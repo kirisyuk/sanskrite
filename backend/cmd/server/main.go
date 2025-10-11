@@ -1,0 +1,278 @@
+﻿package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	firebase "firebase.google.com/go/v4"
+	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
+	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"google.golang.org/api/option"
+
+	// orchestrator deps
+	"cloud.google.com/go/pubsub"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/crawler"
+	"github.com/igorkirisyuk/sanskrite/internal/discovery"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/telegram"
+)
+
+type server struct {
+	fbApp            *firebase.App
+	fs               *gcp.FirestoreClient
+	users            *repo.UsersRepository
+	projs            *repo.ProjectsRepository
+	dsrcs            *repo.DataSourcesRepository
+	usersHandler     *httphandlers.UsersHandler
+	projectsHandler  *httphandlers.ProjectsHandler
+	discoveryHandler *httphandlers.DiscoveryHandler
+	logger           *log.Logger
+}
+
+func main() {
+	addr := getEnv("PORT", "8080")
+	ctx := context.Background()
+
+	credsPath := getEnv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	var opts []option.ClientOption
+	if credsPath != "" {
+		opts = append(opts, option.WithCredentialsFile(credsPath))
+	}
+
+	projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
+	fbApp, err := firebase.NewApp(ctx, &firebase.Config{
+		ProjectID: projectID,
+	}, opts...)
+	if err != nil {
+		log.Fatalf("firebase app init: %v", err)
+	}
+
+	// Initialize Firestore client
+	fsClient, err := gcp.NewFirestoreClient(ctx, projectID)
+	if err != nil {
+		log.Fatalf("firestore init: %v", err)
+	}
+
+	logger := log.New(os.Stdout, "[sanskrite] ", log.LstdFlags|log.Lshortfile)
+
+	s := &server{fbApp: fbApp, fs: fsClient, logger: logger}
+	// Repositories
+	s.users = repo.NewUsersRepository(fsClient.Client())
+	s.projs = repo.NewProjectsRepository(fsClient.Client())
+	s.dsrcs = repo.NewDataSourcesRepository(fsClient.Client())
+
+	// Handlers
+	s.usersHandler = httphandlers.NewUsersHandler(s.users, logger)
+	s.projectsHandler = httphandlers.NewProjectsHandler(s.projs, logger).WithDataSources(s.dsrcs)
+	s.discoveryHandler = httphandlers.NewDiscoveryHandler(s.projs, s.dsrcs, logger)
+
+	// Wire orchestrator (AITaskExecutor + ModelManager + Vertex service)
+	modelManager := ai.NewAIModelManager()
+	// For brevity, only Vertex provider is wired here; additional providers can be added
+	{
+		services := []ai.AIService{}
+
+		if v := os.Getenv("VERTEX_API_KEY"); v != "" {
+			services = append(services, ai.NewVertexAIService(v, modelManager))
+		}
+		if k := os.Getenv("OPENAI_API_KEY"); k != "" {
+			services = append(services, ai.NewOpenAIService(k, modelManager))
+		}
+		if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
+			services = append(services, ai.NewClaudeService(k, modelManager))
+		}
+		if k := os.Getenv("GROK_API_KEY"); k != "" {
+			services = append(services, ai.NewGrokService(k, modelManager))
+		}
+
+		exec := ai.NewAITaskExecutor(services, modelManager)
+		wc := crawler.NewWebCrawler()
+		tgBase := os.Getenv("TELEGRAM_SERVICE_URL")
+		tgClient := telegram.NewClient(tgBase)
+		projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
+		pub, err := realtime.NewPublisher(ctx, projectID)
+		if err != nil {
+			log.Printf("WARNING: PubSub publisher init failed: %v (realtime updates disabled)", err)
+		}
+		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger)
+		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
+		interactions := repo.NewInteractionsRepository(fsClient.Client())
+		orchestrator = orchestrator.WithCache(cacheRepo).WithInteractions(interactions)
+		s.discoveryHandler = s.discoveryHandler.WithOrchestrator(orchestrator)
+	}
+
+	// Get auth client for middleware
+	authClient, err := fbApp.Auth(ctx)
+	if err != nil {
+		log.Fatalf("auth client init: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	// WS hub and Pub/Sub subscriber
+	hub := realtime.NewHub(logger)
+	// ws endpoint: /ws (Authorization: Bearer <FirebaseIDToken>)
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		const prefix = "Bearer "
+		if len(authHeader) <= len(prefix) || authHeader[:len(prefix)] != prefix {
+			http.Error(w, "missing or invalid Authorization", http.StatusUnauthorized)
+			return
+		}
+		idToken := authHeader[len(prefix):]
+		client, err := fbApp.Auth(r.Context())
+		if err != nil {
+			http.Error(w, "auth init error", http.StatusInternalServerError)
+			return
+		}
+		tok, err := client.VerifyIDToken(r.Context(), idToken)
+		if err != nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		uid := tok.UID
+		tenant := ""
+		if u, err := s.users.GetByUID(r.Context(), uid); err == nil && u != nil {
+			tenant = u.TenantID
+		}
+		if tenant == "" {
+			http.Error(w, "tenant not resolved", http.StatusForbidden)
+			return
+		}
+		hub.ServeWS(w, r, tenant)
+	})
+
+	// Start WS subscriber using the same project Pub/Sub client
+	{
+		projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
+		if projectID != "" {
+			psClient, err := pubsub.NewClient(ctx, projectID)
+			if err == nil {
+				sub := realtime.NewSubscriber(psClient, hub, logger)
+				_ = sub.Start(ctx, string(realtime.EventDiscoveryStatus), string(realtime.EventDiscoveryProfile), string(realtime.EventDiscoveryAnswer))
+			} else {
+				log.Printf("ws subscriber: pubsub client init error: %v", err)
+			}
+		}
+	}
+
+	// Apply auth middleware to all /api/v1/* routes
+	// Compose middleware: attach repos, then auth
+	authMiddleware := func(h http.Handler) http.Handler {
+		return httphandlers.WithUsersRepo(s.users)(httphandlers.AuthMiddleware(authClient)(h))
+	}
+
+	// User routes
+	mux.Handle("/api/v1/users", authMiddleware(http.HandlerFunc(s.usersHandler.CreateUser)))
+	mux.Handle("/api/v1/users/", authMiddleware(http.HandlerFunc(s.routeUsersByID)))
+
+	// Project routes
+	mux.Handle("/api/v1/projects", authMiddleware(http.HandlerFunc(s.routeProjects)))
+	mux.Handle("/api/v1/projects/", authMiddleware(http.HandlerFunc(s.routeProjectsByID)))
+
+	// Discovery routes
+	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
+	// Note: /api/v1/projects/{id}/datasources is handled by projectsByID pattern
+
+	// Legacy routes (to be migrated)
+	// mux.Handle("/v1/whoami", authMiddleware(http.HandlerFunc(s.whoAmI)))
+	// mux.Handle("/v1/users/me", authMiddleware(http.HandlerFunc(s.upsertMe)))
+	// mux.Handle("/v1/projects", authMiddleware(http.HandlerFunc(s.createProject)))
+	// mux.Handle("/v1/datasources", authMiddleware(http.HandlerFunc(s.createDataSource)))
+
+	// CORS for local frontend
+	allowedOrigin := getEnv("FRONTEND_ORIGIN", "http://localhost:5173")
+	handler := withCORS(allowedOrigin)(mux)
+
+	srv := &http.Server{
+		Addr:              ":" + addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	log.Printf("server listening on :%s", addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+}
+
+// routeUsersByID routes /api/v1/users/{id} to appropriate handler based on method
+func (s *server) routeUsersByID(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.usersHandler.GetUser(w, r)
+	case http.MethodPut:
+		s.usersHandler.UpdateUser(w, r)
+	default:
+		httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+	}
+}
+
+// routeProjects routes /api/v1/projects to appropriate handler based on method
+func (s *server) routeProjects(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		s.projectsHandler.CreateProject(w, r)
+	case http.MethodGet:
+		s.projectsHandler.ListProjects(w, r)
+	default:
+		httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+	}
+}
+
+// routeProjectsByID routes /api/v1/projects/{id} to appropriate handler based on method
+func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request) {
+	// Check if path is /projects/{id}/datasources
+	if strings.HasSuffix(r.URL.Path, "/datasources") {
+		s.discoveryHandler.ListProjectSources(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.projectsHandler.GetProject(w, r)
+	case http.MethodPut:
+		s.projectsHandler.UpdateProject(w, r)
+	case http.MethodDelete:
+		s.projectsHandler.DeleteProject(w, r)
+	default:
+		httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+	}
+}
+
+// withCORS returns middleware that adds CORS headers and handles OPTIONS preflight.
+func withCORS(allowedOrigin string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func getEnv(key, def string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	return v
+}

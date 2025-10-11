@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+WEB_DIR="$ROOT_DIR/web"
+API_DIR="$ROOT_DIR/backend"
+
+TARGET_WEB=1
+TARGET_API=1
+
+REGION=${REGION:-us-central1}
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null || true)
+if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
+  echo -e "${RED}GCP project is not set. Run: gcloud config set project <ID>${NC}" >&2
+  exit 1
+fi
+
+# Service account for backend
+SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
+
+usage() {
+  echo "Usage: scripts/deploy [--web] [--api] [--py]"
+  echo "If none specified, deploy all. REGION env var supported (default: us-central1)."
+}
+
+TARGET_PY=1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --web) TARGET_API=0 ;;
+    --api) TARGET_WEB=0 ;;
+    --py) TARGET_WEB=0; TARGET_API=0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
+  esac
+  shift
+done
+
+echo -e "${BLUE}Project:${NC} $PROJECT_ID\n${BLUE}Region:${NC} $REGION"
+
+require() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo -e "${RED}Missing required command: $1${NC}" >&2
+    exit 1
+  fi
+}
+
+require gcloud
+## gsutil not required; use gcloud storage to avoid Python dependency
+
+# Ensure APIs
+enable_api() {
+  local api=$1
+  gcloud services enable "$api" >/dev/null && echo -e "${GREEN}API enabled:${NC} $api" || true
+}
+
+echo -e "${BLUE}Ensuring required APIs...${NC}"
+enable_api firestore.googleapis.com
+enable_api run.googleapis.com
+enable_api cloudbuild.googleapis.com
+enable_api iam.googleapis.com
+enable_api secretmanager.googleapis.com
+enable_api pubsub.googleapis.com
+
+deploy_web() {
+  echo -e "${BLUE}[web] Preparing bucket and Cloud Build...${NC}"
+  local bucket="gs://${PROJECT_ID}-web-static"
+
+  if gcloud storage buckets describe "$bucket" >/dev/null 2>&1; then
+    echo -e "${GREEN}[web] Bucket exists:${NC} $bucket"
+  else
+    gcloud storage buckets create "$bucket" --location=US --uniform-bucket-level-access
+    gcloud storage buckets update "$bucket" --web-main-page-suffix=index.html --web-error-page=404.html
+    echo -e "${GREEN}[web] Created bucket:${NC} $bucket"
+  fi
+
+  echo -e "${BLUE}[web] Submitting Cloud Build (npm ci && build, then upload)...${NC}"
+  gcloud beta builds submit "$WEB_DIR" \
+    --config "$WEB_DIR/cloudbuild.deploy.yaml" \
+    --substitutions _BUCKET="$bucket" \
+    --project "$PROJECT_ID" \
+    --quiet
+
+  echo -e "${BLUE}[web] Setting cache headers...${NC}"
+  # Best effort; may be skipped if objects not present yet
+  gcloud storage objects update --recursive --cache-control="public,max-age=31536000,immutable" "$bucket/assets/" || true
+  gcloud storage objects update --cache-control="no-store" "$bucket/index.html" || true
+
+  echo -e "${GREEN}[web] Deployed successfully to:${NC} $bucket"
+  echo -e "${YELLOW}Note:${NC} For public access, configure Cloud CDN or make bucket objects public as needed."
+}
+
+setup_infrastructure() {
+  echo -e "${BLUE}[infra] Setting up service accounts and permissions...${NC}"
+  
+  # 1. Ensure SA exists
+  if ! gcloud iam service-accounts describe "$SA_BACKEND" >/dev/null 2>&1; then
+    gcloud iam service-accounts create backend --display-name "Sanskrite Backend"
+    echo -e "${GREEN}[infra] Created service account:${NC} $SA_BACKEND"
+  fi
+  
+  # 2. Grant required roles (idempotent)
+  echo -e "${BLUE}[infra] Ensuring IAM permissions...${NC}"
+  for role in roles/datastore.user roles/secretmanager.secretAccessor roles/pubsub.admin roles/logging.logWriter; do
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$SA_BACKEND" \
+      --role="$role" \
+      --condition=None \
+      --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓${NC} $role"
+  done
+  
+  # 3. Ensure secrets exist (create if missing with placeholder)
+  echo -e "${BLUE}[infra] Ensuring secrets exist...${NC}"
+  for secret in vertex_api_key openai_api_key anthropic_api_key grok_api_key; do
+    if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
+      echo "PLACEHOLDER_UPDATE_ME" | gcloud secrets create "$secret" --data-file=-
+      echo -e "${YELLOW}  ⚠${NC} Created placeholder for: $secret (update with real value!)"
+    else
+      echo -e "${GREEN}  ✓${NC} $secret exists"
+    fi
+  done
+  
+  # 4. Ensure Pub/Sub topics exist
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub topics...${NC}"
+  for topic in discovery.status discovery.profile discovery.answer discovery.project; do
+    if ! gcloud pubsub topics describe "$topic" >/dev/null 2>&1; then
+      gcloud pubsub topics create "$topic" --quiet
+      echo -e "${GREEN}  ✓${NC} Created topic: $topic"
+    else
+      echo -e "${GREEN}  ✓${NC} $topic exists"
+    fi
+  done
+}
+
+deploy_api() {
+  echo -e "${BLUE}[api] Pre-deployment: validating Go build...${NC}"
+  (cd "$API_DIR" && go build -o /dev/null ./cmd/server) || {
+    echo -e "${RED}[api] Go build failed! Fix errors before deploying.${NC}"
+    exit 1
+  }
+  echo -e "${GREEN}[api] Go build successful locally${NC}"
+  
+  echo -e "${BLUE}[api] Deploying to Cloud Run from source...${NC}"
+  local service="sanskrite-api"
+
+  gcloud run deploy "$service" \
+    --source "$API_DIR" \
+    --region "$REGION" \
+    --allow-unauthenticated \
+    --service-account "$SA_BACKEND" \
+    --set-build-env-vars GOOGLE_BUILDABLE=./cmd/server \
+    --min-instances=1 \
+    --max-instances=3 \
+    --cpu=1 \
+    --memory=512Mi \
+    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGIN=http://localhost:5173" \
+    --set-secrets "VERTEX_API_KEY=vertex_api_key:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,GROK_API_KEY=grok_api_key:latest" \
+    --project "$PROJECT_ID" \
+    --quiet
+
+  # Force traffic to latest revision
+  echo -e "${BLUE}[api] Routing 100% traffic to latest revision...${NC}"
+  gcloud run services update-traffic "$service" \
+    --region "$REGION" \
+    --to-latest \
+    --quiet
+  
+  local current_revision=$(gcloud run services describe "$service" --region "$REGION" --format="value(status.traffic[0].revisionName)")
+  echo -e "${GREEN}[api] Traffic routed to:${NC} $current_revision"
+
+  API_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${GREEN}[api] Deployed successfully${NC}"
+  echo -e "${BLUE}[api] URL:${NC} $API_URL"
+}
+
+deploy_py() {
+  echo -e "${BLUE}[py] Deploying Telegram service to Cloud Run...${NC}"
+  local service="sanskrite-telegram"
+  local SRC_DIR="$ROOT_DIR/python/telegram_service"
+  gcloud run deploy "$service" \
+    --source "$SRC_DIR" \
+    --region "$REGION" \
+    --allow-unauthenticated \
+    --min-instances=0 \
+    --max-instances=3 \
+    --cpu=1 \
+    --memory=256Mi \
+    --project "$PROJECT_ID" \
+    --quiet
+  
+  echo -e "${GREEN}[py] Deployed successfully${NC}"
+  TG_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${BLUE}[py] URL:${NC} $TG_URL"
+  
+  # Update backend with TELEGRAM_SERVICE_URL
+  if [[ "$TARGET_API" -eq 1 ]] || gcloud run services describe sanskrite-api --region "$REGION" >/dev/null 2>&1; then
+    echo -e "${BLUE}[api] Updating backend with TELEGRAM_SERVICE_URL...${NC}"
+    gcloud run services update sanskrite-api \
+      --region "$REGION" \
+      --update-env-vars "TELEGRAM_SERVICE_URL=$TG_URL" \
+      --quiet || true
+  fi
+}
+
+create_indexes() {
+  echo -e "${BLUE}[firestore] Creating composite indexes (idempotent)...${NC}"
+  # Projects: tenantId + view + lastInteractionAt desc
+  gcloud firestore indexes composite create \
+    --collection-group=core_projects \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=view,order=ASCENDING \
+    --field-config field-path=lastInteractionAt,order=DESCENDING \
+    --quiet || true
+  # DataSources suggestions (uri canonical, channel username)
+  gcloud firestore indexes composite create \
+    --collection-group=core_datasources \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=sourceDetails.uri,order=ASCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create \
+    --collection-group=core_datasources \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=sourceDetails.channelUsername,order=ASCENDING \
+    --quiet || true
+}
+
+# Setup infrastructure first (idempotent)
+setup_infrastructure
+
+if [[ "$TARGET_WEB" -eq 1 ]]; then
+  deploy_web
+fi
+
+if [[ "$TARGET_API" -eq 1 ]]; then
+  deploy_api
+fi
+
+if [[ "$TARGET_PY" -eq 1 ]]; then
+  deploy_py
+fi
+
+create_indexes
+
+echo ""
+echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}✓ Deployment Complete${NC}"
+echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
+
+# Summary
+if [[ "$TARGET_API" -eq 1 ]] && [[ -n "${API_URL:-}" ]]; then
+  echo -e "${BLUE}Backend API:${NC} $API_URL"
+fi
+if [[ "$TARGET_PY" -eq 1 ]] && [[ -n "${TG_URL:-}" ]]; then
+  echo -e "${BLUE}Telegram Service:${NC} $TG_URL"
+fi
+if [[ "$TARGET_WEB" -eq 1 ]]; then
+  echo -e "${BLUE}Web Static:${NC} gs://${PROJECT_ID}-web-static"
+fi
+
+echo ""
+echo -e "${YELLOW}Post-deployment checklist:${NC}"
+echo -e "  ☐ Verify secrets have real API keys (not placeholders)"
+echo -e "  ☐ Test API health: curl \$API_URL/health"
+echo -e "  ☐ Check Cloud Run logs for errors"
+echo -e "  ☐ Verify traffic is on latest revision"
+echo ""
+

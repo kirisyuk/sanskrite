@@ -1,0 +1,126 @@
+package prompts
+
+import "strings"
+
+// SourceProfilingPrompt defines a STRICT JSON contract aligned with the legacy
+// SourceProfileDataDto (see temp-repos/etigram-backend/web/src/types/dto.ts lines ~784+).
+// The model MUST return exactly one JSON object that conforms to this schema.
+const SourceProfilingPrompt = `You are an expert media analyst. Analyze this source content and produce a STRICT JSON object following the schema below. Do NOT include any explanations or markdown. Output ONE JSON object only.
+
+SOURCE: {sourceId}
+LANGUAGE: {language}
+
+CONTENT:
+{extractedText}
+
+TASK:
+- Build a structured source profile for Discovery. Use ONLY the provided CONTENT (no external knowledge or links fetching).
+- If CONTENT is in a different language, still produce textual fields in {language} while preserving meaning.
+- When evidence is insufficient, set fields to null or omit them; never invent facts.
+- All ratio-like numeric values MUST be normalized to [0,1]. Topic/method shares across arrays SHOULD sum to ≤ 1.0.
+- Keep numbers with 2 decimal digits where applicable.
+
+REQUIRED JSON SCHEMA (keys and types MUST match exactly; omit unknown fields or use nulls where appropriate):
+{
+  "editorialStance": {
+    "political": "string",
+    "confidence": 0.0,
+    "evidence": ["string"]
+  },
+  "agenda": {
+    "primaryGoal": "string",
+    "description": "string",
+    "promotedThemes": ["string"],
+    "avoidedThemes": ["string"],
+    "targetAudience": "string"
+  },
+  "motivation": "string",
+  "trustScore": 0.0,
+  "trustRationale": "string",
+  "behaviorPatterns": {
+    "publishingCadence": "string",
+    "eventResponsiveness": 0.0,
+    "contentConsistency": 0.0,
+    "originalityScore": 0.0
+  },
+  "contentPatterns": {
+    "dominantFramings": ["string"],
+    "emotionalToneDistribution": {
+      "neutral": 0.0,
+      "outrage": 0.0,
+      "fear": 0.0,
+      "hope": 0.0
+    },
+    "focusEntityNames": [
+      { "entityName": "string", "mentionCount": 0, "averageSentiment": 0.0 }
+    ]
+  },
+  "topics": [ { "name": "string", "share": 0.0, "trend": "up|down|flat" } ],
+  "editorialMethods": [ { "method": "string", "share": 0.0 } ],
+  "goals": [ { "goal": "string", "confidence": 0.0 } ],
+  "goalAlignmentScore": 0.0,
+  "metrics": {
+    "claimDensity": 0.0,
+    "externalRefShare": 0.0,
+    "responseLatencyAvg": 0.0,
+    "polarization": 0.0,
+    "ctaShare": 0.0,
+    "promoLinkShare": 0.0,
+    "evidenceQuality": 0.0
+  },
+  "targetAudienceCountries": ["string"],
+  "redFlags": [ { "code": "string", "score": 0.0, "rationale": "string" } ],
+  "coordinatedSources": [ { "sourceId": "string", "coordinationScore": 0.0 } ],
+  "flags": ["string"]
+}
+
+STRICT RULES:
+- Output MUST be valid JSON matching the schema (no extra top-level keys).
+- Numeric values MUST be within [0..1] when applicable.
+- Use null or omit fields if data cannot be inferred.
+- Do NOT wrap in code fences; return raw JSON only.
+`
+
+// AnswerSynthesisPrompt instructs the model to generate a concise, well-grounded
+// textual answer that directly addresses the user's query based on multiple
+// previously extracted source profiles.
+const AnswerSynthesisPrompt = `You are an expert analyst synthesizing information from multiple sources.
+
+USER QUERY: {queryText}
+LANGUAGE: {language}
+SOURCES ANALYZED: {sourcesCount}
+
+SOURCE PROFILES (JSON array):
+{profilesJson}
+
+TASK:
+- Produce a user-facing answer that directly addresses the query using ONLY the provided source profiles.
+- Do NOT introduce external facts. If evidence is insufficient or conflicting, explicitly note limitations.
+- Maintain neutral tone; avoid speculation.
+
+Generate a comprehensive, clear answer that:
+1) Directly addresses the user's query in {language} language
+2) Summarizes key findings from analyzed sources
+3) Highlights patterns and insights discovered across sources
+4) Notes source reliability if relevant concerns exist
+5) Provides necessary context for understanding the information
+
+ANSWER REQUIREMENTS:
+- Write in {language}
+- Be concise but informative (3-5 paragraphs)
+- Use clear, accessible language
+- If sources conflict, briefly note discrepancies
+
+CRITICAL:
+- Return plain text answer only (no JSON, no markdown formatting).
+`
+
+// Format replaces placeholders in a template with provided values.
+// Placeholders are in the form {key}. Missing keys will remain unchanged.
+func Format(template string, params map[string]string) string {
+	result := template
+	for k, v := range params {
+		result = strings.ReplaceAll(result, "{"+k+"}", v)
+	}
+	return result
+}

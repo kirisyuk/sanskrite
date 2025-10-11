@@ -1,0 +1,25 @@
+# Go build artifacts
+bin/
+build/
+# Git
+.git/
+.gitignore
+# OS/editor
+.DS_Store
+Thumbs.db
+# Local env
+.env
+# Node leftovers
+node_modules/
+**/node_modules/
+backend/
+# Tests & cache
+coverage/
+**/*_test.go
+# Service account keys should not be uploaded by default
+*.json
+# Keep sources
+!go.mod
+!go.sum
+!cmd/**
+!internal/**

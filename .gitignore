@@ -1,0 +1,63 @@
+# Node
+node_modules/
+web/node_modules/
+web/dist/
+web/.vite/
+web/.eslintcache
+web/coverage/
+
+# Env & Secrets
+.env
+.env.*
+web/.env
+web/.env.local
+backend/.env
+**/*-service-account.json
+**/*firebase-adminsdk*.json
+**/*firebase-key.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Go
+backend/bin/
+backend/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+python/telegram_service/.telethon/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+
+# Documentation artifacts
+docs/**/*.pdf
+docs/**/*.docx
+docs/**/.DS_Store
+

@@ -1,0 +1,22 @@
+# Ignore node_modules; Cloud Build uses npm ci
+node_modules/
+# Ignore local env
+.env
+# Editor/OS
+.DS_Store
+Thumbs.db
+# Git
+.git/
+.gitignore
+# Tests, coverage
+coverage/
+**/*.spec.*
+**/*.test.*
+# Local build output
+dist/
+# Cache
+.vite/
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

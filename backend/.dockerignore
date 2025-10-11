@@ -1,0 +1,26 @@
+# Exclude unnecessary files from Docker build context
+.git/
+.gitignore
+node_modules/
+**/node_modules/
+bin/
+build/
+coverage/
+*.log
+*.tmp
+*.cache
+*.swp
+
+# Local env and secrets
+.env
+*.env
+*.local
+*.json
+
+# Keep Go sources and configs
+!go.mod
+!go.sum
+!cmd/**
+!internal/**
+!firestore.rules
+!firestore.indexes.json
