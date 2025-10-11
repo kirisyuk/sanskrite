@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/igorkirisyuk/sanskrite/internal/models/project",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "pk": {
+      "type": "string"
+    },
+    "tenantId": {
+      "type": "string"
+    },
+    "displayName": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "ownerUserId": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "lastInteractionAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "view": {
+      "type": "string"
+    },
+    "isExternal": {
+      "type": "boolean"
+    },
+    "linkedProjectRef": {
+      "type": "string"
+    },
+    "sharingPolicy": {
+      "type": "string"
+    },
+    "ontologyOverlayRef": {
+      "type": "string"
+    },
+    "companyRef": {
+      "type": "string"
+    },
+    "organizationName": {
+      "type": "string"
+    },
+    "businessUnitName": {
+      "type": "string"
+    },
+    "enableRiskProfileSuggestions": {
+      "type": "boolean"
+    },
+    "aiguided": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "id",
+    "pk",
+    "tenantId",
+    "displayName",
+    "status",
+    "ownerUserId",
+    "createdAt",
+    "updatedAt"
+  ]
+}

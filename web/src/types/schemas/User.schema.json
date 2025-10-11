@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/igorkirisyuk/sanskrite/internal/models/user",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "tenantId": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "displayName": {
+      "type": "string"
+    },
+    "authType": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "schemaVersion": {
+      "type": "string"
+    },
+    "companyRef": {
+      "type": "string"
+    },
+    "companyConfidence": {
+      "type": "number"
+    },
+    "jobTitle": {
+      "type": "string"
+    },
+    "department": {
+      "type": "string"
+    },
+    "orgUnitRef": {
+      "type": "string"
+    },
+    "defaultProjectId": {
+      "type": "string"
+    },
+    "projectRoles": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "assignedGoalIds": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "assignedInitiativeIds": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "id",
+    "tenantId",
+    "email",
+    "createdAt",
+    "updatedAt",
+    "schemaVersion"
+  ]
+}
