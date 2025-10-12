@@ -1,4 +1,5 @@
 Flask==3.0.3
-telethon==1.36.0
+# Allow Telethon to match the session string format used in Azure
+telethon
 gunicorn==23.0.0
 

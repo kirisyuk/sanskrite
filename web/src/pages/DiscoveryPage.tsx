@@ -15,13 +15,16 @@ const DiscoveryPage: React.FC = () => {
 
   useEffect(() => {
     fetchProjects('discovery');
+    // Connect WebSocket on page load
+    const tenantId = currentUser?.email || '';
+    if (tenantId) {
+      connectWs(tenantId);
+    }
   }, []);
 
   useEffect(() => {
     if (currentProject) {
       fetchProjectSources(currentProject.id);
-      const tenantId = currentUser?.email || '';
-      if (tenantId) connectWs(tenantId);
     } else {
       clearSources();
     }
@@ -80,9 +83,14 @@ const DiscoveryPage: React.FC = () => {
   };
 
   const handleExecuteDiscovery = async () => {
-    if (running || !queryText.trim()) return;
+    if (running || !queryText.trim()) {
+      console.log('[Discovery] Blocked:', { running, hasQuery: !!queryText.trim() });
+      return;
+    }
 
     const parsed = parseSourcesFromQuery(queryText);
+    console.log('[Discovery] Parsed sources:', parsed);
+    
     if (parsed.web.length === 0 && parsed.telegram.length === 0) {
       alert('Please include at least one source (URL or @telegram handle) in your query');
       return;
@@ -94,11 +102,13 @@ const DiscoveryPage: React.FC = () => {
       // If no currentProject, backend will create one automatically
       const projectId = currentProject?.id || '';
       
-      await executeDiscovery({
+      console.log('[Discovery] Executing with projectId:', projectId);
+      const result = await executeDiscovery({
         projectId,
         queryText,
         sources: parsed,
       });
+      console.log('[Discovery] Result:', result);
       
       correlationRef.current = correlationId;
       
@@ -106,8 +116,11 @@ const DiscoveryPage: React.FC = () => {
       if (!currentProject) {
         setTimeout(() => fetchProjects('discovery'), 1000);
       }
+      
+      // Reset running state after successful execution
+      setRunning(false);
     } catch (error) {
-      console.error('Failed to execute discovery:', error);
+      console.error('[Discovery] Failed to execute:', error);
       setRunning(false);
     }
   };

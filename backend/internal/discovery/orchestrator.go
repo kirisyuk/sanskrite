@@ -15,6 +15,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
+	"golang.org/x/sync/errgroup"
 )
 
 type Orchestrator struct {
@@ -74,6 +75,14 @@ type ExecuteInput struct {
 
 // Execute runs discovery orchestration, auto-creating project if needed
 func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
+	// Emit started status (compat with old flow)
+	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
+		"correlationId": in.Correlation,
+		"projectId":     in.ProjectID,
+		"status":        "started",
+		"message":       "Discovery started",
+	})
+
 	// Auto-create project if empty
 	if in.ProjectID == "" {
 		title, err := o.generateProjectTitle(ctx, in.QueryText, in.Language)
@@ -106,39 +115,50 @@ func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 
 		// Send WebSocket message about new project
 		msg := map[string]interface{}{
-			"type":      "discoveryProject",
-			"projectId": projectID,
-			"title":     title,
-			"views":     []string{"discovery"},
-			"tenantId":  in.TenantID,
-			"createdAt": proj.CreatedAt.Format(time.RFC3339),
+			"type":          "discoveryProject",
+			"projectId":     projectID,
+			"title":         title,
+			"views":         []string{"discovery"},
+			"tenantId":      in.TenantID,
+			"createdAt":     proj.CreatedAt.Format(time.RFC3339),
+			"correlationId": in.Correlation,
 		}
 		o.publishEvent(ctx, "discovery.project", in.TenantID, msg)
 	}
-	// Process web sources
+
+	// Process sources in parallel and await all
+	eg, gctx := errgroup.WithContext(ctx)
 	for _, raw := range in.WebSources {
 		canonical := crawler.CanonicalizeURL(strings.TrimSpace(raw))
 		if canonical == "" {
 			continue
 		}
-		if err := o.processWebSource(ctx, in, canonical); err != nil {
-			o.logger.Printf("orchestrator: web %s error: %v", canonical, err)
-		}
+		src := canonical
+		eg.Go(func() error { return o.processWebSource(gctx, in, src) })
 	}
-	// Process telegram
 	for _, h := range in.TgHandles {
 		handle := strings.TrimPrefix(strings.TrimSpace(h), "@")
 		if handle == "" {
 			continue
 		}
-		if err := o.processTelegramSource(ctx, in, handle); err != nil {
-			o.logger.Printf("orchestrator: tg @%s error: %v", handle, err)
-		}
+		h := handle
+		eg.Go(func() error { return o.processTelegramSource(gctx, in, h) })
+	}
+	if err := eg.Wait(); err != nil {
+		o.logger.Printf("orchestrator: parallel sources error: %v", err)
 	}
 	// Synthesize final answer from all profiles in project (simplified: load sources and aggregate)
 	if err := o.synthesizeAnswer(ctx, in); err != nil {
 		o.logger.Printf("orchestrator: synthesize answer error: %v", err)
 	}
+
+	// Emit completed status
+	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
+		"correlationId": in.Correlation,
+		"projectId":     in.ProjectID,
+		"status":        "completed",
+		"message":       "Discovery completed",
+	})
 	return nil
 }
 
@@ -236,7 +256,8 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		}
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
-		"projectId": in.ProjectID, "sourceId": ds.ID, "status": "fetching"})
+		"correlationId": in.Correlation,
+		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching"})
 
 	// fetch content
 	fr, err := o.crawl.FetchContent(ctx, canonicalURL)
@@ -252,7 +273,8 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 			ds.Status = "completed"
 			_ = o.sources.Upsert(ctx, ds)
 			o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
-				"projectId": in.ProjectID, "sourceId": ds.ID, "profile": p})
+				"correlationId": in.Correlation,
+				"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": p})
 			return nil
 		}
 	}
@@ -272,7 +294,8 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	}
 
 	o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
-		"projectId": in.ProjectID, "sourceId": ds.ID, "profile": prof})
+		"correlationId": in.Correlation,
+		"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": prof})
 	return nil
 }
 
@@ -320,7 +343,8 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		}
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
-		"projectId": in.ProjectID, "sourceId": ds.ID, "status": "fetching"})
+		"correlationId": in.Correlation,
+		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching"})
 
 	// fetch posts (last 100)
 	msgs, err := o.telegram.FetchUpdates(ctx, handle, 0)
@@ -346,7 +370,8 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		return err
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
-		"projectId": in.ProjectID, "sourceId": ds.ID, "profile": prof})
+		"correlationId": in.Correlation,
+		"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": prof})
 	return nil
 }
 
@@ -409,7 +434,8 @@ func (o *Orchestrator) synthesizeAnswer(ctx context.Context, in ExecuteInput) er
 		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.answer", Content: res.Content})
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryAnswer, in.TenantID, map[string]interface{}{
-		"projectId": in.ProjectID, "answer": res.Content})
+		"correlationId": in.Correlation,
+		"projectId":     in.ProjectID, "answer": res.Content})
 	return nil
 }
 

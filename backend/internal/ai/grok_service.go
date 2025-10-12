@@ -20,9 +20,12 @@ type GrokService struct {
 }
 
 func NewGrokService(apiKey string, modelManager *AIModelManager) *GrokService {
+	// Sanitize API key to avoid invalid header values
+	sanitizedKey := strings.TrimSpace(apiKey)
+	sanitizedKey = strings.Trim(sanitizedKey, "\"'")
 	return &GrokService{
 		BaseAIService: NewBaseAIService(modelManager),
-		apiKey:        apiKey,
+		apiKey:        sanitizedKey,
 		httpClient:    &http.Client{Timeout: 120 * time.Second},
 	}
 }

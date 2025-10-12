@@ -192,6 +192,7 @@ deploy_py() {
     --max-instances=3 \
     --cpu=1 \
     --memory=256Mi \
+    --set-secrets "TELEGRAM_API_ID=TELEGRAM_API_ID:latest,TELEGRAM_API_HASH=TELEGRAM_API_HASH:latest,TELEGRAM_SESSION_STRING=TELEGRAM_SESSION_STRING:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest" \
     --project "$PROJECT_ID" \
     --quiet
   

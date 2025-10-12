@@ -22,9 +22,12 @@ type OpenAIService struct {
 
 // NewOpenAIService создает новый экземпляр OpenAIService
 func NewOpenAIService(apiKey string, modelManager *AIModelManager) *OpenAIService {
+	// Sanitize API key to avoid invalid header values (e.g., trailing newlines/quotes)
+	sanitizedKey := strings.TrimSpace(apiKey)
+	sanitizedKey = strings.Trim(sanitizedKey, "\"'")
 	return &OpenAIService{
 		BaseAIService: NewBaseAIService(modelManager),
-		apiKey:        apiKey,
+		apiKey:        sanitizedKey,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -289,8 +292,8 @@ func (s *OpenAIService) ExecuteSearch(ctx context.Context, query string, modelNa
 	log.Printf("[OpenAI] ExecuteSearch. model=%s, q=\"%s\"", modelName, query)
 
 	requestBody := map[string]interface{}{
-		"model":               modelName,
-		"web_search_options":  map[string]interface{}{},
+		"model":              modelName,
+		"web_search_options": map[string]interface{}{},
 		"messages": []map[string]string{
 			{"role": "user", "content": query},
 		},
@@ -678,4 +681,3 @@ func (s *OpenAIService) ContinueWithToolResults(ctx context.Context, sessionID s
 
 	return step, nil
 }
-

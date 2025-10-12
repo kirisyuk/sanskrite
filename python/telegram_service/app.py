@@ -44,7 +44,8 @@ def telegram_updates():
 
     api_id_str = os.environ.get("TELEGRAM_API_ID")
     api_hash = os.environ.get("TELEGRAM_API_HASH")
-    session_string = os.environ.get("TELEGRAM_SESSION_STRING")
+    # Trim to avoid issues with newline characters in secret values
+    session_string = (os.environ.get("TELEGRAM_SESSION_STRING") or "").strip()
     if not all([api_id_str, api_hash, session_string]):
         logging.error("Missing env: TELEGRAM_API_ID/TELEGRAM_API_HASH/TELEGRAM_SESSION_STRING")
         return ("Server configuration is incomplete.", 500)

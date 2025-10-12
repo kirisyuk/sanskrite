@@ -121,15 +121,24 @@ func main() {
 
 	// WS hub and Pub/Sub subscriber
 	hub := realtime.NewHub(logger)
-	// ws endpoint: /ws (Authorization: Bearer <FirebaseIDToken>)
+	// ws endpoint: /ws (Authorization: Bearer <FirebaseIDToken> or ?token=<FirebaseIDToken>)
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		// Try to get token from Authorization header or query parameter
+		idToken := ""
 		authHeader := r.Header.Get("Authorization")
 		const prefix = "Bearer "
-		if len(authHeader) <= len(prefix) || authHeader[:len(prefix)] != prefix {
+		if len(authHeader) > len(prefix) && authHeader[:len(prefix)] == prefix {
+			idToken = authHeader[len(prefix):]
+		} else {
+			// Fallback to query parameter for WebSocket connections (browser limitation)
+			idToken = r.URL.Query().Get("token")
+		}
+
+		if idToken == "" {
 			http.Error(w, "missing or invalid Authorization", http.StatusUnauthorized)
 			return
 		}
-		idToken := authHeader[len(prefix):]
+
 		client, err := fbApp.Auth(r.Context())
 		if err != nil {
 			http.Error(w, "auth init error", http.StatusInternalServerError)

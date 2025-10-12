@@ -4,6 +4,7 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { AuthProvider } from './contexts/AuthContext';
 import AuthGuard from './components/AuthGuard';
 import { TopBar } from './components/TopBar';
+import { BottomBar } from './components/BottomBar';
 import DiscoveryPage from './pages/DiscoveryPage';
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
               <div className="content-area">
                 <DiscoveryPage />
               </div>
+              <BottomBar />
             </div>
           </div>
         </AuthGuard>

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -20,9 +21,12 @@ type ClaudeService struct {
 
 // NewClaudeService создает новый экземпляр ClaudeService
 func NewClaudeService(apiKey string, modelManager *AIModelManager) *ClaudeService {
+	// Sanitize API key to avoid invalid header values
+	sanitizedKey := strings.TrimSpace(apiKey)
+	sanitizedKey = strings.Trim(sanitizedKey, "\"'")
 	return &ClaudeService{
 		BaseAIService: NewBaseAIService(modelManager),
-		apiKey:        apiKey,
+		apiKey:        sanitizedKey,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -307,4 +311,3 @@ func (s *ClaudeService) ContinueWithToolResults(ctx context.Context, sessionID s
 
 	return step, nil
 }
-

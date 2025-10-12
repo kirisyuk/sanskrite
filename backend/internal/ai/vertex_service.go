@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -21,9 +22,12 @@ type VertexAIService struct {
 
 // NewVertexAIService создает новый экземпляр VertexAIService
 func NewVertexAIService(apiKey string, modelManager *AIModelManager) *VertexAIService {
+	// Sanitize API key to avoid invalid header values
+	sanitizedKey := strings.TrimSpace(apiKey)
+	sanitizedKey = strings.Trim(sanitizedKey, "\"'")
 	return &VertexAIService{
 		BaseAIService: NewBaseAIService(modelManager),
-		apiKey:        apiKey,
+		apiKey:        sanitizedKey,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -492,4 +496,3 @@ func (s *VertexAIService) ContinueWithToolResults(ctx context.Context, sessionID
 
 	return step, nil
 }
-

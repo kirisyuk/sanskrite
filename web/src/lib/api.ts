@@ -89,7 +89,9 @@ class ApiClient {
     };
     correlationId?: string;
   }): Promise<{ correlationId: string }> {
+    console.log('[API] Sending discovery request:', { ...data, queryText: data.queryText.substring(0, 50) + '...' });
     const response = await this.client.post<{ correlationId: string }>('/api/v1/sources-discovery/execute', data);
+    console.log('[API] Discovery response:', response.data);
     return response.data;
   }
 

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -125,14 +126,17 @@ func (h *DiscoveryHandler) ExecuteDiscovery(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Execute orchestrator (fire-and-forget go routine)
+	// Execute orchestrator (fire-and-forget go routine) using independent timeout-bound context
 	if h.orchestrator != nil {
 		go func() {
 			lang := "en"
 			if req.Language != nil && *req.Language != "" {
 				lang = *req.Language
 			}
-			_ = h.orchestrator.Execute(r.Context(), discovery.ExecuteInput{
+			// Important: decouple from r.Context() so work continues after HTTP returns
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			_ = h.orchestrator.Execute(ctx, discovery.ExecuteInput{
 				TenantID:    authInfo.TenantID,
 				ProjectID:   req.ProjectID,
 				QueryText:   req.QueryText,

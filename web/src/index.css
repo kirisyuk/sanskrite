@@ -275,6 +275,21 @@ p {
   flex-shrink: 0;
 }
 
+.bottombar {
+  height: 32px;
+  background-color: transparent;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-top: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+}
+
 .main-content {
   flex: 1;
   display: flex;

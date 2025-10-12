@@ -8,7 +8,7 @@ interface DiscoveryState {
   error: string | null;
   correlationId: string | null;
   answer: string | null;
-  connectWs: (tenantId: string) => void;
+  connectWs: (tenantId: string) => Promise<void>;
   
   // Actions
   executeDiscovery: (data: {
@@ -16,7 +16,7 @@ interface DiscoveryState {
     queryText: string;
     language?: string;
     sources: { web: string[]; telegram: string[] };
-  }) => Promise<void>;
+  }) => Promise<{ correlationId: string }>;
   fetchProjectSources: (projectId: string) => Promise<void>;
   clearSources: () => void;
 }
@@ -32,11 +32,14 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
     set({ loading: true, error: null });
     try {
       const response = await api.executeDiscovery(data);
+      console.log('[Store] API response:', response);
       set({
         correlationId: response.correlationId,
         loading: false,
       });
+      return response;
     } catch (error: any) {
+      console.error('[Store] API error:', error);
       set({ error: error.message, loading: false });
       throw error;
     }
@@ -55,14 +58,41 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
   clearSources: () => {
     set({ sources: [], correlationId: null, answer: null });
   },
-  connectWs: (tenantId) => {
+  connectWs: async (tenantId) => {
     const url = (window as any).buildWsUrl ? (window as any).buildWsUrl(tenantId) : undefined;
     let ws: WebSocket | null = null;
     try {
+      // Get Firebase ID token
+      const { auth } = await import('../lib/firebase');
+      const user = auth.currentUser;
+      if (!user) {
+        return;
+      }
+      const token = await user.getIdToken();
+      
       const base = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8080';
       const toWs = (u: string) => u.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-      const wsUrl = url || `${toWs(base)}/ws?tenantId=${encodeURIComponent(tenantId)}`;
+      const wsUrl = url || `${toWs(base)}/ws?token=${encodeURIComponent(token)}`;
       ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        import('./wsStore').then(({ useWsStore }) => {
+          useWsStore.getState().setConnected(true);
+        }).catch(() => {});
+      };
+      
+      ws.onclose = () => {
+        import('./wsStore').then(({ useWsStore }) => {
+          useWsStore.getState().setConnected(false);
+        }).catch(() => {});
+      };
+      
+      ws.onerror = () => {
+        import('./wsStore').then(({ useWsStore }) => {
+          useWsStore.getState().setConnected(false);
+        }).catch(() => {});
+      };
+      
       ws.onmessage = (evt) => {
         try {
           const msg = JSON.parse(evt.data);
