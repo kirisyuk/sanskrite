@@ -8,6 +8,7 @@ interface DiscoveryState {
   error: string | null;
   correlationId: string | null;
   answer: string | null;
+  pendingSources: Array<{ id: string; kind: 'web' | 'telegram'; status: string }>;
   connectWs: (tenantId: string) => Promise<void>;
   
   // Actions
@@ -19,6 +20,7 @@ interface DiscoveryState {
   }) => Promise<{ correlationId: string }>;
   fetchProjectSources: (projectId: string) => Promise<void>;
   clearSources: () => void;
+  setPendingSources: (sources: Array<{ id: string; kind: 'web' | 'telegram'; status: string }>) => void;
 }
 
 export const useDiscoveryStore = create<DiscoveryState>((set) => ({
@@ -27,6 +29,9 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
   error: null,
   correlationId: null,
   answer: null,
+  pendingSources: [],
+
+  setPendingSources: (sources) => set({ pendingSources: sources }),
 
   executeDiscovery: async (data) => {
     set({ loading: true, error: null });
@@ -49,14 +54,29 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
     set({ loading: true, error: null });
     try {
       const sources = await api.getProjectSources(projectId);
-      set({ sources, loading: false });
+      // Merge pending sources with fetched sources (pending take precedence if status is 'fetching')
+      set((state) => {
+        const merged = [...sources];
+        for (const pending of state.pendingSources) {
+          const exists = merged.find((s) => s.id === pending.id || s.displayName === pending.id);
+          if (!exists) {
+            merged.push({
+              id: pending.id,
+              displayName: pending.id,
+              kind: pending.kind,
+              status: pending.status,
+            } as any);
+          }
+        }
+        return { sources: merged, loading: false };
+      });
     } catch (error: any) {
       set({ error: error.message, loading: false });
     }
   },
 
   clearSources: () => {
-    set({ sources: [], correlationId: null, answer: null });
+    set({ sources: [], correlationId: null, answer: null, pendingSources: [] });
   },
   connectWs: async (tenantId) => {
     const url = (window as any).buildWsUrl ? (window as any).buildWsUrl(tenantId) : undefined;

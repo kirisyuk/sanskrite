@@ -32,3 +32,6 @@ func (r *InteractionsRepository) Create(ctx context.Context, it *Interaction) (s
 	}
 	return doc.ID, nil
 }
+
+
+

@@ -24,6 +24,7 @@ type Orchestrator struct {
 	telegram     TelegramFetcher
 	projects     *repo.ProjectsRepository
 	sources      *repo.DataSourcesRepository
+	profiles     *repo.SourceProfilesRepository
 	publish      *realtime.Publisher
 	logger       *log.Logger
 	cache        *repo.ProcessedContentRepository
@@ -36,6 +37,12 @@ type TelegramFetcher interface {
 
 func NewOrchestrator(exec *ai.AITaskExecutor, crawl *crawler.WebCrawler, tg TelegramFetcher, pr *repo.ProjectsRepository, ds *repo.DataSourcesRepository, pub *realtime.Publisher, logger *log.Logger) *Orchestrator {
 	return &Orchestrator{exec: exec, crawl: crawl, telegram: tg, projects: pr, sources: ds, publish: pub, logger: logger}
+}
+
+// WithProfiles wires SourceProfiles repository (optional during gradual migration)
+func (o *Orchestrator) WithProfiles(sp *repo.SourceProfilesRepository) *Orchestrator {
+	o.profiles = sp
+	return o
 }
 
 // Publish exposes the Publisher for wiring subscribers
@@ -226,14 +233,15 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		needsUpdate = true
 
 		// If source was previously processed, skip reprocessing
-		if ds.Status == "completed" && ds.Profile != nil {
+		if ds.Status == "completed" && o.profiles != nil {
 			if needsUpdate {
 				_ = o.sources.Upsert(ctx, ds)
 			}
-			// Publish cached profile immediately
-			o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
-				"projectId": in.ProjectID, "sourceId": ds.ID, "profile": ds.Profile})
-			return nil
+			if sp, _ := o.profiles.GetByDataSource(ctx, in.TenantID, ds.ID); sp != nil {
+				o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
+					"projectId": in.ProjectID, "sourceId": ds.ID, "profile": sp.Profile})
+				return nil
+			}
 		}
 	} else {
 		now := time.Now().UTC()
@@ -269,9 +277,11 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	contentHash := repo.HashContent(fr.Text)
 	if o.cache != nil {
 		if p, _ := o.cache.Get(ctx, in.TenantID, canonicalURL, contentHash, 24*time.Hour); p != nil {
-			ds.Profile = p
 			ds.Status = "completed"
 			_ = o.sources.Upsert(ctx, ds)
+			if o.profiles != nil {
+				_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *p})
+			}
 			o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 				"correlationId": in.Correlation,
 				"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": p})
@@ -284,7 +294,6 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	if err != nil {
 		return err
 	}
-	ds.Profile = prof
 	ds.Status = "completed"
 	if err := o.sources.Upsert(ctx, ds); err != nil {
 		o.logger.Printf("orchestrator: failed to upsert web source %s (profile size: ~%d bytes): %v", canonicalURL, len(mustJSON(prof)), err)
@@ -293,6 +302,9 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	o.logger.Printf("orchestrator: saved web profile for %s, size: ~%d bytes", canonicalURL, len(mustJSON(prof)))
 	if o.cache != nil {
 		_ = o.cache.Put(ctx, in.TenantID, canonicalURL, contentHash, prof)
+	}
+	if o.profiles != nil {
+		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
 	}
 
 	o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
@@ -318,14 +330,15 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		needsUpdate = true
 
 		// If source was previously processed, skip reprocessing
-		if ds.Status == "completed" && ds.Profile != nil {
+		if ds.Status == "completed" && o.profiles != nil {
 			if needsUpdate {
 				_ = o.sources.Upsert(ctx, ds)
 			}
-			// Publish cached profile immediately
-			o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
-				"projectId": in.ProjectID, "sourceId": ds.ID, "profile": ds.Profile})
-			return nil
+			if sp, _ := o.profiles.GetByDataSource(ctx, in.TenantID, ds.ID); sp != nil {
+				o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
+					"projectId": in.ProjectID, "sourceId": ds.ID, "profile": sp.Profile})
+				return nil
+			}
 		}
 	} else {
 		now := time.Now().UTC()
@@ -372,13 +385,15 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		o.logger.Printf("orchestrator: profiling error for @%s: %v", handle, err)
 		return err
 	}
-	ds.Profile = prof
 	ds.Status = "completed"
 	if err := o.sources.Upsert(ctx, ds); err != nil {
 		o.logger.Printf("orchestrator: failed to upsert telegram source @%s (profile size: ~%d bytes): %v", handle, len(mustJSON(prof)), err)
 		return err
 	}
 	o.logger.Printf("orchestrator: saved telegram profile for @%s, size: ~%d bytes", handle, len(mustJSON(prof)))
+	if o.profiles != nil {
+		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
+	}
 	o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
 		"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": prof})
@@ -398,30 +413,31 @@ func (o *Orchestrator) synthesizeAnswer(ctx context.Context, in ExecuteInput) er
 		return err
 	}
 	o.logger.Printf("orchestrator: loaded %d sources for project %s, preparing synthesis", len(list), in.ProjectID)
-	// Build profiles array JSON
+	// Build profiles array JSON via SourceProfiles repository
 	profiles := make([]map[string]interface{}, 0, len(list))
-	for _, s := range list {
-		if s.Profile == nil {
-			continue
+	if o.profiles != nil {
+		profs, _ := o.profiles.ListByProject(ctx, in.TenantID, in.ProjectID, o.sources)
+		for _, sp := range profs {
+			p := sp.Profile
+			profiles = append(profiles, map[string]interface{}{
+				"editorialStance":         p.EditorialStance,
+				"agenda":                  p.Agenda,
+				"motivation":              p.Motivation,
+				"trustScore":              p.TrustScore,
+				"trustRationale":          p.TrustRationale,
+				"behaviorPatterns":        p.BehaviorPatterns,
+				"contentPatterns":         p.ContentPatterns,
+				"topics":                  p.Topics,
+				"editorialMethods":        p.EditorialMethods,
+				"goals":                   p.Goals,
+				"goalAlignmentScore":      p.GoalAlignmentScore,
+				"metrics":                 p.Metrics,
+				"targetAudienceCountries": p.TargetAudienceCountries,
+				"redFlags":                p.RedFlags,
+				"coordinatedSources":      p.CoordinatedSources,
+				"flags":                   p.Flags,
+			})
 		}
-		profiles = append(profiles, map[string]interface{}{
-			"editorialStance":         s.Profile.EditorialStance,
-			"agenda":                  s.Profile.Agenda,
-			"motivation":              s.Profile.Motivation,
-			"trustScore":              s.Profile.TrustScore,
-			"trustRationale":          s.Profile.TrustRationale,
-			"behaviorPatterns":        s.Profile.BehaviorPatterns,
-			"contentPatterns":         s.Profile.ContentPatterns,
-			"topics":                  s.Profile.Topics,
-			"editorialMethods":        s.Profile.EditorialMethods,
-			"goals":                   s.Profile.Goals,
-			"goalAlignmentScore":      s.Profile.GoalAlignmentScore,
-			"metrics":                 s.Profile.Metrics,
-			"targetAudienceCountries": s.Profile.TargetAudienceCountries,
-			"redFlags":                s.Profile.RedFlags,
-			"coordinatedSources":      s.Profile.CoordinatedSources,
-			"flags":                   s.Profile.Flags,
-		})
 	}
 	o.logger.Printf("orchestrator: synthesis will use %d profiles (out of %d sources)", len(profiles), len(list))
 

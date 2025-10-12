@@ -29,6 +29,7 @@ type server struct {
 	users            *repo.UsersRepository
 	projs            *repo.ProjectsRepository
 	dsrcs            *repo.DataSourcesRepository
+	sprofs           *repo.SourceProfilesRepository
 	usersHandler     *httphandlers.UsersHandler
 	projectsHandler  *httphandlers.ProjectsHandler
 	discoveryHandler *httphandlers.DiscoveryHandler
@@ -66,6 +67,7 @@ func main() {
 	s.users = repo.NewUsersRepository(fsClient.Client())
 	s.projs = repo.NewProjectsRepository(fsClient.Client())
 	s.dsrcs = repo.NewDataSourcesRepository(fsClient.Client())
+	s.sprofs = repo.NewSourceProfilesRepository(fsClient.Client())
 
 	// Handlers
 	s.usersHandler = httphandlers.NewUsersHandler(s.users, logger)
@@ -100,7 +102,7 @@ func main() {
 		if err != nil {
 			log.Printf("WARNING: PubSub publisher init failed: %v (realtime updates disabled)", err)
 		}
-		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger)
+		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger).WithProfiles(s.sprofs)
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
 		orchestrator = orchestrator.WithCache(cacheRepo).WithInteractions(interactions)

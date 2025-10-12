@@ -46,9 +46,6 @@ type DataSource struct {
 	OwnerUserID string        `json:"ownerUserId"`
 	Details     SourceDetails `json:"sourceDetails"`
 
-	// Source profile data (from AI analysis)
-	Profile *SourceProfileData `json:"profile,omitempty"`
-
 	LastPolledAt *time.Time `json:"lastPolledAt,omitempty"`
 	LastFoundAt  *time.Time `json:"lastFoundAt,omitempty"`
 
@@ -60,6 +57,19 @@ type DataSource struct {
 	TrustLevel float64   `json:"trustLevel"`
 	FirstSeen  time.Time `json:"firstSeenAt"`
 	LastSeen   time.Time `json:"lastSeenAt"`
+}
+
+// SourceProfile документ хранит профиль источника отдельно от DataSource
+type SourceProfile struct {
+	ID             string     `json:"id"`
+	TenantID       string     `json:"tenantId"`
+	DataSourceID   string     `json:"dataSourceId"`
+	SchemaVersion  string     `json:"schemaVersion"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	LastAnalyzedAt *time.Time `json:"lastAnalyzedAt,omitempty"`
+
+	Profile SourceProfileData `json:"profile"`
 }
 
 // SourceProfileData matches SourceProfileDataDto from old frontend
@@ -141,7 +151,7 @@ type Goal struct {
 type Metrics struct {
 	ClaimDensity       *float64 `json:"claimDensity,omitempty"`
 	ExternalRefShare   *float64 `json:"externalRefShare,omitempty"`
-    ResponseLatencyAvg *float64 `json:"responseLatencyAvg,omitempty"`
+	ResponseLatencyAvg *float64 `json:"responseLatencyAvg,omitempty"`
 	Polarization       *float64 `json:"polarization,omitempty"`
 	CTAShare           *float64 `json:"ctaShare,omitempty"`
 	PromoLinkShare     *float64 `json:"promoLinkShare,omitempty"`

@@ -16,6 +16,7 @@ var ErrInvalidDocument = errors.New("invalid document")
 type UsersRepository struct{ col *firestore.CollectionRef }
 type ProjectsRepository struct{ col *firestore.CollectionRef }
 type DataSourcesRepository struct{ col *firestore.CollectionRef }
+type SourceProfilesRepository struct{ col *firestore.CollectionRef }
 
 func NewUsersRepository(db *firestore.Client) *UsersRepository {
 	return &UsersRepository{col: db.Collection("core_users")}
@@ -27,6 +28,10 @@ func NewProjectsRepository(db *firestore.Client) *ProjectsRepository {
 
 func NewDataSourcesRepository(db *firestore.Client) *DataSourcesRepository {
 	return &DataSourcesRepository{col: db.Collection("core_datasources")}
+}
+
+func NewSourceProfilesRepository(db *firestore.Client) *SourceProfilesRepository {
+	return &SourceProfilesRepository{col: db.Collection("core_source_profiles")}
 }
 
 // --- Users ---
@@ -195,6 +200,73 @@ func (r *DataSourcesRepository) Create(ctx context.Context, ds *models.DataSourc
 		return "", err
 	}
 	return doc.ID, nil
+}
+
+// --- SourceProfiles ---
+func (r *SourceProfilesRepository) Upsert(ctx context.Context, sp *models.SourceProfile) error {
+	if sp == nil || sp.ID == "" || sp.DataSourceID == "" || sp.TenantID == "" {
+		return ErrInvalidDocument
+	}
+	now := time.Now().UTC()
+	if sp.CreatedAt.IsZero() {
+		sp.CreatedAt = now
+	}
+	sp.UpdatedAt = now
+	if sp.SchemaVersion == "" {
+		sp.SchemaVersion = "1.0"
+	}
+	_, err := r.col.Doc(sp.ID).Set(ctx, sp)
+	return err
+}
+
+func (r *SourceProfilesRepository) GetByDataSource(ctx context.Context, tenantID, dataSourceID string) (*models.SourceProfile, error) {
+	// Simple scan by tenant; Firestore requires composite index for equality on two fields, use client-side filter for now
+	docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range docs {
+		var sp models.SourceProfile
+		if err := d.DataTo(&sp); err != nil {
+			continue
+		}
+		if sp.DataSourceID == dataSourceID {
+			return &sp, nil
+		}
+	}
+	return nil, fmt.Errorf("source profile not found")
+}
+
+func (r *SourceProfilesRepository) ListByProject(ctx context.Context, tenantID, projectID string, sourcesRepo *DataSourcesRepository) ([]*models.SourceProfile, error) {
+	// Load sources by project then map to profiles
+	sources, err := sourcesRepo.ListByProject(ctx, tenantID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if len(sources) == 0 {
+		return []*models.SourceProfile{}, nil
+	}
+	// Build set of dataSourceIDs
+	ids := make(map[string]struct{}, len(sources))
+	for _, s := range sources {
+		ids[s.ID] = struct{}{}
+	}
+	// Fetch all tenant profiles and filter
+	docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var res []*models.SourceProfile
+	for _, d := range docs {
+		var sp models.SourceProfile
+		if err := d.DataTo(&sp); err != nil {
+			continue
+		}
+		if _, ok := ids[sp.DataSourceID]; ok {
+			res = append(res, &sp)
+		}
+	}
+	return res, nil
 }
 
 func (r *DataSourcesRepository) Upsert(ctx context.Context, ds *models.DataSource) error {

@@ -96,6 +96,13 @@ const DiscoveryPage: React.FC = () => {
       return;
     }
 
+    // Pre-seed pending sources for immediate visual feedback
+    const pending = [
+      ...parsed.web.map((url) => ({ id: url, kind: 'web' as const, status: 'fetching' })),
+      ...parsed.telegram.map((handle) => ({ id: handle, kind: 'telegram' as const, status: 'fetching' })),
+    ];
+    useDiscoveryStore.getState().setPendingSources(pending);
+
     setRunning(true);
     
     try {
