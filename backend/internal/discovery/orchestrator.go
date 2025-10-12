@@ -287,8 +287,10 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	ds.Profile = prof
 	ds.Status = "completed"
 	if err := o.sources.Upsert(ctx, ds); err != nil {
+		o.logger.Printf("orchestrator: failed to upsert web source %s (profile size: ~%d bytes): %v", canonicalURL, len(mustJSON(prof)), err)
 		return err
 	}
+	o.logger.Printf("orchestrator: saved web profile for %s, size: ~%d bytes", canonicalURL, len(mustJSON(prof)))
 	if o.cache != nil {
 		_ = o.cache.Put(ctx, in.TenantID, canonicalURL, contentHash, prof)
 	}
@@ -346,10 +348,15 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		"correlationId": in.Correlation,
 		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching"})
 
-	// fetch posts (last 100)
+	// fetch posts (last 30 to avoid Firestore 1MB document limit)
 	msgs, err := o.telegram.FetchUpdates(ctx, handle, 0)
 	if err != nil {
+		o.logger.Printf("orchestrator: telegram fetch error for @%s: %v", handle, err)
 		return err
+	}
+	// Limit to 30 most recent messages
+	if len(msgs) > 30 {
+		msgs = msgs[len(msgs)-30:]
 	}
 	// concatenate text
 	var b strings.Builder
@@ -362,13 +369,16 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 
 	prof, err := o.profile(ctx, ds.DisplayName, b.String(), in.Language)
 	if err != nil {
+		o.logger.Printf("orchestrator: profiling error for @%s: %v", handle, err)
 		return err
 	}
 	ds.Profile = prof
 	ds.Status = "completed"
 	if err := o.sources.Upsert(ctx, ds); err != nil {
+		o.logger.Printf("orchestrator: failed to upsert telegram source @%s (profile size: ~%d bytes): %v", handle, len(mustJSON(prof)), err)
 		return err
 	}
+	o.logger.Printf("orchestrator: saved telegram profile for @%s, size: ~%d bytes", handle, len(mustJSON(prof)))
 	o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
 		"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": prof})
@@ -384,8 +394,10 @@ func (o *Orchestrator) synthesizeAnswer(ctx context.Context, in ExecuteInput) er
 	// Load sources
 	list, err := o.sources.ListByProject(ctx, in.TenantID, in.ProjectID)
 	if err != nil {
+		o.logger.Printf("orchestrator: failed to list sources for project %s: %v", in.ProjectID, err)
 		return err
 	}
+	o.logger.Printf("orchestrator: loaded %d sources for project %s, preparing synthesis", len(list), in.ProjectID)
 	// Build profiles array JSON
 	profiles := make([]map[string]interface{}, 0, len(list))
 	for _, s := range list {
@@ -411,6 +423,7 @@ func (o *Orchestrator) synthesizeAnswer(ctx context.Context, in ExecuteInput) er
 			"flags":                   s.Profile.Flags,
 		})
 	}
+	o.logger.Printf("orchestrator: synthesis will use %d profiles (out of %d sources)", len(profiles), len(list))
 
 	profilesJSON := mustJSON(profiles)
 	prompt := prompts.Format(prompts.AnswerSynthesisPrompt, map[string]string{

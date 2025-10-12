@@ -168,7 +168,12 @@ func main() {
 			psClient, err := pubsub.NewClient(ctx, projectID)
 			if err == nil {
 				sub := realtime.NewSubscriber(psClient, hub, logger)
-				_ = sub.Start(ctx, string(realtime.EventDiscoveryStatus), string(realtime.EventDiscoveryProfile), string(realtime.EventDiscoveryAnswer))
+				_ = sub.Start(ctx,
+					string(realtime.EventDiscoveryStatus),
+					string(realtime.EventDiscoveryProfile),
+					string(realtime.EventDiscoveryAnswer),
+					string(realtime.EventDiscoveryProject),
+				)
 			} else {
 				log.Printf("ws subscriber: pubsub client init error: %v", err)
 			}
