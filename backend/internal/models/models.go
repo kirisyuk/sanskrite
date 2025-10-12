@@ -141,7 +141,7 @@ type Goal struct {
 type Metrics struct {
 	ClaimDensity       *float64 `json:"claimDensity,omitempty"`
 	ExternalRefShare   *float64 `json:"externalRefShare,omitempty"`
-	ResponseLatencyAvg *int     `json:"responseLatencyAvg,omitempty"`
+    ResponseLatencyAvg *float64 `json:"responseLatencyAvg,omitempty"`
 	Polarization       *float64 `json:"polarization,omitempty"`
 	CTAShare           *float64 `json:"ctaShare,omitempty"`
 	PromoLinkShare     *float64 `json:"promoLinkShare,omitempty"`
