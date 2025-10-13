@@ -98,8 +98,9 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 	var historyPairs []map[string]string
 	var profileSummaries []string
 	var contextSnippets []string
-	if o.interactions != nil {
-		if items, err := o.interactions.ListByProject(ctx, projectID); err == nil {
+    hadContext := false
+    if o.interactions != nil {
+        if items, err := o.interactions.ListByProject(ctx, projectID); err == nil {
 			// Collect last up to 8 messages (4 pairs)
 			for i := len(items) - 1; i >= 0 && len(historyPairs) < 4; i-- {
 				it := items[i]
@@ -124,8 +125,11 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 						profileSummaries = append(profileSummaries, it.Content)
 					}
 				}
+                if it.Kind == "discovery.context" {
+                    hadContext = true
+                }
 			}
-			// Collect recent context snippets with a simple char budget (~6000 chars)
+            // Collect recent context snippets with a simple char budget (~6000 chars)
 			constMaxChars := 6000
 			used := 0
 			for i := len(items) - 1; i >= 0 && used < constMaxChars; i-- {
@@ -145,6 +149,52 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 								used += len(s)
 							}
 						}
+
+    // If we have no discovery.context at all for this project, fetch minimal context now (web/telegram summaries)
+    if !hadContext {
+        // Load sources and fetch a minimal fresh context snippet for each (best effort)
+        if o.sources != nil {
+            if srcs, err := o.sources.ListByProject(ctx, tenantID, projectID); err == nil {
+                for _, ds := range srcs {
+                    // Prepare a small snippet depending on kind
+                    var snippet string
+                    if ds.Kind == "web" && ds.Details.URI != nil {
+                        if fr, err := o.crawl.FetchContent(ctx, *ds.Details.URI); err == nil {
+                            snippet = strings.TrimSpace(fr.Text)
+                        }
+                    } else if ds.Kind == "telegram_channel" && ds.Details.ChannelUsername != nil {
+                        if msgs, err := o.telegram.FetchUpdates(ctx, *ds.Details.ChannelUsername, 0); err == nil {
+                            var b strings.Builder
+                            for i := 0; i < len(msgs) && i < 10; i++ {
+                                if msgs[i].Text != "" {
+                                    b.WriteString(msgs[i].Text)
+                                    b.WriteString("\n\n")
+                                }
+                            }
+                            snippet = strings.TrimSpace(b.String())
+                        }
+                    }
+                    if snippet != "" {
+                        if len(snippet) > 1500 {
+                            snippet = snippet[:1500]
+                        }
+                        obj := map[string]interface{}{
+                            "sourceId":    ds.ID,
+                            "displayName": ds.DisplayName,
+                            "sourceKind":  ds.Kind,
+                            "snippet":     snippet,
+                            "chars":       len(snippet),
+                        }
+                        b, _ := json.Marshal(obj)
+                        if o.interactions != nil {
+                            _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: tenantID, ProjectID: projectID, Kind: "discovery.context", Content: string(b)})
+                        }
+                        contextSnippets = append(contextSnippets, snippet)
+                    }
+                }
+            }
+        }
+    }
 					}
 				}
 			}
