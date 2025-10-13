@@ -219,7 +219,12 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	// find or create DataSource
 	var ds *models.DataSource
 	needsUpdate := false
-	if existing, err := o.sources.FindByCanonicalSource(ctx, in.TenantID, canonicalURL); err == nil && existing != nil {
+	existing, err := o.sources.FindByCanonicalSource(ctx, in.TenantID, canonicalURL)
+	if err != nil {
+		o.logger.Printf("orchestrator: FindByCanonicalSource for %s error: %v (will create new)", canonicalURL, err)
+	}
+	if existing != nil {
+		o.logger.Printf("orchestrator: found existing web source %s (id=%s) for project %s", canonicalURL, existing.ID, in.ProjectID)
 		ds = existing
 		// ensure project link present
 		if ds.ProjectID == nil || *ds.ProjectID != in.ProjectID {
@@ -238,6 +243,7 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 				_ = o.sources.Upsert(ctx, ds)
 			}
 			if sp, _ := o.profiles.GetByDataSource(ctx, in.TenantID, ds.ID); sp != nil {
+				o.logger.Printf("orchestrator: reusing existing profile for %s", canonicalURL)
 				o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 					"projectId": in.ProjectID, "sourceId": ds.ID, "profile": sp.Profile})
 				return nil
@@ -245,6 +251,7 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		}
 	} else {
 		now := time.Now().UTC()
+		o.logger.Printf("orchestrator: creating new web source %s for project %s", canonicalURL, in.ProjectID)
 		ds = &models.DataSource{
 			TenantID:    in.TenantID,
 			Pk:          in.TenantID,
@@ -259,13 +266,18 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 			FirstSeen:   now,
 			LastSeen:    now,
 		}
-		if _, err := o.sources.Create(ctx, ds); err != nil {
+		if createdID, err := o.sources.Create(ctx, ds); err != nil {
+			o.logger.Printf("orchestrator: failed to create web source %s: %v", canonicalURL, err)
 			return err
+		} else {
+			o.logger.Printf("orchestrator: created web source %s with id=%s", canonicalURL, createdID)
 		}
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
-		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching"})
+		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching",
+		"kind": ds.Kind, "displayName": ds.DisplayName,
+	})
 
 	// fetch content
 	fr, err := o.crawl.FetchContent(ctx, canonicalURL)
@@ -317,7 +329,12 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 	// find or create
 	var ds *models.DataSource
 	needsUpdate := false
-	if existing, err := o.sources.FindByCanonicalSource(ctx, in.TenantID, handle); err == nil && existing != nil {
+	existing, err := o.sources.FindByCanonicalSource(ctx, in.TenantID, handle)
+	if err != nil {
+		o.logger.Printf("orchestrator: FindByCanonicalSource for @%s error: %v (will create new)", handle, err)
+	}
+	if existing != nil {
+		o.logger.Printf("orchestrator: found existing telegram source @%s (id=%s) for project %s", handle, existing.ID, in.ProjectID)
 		ds = existing
 		if ds.ProjectID == nil || *ds.ProjectID != in.ProjectID {
 			if !contains(ds.RelatedProjectIDs, in.ProjectID) {
@@ -335,6 +352,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 				_ = o.sources.Upsert(ctx, ds)
 			}
 			if sp, _ := o.profiles.GetByDataSource(ctx, in.TenantID, ds.ID); sp != nil {
+				o.logger.Printf("orchestrator: reusing existing profile for @%s", handle)
 				o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 					"projectId": in.ProjectID, "sourceId": ds.ID, "profile": sp.Profile})
 				return nil
@@ -342,6 +360,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		}
 	} else {
 		now := time.Now().UTC()
+		o.logger.Printf("orchestrator: creating new telegram source @%s for project %s", handle, in.ProjectID)
 		ds = &models.DataSource{
 			TenantID:    in.TenantID,
 			Pk:          in.TenantID,
@@ -353,13 +372,18 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 			Details:     models.SourceDetails{ChannelUsername: &handle},
 			CreatedAt:   now, UpdatedAt: now, FirstSeen: now, LastSeen: now,
 		}
-		if _, err := o.sources.Create(ctx, ds); err != nil {
+		if createdID, err := o.sources.Create(ctx, ds); err != nil {
+			o.logger.Printf("orchestrator: failed to create telegram source @%s: %v", handle, err)
 			return err
+		} else {
+			o.logger.Printf("orchestrator: created telegram source @%s with id=%s", handle, createdID)
 		}
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
-		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching"})
+		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching",
+		"kind": ds.Kind, "displayName": ds.DisplayName,
+	})
 
 	// fetch posts (last 30 to avoid Firestore 1MB document limit)
 	msgs, err := o.telegram.FetchUpdates(ctx, handle, 0)

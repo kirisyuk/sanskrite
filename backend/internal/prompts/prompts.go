@@ -19,6 +19,7 @@ TASK:
 - When evidence is insufficient, set fields to null or omit them; never invent facts.
 - All ratio-like numeric values MUST be normalized to [0,1]. Topic/method shares across arrays SHOULD sum to ≤ 1.0.
 - Keep numbers with 2 decimal digits where applicable.
+- For targetAudienceCountries, output ISO 3166-1 alpha-2 country codes in UPPERCASE (e.g., RU, US, DE). Do not use full country names.
 
 REQUIRED JSON SCHEMA (keys and types MUST match exactly; omit unknown fields or use nulls where appropriate):
 {
@@ -68,11 +69,19 @@ REQUIRED JSON SCHEMA (keys and types MUST match exactly; omit unknown fields or 
     "promoLinkShare": 0.0,
     "evidenceQuality": 0.0
   },
-  "targetAudienceCountries": ["string"],
+  "targetAudienceCountries": ["ISO_3166-1_alpha-2"],
   "redFlags": [ { "code": "string", "score": 0.0, "rationale": "string" } ],
   "coordinatedSources": [ { "sourceId": "string", "coordinationScore": 0.0 } ],
   "flags": ["string"]
 }
+
+TOPIC EXTRACTION GUIDELINES:
+- Return 3-8 topics that reflect distinct, recurring themes observed in CONTENT (not generic labels).
+- Topic names must be concise noun phrases (≤ 4 words), human-readable, and specific; avoid generic terms like "news", "politics", "economy".
+- Merge synonyms/variants into a single canonical topic (e.g., "AI" and "artificial intelligence" → "Artificial Intelligence").
+- For each topic, set share ∈ [0,1] proportional to its relative prominence; the sum of all topic shares MUST be ≤ 1.0.
+- Drop very minor topics (< 0.02 share) before normalization; deduplicate strictly (no duplicate names).
+- Set trend to one of {up,down,flat} based on relative prominence changes implied by the text; if unclear, use "flat".
 
 STRICT RULES:
 - Output MUST be valid JSON matching the schema (no extra top-level keys).

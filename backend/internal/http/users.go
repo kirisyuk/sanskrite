@@ -27,10 +27,11 @@ func NewUsersHandler(repo *repo.UsersRepository, logger *log.Logger) *UsersHandl
 
 // CreateUserRequest represents the request body for creating a user
 type CreateUserRequest struct {
-	FirebaseUID string  `json:"firebaseUid"`
-	Email       string  `json:"email"`
-	AccountType string  `json:"accountType"` // "personal" or "corporate"
-	DisplayName *string `json:"displayName,omitempty"`
+	FirebaseUID       string  `json:"firebaseUid"`
+	Email             string  `json:"email"`
+	AccountType       string  `json:"accountType"` // "personal" or "corporate"
+	DisplayName       *string `json:"displayName,omitempty"`
+	PreferredLanguage *string `json:"preferredLanguage,omitempty"`
 }
 
 // CreateUserResponse represents the response for user creation
@@ -106,17 +107,27 @@ func (h *UsersHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	status := "active"
 	schemaVersion := "1.0"
 
+	// Default preferredLanguage to EN if not provided or invalid length
+	pl := "EN"
+	if req.PreferredLanguage != nil {
+		v := strings.ToUpper(strings.TrimSpace(*req.PreferredLanguage))
+		if len(v) == 2 {
+			pl = v
+		}
+	}
+
 	user := &models.User{
-		ID:            req.FirebaseUID,
-		TenantID:      tenantID,
-		Email:         req.Email,
-		DisplayName:   req.DisplayName,
-		AuthType:      &req.AccountType,
-		Role:          &role,
-		Status:        &status,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		SchemaVersion: schemaVersion,
+		ID:                req.FirebaseUID,
+		TenantID:          tenantID,
+		Email:             req.Email,
+		DisplayName:       req.DisplayName,
+		AuthType:          &req.AccountType,
+		Role:              &role,
+		Status:            &status,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		SchemaVersion:     schemaVersion,
+		PreferredLanguage: &pl,
 	}
 
 	// Save to Firestore
@@ -246,6 +257,18 @@ func (h *UsersHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if updates.Metadata != nil {
 		userToUpdate.Metadata = updates.Metadata
+	}
+	if updates.PreferredLanguage != nil {
+		v := strings.ToUpper(strings.TrimSpace(*updates.PreferredLanguage))
+		if len(v) == 2 {
+			userToUpdate.PreferredLanguage = &v
+		}
+	}
+	if updates.CountryOfResidence != nil {
+		v := strings.ToUpper(strings.TrimSpace(*updates.CountryOfResidence))
+		if len(v) == 2 {
+			userToUpdate.CountryOfResidence = &v
+		}
 	}
 
 	// Admin can update role and status (for now, simplified - no admin check)

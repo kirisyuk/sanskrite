@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
@@ -66,6 +68,8 @@ func (p *SourceProfiler) ProfileSource(ctx context.Context, req ProfileRequest) 
 		return nil, fmt.Errorf("unexpected result type: %T", result)
 	}
 
+	// Best-practice normalization (dedupe, clamp, renormalize shares)
+	normalizeProfile(profile)
 	return profile, nil
 }
 
@@ -229,4 +233,353 @@ func validateProfile(p *models.SourceProfileData) error {
 	}
 
 	return nil
+}
+
+// normalizeProfile applies non-destructive best-practice cleanup:
+// - trims/normalizes strings
+// - merges duplicates case-insensitively
+// - thresholds tiny shares and renormalizes to sum ≤ 1
+// - clamps numeric scores to [0,1]
+// - validates/canonicalizes simple enums
+func normalizeProfile(p *models.SourceProfileData) {
+	// Editorial stance evidence: trim empties
+	if p.EditorialStance.Evidence != nil {
+		kept := make([]string, 0, len(p.EditorialStance.Evidence))
+		for _, e := range p.EditorialStance.Evidence {
+			t := strings.TrimSpace(e)
+			if t != "" {
+				kept = append(kept, t)
+			}
+		}
+		p.EditorialStance.Evidence = kept
+	}
+
+	// Agenda
+	if p.Agenda != nil {
+		if p.Agenda.PrimaryGoal != nil {
+			v := strings.TrimSpace(*p.Agenda.PrimaryGoal)
+			p.Agenda.PrimaryGoal = &v
+		}
+		if p.Agenda.Description != nil {
+			v := strings.TrimSpace(*p.Agenda.Description)
+			p.Agenda.Description = &v
+		}
+		// promoted/avoided themes – dedup lower
+		dedupStrSlice := func(in []string) []string {
+			seen := map[string]struct{}{}
+			out := make([]string, 0, len(in))
+			for _, s := range in {
+				t := strings.TrimSpace(s)
+				if t == "" {
+					continue
+				}
+				key := strings.ToLower(t)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, t)
+			}
+			return out
+		}
+		p.Agenda.PromotedThemes = dedupStrSlice(p.Agenda.PromotedThemes)
+		p.Agenda.AvoidedThemes = dedupStrSlice(p.Agenda.AvoidedThemes)
+		if p.Agenda.TargetAudience != nil {
+			v := strings.TrimSpace(*p.Agenda.TargetAudience)
+			p.Agenda.TargetAudience = &v
+		}
+	}
+
+	// Clamp behavior patterns
+	clamp01 := func(x float64) float64 {
+		if x < 0 {
+			return 0
+		}
+		if x > 1 {
+			return 1
+		}
+		return x
+	}
+	p.BehaviorPatterns.EventResponsiveness = clamp01(p.BehaviorPatterns.EventResponsiveness)
+	p.BehaviorPatterns.ContentConsistency = clamp01(p.BehaviorPatterns.ContentConsistency)
+	p.BehaviorPatterns.OriginalityScore = clamp01(p.BehaviorPatterns.OriginalityScore)
+
+	// Emotional tone distribution: clamp and renormalize if > 1
+	if p.ContentPatterns != nil && p.ContentPatterns.EmotionalToneDistribution != nil {
+		etd := p.ContentPatterns.EmotionalToneDistribution
+		vals := []*float64{etd.Neutral, etd.Outrage, etd.Fear, etd.Hope}
+		sum := 0.0
+		for _, ref := range vals {
+			if ref != nil {
+				v := clamp01(*ref)
+				*ref = v
+				sum += v
+			}
+		}
+		if sum > 1.0001 {
+			// renormalize proportionally
+			for _, ref := range vals {
+				if ref != nil {
+					*ref = *ref / sum
+				}
+			}
+		}
+	}
+
+	// Focus entities: dedup by entityName (case-insensitive), sum mentions, avg sentiment weighted
+	if p.ContentPatterns != nil && p.ContentPatterns.FocusEntityNames != nil {
+		type agg struct {
+			count    int
+			mentions int
+			sentSum  float64
+		}
+		by := map[string]agg{}
+		for _, fe := range p.ContentPatterns.FocusEntityNames {
+			name := strings.TrimSpace(fe.EntityName)
+			if name == "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			a := by[key]
+			a.count++
+			a.mentions += fe.MentionCount
+			a.sentSum += fe.AverageSentiment * float64(maxInt(1, fe.MentionCount))
+			by[key] = a
+		}
+		out := make([]models.FocusEntity, 0, len(by))
+		for k, a := range by {
+			avg := 0.0
+			if a.mentions > 0 {
+				avg = a.sentSum / float64(a.mentions)
+			}
+			out = append(out, models.FocusEntity{EntityName: k, MentionCount: a.mentions, AverageSentiment: avg})
+		}
+		// sort by mentions desc
+		sort.Slice(out, func(i, j int) bool { return out[i].MentionCount > out[j].MentionCount })
+		if len(out) > 20 {
+			out = out[:20]
+		}
+		p.ContentPatterns.FocusEntityNames = out
+	}
+
+	// Topics: merge duplicates (case-insensitive), drop tiny, renormalize, sort
+	if p.Topics != nil {
+		type topic struct {
+			name  string
+			share float64
+			trend *string
+		}
+		by := map[string]topic{}
+		for _, t := range p.Topics {
+			name := strings.TrimSpace(t.Name)
+			if name == "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			cur := by[key]
+			cur.name = name
+			cur.share += t.Share
+			if t.Trend != nil {
+				tv := strings.ToLower(strings.TrimSpace(*t.Trend))
+				if tv == "up" || tv == "down" || tv == "flat" {
+					cur.trend = &tv
+				}
+			}
+			by[key] = cur
+		}
+		// threshold and collect
+		const minShare = 0.02
+		merged := make([]models.Topic, 0, len(by))
+		sum := 0.0
+		for _, v := range by {
+			if v.share < minShare {
+				continue
+			}
+			sum += v.share
+		}
+		// renormalize if needed
+		for _, v := range by {
+			if v.share < minShare {
+				continue
+			}
+			s := v.share
+			if sum > 0 {
+				s = s / sum
+			}
+			merged = append(merged, models.Topic{Name: v.name, Share: s, Trend: v.trend})
+		}
+		sort.Slice(merged, func(i, j int) bool { return merged[i].Share > merged[j].Share })
+		if len(merged) > 12 {
+			merged = merged[:12]
+		}
+		p.Topics = merged
+	}
+
+	// Editorial methods: merge by method, threshold and renormalize
+	if p.EditorialMethods != nil {
+		by := map[string]float64{}
+		for _, m := range p.EditorialMethods {
+			name := strings.TrimSpace(m.Method)
+			if name == "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			by[key] += m.Share
+		}
+		const minShare = 0.02
+		sum := 0.0
+		for _, s := range by {
+			if s >= minShare {
+				sum += s
+			}
+		}
+		out := make([]models.EditorialMethod, 0, len(by))
+		for k, s := range by {
+			if s < minShare {
+				continue
+			}
+			if sum > 0 {
+				s = s / sum
+			}
+			out = append(out, models.EditorialMethod{Method: k, Share: s})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Share > out[j].Share })
+		if len(out) > 12 {
+			out = out[:12]
+		}
+		p.EditorialMethods = out
+	}
+
+	// Goals: dedup by text, keep max confidence
+	if p.Goals != nil {
+		by := map[string]float64{}
+		for _, g := range p.Goals {
+			name := strings.TrimSpace(g.Goal)
+			if name == "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			c := clamp01(g.Confidence)
+			if c > by[key] {
+				by[key] = c
+			}
+		}
+		out := make([]models.Goal, 0, len(by))
+		for k, c := range by {
+			out = append(out, models.Goal{Goal: k, Confidence: c})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Confidence > out[j].Confidence })
+		if len(out) > 20 {
+			out = out[:20]
+		}
+		p.Goals = out
+	}
+
+	// Target audience countries: enforce ISO-3166-1 alpha-2 uppercase
+	if p.TargetAudienceCountries != nil {
+		out := make([]string, 0, len(p.TargetAudienceCountries))
+		seen := map[string]struct{}{}
+		for _, c := range p.TargetAudienceCountries {
+			code := strings.ToUpper(strings.TrimSpace(c))
+			if len(code) != 2 {
+				continue
+			}
+			if code[0] < 'A' || code[0] > 'Z' || code[1] < 'A' || code[1] > 'Z' {
+				continue
+			}
+			if _, ok := seen[code]; ok {
+				continue
+			}
+			seen[code] = struct{}{}
+			out = append(out, code)
+		}
+		p.TargetAudienceCountries = out
+	}
+
+	// Red flags: dedup by code, keep max score, clamp 0..1
+	if p.RedFlags != nil {
+		by := map[string]models.RedFlag{}
+		for _, rf := range p.RedFlags {
+			code := strings.TrimSpace(rf.Code)
+			if code == "" {
+				continue
+			}
+			if rf.Score < 0 {
+				rf.Score = 0
+			} else if rf.Score > 1 {
+				rf.Score = 1
+			}
+			if old, ok := by[code]; !ok || rf.Score > old.Score {
+				by[code] = models.RedFlag{Code: code, Score: rf.Score, Rationale: rf.Rationale}
+			}
+		}
+		out := make([]models.RedFlag, 0, len(by))
+		for _, v := range by {
+			out = append(out, v)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+		if len(out) > 20 {
+			out = out[:20]
+		}
+		p.RedFlags = out
+	}
+
+	// Coordinated sources: dedup by sourceId, keep max score, clamp 0..1
+	if p.CoordinatedSources != nil {
+		by := map[string]float64{}
+		for _, cs := range p.CoordinatedSources {
+			id := strings.TrimSpace(cs.SourceID)
+			if id == "" {
+				continue
+			}
+			s := clamp01(cs.CoordinationScore)
+			if s > by[id] {
+				by[id] = s
+			}
+		}
+		out := make([]models.CoordinatedSource, 0, len(by))
+		for id, s := range by {
+			out = append(out, models.CoordinatedSource{SourceID: id, CoordinationScore: s})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].CoordinationScore > out[j].CoordinationScore })
+		if len(out) > 20 {
+			out = out[:20]
+		}
+		p.CoordinatedSources = out
+	}
+
+	// Metrics: clamp 0..1
+	if p.Metrics != nil {
+		if p.Metrics.ClaimDensity != nil {
+			v := clamp01(*p.Metrics.ClaimDensity)
+			p.Metrics.ClaimDensity = &v
+		}
+		if p.Metrics.ExternalRefShare != nil {
+			v := clamp01(*p.Metrics.ExternalRefShare)
+			p.Metrics.ExternalRefShare = &v
+		}
+		if p.Metrics.Polarization != nil {
+			v := clamp01(*p.Metrics.Polarization)
+			p.Metrics.Polarization = &v
+		}
+		if p.Metrics.CTAShare != nil {
+			v := clamp01(*p.Metrics.CTAShare)
+			p.Metrics.CTAShare = &v
+		}
+		if p.Metrics.PromoLinkShare != nil {
+			v := clamp01(*p.Metrics.PromoLinkShare)
+			p.Metrics.PromoLinkShare = &v
+		}
+		if p.Metrics.EvidenceQuality != nil {
+			v := clamp01(*p.Metrics.EvidenceQuality)
+			p.Metrics.EvidenceQuality = &v
+		}
+	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

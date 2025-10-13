@@ -99,6 +99,11 @@ class ApiClient {
     const response = await this.client.get<DataSource[]>(`/api/v1/projects/${projectId}/datasources`);
     return response.data;
   }
+
+  async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string }[]> {
+    const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string }[] }>(`/api/v1/projects/${projectId}/interactions`);
+    return response.data.items;
+  }
 }
 
 export const api = new ApiClient();

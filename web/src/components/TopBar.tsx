@@ -21,9 +21,10 @@ export const TopBar: React.FC = () => {
         <img
           src={theme === 'dark' ? logoDarkTheme : logoLightTheme}
           alt="Sanskrite"
-          className="h-[13.5px] w-auto object-contain"
+          className="h-[10.8px] w-auto object-contain"
           style={{
             filter: theme === 'dark' ? 'drop-shadow(0 0 2px rgba(0,0,0,0.6))' : 'none',
+            opacity: 0.7,
           }}
         />
       </div>

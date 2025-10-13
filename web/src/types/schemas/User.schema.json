@@ -26,6 +26,12 @@
     "metadata": {
       "type": "object"
     },
+    "preferredLanguage": {
+      "type": "string"
+    },
+    "countryOfResidence": {
+      "type": "string"
+    },
     "createdAt": {
       "type": "string",
       "format": "date-time"

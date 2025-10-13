@@ -31,6 +31,7 @@ func HashContent(s string) string {
 
 // Get returns cached profile if content hash matches and not older than maxAge
 func (r *ProcessedContentRepository) Get(ctx context.Context, tenantID, sourceKey, contentHash string, maxAge time.Duration) (*models.SourceProfileData, error) {
+	// With firestore tags set to lowerCamel, use lowerCamel paths
 	q := r.col.Where("tenantId", "==", tenantID).Where("sourceKey", "==", sourceKey).Limit(1)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil || len(docs) == 0 {
@@ -57,6 +58,3 @@ func (r *ProcessedContentRepository) Put(ctx context.Context, tenantID, sourceKe
 	_, err := r.col.Doc(docID).Set(ctx, data)
 	return err
 }
-
-
-

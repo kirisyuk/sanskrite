@@ -29,77 +29,6 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
     contentType?: string;
     sourceUri?: string;
   };
-  profile?: {
-    editorialStance: {
-      political: string;
-      confidence: number;
-      evidence?: string[];
-    };
-    agenda?: {
-      primaryGoal?: string;
-      description?: string;
-      promotedThemes?: string[];
-      avoidedThemes?: string[];
-      targetAudience?: string;
-    };
-    motivation: string;
-    trustScore: number;
-    trustRationale: string;
-    behaviorPatterns: {
-      publishingCadence: string;
-      eventResponsiveness: number;
-      contentConsistency: number;
-      originalityScore: number;
-    };
-    contentPatterns?: {
-      dominantFramings?: string[];
-      emotionalToneDistribution?: {
-        neutral?: number;
-        outrage?: number;
-        fear?: number;
-        hope?: number;
-      };
-      focusEntityNames?: {
-        entityName: string;
-        mentionCount: number;
-        averageSentiment: number;
-      }[];
-    };
-    topics?: {
-      name: string;
-      share: number;
-      trend?: string;
-    }[];
-    editorialMethods?: {
-      method: string;
-      share: number;
-    }[];
-    goals?: {
-      goal: string;
-      confidence: number;
-    }[];
-    goalAlignmentScore?: number;
-    metrics?: {
-      claimDensity?: number;
-      externalRefShare?: number;
-      responseLatencyAvg?: number;
-      polarization?: number;
-      ctaShare?: number;
-      promoLinkShare?: number;
-      evidenceQuality?: number;
-    };
-    targetAudienceCountries?: string[];
-    redFlags?: {
-      code: string;
-      score: number;
-      rationale?: string;
-    }[];
-    coordinatedSources?: {
-      sourceId: string;
-      coordinationScore: number;
-    }[];
-    flags?: string[];
-  };
   lastPolledAt?: string;
   lastFoundAt?: string;
   errorCount: number;
@@ -144,6 +73,8 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsUser {
   metadata?: {
     [k: string]: any;
   };
+  preferredLanguage?: string;
+  countryOfResidence?: string;
   createdAt: string;
   updatedAt: string;
   schemaVersion: string;

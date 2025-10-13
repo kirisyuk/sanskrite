@@ -106,7 +106,9 @@ func main() {
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
 		orchestrator = orchestrator.WithCache(cacheRepo).WithInteractions(interactions)
-		s.discoveryHandler = s.discoveryHandler.WithOrchestrator(orchestrator)
+		// Wire cascade repos to projects handler
+		s.projectsHandler = s.projectsHandler.WithCascade(s.sprofs, interactions)
+		s.discoveryHandler = s.discoveryHandler.WithOrchestrator(orchestrator).WithInteractions(interactions).WithProfiles(s.sprofs)
 	}
 
 	// Get auth client for middleware
@@ -251,6 +253,11 @@ func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request) {
 	// Check if path is /projects/{id}/datasources
 	if strings.HasSuffix(r.URL.Path, "/datasources") {
 		s.discoveryHandler.ListProjectSources(w, r)
+		return
+	}
+	// Check if path is /projects/{id}/interactions
+	if strings.HasSuffix(r.URL.Path, "/interactions") {
+		s.discoveryHandler.ListProjectInteractions(w, r)
 		return
 	}
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Settings from '../components/Settings';
 import { useProjectsStore } from '../stores/projectsStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
 import { useAuth } from '../contexts/AuthContext';
@@ -6,25 +7,34 @@ import { useAuth } from '../contexts/AuthContext';
 const DiscoveryPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { projects, currentProject, fetchProjects, deleteProject, setCurrentProject } = useProjectsStore();
-  const { sources, loading, executeDiscovery, fetchProjectSources, clearSources, connectWs, answer, correlationId } = useDiscoveryStore();
+  const { sources, loading, executeDiscovery, fetchProjectSources, fetchProjectInteractions, clearSources, connectWs, answer, correlationId, interactions } = useDiscoveryStore();
   
   const [queryText, setQueryText] = useState('');
   const [sideOpen, setSideOpen] = useState(false);
   const [running, setRunning] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const correlationRef = useRef<string | null>(null);
+  const wsInitialized = useRef(false);
 
   useEffect(() => {
     fetchProjects('discovery');
-    // Connect WebSocket on page load
+  }, [fetchProjects]);
+
+  // Separate effect for WebSocket to prevent duplicate connections
+  useEffect(() => {
+    if (wsInitialized.current) return;
+    
     const tenantId = currentUser?.email || '';
     if (tenantId) {
+      wsInitialized.current = true;
       connectWs(tenantId);
     }
-  }, []);
+  }, [currentUser?.email, connectWs]);
 
   useEffect(() => {
     if (currentProject) {
       fetchProjectSources(currentProject.id);
+      fetchProjectInteractions(currentProject.id);
     } else {
       clearSources();
     }
@@ -260,7 +270,7 @@ const DiscoveryPage: React.FC = () => {
         >
           <div className="p-6 h-full flex flex-col">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-sm font-medium" style={{ color: 'var(--text-heading)' }}>Navigation</h3>
+              <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Navigation</h3>
               <button
                 onClick={() => setSideOpen(false)}
                 className="p-2 rounded-lg transition-colors"
@@ -271,6 +281,31 @@ const DiscoveryPage: React.FC = () => {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
+              </button>
+            </div>
+
+            {/* New Chat action */}
+            <div className="mb-3">
+              <button
+                type="button"
+                aria-label="New Chat"
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => {
+                  // Clear right side: sources, status, input, current chat, interactions
+                  clearSources();
+                  setCurrentProject(null);
+                  setQueryText('');
+                }}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  {/* Outlined plus in rounded rect (new chat) */}
+                  <rect x="3.5" y="3.5" width="17" height="17" rx="3" strokeWidth={2} />
+                  <path strokeLinecap="round" strokeWidth={2} d="M12 8v8M8 12h8" />
+                </svg>
+                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>New Chat</span>
               </button>
             </div>
 
@@ -319,6 +354,26 @@ const DiscoveryPage: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {/* Bottom settings button */}
+            <div className="mt-auto pt-4">
+              <button
+                type="button"
+                aria-label="Settings"
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => setShowSettings(true)}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  {/* Outlined gear (non-filled), simple and monotone */}
+                  <circle cx="12" cy="12" r="4.5" strokeWidth={2} />
+                  <path strokeLinecap="round" strokeWidth={2} d="M12 3v2M12 19v2M3 12h2M19 12h2M5.636 5.636l1.414 1.414M16.95 7.05l1.414-1.414M18.364 18.364l-1.414-1.414M7.05 16.95l-1.414 1.414" />
+                </svg>
+                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Settings</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -338,6 +393,27 @@ const DiscoveryPage: React.FC = () => {
 
       {/* Main center column */}
       <div className="flex-1 min-h-0 flex flex-col items-center">
+        {showSettings ? (
+          <div className="w-full px-4 mt-2 mb-2">
+            <div className="mb-2 flex items-center">
+              <button
+                onClick={() => setShowSettings(false)}
+                className="p-2 rounded-lg transition-colors"
+                style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                aria-label="Back"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <div className="ml-2 text-13" style={{ color: 'var(--text-heading)' }}>Settings</div>
+            </div>
+            <Settings />
+          </div>
+        ) : (
+        <>
         {/* Sources list (appears above input) */}
         {sources.length > 0 && (
           <div className="w-full max-w-3xl px-4 mt-2 mb-2">
@@ -349,13 +425,18 @@ const DiscoveryPage: React.FC = () => {
 
         {/* Input box anchored to bottom */}
         <div className="w-full max-w-3xl px-4 mt-auto mb-2">
-          {/* Answer bubble (above input) */}
-          {answer && (
+          {/* Interactions history (LLM answers etc.) */}
+          {interactions && interactions.length > 0 && (
             <div className="px-1 pb-2">
-              <div className="rounded-2xl px-3 py-2 mb-2" style={{ backgroundColor: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-heading)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {answer}
-                </div>
+              <div className="space-y-2">
+                {interactions.map((it) => (
+                  <div key={it.id} className="rounded-2xl px-3 py-2" style={{ backgroundColor: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
+                    <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>{it.kind}</div>
+                    <div className="text-xs" style={{ color: 'var(--text-heading)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {it.content}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -415,6 +496,8 @@ const DiscoveryPage: React.FC = () => {
             </div>
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

@@ -15,10 +15,12 @@ import (
 
 // DiscoveryHandler handles discovery-related HTTP requests
 type DiscoveryHandler struct {
-	projectsRepo    *repo.ProjectsRepository
-	dataSourcesRepo *repo.DataSourcesRepository
-	logger          *log.Logger
-	orchestrator    *discovery.Orchestrator
+	projectsRepo     *repo.ProjectsRepository
+	dataSourcesRepo  *repo.DataSourcesRepository
+	interactionsRepo *repo.InteractionsRepository
+	profilesRepo     *repo.SourceProfilesRepository
+	logger           *log.Logger
+	orchestrator     *discovery.Orchestrator
 }
 
 // NewDiscoveryHandler creates a new DiscoveryHandler
@@ -37,6 +39,18 @@ func NewDiscoveryHandler(
 // WithOrchestrator wires orchestrator instance for execution
 func (h *DiscoveryHandler) WithOrchestrator(o *discovery.Orchestrator) *DiscoveryHandler {
 	h.orchestrator = o
+	return h
+}
+
+// WithInteractions wires interactions repo
+func (h *DiscoveryHandler) WithInteractions(ir *repo.InteractionsRepository) *DiscoveryHandler {
+	h.interactionsRepo = ir
+	return h
+}
+
+// WithProfiles wires SourceProfiles repository (optional)
+func (h *DiscoveryHandler) WithProfiles(sp *repo.SourceProfilesRepository) *DiscoveryHandler {
+	h.profilesRepo = sp
 	return h
 }
 
@@ -204,7 +218,94 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Optionally enrich with profiles
+	if h.profilesRepo != nil {
+		profs, err := h.profilesRepo.ListByProject(r.Context(), authInfo.TenantID, projectID, h.dataSourcesRepo)
+		if err != nil {
+			h.logger.Printf("ListByProject profiles error: %v", err)
+			// Non-fatal; return plain sources
+			WriteJSON(w, http.StatusOK, sources)
+			return
+		}
+		// Map dataSourceId -> profile
+		pmap := make(map[string]interface{}, len(profs))
+		for _, sp := range profs {
+			pmap[sp.DataSourceID] = sp.Profile
+		}
+		// Build []map[string]interface{} to include profile alongside source fields
+		enriched := make([]map[string]interface{}, 0, len(sources))
+		for _, s := range sources {
+			m := map[string]interface{}{
+				"id":                s.ID,
+				"tenantId":          s.TenantID,
+				"pk":                s.Pk,
+				"displayName":       s.DisplayName,
+				"kind":              s.Kind,
+				"status":            s.Status,
+				"projectId":         s.ProjectID,
+				"relatedProjectIds": s.RelatedProjectIDs,
+				"researchId":        s.ResearchID,
+				"sessionId":         s.SessionID,
+				"ownerUserId":       s.OwnerUserID,
+				"sourceDetails":     s.Details,
+				"lastPolledAt":      s.LastPolledAt,
+				"lastFoundAt":       s.LastFoundAt,
+				"errorCount":        s.ErrorCount,
+				"createdAt":         s.CreatedAt,
+				"updatedAt":         s.UpdatedAt,
+				"trustLevel":        s.TrustLevel,
+				"firstSeenAt":       s.FirstSeen,
+				"lastSeenAt":        s.LastSeen,
+			}
+			if p, ok := pmap[s.ID]; ok {
+				m["profile"] = p
+			}
+			enriched = append(enriched, m)
+		}
+		WriteJSON(w, http.StatusOK, enriched)
+		return
+	}
+
 	WriteJSON(w, http.StatusOK, sources)
+}
+
+// ListProjectInteractions handles GET /api/v1/projects/{id}/interactions
+func (h *DiscoveryHandler) ListProjectInteractions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := pathParts[3]
+
+	project, err := h.projectsRepo.Get(r.Context(), projectID)
+	if err != nil {
+		WriteNotFound(w, "Project not found")
+		return
+	}
+	if project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	if h.interactionsRepo == nil {
+		WriteInternalError(w, "Interactions not configured")
+		return
+	}
+	items, err := h.interactionsRepo.ListByProject(r.Context(), projectID)
+	if err != nil {
+		WriteInternalError(w, "Failed to list interactions")
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // generateCorrelationID generates a simple correlation ID

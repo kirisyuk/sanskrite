@@ -230,6 +230,12 @@ create_indexes() {
     --field-config field-path=tenantId,order=ASCENDING \
     --field-config field-path=sourceDetails.channelUsername,order=ASCENDING \
     --quiet || true
+  # Interactions: projectId + createdAt asc (for listing by project with ordering)
+  gcloud firestore indexes composite create \
+    --collection-group=core_interactions \
+    --field-config field-path=projectId,order=ASCENDING \
+    --field-config field-path=createdAt,order=ASCENDING \
+    --quiet || true
 }
 
 # Setup infrastructure first (idempotent)

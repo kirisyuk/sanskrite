@@ -13,9 +13,11 @@ import (
 
 // ProjectsHandler handles project-related HTTP requests
 type ProjectsHandler struct {
-	repo        *repo.ProjectsRepository
-	logger      *log.Logger
-	dataSources *repo.DataSourcesRepository
+	repo         *repo.ProjectsRepository
+	logger       *log.Logger
+	dataSources  *repo.DataSourcesRepository
+	profiles     *repo.SourceProfilesRepository
+	interactions *repo.InteractionsRepository
 }
 
 // NewProjectsHandler creates a new ProjectsHandler
@@ -29,6 +31,13 @@ func NewProjectsHandler(repo *repo.ProjectsRepository, logger *log.Logger) *Proj
 // WithDataSources binds DataSourcesRepository for cascade operations
 func (h *ProjectsHandler) WithDataSources(dsrc *repo.DataSourcesRepository) *ProjectsHandler {
 	h.dataSources = dsrc
+	return h
+}
+
+// WithCascade wires additional repos for cascade deletes
+func (h *ProjectsHandler) WithCascade(profiles *repo.SourceProfilesRepository, interactions *repo.InteractionsRepository) *ProjectsHandler {
+	h.profiles = profiles
+	h.interactions = interactions
 	return h
 }
 
@@ -205,6 +214,20 @@ func (h *ProjectsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) 
 	if h.dataSources != nil {
 		if err := h.dataSources.DeleteByProject(r.Context(), projectID); err != nil {
 			h.logger.Printf("Warning: cascade delete for project %s encountered errors: %v", projectID, err)
+		}
+	}
+
+	// Cascade: delete source profiles for sources tied to this project
+	if h.profiles != nil && h.dataSources != nil {
+		if err := h.profiles.DeleteByProject(r.Context(), authInfo.TenantID, projectID, h.dataSources); err != nil {
+			h.logger.Printf("Warning: cascade delete profiles for project %s: %v", projectID, err)
+		}
+	}
+
+	// Cascade: delete interactions for this project
+	if h.interactions != nil {
+		if err := h.interactions.DeleteByProject(r.Context(), projectID); err != nil {
+			h.logger.Printf("Warning: cascade delete interactions for project %s: %v", projectID, err)
 		}
 	}
 

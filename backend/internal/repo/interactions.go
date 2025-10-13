@@ -33,5 +33,33 @@ func (r *InteractionsRepository) Create(ctx context.Context, it *Interaction) (s
 	return doc.ID, nil
 }
 
+// DeleteByProject removes all interactions for a given project
+func (r *InteractionsRepository) DeleteByProject(ctx context.Context, projectID string) error {
+	// Firestore: scan collection and delete matches (low volume acceptable)
+	docs, err := r.col.Where("projectId", "==", projectID).Documents(ctx).GetAll()
+	if err != nil {
+		return err
+	}
+	for _, d := range docs {
+		_, _ = r.col.Doc(d.Ref.ID).Delete(ctx)
+	}
+	return nil
+}
 
-
+// ListByProject returns interactions for a project ordered by createdAt asc
+func (r *InteractionsRepository) ListByProject(ctx context.Context, projectID string) ([]*Interaction, error) {
+	q := r.col.Where("projectId", "==", projectID).OrderBy("createdAt", firestore.Asc)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	res := make([]*Interaction, 0, len(docs))
+	for _, d := range docs {
+		var it Interaction
+		if err := d.DataTo(&it); err != nil {
+			continue
+		}
+		res = append(res, &it)
+	}
+	return res, nil
+}

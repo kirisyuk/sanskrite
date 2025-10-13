@@ -97,21 +97,21 @@ export function getProjectAge(project: Project): number {
  * Проверить, завершен ли анализ источника
  */
 export function isSourceProfiled(source: DataSource): boolean {
-  return source.status === 'completed' && source.profile !== undefined;
+  return source.status === 'completed';
 }
 
 /**
  * Получить оценку доверия источника
  */
-export function getSourceTrustScore(source: DataSource): number | null {
-  return source.profile?.trustScore ?? null;
+export function getSourceTrustScore(_source: DataSource): number | null {
+  return null;
 }
 
 /**
  * Получить список red flags источника
  */
-export function getSourceRedFlags(source: DataSource): Array<{ code: string; score: number }> {
-  return source.profile?.redFlags ?? [];
+export function getSourceRedFlags(_source: DataSource): Array<{ code: string; score: number }> {
+  return [];
 }
 
 /**
@@ -175,14 +175,8 @@ export function hasCompany(user: User): user is User & { companyRef: string } {
 /**
  * Проверить, есть ли у источника профиль с trust score
  */
-export function hasTrustScore(
-  source: DataSource
-): source is DataSource & { profile: { trustScore: number } } {
-  return (
-    source.profile !== undefined &&
-    source.profile.trustScore !== undefined &&
-    typeof source.profile.trustScore === 'number'
-  );
+export function hasTrustScore(_source: DataSource): boolean {
+  return false;
 }
 
 // ============================================================================
@@ -221,11 +215,7 @@ export function filterSourcesByKind(
  * Отсортировать источники по trust score (от высокого к низкому)
  */
 export function sortSourcesByTrust(sources: DataSource[]): DataSource[] {
-  return [...sources].sort((a, b) => {
-    const aScore = a.profile?.trustScore ?? 0;
-    const bScore = b.profile?.trustScore ?? 0;
-    return bScore - aScore;
-  });
+  return [...sources].sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 // ============================================================================

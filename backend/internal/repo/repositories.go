@@ -77,6 +77,33 @@ func (r *UsersRepository) GetByUID(ctx context.Context, uid string) (*models.Use
 		if err := d.DataTo(&u); err != nil {
 			continue
 		}
+		// Backward compatibility: documents created before firestore tags may have PascalCase field names
+		if u.ID == "" {
+			data := d.Data()
+			if idRaw, ok := data["ID"].(string); ok {
+				u.ID = idRaw
+			}
+			if tRaw, ok := data["TenantID"].(string); ok {
+				u.TenantID = tRaw
+			}
+			if eRaw, ok := data["Email"].(string); ok {
+				u.Email = eRaw
+			}
+			if sv, ok := data["SchemaVersion"].(string); ok {
+				u.SchemaVersion = sv
+			}
+			// Minimal timestamps if present
+			if ca, ok := data["CreatedAt"].(time.Time); ok {
+				u.CreatedAt = ca
+			}
+			if ua, ok := data["UpdatedAt"].(time.Time); ok {
+				u.UpdatedAt = ua
+			}
+			// If we successfully recovered ID, consider migrating document to lowerCamel
+			if u.ID != "" && u.TenantID != "" {
+				_ = r.Upsert(ctx, &u)
+			}
+		}
 		if u.ID == uid {
 			return &u, nil
 		}
@@ -144,6 +171,7 @@ func (r *ProjectsRepository) Get(ctx context.Context, id string) (*models.Projec
 }
 
 func (r *ProjectsRepository) List(ctx context.Context, tenantID string, view *string) ([]*models.Project, error) {
+	// With firestore tags set to lowerCamel, use lowerCamel paths
 	query := r.col.Where("tenantId", "==", tenantID)
 	if view != nil {
 		query = query.Where("view", "==", *view)
@@ -269,6 +297,38 @@ func (r *SourceProfilesRepository) ListByProject(ctx context.Context, tenantID, 
 	return res, nil
 }
 
+// DeleteByProject deletes source profiles for all data sources belonging to a project
+func (r *SourceProfilesRepository) DeleteByProject(ctx context.Context, tenantID, projectID string, sourcesRepo *DataSourcesRepository) error {
+	// Load sources tied to this project (including related)
+	sources, err := sourcesRepo.ListByProject(ctx, tenantID, projectID)
+	if err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+	ids := make(map[string]struct{}, len(sources))
+	for _, s := range sources {
+		ids[s.ID] = struct{}{}
+	}
+
+	// Scan profiles by tenant and delete those pointing to the collected dataSourceIds
+	docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
+	if err != nil {
+		return err
+	}
+	for _, d := range docs {
+		var sp models.SourceProfile
+		if err := d.DataTo(&sp); err != nil {
+			continue
+		}
+		if _, ok := ids[sp.DataSourceID]; ok {
+			_, _ = r.col.Doc(d.Ref.ID).Delete(ctx)
+		}
+	}
+	return nil
+}
+
 func (r *DataSourcesRepository) Upsert(ctx context.Context, ds *models.DataSource) error {
 	if ds == nil || ds.ID == "" {
 		return ErrInvalidDocument
@@ -308,6 +368,7 @@ func (r *DataSourcesRepository) FindByCanonicalSource(ctx context.Context, tenan
 		return nil, err
 	}
 
+	var candidates []string
 	for _, doc := range docs {
 		var ds models.DataSource
 		if err := doc.DataTo(&ds); err != nil {
@@ -315,13 +376,23 @@ func (r *DataSourcesRepository) FindByCanonicalSource(ctx context.Context, tenan
 		}
 		// Check if canonical matches URI or ChannelUsername
 		if ds.Details.URI != nil && *ds.Details.URI == canonical {
+			fmt.Printf("[FindByCanonicalSource] Found match by URI: canonical=%s, id=%s\n", canonical, ds.ID)
 			return &ds, nil
 		}
 		if ds.Details.ChannelUsername != nil && *ds.Details.ChannelUsername == canonical {
+			fmt.Printf("[FindByCanonicalSource] Found match by ChannelUsername: canonical=%s, id=%s\n", canonical, ds.ID)
 			return &ds, nil
+		}
+		// Collect candidates for debugging
+		if ds.Details.ChannelUsername != nil {
+			candidates = append(candidates, fmt.Sprintf("id=%s,channel=%s", ds.ID, *ds.Details.ChannelUsername))
+		}
+		if ds.Details.URI != nil {
+			candidates = append(candidates, fmt.Sprintf("id=%s,uri=%s", ds.ID, *ds.Details.URI))
 		}
 	}
 
+	fmt.Printf("[FindByCanonicalSource] No match for canonical=%s among %d sources: %v\n", canonical, len(candidates), candidates)
 	return nil, fmt.Errorf("datasource not found")
 }
 
@@ -335,15 +406,28 @@ func (r *DataSourcesRepository) ListByProject(ctx context.Context, tenantID, pro
 	}
 
 	var sources []*models.DataSource
+	var debugInfo []string
 	for _, doc := range docs {
 		var ds models.DataSource
 		if err := doc.DataTo(&ds); err != nil {
 			continue
 		}
+		// Debug: log all sources to understand filtering
+		projID := "nil"
+		if ds.ProjectID != nil {
+			projID = *ds.ProjectID
+		}
+		debugInfo = append(debugInfo, fmt.Sprintf("id=%s,kind=%s,projID=%s,related=%v", ds.ID, ds.Kind, projID, ds.RelatedProjectIDs))
+
 		// Include if projectId matches or projectId is in relatedProjectIds
 		if (ds.ProjectID != nil && *ds.ProjectID == projectID) || contains(ds.RelatedProjectIDs, projectID) {
 			sources = append(sources, &ds)
 		}
+	}
+
+	// Log for debugging
+	if len(sources) == 0 && len(debugInfo) > 0 {
+		fmt.Printf("[DataSourcesRepository] ListByProject: found 0 sources for project %s among %d total sources: %v\n", projectID, len(debugInfo), debugInfo)
 	}
 
 	return sources, nil

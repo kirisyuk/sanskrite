@@ -1,0 +1,112 @@
+{
+  "overview": {
+    "path": "docs/architecture/overview.md",
+    "links": [
+      "docs/architecture/backend/overview.md",
+      "docs/architecture/frontend/overview.md",
+      "docs/architecture/infrastructure/overview.md"
+    ]
+  },
+  "backend": {
+    "overview": {
+      "path": "docs/architecture/backend/overview.md",
+      "code": [
+        "backend/cmd/server/main.go",
+        "backend/internal/http",
+        "backend/internal/realtime",
+        "backend/internal/discovery",
+        "backend/internal/ai",
+        "backend/internal/repo",
+        "backend/internal/gcp",
+        "backend/internal/telegram"
+      ]
+    },
+    "modules": {
+      "ai": "docs/architecture/backend/modules/ai.md",
+      "discovery": "docs/architecture/backend/modules/discovery.md",
+      "realtime": "docs/architecture/backend/modules/realtime.md",
+      "http": "docs/architecture/backend/modules/http.md",
+      "repo": "docs/architecture/backend/modules/repo.md",
+      "gcp": "docs/architecture/backend/modules/gcp.md",
+      "telegram": "docs/architecture/backend/modules/telegram.md"
+    }
+  },
+  "frontend": {
+    "overview": {
+      "path": "docs/architecture/frontend/overview.md",
+      "code": [
+        "web/src/main.tsx",
+        "web/src/App.tsx",
+        "web/src/components",
+        "web/src/pages",
+        "web/src/stores",
+        "web/src/contexts",
+        "web/src/lib"
+      ]
+    },
+    "details": {
+      "state_and_pages": "docs/architecture/frontend/state-and-pages.md",
+      "realtime_and_api": "docs/architecture/frontend/realtime-and-api.md"
+    }
+  },
+  "data_model": {
+    "path": "docs/architecture/data-model.md",
+    "code": [
+      "backend/internal/models/models.go",
+      "backend/firestore.indexes.json",
+      "backend/firestore.rules"
+    ]
+  },
+  "apis": {
+    "path": "docs/architecture/apis.md",
+    "code": [
+      "backend/internal/http",
+      "backend/internal/realtime/ws.go",
+      "backend/internal/realtime/pubsub.go"
+    ]
+  },
+  "security": {
+    "path": "docs/architecture/security.md",
+    "code": [
+      "backend/internal/http/auth.go",
+      "web/src/components/AuthGuard.tsx",
+      "web/src/contexts/AuthContext.tsx"
+    ]
+  },
+  "configuration": {
+    "path": "docs/architecture/configuration.md",
+    "code": [
+      "backend/Dockerfile",
+      "backend/cmd/server/main.go",
+      "web/firebase.json",
+      "web/.firebaserc",
+      "web/cloudbuild.deploy.yaml",
+      "scripts/deploy",
+      "scripts/deploy-gcp.ps1",
+      "scripts/dev.ps1"
+    ]
+  },
+  "observability": {
+    "path": "docs/architecture/observability.md",
+    "artifacts": [
+      "logs.json",
+      "logs_full.json",
+      "logs_all.json",
+      "logs_api.txt",
+      "profile_errors.txt"
+    ]
+  },
+  "infrastructure": {
+    "overview": "docs/architecture/infrastructure/overview.md",
+    "deployment": "docs/architecture/infrastructure/deployment.md"
+  },
+  "decisions": {
+    "adr_0001_foundations": "docs/architecture/decisions/adr-0001-foundations.md"
+  },
+  "sequences": {
+    "discovery": "docs/architecture/sequences/discovery-flow.md",
+    "profiling": "docs/architecture/sequences/profiling-flow.md",
+    "realtime": "docs/architecture/sequences/realtime-updates.md",
+    "auth": "docs/architecture/sequences/auth-flow.md"
+  }
+}

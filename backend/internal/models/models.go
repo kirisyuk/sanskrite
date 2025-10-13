@@ -5,71 +5,71 @@ import "time"
 // SourceDetails хранит параметры, специфичные для типа источника
 type SourceDetails struct {
 	// web
-	URI *string `json:"uri,omitempty"`
+	URI *string `json:"uri,omitempty" firestore:"uri"`
 
 	// rss
-	RSSURL *string `json:"rssUrl,omitempty"`
+	RSSURL *string `json:"rssUrl,omitempty" firestore:"rssUrl"`
 
 	// topic_based_interest
-	SearchQuery         *string `json:"searchQuery,omitempty"`
-	OriginalSearchQuery *string `json:"originalSearchQuery,omitempty"`
+	SearchQuery         *string `json:"searchQuery,omitempty" firestore:"searchQuery"`
+	OriginalSearchQuery *string `json:"originalSearchQuery,omitempty" firestore:"originalSearchQuery"`
 
 	// telegram_channel
-	ChannelUsername        *string `json:"channelUsername,omitempty"`
-	LastProcessedMessageID *int    `json:"lastProcessedMessageId,omitempty"`
+	ChannelUsername        *string `json:"channelUsername,omitempty" firestore:"channelUsername"`
+	LastProcessedMessageID *int    `json:"lastProcessedMessageId,omitempty" firestore:"lastProcessedMessageId"`
 
 	// twitter_search
-	SinceTweetID *string `json:"sinceTweetId,omitempty"`
+	SinceTweetID *string `json:"sinceTweetId,omitempty" firestore:"sinceTweetId"`
 
 	// document
-	OriginalFileName *string `json:"originalFileName,omitempty"`
-	ContentType      *string `json:"contentType,omitempty"`
+	OriginalFileName *string `json:"originalFileName,omitempty" firestore:"originalFileName"`
+	ContentType      *string `json:"contentType,omitempty" firestore:"contentType"`
 
 	// legacy compatibility
-	SourceURI *string `json:"sourceUri,omitempty"`
+	SourceURI *string `json:"sourceUri,omitempty" firestore:"sourceUri"`
 }
 
 // DataSource соответствует Core.DataSources
 type DataSource struct {
-	ID          string `json:"id"`
-	TenantID    string `json:"tenantId"`
-	Pk          string `json:"pk"`
-	DisplayName string `json:"displayName"`
-	Kind        string `json:"kind"`
-	Status      string `json:"status"`
+	ID          string `json:"id" firestore:"id"`
+	TenantID    string `json:"tenantId" firestore:"tenantId"`
+	Pk          string `json:"pk" firestore:"pk"`
+	DisplayName string `json:"displayName" firestore:"displayName"`
+	Kind        string `json:"kind" firestore:"kind"`
+	Status      string `json:"status" firestore:"status"`
 
-	ProjectID         *string  `json:"projectId,omitempty"`
-	RelatedProjectIDs []string `json:"relatedProjectIds,omitempty"` // Additional projects this source is linked to
-	ResearchID        *string  `json:"researchId,omitempty"`
-	SessionID         *string  `json:"sessionId,omitempty"`
+	ProjectID         *string  `json:"projectId,omitempty" firestore:"projectId"`
+	RelatedProjectIDs []string `json:"relatedProjectIds,omitempty" firestore:"relatedProjectIds"`
+	ResearchID        *string  `json:"researchId,omitempty" firestore:"researchId"`
+	SessionID         *string  `json:"sessionId,omitempty" firestore:"sessionId"`
 
-	OwnerUserID string        `json:"ownerUserId"`
-	Details     SourceDetails `json:"sourceDetails"`
+	OwnerUserID string        `json:"ownerUserId" firestore:"ownerUserId"`
+	Details     SourceDetails `json:"sourceDetails" firestore:"sourceDetails"`
 
-	LastPolledAt *time.Time `json:"lastPolledAt,omitempty"`
-	LastFoundAt  *time.Time `json:"lastFoundAt,omitempty"`
+	LastPolledAt *time.Time `json:"lastPolledAt,omitempty" firestore:"lastPolledAt"`
+	LastFoundAt  *time.Time `json:"lastFoundAt,omitempty" firestore:"lastFoundAt"`
 
-	ErrorCount int `json:"errorCount"`
+	ErrorCount int `json:"errorCount" firestore:"errorCount"`
 
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
 
-	TrustLevel float64   `json:"trustLevel"`
-	FirstSeen  time.Time `json:"firstSeenAt"`
-	LastSeen   time.Time `json:"lastSeenAt"`
+	TrustLevel float64   `json:"trustLevel" firestore:"trustLevel"`
+	FirstSeen  time.Time `json:"firstSeenAt" firestore:"firstSeenAt"`
+	LastSeen   time.Time `json:"lastSeenAt" firestore:"lastSeenAt"`
 }
 
 // SourceProfile документ хранит профиль источника отдельно от DataSource
 type SourceProfile struct {
-	ID             string     `json:"id"`
-	TenantID       string     `json:"tenantId"`
-	DataSourceID   string     `json:"dataSourceId"`
-	SchemaVersion  string     `json:"schemaVersion"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-	LastAnalyzedAt *time.Time `json:"lastAnalyzedAt,omitempty"`
+	ID             string     `json:"id" firestore:"id"`
+	TenantID       string     `json:"tenantId" firestore:"tenantId"`
+	DataSourceID   string     `json:"dataSourceId" firestore:"dataSourceId"`
+	SchemaVersion  string     `json:"schemaVersion" firestore:"schemaVersion"`
+	CreatedAt      time.Time  `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt" firestore:"updatedAt"`
+	LastAnalyzedAt *time.Time `json:"lastAnalyzedAt,omitempty" firestore:"lastAnalyzedAt"`
 
-	Profile SourceProfileData `json:"profile"`
+	Profile SourceProfileData `json:"profile" firestore:"profile"`
 }
 
 // SourceProfileData matches SourceProfileDataDto from old frontend
@@ -171,61 +171,67 @@ type CoordinatedSource struct {
 
 // User соответствует Core.Users
 type User struct {
-	ID       string `json:"id"`
-	TenantID string `json:"tenantId"`
-	Email    string `json:"email"`
+	ID       string `json:"id" firestore:"id"`
+	TenantID string `json:"tenantId" firestore:"tenantId"`
+	Email    string `json:"email" firestore:"email"`
 
-	DisplayName *string        `json:"displayName,omitempty"`
-	AuthType    *string        `json:"authType,omitempty"`
-	Role        *string        `json:"role,omitempty"`
-	Status      *string        `json:"status,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	DisplayName *string        `json:"displayName,omitempty" firestore:"displayName"`
+	AuthType    *string        `json:"authType,omitempty" firestore:"authType"`
+	Role        *string        `json:"role,omitempty" firestore:"role"`
+	Status      *string        `json:"status,omitempty" firestore:"status"`
+	Metadata    map[string]any `json:"metadata,omitempty" firestore:"metadata"`
 
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	// Preferred UI language (ISO 3166-1 alpha-2, uppercase), default: "EN"
+	PreferredLanguage *string `json:"preferredLanguage,omitempty" firestore:"preferredLanguage"`
 
-	SchemaVersion string `json:"schemaVersion"`
+	// Country of residence (ISO 3166-1 alpha-2, uppercase)
+	CountryOfResidence *string `json:"countryOfResidence,omitempty" firestore:"countryOfResidence"`
 
-	CompanyRef        *string  `json:"companyRef,omitempty"`
-	CompanyConfidence *float64 `json:"companyConfidence,omitempty"`
-	JobTitle          *string  `json:"jobTitle,omitempty"`
-	Department        *string  `json:"department,omitempty"`
-	OrgUnitRef        *string  `json:"orgUnitRef,omitempty"`
+	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
 
-	DefaultProjectID *string           `json:"defaultProjectId,omitempty"`
-	ProjectRoles     map[string]string `json:"projectRoles,omitempty"`
+	SchemaVersion string `json:"schemaVersion" firestore:"schemaVersion"`
 
-	AssignedGoalIDs       []string `json:"assignedGoalIds,omitempty"`
-	AssignedInitiativeIDs []string `json:"assignedInitiativeIds,omitempty"`
+	CompanyRef        *string  `json:"companyRef,omitempty" firestore:"companyRef"`
+	CompanyConfidence *float64 `json:"companyConfidence,omitempty" firestore:"companyConfidence"`
+	JobTitle          *string  `json:"jobTitle,omitempty" firestore:"jobTitle"`
+	Department        *string  `json:"department,omitempty" firestore:"department"`
+	OrgUnitRef        *string  `json:"orgUnitRef,omitempty" firestore:"orgUnitRef"`
+
+	DefaultProjectID *string           `json:"defaultProjectId,omitempty" firestore:"defaultProjectId"`
+	ProjectRoles     map[string]string `json:"projectRoles,omitempty" firestore:"projectRoles"`
+
+	AssignedGoalIDs       []string `json:"assignedGoalIds,omitempty" firestore:"assignedGoalIds"`
+	AssignedInitiativeIDs []string `json:"assignedInitiativeIds,omitempty" firestore:"assignedInitiativeIds"`
 }
 
 // Project соответствует Core.Projects
 type Project struct {
-	ID          string `json:"id"`
-	Pk          string `json:"pk"`
-	TenantID    string `json:"tenantId"`
-	DisplayName string `json:"displayName"`
+	ID          string `json:"id" firestore:"id"`
+	Pk          string `json:"pk" firestore:"pk"`
+	TenantID    string `json:"tenantId" firestore:"tenantId"`
+	DisplayName string `json:"displayName" firestore:"displayName"`
 
-	Description *string `json:"description,omitempty"`
-	Status      string  `json:"status"`
+	Description *string `json:"description,omitempty" firestore:"description"`
+	Status      string  `json:"status" firestore:"status"`
 
-	OwnerUserID string    `json:"ownerUserId"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	OwnerUserID string    `json:"ownerUserId" firestore:"ownerUserId"`
+	CreatedAt   time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt" firestore:"updatedAt"`
 
 	// For Discovery chat sorting
-	LastInteractionAt *time.Time `json:"lastInteractionAt,omitempty"`
+	LastInteractionAt *time.Time `json:"lastInteractionAt,omitempty" firestore:"lastInteractionAt"`
 
 	// View type for filtering (e.g., "discovery", "workspace")
-	View *string `json:"view,omitempty"`
+	View *string `json:"view,omitempty" firestore:"view"`
 
-	IsExternal                   *bool   `json:"isExternal,omitempty"`
-	LinkedProjectRef             *string `json:"linkedProjectRef,omitempty"`
-	SharingPolicy                *string `json:"sharingPolicy,omitempty"`
-	OntologyOverlayRef           *string `json:"ontologyOverlayRef,omitempty"`
-	CompanyRef                   *string `json:"companyRef,omitempty"`
-	OrganizationName             *string `json:"organizationName,omitempty"`
-	BusinessUnitName             *string `json:"businessUnitName,omitempty"`
-	EnableRiskProfileSuggestions *bool   `json:"enableRiskProfileSuggestions,omitempty"`
-	AiGuided                     *bool   `json:"aiguided,omitempty"`
+	IsExternal                   *bool   `json:"isExternal,omitempty" firestore:"isExternal"`
+	LinkedProjectRef             *string `json:"linkedProjectRef,omitempty" firestore:"linkedProjectRef"`
+	SharingPolicy                *string `json:"sharingPolicy,omitempty" firestore:"sharingPolicy"`
+	OntologyOverlayRef           *string `json:"ontologyOverlayRef,omitempty" firestore:"ontologyOverlayRef"`
+	CompanyRef                   *string `json:"companyRef,omitempty" firestore:"companyRef"`
+	OrganizationName             *string `json:"organizationName,omitempty" firestore:"organizationName"`
+	BusinessUnitName             *string `json:"businessUnitName,omitempty" firestore:"businessUnitName"`
+	EnableRiskProfileSuggestions *bool   `json:"enableRiskProfileSuggestions,omitempty" firestore:"enableRiskProfileSuggestions"`
+	AiGuided                     *bool   `json:"aiguided,omitempty" firestore:"aiguided"`
 }
