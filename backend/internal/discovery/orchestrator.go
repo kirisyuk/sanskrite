@@ -90,8 +90,11 @@ func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 		"message":       "Discovery started",
 	})
 
-	// Auto-create project if empty
-	if in.ProjectID == "" {
+    // Track whether we create a new project in this call
+    createdNewProject := false
+
+    // Auto-create project if empty
+    if in.ProjectID == "" {
 		title, err := o.generateProjectTitle(ctx, in.QueryText, in.Language)
 		if err != nil {
 			o.logger.Printf("orchestrator: generate title error: %v, using fallback", err)
@@ -117,8 +120,9 @@ func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 			return fmt.Errorf("failed to create project: %w", err)
 		}
 
-		in.ProjectID = projectID
+        in.ProjectID = projectID
 		o.logger.Printf("orchestrator: auto-created project %s: %s", projectID, title)
+        createdNewProject = true
 
 		// Send WebSocket message about new project
 		msg := map[string]interface{}{
@@ -129,7 +133,12 @@ func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 			"tenantId":      in.TenantID,
 			"createdAt":     proj.CreatedAt.Format(time.RFC3339),
 			"correlationId": in.Correlation,
-		}
+    }
+
+    // Persist the user's query as interaction when this is a brand-new chat
+    if createdNewProject && o.interactions != nil && strings.TrimSpace(in.QueryText) != "" {
+        _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.query", Content: in.QueryText})
+    }
 		o.publishEvent(ctx, "discovery.project", in.TenantID, msg)
 	}
 
@@ -279,54 +288,54 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		"kind": ds.Kind, "displayName": ds.DisplayName,
 	})
 
-    // fetch content
-    fr, err := o.crawl.FetchContent(ctx, canonicalURL)
+	// fetch content
+	fr, err := o.crawl.FetchContent(ctx, canonicalURL)
 	if err != nil {
 		return err
 	}
 
-    // Persist fetched context snapshot (truncated) as interaction
-    if o.interactions != nil {
-        snippet := fr.Text
-        if len(snippet) > 5000 {
-            snippet = snippet[:5000]
-        }
-        ctxObj := map[string]interface{}{
-            "sourceId":    ds.ID,
-            "displayName": ds.DisplayName,
-            "sourceKind":  ds.Kind,
-            "uri":         canonicalURL,
-            "snippet":     snippet,
-            "chars":       len(fr.Text),
-        }
-        _ = func() error {
-            b, _ := json.Marshal(ctxObj)
-            _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.context", Content: string(b)})
-            return nil
-        }()
-    }
+	// Persist fetched context snapshot (truncated) as interaction
+	if o.interactions != nil {
+		snippet := fr.Text
+		if len(snippet) > 5000 {
+			snippet = snippet[:5000]
+		}
+		ctxObj := map[string]interface{}{
+			"sourceId":    ds.ID,
+			"displayName": ds.DisplayName,
+			"sourceKind":  ds.Kind,
+			"uri":         canonicalURL,
+			"snippet":     snippet,
+			"chars":       len(fr.Text),
+		}
+		_ = func() error {
+			b, _ := json.Marshal(ctxObj)
+			_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.context", Content: string(b)})
+			return nil
+		}()
+	}
 
 	// cache check
 	contentHash := repo.HashContent(fr.Text)
-    if o.cache != nil {
+	if o.cache != nil {
 		if p, _ := o.cache.Get(ctx, in.TenantID, canonicalURL, contentHash, 24*time.Hour); p != nil {
 			ds.Status = "completed"
 			_ = o.sources.Upsert(ctx, ds)
 			if o.profiles != nil {
 				_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *p})
 			}
-            // Persist profile summary interaction
-            if o.interactions != nil {
-                summary := summarizeProfile(p)
-                obj := map[string]interface{}{
-                    "sourceId":    ds.ID,
-                    "displayName": ds.DisplayName,
-                    "summary":     summary,
-                    "hasFullProfile": true,
-                }
-                b, _ := json.Marshal(obj)
-                _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.profile", Content: string(b)})
-            }
+			// Persist profile summary interaction
+			if o.interactions != nil {
+				summary := summarizeProfile(p)
+				obj := map[string]interface{}{
+					"sourceId":       ds.ID,
+					"displayName":    ds.DisplayName,
+					"summary":        summary,
+					"hasFullProfile": true,
+				}
+				b, _ := json.Marshal(obj)
+				_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.profile", Content: string(b)})
+			}
 			o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 				"correlationId": in.Correlation,
 				"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": p})
@@ -352,18 +361,18 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
 	}
 
-    // Persist profile summary interaction
-    if o.interactions != nil {
-        summary := summarizeProfile(prof)
-        obj := map[string]interface{}{
-            "sourceId":    ds.ID,
-            "displayName": ds.DisplayName,
-            "summary":     summary,
-            "hasFullProfile": true,
-        }
-        b, _ := json.Marshal(obj)
-        _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.profile", Content: string(b)})
-    }
+	// Persist profile summary interaction
+	if o.interactions != nil {
+		summary := summarizeProfile(prof)
+		obj := map[string]interface{}{
+			"sourceId":       ds.ID,
+			"displayName":    ds.DisplayName,
+			"summary":        summary,
+			"hasFullProfile": true,
+		}
+		b, _ := json.Marshal(obj)
+		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.profile", Content: string(b)})
+	}
 
 	o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
@@ -441,7 +450,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 	if len(msgs) > 30 {
 		msgs = msgs[len(msgs)-30:]
 	}
-    // concatenate text
+	// concatenate text
 	var b strings.Builder
 	for _, m := range msgs {
 		if m.Text != "" {
@@ -450,24 +459,24 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		}
 	}
 
-    // Persist fetched context snapshot for telegram
-    if o.interactions != nil {
-        text := b.String()
-        snippet := text
-        if len(snippet) > 5000 {
-            snippet = snippet[:5000]
-        }
-        ctxObj := map[string]interface{}{
-            "sourceId":    ds.ID,
-            "displayName": ds.DisplayName,
-            "sourceKind":  ds.Kind,
-            "handle":      "@" + handle,
-            "snippet":     snippet,
-            "chars":       len(text),
-        }
-        bb, _ := json.Marshal(ctxObj)
-        _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.context", Content: string(bb)})
-    }
+	// Persist fetched context snapshot for telegram
+	if o.interactions != nil {
+		text := b.String()
+		snippet := text
+		if len(snippet) > 5000 {
+			snippet = snippet[:5000]
+		}
+		ctxObj := map[string]interface{}{
+			"sourceId":    ds.ID,
+			"displayName": ds.DisplayName,
+			"sourceKind":  ds.Kind,
+			"handle":      "@" + handle,
+			"snippet":     snippet,
+			"chars":       len(text),
+		}
+		bb, _ := json.Marshal(ctxObj)
+		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.context", Content: string(bb)})
+	}
 
 	prof, err := o.profile(ctx, ds.DisplayName, b.String(), in.Language)
 	if err != nil {
@@ -484,18 +493,18 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
 	}
 
-    // Persist profile summary interaction
-    if o.interactions != nil {
-        summary := summarizeProfile(prof)
-        obj := map[string]interface{}{
-            "sourceId":    ds.ID,
-            "displayName": ds.DisplayName,
-            "summary":     summary,
-            "hasFullProfile": true,
-        }
-        b2, _ := json.Marshal(obj)
-        _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.profile", Content: string(b2)})
-    }
+	// Persist profile summary interaction
+	if o.interactions != nil {
+		summary := summarizeProfile(prof)
+		obj := map[string]interface{}{
+			"sourceId":       ds.ID,
+			"displayName":    ds.DisplayName,
+			"summary":        summary,
+			"hasFullProfile": true,
+		}
+		b2, _ := json.Marshal(obj)
+		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.profile", Content: string(b2)})
+	}
 	o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
 		"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": prof})
@@ -577,38 +586,42 @@ func mustJSON(v interface{}) string {
 
 // summarizeProfile produces a compact summary JSON-safe string from SourceProfileData
 func summarizeProfile(p *models.SourceProfileData) string {
-    if p == nil {
-        return ""
-    }
-    type summary struct {
-        PrimaryGoal string   `json:"primaryGoal,omitempty"`
-        Motivation  string   `json:"motivation,omitempty"`
-        Topics      []string `json:"topics,omitempty"`
-        TrustScore  float64  `json:"trustScore,omitempty"`
-        Alignment   float64  `json:"goalAlignmentScore,omitempty"`
-    }
-    s := summary{
-        TrustScore: p.TrustScore,
-        Alignment:  p.GoalAlignmentScore,
-    }
-    if p.Agenda != nil {
-        s.PrimaryGoal = p.Agenda.PrimaryGoal
-    }
-    s.Motivation = p.Motivation
-    if len(p.Topics) > 0 {
-        tops := make([]string, 0, len(p.Topics))
-        for i, t := range p.Topics {
-            if i >= 8 {
-                break
-            }
-            if t.Name != "" {
-                tops = append(tops, t.Name)
-            }
-        }
-        s.Topics = tops
-    }
-    b, _ := json.Marshal(s)
-    return string(b)
+	if p == nil {
+		return ""
+	}
+	type summary struct {
+		PrimaryGoal string   `json:"primaryGoal,omitempty"`
+		Motivation  string   `json:"motivation,omitempty"`
+		Topics      []string `json:"topics,omitempty"`
+		TrustScore  float64  `json:"trustScore,omitempty"`
+		Alignment   float64  `json:"goalAlignmentScore,omitempty"`
+	}
+	var align float64
+	if p.GoalAlignmentScore != nil {
+		align = *p.GoalAlignmentScore
+	}
+	s := summary{
+		TrustScore: p.TrustScore,
+		Alignment:  align,
+	}
+	if p.Agenda != nil && p.Agenda.PrimaryGoal != nil {
+		s.PrimaryGoal = *p.Agenda.PrimaryGoal
+	}
+	s.Motivation = p.Motivation
+	if len(p.Topics) > 0 {
+		tops := make([]string, 0, len(p.Topics))
+		for i, t := range p.Topics {
+			if i >= 8 {
+				break
+			}
+			if t.Name != "" {
+				tops = append(tops, t.Name)
+			}
+		}
+		s.Topics = tops
+	}
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func contains(arr []string, s string) bool {
