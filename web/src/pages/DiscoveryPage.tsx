@@ -391,17 +391,19 @@ const DiscoveryPage: React.FC = () => {
         </button>
       )}
 
-      {/* Sources column (right to sidebar) */}
-      <div className="flex-shrink-0 mr-4" style={{ width: '360px', maxWidth: '420px' }}>
-        {sources.length > 0 && (
-          <div className="space-y-2" style={{ background: 'transparent' }}>
-            {sources.map((source) => renderSourceCard(source))}
-          </div>
-        )}
-      </div>
+      {/* Grid wrapper: [left free area for sources] [fixed-width center] [right filler] */}
+      <div className="flex-1 min-h-0" style={{ display: 'grid', gridTemplateColumns: '1fr minmax(0, 768px) 1fr', gap: '16px' }}>
+        {/* Left area: sources take whatever space is available without pushing center */}
+        <div className="min-h-0 mr-4" style={{ background: 'transparent' }}>
+          {sources.length > 0 && (
+            <div className="space-y-2">
+              {sources.map((source) => renderSourceCard(source))}
+            </div>
+          )}
+        </div>
 
-      {/* Main center column */}
-      <div className="flex-1 min-h-0 flex flex-col items-center">
+        {/* Main center column (fixed max width) */}
+        <div className="min-h-0 flex flex-col">
         {showSettings ? (
           <div className="w-full px-4 mt-2 mb-2">
             <div className="mb-2 flex items-center">
@@ -423,7 +425,7 @@ const DiscoveryPage: React.FC = () => {
           </div>
         ) : (
         <>
-        {/* Sources moved to the dedicated column */}
+        {/* Sources moved to the left grid column */}
 
         {/* Input box anchored to bottom */}
         <div className="w-full max-w-3xl px-4 mt-auto mb-2">
@@ -500,6 +502,10 @@ const DiscoveryPage: React.FC = () => {
         </div>
         </>
         )}
+        </div>
+
+        {/* Right filler column (keeps center truly centered) */}
+        <div />
       </div>
     </div>
   );
