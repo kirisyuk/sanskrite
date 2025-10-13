@@ -7,11 +7,12 @@ import { useAuth } from '../contexts/AuthContext';
 const DiscoveryPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { projects, currentProject, fetchProjects, deleteProject, setCurrentProject } = useProjectsStore();
-  const { sources, loading, executeDiscovery, fetchProjectSources, fetchProjectInteractions, clearSources, connectWs, answer, correlationId, interactions } = useDiscoveryStore();
+  const { sources, loading, executeDiscovery, fetchProjectSources, fetchProjectInteractions, clearSources, connectWs, answer, correlationId, interactions, sendChatMessage } = useDiscoveryStore();
   
   const [queryText, setQueryText] = useState('');
   const [sideOpen, setSideOpen] = useState(false);
   const [running, setRunning] = useState(false);
+  const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const correlationRef = useRef<string | null>(null);
   const wsInitialized = useRef(false);
@@ -39,6 +40,21 @@ const DiscoveryPage: React.FC = () => {
       clearSources();
     }
   }, [currentProject]);
+
+  // Timer for chat "Thinking..." state
+  useEffect(() => {
+    if (running && currentProject?.id) {
+      setThinkingSeconds(0);
+      const id = window.setInterval(() => {
+        setThinkingSeconds((s) => s + 1);
+      }, 1000);
+      return () => {
+        window.clearInterval(id);
+      };
+    } else {
+      setThinkingSeconds(0);
+    }
+  }, [running, currentProject?.id]);
 
   const handleDeleteChat = async (projectId: string, projectName: string) => {
     if (!confirm(`Delete "${projectName}"?`)) return;
@@ -128,6 +144,14 @@ const DiscoveryPage: React.FC = () => {
       console.log('[Discovery] Result:', result);
       
       correlationRef.current = correlationId;
+      // Optimistically append user query interaction (typed as discovery.query)
+      const createdAt = new Date().toISOString();
+      useDiscoveryStore.setState((state) => ({
+        interactions: [
+          ...state.interactions,
+          { id: createdAt, kind: 'discovery.query', content: queryText, createdAt },
+        ],
+      }));
       
       // Reload projects after discovery starts (to get newly created project)
       if (!currentProject) {
@@ -213,13 +237,15 @@ const DiscoveryPage: React.FC = () => {
         </div>
 
         {source.profile?.agenda?.primaryGoal && (
-          <div className="ml-5 mt-1 rounded" style={{ color: 'var(--text-heading)' }}>
-            <span style={{ color: 'var(--text-secondary-strong)' }}>primaryGoal:</span> {source.profile.agenda.primaryGoal}
+          <div className="ml-5 mt-1 rounded mb-1" style={{ color: 'var(--text-heading)' }}>
+            <div>
+              <span style={{ color: 'var(--text-secondary-strong)' }}>primaryGoal:</span> {source.profile.agenda.primaryGoal}
+            </div>
           </div>
         )}
 
         {source.profile && (
-          <div className="px-3 pb-3 space-y-2">
+          <div className="px-3 pb-3 space-y-2 mt-2">
             {source.profile.topics && source.profile.topics.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {source.profile.topics.slice(0, 6).map((t: any, i: number) => (
@@ -433,14 +459,22 @@ const DiscoveryPage: React.FC = () => {
           {interactions && interactions.length > 0 && (
             <div className="px-1 pb-2">
               <div className="space-y-2">
-                {interactions.map((it) => (
-                  <div key={it.id} className="rounded-2xl px-3 py-2" style={{ backgroundColor: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
-                    <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>{it.kind}</div>
-                    <div className="text-xs" style={{ color: 'var(--text-heading)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                      {it.content}
+                {interactions.map((it) => {
+                  const isUser = it.kind === 'discovery.query';
+                  const containerStyle: React.CSSProperties = {
+                    backgroundColor: isUser ? 'var(--bg-elevated)' : 'var(--bg-sidebar)',
+                    border: '1px solid var(--overlay-line-90)',
+                    maxWidth: '75%',
+                  };
+                  return (
+                    <div key={it.id} className={`rounded-2xl px-3 py-2 ${isUser ? 'ml-auto' : ''}`} style={containerStyle}>
+                      <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>{isUser ? 'you' : 'assistant'}</div>
+                      <div className="text-xs" style={{ color: 'var(--text-heading)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {it.content}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -448,8 +482,8 @@ const DiscoveryPage: React.FC = () => {
           {/* Status indicator */}
           {running && (
             <div className="px-1 pb-2">
-              <div className="text-xs" style={{ textAlign: 'left' }}>
-                <span className="animate-pulse" style={{ color: 'var(--text-secondary-strong)' }}>...</span>
+              <div className="text-xs" style={{ textAlign: 'left', color: 'var(--text-secondary-strong)' }}>
+                Thinking... {thinkingSeconds}s
               </div>
             </div>
           )}
@@ -479,7 +513,21 @@ const DiscoveryPage: React.FC = () => {
                   type="button"
                   aria-label="Send"
                   className="flex items-center justify-center rounded-full"
-                  onClick={handleExecuteDiscovery}
+                  onClick={async () => {
+                    if (running || !queryText.trim()) return;
+                    // If there is a current project, send chat; otherwise, run discovery
+                    if (currentProject?.id) {
+                      setRunning(true);
+                      try {
+                        await sendChatMessage(currentProject.id, queryText);
+                        setQueryText('');
+                      } finally {
+                        setRunning(false);
+                      }
+                    } else {
+                      handleExecuteDiscovery();
+                    }
+                  }}
                   disabled={running || !queryText.trim()}
                   style={{
                     width: '32px',

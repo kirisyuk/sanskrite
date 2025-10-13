@@ -8,12 +8,12 @@ import (
 )
 
 type Interaction struct {
-	ID        string    `json:"id"`
-	TenantID  string    `json:"tenantId"`
-	ProjectID string    `json:"projectId"`
-	Kind      string    `json:"kind"` // e.g., "discovery.answer"
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"createdAt"`
+    ID        string    `json:"id" firestore:"id"`
+    TenantID  string    `json:"tenantId" firestore:"tenantId"`
+    ProjectID string    `json:"projectId" firestore:"projectId"`
+    Kind      string    `json:"kind" firestore:"kind"` // e.g., "discovery.answer"
+    Content   string    `json:"content" firestore:"content"`
+    CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
 }
 
 type InteractionsRepository struct{ col *firestore.CollectionRef }
@@ -35,31 +35,44 @@ func (r *InteractionsRepository) Create(ctx context.Context, it *Interaction) (s
 
 // DeleteByProject removes all interactions for a given project
 func (r *InteractionsRepository) DeleteByProject(ctx context.Context, projectID string) error {
-	// Firestore: scan collection and delete matches (low volume acceptable)
-	docs, err := r.col.Where("projectId", "==", projectID).Documents(ctx).GetAll()
-	if err != nil {
-		return err
-	}
-	for _, d := range docs {
-		_, _ = r.col.Doc(d.Ref.ID).Delete(ctx)
-	}
-	return nil
+    // Delete documents matching either field casing (backward compatibility)
+    fieldNames := []string{"projectId", "ProjectID"}
+    for _, fname := range fieldNames {
+        docs, err := r.col.Where(fname, "==", projectID).Documents(ctx).GetAll()
+        if err != nil {
+            continue
+        }
+        for _, d := range docs {
+            _, _ = r.col.Doc(d.Ref.ID).Delete(ctx)
+        }
+    }
+    return nil
 }
 
 // ListByProject returns interactions for a project ordered by createdAt asc
 func (r *InteractionsRepository) ListByProject(ctx context.Context, projectID string) ([]*Interaction, error) {
-	q := r.col.Where("projectId", "==", projectID).OrderBy("createdAt", firestore.Asc)
-	docs, err := q.Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
-	}
-	res := make([]*Interaction, 0, len(docs))
-	for _, d := range docs {
-		var it Interaction
-		if err := d.DataTo(&it); err != nil {
-			continue
-		}
-		res = append(res, &it)
-	}
-	return res, nil
+    // Try modern field first, then legacy casing
+    fieldNames := []string{"projectId", "ProjectID"}
+    var res []*Interaction
+    for i, fname := range fieldNames {
+        q := r.col.Where(fname, "==", projectID).OrderBy("createdAt", firestore.Asc)
+        docs, err := q.Documents(ctx).GetAll()
+        if err != nil {
+            if i == len(fieldNames)-1 {
+                return nil, err
+            }
+            continue
+        }
+        for _, d := range docs {
+            var it Interaction
+            if err := d.DataTo(&it); err != nil {
+                continue
+            }
+            res = append(res, &it)
+        }
+        if len(res) > 0 {
+            break
+        }
+    }
+    return res, nil
 }

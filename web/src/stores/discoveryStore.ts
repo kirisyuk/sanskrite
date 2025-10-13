@@ -42,6 +42,7 @@ interface DiscoveryState {
     language?: string;
     sources: { web: string[]; telegram: string[] };
   }) => Promise<{ correlationId: string }>;
+  sendChatMessage: (projectId: string, message: string, language?: string) => Promise<string>;
   fetchProjectSources: (projectId: string) => Promise<void>;
   fetchProjectInteractions: (projectId: string) => Promise<void>;
   clearSources: () => void;
@@ -109,6 +110,43 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
       set({ error: error.message });
     }
   },
+  sendChatMessage: async (projectId: string, message: string, language?: string) => {
+    // Append optimistic user message and a placeholder "Thinking..."
+    const now = new Date().toISOString();
+    set((state) => ({
+      interactions: [
+        ...state.interactions,
+        { id: now, kind: 'discovery.query', content: message, createdAt: now },
+        { id: now + '-thinking', kind: 'discovery.answer', content: 'Thinking...', createdAt: now },
+      ],
+    }));
+
+    try {
+      const { answer } = await api.sendChatMessage(projectId, message, language);
+      // Replace the last placeholder with real answer
+      set((state) => {
+        const items = [...state.interactions];
+        const idx = items.findIndex((it) => it.id === now + '-thinking');
+        if (idx >= 0) {
+          items[idx] = { ...items[idx], content: answer } as any;
+        } else {
+          items.push({ id: new Date().toISOString(), kind: 'discovery.answer', content: answer, createdAt: new Date().toISOString() });
+        }
+        return { interactions: items } as any;
+      });
+      return answer;
+    } catch (e: any) {
+      set((state) => {
+        const items = [...state.interactions];
+        const idx = items.findIndex((it) => it.id === now + '-thinking');
+        if (idx >= 0) {
+          items[idx] = { ...items[idx], content: 'Failed to get answer' } as any;
+        }
+        return { interactions: items } as any;
+      });
+      throw e;
+    }
+  },
 
   clearSources: () => {
     set({ sources: [], correlationId: null, answer: null, pendingSources: [], interactions: [] });
@@ -133,7 +171,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
       try {
         // Refresh Firebase token each (re)connect
         const { auth } = await import('../lib/firebase');
-        const user = auth.currentUser;
+        const user = auth?.currentUser;
         if (!user) {
           isConnecting = false;
           return;
@@ -237,11 +275,16 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
           
           if (msg?.type === 'discovery.answer' && typeof msg.data?.answer === 'string') {
             set((state) => {
-              const createdAt = new Date().toISOString();
-              const items = [
-                ...state.interactions,
-                { id: createdAt, kind: 'discovery.answer', content: msg.data.answer, createdAt },
-              ];
+              const items = [...state.interactions];
+              // Prefer replacing any existing Thinking... placeholder instead of appending (prevents duplicates for chat path)
+              const idx = [...items].reverse().findIndex((it) => it.kind === 'discovery.answer' && it.content === 'Thinking...');
+              if (idx >= 0) {
+                const realIdx = items.length - 1 - idx;
+                items[realIdx] = { ...items[realIdx], content: msg.data.answer } as any;
+              } else {
+                const createdAt = new Date().toISOString();
+                items.push({ id: createdAt, kind: 'discovery.answer', content: msg.data.answer, createdAt } as any);
+              }
               return { answer: msg.data.answer, interactions: items } as any;
             });
           }
