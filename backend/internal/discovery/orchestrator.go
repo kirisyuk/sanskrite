@@ -97,6 +97,7 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 	// Build context: recent Q/A pairs and profile summaries
 	var historyPairs []map[string]string
 	var profileSummaries []string
+	var contextSnippets []string
 	if o.interactions != nil {
 		if items, err := o.interactions.ListByProject(ctx, projectID); err == nil {
 			// Collect last up to 8 messages (4 pairs)
@@ -124,6 +125,29 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 					}
 				}
 			}
+			// Collect recent context snippets with a simple char budget (~6000 chars)
+			constMaxChars := 6000
+			used := 0
+			for i := len(items) - 1; i >= 0 && used < constMaxChars; i-- {
+				it := items[i]
+				if it.Kind == "discovery.context" {
+					// content is JSON; try to extract snippet
+					var m map[string]interface{}
+					if err := json.Unmarshal([]byte(it.Content), &m); err == nil {
+						if v, ok := m["snippet"].(string); ok {
+							s := strings.TrimSpace(v)
+							if s != "" {
+								// truncate each to max 1500 chars
+								if len(s) > 1500 {
+									s = s[:1500]
+								}
+								contextSnippets = append([]string{s}, contextSnippets...)
+								used += len(s)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -140,6 +164,13 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
+	}
+	if len(contextSnippets) > 0 {
+		b.WriteString("RECENT CONTEXT SNIPPETS (truncated):\n")
+		for _, s := range contextSnippets {
+			b.WriteString(s)
+			b.WriteString("\n\n")
+		}
 	}
 	if len(historyPairs) > 0 {
 		b.WriteString("RECENT DIALOG (oldest-first):\n")
@@ -166,12 +197,12 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 		return "", err
 	}
 
-    answer := strings.TrimSpace(res.Content)
-    if o.interactions != nil && answer != "" {
-        _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: tenantID, ProjectID: projectID, Kind: "discovery.answer", Content: answer})
-    }
-    // For chat continuation, avoid WS duplication: REST returns the answer and UI updates the placeholder
-    return answer, nil
+	answer := strings.TrimSpace(res.Content)
+	if o.interactions != nil && answer != "" {
+		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: tenantID, ProjectID: projectID, Kind: "discovery.answer", Content: answer})
+	}
+	// For chat continuation, avoid WS duplication: REST returns the answer and UI updates the placeholder
+	return answer, nil
 }
 
 // Execute runs discovery orchestration, auto-creating project if needed
