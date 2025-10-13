@@ -80,6 +80,100 @@ type ExecuteInput struct {
 	OwnerUID    string
 }
 
+// Chat handles continuation within an existing project using chat history and profiles
+func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, language string) (string, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return "", fmt.Errorf("projectId is required")
+	}
+	if language == "" {
+		language = "en"
+	}
+
+	// Persist user query
+	if o.interactions != nil && strings.TrimSpace(message) != "" {
+		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: tenantID, ProjectID: projectID, Kind: "discovery.query", Content: message})
+	}
+
+	// Build context: recent Q/A pairs and profile summaries
+	var historyPairs []map[string]string
+	var profileSummaries []string
+	if o.interactions != nil {
+		if items, err := o.interactions.ListByProject(ctx, projectID); err == nil {
+			// Collect last up to 8 messages (4 pairs)
+			for i := len(items) - 1; i >= 0 && len(historyPairs) < 4; i-- {
+				it := items[i]
+				if it.Kind == "discovery.answer" {
+					// find preceding query if any
+					var prev *repo.Interaction
+					for j := i - 1; j >= 0; j-- {
+						if items[j].Kind == "discovery.query" {
+							prev = items[j]
+							break
+						}
+					}
+					pair := map[string]string{"answer": it.Content}
+					if prev != nil {
+						pair["query"] = prev.Content
+					}
+					historyPairs = append([]map[string]string{pair}, historyPairs...)
+				}
+				if it.Kind == "discovery.profile" {
+					// keep up to 6 summaries
+					if len(profileSummaries) < 6 {
+						profileSummaries = append(profileSummaries, it.Content)
+					}
+				}
+			}
+		}
+	}
+
+	// Compose prompt
+	var b strings.Builder
+	b.WriteString("You are an expert assistant continuing a chat.\n")
+	b.WriteString("LANGUAGE: ")
+	b.WriteString(language)
+	b.WriteString("\n\n")
+	if len(profileSummaries) > 0 {
+		b.WriteString("SOURCE PROFILES SUMMARY (JSON snippets):\n")
+		for _, s := range profileSummaries {
+			b.WriteString(s)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	if len(historyPairs) > 0 {
+		b.WriteString("RECENT DIALOG (oldest-first):\n")
+		for _, p := range historyPairs {
+			if q, ok := p["query"]; ok && q != "" {
+				b.WriteString("USER: ")
+				b.WriteString(q)
+				b.WriteString("\n")
+			}
+			b.WriteString("ASSISTANT: ")
+			b.WriteString(p["answer"])
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("CURRENT USER MESSAGE: ")
+	b.WriteString(message)
+	b.WriteString("\n\n")
+	b.WriteString("TASK: Reply helpfully in the specified LANGUAGE using only provided context and prior dialog. Be concise and accurate. Return plain text only.")
+
+	task := &ai.AITask{TaskType: ai.TaskTypeContentGeneration, InputContent: b.String(), AIRequirements: ai.AIRequirements{TextGenerationCapability: true}}
+	res, err := o.exec.ExecuteTask(ctx, task)
+	if err != nil {
+		return "", err
+	}
+
+    answer := strings.TrimSpace(res.Content)
+    if o.interactions != nil && answer != "" {
+        _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: tenantID, ProjectID: projectID, Kind: "discovery.answer", Content: answer})
+    }
+    // For chat continuation, avoid WS duplication: REST returns the answer and UI updates the placeholder
+    return answer, nil
+}
+
 // Execute runs discovery orchestration, auto-creating project if needed
 func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 	// Emit started status (compat with old flow)
@@ -90,11 +184,11 @@ func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 		"message":       "Discovery started",
 	})
 
-    // Track whether we create a new project in this call
-    createdNewProject := false
+	// Track whether we create a new project in this call
+	createdNewProject := false
 
-    // Auto-create project if empty
-    if in.ProjectID == "" {
+	// Auto-create project if empty
+	if in.ProjectID == "" {
 		title, err := o.generateProjectTitle(ctx, in.QueryText, in.Language)
 		if err != nil {
 			o.logger.Printf("orchestrator: generate title error: %v, using fallback", err)
@@ -120,9 +214,9 @@ func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 			return fmt.Errorf("failed to create project: %w", err)
 		}
 
-        in.ProjectID = projectID
+		in.ProjectID = projectID
 		o.logger.Printf("orchestrator: auto-created project %s: %s", projectID, title)
-        createdNewProject = true
+		createdNewProject = true
 
 		// Send WebSocket message about new project
 		msg := map[string]interface{}{
@@ -133,12 +227,12 @@ func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 			"tenantId":      in.TenantID,
 			"createdAt":     proj.CreatedAt.Format(time.RFC3339),
 			"correlationId": in.Correlation,
-    }
+		}
 
-    // Persist the user's query as interaction when this is a brand-new chat
-    if createdNewProject && o.interactions != nil && strings.TrimSpace(in.QueryText) != "" {
-        _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.query", Content: in.QueryText})
-    }
+		// Persist the user's query as interaction when this is a brand-new chat
+		if createdNewProject && o.interactions != nil && strings.TrimSpace(in.QueryText) != "" {
+			_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.query", Content: in.QueryText})
+		}
 		o.publishEvent(ctx, "discovery.project", in.TenantID, msg)
 	}
 
