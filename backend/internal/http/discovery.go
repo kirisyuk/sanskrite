@@ -104,6 +104,16 @@ func (h *DiscoveryHandler) ExecuteDiscovery(w http.ResponseWriter, r *http.Reque
 			h.logger.Printf("Failed to update project interaction time: %v", err)
 			// Non-fatal, continue
 		}
+
+		// Persist user query as an interaction for chat history (when project is known)
+		if h.interactionsRepo != nil && strings.TrimSpace(req.QueryText) != "" {
+			_, _ = h.interactionsRepo.Create(r.Context(), &repo.Interaction{
+				TenantID:  authInfo.TenantID,
+				ProjectID: req.ProjectID,
+				Kind:      "discovery.query",
+				Content:   req.QueryText,
+			})
+		}
 	}
 
 	// Generate correlation ID if not provided
