@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "gen:schemas": "cd ..\\backend && go run ./internal/tools/schemagen",
+    "gen:schemas": "cd ../backend && go run ./internal/tools/schemagen",
     "gen:types": "node scripts/generate-types.mjs",
     "build": "npm run gen:schemas && npm run gen:types && tsc -b && vite build",
     "build:ci": "tsc -b && vite build",
