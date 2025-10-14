@@ -169,6 +169,101 @@ type CoordinatedSource struct {
 	CoordinationScore float64 `json:"coordinationScore"`
 }
 
+// --- New RAG data model types ---
+
+// SourceProject links a logical source to a project with per-project config
+type SourceProject struct {
+	ID         string             `json:"id" firestore:"id"`
+	TenantID   string             `json:"tenantId" firestore:"tenantId"`
+	SourceID   string             `json:"sourceId" firestore:"sourceId"`
+	ProjectID  string             `json:"projectId" firestore:"projectId"`
+	Status     string             `json:"status" firestore:"status"` // active/paused
+	Weights    map[string]float64 `json:"weights,omitempty" firestore:"weights"`
+	SyncConfig map[string]any     `json:"syncConfig,omitempty" firestore:"syncConfig"`
+	CreatedAt  time.Time          `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt  time.Time          `json:"updatedAt" firestore:"updatedAt"`
+}
+
+// Document represents a normalized unit of content to be chunked/embedded
+type Document struct {
+	ID                string           `json:"id" firestore:"id"`
+	TenantID          string           `json:"tenantId" firestore:"tenantId"`
+	SourceID          string           `json:"sourceId" firestore:"sourceId"`
+	ExternalID        string           `json:"externalId" firestore:"externalId"`
+	Title             string           `json:"title,omitempty" firestore:"title"`
+	URL               string           `json:"url,omitempty" firestore:"url"`
+	DocumentPath      string           `json:"documentPath" firestore:"documentPath"`
+	FullText          string           `json:"fullText" firestore:"fullText"`
+	Status            string           `json:"status" firestore:"status"`                       // new → embedded → processing → processed; error:*
+	ContentType       string           `json:"contentType,omitempty" firestore:"contentType"`   // plainText, html, markdown, binary
+	DocumentType      string           `json:"documentType,omitempty" firestore:"documentType"` // post, article, pdf, word
+	Language          string           `json:"language,omitempty" firestore:"language"`
+	Authors           []string         `json:"authors,omitempty" firestore:"authors"`
+	SourceMeta        map[string]any   `json:"sourceMeta,omitempty" firestore:"sourceMeta"`
+	ContentHash       string           `json:"contentHash" firestore:"contentHash"`
+	Categories        []map[string]any `json:"categories,omitempty" firestore:"categories"` // {label, confidence, method, taxonomyId, version, at}
+	Attrs             map[string]any   `json:"attrs,omitempty" firestore:"attrs"`
+	OriginPublishedAt *time.Time       `json:"originPublishedAt,omitempty" firestore:"originPublishedAt"`
+	IngestedAt        time.Time        `json:"ingestedAt" firestore:"ingestedAt"`
+	CreatedAt         time.Time        `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt         time.Time        `json:"updatedAt" firestore:"updatedAt"`
+}
+
+// Chunk stores vectorized searchable fragments of a document
+type Chunk struct {
+	ID               string         `json:"id" firestore:"id"`
+	TenantID         string         `json:"tenantId" firestore:"tenantId"`
+	DocID            string         `json:"docId" firestore:"docId"`
+	SourceID         string         `json:"sourceId" firestore:"sourceId"`
+	Position         int            `json:"position" firestore:"position"`
+	Text             string         `json:"text" firestore:"text"`
+	Embedding        []float64      `json:"embedding,omitempty" firestore:"embedding"`
+	EmbeddingModel   string         `json:"embeddingModel,omitempty" firestore:"embeddingModel"`
+	EmbeddingVersion string         `json:"embeddingVersion,omitempty" firestore:"embeddingVersion"`
+	Attrs            map[string]any `json:"attrs,omitempty" firestore:"attrs"`
+	ContentHash      string         `json:"contentHash" firestore:"contentHash"`
+	CreatedAt        time.Time      `json:"createdAt" firestore:"createdAt"`
+}
+
+// Rule represents a Decision Intel rule configuration
+type Rule struct {
+	ID        string         `json:"id" firestore:"id"`
+	TenantID  string         `json:"tenantId" firestore:"tenantId"`
+	Scope     map[string]any `json:"scope" firestore:"scope"` // {level: global|tenant|project|source, ids: []}
+	Kind      string         `json:"kind" firestore:"kind"`   // ingestion|enrichment|ranking|post-answer
+	Priority  int            `json:"priority" firestore:"priority"`
+	Version   string         `json:"version" firestore:"version"`
+	Config    map[string]any `json:"config" firestore:"config"`
+	CreatedAt time.Time      `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt" firestore:"updatedAt"`
+}
+
+// Job tracks ingestion/reindex/migration operations
+type Job struct {
+	ID        string         `json:"id" firestore:"id"`
+	TenantID  string         `json:"tenantId" firestore:"tenantId"`
+	Type      string         `json:"type" firestore:"type"`
+	Status    string         `json:"status" firestore:"status"` // pending|running|completed|failed
+	Attempt   int            `json:"attempt" firestore:"attempt"`
+	Payload   map[string]any `json:"payload,omitempty" firestore:"payload"`
+	LastError *string        `json:"lastError,omitempty" firestore:"lastError"`
+	CreatedAt time.Time      `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt" firestore:"updatedAt"`
+}
+
+// SearchEvent captures search/grounding telemetry
+type SearchEvent struct {
+	ID            string         `json:"id" firestore:"id"`
+	TenantID      string         `json:"tenantId" firestore:"tenantId"`
+	ProjectID     string         `json:"projectId" firestore:"projectId"`
+	Query         string         `json:"query" firestore:"query"`
+	Filters       map[string]any `json:"filters,omitempty" firestore:"filters"`
+	ResultsDocIDs []string       `json:"resultsDocIds,omitempty" firestore:"resultsDocIds"`
+	ClickedDocID  *string        `json:"clickedDocId,omitempty" firestore:"clickedDocId"`
+	Feedback      *string        `json:"feedback,omitempty" firestore:"feedback"`
+	CreatedAt     time.Time      `json:"createdAt" firestore:"createdAt"`
+}
+
 // User соответствует Core.Users
 type User struct {
 	ID       string `json:"id" firestore:"id"`

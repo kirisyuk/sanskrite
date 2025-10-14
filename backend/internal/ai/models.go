@@ -92,88 +92,94 @@ const (
 type AIRequirements struct {
 	// PreferredModel предпочтительная модель для выполнения задачи
 	PreferredModel string `json:"preferredModel,omitempty"`
-	
+
 	// FallbackModels список резервных моделей, если предпочтительная недоступна
 	FallbackModels []string `json:"fallbackModels,omitempty"`
-	
+
 	// MinContextWindow минимально требуемый размер контекстного окна в токенах
 	MinContextWindow int `json:"minContextWindow"`
-	
+
 	// MaxOutputSize максимальный желаемый размер ответа в токенах
 	MaxOutputSize int `json:"maxOutputSize"`
-	
+
 	// MinCapabilityScore минимальная условная оценка возможностей модели
 	MinCapabilityScore int `json:"minCapabilityScore"`
-	
+
 	// TextGenerationCapability требуется возможность генерации текста
 	TextGenerationCapability bool `json:"textGenerationCapability"`
-	
+
 	// ImageGenerationCapability требуется возможность генерации изображений
 	ImageGenerationCapability bool `json:"imageGenerationCapability"`
-	
+
 	// EmbeddingGenerationCapability требуется возможность вычисления эмбеддингов
 	EmbeddingGenerationCapability bool `json:"embeddingGenerationCapability"`
-	
+
 	// ImageAnalysisCapability требуется возможность анализа изображений
 	ImageAnalysisCapability bool `json:"imageAnalysisCapability"`
-	
+
 	// BuiltInSearchCapability требуется модель со встроенной функцией веб-поиска
 	BuiltInSearchCapability bool `json:"builtInSearchCapability"`
+
+	// SearchGroundingCapability требуется модель с поддержкой Google Search Grounding (Vertex/Gemini)
+	SearchGroundingCapability bool `json:"searchGroundingCapability"`
 }
 
 // AIModelCapabilities описывает технические и коммерческие характеристики конкретной AI-модели
 type AIModelCapabilities struct {
 	// Name имя модели, используемое в API-запросах
 	Name string
-	
+
 	// ContextWindow максимальный размер контекстного окна в токенах
 	ContextWindow int
-	
+
 	// OutputTokens максимальный размер генерируемого ответа в токенах
 	OutputTokens int
-	
+
 	// PricePerInputToken стоимость одного входного токена в USD
 	PricePerInputToken float64
-	
+
 	// PricePerOutputToken стоимость одного выходного токена в USD
 	PricePerOutputToken float64
-	
+
 	// Provider провайдер, предоставляющий данную модель
 	Provider AIProvider
-	
+
 	// MaxTokensPerMinute ограничение на количество токенов в минуту
 	MaxTokensPerMinute int
-	
+
 	// MaxTokensPerDay ограничение на количество токенов в день
 	MaxTokensPerDay int
-	
+
 	// NearlyRealTime флаг, указывающий, что модель работает с низкой задержкой
 	NearlyRealTime bool
-	
+
 	// CapabilityScore условная оценка общих возможностей модели (например, по шкале от 1 до 10)
 	CapabilityScore int
-	
+
 	// TextGenerationCapability поддерживает ли модель генерацию текста
 	TextGenerationCapability bool
-	
+
 	// ImageGenerationCapability поддерживает ли модель генерацию изображений
 	ImageGenerationCapability bool
-	
+
 	// EmbeddingGenerationCapability поддерживает ли модель вычисление векторных представлений
 	EmbeddingGenerationCapability bool
-	
+
 	// ImageAnalysisCapability поддерживает ли модель анализ изображений
 	ImageAnalysisCapability bool
-	
+
 	// BuiltInSearchCapability поддерживает ли модель встроенную функцию веб-поиска
 	BuiltInSearchCapability bool
-	
+
+	// SearchGroundingCapability поддерживает ли модель Search Grounding (Gemini/Vertex)
+	SearchGroundingCapability bool
+
 	// SupportsToolCalling поддерживает ли модель function/tool-calling
 	SupportsToolCalling bool
-	
+
 	// SupportsMcp предполагается ли использование MCP при tool-calling
 	SupportsMcp bool
-	
+
 	// ToolUseProtocol какой протокол tool-use должен применяться при обращении к этой модели
 	ToolUseProtocol ToolUseProtocol
 }
@@ -182,34 +188,34 @@ type AIModelCapabilities struct {
 type AITask struct {
 	// TaskType тип выполняемой задачи
 	TaskType TaskType `json:"taskType"`
-	
+
 	// InputContent входные данные для задачи в виде строки
 	InputContent string `json:"inputContent"`
-	
+
 	// AIRequirements требования к AI-модели для выполнения этой задачи
 	AIRequirements AIRequirements `json:"aiRequirements"`
-	
+
 	// Verifier опциональный верификатор, который определяет, является ли ответ от AI валидным
 	Verifier AITaskResultVerifier `json:"-"`
-	
+
 	// EnableTelemetry включает автоматическую отправку телеметрии (по умолчанию true)
 	EnableTelemetry bool `json:"enableTelemetry"`
-	
+
 	// TenantID мультиарендность для телеметрии
 	TenantID string `json:"tenantId,omitempty"`
-	
+
 	// Environment окружение для телеметрии
 	Environment string `json:"environment,omitempty"`
-	
+
 	// Project проект для телеметрии
 	Project string `json:"project,omitempty"`
-	
+
 	// SessionID идентификатор сессии для телеметрии
 	SessionID string `json:"sessionId,omitempty"`
-	
+
 	// TraceID идентификатор трассировки для телеметрии
 	TraceID string `json:"traceId,omitempty"`
-	
+
 	// SpanID идентификатор спана для телеметрии
 	SpanID string `json:"spanId,omitempty"`
 }
@@ -237,46 +243,46 @@ type ToolCallRecord struct {
 type AITaskResult struct {
 	// Content основной текстовый результат, сгенерированный моделью
 	Content string `json:"content"`
-	
+
 	// Model имя модели, которая выполнила задачу
 	Model string `json:"model"`
-	
+
 	// TaskType тип выполненной задачи
 	TaskType TaskType `json:"taskType"`
-	
+
 	// Status статус выполнения (успех или ошибка)
 	Status AITaskStatus `json:"status"`
-	
+
 	// InputTokens количество токенов во входном запросе
 	InputTokens int `json:"inputTokens"`
-	
+
 	// OutputTokens количество токенов в сгенерированном ответе
 	OutputTokens int `json:"outputTokens"`
-	
+
 	// ProcessingCost расчетная стоимость выполнения задачи в USD
 	ProcessingCost float64 `json:"processingCost"`
-	
+
 	// ProcessingTime время, затраченное на выполнение задачи
 	ProcessingTime time.Duration `json:"processingTime"`
-	
+
 	// Embedding векторное представление (эмбеддинг), если задачей было его вычисление
 	Embedding []float64 `json:"embedding,omitempty"`
-	
+
 	// Citations список ссылок на веб-источники, использованных моделью при поиске
 	Citations []WebCitation `json:"citations,omitempty"`
-	
+
 	// UsedToolCalling был ли использован режим tool/function-calling
 	UsedToolCalling bool `json:"usedToolCalling"`
-	
+
 	// ToolUseProtocol протокол tool-use, применённый провайдером
 	ToolUseProtocol ToolUseProtocol `json:"toolUseProtocol"`
-	
+
 	// ToolCallIterations количество итераций цикла tool-calls
 	ToolCallIterations int `json:"toolCallIterations"`
-	
+
 	// ToolCalls журнал вызовов инструментов
 	ToolCalls []ToolCallRecord `json:"toolCalls,omitempty"`
-	
+
 	// FinishReason причина завершения
 	FinishReason string `json:"finishReason,omitempty"`
 }
@@ -303,9 +309,9 @@ type ToolCallRequest struct {
 
 // ToolExecutionResult результат выполнения инструмента
 type ToolExecutionResult struct {
-	CallID                string `json:"callId"`
-	ToolName              string `json:"toolName"`
-	ResultJSON            string `json:"resultJson"`
+	CallID                 string `json:"callId"`
+	ToolName               string `json:"toolName"`
+	ResultJSON             string `json:"resultJson"`
 	RequestedArgumentsJSON string `json:"requestedArgumentsJson,omitempty"`
 }
 
@@ -316,4 +322,3 @@ type ToolChatStep struct {
 	ToolCalls []ToolCallRequest `json:"toolCalls"`
 	IsFinal   bool              `json:"isFinal"`
 }
-

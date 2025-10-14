@@ -267,6 +267,7 @@ func (mm *AIModelManager) initializeModels() {
 		TextGenerationCapability:      true,
 		ImageAnalysisCapability:       false,
 		BuiltInSearchCapability:       false,
+		SearchGroundingCapability:     true,
 		SupportsToolCalling:           true,
 		SupportsMcp:                   true,
 		ToolUseProtocol:               ToolUseProtocolGemini,
@@ -288,6 +289,7 @@ func (mm *AIModelManager) initializeModels() {
 		TextGenerationCapability:      true,
 		ImageAnalysisCapability:       false,
 		BuiltInSearchCapability:       false,
+		SearchGroundingCapability:     true,
 		SupportsToolCalling:           true,
 		SupportsMcp:                   true,
 		ToolUseProtocol:               ToolUseProtocolGemini,
@@ -309,6 +311,7 @@ func (mm *AIModelManager) initializeModels() {
 		TextGenerationCapability:      true,
 		ImageAnalysisCapability:       true,
 		BuiltInSearchCapability:       false,
+		SearchGroundingCapability:     true,
 		SupportsToolCalling:           true,
 		SupportsMcp:                   true,
 		ToolUseProtocol:               ToolUseProtocolGemini,
@@ -424,13 +427,15 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 
 	// Если поиск не требуется, исключаем модели со встроенным поиском
 	searchRequired := requirements.BuiltInSearchCapability
+	// Требование на Search Grounding (Vertex/Gemini)
+	groundingRequired := requirements.SearchGroundingCapability
 
 	// Фильтруем модели по всем критериям
 	type modelCandidate struct {
 		name  string
 		model AIModelCapabilities
 	}
-	
+
 	var capableModels []modelCandidate
 
 	for name, m := range mm.models {
@@ -459,8 +464,12 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 		if requirements.ImageAnalysisCapability && !m.ImageAnalysisCapability {
 			continue
 		}
-		// Логика для поиска: либо требуется и модель поддерживает, либо не требуется и модель не поддерживает
+		// Логика для классического веб-поиска: либо требуется и модель поддерживает, либо не требуется и модель не поддерживает
 		if (searchRequired && !m.BuiltInSearchCapability) || (!searchRequired && m.BuiltInSearchCapability) {
+			continue
+		}
+		// Если требуется Grounding, отбираем только модели с поддержкой Grounding
+		if groundingRequired && !m.SearchGroundingCapability {
 			continue
 		}
 
@@ -505,6 +514,9 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 			continue
 		}
 		if (searchRequired && !m.BuiltInSearchCapability) || (!searchRequired && m.BuiltInSearchCapability) {
+			continue
+		}
+		if groundingRequired && !m.SearchGroundingCapability {
 			continue
 		}
 

@@ -104,6 +104,11 @@ class ApiClient {
     const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string }[] }>(`/api/v1/projects/${projectId}/interactions`);
     return response.data.items;
   }
+
+  async sendChatMessage(projectId: string, message: string, language?: string): Promise<{ answer: string }> {
+    const response = await this.client.post<{ answer: string }>(`/api/v1/projects/${projectId}/chat`, { message, language });
+    return response.data;
+  }
 }
 
 export const api = new ApiClient();

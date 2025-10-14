@@ -10,6 +10,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
+	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/prompts"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -22,9 +23,13 @@ type Orchestrator struct {
 	exec         *ai.AITaskExecutor
 	crawl        *crawler.WebCrawler
 	telegram     TelegramFetcher
+	providersReg *prov.Registry
 	projects     *repo.ProjectsRepository
 	sources      *repo.DataSourcesRepository
 	profiles     *repo.SourceProfilesRepository
+	docs         *repo.DocumentsRepository
+	chunks       *repo.ChunksRepository
+	emb          ai.EmbeddingProvider
 	publish      *realtime.Publisher
 	logger       *log.Logger
 	cache        *repo.ProcessedContentRepository
@@ -48,6 +53,61 @@ func (o *Orchestrator) WithProfiles(sp *repo.SourceProfilesRepository) *Orchestr
 // Publish exposes the Publisher for wiring subscribers
 func (o *Orchestrator) Publish() *realtime.Publisher { return o.publish }
 
+// Exec accessor (used by HTTP handlers needing embeddings)
+func (o *Orchestrator) Exec() *ai.AITaskExecutor { return o.exec }
+
+// RefreshDocumentByID naive revalidation placeholder
+func (o *Orchestrator) RefreshDocumentByID(ctx context.Context, tenantID, sourceID, docID string) error {
+	if o.docs == nil || o.providersReg == nil || o.emb == nil {
+		return fmt.Errorf("grounding deps not wired")
+	}
+	d, err := o.docs.GetByID(ctx, docID)
+	if err != nil || d == nil {
+		return fmt.Errorf("document not found")
+	}
+	// select provider by source kind
+	// Minimal logic: if documentPath starts with rss/, call rss provider Ground on URL; if web/, fetch page; if telegram/, skip for now
+	updatedText := ""
+	if strings.HasPrefix(d.DocumentPath, "rss/") && d.URL != "" {
+		if p, ok := o.providersReg.Get("rss"); ok {
+			res, err := p.Ground(ctx, tenantID, d.SourceID, []string{d.URL})
+			if err == nil && len(res) > 0 && strings.TrimSpace(res[0].FullText) != "" {
+				updatedText = res[0].FullText
+			}
+		}
+	} else if strings.HasPrefix(d.DocumentPath, "web/") && d.URL != "" && o.crawl != nil {
+		if fr, err := o.crawl.FetchContent(ctx, d.URL); err == nil && strings.TrimSpace(fr.Text) != "" {
+			updatedText = fr.Text
+		}
+	}
+	if strings.TrimSpace(updatedText) == "" || updatedText == d.FullText {
+		return nil
+	}
+	// update document and re-embed chunks
+	d.FullText = updatedText
+	d.ContentHash = repo.HashContent(updatedText)
+	d.UpdatedAt = time.Now().UTC()
+	d.Status = "new"
+	if err := o.docs.Upsert(ctx, d); err != nil {
+		return err
+	}
+	// re-chunk and re-embed (simple replace: in prod, delete old chunks first)
+	parts := ChunkText(updatedText, 1200)
+	vecs, err := o.emb.EmbedTexts(ctx, parts)
+	if err != nil {
+		return err
+	}
+	for i := range parts {
+		ch := &models.Chunk{TenantID: tenantID, DocID: d.ID, SourceID: d.SourceID, Position: i, Text: parts[i], Embedding: vecs[i], EmbeddingModel: o.emb.ModelID(), EmbeddingVersion: "v1", Attrs: map[string]any{"documentType": d.DocumentType}, ContentHash: repo.HashContent(parts[i]), CreatedAt: time.Now().UTC()}
+		if _, err := o.chunks.Create(ctx, ch); err != nil {
+			return err
+		}
+	}
+	d.Status = "embedded"
+	_ = o.docs.Upsert(ctx, d)
+	return nil
+}
+
 // publishEvent safely publishes an event, handling nil publisher gracefully
 func (o *Orchestrator) publishEvent(ctx context.Context, et realtime.EventType, tenantID string, payload interface{}) {
 	if o.publish != nil {
@@ -67,6 +127,282 @@ func (o *Orchestrator) WithCache(c *repo.ProcessedContentRepository) *Orchestrat
 func (o *Orchestrator) WithInteractions(ir *repo.InteractionsRepository) *Orchestrator {
 	o.interactions = ir
 	return o
+}
+
+// WithRAG wires repositories and provider registry for RAG ingest
+func (o *Orchestrator) WithRAG(reg *prov.Registry, docs *repo.DocumentsRepository, chunks *repo.ChunksRepository) *Orchestrator {
+	o.providersReg = reg
+	o.docs = docs
+	o.chunks = chunks
+	return o
+}
+
+// WithEmbedding wires embedding provider for sync-embedding ingest
+func (o *Orchestrator) WithEmbedding(emb ai.EmbeddingProvider) *Orchestrator {
+	o.emb = emb
+	return o
+}
+
+// IngestWeb ingests a single web page as a document and chunks (sync embeddings)
+func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canonicalURL string) error {
+	if o.crawl == nil || o.docs == nil || o.chunks == nil || o.emb == nil {
+		return fmt.Errorf("ingest dependencies not wired")
+	}
+	fr, err := o.crawl.FetchContent(ctx, canonicalURL)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	extID := canonicalURL
+	existing, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID)
+	var docID string
+	if existing != nil {
+		existing.Title = canonicalURL
+		existing.URL = canonicalURL
+		existing.DocumentPath = "web/" + canonicalURL
+		existing.FullText = fr.Text
+		existing.ContentType = "plainText"
+		existing.DocumentType = "article"
+		existing.Status = "new"
+		existing.ContentHash = repo.HashContent(fr.Text)
+		existing.UpdatedAt = now
+		if err := o.docs.Upsert(ctx, existing); err != nil {
+			return err
+		}
+		docID = existing.ID
+	} else {
+		d := &models.Document{TenantID: tenantID, SourceID: sourceID, ExternalID: extID, Title: canonicalURL, URL: canonicalURL, DocumentPath: "web/" + canonicalURL, FullText: fr.Text, Status: "new", ContentType: "plainText", DocumentType: "article", ContentHash: repo.HashContent(fr.Text), IngestedAt: now, CreatedAt: now, UpdatedAt: now}
+		id, err := o.docs.Create(ctx, d)
+		if err != nil {
+			return err
+		}
+		docID = id
+	}
+	parts := ChunkText(fr.Text, 1200)
+	if len(parts) > 0 {
+		vectors, err := o.emb.EmbedTexts(ctx, parts)
+		if err != nil {
+			return err
+		}
+		for i := range parts {
+			ch := &models.Chunk{TenantID: tenantID, DocID: docID, SourceID: sourceID, Position: i, Text: parts[i], Embedding: vectors[i], EmbeddingModel: o.emb.ModelID(), EmbeddingVersion: "v1", Attrs: map[string]any{"documentType": "article"}, ContentHash: repo.HashContent(parts[i]), CreatedAt: now}
+			if _, err := o.chunks.Create(ctx, ch); err != nil {
+				return err
+			}
+		}
+	}
+	if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID); d != nil {
+		d.Status = "embedded"
+		_ = o.docs.Upsert(ctx, d)
+		if o.publish != nil {
+			_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"tenantId": tenantID, "sourceId": sourceID, "documentId": d.ID, "externalId": d.ExternalID})
+		}
+	}
+	return nil
+}
+
+// IngestTelegram ingests recent Telegram messages as documents and chunks
+func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, handle string, lastMessageID int) error {
+	if o.telegram == nil || o.docs == nil || o.chunks == nil || o.emb == nil {
+		return fmt.Errorf("ingest dependencies not wired")
+	}
+	msgs, err := o.telegram.FetchUpdates(ctx, handle, lastMessageID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, m := range msgs {
+		extID := fmt.Sprintf("%d", m.ID)
+		existing, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID)
+		var docID string
+		var pubAt *time.Time
+		if t, err := time.Parse(time.RFC3339, m.Date); err == nil {
+			pubAt = &t
+		}
+		text := strings.TrimSpace(m.Text)
+		if text == "" {
+			continue
+		}
+		if existing != nil {
+			existing.Title = m.Link
+			existing.URL = m.Link
+			existing.DocumentPath = "telegram/" + handle + "/" + extID
+			existing.FullText = text
+			existing.ContentType = "plainText"
+			existing.DocumentType = "post"
+			existing.OriginPublishedAt = pubAt
+			existing.Status = "new"
+			existing.ContentHash = repo.HashContent(text)
+			existing.UpdatedAt = now
+			if err := o.docs.Upsert(ctx, existing); err != nil {
+				return err
+			}
+			docID = existing.ID
+		} else {
+			d := &models.Document{TenantID: tenantID, SourceID: sourceID, ExternalID: extID, Title: m.Link, URL: m.Link, DocumentPath: "telegram/" + handle + "/" + extID, FullText: text, Status: "new", ContentType: "plainText", DocumentType: "post", OriginPublishedAt: pubAt, ContentHash: repo.HashContent(text), IngestedAt: now, CreatedAt: now, UpdatedAt: now}
+			id, err := o.docs.Create(ctx, d)
+			if err != nil {
+				return err
+			}
+			docID = id
+		}
+		parts := ChunkText(text, 800)
+		if len(parts) > 0 {
+			vectors, err := o.emb.EmbedTexts(ctx, parts)
+			if err != nil {
+				return err
+			}
+			for i := range parts {
+				ch := &models.Chunk{TenantID: tenantID, DocID: docID, SourceID: sourceID, Position: i, Text: parts[i], Embedding: vectors[i], EmbeddingModel: o.emb.ModelID(), EmbeddingVersion: "v1", Attrs: map[string]any{"documentType": "post"}, ContentHash: repo.HashContent(parts[i]), CreatedAt: now}
+				if _, err := o.chunks.Create(ctx, ch); err != nil {
+					return err
+				}
+			}
+		}
+		if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID); d != nil {
+			d.Status = "embedded"
+			_ = o.docs.Upsert(ctx, d)
+			if o.publish != nil {
+				_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"tenantId": tenantID, "sourceId": sourceID, "documentId": d.ID, "externalId": d.ExternalID})
+			}
+		}
+	}
+	return nil
+}
+
+// IngestProjectSources triggers ingest for all sources linked to a project (legacy linkage for now)
+func (o *Orchestrator) IngestProjectSources(ctx context.Context, tenantID, projectID string) error {
+	if o.sources == nil {
+		return fmt.Errorf("sources repo not wired")
+	}
+	list, err := o.sources.ListByProject(ctx, tenantID, projectID)
+	if err != nil {
+		return err
+	}
+	for _, ds := range list {
+		if ds.Kind == "web" && ds.Details.URI != nil {
+			_ = o.IngestWeb(ctx, tenantID, ds.ID, *ds.Details.URI)
+		} else if ds.Kind == "telegram_channel" && ds.Details.ChannelUsername != nil {
+			last := 0
+			if ds.Details.LastProcessedMessageID != nil {
+				last = *ds.Details.LastProcessedMessageID
+			}
+			_ = o.IngestTelegram(ctx, tenantID, ds.ID, *ds.Details.ChannelUsername, last)
+		} else if ds.Kind == "rss" && ds.Details.RSSURL != nil {
+			// reuse existing rss ingest using emb
+			if o.emb != nil {
+				_ = o.IngestRSS(ctx, tenantID, ds.ID, o.emb)
+			}
+		}
+	}
+	return nil
+}
+
+// IngestRSS demonstrates provider-based ingest for RSS sources.
+func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string, embed ai.EmbeddingProvider) error {
+	if o.providersReg == nil || o.docs == nil || o.chunks == nil {
+		return fmt.Errorf("RAG components not wired")
+	}
+	p, ok := o.providersReg.Get("rss")
+	if !ok {
+		return fmt.Errorf("rss provider not registered")
+	}
+	docs, err := p.Ingest(ctx, tenantID, sourceID)
+	if err != nil {
+		return err
+	}
+	for _, nd := range docs {
+		// idempotent upsert by externalId
+		existing, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, nd.ExternalID)
+		var docID string
+		now := time.Now().UTC()
+		if existing != nil {
+			existing.Title = nd.Title
+			existing.URL = nd.URL
+			existing.DocumentPath = nd.DocumentPath
+			existing.FullText = nd.FullText
+			existing.Language = nd.Language
+			existing.ContentType = nd.ContentType
+			existing.DocumentType = nd.DocumentType
+			existing.SourceMeta = nd.SourceMeta
+			existing.OriginPublishedAt = nd.OriginPublishedAt
+			existing.Status = "new"
+			existing.ContentHash = repo.HashContent(nd.FullText)
+			existing.UpdatedAt = now
+			if err := o.docs.Upsert(ctx, existing); err != nil {
+				return err
+			}
+			docID = existing.ID
+		} else {
+			d := &models.Document{
+				TenantID:          tenantID,
+				SourceID:          sourceID,
+				ExternalID:        nd.ExternalID,
+				Title:             nd.Title,
+				URL:               nd.URL,
+				DocumentPath:      nd.DocumentPath,
+				FullText:          nd.FullText,
+				Status:            "new",
+				ContentType:       nd.ContentType,
+				DocumentType:      nd.DocumentType,
+				Language:          nd.Language,
+				SourceMeta:        nd.SourceMeta,
+				OriginPublishedAt: nd.OriginPublishedAt,
+				ContentHash:       repo.HashContent(nd.FullText),
+				IngestedAt:        now,
+				CreatedAt:         now,
+				UpdatedAt:         now,
+			}
+			id, err := o.docs.Create(ctx, d)
+			if err != nil {
+				return err
+			}
+			docID = id
+		}
+
+		// chunk and embed synchronously
+		parts := ChunkText(nd.FullText, 1200)
+		if len(parts) == 0 {
+			continue
+		}
+		vectors, err := embed.EmbedTexts(ctx, parts)
+		if err != nil {
+			return err
+		}
+		for i := range parts {
+			ch := &models.Chunk{
+				TenantID:         tenantID,
+				DocID:            docID,
+				SourceID:         sourceID,
+				Position:         i,
+				Text:             parts[i],
+				Embedding:        vectors[i],
+				EmbeddingModel:   embed.ModelID(),
+				EmbeddingVersion: "v1",
+				Attrs:            map[string]any{"language": nd.Language, "documentType": nd.DocumentType},
+				ContentHash:      repo.HashContent(parts[i]),
+			}
+			if _, err := o.chunks.Create(ctx, ch); err != nil {
+				return err
+			}
+		}
+		// mark document embedded and enqueue async processing
+		if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, nd.ExternalID); d != nil {
+			d.Status = "embedded"
+			_ = o.docs.Upsert(ctx, d)
+			// publish to document.process
+			if o.publish != nil {
+				payload := map[string]any{
+					"tenantId":   tenantID,
+					"sourceId":   sourceID,
+					"documentId": d.ID,
+					"externalId": d.ExternalID,
+				}
+				_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, payload)
+			}
+		}
+	}
+	return nil
 }
 
 type ExecuteInput struct {
@@ -98,9 +434,12 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 	var historyPairs []map[string]string
 	var profileSummaries []string
 	var contextSnippets []string
-    hadContext := false
-    if o.interactions != nil {
-        if items, err := o.interactions.ListByProject(ctx, projectID); err == nil {
+	type ctxEntry struct{ sourceId, displayName, kind, snippet string }
+	var contextEntries []ctxEntry
+	var lastContextAt *time.Time
+	hadContext := false
+	if o.interactions != nil {
+		if items, err := o.interactions.ListByProject(ctx, projectID); err == nil {
 			// Collect last up to 8 messages (4 pairs)
 			for i := len(items) - 1; i >= 0 && len(historyPairs) < 4; i-- {
 				it := items[i]
@@ -125,77 +464,79 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 						profileSummaries = append(profileSummaries, it.Content)
 					}
 				}
-                if it.Kind == "discovery.context" {
-                    hadContext = true
-                }
+				if it.Kind == "discovery.context" {
+					hadContext = true
+					t := it.CreatedAt
+					if lastContextAt == nil || t.After(*lastContextAt) {
+						lastContextAt = &t
+					}
+				}
 			}
-            // Collect recent context snippets with a simple char budget (~6000 chars)
-			constMaxChars := 6000
-			used := 0
-			for i := len(items) - 1; i >= 0 && used < constMaxChars; i-- {
+			// Collect recent context snippets per source; budgeting later
+			for i := len(items) - 1; i >= 0; i-- {
 				it := items[i]
 				if it.Kind == "discovery.context" {
 					// content is JSON; try to extract snippet
 					var m map[string]interface{}
 					if err := json.Unmarshal([]byte(it.Content), &m); err == nil {
+						srcID, _ := m["sourceId"].(string)
+						disp, _ := m["displayName"].(string)
+						skind, _ := m["sourceKind"].(string)
 						if v, ok := m["snippet"].(string); ok {
 							s := strings.TrimSpace(v)
 							if s != "" {
-								// truncate each to max 1500 chars
-								if len(s) > 1500 {
-									s = s[:1500]
-								}
-								contextSnippets = append([]string{s}, contextSnippets...)
-								used += len(s)
+								contextEntries = append(contextEntries, ctxEntry{sourceId: srcID, displayName: disp, kind: skind, snippet: s})
 							}
 						}
-
-    // If we have no discovery.context at all for this project, fetch minimal context now (web/telegram summaries)
-    if !hadContext {
-        // Load sources and fetch a minimal fresh context snippet for each (best effort)
-        if o.sources != nil {
-            if srcs, err := o.sources.ListByProject(ctx, tenantID, projectID); err == nil {
-                for _, ds := range srcs {
-                    // Prepare a small snippet depending on kind
-                    var snippet string
-                    if ds.Kind == "web" && ds.Details.URI != nil {
-                        if fr, err := o.crawl.FetchContent(ctx, *ds.Details.URI); err == nil {
-                            snippet = strings.TrimSpace(fr.Text)
-                        }
-                    } else if ds.Kind == "telegram_channel" && ds.Details.ChannelUsername != nil {
-                        if msgs, err := o.telegram.FetchUpdates(ctx, *ds.Details.ChannelUsername, 0); err == nil {
-                            var b strings.Builder
-                            for i := 0; i < len(msgs) && i < 10; i++ {
-                                if msgs[i].Text != "" {
-                                    b.WriteString(msgs[i].Text)
-                                    b.WriteString("\n\n")
-                                }
-                            }
-                            snippet = strings.TrimSpace(b.String())
-                        }
-                    }
-                    if snippet != "" {
-                        if len(snippet) > 1500 {
-                            snippet = snippet[:1500]
-                        }
-                        obj := map[string]interface{}{
-                            "sourceId":    ds.ID,
-                            "displayName": ds.DisplayName,
-                            "sourceKind":  ds.Kind,
-                            "snippet":     snippet,
-                            "chars":       len(snippet),
-                        }
-                        b, _ := json.Marshal(obj)
-                        if o.interactions != nil {
-                            _, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: tenantID, ProjectID: projectID, Kind: "discovery.context", Content: string(b)})
-                        }
-                        contextSnippets = append(contextSnippets, snippet)
-                    }
-                }
-            }
-        }
-    }
 					}
+				}
+			}
+		}
+	}
+
+	// If no context ever or context is stale (> 2 hours), fetch minimal context now
+	needRefresh := !hadContext
+	if !needRefresh && lastContextAt != nil {
+		if time.Since(*lastContextAt) > 2*time.Hour {
+			needRefresh = true
+		}
+	}
+	if needRefresh && o.sources != nil {
+		if srcs, err := o.sources.ListByProject(ctx, tenantID, projectID); err == nil {
+			for _, ds := range srcs {
+				var snippet string
+				if ds.Kind == "web" && ds.Details.URI != nil {
+					if fr, err := o.crawl.FetchContent(ctx, *ds.Details.URI); err == nil {
+						snippet = strings.TrimSpace(fr.Text)
+					}
+				} else if ds.Kind == "telegram_channel" && ds.Details.ChannelUsername != nil {
+					if msgs, err := o.telegram.FetchUpdates(ctx, *ds.Details.ChannelUsername, 0); err == nil {
+						var sb strings.Builder
+						for i := 0; i < len(msgs) && i < 50; i++ {
+							if msgs[i].Text != "" {
+								sb.WriteString(msgs[i].Text)
+								sb.WriteString("\n\n")
+							}
+						}
+						snippet = strings.TrimSpace(sb.String())
+					}
+				}
+				if snippet != "" {
+					if len(snippet) > 100000 { // hard-cap to 100 KB
+						snippet = snippet[:100000]
+					}
+					obj := map[string]interface{}{
+						"sourceId":    ds.ID,
+						"displayName": ds.DisplayName,
+						"sourceKind":  ds.Kind,
+						"snippet":     snippet,
+						"chars":       len(snippet),
+					}
+					bjson, _ := json.Marshal(obj)
+					if o.interactions != nil {
+						_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: tenantID, ProjectID: projectID, Kind: "discovery.context", Content: string(bjson)})
+					}
+					contextEntries = append(contextEntries, ctxEntry{sourceId: ds.ID, displayName: ds.DisplayName, kind: ds.Kind, snippet: snippet})
 				}
 			}
 		}
@@ -214,6 +555,36 @@ func (o *Orchestrator) Chat(ctx context.Context, tenantID, projectID, message, l
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
+	}
+	// Apply 100KB total budget split evenly across sources
+	if len(contextEntries) > 0 {
+		seen := map[string]bool{}
+		var perSource []ctxEntry
+		for i := 0; i < len(contextEntries); i++ { // newest first in entries
+			ce := contextEntries[i]
+			key := ce.sourceId
+			if key == "" {
+				key = ce.displayName + ":" + ce.kind
+			}
+			if !seen[key] {
+				seen[key] = true
+				perSource = append(perSource, ce)
+			}
+		}
+		if len(perSource) > 0 {
+			totalBudget := 100000
+			perBudget := totalBudget / len(perSource)
+			if perBudget < 1 {
+				perBudget = 1
+			}
+			for _, ce := range perSource {
+				s := ce.snippet
+				if len(s) > perBudget {
+					s = s[:perBudget]
+				}
+				contextSnippets = append(contextSnippets, s)
+			}
+		}
 	}
 	if len(contextSnippets) > 0 {
 		b.WriteString("RECENT CONTEXT SNIPPETS (truncated):\n")

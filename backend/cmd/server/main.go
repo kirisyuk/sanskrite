@@ -19,6 +19,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
+	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
 )
@@ -68,11 +69,20 @@ func main() {
 	s.projs = repo.NewProjectsRepository(fsClient.Client())
 	s.dsrcs = repo.NewDataSourcesRepository(fsClient.Client())
 	s.sprofs = repo.NewSourceProfilesRepository(fsClient.Client())
+	// RAG repos
+	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
+	chunksRepo := repo.NewChunksRepository(fsClient.Client())
 
 	// Handlers
 	s.usersHandler = httphandlers.NewUsersHandler(s.users, logger)
 	s.projectsHandler = httphandlers.NewProjectsHandler(s.projs, logger).WithDataSources(s.dsrcs)
 	s.discoveryHandler = httphandlers.NewDiscoveryHandler(s.projs, s.dsrcs, logger)
+	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger)
+	searchEventsRepo := repo.NewSearchEventsRepository(fsClient.Client())
+	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
+	rulesRepo := repo.NewRulesRepository(fsClient.Client())
+	rulesHandler := httphandlers.NewRulesHandler(rulesRepo, logger)
+	webhooksHandler := httphandlers.NewWebhooksHandler(logger)
 
 	// Wire orchestrator (AITaskExecutor + ModelManager + Vertex service)
 	modelManager := ai.NewAIModelManager()
@@ -103,6 +113,37 @@ func main() {
 			log.Printf("WARNING: PubSub publisher init failed: %v (realtime updates disabled)", err)
 		}
 		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger).WithProfiles(s.sprofs)
+		// Provider registry
+		reg := prov.NewRegistry()
+		reg.Register(prov.NewRSSProvider())
+		// Embedding provider (OpenAI small)
+		emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
+		_ = emb // wired into orchestrator when ingest endpoints are added
+		orchestrator = orchestrator.WithRAG(reg, docsRepo, chunksRepo).WithEmbedding(emb)
+		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo)
+
+		// Start document processor worker (background)
+		if pub != nil {
+			psClient := pub.Client()
+			worker := discovery.NewDocumentProcessor(psClient, string(realtime.EventDocProcess), docsRepo, rulesRepo, exec, logger)
+			go func() {
+				ctxW, cancelW := context.WithCancel(ctx)
+				defer cancelW()
+				if err := worker.Start(ctxW); err != nil {
+					log.Printf("document processor stopped: %v", err)
+				}
+			}()
+
+			// Start grounding processor worker (background)
+			grounder := discovery.NewGroundingProcessor(psClient, string(realtime.EventGroundRefresh), orchestrator, logger)
+			go func() {
+				ctxG, cancelG := context.WithCancel(ctx)
+				defer cancelG()
+				if err := grounder.Start(ctxG); err != nil {
+					log.Printf("grounding processor stopped: %v", err)
+				}
+			}()
+		}
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
 		orchestrator = orchestrator.WithCache(cacheRepo).WithInteractions(interactions)
@@ -194,9 +235,58 @@ func main() {
 	mux.Handle("/api/v1/users", authMiddleware(http.HandlerFunc(s.usersHandler.CreateUser)))
 	mux.Handle("/api/v1/users/", authMiddleware(http.HandlerFunc(s.routeUsersByID)))
 
-	// Project routes
+	// Project routes and nested sub-routes
 	mux.Handle("/api/v1/projects", authMiddleware(http.HandlerFunc(s.routeProjects)))
-	mux.Handle("/api/v1/projects/", authMiddleware(http.HandlerFunc(s.routeProjectsByID)))
+	mux.Handle("/api/v1/projects/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sources") && r.Method == http.MethodPost {
+			sourcesHandler.AttachSource(w, r)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/sources/") && r.Method == http.MethodDelete {
+			sourcesHandler.DetachSource(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/search") && r.Method == http.MethodGet {
+			s.discoveryHandler.SearchDocuments(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/vector-search") && r.Method == http.MethodPost {
+			s.discoveryHandler.VectorSearch(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/ingest") && r.Method == http.MethodPost {
+			s.discoveryHandler.IngestProject(w, r)
+			return
+		}
+		// fallback to default project by id handler
+		s.routeProjectsByID(w, r)
+	})))
+
+	// Rules routes
+	mux.Handle("/api/v1/rules", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			rulesHandler.CreateRule(w, r)
+		case http.MethodGet:
+			rulesHandler.ListRules(w, r)
+		default:
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		}
+	})))
+	mux.Handle("/api/v1/rules/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			rulesHandler.UpdateRule(w, r)
+			return
+		}
+		if r.Method == http.MethodDelete {
+			rulesHandler.DeleteRule(w, r)
+			return
+		}
+		httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+	})))
+
+	// Webhooks
+	mux.Handle("/api/v1/webhooks/", http.HandlerFunc(webhooksHandler.Handle))
 
 	// Discovery routes
 	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
@@ -258,6 +348,15 @@ func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request) {
 	// Check if path is /projects/{id}/interactions
 	if strings.HasSuffix(r.URL.Path, "/interactions") {
 		s.discoveryHandler.ListProjectInteractions(w, r)
+		return
+	}
+	// Check if path is /projects/{id}/chat
+	if strings.HasSuffix(r.URL.Path, "/chat") {
+		if r.Method == http.MethodPost {
+			s.discoveryHandler.ChatMessage(w, r)
+			return
+		}
+		httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
 		return
 	}
 

@@ -20,6 +20,26 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create, update, delete: if isSignedIn();
     }
+
+    // RAG collections (server-side access; rules permissive for backend)
+    match /rag_source_projects/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /rag_documents/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /rag_chunks/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /rag_rules/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /rag_jobs/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /rag_search_events/{id} {
+      allow read, write: if isSignedIn();
+    }
   }
 }
 

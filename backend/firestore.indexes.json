@@ -26,7 +26,16 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "rag_chunks",
+      "fieldPath": "embedding",
+      "vectorConfig": {
+        "dimension": 1536,
+        "distanceMeasure": "COSINE"
+      }
+    }
+  ]
 }
 
 

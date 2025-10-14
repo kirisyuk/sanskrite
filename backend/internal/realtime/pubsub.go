@@ -17,6 +17,9 @@ const (
 	EventDiscoveryProfile EventType = "discovery.profile"
 	EventDiscoveryAnswer  EventType = "discovery.answer"
 	EventDiscoveryProject EventType = "discovery.project"
+	EventDocProcess       EventType = "document.process"
+	EventGroundRefresh    EventType = "ground.refresh"
+	EventSourcePoll       EventType = "source.poll"
 )
 
 type Publisher struct {
@@ -32,7 +35,7 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 
 	p := &Publisher{client: client, topics: map[EventType]*pubsub.Topic{}}
 	// Ensure topics exist
-	for _, et := range []EventType{EventDiscoveryStatus, EventDiscoveryProfile, EventDiscoveryAnswer, EventDiscoveryProject} {
+	for _, et := range []EventType{EventDiscoveryStatus, EventDiscoveryProfile, EventDiscoveryAnswer, EventDiscoveryProject, EventDocProcess, EventGroundRefresh, EventSourcePoll} {
 		name := string(et)
 		t := client.Topic(name)
 		exists, err := t.Exists(ctx)

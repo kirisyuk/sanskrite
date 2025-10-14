@@ -13,6 +13,7 @@ const DiscoveryPage: React.FC = () => {
   const [sideOpen, setSideOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const correlationRef = useRef<string | null>(null);
   const wsInitialized = useRef(false);
@@ -55,6 +56,13 @@ const DiscoveryPage: React.FC = () => {
       setThinkingSeconds(0);
     }
   }, [running, currentProject?.id]);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (messagesRef.current) {
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    }
+  }, [interactions.length, running]);
 
   const handleDeleteChat = async (projectId: string, projectName: string) => {
     if (!confirm(`Delete "${projectName}"?`)) return;
@@ -429,7 +437,7 @@ const DiscoveryPage: React.FC = () => {
         </div>
 
         {/* Main center column (fixed max width) */}
-        <div className="min-h-0 flex flex-col">
+        <div className="min-h-0 flex flex-col flex-1">
         {showSettings ? (
           <div className="w-full px-4 mt-2 mb-2">
             <div className="mb-2 flex items-center">
@@ -453,17 +461,18 @@ const DiscoveryPage: React.FC = () => {
         <>
         {/* Sources moved to the left grid column */}
 
-        {/* Input box anchored to bottom */}
-        <div className="w-full max-w-3xl px-4 mt-auto mb-2">
+        {/* Interactions + input container with internal scroll */}
+        <div className="w-full max-w-3xl px-4 flex-1 flex flex-col min-h-0 pb-2">
           {/* Interactions history (LLM answers etc.) */}
-          {interactions && interactions.length > 0 && (
-            <div className="px-1 pb-2">
-              <div className="space-y-2">
-                {interactions.map((it) => {
+          <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]">
+            <div className="space-y-2">
+              {interactions
+                .filter((it) => it.kind === 'discovery.query' || it.kind === 'discovery.answer')
+                .map((it) => {
                   const isUser = it.kind === 'discovery.query';
                   const containerStyle: React.CSSProperties = {
-                    backgroundColor: isUser ? 'var(--bg-elevated)' : 'var(--bg-sidebar)',
-                    border: '1px solid var(--overlay-line-90)',
+                    backgroundColor: isUser ? 'var(--brand-10)' : 'var(--bg-sidebar)',
+                    border: isUser ? '1px solid var(--brand-25)' : '1px solid var(--overlay-line-90)',
                     maxWidth: '75%',
                   };
                   return (
@@ -474,10 +483,10 @@ const DiscoveryPage: React.FC = () => {
                       </div>
                     </div>
                   );
-                })}
-              </div>
+              })
+            }
             </div>
-          )}
+          </div>
 
           {/* Status indicator */}
           {running && (
@@ -489,7 +498,7 @@ const DiscoveryPage: React.FC = () => {
           )}
 
           {/* Input box */}
-          <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="rounded-xl border overflow-hidden mt-2" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
             <div className="p-3">
               <div className="flex items-end gap-3">
                 <div className="flex-1">

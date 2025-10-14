@@ -67,6 +67,10 @@ enable_api cloudbuild.googleapis.com
 enable_api iam.googleapis.com
 enable_api secretmanager.googleapis.com
 enable_api pubsub.googleapis.com
+# Optional but recommended for future features
+enable_api aiplatform.googleapis.com
+enable_api cloudscheduler.googleapis.com
+enable_api cloudresourcemanager.googleapis.com
 
 deploy_web() {
   echo -e "${BLUE}[web] Preparing bucket and Cloud Build...${NC}"
@@ -107,7 +111,13 @@ setup_infrastructure() {
   
   # 2. Grant required roles (idempotent)
   echo -e "${BLUE}[infra] Ensuring IAM permissions...${NC}"
-  for role in roles/datastore.user roles/secretmanager.secretAccessor roles/pubsub.admin roles/logging.logWriter; do
+  for role in \
+    roles/datastore.user \
+    roles/secretmanager.secretAccessor \
+    roles/pubsub.admin \
+    roles/pubsub.publisher \
+    roles/pubsub.subscriber \
+    roles/logging.logWriter; do
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
       --member="serviceAccount:$SA_BACKEND" \
       --role="$role" \
@@ -129,7 +139,7 @@ setup_infrastructure() {
   
   # 4. Ensure Pub/Sub topics exist
   echo -e "${BLUE}[infra] Ensuring Pub/Sub topics...${NC}"
-  for topic in discovery.status discovery.profile discovery.answer discovery.project; do
+  for topic in discovery.status discovery.profile discovery.answer discovery.project document.process ground.refresh source.poll; do
     if ! gcloud pubsub topics describe "$topic" >/dev/null 2>&1; then
       gcloud pubsub topics create "$topic" --quiet
       echo -e "${GREEN}  ✓${NC} Created topic: $topic"
@@ -146,6 +156,9 @@ deploy_api() {
     exit 1
   }
   echo -e "${GREEN}[api] Go build successful locally${NC}"
+
+  echo -e "${BLUE}[api] Running migration: sourceProjects backfill...${NC}"
+  (cd "$API_DIR" && go run ./cmd/migrate_sources) || echo -e "${YELLOW}[api] Migration skipped/failed (non-fatal).${NC}"
   
   echo -e "${BLUE}[api] Deploying to Cloud Run from source...${NC}"
   local service="sanskrite-api"
@@ -236,6 +249,43 @@ create_indexes() {
     --field-config field-path=projectId,order=ASCENDING \
     --field-config field-path=createdAt,order=ASCENDING \
     --quiet || true
+
+  # RAG: sourceProjects composites
+  gcloud firestore indexes composite create \
+    --collection-group=rag_source_projects \
+    --field-config field-path=projectId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create \
+    --collection-group=rag_source_projects \
+    --field-config field-path=sourceId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --quiet || true
+
+  # RAG: documents lookups
+  gcloud firestore indexes composite create \
+    --collection-group=rag_documents \
+    --field-config field-path=sourceId,order=ASCENDING \
+    --field-config field-path=originPublishedAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create \
+    --collection-group=rag_documents \
+    --field-config field-path=sourceId,order=ASCENDING \
+    --field-config field-path=externalId,order=ASCENDING \
+    --quiet || true
+
+  # Vector field for rag_chunks.embedding (dimension=1536, COSINE)
+  # Requires gcloud alpha (as of now). If not available, skip with a notice.
+  if gcloud alpha --help >/dev/null 2>&1; then
+    echo -e "${BLUE}[firestore] Ensuring vector field config for rag_chunks.embedding...${NC}"
+    gcloud alpha firestore indexes fields create \
+      --collection-group=rag_chunks \
+      --field-path=embedding \
+      --vector-config=dimension=1536,distance-measure=COSINE \
+      --quiet || true
+  else
+    echo -e "${YELLOW}[firestore] Skipping vector field create (gcloud alpha not available). Index present in backend/firestore.indexes.json${NC}"
+  fi
 }
 
 # Setup infrastructure first (idempotent)

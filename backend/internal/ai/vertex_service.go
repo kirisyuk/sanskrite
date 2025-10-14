@@ -128,8 +128,9 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 	if err != nil {
 		return nil, err
 	}
-	if !caps.BuiltInSearchCapability {
-		return nil, fmt.Errorf("model %s does not support built-in search", modelName)
+	// Для Vertex/Gemini требуется поддержка Search Grounding, а не общий веб-поиск
+	if !caps.SearchGroundingCapability {
+		return nil, fmt.Errorf("model %s does not support Search Grounding", modelName)
 	}
 
 	log.Printf("[VertexAI] ExecuteSearch. model=%s, q=\"%s\"", modelName, query)
@@ -146,7 +147,8 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 		},
 		"tools": []map[string]interface{}{
 			{
-				"googleSearchRetrieval": map[string]interface{}{},
+				// Современный инструмент Grounding
+				"googleSearch": map[string]interface{}{},
 			},
 		},
 	}
