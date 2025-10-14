@@ -648,62 +648,68 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Fetch sources for project
+	// Preferred: resolve via rag_source_projects (new linkage)
+	var out []map[string]any
+	if h.sourceProjectsRepo != nil {
+		status := "active"
+		links, err := h.sourceProjectsRepo.ListByProject(r.Context(), authInfo.TenantID, projectID, &status)
+		if err != nil {
+			h.logger.Printf("ListByProject (sourceProjects) error: %v", err)
+		} else {
+			for _, link := range links {
+				if link == nil || strings.TrimSpace(link.SourceID) == "" {
+					continue
+				}
+				ds, err := h.dataSourcesRepo.Get(r.Context(), link.SourceID)
+				if err != nil || ds == nil {
+					continue
+				}
+				m := map[string]interface{}{
+					"id":            ds.ID,
+					"tenantId":      ds.TenantID,
+					"pk":            ds.Pk,
+					"displayName":   ds.DisplayName,
+					"kind":          ds.Kind,
+					"status":        ds.Status,
+					"researchId":    ds.ResearchID,
+					"sessionId":     ds.SessionID,
+					"ownerUserId":   ds.OwnerUserID,
+					"sourceDetails": ds.Details,
+					"lastPolledAt":  ds.LastPolledAt,
+					"lastFoundAt":   ds.LastFoundAt,
+					"errorCount":    ds.ErrorCount,
+					"createdAt":     ds.CreatedAt,
+					"updatedAt":     ds.UpdatedAt,
+					"trustLevel":    ds.TrustLevel,
+					"firstSeenAt":   ds.FirstSeen,
+					"lastSeenAt":    ds.LastSeen,
+					// new linkage metadata
+					"link": map[string]any{
+						"id":         link.ID,
+						"projectId":  link.ProjectID,
+						"sourceId":   link.SourceID,
+						"status":     link.Status,
+						"weights":    link.Weights,
+						"syncConfig": link.SyncConfig,
+						"createdAt":  link.CreatedAt,
+						"updatedAt":  link.UpdatedAt,
+					},
+				}
+				out = append(out, m)
+			}
+		}
+	}
+	if len(out) > 0 {
+		WriteJSON(w, http.StatusOK, out)
+		return
+	}
+	// Fallback: legacy lookup by projectId on core_datasources
 	sources, err := h.dataSourcesRepo.ListByProject(r.Context(), authInfo.TenantID, projectID)
 	if err != nil {
 		h.logger.Printf("Failed to list sources for project %s: %v", projectID, err)
 		WriteInternalError(w, "Failed to list sources")
 		return
 	}
-
-	// Optionally enrich with profiles
-	if h.profilesRepo != nil {
-		profs, err := h.profilesRepo.ListByProject(r.Context(), authInfo.TenantID, projectID, h.dataSourcesRepo)
-		if err != nil {
-			h.logger.Printf("ListByProject profiles error: %v", err)
-			// Non-fatal; return plain sources
-			WriteJSON(w, http.StatusOK, sources)
-			return
-		}
-		// Map dataSourceId -> profile
-		pmap := make(map[string]interface{}, len(profs))
-		for _, sp := range profs {
-			pmap[sp.DataSourceID] = sp.Profile
-		}
-		// Build []map[string]interface{} to include profile alongside source fields
-		enriched := make([]map[string]interface{}, 0, len(sources))
-		for _, s := range sources {
-			m := map[string]interface{}{
-				"id":                s.ID,
-				"tenantId":          s.TenantID,
-				"pk":                s.Pk,
-				"displayName":       s.DisplayName,
-				"kind":              s.Kind,
-				"status":            s.Status,
-				"projectId":         s.ProjectID,
-				"relatedProjectIds": s.RelatedProjectIDs,
-				"researchId":        s.ResearchID,
-				"sessionId":         s.SessionID,
-				"ownerUserId":       s.OwnerUserID,
-				"sourceDetails":     s.Details,
-				"lastPolledAt":      s.LastPolledAt,
-				"lastFoundAt":       s.LastFoundAt,
-				"errorCount":        s.ErrorCount,
-				"createdAt":         s.CreatedAt,
-				"updatedAt":         s.UpdatedAt,
-				"trustLevel":        s.TrustLevel,
-				"firstSeenAt":       s.FirstSeen,
-				"lastSeenAt":        s.LastSeen,
-			}
-			if p, ok := pmap[s.ID]; ok {
-				m["profile"] = p
-			}
-			enriched = append(enriched, m)
-		}
-		WriteJSON(w, http.StatusOK, enriched)
-		return
-	}
-
 	WriteJSON(w, http.StatusOK, sources)
 }
 

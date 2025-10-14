@@ -251,12 +251,12 @@ func (mm *AIModelManager) initializeModels() {
 	}
 
 	// ------------------- Google DeepMind Gemini (с Grounding) -------------------
-	mm.models["gemini-2.0-flash"] = AIModelCapabilities{
-		Name:                          "gemini-2.0-flash",
+	mm.models["gemini-2.5-flash"] = AIModelCapabilities{
+		Name:                          "gemini-2.5-flash",
 		ContextWindow:                 1000000,
 		OutputTokens:                  1000000,
-		PricePerInputToken:            0.0000050,
-		PricePerOutputToken:           0.0000200,
+		PricePerInputToken:            0.00000030, // $0.30 / 1M (max in range)
+		PricePerOutputToken:           0.00000250, // $2.50 / 1M (max in range)
 		Provider:                      AIProviderGemini,
 		MaxTokensPerMinute:            5000000,
 		MaxTokensPerDay:               10000000,
@@ -267,18 +267,18 @@ func (mm *AIModelManager) initializeModels() {
 		TextGenerationCapability:      true,
 		ImageAnalysisCapability:       false,
 		BuiltInSearchCapability:       false,
-		SearchGroundingCapability:     true,
+		SearchGroundingCapability:     false,
 		SupportsToolCalling:           true,
 		SupportsMcp:                   true,
 		ToolUseProtocol:               ToolUseProtocolGemini,
 	}
 
-	mm.models["gemini-2.0-flash-lite"] = AIModelCapabilities{
-		Name:                          "gemini-2.0-flash-lite",
+	mm.models["gemini-2.5-flash-lite"] = AIModelCapabilities{
+		Name:                          "gemini-2.5-flash-lite",
 		ContextWindow:                 1000000,
 		OutputTokens:                  1000000,
-		PricePerInputToken:            0.0000010,
-		PricePerOutputToken:           0.0000040,
+		PricePerInputToken:            0.00000010, // $0.10 / 1M (max in range)
+		PricePerOutputToken:           0.00000040, // $0.40 / 1M (max in range)
 		Provider:                      AIProviderGemini,
 		MaxTokensPerMinute:            6000000,
 		MaxTokensPerDay:               12000000,
@@ -289,18 +289,18 @@ func (mm *AIModelManager) initializeModels() {
 		TextGenerationCapability:      true,
 		ImageAnalysisCapability:       false,
 		BuiltInSearchCapability:       false,
-		SearchGroundingCapability:     true,
+		SearchGroundingCapability:     false,
 		SupportsToolCalling:           true,
 		SupportsMcp:                   true,
 		ToolUseProtocol:               ToolUseProtocolGemini,
 	}
 
-	mm.models["gemini-2.0-pro"] = AIModelCapabilities{
-		Name:                          "gemini-2.0-pro",
+	mm.models["gemini-2.5-pro"] = AIModelCapabilities{
+		Name:                          "gemini-2.5-pro",
 		ContextWindow:                 2000000,
 		OutputTokens:                  2000000,
-		PricePerInputToken:            0.0000100,
-		PricePerOutputToken:           0.0000400,
+		PricePerInputToken:            0.00000250, // $2.50 / 1M (max in range)
+		PricePerOutputToken:           0.00001500, // $15.00 / 1M (max in range)
 		Provider:                      AIProviderGemini,
 		MaxTokensPerMinute:            4000000,
 		MaxTokensPerDay:               10000000,

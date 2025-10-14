@@ -69,7 +69,8 @@ func (r *ChunksRepository) ListBySourcesRecent(ctx context.Context, tenantID str
 			end = len(sourceIDs)
 		}
 		batch := sourceIDs[i:end]
-		q := r.col.Where("tenantId", "==", tenantID).Where("sourceId", "in", batch).OrderBy("createdAt", firestore.Desc)
+		// Public chunks are global (tenantId may be empty), so filter only by sourceId and order by recency.
+		q := r.col.Where("sourceId", "in", batch).OrderBy("createdAt", firestore.Desc)
 		if limit > 0 {
 			q = q.Limit(limit)
 		}
@@ -80,6 +81,10 @@ func (r *ChunksRepository) ListBySourcesRecent(ctx context.Context, tenantID str
 		for _, d := range docs {
 			var c models.Chunk
 			if err := d.DataTo(&c); err != nil {
+				continue
+			}
+			// For internal (tenant-scoped) chunks, enforce tenant match
+			if strings.TrimSpace(c.TenantID) != "" && tenantID != c.TenantID {
 				continue
 			}
 			results = append(results, &c)

@@ -11,6 +11,15 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
+func isPublicSource(kind string) bool {
+	switch kind {
+	case "web", "rss", "telegram_channel":
+		return true
+	default:
+		return false
+	}
+}
+
 var ErrInvalidDocument = errors.New("invalid document")
 
 type UsersRepository struct{ col *firestore.CollectionRef }
@@ -217,7 +226,13 @@ func (r *DataSourcesRepository) Create(ctx context.Context, ds *models.DataSourc
 	now := time.Now().UTC()
 	ds.CreatedAt = now
 	ds.UpdatedAt = now
-	ds.Pk = ds.TenantID
+	// Public sources (web/rss/telegram_channel) are stored globally
+	if isPublicSource(ds.Kind) {
+		ds.TenantID = ""
+		ds.Pk = "global"
+	} else {
+		ds.Pk = ds.TenantID
+	}
 	if ds.FirstSeen.IsZero() {
 		ds.FirstSeen = now
 	}
@@ -338,7 +353,10 @@ func (r *DataSourcesRepository) Upsert(ctx context.Context, ds *models.DataSourc
 		ds.CreatedAt = now
 	}
 	ds.UpdatedAt = now
-	if ds.Pk == "" {
+	if isPublicSource(ds.Kind) {
+		ds.TenantID = ""
+		ds.Pk = "global"
+	} else if ds.Pk == "" {
 		ds.Pk = ds.TenantID
 	}
 	ds.LastSeen = now
@@ -360,10 +378,8 @@ func (r *DataSourcesRepository) Get(ctx context.Context, id string) (*models.Dat
 
 // FindByCanonicalSource finds a datasource by tenant + canonical source identifier (e.g., normalized URL or @username)
 func (r *DataSourcesRepository) FindByCanonicalSource(ctx context.Context, tenantID, canonical string) (*models.DataSource, error) {
-	// Query by tenantId and sourceDetails fields
-	// For web sources, canonical is stored in Details.URI (canonicalized)
-	// For telegram, canonical is stored in Details.ChannelUsername
-	docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
+	// Search across all datasources (globals + tenant-scoped)
+	docs, err := r.col.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
 	}

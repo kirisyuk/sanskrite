@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/igorkirisyuk/sanskrite/internal/models/document",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "tenantId": {
+      "type": "string"
+    },
+    "sourceId": {
+      "type": "string"
+    },
+    "externalId": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "documentPath": {
+      "type": "string"
+    },
+    "fullText": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "contentType": {
+      "type": "string"
+    },
+    "documentType": {
+      "type": "string"
+    },
+    "language": {
+      "type": "string"
+    },
+    "authors": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "sourceMeta": {
+      "type": "object"
+    },
+    "contentHash": {
+      "type": "string"
+    },
+    "categories": {
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "attrs": {
+      "type": "object"
+    },
+    "originPublishedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ingestedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "id",
+    "sourceId",
+    "externalId",
+    "documentPath",
+    "fullText",
+    "status",
+    "contentHash",
+    "ingestedAt",
+    "createdAt",
+    "updatedAt"
+  ]
+}

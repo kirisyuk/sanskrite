@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/invopop/jsonschema"
@@ -16,6 +17,22 @@ func writeSchema(path string, v any) error {
 		DoNotReference: true, // Inline all definitions instead of using $ref to root
 	}
 	r := reflector.Reflect(v)
+	// Post-process: make tenantId optional for public-capable entities
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, strings.ToLower("DataSource.schema.json")) ||
+		strings.HasSuffix(lower, strings.ToLower("Document.schema.json")) ||
+		strings.HasSuffix(lower, strings.ToLower("SourceProfile.schema.json")) {
+		if r.Required != nil {
+			var without []string
+			for _, req := range r.Required {
+				if req == "tenantId" {
+					continue
+				}
+				without = append(without, req)
+			}
+			r.Required = without
+		}
+	}
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
@@ -37,6 +54,8 @@ func main() {
 		{File: "User.schema.json", Val: new(models.User)},
 		{File: "Project.schema.json", Val: new(models.Project)},
 		{File: "DataSource.schema.json", Val: new(models.DataSource)},
+		{File: "Document.schema.json", Val: new(models.Document)},
+		{File: "SourceProfile.schema.json", Val: new(models.SourceProfile)},
 	}
 
 	for _, t := range targets {

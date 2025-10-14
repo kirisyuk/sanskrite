@@ -109,7 +109,6 @@
   "type": "object",
   "required": [
     "id",
-    "tenantId",
     "pk",
     "displayName",
     "kind",

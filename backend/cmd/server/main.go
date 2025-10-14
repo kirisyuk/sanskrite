@@ -143,6 +143,16 @@ func main() {
 					log.Printf("grounding processor stopped: %v", err)
 				}
 			}()
+
+			// Start source poller worker (background)
+			poller := discovery.NewSourcePoller(psClient, string(realtime.EventSourcePoll), orchestrator, logger)
+			go func() {
+				ctxP, cancelP := context.WithCancel(ctx)
+				defer cancelP()
+				if err := poller.Start(ctxP); err != nil {
+					log.Printf("source poller stopped: %v", err)
+				}
+			}()
 		}
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())

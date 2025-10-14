@@ -211,8 +211,12 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 		return err
 	}
 	now := time.Now().UTC()
+	maxSeenID := lastMessageID
 	for _, m := range msgs {
 		extID := fmt.Sprintf("%d", m.ID)
+		if m.ID > maxSeenID {
+			maxSeenID = m.ID
+		}
 		existing, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID)
 		var docID string
 		var pubAt *time.Time
@@ -267,6 +271,16 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			}
 		}
 	}
+	// Update lastProcessedMessageId on the DataSource after ingest (best-effort)
+	if o.sources != nil {
+		if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+			// Only move forward
+			if ds.Details.LastProcessedMessageID == nil || maxSeenID > *ds.Details.LastProcessedMessageID {
+				ds.Details.LastProcessedMessageID = &maxSeenID
+				_ = o.sources.Upsert(ctx, ds)
+			}
+		}
+	}
 	return nil
 }
 
@@ -279,16 +293,44 @@ func (o *Orchestrator) IngestProjectSources(ctx context.Context, tenantID, proje
 	if err != nil {
 		return err
 	}
+	// In-run deduplication across sources (web/rss/telegram)
+	webSeen := map[string]struct{}{}
+	tgSeen := map[string]struct{}{}
+	rssSeen := map[string]struct{}{}
 	for _, ds := range list {
 		if ds.Kind == "web" && ds.Details.URI != nil {
+			can := crawler.CanonicalizeURL(*ds.Details.URI)
+			if can == "" {
+				continue
+			}
+			if _, ok := webSeen[can]; ok {
+				continue
+			}
+			webSeen[can] = struct{}{}
 			_ = o.IngestWeb(ctx, tenantID, ds.ID, *ds.Details.URI)
 		} else if ds.Kind == "telegram_channel" && ds.Details.ChannelUsername != nil {
+			handle := strings.ToLower(strings.TrimPrefix(*ds.Details.ChannelUsername, "@"))
+			if handle == "" {
+				continue
+			}
+			if _, ok := tgSeen[handle]; ok {
+				continue
+			}
+			tgSeen[handle] = struct{}{}
 			last := 0
 			if ds.Details.LastProcessedMessageID != nil {
 				last = *ds.Details.LastProcessedMessageID
 			}
 			_ = o.IngestTelegram(ctx, tenantID, ds.ID, *ds.Details.ChannelUsername, last)
 		} else if ds.Kind == "rss" && ds.Details.RSSURL != nil {
+			can := crawler.CanonicalizeURL(*ds.Details.RSSURL)
+			if can == "" {
+				continue
+			}
+			if _, ok := rssSeen[can]; ok {
+				continue
+			}
+			rssSeen[can] = struct{}{}
 			// reuse existing rss ingest using emb
 			if o.emb != nil {
 				_ = o.IngestRSS(ctx, tenantID, ds.ID, o.emb)
@@ -307,11 +349,32 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	if !ok {
 		return fmt.Errorf("rss provider not registered")
 	}
-	docs, err := p.Ingest(ctx, tenantID, sourceID)
+	// Determine feed URL from DataSource details
+	feedURL := ""
+	if o.sources != nil {
+		if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+			if ds.Details.RSSURL != nil {
+				feedURL = *ds.Details.RSSURL
+			}
+		}
+	}
+	if strings.TrimSpace(feedURL) == "" {
+		// fallback to using sourceID as URL for backward compatibility
+		feedURL = sourceID
+	}
+	docs, err := p.Ingest(ctx, tenantID, feedURL)
 	if err != nil {
 		return err
 	}
+	// Deduplicate documents by ExternalID within this ingest run
+	seenExt := map[string]struct{}{}
 	for _, nd := range docs {
+		if nd.ExternalID != "" {
+			if _, ok := seenExt[nd.ExternalID]; ok {
+				continue
+			}
+			seenExt[nd.ExternalID] = struct{}{}
+		}
 		// idempotent upsert by externalId
 		existing, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, nd.ExternalID)
 		var docID string
@@ -688,23 +751,35 @@ func (o *Orchestrator) Execute(ctx context.Context, in ExecuteInput) error {
 		o.publishEvent(ctx, "discovery.project", in.TenantID, msg)
 	}
 
-	// Process sources in parallel and await all
+	// Process sources in parallel with in-run deduplication and await all
 	eg, gctx := errgroup.WithContext(ctx)
+	// Deduplicate web sources by canonical URL
+	webSeen := map[string]struct{}{}
 	for _, raw := range in.WebSources {
 		canonical := crawler.CanonicalizeURL(strings.TrimSpace(raw))
 		if canonical == "" {
 			continue
 		}
+		if _, ok := webSeen[canonical]; ok {
+			continue
+		}
+		webSeen[canonical] = struct{}{}
 		src := canonical
 		eg.Go(func() error { return o.processWebSource(gctx, in, src) })
 	}
+	// Deduplicate telegram handles
+	tgSeen := map[string]struct{}{}
 	for _, h := range in.TgHandles {
-		handle := strings.TrimPrefix(strings.TrimSpace(h), "@")
+		handle := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(h), "@"))
 		if handle == "" {
 			continue
 		}
-		h := handle
-		eg.Go(func() error { return o.processTelegramSource(gctx, in, h) })
+		if _, ok := tgSeen[handle]; ok {
+			continue
+		}
+		tgSeen[handle] = struct{}{}
+		hh := handle
+		eg.Go(func() error { return o.processTelegramSource(gctx, in, hh) })
 	}
 	if err := eg.Wait(); err != nil {
 		o.logger.Printf("orchestrator: parallel sources error: %v", err)
@@ -808,8 +883,9 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		now := time.Now().UTC()
 		o.logger.Printf("orchestrator: creating new web source %s for project %s", canonicalURL, in.ProjectID)
 		ds = &models.DataSource{
-			TenantID:    in.TenantID,
-			Pk:          in.TenantID,
+			// Public source: store globally (no tenant scoping)
+			TenantID:    "",
+			Pk:          "global",
 			DisplayName: canonicalURL,
 			Kind:        "web",
 			Status:      "processing",
@@ -963,8 +1039,9 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		now := time.Now().UTC()
 		o.logger.Printf("orchestrator: creating new telegram source @%s for project %s", handle, in.ProjectID)
 		ds = &models.DataSource{
-			TenantID:    in.TenantID,
-			Pk:          in.TenantID,
+			// Public source: store globally (no tenant scoping)
+			TenantID:    "",
+			Pk:          "global",
 			DisplayName: "@" + handle,
 			Kind:        "telegram_channel",
 			Status:      "processing",

@@ -7,7 +7,7 @@
 
 export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
   id: string;
-  tenantId: string;
+  tenantId?: string;
   pk: string;
   displayName: string;
   kind: string;
@@ -39,6 +39,36 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
   lastSeenAt: string;
 }
 
+export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDocument {
+  id: string;
+  tenantId?: string;
+  sourceId: string;
+  externalId: string;
+  title?: string;
+  url?: string;
+  documentPath: string;
+  fullText: string;
+  status: string;
+  contentType?: string;
+  documentType?: string;
+  language?: string;
+  authors?: string[];
+  sourceMeta?: {
+    [k: string]: any;
+  };
+  contentHash: string;
+  categories?: {
+    [k: string]: any;
+  }[];
+  attrs?: {
+    [k: string]: any;
+  };
+  originPublishedAt?: string;
+  ingestedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsProject {
   id: string;
   pk: string;
@@ -60,6 +90,87 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsProject {
   businessUnitName?: string;
   enableRiskProfileSuggestions?: boolean;
   aiguided?: boolean;
+}
+
+export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsSourceProfile {
+  id: string;
+  tenantId?: string;
+  dataSourceId: string;
+  schemaVersion: string;
+  createdAt: string;
+  updatedAt: string;
+  lastAnalyzedAt?: string;
+  profile: {
+    editorialStance: {
+      political: string;
+      confidence: number;
+      evidence?: string[];
+    };
+    agenda?: {
+      primaryGoal?: string;
+      description?: string;
+      promotedThemes?: string[];
+      avoidedThemes?: string[];
+      targetAudience?: string;
+    };
+    motivation: string;
+    trustScore: number;
+    trustRationale: string;
+    behaviorPatterns: {
+      publishingCadence: string;
+      eventResponsiveness: number;
+      contentConsistency: number;
+      originalityScore: number;
+    };
+    contentPatterns?: {
+      dominantFramings?: string[];
+      emotionalToneDistribution?: {
+        neutral?: number;
+        outrage?: number;
+        fear?: number;
+        hope?: number;
+      };
+      focusEntityNames?: {
+        entityName: string;
+        mentionCount: number;
+        averageSentiment: number;
+      }[];
+    };
+    topics?: {
+      name: string;
+      share: number;
+      trend?: string;
+    }[];
+    editorialMethods?: {
+      method: string;
+      share: number;
+    }[];
+    goals?: {
+      goal: string;
+      confidence: number;
+    }[];
+    goalAlignmentScore?: number;
+    metrics?: {
+      claimDensity?: number;
+      externalRefShare?: number;
+      responseLatencyAvg?: number;
+      polarization?: number;
+      ctaShare?: number;
+      promoLinkShare?: number;
+      evidenceQuality?: number;
+    };
+    targetAudienceCountries?: string[];
+    redFlags?: {
+      code: string;
+      score: number;
+      rationale?: string;
+    }[];
+    coordinatedSources?: {
+      sourceId: string;
+      coordinationScore: number;
+    }[];
+    flags?: string[];
+  };
 }
 
 export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsUser {
@@ -94,5 +205,7 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsUser {
 
 // Convenient type aliases
 export type DataSource = HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource;
+export type Document = HttpsGithubComIgorkirisyukSanskriteInternalModelsDocument;
 export type Project = HttpsGithubComIgorkirisyukSanskriteInternalModelsProject;
+export type SourceProfile = HttpsGithubComIgorkirisyukSanskriteInternalModelsSourceProfile;
 export type User = HttpsGithubComIgorkirisyukSanskriteInternalModelsUser;
