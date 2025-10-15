@@ -82,6 +82,13 @@
       "type": "string",
       "format": "date-time"
     },
+    "nextPollAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "pollBackoffSec": {
+      "type": "integer"
+    },
     "errorCount": {
       "type": "integer"
     },

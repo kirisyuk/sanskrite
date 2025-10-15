@@ -167,7 +167,7 @@ setup_infrastructure() {
           --schedule="*/5 * * * *" \
           --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
           --http-method=POST \
-          --headers="X-Job-Token=$ADMIN_TOKEN" \
+          --update-headers="X-Job-Token=$ADMIN_TOKEN" \
           --attempt-deadline=60s \
           --quiet || true
       else
@@ -197,7 +197,7 @@ deploy_api() {
   echo -e "${GREEN}[api] Go build successful locally${NC}"
 
   echo -e "${BLUE}[api] Running migration: sourceProjects backfill...${NC}"
-  (cd "$API_DIR" && go run ./cmd/migrate_sources) || echo -e "${YELLOW}[api] Migration skipped/failed (non-fatal).${NC}"
+  (cd "$API_DIR" && GCP_PROJECT_ID="$PROJECT_ID" GOOGLE_CLOUD_PROJECT="$PROJECT_ID" go run ./cmd/migrate_sources) || echo -e "${YELLOW}[api] Migration skipped/failed (non-fatal).${NC}"
   
   echo -e "${BLUE}[api] Deploying to Cloud Run from source...${NC}"
   local service="sanskrite-api"

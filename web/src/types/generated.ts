@@ -31,6 +31,8 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
   };
   lastPolledAt?: string;
   lastFoundAt?: string;
+  nextPollAt?: string;
+  pollBackoffSec?: number;
   errorCount: number;
   createdAt: string;
   updatedAt: string;

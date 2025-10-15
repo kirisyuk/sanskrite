@@ -319,8 +319,7 @@ func main() {
 	// Webhooks
 	mux.Handle("/api/v1/webhooks/", http.HandlerFunc(webhooksHandler.Handle))
 
-	// Admin: publish-due (allow Cloud Scheduler HTTP trigger)
-	mux.Handle("/api/v1/admin/sources/publish-due", authMiddleware(http.HandlerFunc(s.discoveryHandler.PublishDue)))
+	// Admin: publish-due (handled below with jobAuth middleware for Cloud Scheduler)
 
 	// Discovery routes
 	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
