@@ -208,7 +208,7 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 					"text":     text,
 				})
 
-				ver := ai.NewGenericVerifier[docExtraction](validate)
+				ver := ai.NewGenericVerifier(validate)
 				t := &ai.AITask{
 					TaskType:     ai.TaskTypeContentGeneration,
 					InputContent: prompt,
@@ -305,9 +305,7 @@ func (w *DocumentProcessor) applyRules(ctx context.Context, tenantID, sourceID, 
 		if err != nil {
 			return
 		}
-		for _, r := range rs {
-			all = append(all, r)
-		}
+		all = append(all, rs...)
 	}
 	collect(map[string]any{"level": "global"})
 	collect(map[string]any{"level": "tenant", "id": tenantID})

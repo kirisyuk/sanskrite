@@ -868,19 +868,12 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	if existing != nil {
 		o.logger.Printf("orchestrator: found existing web source %s (id=%s) for project %s", canonicalURL, existing.ID, in.ProjectID)
 		ds = existing
-		// ensure project link present
-		if ds.ProjectID == nil || *ds.ProjectID != in.ProjectID {
-			if !contains(ds.RelatedProjectIDs, in.ProjectID) {
-				ds.RelatedProjectIDs = append(ds.RelatedProjectIDs, in.ProjectID)
-				needsUpdate = true
-			}
-		}
 		// Update LastSeen
 		ds.LastSeen = time.Now().UTC()
 		needsUpdate = true
 
 		// If source was previously processed, skip reprocessing
-		if ds.Status == "completed" && o.profiles != nil {
+		if (ds.Status == "paused" || ds.Status == "completed") && o.profiles != nil {
 			if needsUpdate {
 				_ = o.sources.Upsert(ctx, ds)
 			}
@@ -900,8 +893,7 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 			Pk:          "global",
 			DisplayName: canonicalURL,
 			Kind:        "web",
-			Status:      "processing",
-			ProjectID:   &in.ProjectID,
+			Status:      "paused",
 			OwnerUserID: in.OwnerUID,
 			Details:     models.SourceDetails{URI: &canonicalURL},
 			CreatedAt:   now,
@@ -915,6 +907,7 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		} else {
 			o.logger.Printf("orchestrator: created web source %s with id=%s", canonicalURL, createdID)
 		}
+		// Note: project linkage should be created by HTTP SourcesHandler.AttachSource; no direct mutation here
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
@@ -953,10 +946,12 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	contentHash := repo.HashContent(fr.Text)
 	if o.cache != nil {
 		if p, _ := o.cache.Get(ctx, in.TenantID, canonicalURL, contentHash, 24*time.Hour); p != nil {
-			ds.Status = "completed"
+			ds.Status = "paused"
 			_ = o.sources.Upsert(ctx, ds)
 			if o.profiles != nil {
-				_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *p})
+				_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: ds.ID, TenantID: "", DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *p})
+				// clean tenant-scoped duplicates if exist
+				_ = o.profiles.DeleteTenantScopedForSource(ctx, in.TenantID, ds.ID)
 			}
 			// Persist profile summary interaction
 			if o.interactions != nil {
@@ -982,7 +977,8 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	if err != nil {
 		return err
 	}
-	ds.Status = "completed"
+	// ensure paused status for public sources
+	ds.Status = "paused"
 	if err := o.sources.Upsert(ctx, ds); err != nil {
 		o.logger.Printf("orchestrator: failed to upsert web source %s (profile size: ~%d bytes): %v", canonicalURL, len(mustJSON(prof)), err)
 		return err
@@ -992,7 +988,9 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		_ = o.cache.Put(ctx, in.TenantID, canonicalURL, contentHash, prof)
 	}
 	if o.profiles != nil {
-		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
+		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: ds.ID, TenantID: "", DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
+		// clean tenant-scoped duplicates if exist
+		_ = o.profiles.DeleteTenantScopedForSource(ctx, in.TenantID, ds.ID)
 	}
 
 	// Persist profile summary interaction
@@ -1025,18 +1023,14 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 	if existing != nil {
 		o.logger.Printf("orchestrator: found existing telegram source @%s (id=%s) for project %s", handle, existing.ID, in.ProjectID)
 		ds = existing
-		if ds.ProjectID == nil || *ds.ProjectID != in.ProjectID {
-			if !contains(ds.RelatedProjectIDs, in.ProjectID) {
-				ds.RelatedProjectIDs = append(ds.RelatedProjectIDs, in.ProjectID)
-				needsUpdate = true
-			}
-		}
 		// Update LastSeen
 		ds.LastSeen = time.Now().UTC()
 		needsUpdate = true
 
-		// If source was previously processed, skip reprocessing
+		// If source was previously processed, normalize status to paused and reuse profile
 		if ds.Status == "completed" && o.profiles != nil {
+			// normalize to paused for public sources
+			ds.Status = "paused"
 			if needsUpdate {
 				_ = o.sources.Upsert(ctx, ds)
 			}
@@ -1056,8 +1050,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 			Pk:          "global",
 			DisplayName: "@" + handle,
 			Kind:        "telegram_channel",
-			Status:      "processing",
-			ProjectID:   &in.ProjectID,
+			Status:      "paused",
 			OwnerUserID: in.OwnerUID,
 			Details:     models.SourceDetails{ChannelUsername: &handle},
 			CreatedAt:   now, UpdatedAt: now, FirstSeen: now, LastSeen: now,
@@ -1118,14 +1111,14 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		o.logger.Printf("orchestrator: profiling error for @%s: %v", handle, err)
 		return err
 	}
-	ds.Status = "completed"
+	ds.Status = "paused"
 	if err := o.sources.Upsert(ctx, ds); err != nil {
 		o.logger.Printf("orchestrator: failed to upsert telegram source @%s (profile size: ~%d bytes): %v", handle, len(mustJSON(prof)), err)
 		return err
 	}
 	o.logger.Printf("orchestrator: saved telegram profile for @%s, size: ~%d bytes", handle, len(mustJSON(prof)))
 	if o.profiles != nil {
-		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: in.TenantID + "_" + ds.ID, TenantID: in.TenantID, DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
+		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: ds.ID, TenantID: "", DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
 	}
 
 	// Persist profile summary interaction

@@ -24,7 +24,10 @@ var ErrInvalidDocument = errors.New("invalid document")
 
 type UsersRepository struct{ col *firestore.CollectionRef }
 type ProjectsRepository struct{ col *firestore.CollectionRef }
-type DataSourcesRepository struct{ col *firestore.CollectionRef }
+type DataSourcesRepository struct {
+	col *firestore.CollectionRef
+	db  *firestore.Client
+}
 type SourceProfilesRepository struct{ col *firestore.CollectionRef }
 
 func NewUsersRepository(db *firestore.Client) *UsersRepository {
@@ -36,7 +39,7 @@ func NewProjectsRepository(db *firestore.Client) *ProjectsRepository {
 }
 
 func NewDataSourcesRepository(db *firestore.Client) *DataSourcesRepository {
-	return &DataSourcesRepository{col: db.Collection("core_datasources")}
+	return &DataSourcesRepository{col: db.Collection("core_datasources"), db: db}
 }
 
 func NewSourceProfilesRepository(db *firestore.Client) *SourceProfilesRepository {
@@ -247,7 +250,7 @@ func (r *DataSourcesRepository) Create(ctx context.Context, ds *models.DataSourc
 
 // --- SourceProfiles ---
 func (r *SourceProfilesRepository) Upsert(ctx context.Context, sp *models.SourceProfile) error {
-	if sp == nil || sp.ID == "" || sp.DataSourceID == "" || sp.TenantID == "" {
+	if sp == nil || sp.ID == "" || sp.DataSourceID == "" {
 		return ErrInvalidDocument
 	}
 	now := time.Now().UTC()
@@ -263,12 +266,24 @@ func (r *SourceProfilesRepository) Upsert(ctx context.Context, sp *models.Source
 }
 
 func (r *SourceProfilesRepository) GetByDataSource(ctx context.Context, tenantID, dataSourceID string) (*models.SourceProfile, error) {
-	// Simple scan by tenant; Firestore requires composite index for equality on two fields, use client-side filter for now
-	docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
+	// Prefer global profile
+	if docsGlobal, err := r.col.Where("tenantId", "==", "").Documents(ctx).GetAll(); err == nil {
+		for _, d := range docsGlobal {
+			var sp models.SourceProfile
+			if err := d.DataTo(&sp); err != nil {
+				continue
+			}
+			if sp.DataSourceID == dataSourceID {
+				return &sp, nil
+			}
+		}
 	}
-	for _, d := range docs {
+	// Fallback to tenant-scoped
+	docsTenant, err2 := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
+	if err2 != nil {
+		return nil, err2
+	}
+	for _, d := range docsTenant {
 		var sp models.SourceProfile
 		if err := d.DataTo(&sp); err != nil {
 			continue
@@ -278,6 +293,24 @@ func (r *SourceProfilesRepository) GetByDataSource(ctx context.Context, tenantID
 		}
 	}
 	return nil, fmt.Errorf("source profile not found")
+}
+
+// DeleteTenantScopedForSource removes tenant-scoped profile for a given dataSourceID (used during migration to global profiles)
+func (r *SourceProfilesRepository) DeleteTenantScopedForSource(ctx context.Context, tenantID, dataSourceID string) error {
+	docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
+	if err != nil {
+		return err
+	}
+	for _, d := range docs {
+		var sp models.SourceProfile
+		if err := d.DataTo(&sp); err != nil {
+			continue
+		}
+		if sp.DataSourceID == dataSourceID {
+			_, _ = r.col.Doc(d.Ref.ID).Delete(ctx)
+		}
+	}
+	return nil
 }
 
 func (r *SourceProfilesRepository) ListByProject(ctx context.Context, tenantID, projectID string, sourcesRepo *DataSourcesRepository) ([]*models.SourceProfile, error) {
@@ -294,19 +327,30 @@ func (r *SourceProfilesRepository) ListByProject(ctx context.Context, tenantID, 
 	for _, s := range sources {
 		ids[s.ID] = struct{}{}
 	}
-	// Fetch all tenant profiles and filter
-	docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
-	}
+	// Fetch tenant-specific and global profiles and filter by DataSourceID
 	var res []*models.SourceProfile
-	for _, d := range docs {
-		var sp models.SourceProfile
-		if err := d.DataTo(&sp); err != nil {
-			continue
+	// Tenant-scoped
+	if docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll(); err == nil {
+		for _, d := range docs {
+			var sp models.SourceProfile
+			if err := d.DataTo(&sp); err != nil {
+				continue
+			}
+			if _, ok := ids[sp.DataSourceID]; ok {
+				res = append(res, &sp)
+			}
 		}
-		if _, ok := ids[sp.DataSourceID]; ok {
-			res = append(res, &sp)
+	}
+	// Global
+	if docs, err := r.col.Where("tenantId", "==", "").Documents(ctx).GetAll(); err == nil {
+		for _, d := range docs {
+			var sp models.SourceProfile
+			if err := d.DataTo(&sp); err != nil {
+				continue
+			}
+			if _, ok := ids[sp.DataSourceID]; ok {
+				res = append(res, &sp)
+			}
 		}
 	}
 	return res, nil
@@ -414,38 +458,36 @@ func (r *DataSourcesRepository) FindByCanonicalSource(ctx context.Context, tenan
 
 // ListByProject returns datasources for a project (primary or related)
 func (r *DataSourcesRepository) ListByProject(ctx context.Context, tenantID, projectID string) ([]*models.DataSource, error) {
-	// Firestore doesn't support array-contains OR field equals in single query
-	// So we need to fetch all sources for tenant and filter in memory
-	docs, err := r.col.Where("tenantId", "==", tenantID).Documents(ctx).GetAll()
+	// Resolve via rag_source_projects linking table
+	spRepo := NewSourceProjectsRepository(r.db)
+	status := "active"
+	links, err := spRepo.ListByProject(ctx, tenantID, projectID, &status)
 	if err != nil {
 		return nil, err
 	}
-
+	if len(links) == 0 {
+		return []*models.DataSource{}, nil
+	}
+	// Build set for fast lookup
+	ids := make(map[string]struct{}, len(links))
+	for _, l := range links {
+		ids[l.SourceID] = struct{}{}
+	}
+	// Fetch all datasources (global + tenant) and filter by ids
+	docs, err := r.col.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
 	var sources []*models.DataSource
-	var debugInfo []string
-	for _, doc := range docs {
+	for _, d := range docs {
 		var ds models.DataSource
-		if err := doc.DataTo(&ds); err != nil {
+		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
-		// Debug: log all sources to understand filtering
-		projID := "nil"
-		if ds.ProjectID != nil {
-			projID = *ds.ProjectID
-		}
-		debugInfo = append(debugInfo, fmt.Sprintf("id=%s,kind=%s,projID=%s,related=%v", ds.ID, ds.Kind, projID, ds.RelatedProjectIDs))
-
-		// Include if projectId matches or projectId is in relatedProjectIds
-		if (ds.ProjectID != nil && *ds.ProjectID == projectID) || contains(ds.RelatedProjectIDs, projectID) {
+		if _, ok := ids[ds.ID]; ok {
 			sources = append(sources, &ds)
 		}
 	}
-
-	// Log for debugging
-	if len(sources) == 0 && len(debugInfo) > 0 {
-		fmt.Printf("[DataSourcesRepository] ListByProject: found 0 sources for project %s among %d total sources: %v\n", projectID, len(debugInfo), debugInfo)
-	}
-
 	return sources, nil
 }
 
@@ -473,34 +515,7 @@ func (r *DataSourcesRepository) ListActiveByKinds(ctx context.Context, kinds []s
 
 // DeleteByProject deletes sources where projectId == id, or removes id from relatedProjectIds
 func (r *DataSourcesRepository) DeleteByProject(ctx context.Context, projectID string) error {
-	// Fetch all sources that reference this project
-	docs, err := r.col.Documents(ctx).GetAll()
-	if err != nil {
-		return err
-	}
-
-	for _, doc := range docs {
-		var ds models.DataSource
-		if err := doc.DataTo(&ds); err != nil {
-			continue
-		}
-
-		// If primary project, delete the source
-		if ds.ProjectID != nil && *ds.ProjectID == projectID {
-			if _, err := r.col.Doc(doc.Ref.ID).Delete(ctx); err != nil {
-				// Log but continue
-				continue
-			}
-		} else if contains(ds.RelatedProjectIDs, projectID) {
-			// Remove from relatedProjectIds
-			ds.RelatedProjectIDs = remove(ds.RelatedProjectIDs, projectID)
-			if err := r.Upsert(ctx, &ds); err != nil {
-				// Log but continue
-				continue
-			}
-		}
-	}
-
+	// No-op in new model: linkage is managed in rag_source_projects
 	return nil
 }
 

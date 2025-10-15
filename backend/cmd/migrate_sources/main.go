@@ -27,16 +27,15 @@ func main() {
 	}
 	defer fs.Close()
 
-	sproj := repo.NewSourceProjectsRepository(fs.Client())
-	projs := repo.NewProjectsRepository(fs.Client())
+	// Legacy migration utilities no longer needed for linkage resolution in this tool
 
 	// Scan datasources and create sourceProjects for primary and related projects
 	docs, err := fs.Client().Collection("core_datasources").Documents(ctx).GetAll()
 	if err != nil {
 		log.Fatalf("list datasources: %v", err)
 	}
-	now := time.Now().UTC()
-	created := 0
+	// now := time.Now().UTC()
+	// created := 0
 	updatedPublic := 0
 	// Collect public datasource IDs for later profile migration
 	publicSourceIDs := map[string]struct{}{}
@@ -48,19 +47,7 @@ func main() {
 		// Determine public kinds
 		isPublic := ds.Kind == "web" || ds.Kind == "rss" || ds.Kind == "telegram_channel"
 
-		// 1) Create source-project links (idempotent): resolve tenantId from Project
-		// Primary project
-		if ds.ProjectID != nil && *ds.ProjectID != "" {
-			if p, err := projs.Get(ctx, *ds.ProjectID); err == nil && p != nil {
-				ensureLink(ctx, fs.Client(), sproj, p.TenantID, *ds.ProjectID, ds.ID, now, &created)
-			}
-		}
-		// Related projects
-		for _, pid := range ds.RelatedProjectIDs {
-			if p, err := projs.Get(ctx, pid); err == nil && p != nil {
-				ensureLink(ctx, fs.Client(), sproj, p.TenantID, pid, ds.ID, now, &created)
-			}
-		}
+		// 1) Legacy linkage by projectId/relatedProjectIds no longer used; intentionally skipped
 
 		// 2) For public sources: null tenantId and set pk to global
 		if isPublic {
@@ -98,16 +85,14 @@ func main() {
 		if _, ok := publicSourceIDs[sp.DataSourceID]; ok {
 			if sp.TenantID != "" {
 				// Soft update: partial update of tenantId to empty string, bypassing repo validation
-				if _, err := fs.Client().Collection("core_source_profiles").Doc(d.Ref.ID).Update(ctx, []firestore.Update{{Path: "tenantId", Value: ""}}); err == nil {
-					profilesUpdated++
-				} else {
+				if _, err := fs.Client().Collection("core_source_profiles").Doc(d.Ref.ID).Update(ctx, []firestore.Update{{Path: "tenantId", Value: ""}}); err != nil {
 					log.Printf("warn: failed to soft-update source profile %s: %v", d.Ref.ID, err)
 				}
 			}
 		}
 	}
 
-	log.Printf("migration complete: created %d sourceProjects, updated %d public datasources, updated %d public profiles", created, updatedPublic, profilesUpdated)
+	log.Printf("migration complete: updated %d public datasources, updated %d public profiles", updatedPublic, profilesUpdated)
 }
 
 // ensureLink creates SourceProject link if it does not already exist

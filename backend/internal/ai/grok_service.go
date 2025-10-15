@@ -62,7 +62,7 @@ func (s *GrokService) ExecuteTask(ctx context.Context, task *AITask, model strin
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Grok API error %d: %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("grok API error %d: %s", resp.StatusCode, string(b))
 	}
 
 	var parsed struct {
@@ -83,11 +83,11 @@ func (s *GrokService) ExecuteTask(ctx context.Context, task *AITask, model strin
 }
 
 func (s *GrokService) ExecuteEmbeddingTask(ctx context.Context, inputText string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("Grok embeddings not supported")
+	return nil, fmt.Errorf("grok embeddings not supported")
 }
 
 func (s *GrokService) ExecuteImageAnalysisByLinkTask(ctx context.Context, inputText string, imageLink string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("Grok image analysis not supported")
+	return nil, fmt.Errorf("grok image analysis not supported")
 }
 
 func (s *GrokService) ExecuteSearch(ctx context.Context, query string, modelName string) (*AITaskResult, error) {
@@ -121,7 +121,7 @@ func (s *GrokService) ExecuteSearch(ctx context.Context, query string, modelName
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Grok Search error %d: %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("grok search error %d: %s", resp.StatusCode, string(b))
 	}
 
 	var root map[string]interface{}

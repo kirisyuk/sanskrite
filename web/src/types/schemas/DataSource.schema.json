@@ -20,15 +20,7 @@
     "status": {
       "type": "string"
     },
-    "projectId": {
-      "type": "string"
-    },
-    "relatedProjectIds": {
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
+    
     "researchId": {
       "type": "string"
     },

@@ -13,7 +13,7 @@ export default function Splash({ onSubmit }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100 p-6">
-      <img src={theme === 'dark' ? darkLogo : lightLogo} alt="Sanskrite" className="h-16 w-auto mb-6" />
+      <img src={theme === 'dark' ? darkLogo : lightLogo} alt="Sanskrite" className="h-3 w-auto mb-6" />
       <form
         className="w-full max-w-xl"
         onSubmit={(e) => {

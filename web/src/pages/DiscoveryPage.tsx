@@ -14,6 +14,7 @@ const DiscoveryPage: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const discoveryTimeoutRef = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const correlationRef = useRef<string | null>(null);
   const wsInitialized = useRef(false);
@@ -144,9 +145,12 @@ const DiscoveryPage: React.FC = () => {
       const projectId = currentProject?.id || '';
       
       console.log('[Discovery] Executing with projectId:', projectId);
+      const preferred = (localStorage.getItem('preferredLanguage') || 'EN').toLowerCase();
+      const lang = preferred && preferred.length === 2 ? preferred : 'en';
       const result = await executeDiscovery({
         projectId,
         queryText,
+        language: lang,
         sources: parsed,
       });
       console.log('[Discovery] Result:', result);
@@ -165,14 +169,42 @@ const DiscoveryPage: React.FC = () => {
       if (!currentProject) {
         setTimeout(() => fetchProjects('discovery'), 1000);
       }
-      
-      // Reset running state after successful execution
-      setRunning(false);
+
+      // Keep running=true until first answer arrives via WS or timeout fires
+      if (discoveryTimeoutRef.current) {
+        window.clearTimeout(discoveryTimeoutRef.current);
+      }
+      discoveryTimeoutRef.current = window.setTimeout(() => {
+        console.warn('[Discovery] Timeout waiting for first answer');
+        setRunning(false);
+        discoveryTimeoutRef.current = null;
+      }, 90000) as unknown as number;
     } catch (error) {
       console.error('[Discovery] Failed to execute:', error);
       setRunning(false);
     }
   };
+
+  // Stop running when the first answer arrives (from WS store)
+  useEffect(() => {
+    if (answer && running) {
+      if (discoveryTimeoutRef.current) {
+        window.clearTimeout(discoveryTimeoutRef.current);
+        discoveryTimeoutRef.current = null;
+      }
+      setRunning(false);
+    }
+  }, [answer, running]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (discoveryTimeoutRef.current) {
+        window.clearTimeout(discoveryTimeoutRef.current);
+        discoveryTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const getSourceIcon = (kind?: string) => {
     if (kind === 'web') {
@@ -491,8 +523,9 @@ const DiscoveryPage: React.FC = () => {
           {/* Status indicator */}
           {running && (
             <div className="px-1 pb-2">
-              <div className="text-xs" style={{ textAlign: 'left', color: 'var(--text-secondary-strong)' }}>
-                Thinking... {thinkingSeconds}s
+              <div className="text-xs flex items-center gap-2" style={{ textAlign: 'left', color: 'var(--text-secondary-strong)' }}>
+                <span className="animate-pulse" style={{ width: '8px', height: '8px', borderRadius: '9999px', backgroundColor: 'var(--text-secondary-strong)' }} />
+                <span>Thinking... {thinkingSeconds}s</span>
               </div>
             </div>
           )}
@@ -525,10 +558,12 @@ const DiscoveryPage: React.FC = () => {
                   onClick={async () => {
                     if (running || !queryText.trim()) return;
                     // If there is a current project, send chat; otherwise, run discovery
-                    if (currentProject?.id) {
+                if (currentProject?.id) {
+                      const preferred = (localStorage.getItem('preferredLanguage') || 'EN').toLowerCase();
+                      const lang = preferred && preferred.length === 2 ? preferred : 'en';
                       setRunning(true);
                       try {
-                        await sendChatMessage(currentProject.id, queryText);
+                        await sendChatMessage(currentProject.id, queryText, lang);
                         setQueryText('');
                       } finally {
                         setRunning(false);

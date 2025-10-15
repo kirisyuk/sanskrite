@@ -31,17 +31,14 @@ type SourceDetails struct {
 
 // DataSource соответствует Core.DataSources
 type DataSource struct {
-	ID          string `json:"id" firestore:"id"`
-	TenantID    string `json:"tenantId" firestore:"tenantId"`
-	Pk          string `json:"pk" firestore:"pk"`
-	DisplayName string `json:"displayName" firestore:"displayName"`
-	Kind        string `json:"kind" firestore:"kind"`
-	Status      string `json:"status" firestore:"status"`
-
-	ProjectID         *string  `json:"projectId,omitempty" firestore:"projectId"`
-	RelatedProjectIDs []string `json:"relatedProjectIds,omitempty" firestore:"relatedProjectIds"`
-	ResearchID        *string  `json:"researchId,omitempty" firestore:"researchId"`
-	SessionID         *string  `json:"sessionId,omitempty" firestore:"sessionId"`
+	ID          string  `json:"id" firestore:"id"`
+	TenantID    string  `json:"tenantId" firestore:"tenantId"`
+	Pk          string  `json:"pk" firestore:"pk"`
+	DisplayName string  `json:"displayName" firestore:"displayName"`
+	Kind        string  `json:"kind" firestore:"kind"`
+	Status      string  `json:"status" firestore:"status"`
+	ResearchID  *string `json:"researchId,omitempty" firestore:"researchId"`
+	SessionID   *string `json:"sessionId,omitempty" firestore:"sessionId"`
 
 	OwnerUserID string        `json:"ownerUserId" firestore:"ownerUserId"`
 	Details     SourceDetails `json:"sourceDetails" firestore:"sourceDetails"`

@@ -85,7 +85,7 @@ func (s *ClaudeService) ExecuteTask(ctx context.Context, task *AITask, model str
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[Claude] API error response: %s", string(body))
-		return nil, fmt.Errorf("Claude API request failed with status code %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("claude API request failed with status code %d: %s", resp.StatusCode, string(body))
 	}
 
 	var response struct {
@@ -115,17 +115,17 @@ func (s *ClaudeService) ExecuteTask(ctx context.Context, task *AITask, model str
 
 // ExecuteEmbeddingTask генерация эмбеддингов не поддерживается API Claude
 func (s *ClaudeService) ExecuteEmbeddingTask(ctx context.Context, inputText string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("Claude does not support embedding generation")
+	return nil, fmt.Errorf("claude does not support embedding generation")
 }
 
 // ExecuteImageAnalysisByLinkTask анализ изображений не поддерживается в данной реализации
 func (s *ClaudeService) ExecuteImageAnalysisByLinkTask(ctx context.Context, inputText string, imageLink string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("Claude does not support image analysis in this implementation")
+	return nil, fmt.Errorf("claude does not support image analysis in this implementation")
 }
 
 // ExecuteSearch встроенный веб-поиск не поддерживается API Claude
 func (s *ClaudeService) ExecuteSearch(ctx context.Context, query string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("Claude does not support built-in web search")
+	return nil, fmt.Errorf("claude does not support built-in web search")
 }
 
 // BeginChatWithTools начинает диалог с поддержкой tool-calling (Anthropic Messages API)
@@ -182,7 +182,7 @@ func (s *ClaudeService) BeginChatWithTools(ctx context.Context, task *AITask, mo
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[Claude] BeginChatWithTools failed: %d %s", resp.StatusCode, string(body))
-		return nil, fmt.Errorf("Claude tool chat error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("claude tool chat error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var parsed struct {
@@ -269,7 +269,7 @@ func (s *ClaudeService) ContinueWithToolResults(ctx context.Context, sessionID s
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[Claude] ContinueWithToolResults failed: %d %s", resp.StatusCode, string(body))
-		return nil, fmt.Errorf("Claude tool continue error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("claude tool continue error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var parsed struct {

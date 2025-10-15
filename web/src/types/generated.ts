@@ -12,8 +12,6 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
   displayName: string;
   kind: string;
   status: string;
-  projectId?: string;
-  relatedProjectIds?: string[];
   researchId?: string;
   sessionId?: string;
   ownerUserId: string;

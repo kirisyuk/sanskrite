@@ -84,7 +84,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Vertex AI API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("vertex AI API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -102,12 +102,12 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 	}
 
 	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("empty response from Vertex AI")
+		return nil, fmt.Errorf("empty response from vertex AI")
 	}
 
 	content := result.Candidates[0].Content.Parts[0].Text
 	if content == "" {
-		return nil, fmt.Errorf("empty response from Vertex AI")
+		return nil, fmt.Errorf("empty response from vertex AI")
 	}
 
 	return &AITaskResult{
@@ -130,7 +130,7 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 	}
 	// Для Vertex/Gemini требуется поддержка Search Grounding, а не общий веб-поиск
 	if !caps.SearchGroundingCapability {
-		return nil, fmt.Errorf("model %s does not support Search Grounding", modelName)
+		return nil, fmt.Errorf("model %s does not support search grounding", modelName)
 	}
 
 	log.Printf("[VertexAI] ExecuteSearch. model=%s, q=\"%s\"", modelName, query)
@@ -179,7 +179,7 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Vertex AI Search error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("vertex AI search error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var root map[string]interface{}
@@ -282,12 +282,12 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 
 // ExecuteEmbeddingTask генерация эмбеддингов не поддерживается в данной реализации
 func (s *VertexAIService) ExecuteEmbeddingTask(ctx context.Context, inputText string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("Vertex AI does not support embedding generation in this implementation")
+	return nil, fmt.Errorf("vertex AI does not support embedding generation in this implementation")
 }
 
 // ExecuteImageAnalysisByLinkTask анализ изображений не поддерживается в данной реализации
 func (s *VertexAIService) ExecuteImageAnalysisByLinkTask(ctx context.Context, inputText string, imageLink string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("Vertex AI does not support image analysis in this implementation")
+	return nil, fmt.Errorf("vertex AI does not support image analysis in this implementation")
 }
 
 // BeginChatWithTools начинает диалог с поддержкой tool-calling (Gemini tools)
@@ -351,7 +351,7 @@ func (s *VertexAIService) BeginChatWithTools(ctx context.Context, task *AITask, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Vertex AI tool chat error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("vertex AI tool chat error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var root map[string]interface{}
@@ -446,7 +446,7 @@ func (s *VertexAIService) ContinueWithToolResults(ctx context.Context, sessionID
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Vertex AI tool continue error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("vertex AI tool continue error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var root map[string]interface{}
