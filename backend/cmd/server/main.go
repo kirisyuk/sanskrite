@@ -153,6 +153,25 @@ func main() {
 					log.Printf("source poller stopped: %v", err)
 				}
 			}()
+
+			// Periodic publisher loop (fallback if Cloud Scheduler not used)
+			go func() {
+				ctxPP, cancelPP := context.WithCancel(ctx)
+				defer cancelPP()
+				t := time.NewTicker(1 * time.Minute)
+				defer t.Stop()
+				for {
+					select {
+					case <-ctxPP.Done():
+						return
+					case <-t.C:
+						_ = poller.PublishDue(ctxPP)
+					}
+				}
+			}()
+
+			// Wire HTTP handler to allow Cloud Scheduler HTTP trigger
+			webhooksHandler = webhooksHandler.WithPoller(poller)
 		}
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
@@ -215,6 +234,8 @@ func main() {
 		}
 		hub.ServeWS(w, r, tenant)
 	})
+
+	// moved below after authMiddleware is defined
 
 	// Start WS subscriber using the same project Pub/Sub client
 	{
@@ -298,6 +319,9 @@ func main() {
 	// Webhooks
 	mux.Handle("/api/v1/webhooks/", http.HandlerFunc(webhooksHandler.Handle))
 
+	// Admin: publish-due (allow Cloud Scheduler HTTP trigger)
+	mux.Handle("/api/v1/admin/sources/publish-due", authMiddleware(http.HandlerFunc(s.discoveryHandler.PublishDue)))
+
 	// Discovery routes
 	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
 	// Note: /api/v1/projects/{id}/datasources is handled by projectsByID pattern
@@ -310,6 +334,26 @@ func main() {
 
 	// CORS for local frontend
 	allowedOrigin := getEnv("FRONTEND_ORIGIN", "http://localhost:5173")
+
+	// Admin job token middleware for Cloud Scheduler (bypasses Firebase auth for admin route only)
+	adminToken := getEnv("ADMIN_JOB_TOKEN", "")
+	jobAuth := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if adminToken == "" {
+				http.Error(w, "admin job token not configured", http.StatusForbidden)
+				return
+			}
+			if r.Header.Get("X-Job-Token") != adminToken {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	// Attach admin route without Firebase auth, but with jobAuth
+	mux.Handle("/api/v1/admin/sources/publish-due", jobAuth(http.HandlerFunc(s.discoveryHandler.PublishDue)))
+
 	handler := withCORS(allowedOrigin)(mux)
 
 	srv := &http.Server{

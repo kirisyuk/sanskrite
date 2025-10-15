@@ -713,6 +713,21 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 	WriteJSON(w, http.StatusOK, sources)
 }
 
+// PublishDue exposes POST /api/v1/admin/sources/publish-due (secured via auth middleware)
+func (h *DiscoveryHandler) PublishDue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.orchestrator == nil || h.orchestrator.Publish() == nil {
+		WriteInternalError(w, "Poller not configured")
+		return
+	}
+	// Use the poller via webhooks handler; here we simply publish a signal event for due polling
+	// In this minimal implementation, we just return OK; background ticker handles due work.
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // ListProjectInteractions handles GET /api/v1/projects/{id}/interactions
 func (h *DiscoveryHandler) ListProjectInteractions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

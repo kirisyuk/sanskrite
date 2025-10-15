@@ -147,6 +147,45 @@ setup_infrastructure() {
       echo -e "${GREEN}  ✓${NC} $topic exists"
     fi
   done
+
+  # 5. Ensure Cloud Scheduler job for due polling (HTTP fallback optional)
+  echo -e "${BLUE}[infra] Ensuring Cloud Scheduler job (optional)...${NC}"
+  if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
+    JOB_NAME="sanskrite-source-poller"
+    SVC_URL=$(gcloud run services describe sanskrite-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+    # Ensure admin token env on API (if not set, generate ephemeral weak token for dev; recommend overriding in CI/prod)
+    ADMIN_TOKEN=${ADMIN_JOB_TOKEN:-}
+    if [[ -z "$ADMIN_TOKEN" ]]; then
+      ADMIN_TOKEN=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
+      gcloud run services update sanskrite-api --region "$REGION" --update-env-vars "ADMIN_JOB_TOKEN=$ADMIN_TOKEN" --quiet || true
+    fi
+    if [[ -n "$SVC_URL" ]]; then
+      # Create or update a job that calls admin publish-due with header X-Job-Token
+      if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
+        gcloud scheduler jobs update http "$JOB_NAME" \
+          --location="$REGION" \
+          --schedule="*/5 * * * *" \
+          --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
+          --http-method=POST \
+          --headers="X-Job-Token=$ADMIN_TOKEN" \
+          --attempt-deadline=60s \
+          --quiet || true
+      else
+        gcloud scheduler jobs create http "$JOB_NAME" \
+          --location="$REGION" \
+          --schedule="*/5 * * * *" \
+          --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
+          --http-method=POST \
+          --headers="X-Job-Token=$ADMIN_TOKEN" \
+          --attempt-deadline=60s \
+          --quiet || true
+      fi
+    else
+      echo -e "${YELLOW}[infra] Skipping scheduler job (api url not resolved).${NC}"
+    fi
+  else
+    echo -e "${YELLOW}[infra] Cloud Scheduler API not enabled or not available; skipping job creation.${NC}"
+  fi
 }
 
 deploy_api() {

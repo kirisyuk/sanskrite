@@ -449,6 +449,28 @@ func (r *DataSourcesRepository) ListByProject(ctx context.Context, tenantID, pro
 	return sources, nil
 }
 
+// ListActiveByKinds returns active datasources filtered by kinds (using Firestore IN on kind)
+func (r *DataSourcesRepository) ListActiveByKinds(ctx context.Context, kinds []string) ([]*models.DataSource, error) {
+	if len(kinds) == 0 {
+		return []*models.DataSource{}, nil
+	}
+	// Firestore IN supports up to 10 values
+	q := r.col.Where("status", "==", "active").Where("kind", "in", kinds)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var res []*models.DataSource
+	for _, d := range docs {
+		var ds models.DataSource
+		if err := d.DataTo(&ds); err != nil {
+			continue
+		}
+		res = append(res, &ds)
+	}
+	return res, nil
+}
+
 // DeleteByProject deletes sources where projectId == id, or removes id from relatedProjectIds
 func (r *DataSourcesRepository) DeleteByProject(ctx context.Context, projectID string) error {
 	// Fetch all sources that reference this project

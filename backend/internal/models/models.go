@@ -49,6 +49,10 @@ type DataSource struct {
 	LastPolledAt *time.Time `json:"lastPolledAt,omitempty" firestore:"lastPolledAt"`
 	LastFoundAt  *time.Time `json:"lastFoundAt,omitempty" firestore:"lastFoundAt"`
 
+	// Adaptive polling
+	NextPollAt     *time.Time `json:"nextPollAt,omitempty" firestore:"nextPollAt"`
+	PollBackoffSec *int       `json:"pollBackoffSec,omitempty" firestore:"pollBackoffSec"`
+
 	ErrorCount int `json:"errorCount" firestore:"errorCount"`
 
 	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`

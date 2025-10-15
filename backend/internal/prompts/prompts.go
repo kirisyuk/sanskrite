@@ -133,3 +133,37 @@ func Format(template string, params map[string]string) string {
 	}
 	return result
 }
+
+const DocumentExtractionPrompt = `You are an expert content analyst. Extract a STRICT JSON object exactly following the schema below. Do NOT include explanations or markdown. Output ONE JSON object only.
+
+TEXT LANGUAGE: {language}
+
+CONTENT:
+{text}
+
+TASK:
+- Extract fields precisely as per schema. Use only the provided CONTENT.
+- Language must be ISO 639-1 (2 letters, lowercase).
+- Sentiment must be in [-1.0, 1.0].
+- Categories must have labels of 1-2 words only, with confidence in [0,1].
+- Document type must be one of: article, post, report, announcement, interview, transcript, other.
+- Dates must be ISO (YYYY-MM-DD) or RFC3339.
+- If unsure, prefer conservative outputs; omit or use nulls instead of inventing facts.
+
+REQUIRED JSON SCHEMA:
+{
+  "language": "ISO 639-1 code (lowercase)",
+  "sentiment": -1.0,
+  "categories": [{"label": "1-2 words", "confidence": 0.0}],
+  "topics": [{"name": "string", "share": 0.0}],
+  "entities": [{"type": "person|org|location|other", "value": "string", "confidence": 0.0}],
+  "keyPoints": ["string"],
+  "documentType": "article|post|report|announcement|interview|transcript|other",
+  "outlinks": [{"url": "string", "kind": "reference|citation|internal|external"}],
+  "events": [{"title": "string", "dateISO": "YYYY-MM-DD or RFC3339", "context": "string?"}],
+  "claims": [{"text": "string", "summary": "string?", "confidence": 0.0, "evidenceUrls": ["string"]}]
+}
+
+STRICT RULES:
+- Return valid JSON matching the schema keys and types.
+- Do NOT wrap in code fences; return raw JSON only.`

@@ -61,6 +61,14 @@ func (o *Orchestrator) RefreshDocumentByID(ctx context.Context, tenantID, source
 	if o.docs == nil || o.providersReg == nil || o.emb == nil {
 		return fmt.Errorf("grounding deps not wired")
 	}
+	// Respect source status
+	if o.sources != nil {
+		if s, err := o.sources.Get(ctx, sourceID); err == nil && s != nil {
+			if s.Status == "paused" || s.Status == "completed" {
+				return nil
+			}
+		}
+	}
 	d, err := o.docs.GetByID(ctx, docID)
 	if err != nil || d == nil {
 		return fmt.Errorf("document not found")
@@ -298,6 +306,10 @@ func (o *Orchestrator) IngestProjectSources(ctx context.Context, tenantID, proje
 	tgSeen := map[string]struct{}{}
 	rssSeen := map[string]struct{}{}
 	for _, ds := range list {
+		// Skip paused/completed
+		if ds.Status == "paused" || ds.Status == "completed" {
+			continue
+		}
 		if ds.Kind == "web" && ds.Details.URI != nil {
 			can := crawler.CanonicalizeURL(*ds.Details.URI)
 			if can == "" {
