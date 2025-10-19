@@ -69,6 +69,8 @@ enable_api secretmanager.googleapis.com
 enable_api pubsub.googleapis.com
 # Optional but recommended for future features
 enable_api aiplatform.googleapis.com
+enable_api generativelanguage.googleapis.com
+enable_api apikeys.googleapis.com
 enable_api cloudscheduler.googleapis.com
 enable_api cloudresourcemanager.googleapis.com
 
@@ -128,7 +130,7 @@ setup_infrastructure() {
   
   # 3. Ensure secrets exist (create if missing with placeholder)
   echo -e "${BLUE}[infra] Ensuring secrets exist...${NC}"
-  for secret in vertex_api_key openai_api_key anthropic_api_key grok_api_key; do
+  for secret in VERTEX_API_KEY openai_api_key anthropic_api_key grok_api_key; do
     if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
       echo "PLACEHOLDER_UPDATE_ME" | gcloud secrets create "$secret" --data-file=-
       echo -e "${YELLOW}  ⚠${NC} Created placeholder for: $secret (update with real value!)"
@@ -139,7 +141,10 @@ setup_infrastructure() {
   
   # 4. Ensure Pub/Sub topics exist
   echo -e "${BLUE}[infra] Ensuring Pub/Sub topics...${NC}"
-  for topic in discovery.status discovery.profile discovery.answer discovery.project document.process ground.refresh source.poll; do
+  for topic in \
+    discovery.status discovery.profile discovery.answer discovery.project \
+    document.process ground.refresh source.poll source.poll.due \
+    genai.stream.start genai.stream.chunk genai.stream.tool_call genai.stream.tool_result genai.stream.done genai.stream.error; do
     if ! gcloud pubsub topics describe "$topic" >/dev/null 2>&1; then
       gcloud pubsub topics create "$topic" --quiet
       echo -e "${GREEN}  ✓${NC} Created topic: $topic"
@@ -213,7 +218,7 @@ deploy_api() {
     --cpu=1 \
     --memory=512Mi \
     --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGIN=http://localhost:5173" \
-    --set-secrets "VERTEX_API_KEY=vertex_api_key:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,GROK_API_KEY=grok_api_key:latest" \
+    --set-secrets "VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,GROK_API_KEY=grok_api_key:latest" \
     --project "$PROJECT_ID" \
     --quiet
 

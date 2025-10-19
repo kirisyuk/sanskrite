@@ -278,7 +278,7 @@ func (mm *AIModelManager) initializeModels() {
 		ContextWindow:                 1000000,
 		OutputTokens:                  1000000,
 		PricePerInputToken:            0.00000010, // $0.10 / 1M (max in range)
-		PricePerOutputToken:           0.00000040, // $0.40 / 1M (max in range)
+		PricePerOutputToken:           0.00000041, // $0.41 / 1M (slightly increased to favor gpt-5-nano)
 		Provider:                      AIProviderGemini,
 		MaxTokensPerMinute:            6000000,
 		MaxTokensPerDay:               12000000,

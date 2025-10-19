@@ -225,6 +225,32 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
         try {
           const msg = JSON.parse(evt.data);
           console.log('[WS] Message received:', msg);
+          // GenAI streaming events
+          if (typeof msg?.type === 'string' && msg.type.startsWith('genai.stream.')) {
+            import('./genaiStore').then(({ useGenaiStore }) => {
+              const s = useGenaiStore.getState();
+              switch (msg.type) {
+                case 'genai.stream.start':
+                  s.reset();
+                  break;
+                case 'genai.stream.chunk':
+                  if (msg.data?.text) useGenaiStore.setState((st) => ({ chunks: [...st.chunks, { text: msg.data.text }] }));
+                  break;
+                case 'genai.stream.tool_call':
+                  if (Array.isArray(msg.data?.toolCalls)) useGenaiStore.setState({ toolCalls: msg.data.toolCalls });
+                  break;
+                case 'genai.stream.tool_result':
+                  // optional: could merge with toolCalls list
+                  break;
+                case 'genai.stream.done':
+                  useGenaiStore.setState({ streaming: false });
+                  break;
+                case 'genai.stream.error':
+                  useGenaiStore.setState({ streaming: false, error: msg.data?.error || 'Stream error' });
+                  break;
+              }
+            }).catch(() => {});
+          }
           
           if (msg?.type === 'discovery.profile' && msg.data?.profile) {
             set((state) => {
@@ -250,6 +276,12 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
                 return state as any;
               }
             });
+            // Refresh interactions to include new context/profile snippets
+            if (msg?.data?.projectId) {
+              api.getProjectInteractions(msg.data.projectId)
+                .then((items) => set({ interactions: items }))
+                .catch((e) => console.error('Failed to refresh interactions:', e));
+            }
           }
           
           if (msg?.type === 'discovery.status' && msg.data?.sourceId) {
@@ -257,17 +289,23 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
               const idx = state.sources.findIndex((s) => s.id === msg.data.sourceId);
               if (idx >= 0) {
                 const updated = [...state.sources];
-                updated[idx] = { ...updated[idx], status: msg.data.status } as any;
+                updated[idx] = { ...updated[idx], status: msg.data.status, __hint: msg.data?.hint, __firstProfile: !!msg.data?.firstProfile } as any;
                 return { sources: updated } as any;
               } else if (msg.data.status === 'fetching' && msg.data.projectId) {
-                // Add placeholder source for visual feedback
+                // Add placeholder source for visual feedback; drop any skeleton by matching displayName
+                const displayName: string | undefined = msg.data.displayName;
+                const filtered = displayName
+                  ? state.sources.filter((s) => s.displayName !== displayName && s.id !== displayName)
+                  : state.sources;
                 const placeholder = {
                   id: msg.data.sourceId,
-                  displayName: msg.data.sourceId,
+                  displayName: displayName || msg.data.sourceId,
                   status: msg.data.status,
-                  kind: 'unknown',
+                  kind: msg.data.kind || 'unknown',
+                  __hint: msg.data?.hint,
+                  __firstProfile: !!msg.data?.firstProfile,
                 } as any;
-                return { sources: [...state.sources, placeholder] } as any;
+                return { sources: [...filtered, placeholder] } as any;
               }
               return state as any;
             });
@@ -287,6 +325,36 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
               }
               return { answer: msg.data.answer, interactions: items } as any;
             });
+          }
+
+          // Route GenAI streaming events to chat store
+          if (typeof msg?.type === 'string' && msg.type.startsWith('genai.stream.')) {
+            import('./genaiChatStore').then(({ useGenaiChatStore }) => {
+              const st = useGenaiChatStore.getState();
+              switch (msg.type) {
+                case 'genai.stream.start':
+                  st.onStart();
+                  break;
+                case 'genai.stream.chunk':
+                  if (msg.data?.text) st.onChunk(msg.data.text);
+                  break;
+                case 'genai.stream.tool_call':
+                  if (Array.isArray(msg.data?.toolCalls)) st.onToolCall(msg.data.toolCalls);
+                  break;
+                case 'genai.stream.tool_result':
+                  if (Array.isArray(msg.data?.toolCalls)) st.onToolResult(msg.data.toolCalls);
+                  break;
+                case 'genai.stream.done':
+                  st.onDone();
+                  st.onDoneMeta({ usage: msg.data?.usage, attributions: msg.data?.attributions });
+                  break;
+                case 'genai.stream.error':
+                  st.onError(msg.data?.error || 'Stream error');
+                  break;
+                default:
+                  break;
+              }
+            }).catch(() => {});
           }
           
           if (msg?.type === 'discovery.project' || msg?.type === 'discoveryProject') {

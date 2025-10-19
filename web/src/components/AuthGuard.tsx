@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import darkLogo from '../assets/sanskrite_logo_dark_theme.png';
+import lightLogo from '../assets/hatl-light-theme.png';
+import darkLogo from '../assets/hatl-dark-theme.png';
+import { ThemeContext } from './ThemeProvider';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -16,6 +18,7 @@ const PUBLIC_DOMAINS = [
 
 const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
   const { user, loading, signIn, signUp, resetPassword } = useAuth();
+  const { theme } = React.useContext(ThemeContext);
   const [currentView, setCurrentView] = useState<AuthView>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -103,9 +106,9 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
   // Loading state with splash
   if (loading) {
     return (
-      <div className="auth-container">
+      <div className="auth-container" style={{ backgroundColor: theme === 'dark' ? 'var(--bg-base)' : 'var(--bg-base)' }}>
         <div className="flex flex-col items-center">
-          <img src={darkLogo} alt="Sanskrite" className="h-8 w-auto mb-4" />
+          <img src={theme === 'dark' ? darkLogo : lightLogo} alt="HATL" className="h-8 w-auto mb-4" />
           <div className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>Signing you in…</div>
           <div className="w-48 h-1 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-elevated)' }}>
             <div className="h-full w-2/5 animate-pulse" style={{ backgroundColor: 'var(--accent-brand)' }}></div>

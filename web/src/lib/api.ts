@@ -105,9 +105,92 @@ class ApiClient {
     return response.data.items;
   }
 
+  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'; content: string }): Promise<{ id: string }> {
+    const response = await this.client.post<{ id: string }>(`/api/v1/projects/${projectId}/interactions`, data);
+    return response.data;
+  }
+
+  async deleteProjectInteraction(projectId: string, interactionId: string): Promise<{ success: boolean }> {
+    const response = await this.client.delete<{ success: boolean }>(`/api/v1/projects/${projectId}/interactions/${interactionId}`);
+    return response.data;
+  }
+
   async sendChatMessage(projectId: string, message: string, language?: string): Promise<{ answer: string }> {
     const response = await this.client.post<{ answer: string }>(`/api/v1/projects/${projectId}/chat`, { message, language });
     return response.data;
+  }
+
+  // GenAI
+  async genaiAdhocJSON(data: {
+    prompt: string;
+    options?: {
+      profile?: 'fast' | 'quality';
+      modelOverride?: string;
+      groundingEnabled?: boolean;
+      temperature?: number;
+      maxOutputTokens?: number;
+      systemInstruction?: string;
+    };
+  }): Promise<{ ok: boolean; model: string; usage: { promptTokens: number; outputTokens: number; totalTokens: number }; validJson: boolean; json: any; raw: string; }> {
+    const response = await this.client.post(`/api/v1/genai/adhoc-json`, data);
+    return response.data;
+  }
+
+  async genaiComplete(data: {
+    prompt: string;
+    tools?: Array<{ name: string; description?: string; parameters: any }>;
+    options?: any;
+  }) {
+    const response = await this.client.post(`/api/v1/genai/complete`, data);
+    return response.data;
+  }
+
+  async genaiCompleteJSON(data: {
+    prompt: string;
+    tools?: Array<{ name: string; description?: string; parameters: any }>;
+    jsonSchema?: any;
+    options?: any;
+  }) {
+    const response = await this.client.post(`/api/v1/genai/complete-json`, data);
+    return response.data;
+  }
+
+  async genaiCompleteWithTools(data: {
+    prompt: string;
+    tools: Array<{ name: string; description?: string; parameters: any }>;
+    options?: any;
+  }) {
+    const response = await this.client.post(`/api/v1/genai/complete-with-tools`, data);
+    return response.data;
+  }
+
+  async genaiStream(data: {
+    prompt: string;
+    tools?: Array<{ name: string; description?: string; parameters: any }>;
+    options?: any;
+    messages?: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>;
+  }) {
+    // Fire-and-forget HTTP 200 triggers Pub/Sub/WS stream events
+    const response = await this.client.post(`/api/v1/genai/stream`, data);
+    return response.data;
+  }
+
+  async suggestChatTitles(messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>, language?: string): Promise<string[]> {
+    const transcript = messages.map(m => `- ${m.role}: ${m.text}`).join('\n');
+    const lang = (language || (localStorage.getItem('preferredLanguage') || 'EN')).toLowerCase();
+    const prompt = `You are naming a chat based on its conversation. Language: ${lang}.\n\nTranscript (most recent last):\n${transcript}\n\nTask: Propose 3 concise, specific, non-generic titles that reflect the supposed user's intent behind the conversation. Each <= 35 characters. Titles must: (1) reflect the user's specific interest in the topic overall based on the user's own requests; (2) present distinct viewpoints/angles on the user's context (not duplicates, different perspectives).\nReturn strictly JSON only, no markdown/code fences, matching this shape: { "titles": ["title1", "title2", "title3"] }.`;
+    try {
+      const res = await this.client.post<{ ok: boolean; result: any }>(`/api/v1/ai/structured`, {
+        prompt,
+        minCapabilityScore: 6,
+        maxOutputSize: 512,
+      });
+      const obj = res.data?.result;
+      const arr = Array.isArray(obj?.titles) ? obj.titles : [];
+      return arr.filter((x: any) => typeof x === 'string');
+    } catch {
+      return [];
+    }
   }
 }
 

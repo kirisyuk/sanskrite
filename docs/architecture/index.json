@@ -25,6 +25,7 @@
       "ai": "docs/architecture/backend/modules/ai.md",
       "discovery": "docs/architecture/backend/modules/discovery.md",
       "realtime": "docs/architecture/backend/modules/realtime.md",
+      "genai": "docs/architecture/backend/modules/genai.md",
       "http": "docs/architecture/backend/modules/http.md",
       "repo": "docs/architecture/backend/modules/repo.md",
       "gcp": "docs/architecture/backend/modules/gcp.md",

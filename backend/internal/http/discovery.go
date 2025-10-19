@@ -76,6 +76,12 @@ func (h *DiscoveryHandler) WithChunks(cr *repo.ChunksRepository) *DiscoveryHandl
 	return h
 }
 
+// WithInteractions wires interactions repo
+func (h *DiscoveryHandler) WithInteractions(ir *repo.InteractionsRepository) *DiscoveryHandler {
+	h.interactionsRepo = ir
+	return h
+}
+
 // SearchDocuments handles GET /api/v1/projects/{id}/search?language=&documentType=&limit=
 func (h *DiscoveryHandler) SearchDocuments(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -254,12 +260,6 @@ func (h *DiscoveryHandler) SearchDocuments(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{"items": out})
-}
-
-// WithInteractions wires interactions repo
-func (h *DiscoveryHandler) WithInteractions(ir *repo.InteractionsRepository) *DiscoveryHandler {
-	h.interactionsRepo = ir
-	return h
 }
 
 // WithProfiles wires SourceProfiles repository (optional)
@@ -661,6 +661,20 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 		WriteInternalError(w, "Failed to list sources")
 		return
 	}
+
+	// Optionally prefetch profiles and index by dataSourceId
+	profilesBySource := map[string]any{}
+	if h.profilesRepo != nil {
+		if profs, err := h.profilesRepo.ListByProject(r.Context(), authInfo.TenantID, projectID, h.dataSourcesRepo); err == nil {
+			for _, sp := range profs {
+				if sp == nil || strings.TrimSpace(sp.DataSourceID) == "" {
+					continue
+				}
+				// Frontend expects `source.profile` to be the inner profile payload (not wrapper)
+				profilesBySource[sp.DataSourceID] = sp.Profile
+			}
+		}
+	}
 	for _, link := range links {
 		if link == nil || strings.TrimSpace(link.SourceID) == "" {
 			continue
@@ -698,6 +712,9 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 				"createdAt":  link.CreatedAt,
 				"updatedAt":  link.UpdatedAt,
 			},
+		}
+		if p, ok := profilesBySource[ds.ID]; ok {
+			m["profile"] = p
 		}
 		out = append(out, m)
 	}
@@ -756,6 +773,103 @@ func (h *DiscoveryHandler) ListProjectInteractions(w http.ResponseWriter, r *htt
 		return
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// CreateProjectInteraction handles POST /api/v1/projects/{id}/interactions
+func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	if h.interactionsRepo == nil {
+		WriteInternalError(w, "Interactions repo not configured")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+	project, err := h.projectsRepo.Get(r.Context(), projectID)
+	if err != nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	var body struct {
+		Kind    string  `json:"kind"`
+		Content string  `json:"content"`
+		Summary *string `json:"summary,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Content) == "" {
+		WriteBadRequest(w, "INVALID_JSON", "kind and content are required")
+		return
+	}
+	// normalize kind
+	k := strings.ToLower(strings.TrimSpace(body.Kind))
+	switch k {
+	case "user", "assistant", "system", "note":
+	default:
+		k = "note"
+	}
+	id, err := h.interactionsRepo.Create(r.Context(), &repo.Interaction{
+		TenantID:  authInfo.TenantID,
+		ProjectID: projectID,
+		Kind:      k,
+		Content:   body.Content,
+		Summary:   body.Summary,
+	})
+	if err != nil {
+		WriteInternalError(w, "Failed to create interaction")
+		return
+	}
+	WriteJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+// DeleteProjectInteraction handles DELETE /api/v1/projects/{id}/interactions/{interactionId}
+func (h *DiscoveryHandler) DeleteProjectInteraction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only DELETE is allowed", nil)
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	if h.interactionsRepo == nil {
+		WriteInternalError(w, "Interactions repo not configured")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project and Interaction IDs are required")
+		return
+	}
+	projectID := parts[3]
+	interactionID := parts[5]
+	project, err := h.projectsRepo.Get(r.Context(), projectID)
+	if err != nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	// optional: verify interaction belongs to project
+	if it, err := h.interactionsRepo.Get(r.Context(), interactionID); err == nil {
+		if it.ProjectID != projectID || it.TenantID != authInfo.TenantID {
+			WriteForbidden(w, "Access denied")
+			return
+		}
+	}
+	if err := h.interactionsRepo.DeleteByID(r.Context(), interactionID); err != nil {
+		WriteInternalError(w, "Failed to delete interaction")
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 // ChatMessage handles POST /api/v1/projects/{id}/chat

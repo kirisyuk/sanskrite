@@ -26,6 +26,7 @@ type Orchestrator struct {
 	providersReg *prov.Registry
 	projects     *repo.ProjectsRepository
 	sources      *repo.DataSourcesRepository
+	sproj        *repo.SourceProjectsRepository
 	profiles     *repo.SourceProfilesRepository
 	docs         *repo.DocumentsRepository
 	chunks       *repo.ChunksRepository
@@ -50,11 +51,42 @@ func (o *Orchestrator) WithProfiles(sp *repo.SourceProfilesRepository) *Orchestr
 	return o
 }
 
+// WithSourceProjects wires SourceProjects repository for linking sources to projects
+func (o *Orchestrator) WithSourceProjects(sp *repo.SourceProjectsRepository) *Orchestrator {
+	o.sproj = sp
+	return o
+}
+
 // Publish exposes the Publisher for wiring subscribers
 func (o *Orchestrator) Publish() *realtime.Publisher { return o.publish }
 
 // Exec accessor (used by HTTP handlers needing embeddings)
 func (o *Orchestrator) Exec() *ai.AITaskExecutor { return o.exec }
+
+// ensureProjectSourceLink creates an active link between project and source if missing.
+func (o *Orchestrator) ensureProjectSourceLink(ctx context.Context, tenantID, projectID, sourceID string) {
+	if o.sproj == nil || strings.TrimSpace(projectID) == "" || strings.TrimSpace(sourceID) == "" {
+		return
+	}
+	status := "active"
+	links, err := o.sproj.ListBySource(ctx, tenantID, sourceID, &status)
+	if err != nil {
+		o.logger.Printf("orchestrator: link: ListBySource error tenant=%s project=%s source=%s: %v", tenantID, projectID, sourceID, err)
+		return
+	}
+	for _, l := range links {
+		if l.ProjectID == projectID {
+			o.logger.Printf("orchestrator: link exists tenant=%s project=%s source=%s", tenantID, projectID, sourceID)
+			return
+		}
+	}
+	_, err = o.sproj.Create(ctx, &models.SourceProject{TenantID: tenantID, SourceID: sourceID, ProjectID: projectID, Status: "active", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+	if err != nil {
+		o.logger.Printf("orchestrator: link create failed tenant=%s project=%s source=%s: %v", tenantID, projectID, sourceID, err)
+		return
+	}
+	o.logger.Printf("orchestrator: link created tenant=%s project=%s source=%s", tenantID, projectID, sourceID)
+}
 
 // RefreshDocumentByID naive revalidation placeholder
 func (o *Orchestrator) RefreshDocumentByID(ctx context.Context, tenantID, sourceID, docID string) error {
@@ -865,12 +897,15 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	if err != nil {
 		o.logger.Printf("orchestrator: FindByCanonicalSource for %s error: %v (will create new)", canonicalURL, err)
 	}
+	createdNew := false
 	if existing != nil {
 		o.logger.Printf("orchestrator: found existing web source %s (id=%s) for project %s", canonicalURL, existing.ID, in.ProjectID)
 		ds = existing
 		// Update LastSeen
 		ds.LastSeen = time.Now().UTC()
 		needsUpdate = true
+		// Ensure link for existing source
+		o.ensureProjectSourceLink(ctx, in.TenantID, in.ProjectID, ds.ID)
 
 		// If source was previously processed, skip reprocessing
 		if (ds.Status == "paused" || ds.Status == "completed") && o.profiles != nil {
@@ -907,13 +942,36 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		} else {
 			o.logger.Printf("orchestrator: created web source %s with id=%s", canonicalURL, createdID)
 		}
-		// Note: project linkage should be created by HTTP SourcesHandler.AttachSource; no direct mutation here
+		createdNew = true
+		// Ensure link project<->source is created for this chat
+		if o.sproj != nil && strings.TrimSpace(in.ProjectID) != "" {
+			status := "active"
+			links, _ := o.sproj.ListBySource(ctx, in.TenantID, ds.ID, &status)
+			exists := false
+			for _, l := range links {
+				if l.ProjectID == in.ProjectID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				_, _ = o.sproj.Create(ctx, &models.SourceProject{TenantID: in.TenantID, SourceID: ds.ID, ProjectID: in.ProjectID, Status: "active", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+			}
+		}
 	}
-	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
+	msg := map[string]interface{}{
 		"correlationId": in.Correlation,
-		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching",
-		"kind": ds.Kind, "displayName": ds.DisplayName,
-	})
+		"projectId":     in.ProjectID,
+		"sourceId":      ds.ID,
+		"status":        "fetching",
+		"kind":          ds.Kind,
+		"displayName":   ds.DisplayName,
+	}
+	if createdNew {
+		msg["firstProfile"] = true
+		msg["hint"] = "profilingNewSource"
+	}
+	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, msg)
 
 	// fetch content
 	fr, err := o.crawl.FetchContent(ctx, canonicalURL)
@@ -959,6 +1017,8 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 				obj := map[string]interface{}{
 					"sourceId":       ds.ID,
 					"displayName":    ds.DisplayName,
+					"sourceKind":     ds.Kind,
+					"uri":            canonicalURL,
 					"summary":        summary,
 					"hasFullProfile": true,
 				}
@@ -999,6 +1059,8 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		obj := map[string]interface{}{
 			"sourceId":       ds.ID,
 			"displayName":    ds.DisplayName,
+			"sourceKind":     ds.Kind,
+			"uri":            canonicalURL,
 			"summary":        summary,
 			"hasFullProfile": true,
 		}
@@ -1020,6 +1082,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 	if err != nil {
 		o.logger.Printf("orchestrator: FindByCanonicalSource for @%s error: %v (will create new)", handle, err)
 	}
+	createdNew := false
 	if existing != nil {
 		o.logger.Printf("orchestrator: found existing telegram source @%s (id=%s) for project %s", handle, existing.ID, in.ProjectID)
 		ds = existing
@@ -1061,12 +1124,37 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		} else {
 			o.logger.Printf("orchestrator: created telegram source @%s with id=%s", handle, createdID)
 		}
+		createdNew = true
+
+		// Ensure link project<->source is created for this chat
+		if o.sproj != nil && strings.TrimSpace(in.ProjectID) != "" {
+			status := "active"
+			links, _ := o.sproj.ListBySource(ctx, in.TenantID, ds.ID, &status)
+			exists := false
+			for _, l := range links {
+				if l.ProjectID == in.ProjectID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				_, _ = o.sproj.Create(ctx, &models.SourceProject{TenantID: in.TenantID, SourceID: ds.ID, ProjectID: in.ProjectID, Status: "active", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+			}
+		}
 	}
-	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, map[string]interface{}{
+	msg := map[string]interface{}{
 		"correlationId": in.Correlation,
-		"projectId":     in.ProjectID, "sourceId": ds.ID, "status": "fetching",
-		"kind": ds.Kind, "displayName": ds.DisplayName,
-	})
+		"projectId":     in.ProjectID,
+		"sourceId":      ds.ID,
+		"status":        "fetching",
+		"kind":          ds.Kind,
+		"displayName":   ds.DisplayName,
+	}
+	if createdNew {
+		msg["firstProfile"] = true
+		msg["hint"] = "profilingNewSource"
+	}
+	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, msg)
 
 	// fetch posts (last 30 to avoid Firestore 1MB document limit)
 	msgs, err := o.telegram.FetchUpdates(ctx, handle, 0)
@@ -1121,12 +1209,14 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: ds.ID, TenantID: "", DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
 	}
 
-	// Persist profile summary interaction
+	// Persist profile summary interaction (telegram)
 	if o.interactions != nil {
 		summary := summarizeProfile(prof)
 		obj := map[string]interface{}{
 			"sourceId":       ds.ID,
 			"displayName":    ds.DisplayName,
+			"sourceKind":     ds.Kind,
+			"handle":         "@" + handle,
 			"summary":        summary,
 			"hasFullProfile": true,
 		}
@@ -1152,13 +1242,39 @@ func (o *Orchestrator) synthesizeAnswer(ctx context.Context, in ExecuteInput) er
 		return err
 	}
 	o.logger.Printf("orchestrator: loaded %d sources for project %s, preparing synthesis", len(list), in.ProjectID)
-	// Build profiles array JSON via SourceProfiles repository
+	// Build human-readable identifiers per source
+	infoByID := map[string]map[string]interface{}{}
+	for _, ds := range list {
+		if ds == nil || strings.TrimSpace(ds.ID) == "" {
+			continue
+		}
+		m := map[string]interface{}{
+			"displayName": ds.DisplayName,
+			"sourceKind":  ds.Kind,
+		}
+		if ds.Kind == "telegram_channel" && ds.Details.ChannelUsername != nil {
+			h := strings.TrimSpace(*ds.Details.ChannelUsername)
+			if h != "" {
+				m["handle"] = "@" + h
+			}
+		}
+		if ds.Kind == "web" && ds.Details.URI != nil {
+			u := strings.TrimSpace(*ds.Details.URI)
+			if u != "" {
+				m["uri"] = u
+			}
+		}
+		infoByID[ds.ID] = m
+	}
+
+	// Build profiles array JSON via SourceProfiles repository (augmented)
 	profiles := make([]map[string]interface{}, 0, len(list))
 	if o.profiles != nil {
 		profs, _ := o.profiles.ListByProject(ctx, in.TenantID, in.ProjectID, o.sources)
 		for _, sp := range profs {
 			p := sp.Profile
-			profiles = append(profiles, map[string]interface{}{
+			entry := map[string]interface{}{
+				"sourceId":                sp.DataSourceID,
 				"editorialStance":         p.EditorialStance,
 				"agenda":                  p.Agenda,
 				"motivation":              p.Motivation,
@@ -1175,7 +1291,22 @@ func (o *Orchestrator) synthesizeAnswer(ctx context.Context, in ExecuteInput) er
 				"redFlags":                p.RedFlags,
 				"coordinatedSources":      p.CoordinatedSources,
 				"flags":                   p.Flags,
-			})
+			}
+			if inf, ok := infoByID[sp.DataSourceID]; ok {
+				if v, ok2 := inf["displayName"]; ok2 {
+					entry["displayName"] = v
+				}
+				if v, ok2 := inf["sourceKind"]; ok2 {
+					entry["sourceKind"] = v
+				}
+				if v, ok2 := inf["handle"]; ok2 {
+					entry["handle"] = v
+				}
+				if v, ok2 := inf["uri"]; ok2 {
+					entry["uri"] = v
+				}
+			}
+			profiles = append(profiles, entry)
 		}
 	}
 	o.logger.Printf("orchestrator: synthesis will use %d profiles (out of %d sources)", len(profiles), len(list))

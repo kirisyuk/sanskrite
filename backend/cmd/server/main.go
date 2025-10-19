@@ -77,6 +77,9 @@ func main() {
 	s.usersHandler = httphandlers.NewUsersHandler(s.users, logger)
 	s.projectsHandler = httphandlers.NewProjectsHandler(s.projs, logger).WithDataSources(s.dsrcs)
 	s.discoveryHandler = httphandlers.NewDiscoveryHandler(s.projs, s.dsrcs, logger)
+	genaiHandler := httphandlers.NewGenAIHandler()
+	// aiExecHandler will be initialized after AITaskExecutor is created
+	var aiExecHandler *httphandlers.AIExecHandler
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger)
 	searchEventsRepo := repo.NewSearchEventsRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
@@ -104,6 +107,7 @@ func main() {
 		}
 
 		exec := ai.NewAITaskExecutor(services, modelManager)
+		aiExecHandler = httphandlers.NewAIExecHandler(exec)
 		wc := crawler.NewWebCrawler()
 		tgBase := os.Getenv("TELEGRAM_SERVICE_URL")
 		tgClient := telegram.NewClient(tgBase)
@@ -112,7 +116,7 @@ func main() {
 		if err != nil {
 			log.Printf("WARNING: PubSub publisher init failed: %v (realtime updates disabled)", err)
 		}
-		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger).WithProfiles(s.sprofs)
+		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger).WithProfiles(s.sprofs).WithSourceProjects(sourceProjectsRepo)
 		// Provider registry
 		reg := prov.NewRegistry()
 		reg.Register(prov.NewRSSProvider())
@@ -172,6 +176,8 @@ func main() {
 
 			// Wire HTTP handler to allow Cloud Scheduler HTTP trigger
 			webhooksHandler = webhooksHandler.WithPoller(poller)
+			// Attach publisher to GenAI handler for streaming events via WithPublisher
+			genaiHandler = genaiHandler.WithPublisher(pub)
 		}
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
@@ -249,6 +255,13 @@ func main() {
 					string(realtime.EventDiscoveryProfile),
 					string(realtime.EventDiscoveryAnswer),
 					string(realtime.EventDiscoveryProject),
+					// Subscribe WS hub to GenAI streaming topics
+					string(realtime.EventGenAIStreamStart),
+					string(realtime.EventGenAIStreamChunk),
+					string(realtime.EventGenAIStreamTool),
+					string(realtime.EventGenAIStreamToolRes),
+					string(realtime.EventGenAIStreamDone),
+					string(realtime.EventGenAIStreamError),
 				)
 			} else {
 				log.Printf("ws subscriber: pubsub client init error: %v", err)
@@ -289,6 +302,15 @@ func main() {
 			s.discoveryHandler.IngestProject(w, r)
 			return
 		}
+		// interactions create/delete
+		if strings.HasSuffix(r.URL.Path, "/interactions") && r.Method == http.MethodPost {
+			s.discoveryHandler.CreateProjectInteraction(w, r)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/interactions/") && r.Method == http.MethodDelete {
+			s.discoveryHandler.DeleteProjectInteraction(w, r)
+			return
+		}
 		// fallback to default project by id handler
 		s.routeProjectsByID(w, r)
 	})))
@@ -323,6 +345,18 @@ func main() {
 
 	// Discovery routes
 	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
+
+	// GenAI routes (isolated Gemini client)
+	mux.Handle("/api/v1/genai/complete", authMiddleware(http.HandlerFunc(genaiHandler.Complete)))
+	mux.Handle("/api/v1/genai/complete-json", authMiddleware(http.HandlerFunc(genaiHandler.CompleteJSON)))
+	mux.Handle("/api/v1/genai/complete-with-tools", authMiddleware(http.HandlerFunc(genaiHandler.CompleteWithTools)))
+	mux.Handle("/api/v1/genai/stream", authMiddleware(http.HandlerFunc(genaiHandler.Stream)))
+	// Universal structured AI endpoint
+	if aiExecHandler != nil {
+		mux.Handle("/api/v1/ai/structured", authMiddleware(http.HandlerFunc(aiExecHandler.Structured)))
+	}
+	// Temporary FE testing endpoint
+	mux.Handle("/api/v1/genai/adhoc-json", authMiddleware(http.HandlerFunc(genaiHandler.AdhocJSON)))
 	// Note: /api/v1/projects/{id}/datasources is handled by projectsByID pattern
 
 	// Legacy routes (to be migrated)
@@ -338,15 +372,24 @@ func main() {
 	adminToken := getEnv("ADMIN_JOB_TOKEN", "")
 	jobAuth := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Primary: validate explicit job token header when configured
+			if adminToken != "" && r.Header.Get("X-Job-Token") == adminToken {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Fallback: if no token configured, allow requests coming from Cloud Scheduler
+			// This helps in dev environments where ADMIN_JOB_TOKEN may be missing
 			if adminToken == "" {
-				http.Error(w, "admin job token not configured", http.StatusForbidden)
+				ua := r.Header.Get("User-Agent")
+				if strings.Contains(ua, "Google-Cloud-Scheduler") {
+					next.ServeHTTP(w, r)
+					return
+				}
+				http.Error(w, "admin job token not configured (and request not recognized as Cloud Scheduler)", http.StatusForbidden)
 				return
 			}
-			if r.Header.Get("X-Job-Token") != adminToken {
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
-			next.ServeHTTP(w, r)
+			// Token configured but missing/mismatched
+			http.Error(w, "forbidden", http.StatusForbidden)
 		})
 	}
 

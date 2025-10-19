@@ -13,6 +13,7 @@ type Interaction struct {
 	ProjectID string    `json:"projectId" firestore:"projectId"`
 	Kind      string    `json:"kind" firestore:"kind"` // e.g., "discovery.answer"
 	Content   string    `json:"content" firestore:"content"`
+	Summary   *string   `json:"summary,omitempty" firestore:"summary,omitempty"`
 	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
 }
 
@@ -31,6 +32,31 @@ func (r *InteractionsRepository) Create(ctx context.Context, it *Interaction) (s
 		return "", err
 	}
 	return doc.ID, nil
+}
+
+// Get returns an interaction by id
+func (r *InteractionsRepository) Get(ctx context.Context, id string) (*Interaction, error) {
+	if id == "" {
+		return nil, ErrInvalidDocument
+	}
+	snap, err := r.col.Doc(id).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var it Interaction
+	if err := snap.DataTo(&it); err != nil {
+		return nil, err
+	}
+	return &it, nil
+}
+
+// DeleteByID deletes an interaction document by id
+func (r *InteractionsRepository) DeleteByID(ctx context.Context, id string) error {
+	if id == "" {
+		return ErrInvalidDocument
+	}
+	_, err := r.col.Doc(id).Delete(ctx)
+	return err
 }
 
 // DeleteByProject removes all interactions for a given project

@@ -23,8 +23,11 @@ export const BottomBar: React.FC = () => {
       {/* Center - Empty for now */}
       <div className="flex items-center gap-4" />
 
-      {/* Right side - Empty for now */}
-      <div className="flex items-center gap-3 px-6" />
+      {/* Right side - Links */}
+      <div className="flex items-center gap-3 px-6">
+        <a href="#" className="text-12 underline" style={{ color: 'var(--text-secondary-strong)' }} onClick={(e) => { e.preventDefault(); const ev = new CustomEvent('ui.openPage', { detail: { kind: 'privacy' } }); window.dispatchEvent(ev); }}>Privacy Notice</a>
+        <a href="#" className="text-12 underline" style={{ color: 'var(--text-secondary-strong)' }} onClick={(e) => { e.preventDefault(); const ev = new CustomEvent('ui.openPage', { detail: { kind: 'terms' } }); window.dispatchEvent(ev); }}>Terms of Usage</a>
+      </div>
     </div>
   );
 };

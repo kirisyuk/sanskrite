@@ -21,6 +21,13 @@ const (
 	EventGroundRefresh    EventType = "ground.refresh"
 	EventSourcePoll       EventType = "source.poll"
 	EventSourcePollDue    EventType = "source.poll.due"
+	// GenAI streaming and tool events
+	EventGenAIStreamStart   EventType = "genai.stream.start"
+	EventGenAIStreamChunk   EventType = "genai.stream.chunk"
+	EventGenAIStreamTool    EventType = "genai.stream.tool_call"
+	EventGenAIStreamToolRes EventType = "genai.stream.tool_result"
+	EventGenAIStreamDone    EventType = "genai.stream.done"
+	EventGenAIStreamError   EventType = "genai.stream.error"
 )
 
 type Publisher struct {
@@ -36,7 +43,23 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 
 	p := &Publisher{client: client, topics: map[EventType]*pubsub.Topic{}}
 	// Ensure topics exist
-	for _, et := range []EventType{EventDiscoveryStatus, EventDiscoveryProfile, EventDiscoveryAnswer, EventDiscoveryProject, EventDocProcess, EventGroundRefresh, EventSourcePoll, EventSourcePollDue} {
+	for _, et := range []EventType{
+		EventDiscoveryStatus,
+		EventDiscoveryProfile,
+		EventDiscoveryAnswer,
+		EventDiscoveryProject,
+		EventDocProcess,
+		EventGroundRefresh,
+		EventSourcePoll,
+		EventSourcePollDue,
+		// GenAI topics
+		EventGenAIStreamStart,
+		EventGenAIStreamChunk,
+		EventGenAIStreamTool,
+		EventGenAIStreamToolRes,
+		EventGenAIStreamDone,
+		EventGenAIStreamError,
+	} {
 		name := string(et)
 		t := client.Topic(name)
 		exists, err := t.Exists(ctx)
@@ -51,6 +74,22 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 			}
 		}
 		p.topics[et] = t
+	}
+
+	// Route all GenAI stream event types to a single physical topic to preserve order across events
+	// We reuse genai.stream.chunk topic for all and enable ordering
+	if tChunk, ok := p.topics[EventGenAIStreamChunk]; ok && tChunk != nil {
+		tChunk.EnableMessageOrdering = true
+		for _, et := range []EventType{
+			EventGenAIStreamStart,
+			EventGenAIStreamChunk,
+			EventGenAIStreamTool,
+			EventGenAIStreamToolRes,
+			EventGenAIStreamDone,
+			EventGenAIStreamError,
+		} {
+			p.topics[et] = tChunk
+		}
 	}
 	return p, nil
 }
@@ -71,6 +110,7 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 			"eventType": string(et),
 			"ts":        fmt.Sprintf("%d", time.Now().UnixMilli()),
 		},
+		OrderingKey: tenantID,
 	})
 	_, err = res.Get(ctx)
 	return err

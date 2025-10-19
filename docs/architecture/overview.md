@@ -60,3 +60,9 @@ graph TD
 See also: `architecture/backend/overview.md`, `architecture/frontend/overview.md`, `architecture/infrastructure/overview.md`.
 
 
+### Branding
+
+- Internal project codename: `Sanskrite` (technical name used in code and repos).
+- External branding: `HATL` — Human Above The Loop (`hatl.one`).
+- UI uses HATL logo and copy; technical docs and directories may still reference `Sanskrite`.
+
