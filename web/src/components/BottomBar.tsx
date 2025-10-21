@@ -6,8 +6,8 @@ export const BottomBar: React.FC = () => {
 
   return (
     <div className="bottombar">
-      {/* Left side - Connection status indicator */}
-      <div className="flex items-center gap-3 px-6">
+      {/* Left side - Connection status indicator (aligned with topbar logo/settings spacing) */}
+      <div className="flex items-center gap-3 px-5">
         <div
           style={{
             width: '5px',
@@ -16,7 +16,8 @@ export const BottomBar: React.FC = () => {
             backgroundColor: connected ? 'var(--text-primary)' : 'var(--accent-danger)',
             transition: 'background-color 300ms ease',
           }}
-          title={connected ? 'Connected' : 'Disconnected'}
+          title={connected ? 'Connected' : 'Connection lost'}
+          aria-label={connected ? 'Connected' : 'Connection lost'}
         />
       </div>
 

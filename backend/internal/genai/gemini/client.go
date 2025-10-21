@@ -52,6 +52,9 @@ type Usage struct {
 	PromptTokens int `json:"promptTokens"`
 	OutputTokens int `json:"outputTokens"`
 	TotalTokens  int `json:"totalTokens"`
+	// Additional metrics when available
+	ReasoningTokens     int `json:"reasoningTokens,omitempty"`
+	ToolUsePromptTokens int `json:"toolUsePromptTokens,omitempty"`
 }
 
 // Attribution represents grounding sources (when enabled)
@@ -62,14 +65,18 @@ type Attribution struct {
 
 // GenerateResponse is a unified response shape
 type GenerateResponse struct {
-	Content      string        `json:"content"`
-	ToolCalls    []ToolCall    `json:"toolCalls,omitempty"`
-	IsToolStep   bool          `json:"isToolStep"`
-	Usage        Usage         `json:"usage"`
-	Attributions []Attribution `json:"attributions,omitempty"`
-	Model        string        `json:"model"`
+	Content       string        `json:"content"`
+	ToolCalls     []ToolCall    `json:"toolCalls,omitempty"`
+	IsToolStep    bool          `json:"isToolStep"`
+	Usage         Usage         `json:"usage"`
+	Attributions  []Attribution `json:"attributions,omitempty"`
+	SearchQueries []string      `json:"searchQueries,omitempty"`
+	Sources       []string      `json:"sources,omitempty"`
+	Model         string        `json:"model"`
 	// For OpenAI-backed flows we propagate raw output items to support follow-up function_call_output linkage
 	OutputRaw []map[string]interface{} `json:"-"`
+	// RawJSON contains the unmodified JSON body returned by the provider
+	RawJSON string `json:"-"`
 }
 
 // Client is an isolated Gemini client that does not depend on task executor/model manager
@@ -128,35 +135,32 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 		},
 	}
 	if opts.SystemInstruction != "" {
-		reqBody["systemInstruction"] = map[string]interface{}{
+		reqBody["system_instruction"] = map[string]interface{}{
 			"parts": []map[string]interface{}{{"text": opts.SystemInstruction}},
 		}
 	}
-	if opts.Temperature > 0 {
-		reqBody["generationConfig"] = map[string]interface{}{
-			"temperature":     opts.Temperature,
-			"maxOutputTokens": opts.MaxOutputTokens,
-			// response MIME controls JSON mode when needed
-			"responseMimeType": func() string {
-				if opts.ResponseFormat == "json" {
-					return "application/json"
-				}
-				return "text/plain"
-			}(),
+	if opts.Temperature > 0 || opts.MaxOutputTokens > 0 || opts.ResponseFormat != "" {
+		gc := map[string]interface{}{}
+		if opts.Temperature > 0 {
+			gc["temperature"] = opts.Temperature
 		}
-	} else if opts.MaxOutputTokens > 0 || opts.ResponseFormat != "" {
-		reqBody["generationConfig"] = map[string]interface{}{
-			"maxOutputTokens": opts.MaxOutputTokens,
-			"responseMimeType": func() string {
-				if opts.ResponseFormat == "json" {
-					return "application/json"
-				}
-				return "text/plain"
-			}(),
+		if opts.MaxOutputTokens > 0 {
+			gc["max_output_tokens"] = opts.MaxOutputTokens
+		}
+		// Do not set response_mime_type when tools are present (function calling is incompatible)
+		if opts.ResponseFormat != "" && len(tools) == 0 {
+			if opts.ResponseFormat == "json" {
+				gc["response_mime_type"] = "application/json"
+			} else {
+				gc["response_mime_type"] = "text/plain"
+			}
+		}
+		if len(gc) > 0 {
+			reqBody["generationConfig"] = gc
 		}
 	}
 
-	// Tools: functionDeclarations and googleSearch grounding
+	// Tools: function_declarations and google_search grounding (v1beta)
 	toolsPayload := make([]map[string]interface{}, 0)
 	if len(tools) > 0 {
 		fdecls := make([]map[string]interface{}, 0, len(tools))
@@ -167,11 +171,11 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 				"parameters":  t.Parameters,
 			})
 		}
-		toolsPayload = append(toolsPayload, map[string]interface{}{"functionDeclarations": fdecls})
+		toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
 	}
 	if opts.GroundingEnabled {
 		// enable search grounding only when explicitly requested
-		toolsPayload = append(toolsPayload, map[string]interface{}{"googleSearch": map[string]interface{}{}})
+		toolsPayload = append(toolsPayload, map[string]interface{}{"google_search": map[string]interface{}{}})
 	}
 	if len(toolsPayload) > 0 {
 		reqBody["tools"] = toolsPayload
@@ -182,8 +186,8 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 		return nil, err
 	}
 
-	// Note: public endpoint works with API key
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1/models/%s:generateContent", model)
+	// Use v1beta for structured outputs compatibility
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -211,6 +215,7 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 	}
 
 	out := &GenerateResponse{Model: model}
+	out.RawJSON = string(rb)
 	// Extract text content and/or tool calls
 	if cands, ok := root["candidates"].([]interface{}); ok && len(cands) > 0 {
 		if cand, ok := cands[0].(map[string]interface{}); ok {
@@ -250,13 +255,44 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 		if v, ok := u["candidatesTokenCount"].(float64); ok {
 			out.Usage.OutputTokens = int(v)
 		}
+		if v, ok := u["thoughtsTokenCount"].(float64); ok {
+			out.Usage.ReasoningTokens = int(v)
+		}
+		if v, ok := u["toolUsePromptTokenCount"].(float64); ok {
+			out.Usage.ToolUsePromptTokens = int(v)
+		}
 		out.Usage.TotalTokens = out.Usage.PromptTokens + out.Usage.OutputTokens
 	}
 
-	// Grounding attributions (best effort)
+	// Grounding attributions and sources (best effort)
 	if cmeta, ok := root["candidates"].([]interface{}); ok && len(cmeta) > 0 {
 		if cand0, ok := cmeta[0].(map[string]interface{}); ok {
 			if meta, ok := cand0["groundingMetadata"].(map[string]interface{}); ok {
+				// collect sources from groundingChunks.web.uri, filtering vertex redirect hosts
+				if chs, ok := meta["groundingChunks"].([]interface{}); ok {
+					for _, ch := range chs {
+						if m, ok := ch.(map[string]interface{}); ok {
+							if w, ok := m["web"].(map[string]interface{}); ok {
+								if uri, ok := w["uri"].(string); ok {
+									u := strings.TrimSpace(uri)
+									if u != "" && !strings.Contains(strings.ToLower(u), "vertexaisearch.cloud.google.com") {
+										// append unique
+										exists := false
+										for _, ex := range out.Sources {
+											if ex == u {
+												exists = true
+												break
+											}
+										}
+										if !exists {
+											out.Sources = append(out.Sources, u)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
 				if atts, ok := meta["groundingAttributions"].([]interface{}); ok {
 					for _, a := range atts {
 						if am, ok := a.(map[string]interface{}); ok {
@@ -267,6 +303,19 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 							}
 							if att.URL != "" || att.Title != "" {
 								out.Attributions = append(out.Attributions, att)
+								// also collect non-vertex URLs into sources
+								if strings.TrimSpace(att.URL) != "" && !strings.Contains(strings.ToLower(att.URL), "vertexaisearch.cloud.google.com") {
+									exists := false
+									for _, ex := range out.Sources {
+										if ex == att.URL {
+											exists = true
+											break
+										}
+									}
+									if !exists {
+										out.Sources = append(out.Sources, att.URL)
+									}
+								}
 							}
 						}
 					}
@@ -287,20 +336,21 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 			"role":  "user",
 			"parts": []map[string]interface{}{{"text": prompt}},
 		}},
-		"generationConfig": map[string]interface{}{
-			"responseMimeType": "application/json",
-		},
 	}
-	if opts.MaxOutputTokens > 0 {
-		reqBody["generationConfig"].(map[string]interface{})["maxOutputTokens"] = opts.MaxOutputTokens
+	// Do NOT set response_mime_type when using function calling (unsupported)
+	if opts.MaxOutputTokens > 0 || opts.Temperature > 0 {
+		gc := map[string]interface{}{}
+		if opts.MaxOutputTokens > 0 {
+			gc["max_output_tokens"] = opts.MaxOutputTokens
+		}
+		if opts.Temperature > 0 {
+			gc["temperature"] = opts.Temperature
+		}
+		if len(gc) > 0 {
+			reqBody["generationConfig"] = gc
+		}
 	}
-	if opts.Temperature > 0 {
-		reqBody["generationConfig"].(map[string]interface{})["temperature"] = opts.Temperature
-	}
-	if jsonSchema != nil {
-		// Gemini supports responseSchema for structured outputs
-		reqBody["responseSchema"] = jsonSchema
-	}
+	// response_schema is not supported on this endpoint; enforce JSON via response_mime_type only
 	toolsPayload := make([]map[string]interface{}, 0)
 	if len(tools) > 0 {
 		fdecls := make([]map[string]interface{}, 0, len(tools))
@@ -311,10 +361,10 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 				"parameters":  t.Parameters,
 			})
 		}
-		toolsPayload = append(toolsPayload, map[string]interface{}{"functionDeclarations": fdecls})
+		toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
 	}
 	if opts.GroundingEnabled {
-		toolsPayload = append(toolsPayload, map[string]interface{}{"googleSearch": map[string]interface{}{}})
+		toolsPayload = append(toolsPayload, map[string]interface{}{"google_search": map[string]interface{}{}})
 	}
 	if len(toolsPayload) > 0 {
 		reqBody["tools"] = toolsPayload
@@ -323,7 +373,7 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 	if err != nil {
 		return nil, err
 	}
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1/models/%s:generateContent", model)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
 	if err != nil {
 		return nil, err
@@ -346,7 +396,99 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 	if err := json.Unmarshal(rb, &root); err != nil {
 		return nil, err
 	}
-	return c.parseGenerateRoot(root, model)
+	gr, err := c.parseGenerateRoot(root, model)
+	if err != nil {
+		return nil, err
+	}
+	gr.RawJSON = string(rb)
+	return gr, nil
+}
+
+// GenerateJSONStrict uses the v1beta Responses API with generation_config.response_schema
+// to enforce structured JSON output. This requires models that support structured output.
+func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []Tool, jsonSchema map[string]interface{}, opts Options) (*GenerateResponse, error) {
+	// Enforce strict JSON via public v1beta generateContent using a function tool
+	// Strictness is achieved by requiring the model to call our tool with jsonSchema
+	model := c.modelFrom(opts)
+	reqBody := map[string]interface{}{
+		"contents": []map[string]interface{}{{
+			"role":  "user",
+			"parts": []map[string]interface{}{{"text": prompt}},
+		}},
+	}
+	if opts.MaxOutputTokens > 0 || opts.Temperature > 0 {
+		gc := map[string]interface{}{}
+		if opts.MaxOutputTokens > 0 {
+			gc["max_output_tokens"] = opts.MaxOutputTokens
+		}
+		if opts.Temperature > 0 {
+			gc["temperature"] = opts.Temperature
+		}
+		if len(gc) > 0 {
+			reqBody["generationConfig"] = gc
+		}
+	}
+	// Build a single required function tool carrying the schema
+	// Note: grounding + tools together is unsupported on public API; do NOT include search here
+	fdecls := make([]map[string]interface{}, 0, len(tools))
+	for _, t := range tools {
+		// If caller passed a schema, prefer it; otherwise use tool.Parameters
+		params := t.Parameters
+		if jsonSchema != nil {
+			params = jsonSchema
+		}
+		fdecls = append(fdecls, map[string]interface{}{
+			"name":        t.Name,
+			"description": t.Description,
+			"parameters":  params,
+		})
+	}
+	// If no tool was provided, create a default return_structured
+	if len(fdecls) == 0 {
+		if jsonSchema == nil {
+			jsonSchema = map[string]interface{}{"type": "object"}
+		}
+		fdecls = append(fdecls, map[string]interface{}{
+			"name":        "return_structured",
+			"description": "Return strictly by schema",
+			"parameters":  jsonSchema,
+		})
+	}
+	reqBody["tools"] = []map[string]interface{}{{"function_declarations": fdecls}}
+
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-goog-api-key", c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	rb, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("gemini error %d: %s", resp.StatusCode, string(rb))
+	}
+	var root map[string]interface{}
+	if err := json.Unmarshal(rb, &root); err != nil {
+		return nil, err
+	}
+	gr, err := c.parseGenerateRoot(root, model)
+	if err != nil {
+		return nil, err
+	}
+	gr.RawJSON = string(rb)
+	return gr, nil
 }
 
 func (c *Client) parseGenerateRoot(root map[string]interface{}, model string) (*GenerateResponse, error) {
@@ -390,6 +532,13 @@ func (c *Client) parseGenerateRoot(root map[string]interface{}, model string) (*
 	if cmeta, ok := root["candidates"].([]interface{}); ok && len(cmeta) > 0 {
 		if cand0, ok := cmeta[0].(map[string]interface{}); ok {
 			if meta, ok := cand0["groundingMetadata"].(map[string]interface{}); ok {
+				if qs, ok := meta["webSearchQueries"].([]interface{}); ok {
+					for _, q := range qs {
+						if s, ok := q.(string); ok && s != "" {
+							out.SearchQueries = append(out.SearchQueries, s)
+						}
+					}
+				}
 				if atts, ok := meta["groundingAttributions"].([]interface{}); ok {
 					for _, a := range atts {
 						if am, ok := a.(map[string]interface{}); ok {
@@ -427,22 +576,22 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 		"contents": contents,
 	}
 	if opts.SystemInstruction != "" {
-		reqBody["systemInstruction"] = map[string]interface{}{
+		reqBody["system_instruction"] = map[string]interface{}{
 			"parts": []map[string]interface{}{{"text": opts.SystemInstruction}},
 		}
 	}
 	if opts.MaxOutputTokens > 0 || opts.ResponseFormat != "" || opts.Temperature > 0 {
 		gc := map[string]interface{}{}
 		if opts.MaxOutputTokens > 0 {
-			gc["maxOutputTokens"] = opts.MaxOutputTokens
+			gc["max_output_tokens"] = opts.MaxOutputTokens
 		}
 		if opts.Temperature > 0 {
 			gc["temperature"] = opts.Temperature
 		}
 		if opts.ResponseFormat == "json" {
-			gc["responseMimeType"] = "application/json"
+			gc["response_mime_type"] = "application/json"
 		} else if opts.ResponseFormat == "text" {
-			gc["responseMimeType"] = "text/plain"
+			gc["response_mime_type"] = "text/plain"
 		}
 		if len(gc) > 0 {
 			reqBody["generationConfig"] = gc

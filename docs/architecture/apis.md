@@ -5,6 +5,37 @@ This document catalogs HTTP REST, WebSocket events, and Pub/Sub topics. The auth
 ### REST Endpoints
 - Handlers under `backend/internal/http/*.go` (e.g., `projects.go`, `users.go`, `discovery.go`).
 - Auth middleware: `backend/internal/http/auth.go`.
+#### GenAI (Unified)
+- Unified generate
+  - POST `/api/v1/genai/generate`
+  - Body (`GenAIRequest`):
+    - `model: string` — provider alias, e.g. `gemini_fast|gemini_quality|gemini_balanced|gpt_fast|gpt_balanced|gpt_quality|grok_fast|grok_quality`
+    - `prompt: string`
+    - `systemInstruction?: string`
+    - `temperature?: number`
+    - `maxOutputTokens?: number`
+    - `webSearchEnabled?: boolean`
+    - `toolCallingEnabled?: boolean`
+    - `strictJSONEnabled?: boolean`
+    - `jsonSchema?: object` — JSON Schema for strict/function tool
+    - `tools?: Tool[]` — function declarations `{ name, description, parameters }`
+    - `toolChoice?: "auto"|"required"`
+    - `parallelToolCalls?: boolean`
+  - Resp (`GenAIResponse`):
+    - `model: string`
+    - `content?: string`
+    - `toolCalls?: { name: string, arguments: string, callId?: string }[]`
+    - `usage: { promptTokens: number, outputTokens: number, totalTokens: number, reasoningTokens?: number, toolUsePromptTokens?: number }`
+    - `sources?: string[]` — cleaned URLs (no vertex redirect hosts)
+    - `searchQueries?: string[]`
+    - `attributions?: { title?: string, url?: string }[]`
+    - `rawJSON?: string`
+  - Notes:
+    - Gemini: tools+search в одном запросе недоступны на публичном API. Эндпоинт выполняет двухшаговый пайплайн (tool‑only → grounded‑only) и мержит Usage/Sources/SearchQueries.
+    - Gemini strict: реализовано через function tool `return_structured` и серверную валидацию схемы; `response_mime_type` при tools не задаётся.
+    - OpenAI: web search включается через tool; извлечение источников/запросов — из function calls и текста.
+    - Grok: live search на уровне request (`search: { sources: [{ type: "web" }] }`).
+
 
 Contract shapes correspond to models in `backend/internal/models/models.go`.
 

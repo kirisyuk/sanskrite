@@ -3,9 +3,11 @@ package combined
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 
 	g "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
+	gr "github.com/igorkirisyuk/sanskrite/internal/genai/grok"
 	oa "github.com/igorkirisyuk/sanskrite/internal/genai/openai"
 )
 
@@ -15,10 +17,33 @@ type Options = g.Options
 type StreamEvent = g.StreamEvent
 type GenerateResponse = g.GenerateResponse
 
+// GenAIRequest defines unified options for a single-shot generation
+type GenAIRequest struct {
+	Model              string                 `json:"model"`
+	Prompt             string                 `json:"prompt"`
+	SystemInstruction  string                 `json:"systemInstruction,omitempty"`
+	Temperature        float64                `json:"temperature,omitempty"`
+	MaxOutputTokens    int                    `json:"maxOutputTokens,omitempty"`
+	WebSearchEnabled   bool                   `json:"webSearchEnabled,omitempty"`
+	ToolCallingEnabled bool                   `json:"toolCallingEnabled,omitempty"`
+	StrictJSONEnabled  bool                   `json:"strictJSONEnabled,omitempty"`
+	JSONSchema         map[string]interface{} `json:"jsonSchema,omitempty"`
+	Tools              []Tool                 `json:"tools,omitempty"`
+	ToolChoice         string                 `json:"toolChoice,omitempty"` // auto|required
+	ParallelToolCalls  bool                   `json:"parallelToolCalls,omitempty"`
+}
+
+// GenAIResponse is an alias of unified GenerateResponse
+type GenAIResponse = GenerateResponse
+
 type Client struct {
 	gem *g.Client
 	oa  *oa.Client
+	gr  *gr.Client
 }
+
+// getenv wraps os.Getenv for consistency
+func getenv(k string) string { return os.Getenv(k) }
 
 func NewClient(geminiClient *g.Client, openaiKey string) *Client {
 	openaiKey = strings.TrimSpace(openaiKey)
@@ -26,7 +51,14 @@ func NewClient(geminiClient *g.Client, openaiKey string) *Client {
 	if openaiKey != "" {
 		oac = oa.NewClient(openaiKey)
 	}
-	return &Client{gem: geminiClient, oa: oac}
+	// Grok key from env (prod key first, fallback to _TEST)
+	var grc *gr.Client
+	if k := strings.Trim(strings.TrimSpace(getenv("GROK_API_KEY")), "\"'"); k != "" {
+		grc = gr.NewClient(k)
+	} else if k := strings.Trim(strings.TrimSpace(getenv("GROK_API_KEY_TEST")), "\"'"); k != "" {
+		grc = gr.NewClient(k)
+	}
+	return &Client{gem: geminiClient, oa: oac, gr: grc}
 }
 
 // route decides provider by model alias (gpt_* -> openai; gemini_* -> gemini; default gemini)
@@ -38,6 +70,9 @@ func route(opts Options) string {
 	if strings.HasPrefix(m, "gpt_") || strings.HasPrefix(strings.ToLower(m), "gpt-5") {
 		return "openai"
 	}
+	if strings.HasPrefix(m, "grok_") || strings.HasPrefix(strings.ToLower(m), "grok-4") {
+		return "grok"
+	}
 	return "gemini"
 }
 
@@ -48,6 +83,8 @@ func (c *Client) normalizeOptionsForGemini(opts Options) Options {
 		opts.ModelOverride = "gemini-2.5-pro"
 	case "gemini_fast":
 		opts.ModelOverride = "gemini-2.5-flash-lite"
+	case "gemini_balanced":
+		opts.ModelOverride = "gemini-2.5-flash"
 	}
 	return opts
 }
@@ -71,8 +108,22 @@ func (c *Client) normalizeOptionsForOpenAI(opts Options) oa.Options {
 	return out
 }
 
+func (c *Client) normalizeOptionsForGrok(opts Options) gr.Options {
+	return gr.Options{
+		ModelOverride: map[string]string{
+			"grok_quality": "grok-4-0709",
+			"grok_fast":    "grok-4-fast-reasoning",
+		}[opts.ModelOverride],
+		Temperature:       opts.Temperature,
+		MaxOutputTokens:   opts.MaxOutputTokens,
+		GroundingEnabled:  opts.GroundingEnabled,
+		SystemInstruction: opts.SystemInstruction,
+	}
+}
+
 func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts Options) (*GenerateResponse, error) {
-	if route(opts) == "openai" {
+	switch route(opts) {
+	case "openai":
 		if c.oa == nil {
 			return nil, errors.New("openai not configured")
 		}
@@ -81,11 +132,25 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 			return nil, err
 		}
 		gr := &GenerateResponse{Content: oar.Content, ToolCalls: toGemCalls(oar.ToolCalls), IsToolStep: oar.IsToolStep, Usage: toGemUsage(oar.Usage), Model: oar.Model}
+		gr.RawJSON = oar.RawJSON
 		gr.OutputRaw = oar.OutputRaw
+		// propagate extras
+		gr.SearchQueries = oar.SearchQueries
+		gr.Sources = oar.Sources
 		return gr, nil
+	case "grok":
+		if c.gr == nil {
+			return nil, errors.New("grok not configured")
+		}
+		r, err := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
+		if err != nil {
+			return nil, err
+		}
+		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromGrok(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromGrok(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+	default:
+		goOpts := c.normalizeOptionsForGemini(opts)
+		return c.gem.Generate(ctx, prompt, tools, goOpts)
 	}
-	goOpts := c.normalizeOptionsForGemini(opts)
-	return c.gem.Generate(ctx, prompt, tools, goOpts)
 }
 
 func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, jsonSchema map[string]interface{}, opts Options) (*GenerateResponse, error) {
@@ -104,10 +169,34 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 			return nil, err
 		}
 		gr := &GenerateResponse{Content: oar.Content, ToolCalls: toGemCalls(oar.ToolCalls), IsToolStep: oar.IsToolStep, Usage: toGemUsage(oar.Usage), Model: oar.Model}
+		gr.RawJSON = oar.RawJSON
 		gr.OutputRaw = oar.OutputRaw
+		gr.SearchQueries = oar.SearchQueries
+		gr.Sources = oar.Sources
 		return gr, nil
 	}
 	return c.gem.GenerateJSON(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
+}
+
+// GenerateJSONStrict enforces structured output using provider-native strict schema when supported.
+func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []Tool, jsonSchema map[string]interface{}, opts Options) (*GenerateResponse, error) {
+	switch route(opts) {
+	case "openai":
+		// Fallback: reuse JSON mode; OpenAI strictness handled via system instruction or tool defs.
+		return c.GenerateJSON(ctx, prompt, tools, jsonSchema, opts)
+	case "grok":
+		if c.gr == nil {
+			return nil, errors.New("grok not configured")
+		}
+		// Grok structured outputs via function calling (strict by tool/parameters)
+		r, err := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
+		if err != nil {
+			return nil, err
+		}
+		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromGrok(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromGrok(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+	default:
+		return c.gem.GenerateJSONStrict(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
+	}
 }
 
 // ExecuteWithTools: run a tool loop (best-effort on OpenAI)
@@ -260,5 +349,116 @@ func toGemCalls(cs []oa.ToolCall) []g.ToolCall {
 	return out
 }
 func toGemUsage(u oa.Usage) g.Usage {
-	return g.Usage{PromptTokens: u.PromptTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens}
+	return g.Usage{PromptTokens: u.PromptTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens, ReasoningTokens: u.ReasoningTokens, ToolUsePromptTokens: u.ToolUsePromptTokens}
+}
+
+func toGrokTools(ts []Tool) []gr.Tool {
+	out := make([]gr.Tool, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, gr.Tool{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
+	}
+	return out
+}
+
+func toGemToolsFromGrok(cs []gr.ToolCall) []g.ToolCall {
+	out := make([]g.ToolCall, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, g.ToolCall{Name: c.Name, Arguments: c.Arguments, CallID: c.CallID})
+	}
+	return out
+}
+
+func toGemUsageFromGrok(u gr.Usage) g.Usage {
+	return g.Usage{PromptTokens: u.PromptTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens, ReasoningTokens: u.ReasoningTokens}
+}
+
+// GenAIGenerate performs a unified generation across providers with optional tools, web search, and strict JSON
+func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIResponse, error) {
+	// Build base options
+	opts := g.Options{
+		ModelOverride:     strings.TrimSpace(req.Model),
+		Temperature:       req.Temperature,
+		MaxOutputTokens:   req.MaxOutputTokens,
+		GroundingEnabled:  req.WebSearchEnabled,
+		SystemInstruction: req.SystemInstruction,
+	}
+	tools := req.Tools
+
+	// Helper: merge extras from grounded call
+	mergeExtras := func(base *GenerateResponse, extra *GenerateResponse) *GenerateResponse {
+		// usage: sum tokens when both present
+		base.Usage.PromptTokens += extra.Usage.PromptTokens
+		base.Usage.OutputTokens += extra.Usage.OutputTokens
+		base.Usage.TotalTokens += extra.Usage.TotalTokens
+		if extra.Usage.ReasoningTokens > 0 {
+			base.Usage.ReasoningTokens += extra.Usage.ReasoningTokens
+		}
+		if extra.Usage.ToolUsePromptTokens > 0 {
+			base.Usage.ToolUsePromptTokens += extra.Usage.ToolUsePromptTokens
+		}
+		// sources/queries/attributions
+		base.SearchQueries = append(base.SearchQueries, extra.SearchQueries...)
+		base.Sources = append(base.Sources, extra.Sources...)
+		base.Attributions = append(base.Attributions, extra.Attributions...)
+		return base
+	}
+
+	provider := route(opts)
+
+	// If strict JSON requested
+	if req.StrictJSONEnabled {
+		// Special-case Gemini: strict JSON cannot run with grounding/tools in some modes
+		if provider == "gemini" && req.WebSearchEnabled {
+			// Step 1: strict JSON without grounding
+			opts.GroundingEnabled = false
+			strict, err := c.gem.GenerateJSONStrict(ctx, req.Prompt, tools, req.JSONSchema, c.normalizeOptionsForGemini(opts))
+			if err != nil {
+				return nil, err
+			}
+			// Step 2: grounded pass without tools (to fetch sources/queries)
+			gopts := opts
+			gopts.GroundingEnabled = true
+			grounded, gerr := c.gem.Generate(ctx, req.Prompt, nil, c.normalizeOptionsForGemini(gopts))
+			if gerr == nil {
+				strict = mergeExtras(strict, grounded)
+			}
+			return (*GenAIResponse)(strict), nil
+		}
+		// Other providers: attempt unified strict generation
+		strict, err := c.GenerateJSONStrict(ctx, req.Prompt, tools, req.JSONSchema, opts)
+		if err != nil {
+			return nil, err
+		}
+		return (*GenAIResponse)(strict), nil
+	}
+
+	// Non-strict path
+	// Ensure web search/tools applied when requested
+	if !req.ToolCallingEnabled {
+		// If tools disabled, clear tools slice
+		tools = nil
+	}
+	// Special-case Gemini: tools + web search unsupported together → two-step
+	if provider == "gemini" && req.ToolCallingEnabled && req.WebSearchEnabled {
+		// Step 1: tools only
+		to := opts
+		to.GroundingEnabled = false
+		first, err := c.gem.Generate(ctx, req.Prompt, tools, c.normalizeOptionsForGemini(to))
+		if err != nil {
+			return nil, err
+		}
+		// Step 2: grounded only (no tools)
+		go2 := opts
+		go2.GroundingEnabled = true
+		second, gerr := c.gem.Generate(ctx, req.Prompt, nil, c.normalizeOptionsForGemini(go2))
+		if gerr == nil {
+			first = mergeExtras(first, second)
+		}
+		return (*GenAIResponse)(first), nil
+	}
+	res, err := c.Generate(ctx, req.Prompt, tools, opts)
+	if err != nil {
+		return nil, err
+	}
+	return (*GenAIResponse)(res), nil
 }

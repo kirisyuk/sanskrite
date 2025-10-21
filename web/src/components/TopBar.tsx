@@ -4,12 +4,10 @@ import { useAuth } from '../contexts/AuthContext';
 import logoDarkTheme from '../assets/hatl-dark-theme.png';
 import logoLightTheme from '../assets/hatl-light-theme.png';
 import { UserProfile } from './UserProfile';
-import { useUIStore } from '../stores/uiStore';
 
 export const TopBar: React.FC = () => {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { currentUser } = useAuth();
-  const { viewMode, setViewMode } = useUIStore();
 
   const toggleTheme = React.useCallback(() => {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -18,8 +16,8 @@ export const TopBar: React.FC = () => {
 
   return (
     <div className="topbar">
-      {/* Left side - Logo */}
-      <div className="flex items-center gap-3 px-6">
+      {/* Left side - Logo (aligned to sidebar toggle spacing) */}
+      <div className="flex items-center gap-3 px-3">
         <img
           src={theme === 'dark' ? logoDarkTheme : logoLightTheme}
           alt="Sanskrite"
@@ -31,64 +29,8 @@ export const TopBar: React.FC = () => {
         />
       </div>
 
-      {/* Center - View mode toggle */}
-      <div className="flex items-center">
-        <div
-          className="flex rounded-lg overflow-hidden"
-          style={{ border: '1px solid var(--overlay-line-90)' }}
-          role="tablist"
-          aria-label="View mode"
-        >
-          <button
-            role="tab"
-            aria-selected={viewMode === 'unfold'}
-            aria-pressed={viewMode === 'unfold'}
-            className="px-3 py-1.5 text-13 font-medium"
-            style={{
-              backgroundColor: viewMode === 'unfold' ? 'var(--white-10)' : 'transparent',
-              color: 'var(--text-heading)'
-            }}
-            onClick={() => setViewMode('unfold')}
-            onMouseEnter={(e) => { if (viewMode !== 'unfold') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-            onMouseLeave={(e) => { if (viewMode !== 'unfold') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-          >
-            Unfold
-          </button>
-          <div style={{ width: '1px', background: 'var(--overlay-line-90)' }} />
-          <button
-            role="tab"
-            aria-selected={viewMode === 'discussion'}
-            aria-pressed={viewMode === 'discussion'}
-            className="px-3 py-1.5 text-13 font-medium"
-            style={{
-              backgroundColor: viewMode === 'discussion' ? 'var(--white-10)' : 'transparent',
-              color: 'var(--text-heading)'
-            }}
-            onClick={() => setViewMode('discussion')}
-            onMouseEnter={(e) => { if (viewMode !== 'discussion') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-            onMouseLeave={(e) => { if (viewMode !== 'discussion') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-          >
-            As Discussion
-          </button>
-          <div style={{ width: '1px', background: 'var(--overlay-line-90)' }} />
-          <button
-            role="tab"
-            aria-selected={viewMode === 'graph'}
-            aria-pressed={viewMode === 'graph'}
-            className="px-3 py-1.5 text-13 font-medium"
-            style={{
-              backgroundColor: viewMode === 'graph' ? 'var(--white-10)' : 'transparent',
-              color: 'var(--text-heading)',
-              
-            }}
-            onClick={() => setViewMode('graph')}
-            onMouseEnter={(e) => { if (viewMode !== 'graph') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-            onMouseLeave={(e) => { if (viewMode !== 'graph') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-          >
-            As Graph
-          </button>
-        </div>
-      </div>
+      {/* Center - View mode toggle temporarily disabled */}
+      <div />
 
       {/* Right - Theme toggle and User profile */}
       <div className="flex items-center gap-3 px-2">

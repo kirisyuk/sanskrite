@@ -100,12 +100,12 @@ class ApiClient {
     return response.data;
   }
 
-  async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string }[]> {
-    const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string }[] }>(`/api/v1/projects/${projectId}/interactions`);
+  async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any> }[]> {
+    const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any> }[] }>(`/api/v1/projects/${projectId}/interactions`);
     return response.data.items;
   }
 
-  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'; content: string }): Promise<{ id: string }> {
+  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'; content: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } }): Promise<{ id: string }> {
     const response = await this.client.post<{ id: string }>(`/api/v1/projects/${projectId}/interactions`, data);
     return response.data;
   }
@@ -121,6 +121,38 @@ class ApiClient {
   }
 
   // GenAI
+  async genaiGenerate(data: {
+    model: string;
+    prompt: string;
+    systemInstruction?: string;
+    temperature?: number;
+    maxOutputTokens?: number;
+    webSearchEnabled?: boolean;
+    toolCallingEnabled?: boolean;
+    strictJSONEnabled?: boolean;
+    jsonSchema?: any;
+    tools?: Array<{ name: string; description?: string; parameters: any }>;
+    toolChoice?: 'auto'|'required';
+    parallelToolCalls?: boolean;
+  }): Promise<{ content?: string; model: string; usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; sources?: string[]; attributions?: Array<{ title?: string; url?: string }>; rawJSON?: string; }>
+  {
+    const body = {
+      model: data.model,
+      prompt: data.prompt,
+      systemInstruction: data.systemInstruction,
+      temperature: data.temperature,
+      maxOutputTokens: data.maxOutputTokens,
+      webSearchEnabled: !!data.webSearchEnabled,
+      toolCallingEnabled: !!data.toolCallingEnabled,
+      strictJSONEnabled: !!data.strictJSONEnabled,
+      jsonSchema: data.jsonSchema,
+      tools: data.tools,
+      toolChoice: data.toolChoice,
+      parallelToolCalls: data.parallelToolCalls,
+    };
+    const response = await this.client.post(`/api/v1/genai/generate`, body);
+    return response.data;
+  }
   async genaiAdhocJSON(data: {
     prompt: string;
     options?: {

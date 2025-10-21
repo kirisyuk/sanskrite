@@ -7,14 +7,49 @@ import (
 	"cloud.google.com/go/firestore"
 )
 
+// ParticipantRef references an author entity (human/ai/system)
+type ParticipantRef struct {
+	ParticipantID string  `json:"participantId" firestore:"participantId"`
+	Kind          string  `json:"kind" firestore:"kind"` // human|ai|system|tool
+	DisplayName   *string `json:"displayName,omitempty" firestore:"displayName,omitempty"`
+}
+
+// AgentProfileSnapshot stores minimal model config alongside an interaction
+// Note: full AgentProfiles collection is not required yet; two presets will be provided on the frontend
+type AgentProfileSnapshot struct {
+	Provider     string          `json:"provider" firestore:"provider"` // gemini|openai|grok
+	Model        string          `json:"model" firestore:"model"`
+	Version      *string         `json:"version,omitempty" firestore:"version,omitempty"`
+	Capabilities map[string]bool `json:"capabilities,omitempty" firestore:"capabilities,omitempty"` // tools, webSearch, reasoning
+	Params       map[string]any  `json:"params,omitempty" firestore:"params,omitempty"`             // temperature, systemPromptHash, etc.
+}
+
 type Interaction struct {
-	ID        string    `json:"id" firestore:"id"`
-	TenantID  string    `json:"tenantId" firestore:"tenantId"`
-	ProjectID string    `json:"projectId" firestore:"projectId"`
-	Kind      string    `json:"kind" firestore:"kind"` // e.g., "discovery.answer"
-	Content   string    `json:"content" firestore:"content"`
-	Summary   *string   `json:"summary,omitempty" firestore:"summary,omitempty"`
-	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
+	ID        string  `json:"id" firestore:"id"`
+	TenantID  string  `json:"tenantId" firestore:"tenantId"`
+	ProjectID string  `json:"projectId" firestore:"projectId"`
+	Kind      string  `json:"kind" firestore:"kind"` // e.g., "discovery.answer"
+	Content   string  `json:"content" firestore:"content"`
+	Summary   *string `json:"summary,omitempty" firestore:"summary,omitempty"`
+	// Optional model/provider metadata for assistant/system interactions
+	Model *string    `json:"model,omitempty" firestore:"model,omitempty"`
+	Usage *UsageMeta `json:"usage,omitempty" firestore:"usage,omitempty"`
+	// Extended multi-participant fields (optional, backward compatible)
+	Author       *ParticipantRef       `json:"author,omitempty" firestore:"author,omitempty"`
+	Recipients   []string              `json:"recipients,omitempty" firestore:"recipients,omitempty"`
+	ReplyTo      *string               `json:"replyTo,omitempty" firestore:"replyTo,omitempty"`
+	AgentProfile *AgentProfileSnapshot `json:"agentProfile,omitempty" firestore:"agentProfile,omitempty"`
+	Evaluations  map[string]any        `json:"evaluations,omitempty" firestore:"evaluations,omitempty"`
+	CreatedAt    time.Time             `json:"createdAt" firestore:"createdAt"`
+}
+
+// UsageMeta captures token usage and related counters reported by providers
+type UsageMeta struct {
+	PromptTokens        int `json:"promptTokens,omitempty" firestore:"promptTokens,omitempty"`
+	OutputTokens        int `json:"outputTokens,omitempty" firestore:"outputTokens,omitempty"`
+	TotalTokens         int `json:"totalTokens,omitempty" firestore:"totalTokens,omitempty"`
+	ReasoningTokens     int `json:"reasoningTokens,omitempty" firestore:"reasoningTokens,omitempty"`
+	ToolUsePromptTokens int `json:"toolUsePromptTokens,omitempty" firestore:"toolUsePromptTokens,omitempty"`
 }
 
 type InteractionsRepository struct{ col *firestore.CollectionRef }

@@ -20,7 +20,6 @@
     "status": {
       "type": "string"
     },
-    
     "researchId": {
       "type": "string"
     },

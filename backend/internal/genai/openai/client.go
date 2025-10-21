@@ -25,9 +25,11 @@ type ToolCall struct {
 }
 
 type Usage struct {
-	PromptTokens int `json:"promptTokens"`
-	OutputTokens int `json:"outputTokens"`
-	TotalTokens  int `json:"totalTokens"`
+	PromptTokens        int `json:"promptTokens"`
+	OutputTokens        int `json:"outputTokens"`
+	TotalTokens         int `json:"totalTokens"`
+	ReasoningTokens     int `json:"reasoningTokens,omitempty"`
+	ToolUsePromptTokens int `json:"toolUsePromptTokens,omitempty"`
 }
 
 type GenerateResponse struct {
@@ -38,6 +40,11 @@ type GenerateResponse struct {
 	Model      string     `json:"model"`
 	// Raw output items from Responses API, used for follow-ups with function_call_output
 	OutputRaw []map[string]interface{} `json:"-"`
+	// RawJSON contains the unmodified JSON body returned by the provider
+	RawJSON string `json:"-"`
+	// Unified extras for parity with Gemini
+	SearchQueries []string `json:"searchQueries,omitempty"`
+	Sources       []string `json:"sources,omitempty"`
 }
 
 type Options struct {
@@ -89,21 +96,17 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 	if opts.MaxOutputTokens > 0 {
 		req["max_output_tokens"] = opts.MaxOutputTokens
 	}
-	// Grounding: map to search tool if requested
-	if opts.GroundingEnabled {
-		req["search"] = map[string]interface{}{"enable": true}
-	}
+	// Build tools list (function tools + optional web_search)
+	tdefs := make([]map[string]interface{}, 0, len(tools)+1)
+	hasFuncTools := false
 	if len(tools) > 0 {
-		tdefs := make([]map[string]interface{}, 0, len(tools))
+		hasFuncTools = true
 		for _, t := range tools {
-			// ensure parameters.additionalProperties=false and properties have type
 			params := t.Parameters
 			if params == nil {
 				params = map[string]interface{}{"type": "object"}
 			}
-			// enforce additionalProperties=false
 			params["additionalProperties"] = false
-			// backfill missing property types
 			if propsRaw, ok := params["properties"].(map[string]interface{}); ok {
 				for k, v := range propsRaw {
 					if m, ok := v.(map[string]interface{}); ok {
@@ -122,10 +125,17 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 				"strict":      true,
 			})
 		}
+	}
+	if opts.GroundingEnabled {
+		tdefs = append(tdefs, map[string]interface{}{"type": "web_search"})
+	}
+	if len(tdefs) > 0 {
 		req["tools"] = tdefs
-		// Require at least one function call for tool tests
-		req["tool_choice"] = "required"
-		// Prevent multiple calls in one turn for simplicity
+		if hasFuncTools {
+			req["tool_choice"] = "required"
+		} else {
+			req["tool_choice"] = "auto"
+		}
 		req["parallel_tool_calls"] = false
 	}
 	b, _ := json.Marshal(req)
@@ -147,6 +157,24 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 		return nil, err
 	}
 	out := &GenerateResponse{Model: model}
+	out.RawJSON = string(rb)
+	// Usage
+	if u, ok := root["usage"].(map[string]interface{}); ok {
+		if v, ok := u["input_tokens"].(float64); ok {
+			out.Usage.PromptTokens = int(v)
+		}
+		if v, ok := u["output_tokens"].(float64); ok {
+			out.Usage.OutputTokens = int(v)
+		}
+		if v, ok := u["total_tokens"].(float64); ok {
+			out.Usage.TotalTokens = int(v)
+		}
+		if d, ok := u["output_tokens_details"].(map[string]interface{}); ok {
+			if v, ok := d["reasoning_tokens"].(float64); ok {
+				out.Usage.ReasoningTokens = int(v)
+			}
+		}
+	}
 	if txt, _ := root["output_text"].(string); txt != "" {
 		out.Content = txt
 	}
@@ -165,8 +193,11 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 						if b, err := json.Marshal(obj); err == nil {
 							argsJSON = string(b)
 						}
+						// extract URLs from structured args
+						extractURLsFromMap(obj, &out.Sources)
 					} else if s, ok := m["arguments"].(string); ok {
 						argsJSON = s
+						extractURLsFromText(s, &out.Sources)
 					}
 					callID, _ := m["call_id"].(string)
 					out.ToolCalls = append(out.ToolCalls, ToolCall{Name: name, Arguments: argsJSON, CallID: callID})
@@ -176,6 +207,24 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 							if cm, ok := c.(map[string]interface{}); ok {
 								if txt, _ := cm["text"].(string); txt != "" {
 									out.Content += txt
+									// Try parse as JSON for {"query":...} or {"sources":[...]}
+									var tmp map[string]interface{}
+									if json.Unmarshal([]byte(txt), &tmp) == nil {
+										if q, ok := tmp["query"].(string); ok && q != "" {
+											appendUnique(&out.SearchQueries, q)
+										}
+										if srcs, ok := tmp["sources"].([]interface{}); ok {
+											for _, s := range srcs {
+												if sm, ok := s.(map[string]interface{}); ok {
+													if u, ok := sm["url"].(string); ok && u != "" {
+														appendUnique(&out.Sources, u)
+													}
+												}
+											}
+										}
+									}
+									// Also scan free text for URLs
+									extractURLsFromText(txt, &out.Sources)
 								}
 							}
 						}
@@ -201,9 +250,6 @@ func (c *Client) Respond(ctx context.Context, input []map[string]interface{}, to
 	if opts.MaxOutputTokens > 0 {
 		req["max_output_tokens"] = opts.MaxOutputTokens
 	}
-	if opts.GroundingEnabled {
-		req["search"] = map[string]interface{}{"enable": true}
-	}
 	if len(tools) > 0 {
 		tdefs := make([]map[string]interface{}, 0, len(tools))
 		for _, t := range tools {
@@ -223,6 +269,9 @@ func (c *Client) Respond(ctx context.Context, input []map[string]interface{}, to
 				}
 			}
 			tdefs = append(tdefs, map[string]interface{}{"type": "function", "name": t.Name, "description": t.Description, "parameters": params, "strict": true})
+		}
+		if opts.GroundingEnabled {
+			tdefs = append(tdefs, map[string]interface{}{"type": "web_search"})
 		}
 		req["tools"] = tdefs
 		req["tool_choice"] = "required"
@@ -246,6 +295,23 @@ func (c *Client) Respond(ctx context.Context, input []map[string]interface{}, to
 		return nil, err
 	}
 	out := &GenerateResponse{Model: model}
+	out.RawJSON = string(rb)
+	if u, ok := root["usage"].(map[string]interface{}); ok {
+		if v, ok := u["input_tokens"].(float64); ok {
+			out.Usage.PromptTokens = int(v)
+		}
+		if v, ok := u["output_tokens"].(float64); ok {
+			out.Usage.OutputTokens = int(v)
+		}
+		if v, ok := u["total_tokens"].(float64); ok {
+			out.Usage.TotalTokens = int(v)
+		}
+		if d, ok := u["output_tokens_details"].(map[string]interface{}); ok {
+			if v, ok := d["reasoning_tokens"].(float64); ok {
+				out.Usage.ReasoningTokens = int(v)
+			}
+		}
+	}
 	if txt, _ := root["output_text"].(string); txt != "" {
 		out.Content = txt
 	}
@@ -257,12 +323,82 @@ func (c *Client) Respond(ctx context.Context, input []map[string]interface{}, to
 					args, _ := m["arguments"].(string)
 					callID, _ := m["call_id"].(string)
 					out.ToolCalls = append(out.ToolCalls, ToolCall{Name: name, Arguments: args, CallID: callID})
+				} else if m["type"] == "message" {
+					if content, ok := m["content"].([]interface{}); ok {
+						for _, c := range content {
+							if cm, ok := c.(map[string]interface{}); ok {
+								if txt, _ := cm["text"].(string); txt != "" {
+									out.Content += txt
+									var tmp map[string]interface{}
+									if json.Unmarshal([]byte(txt), &tmp) == nil {
+										if q, ok := tmp["query"].(string); ok && q != "" {
+											appendUnique(&out.SearchQueries, q)
+										}
+										if srcs, ok := tmp["sources"].([]interface{}); ok {
+											for _, s := range srcs {
+												if sm, ok := s.(map[string]interface{}); ok {
+													if u, ok := sm["url"].(string); ok && u != "" {
+														appendUnique(&out.Sources, u)
+													}
+												}
+											}
+										}
+									}
+									extractURLsFromText(txt, &out.Sources)
+								}
+							}
+						}
+					}
 				}
 			}
 		}
 	}
 	out.IsToolStep = len(out.ToolCalls) > 0 && out.Content == ""
 	return out, nil
+}
+
+// Helpers for parsing queries/URLs
+func appendUnique(dst *[]string, v string) {
+	for _, x := range *dst {
+		if x == v {
+			return
+		}
+	}
+	*dst = append(*dst, v)
+}
+
+func extractURLsFromText(s string, dst *[]string) {
+	parts := strings.Fields(s)
+	for _, p := range parts {
+		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+			// Preserve closing ')' to keep Wikipedia-style URLs with parentheses intact
+			u := strings.TrimRight(p, ".,;]\"'}")
+			// If we accidentally have an opening '(' without matching ')', try to add ')'
+			if strings.Count(u, "(") > strings.Count(u, ")") {
+				u = u + ")"
+			}
+			appendUnique(dst, u)
+		}
+	}
+}
+
+func extractURLsFromMap(m map[string]interface{}, dst *[]string) {
+	for _, v := range m {
+		switch tv := v.(type) {
+		case string:
+			extractURLsFromText(tv, dst)
+		case map[string]interface{}:
+			extractURLsFromMap(tv, dst)
+		case []interface{}:
+			for _, it := range tv {
+				if sm, ok := it.(map[string]interface{}); ok {
+					extractURLsFromMap(sm, dst)
+				} else if ss, ok := it.(string); ok {
+					extractURLsFromText(ss, dst)
+				}
+			}
+		}
+	}
 }
 
 // Stream streams text deltas using Responses API SSE
@@ -284,13 +420,13 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 	if opts.MaxOutputTokens > 0 {
 		req["max_output_tokens"] = opts.MaxOutputTokens
 	}
-	if opts.GroundingEnabled {
-		req["search"] = map[string]interface{}{"enable": true}
-	}
 	if len(tools) > 0 {
 		tdefs := make([]map[string]interface{}, 0, len(tools))
 		for _, t := range tools {
 			tdefs = append(tdefs, map[string]interface{}{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters, "strict": true})
+		}
+		if opts.GroundingEnabled {
+			tdefs = append(tdefs, map[string]interface{}{"type": "web_search"})
 		}
 		req["tools"] = tdefs
 		// do not force required in streaming basic path; let the model decide

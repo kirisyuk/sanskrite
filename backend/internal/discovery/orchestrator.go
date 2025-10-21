@@ -1330,7 +1330,10 @@ func (o *Orchestrator) synthesizeAnswer(ctx context.Context, in ExecuteInput) er
 	}
 	// persist interaction (answer)
 	if o.interactions != nil {
-		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.answer", Content: res.Content})
+		// Persist model/usage if available
+		model := res.Model
+		usage := &repo.UsageMeta{PromptTokens: res.InputTokens, OutputTokens: res.OutputTokens, TotalTokens: res.InputTokens + res.OutputTokens}
+		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.answer", Content: res.Content, Model: &model, Usage: usage})
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryAnswer, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
@@ -1383,6 +1386,8 @@ func summarizeProfile(p *models.SourceProfileData) string {
 	return string(b)
 }
 
+// contains: kept for readability across orchestrator; referenced in docs/tests historically.
+// nolint:unused
 func contains(arr []string, s string) bool {
 	for _, x := range arr {
 		if x == s {

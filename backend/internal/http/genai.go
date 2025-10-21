@@ -43,6 +43,32 @@ func NewGenAIHandler() *GenAIHandler {
 	return &GenAIHandler{client: comb}
 }
 
+// GenAIGenerate: unified generation endpoint
+func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		_ = WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		return
+	}
+	var req gen_combined.GenAIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		_ = WriteBadRequest(w, "INVALID_JSON", "Invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.Model) == "" || strings.TrimSpace(req.Prompt) == "" {
+		_ = WriteBadRequest(w, "INVALID_PARAMS", "model and prompt are required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+	defer cancel()
+	resp, err := h.client.GenAIGenerate(ctx, req)
+	if err != nil {
+		status, code, msg, details := parseUpstreamError(err)
+		_ = WriteError(w, status, code, msg, details)
+		return
+	}
+	_ = WriteJSON(w, http.StatusOK, resp)
+}
+
 type genaiCompleteRequest struct {
 	Prompt     string                 `json:"prompt"`
 	Tools      []gen_gemini.Tool      `json:"tools"`
@@ -114,6 +140,28 @@ func (h *GenAIHandler) CompleteJSON(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	resp, err := h.client.GenerateJSON(ctx, req.Prompt, req.Tools, req.JSONSchema, req.Options)
+	if err != nil {
+		status, code, msg, details := parseUpstreamError(err)
+		_ = WriteError(w, status, code, msg, details)
+		return
+	}
+	_ = WriteJSON(w, http.StatusOK, resp)
+}
+
+// CompleteJSONStrict enforces strict JSON according to optional response schema (provider-native strict mode)
+func (h *GenAIHandler) CompleteJSONStrict(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		_ = WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		return
+	}
+	var req genaiCompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		_ = WriteBadRequest(w, "INVALID_JSON", "Invalid JSON body")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+	resp, err := h.client.GenerateJSONStrict(ctx, req.Prompt, req.Tools, req.JSONSchema, req.Options)
 	if err != nil {
 		status, code, msg, details := parseUpstreamError(err)
 		_ = WriteError(w, status, code, msg, details)

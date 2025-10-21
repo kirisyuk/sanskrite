@@ -98,6 +98,14 @@
   --disabled-20: rgba(94, 100, 108, 0.20);
   --text-tertiary-weak: #8B919A;
   --avatar-bg: #1F1F25;
+
+  /* New Chat button theme tokens (dark) */
+  --newchat-bg: var(--surface-770);         /* base */
+  --newchat-bg-hover: #343A42;              /* ~1 tone lighter than surface-770 */
+  /* User message bubble background (dark): 1 tone darker than newchat-bg */
+  --user-msg-bg: #24282E;
+  /* Agent/system info bubbles (dark) */
+  --agent-info-bg: var(--surface-750);
 }
 
 /* Light theme overrides */
@@ -176,6 +184,14 @@
   --gray-700: #9CA3AF;
   --gray-800: #6B7280;
   --avatar-bg: #E5E7EB;
+
+  /* New Chat button theme tokens (light) */
+  --newchat-bg: var(--surface-770);         /* base (2 tones darker than surface) */
+  --newchat-bg-hover: #C9D0DB;              /* ~1 tone darker than surface-770 */
+  /* User message bubble background (light): 2 tones lighter than newchat-bg */
+  --user-msg-bg: #E1E6EE;
+  /* Agent/system info bubbles (light) */
+  --agent-info-bg: var(--surface-700);
 }
 
 /* Global shimmer animation (used by skeletons) */

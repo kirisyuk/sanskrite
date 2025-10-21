@@ -520,6 +520,8 @@ func (r *DataSourcesRepository) DeleteByProject(ctx context.Context, projectID s
 }
 
 // helper functions
+// contains: legacy helper; currently unused but retained for symmetry with remove.
+// nolint:unused
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -529,6 +531,8 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+// remove: legacy helper; currently unused.
+// nolint:unused
 func remove(slice []string, item string) []string {
 	result := make([]string, 0, len(slice))
 	for _, s := range slice {

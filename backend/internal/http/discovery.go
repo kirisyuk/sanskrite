@@ -802,9 +802,16 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		return
 	}
 	var body struct {
-		Kind    string  `json:"kind"`
-		Content string  `json:"content"`
-		Summary *string `json:"summary,omitempty"`
+		Kind    string          `json:"kind"`
+		Content string          `json:"content"`
+		Summary *string         `json:"summary,omitempty"`
+		Model   *string         `json:"model,omitempty"`
+		Usage   *repo.UsageMeta `json:"usage,omitempty"`
+		// Optional extended fields (safe defaults if missing)
+		Author       *repo.ParticipantRef       `json:"author,omitempty"`
+		Recipients   []string                   `json:"recipients,omitempty"`
+		ReplyTo      *string                    `json:"replyTo,omitempty"`
+		AgentProfile *repo.AgentProfileSnapshot `json:"agentProfile,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Content) == "" {
 		WriteBadRequest(w, "INVALID_JSON", "kind and content are required")
@@ -818,11 +825,17 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		k = "note"
 	}
 	id, err := h.interactionsRepo.Create(r.Context(), &repo.Interaction{
-		TenantID:  authInfo.TenantID,
-		ProjectID: projectID,
-		Kind:      k,
-		Content:   body.Content,
-		Summary:   body.Summary,
+		TenantID:     authInfo.TenantID,
+		ProjectID:    projectID,
+		Kind:         k,
+		Content:      body.Content,
+		Summary:      body.Summary,
+		Model:        body.Model,
+		Usage:        body.Usage,
+		Author:       body.Author,
+		Recipients:   body.Recipients,
+		ReplyTo:      body.ReplyTo,
+		AgentProfile: body.AgentProfile,
 	})
 	if err != nil {
 		WriteInternalError(w, "Failed to create interaction")

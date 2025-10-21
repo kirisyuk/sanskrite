@@ -349,6 +349,8 @@ func main() {
 	// GenAI routes (isolated Gemini client)
 	mux.Handle("/api/v1/genai/complete", authMiddleware(http.HandlerFunc(genaiHandler.Complete)))
 	mux.Handle("/api/v1/genai/complete-json", authMiddleware(http.HandlerFunc(genaiHandler.CompleteJSON)))
+	mux.Handle("/api/v1/genai/complete-json-strict", authMiddleware(http.HandlerFunc(genaiHandler.CompleteJSONStrict)))
+	mux.Handle("/api/v1/genai/generate", authMiddleware(http.HandlerFunc(genaiHandler.GenAIGenerate)))
 	mux.Handle("/api/v1/genai/complete-with-tools", authMiddleware(http.HandlerFunc(genaiHandler.CompleteWithTools)))
 	mux.Handle("/api/v1/genai/stream", authMiddleware(http.HandlerFunc(genaiHandler.Stream)))
 	// Universal structured AI endpoint

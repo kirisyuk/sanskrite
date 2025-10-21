@@ -163,9 +163,7 @@ func normalizeTelegramChannel(input string) (string, error) {
 		return "", fmt.Errorf("INVALID_CHANNEL_FORMAT: empty")
 	}
 	// Handle @username
-	if strings.HasPrefix(s, "@") {
-		s = s[1:]
-	}
+	s = strings.TrimPrefix(s, "@")
 	// URLs: http(s)://t.me/... or t.me/...
 	if strings.Contains(strings.ToLower(s), "t.me/") {
 		// strip scheme

@@ -8,7 +8,7 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  viewMode: 'discussion',
+  viewMode: 'unfold',
   setViewMode: (mode) => set({ viewMode: mode }),
 }));
 
