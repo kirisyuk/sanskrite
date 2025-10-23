@@ -55,6 +55,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signUp = async (email: string, password: string, accountType: 'personal' | 'corporate', displayName?: string) => {
     let firebaseUser: User | null = null;
     try {
+      // 0) Waitlist check (must be approved)
+      try {
+        const res = await (await import('../lib/api')).api.waitlistCheck(email);
+        if (!res.found || (res.status || '').toLowerCase() !== 'approved') {
+          throw new Error('This email is not approved for Private Beta. Please join the waitlist.');
+        }
+      } catch (e: any) {
+        throw e;
+      }
+
       // Step 1: Create Firebase user
       if (!auth) throw new Error('Auth is not initialized');
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);

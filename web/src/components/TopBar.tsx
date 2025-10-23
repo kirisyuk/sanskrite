@@ -5,7 +5,7 @@ import logoDarkTheme from '../assets/hatl-dark-theme.png';
 import logoLightTheme from '../assets/hatl-light-theme.png';
 import { UserProfile } from './UserProfile';
 
-export const TopBar: React.FC = () => {
+export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) => {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { currentUser } = useAuth();
 
@@ -18,15 +18,29 @@ export const TopBar: React.FC = () => {
     <div className="topbar">
       {/* Left side - Logo (aligned to sidebar toggle spacing) */}
       <div className="flex items-center gap-3 px-3">
-        <img
-          src={theme === 'dark' ? logoDarkTheme : logoLightTheme}
-          alt="Sanskrite"
-          className="h-[12px] w-auto object-contain"
-          style={{
-            filter: theme === 'dark' ? 'drop-shadow(0 0 2px rgba(0,0,0,0.6))' : 'none',
-            opacity: 0.7,
-          }}
-        />
+        <a href="/" aria-label="Home" className="flex items-center" style={{ textDecoration: 'none' }}>
+          <img
+            src={theme === 'dark' ? logoDarkTheme : logoLightTheme}
+            alt="Sanskrite"
+            className="h-[12px] w-auto object-contain"
+            style={{
+              filter: theme === 'dark' ? 'drop-shadow(0 0 2px rgba(0,0,0,0.6))' : 'none',
+              opacity: 0.7,
+            }}
+          />
+        </a>
+        {/* Link to Unfold chat when logged in */}
+        {currentUser && (
+          <a
+            href="/?app=unfold"
+            className="text-12 px-2 py-1 rounded"
+            style={{ color: 'var(--text-heading)', textDecoration: 'none' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = 'var(--white-10)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = 'transparent'; }}
+          >
+            Unfold
+          </a>
+        )}
       </div>
 
       {/* Center - View mode toggle temporarily disabled */}
@@ -60,7 +74,7 @@ export const TopBar: React.FC = () => {
         </button>
 
         {/* User profile */}
-        {currentUser && <UserProfile />}
+        {showUser && currentUser && <UserProfile />}
       </div>
     </div>
   );

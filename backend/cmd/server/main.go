@@ -61,6 +61,12 @@ func main() {
 		log.Fatalf("firestore init: %v", err)
 	}
 
+	// Initialize GCS client for uploads
+	gcsClient, err := gcp.NewGCSClient(ctx, projectID)
+	if err != nil {
+		log.Fatalf("gcs init: %v", err)
+	}
+
 	logger := log.New(os.Stdout, "[sanskrite] ", log.LstdFlags|log.Lshortfile)
 
 	s := &server{fbApp: fbApp, fs: fsClient, logger: logger}
@@ -80,6 +86,7 @@ func main() {
 	genaiHandler := httphandlers.NewGenAIHandler()
 	// aiExecHandler will be initialized after AITaskExecutor is created
 	var aiExecHandler *httphandlers.AIExecHandler
+	var metaHandler *httphandlers.MetaHandler
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger)
 	searchEventsRepo := repo.NewSearchEventsRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
@@ -182,9 +189,27 @@ func main() {
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
 		orchestrator = orchestrator.WithCache(cacheRepo).WithInteractions(interactions)
+		// Core docs repo
+		coreDocsRepo := repo.NewCoreDocsRepo(fsClient.Client())
+		// bucket name env or default
+		bucket := os.Getenv("CORE_DOCS_BUCKET")
+		if bucket == "" {
+			bucket = projectID + "-core-docs"
+		}
+		s.projectsHandler = s.projectsHandler.WithCoreDocs(coreDocsRepo).WithStorage(gcsClient, bucket)
 		// Wire cascade repos to projects handler
 		s.projectsHandler = s.projectsHandler.WithCascade(s.sprofs, interactions)
 		s.discoveryHandler = s.discoveryHandler.WithOrchestrator(orchestrator).WithInteractions(interactions).WithProfiles(s.sprofs)
+		if pub != nil {
+			s.projectsHandler = s.projectsHandler.WithPublisher(pub)
+		}
+		// Meta analysis repos and handler
+		metaEvents := repo.NewMetaAnalysesRepository(fsClient.Client())
+		metaAggProj := repo.NewMetaAggregateProjectsRepository(fsClient.Client())
+		metaAggUser := repo.NewMetaAggregateUsersRepository(fsClient.Client())
+		metaHandler = httphandlers.NewMetaHandler(s.projs, interactions, metaEvents, metaAggProj, metaAggUser, exec)
+		// Wire to projects handler for cascade delete
+		s.projectsHandler = s.projectsHandler.WithMeta(metaEvents, metaAggProj, metaAggUser)
 	}
 
 	// Get auth client for middleware
@@ -275,9 +300,26 @@ func main() {
 		return httphandlers.WithUsersRepo(s.users)(httphandlers.AuthMiddleware(authClient)(h))
 	}
 
+	// Waitlist wiring
+	wlRepo := repo.NewWaitlistRepository(fsClient.Client())
+	wlHandler := httphandlers.NewWaitlistHandler(wlRepo, s.users, logger)
+
 	// User routes
 	mux.Handle("/api/v1/users", authMiddleware(http.HandlerFunc(s.usersHandler.CreateUser)))
 	mux.Handle("/api/v1/users/", authMiddleware(http.HandlerFunc(s.routeUsersByID)))
+	// Waitlist routes
+	mux.Handle("/api/v1/waitlist", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			wlHandler.Join(w, r)
+		case http.MethodGet:
+			wlHandler.Check(w, r)
+		default:
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		}
+	}))
+	mux.Handle("/api/v1/waitlist/approve", authMiddleware(http.HandlerFunc(wlHandler.Approve)))
+	mux.Handle("/api/v1/waitlist/list", authMiddleware(http.HandlerFunc(wlHandler.List)))
 
 	// Project routes and nested sub-routes
 	mux.Handle("/api/v1/projects", authMiddleware(http.HandlerFunc(s.routeProjects)))
@@ -300,6 +342,59 @@ func main() {
 		}
 		if strings.HasSuffix(r.URL.Path, "/ingest") && r.Method == http.MethodPost {
 			s.discoveryHandler.IngestProject(w, r)
+			return
+		}
+		// Core docs: /projects/{id}/docs and /projects/{id}/docs/upload
+		if strings.HasSuffix(r.URL.Path, "/docs") {
+			switch r.Method {
+			case http.MethodGet:
+				s.projectsHandler.ListProjectDocs(w, r)
+				return
+			case http.MethodPost:
+				s.projectsHandler.CreateProjectDoc(w, r)
+				return
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/docs/upload") && r.Method == http.MethodPost {
+			s.projectsHandler.UploadProjectDoc(w, r)
+			return
+		}
+		// Meta analysis endpoints
+		if strings.HasSuffix(r.URL.Path, "/meta:analyze") && r.Method == http.MethodPost {
+			if metaHandler == nil {
+				httphandlers.WriteInternalError(w, "Meta analysis not configured")
+				return
+			}
+			metaHandler.Analyze(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/meta/events") && r.Method == http.MethodGet {
+			if metaHandler == nil {
+				httphandlers.WriteInternalError(w, "Meta analysis not configured")
+				return
+			}
+			metaHandler.ListEvents(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/meta/aggregate") && r.Method == http.MethodGet {
+			if metaHandler == nil {
+				httphandlers.WriteInternalError(w, "Meta analysis not configured")
+				return
+			}
+			metaHandler.GetAggregate(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/parse") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodPost {
+			s.projectsHandler.ParseProjectDoc(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/download") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodGet {
+			s.projectsHandler.DownloadProjectDoc(w, r)
+			return
+		}
+		// delete core doc
+		if strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodDelete {
+			s.projectsHandler.DeleteProjectDoc(w, r)
 			return
 		}
 		// interactions create/delete
@@ -367,8 +462,21 @@ func main() {
 	// mux.Handle("/v1/projects", authMiddleware(http.HandlerFunc(s.createProject)))
 	// mux.Handle("/v1/datasources", authMiddleware(http.HandlerFunc(s.createDataSource)))
 
-	// CORS for local frontend
-	allowedOrigin := getEnv("FRONTEND_ORIGIN", "http://localhost:5173")
+	// CORS: support multiple origins via FRONTEND_ORIGINS (comma-separated),
+	// fallback to single FRONTEND_ORIGIN for backward compatibility
+	allowedOriginsEnv := getEnv("FRONTEND_ORIGINS", "")
+	var allowedOrigins []string
+	if allowedOriginsEnv != "" {
+		splitFn := func(r rune) bool { return r == ',' || r == '|' }
+		for _, o := range strings.FieldsFunc(allowedOriginsEnv, splitFn) {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				allowedOrigins = append(allowedOrigins, o)
+			}
+		}
+	} else {
+		allowedOrigins = []string{getEnv("FRONTEND_ORIGIN", "http://localhost:5173")}
+	}
 
 	// Admin job token middleware for Cloud Scheduler (bypasses Firebase auth for admin route only)
 	adminToken := getEnv("ADMIN_JOB_TOKEN", "")
@@ -398,7 +506,7 @@ func main() {
 	// Attach admin route without Firebase auth, but with jobAuth
 	mux.Handle("/api/v1/admin/sources/publish-due", jobAuth(http.HandlerFunc(s.discoveryHandler.PublishDue)))
 
-	handler := withCORS(allowedOrigin)(mux)
+	handler := withCORS(allowedOrigins)(mux)
 
 	srv := &http.Server{
 		Addr:              ":" + addr,
@@ -471,14 +579,38 @@ func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request) {
 }
 
 // withCORS returns middleware that adds CORS headers and handles OPTIONS preflight.
-func withCORS(allowedOrigin string) func(http.Handler) http.Handler {
+func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
-			w.Header().Set("Vary", "Origin")
+			origin := r.Header.Get("Origin")
+			// If no Origin header (non-CORS request), proceed without CORS headers except defaults
+			allowOrigin := ""
+			if origin != "" {
+				// Exact match against allowed origins list
+				for _, ao := range allowedOrigins {
+					if origin == ao {
+						allowOrigin = origin
+						break
+					}
+				}
+				// For local dev, also allow same-origin when wildcard "same-origin" is used
+				if allowOrigin == "" {
+					for _, ao := range allowedOrigins {
+						if ao == "*" {
+							allowOrigin = origin
+							break
+						}
+					}
+				}
+			}
+
+			if allowOrigin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+				w.Header().Set("Vary", "Origin")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

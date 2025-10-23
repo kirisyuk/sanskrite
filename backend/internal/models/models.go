@@ -185,6 +185,141 @@ type SourceProject struct {
 	UpdatedAt  time.Time          `json:"updatedAt" firestore:"updatedAt"`
 }
 
+// --- Meta Analysis (Human↔LLM coaching) ---
+
+// MetaAnalyzer is a kind of analyzer we run over an interaction window
+type MetaAnalyzer string
+
+const (
+	MetaAnalyzerThinking  MetaAnalyzer = "thinking"
+	MetaAnalyzerBiases    MetaAnalyzer = "biases"
+	MetaAnalyzerDecisions MetaAnalyzer = "decisions"
+	MetaAnalyzerComm      MetaAnalyzer = "comm"
+	MetaAnalyzerLearning  MetaAnalyzer = "learning"
+)
+
+// EnumScore captures a classified label with intensity and confidence
+type EnumScore struct {
+	Label      string   `json:"label" firestore:"label"`
+	Intensity  float64  `json:"intensity" firestore:"intensity"`
+	Confidence float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
+	Rationale  *string  `json:"rationale,omitempty" firestore:"rationale,omitempty"`
+	Evidence   []string `json:"evidence,omitempty" firestore:"evidence,omitempty"`
+}
+
+// MetaCommon stores analyzer-agnostic dialog control metrics
+type MetaCommon struct {
+	WhoLeads        string  `json:"whoLeads" firestore:"whoLeads"`               // User|AI|Mixed
+	LeadershipIndex float64 `json:"leadershipIndex" firestore:"leadershipIndex"` // 0..1
+	FocusRetention  float64 `json:"focusRetention" firestore:"focusRetention"`   // 0..1
+	StructureScore  float64 `json:"structureScore" firestore:"structureScore"`   // 0..1
+}
+
+// ThinkingPatternsResult mirrors taxonomy discussed with enums + scores
+type ThinkingPatternsResult struct {
+	Depth        EnumScore   `json:"depth" firestore:"depth"`               // Surface|Analytical|Systemic
+	TimeHorizon  []EnumScore `json:"timeHorizon" firestore:"timeHorizon"`   // Strategic/Tactical/Reactive distribution
+	Uncertainty  EnumScore   `json:"uncertainty" firestore:"uncertainty"`   // Avoids|Acknowledges|WorksWithIt
+	ThinkingType []EnumScore `json:"thinkingType" firestore:"thinkingType"` // Convergent|Divergent|Integrative
+}
+
+// BiasEntry single bias item
+type BiasEntry struct {
+	Label      string   `json:"label" firestore:"label"`
+	Intensity  float64  `json:"intensity" firestore:"intensity"`
+	Confidence float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
+	Rationale  *string  `json:"rationale,omitempty" firestore:"rationale,omitempty"`
+	Evidence   []string `json:"evidence,omitempty" firestore:"evidence,omitempty"`
+}
+
+// CognitiveBiasesResult captures detected biases and simple metrics
+type CognitiveBiasesResult struct {
+	Biases  []BiasEntry        `json:"biases" firestore:"biases"`
+	Metrics map[string]float64 `json:"metrics,omitempty" firestore:"metrics,omitempty"` // e.g., pro_vs_con_ratio, assumption_updates
+}
+
+// DecisionMakingResult captures decision style axes
+type DecisionMakingResult struct {
+	Process       EnumScore `json:"process" firestore:"process"`             // Intuitive|Analytical|Consensus
+	RiskAttitude  EnumScore `json:"riskAttitude" firestore:"riskAttitude"`   // RiskAverse|RiskNeutral|RiskSeeking
+	CriteriaStyle EnumScore `json:"criteriaStyle" firestore:"criteriaStyle"` // Mono|Multi|Adaptive
+	Speed         EnumScore `json:"speed" firestore:"speed"`                 // Impulsive|Reflective|Paralyzing
+}
+
+// CommunicationPatternsResult captures clarity/context/abstraction/feedback
+type CommunicationPatternsResult struct {
+	Clarity             EnumScore `json:"clarity" firestore:"clarity"`
+	Abstraction         EnumScore `json:"abstraction" firestore:"abstraction"`
+	ContextCompleteness EnumScore `json:"contextCompleteness" firestore:"contextCompleteness"`
+	FeedbackLoop        EnumScore `json:"feedbackLoop" firestore:"feedbackLoop"`
+}
+
+// LearningTrajectoryResult captures evolution axes
+type LearningTrajectoryResult struct {
+	Dynamics      EnumScore `json:"dynamics" firestore:"dynamics"`           // Linear|Deepening|Jumping
+	Integration   EnumScore `json:"integration" firestore:"integration"`     // Isolated|Connected|Synthetic
+	MetaAwareness EnumScore `json:"metaAwareness" firestore:"metaAwareness"` // None|Partial|Full
+}
+
+// MetaWindow describes the analyzed slice
+type MetaWindow struct {
+	Mode         string     `json:"mode" firestore:"mode"` // lastN|time
+	N            *int       `json:"n,omitempty" firestore:"n,omitempty"`
+	Minutes      *int       `json:"minutes,omitempty" firestore:"minutes,omitempty"`
+	MessageCount int        `json:"messageCount,omitempty" firestore:"messageCount,omitempty"`
+	StartAt      *time.Time `json:"startAt,omitempty" firestore:"startAt,omitempty"`
+	EndAt        *time.Time `json:"endAt,omitempty" firestore:"endAt,omitempty"`
+}
+
+// MetaAnalysisEvent is an append-only event produced by an analyzer run
+type MetaAnalysisEvent struct {
+	ID         string       `json:"id" firestore:"id"`
+	TenantID   string       `json:"tenantId" firestore:"tenantId"`
+	ProjectID  string       `json:"projectId" firestore:"projectId"`
+	UserID     string       `json:"userId" firestore:"userId"`
+	Analyzer   MetaAnalyzer `json:"analyzer" firestore:"analyzer"`
+	Version    string       `json:"version" firestore:"version"`
+	Model      string       `json:"model" firestore:"model"`
+	TokensUsed int          `json:"tokensUsed" firestore:"tokensUsed"`
+	Window     MetaWindow   `json:"window" firestore:"window"`
+	Common     MetaCommon   `json:"common" firestore:"common"`
+	// Raw result for flexibility and forward compatibility
+	Result    map[string]any `json:"result" firestore:"result"`
+	CreatedAt time.Time      `json:"createdAt" firestore:"createdAt"`
+}
+
+// MetaAggregateProject stores rolling EMA aggregates per project
+type MetaAggregateProject struct {
+	ID              string         `json:"id" firestore:"id"` // same as projectId
+	TenantID        string         `json:"tenantId" firestore:"tenantId"`
+	ProjectID       string         `json:"projectId" firestore:"projectId"`
+	OwnerUserID     string         `json:"ownerUserId" firestore:"ownerUserId"`
+	Version         string         `json:"version" firestore:"version"`
+	UpdatedAt       time.Time      `json:"updatedAt" firestore:"updatedAt"`
+	Samples         int            `json:"samples" firestore:"samples"`
+	WhoLeads        string         `json:"whoLeads" firestore:"whoLeads"`
+	LeadershipIndex float64        `json:"leadershipIndex" firestore:"leadershipIndex"`
+	FocusRetention  float64        `json:"focusRetention" firestore:"focusRetention"`
+	StructureScore  float64        `json:"structureScore" firestore:"structureScore"`
+	Effectiveness   float64        `json:"effectiveness" firestore:"effectiveness"`
+	LastAnalyzers   []string       `json:"lastAnalyzers,omitempty" firestore:"lastAnalyzers,omitempty"`
+	LastResults     map[string]any `json:"lastResults,omitempty" firestore:"lastResults,omitempty"`
+}
+
+// MetaAggregateUser stores weighted aggregates across projects for a user
+type MetaAggregateUser struct {
+	ID              string    `json:"id" firestore:"id"` // tenant_user composite
+	TenantID        string    `json:"tenantId" firestore:"tenantId"`
+	UserID          string    `json:"userId" firestore:"userId"`
+	Version         string    `json:"version" firestore:"version"`
+	UpdatedAt       time.Time `json:"updatedAt" firestore:"updatedAt"`
+	Samples         int       `json:"samples" firestore:"samples"`
+	LeadershipIndex float64   `json:"leadershipIndex" firestore:"leadershipIndex"`
+	FocusRetention  float64   `json:"focusRetention" firestore:"focusRetention"`
+	StructureScore  float64   `json:"structureScore" firestore:"structureScore"`
+	Effectiveness   float64   `json:"effectiveness" firestore:"effectiveness"`
+}
+
 // Document represents a normalized unit of content to be chunked/embedded
 type Document struct {
 	ID                string           `json:"id" firestore:"id"`
@@ -283,6 +418,13 @@ type User struct {
 	// Country of residence (ISO 3166-1 alpha-2, uppercase)
 	CountryOfResidence *string `json:"countryOfResidence,omitempty" firestore:"countryOfResidence"`
 
+	// Parent-child relation for supervised accounts
+	ParentUserID *string `json:"parentUserId,omitempty" firestore:"parentUserId"`
+
+	// Demographics (optional)
+	Gender *string `json:"gender,omitempty" firestore:"gender"`
+	Age    *int    `json:"age,omitempty" firestore:"age"`
+
 	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
 
@@ -299,6 +441,17 @@ type User struct {
 
 	AssignedGoalIDs       []string `json:"assignedGoalIds,omitempty" firestore:"assignedGoalIds"`
 	AssignedInitiativeIDs []string `json:"assignedInitiativeIds,omitempty" firestore:"assignedInitiativeIds"`
+}
+
+// WaitlistEntry represents an email awaiting access approval
+type WaitlistEntry struct {
+	ID        string    `json:"id" firestore:"id"`
+	Email     string    `json:"email" firestore:"email"`
+	Status    string    `json:"status" firestore:"status"` // pending|approved|rejected
+	Note      *string   `json:"note,omitempty" firestore:"note"`
+	InvitedBy *string   `json:"invitedBy,omitempty" firestore:"invitedBy"`
+	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
 }
 
 // Project соответствует Core.Projects
@@ -330,4 +483,47 @@ type Project struct {
 	BusinessUnitName             *string `json:"businessUnitName,omitempty" firestore:"businessUnitName"`
 	EnableRiskProfileSuggestions *bool   `json:"enableRiskProfileSuggestions,omitempty" firestore:"enableRiskProfileSuggestions"`
 	AiGuided                     *bool   `json:"aiguided,omitempty" firestore:"aiguided"`
+}
+
+// --- Core project documents (user-uploaded or externally linked) ---
+
+// ExternalDocRef describes a file living in an external service (Google Drive, OneDrive, etc.)
+type ExternalDocRef struct {
+	// Provider id, e.g. "gdrive", "onedrive", "box", "sharepoint"
+	Provider string `json:"provider" firestore:"provider"`
+	// Canonical URL to open the document (view link)
+	URL string `json:"url" firestore:"url"`
+	// Optional provider-specific identifiers
+	ResourceID *string `json:"resourceId,omitempty" firestore:"resourceId,omitempty"`
+	DriveID    *string `json:"driveId,omitempty" firestore:"driveId,omitempty"`
+	OwnerEmail *string `json:"ownerEmail,omitempty" firestore:"ownerEmail,omitempty"`
+	ETag       *string `json:"eTag,omitempty" firestore:"eTag,omitempty"`
+	MimeType   *string `json:"mimeType,omitempty" firestore:"mimeType,omitempty"`
+}
+
+// CoreDoc represents a project-scoped document the user attached to a project.
+// It can be stored in our storage (StoragePath) or referenced externally (External).
+type CoreDoc struct {
+	ID          string  `json:"id" firestore:"id"`
+	TenantID    string  `json:"tenantId" firestore:"tenantId"`
+	ProjectID   string  `json:"projectId" firestore:"projectId"`
+	Filename    string  `json:"filename" firestore:"filename"`
+	ContentType string  `json:"contentType" firestore:"contentType"`
+	Description *string `json:"description,omitempty" firestore:"description,omitempty"`
+	SizeBytes   *int64  `json:"sizeBytes,omitempty" firestore:"sizeBytes,omitempty"`
+	// If uploaded to our storage (e.g., GCS), this contains a gs:// path or bucket/key
+	StoragePath *string `json:"storagePath,omitempty" firestore:"storagePath,omitempty"`
+	// If the document is an external reference (e.g., Google Docs), it's set
+	External *ExternalDocRef `json:"external,omitempty" firestore:"external,omitempty"`
+
+	// Minimal ownership/telemetry
+	CreatedBy *string   `json:"createdBy,omitempty" firestore:"createdBy,omitempty"`
+	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
+
+	// Parsed text (extraction result) and metadata
+	ExtractedText *string        `json:"extractedText,omitempty" firestore:"extractedText,omitempty"`
+	ParseStatus   *string        `json:"parseStatus,omitempty" firestore:"parseStatus,omitempty"` // new|parsed|error
+	ParseMeta     map[string]any `json:"parseMeta,omitempty" firestore:"parseMeta,omitempty"`
+	PageCount     *int           `json:"pageCount,omitempty" firestore:"pageCount,omitempty"`
 }

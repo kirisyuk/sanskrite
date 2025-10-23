@@ -48,6 +48,9 @@ export const Settings: React.FC = () => {
   const [countryCode, setCountryCode] = React.useState('');
   const [countryInput, setCountryInput] = React.useState('');
   const [showCountryDropdown, setShowCountryDropdown] = React.useState(false);
+  const [parentUserId, setParentUserId] = React.useState('');
+  const [gender, setGender] = React.useState('');
+  const [age, setAge] = React.useState<number | ''>('');
   const { theme, setTheme } = React.useContext(ThemeContext);
   const [company, setCompany] = React.useState('');
   const [jobTitle, setJobTitle] = React.useState('');
@@ -69,6 +72,9 @@ export const Settings: React.FC = () => {
           const country = COUNTRIES.find(c => c.code === user.countryOfResidence);
           if (country) setCountryInput(country.name);
         }
+        if (user.parentUserId) setParentUserId(user.parentUserId);
+        if (user.gender) setGender(user.gender);
+        if (typeof user.age === 'number') setAge(user.age);
         if (user.companyRef) setCompany(user.companyRef);
         if (user.jobTitle) setJobTitle(user.jobTitle);
         if (user.department) setDepartment(user.department);
@@ -236,6 +242,51 @@ export const Settings: React.FC = () => {
                       ))}
                     </div>
                   )}
+                </div>
+              </div>
+              <div className="grid" style={{ gap: '16px', gridTemplateColumns: '1fr 1fr 1fr' }}>
+                <div>
+                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Parent user ID</label>
+                  <input
+                    value={parentUserId}
+                    onChange={e => setParentUserId(e.target.value)}
+                    placeholder="UID of parent account"
+                    className="w-full"
+                    style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0', borderBottom: '1px solid var(--overlay-line-90)' }}
+                    onBlur={async () => { try { if (currentUser?.uid) await api.updateUser(currentUser.uid, { parentUserId: parentUserId || undefined }); } catch {} }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Gender</label>
+                  <select
+                    value={gender}
+                    onChange={async (e) => { const v = e.target.value; setGender(v); try { if (currentUser?.uid) await api.updateUser(currentUser.uid, { gender: v || undefined }); } catch {} }}
+                    className="w-full"
+                    style={{ padding: '8px 12px' }}
+                  >
+                    <option value="">—</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Age</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    value={age}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const num = val === '' ? '' : Number(val);
+                      if (num === '' || (!Number.isNaN(num) && num >= 0 && num <= 120)) setAge(num as any);
+                    }}
+                    onBlur={async () => { try { if (currentUser?.uid) await api.updateUser(currentUser.uid, { age: typeof age === 'number' ? age : undefined }); } catch {} }}
+                    placeholder="Age"
+                    className="w-full"
+                    style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0', borderBottom: '1px solid var(--overlay-line-90)' }}
+                  />
                 </div>
               </div>
               <div>

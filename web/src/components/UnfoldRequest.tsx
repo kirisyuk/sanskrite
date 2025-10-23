@@ -1,4 +1,5 @@
 import React from 'react';
+import { api } from '../lib/api';
 import { useGenAISettings, providerCapabilities } from '../stores/genaiSettingsStore';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
@@ -9,9 +10,12 @@ interface UnfoldRequestProps {
   onChange: (v: string) => void;
   onSubmit: () => void;
   disabled?: boolean;
+  dangerTint?: boolean;
+  showHighRiskTag?: boolean;
+  onHighRiskTagClick?: () => void;
 }
 
-const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit, disabled }) => {
+const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick }) => {
   const { theme } = React.useContext(ThemeContext);
   const [showSettings, setShowSettings] = React.useState(false);
   const settings = useGenAISettings();
@@ -48,14 +52,15 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
     // We intentionally do not depend on value to avoid re-randomizing while typing
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasHistory, ongoingPlaceholders, initialPlaceholders]);
-  const containerStyle: React.CSSProperties = {
-    borderColor: 'var(--overlay-line-90)',
+  const containerStyle: React.CSSProperties = React.useMemo(() => ({
+    borderColor: dangerTint ? 'rgba(220, 20, 60, 0.35)' : 'var(--overlay-line-90)',
     backgroundColor: 'var(--bg-elevated)',
     boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
-  };
+    backgroundImage: dangerTint ? 'linear-gradient(0deg, rgba(255,0,0,0.04), rgba(255,0,0,0.04))' : undefined,
+  }), [theme, dangerTint]);
 
   return (
-    <div className="rounded-xl border overflow-hidden mt-2" style={containerStyle}>
+    <div id="unfold-request-container" className="rounded-xl border overflow-hidden mt-2" style={containerStyle}>
       <div className="p-3">
         {/* Top: input field only */}
         <div className="mb-2">
@@ -79,6 +84,36 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
         <div className="flex items-center justify-between gap-2">
           {/* Strength selector (synced with settings) — left side */}
           <div className="flex items-center gap-2">
+            {/* Attach button */}
+            <label className="flex items-center justify-center rounded-full cursor-pointer" style={{ width: 32, height: 32 }} title="Attach document">
+              <input
+                type="file"
+                accept=".txt,.md,.csv,.tsv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv,text/tab-separated-values"
+                style={{ display: 'none' }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    // project id from chat store
+                    const { useGenaiChatStore } = await import('../stores/genaiChatStore');
+                    const store = useGenaiChatStore.getState();
+                    const pid = await store.ensureProject();
+                    console.log('[Attach] uploading', { name: file.name, size: file.size, type: file.type, projectId: pid });
+                    const doc = await api.docsUpload(pid, file);
+                    console.log('[Attach] uploaded', doc);
+                    // optionally trigger parse explicitly (autoparse also runs on backend)
+                    try { await api.docsParse(pid, doc.id); } catch {}
+                  } catch (err) {
+                    console.error('[Attach] failed', err);
+                  } finally {
+                    e.currentTarget.value = '';
+                  }
+                }}
+              />
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                <path d="M21 15V7a4 4 0 00-4-4h-3a4 4 0 00-4 4v10a3 3 0 106 0V8" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </label>
             <label className="sr-only">Model strength</label>
             <select
               aria-label="Model strength"
@@ -116,6 +151,25 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
             </button>
           </div>
           <div className="flex items-center gap-2">
+            {showHighRiskTag && (
+              <button
+                type="button"
+                aria-label="High risk conversation"
+                title="High risk conversation"
+                onClick={() => { onHighRiskTagClick && onHighRiskTagClick(); }}
+                className="flex items-center gap-1 px-2 py-1 rounded-full"
+                style={{
+                  background: 'rgba(255,0,0,0.08)',
+                  border: '1px solid rgba(220,20,60,0.45)',
+                  color: '#cc3344',
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}
+              >
+                <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 9999, backgroundColor: '#cc3344' }} />
+                <span>High Risk</span>
+              </button>
+            )}
             <button
               type="button"
               aria-label="Settings"

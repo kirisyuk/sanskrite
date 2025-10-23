@@ -75,31 +75,18 @@ enable_api cloudscheduler.googleapis.com
 enable_api cloudresourcemanager.googleapis.com
 
 deploy_web() {
-  echo -e "${BLUE}[web] Preparing bucket and Cloud Build...${NC}"
-  local bucket="gs://${PROJECT_ID}-web-static"
+  echo -e "${BLUE}[web] Building Vite app...${NC}"
+  require firebase
+  (cd "$WEB_DIR" && npm ci && npm run build)
 
-  if gcloud storage buckets describe "$bucket" >/dev/null 2>&1; then
-    echo -e "${GREEN}[web] Bucket exists:${NC} $bucket"
-  else
-    gcloud storage buckets create "$bucket" --location=US --uniform-bucket-level-access
-    gcloud storage buckets update "$bucket" --web-main-page-suffix=index.html --web-error-page=404.html
-    echo -e "${GREEN}[web] Created bucket:${NC} $bucket"
+  echo -e "${BLUE}[web] Deploying to Firebase Hosting...${NC}"
+  local FB_ARGS=("--only" "hosting" "--project" "$PROJECT_ID" "--non-interactive" "--force")
+  if [[ -n "${FIREBASE_TOKEN:-}" ]]; then
+    FB_ARGS+=("--token" "$FIREBASE_TOKEN")
   fi
+  (cd "$WEB_DIR" && firebase deploy "${FB_ARGS[@]}")
 
-  echo -e "${BLUE}[web] Submitting Cloud Build (npm ci && build, then upload)...${NC}"
-  gcloud beta builds submit "$WEB_DIR" \
-    --config "$WEB_DIR/cloudbuild.deploy.yaml" \
-    --substitutions _BUCKET="$bucket" \
-    --project "$PROJECT_ID" \
-    --quiet
-
-  echo -e "${BLUE}[web] Setting cache headers...${NC}"
-  # Best effort; may be skipped if objects not present yet
-  gcloud storage objects update --recursive --cache-control="public,max-age=31536000,immutable" "$bucket/assets/" || true
-  gcloud storage objects update --cache-control="no-store" "$bucket/index.html" || true
-
-  echo -e "${GREEN}[web] Deployed successfully to:${NC} $bucket"
-  echo -e "${YELLOW}Note:${NC} For public access, configure Cloud CDN or make bucket objects public as needed."
+  echo -e "${GREEN}[web] Firebase Hosting deploy completed.${NC}"
 }
 
 setup_infrastructure() {
@@ -138,6 +125,15 @@ setup_infrastructure() {
       echo -e "${GREEN}  ✓${NC} $secret exists"
     fi
   done
+
+  # 3.5 Ensure GCS bucket for core docs exists
+  local docs_bucket="gs://${PROJECT_ID}-core-docs"
+  if gcloud storage buckets describe "$docs_bucket" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Core docs bucket exists:${NC} $docs_bucket"
+  else
+    gcloud storage buckets create "$docs_bucket" --location=US --uniform-bucket-level-access
+    echo -e "${GREEN}[infra] Created core docs bucket:${NC} $docs_bucket"
+  fi
   
   # 4. Ensure Pub/Sub topics exist
   echo -e "${BLUE}[infra] Ensuring Pub/Sub topics...${NC}"
@@ -217,7 +213,7 @@ deploy_api() {
     --max-instances=3 \
     --cpu=1 \
     --memory=512Mi \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGIN=http://localhost:5173" \
+    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGIN=http://localhost:5173,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs" \
     --set-secrets "VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,GROK_API_KEY=grok_api_key:latest" \
     --project "$PROJECT_ID" \
     --quiet
@@ -294,6 +290,21 @@ create_indexes() {
     --field-config field-path=createdAt,order=ASCENDING \
     --quiet || true
 
+  # Core docs: tenant+project for quick listing within project, newest first
+  gcloud firestore indexes composite create \
+    --collection-group=core_docs \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=projectId,order=ASCENDING \
+    --field-config field-path=createdAt,order=DESCENDING \
+    --quiet || true
+
+  # Core docs: lookup by external provider+resource id (optional future use)
+  gcloud firestore indexes composite create \
+    --collection-group=core_docs \
+    --field-config field-path=external.provider,order=ASCENDING \
+    --field-config field-path=external.resourceId,order=ASCENDING \
+    --quiet || true
+
   # RAG: sourceProjects composites
   gcloud firestore indexes composite create \
     --collection-group=rag_source_projects \
@@ -318,6 +329,20 @@ create_indexes() {
     --field-config field-path=externalId,order=ASCENDING \
     --quiet || true
 
+  # Meta analyses: events by project (latest first)
+  gcloud firestore indexes composite create \
+    --collection-group=meta_analyses \
+    --field-config field-path=projectId,order=ASCENDING \
+    --field-config field-path=createdAt,order=DESCENDING \
+    --quiet || true
+  # Meta analyses: events by user within tenant (latest first)
+  gcloud firestore indexes composite create \
+    --collection-group=meta_analyses \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=userId,order=ASCENDING \
+    --field-config field-path=createdAt,order=DESCENDING \
+    --quiet || true
+
   # Vector field for rag_chunks.embedding (dimension=1536, COSINE)
   # Requires gcloud alpha (as of now). If not available, skip with a notice.
   if gcloud alpha --help >/dev/null 2>&1; then
@@ -329,6 +354,23 @@ create_indexes() {
       --quiet || true
   else
     echo -e "${YELLOW}[firestore] Skipping vector field create (gcloud alpha not available). Index present in backend/firestore.indexes.json${NC}"
+  fi
+
+  # Verify meta_analyses indexes presence (best-effort)
+  echo -e "${BLUE}[firestore] Verifying meta_analyses composite indexes...${NC}"
+  local meta_list_json
+  if meta_list_json=$(gcloud firestore indexes composite list --collection-group=meta_analyses --format=json 2>/dev/null); then
+    local has_proj
+    local has_user
+    has_proj=$(echo "$meta_list_json" | grep -c '"projectId"' || true)
+    has_user=$(echo "$meta_list_json" | grep -c '"userId"' || true)
+    if [[ "$has_proj" -gt 0 && "$has_user" -gt 0 ]]; then
+      echo -e "${GREEN}  ✓${NC} meta_analyses indexes detected"
+    else
+      echo -e "${YELLOW}  ⚠${NC} meta_analyses indexes not fully visible yet (Firestorm propagation may take minutes)."
+    fi
+  else
+    echo -e "${YELLOW}  ⚠${NC} Unable to list composite indexes for meta_analyses (insufficient permissions or API)."
   fi
 }
 

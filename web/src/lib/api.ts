@@ -1,6 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { auth } from './firebase';
 import type { User, Project, DataSource } from '../types';
+import type { AnalyzeRequest, AnalyzeResponse } from '../types/stance';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
@@ -24,6 +25,17 @@ class ApiClient {
       }
       return config;
     });
+  }
+
+  // Waitlist
+  async waitlistJoin(data: { email: string; note?: string }): Promise<{ ok: boolean }> {
+    const response = await this.client.post<{ ok: boolean }>(`/api/v1/waitlist`, data);
+    return response.data;
+  }
+
+  async waitlistCheck(email: string): Promise<{ found: boolean; status?: string }> {
+    const response = await this.client.get<{ found: boolean; status?: string }>(`/api/v1/waitlist`, { params: { email } });
+    return response.data;
   }
 
   // Users
@@ -120,6 +132,22 @@ class ApiClient {
     return response.data;
   }
 
+  // --- Meta analysis ---
+  async metaAnalyze(projectId: string, data: AnalyzeRequest): Promise<AnalyzeResponse> {
+    const res = await this.client.post<AnalyzeResponse>(`/api/v1/projects/${projectId}/meta:analyze`, data);
+    return res.data;
+  }
+
+  async metaListEvents(projectId: string): Promise<any[]> {
+    const res = await this.client.get<any[]>(`/api/v1/projects/${projectId}/meta/events`);
+    return res.data as any[];
+  }
+
+  async metaGetAggregate(projectId: string): Promise<any> {
+    const res = await this.client.get<any>(`/api/v1/projects/${projectId}/meta/aggregate`);
+    return res.data;
+  }
+
   // GenAI
   async genaiGenerate(data: {
     model: string;
@@ -205,6 +233,37 @@ class ApiClient {
     // Fire-and-forget HTTP 200 triggers Pub/Sub/WS stream events
     const response = await this.client.post(`/api/v1/genai/stream`, data);
     return response.data;
+  }
+
+  // --- Core Docs (project attachments) ---
+  async docsList(projectId: string) {
+    const res = await this.client.get(`/api/v1/projects/${projectId}/docs`);
+    return res.data as any[];
+  }
+
+  async docsUpload(projectId: string, file: File, description?: string) {
+    const form = new FormData();
+    form.append('file', file);
+    if (description) form.append('description', description);
+    const res = await this.client.post(`/api/v1/projects/${projectId}/docs/upload`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data as any;
+  }
+
+  async docsParse(projectId: string, docId: string) {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/docs/${docId}/parse`);
+    return res.data as any;
+  }
+
+  async docsDelete(projectId: string, docId: string) {
+    const res = await this.client.delete(`/api/v1/projects/${projectId}/docs/${docId}`);
+    return res.data as any;
+  }
+
+  async docsDownload(projectId: string, docId: string): Promise<Blob> {
+    const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/download`, { responseType: 'blob' });
+    return res.data as Blob;
   }
 
   async suggestChatTitles(messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>, language?: string): Promise<string[]> {

@@ -356,6 +356,13 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
               }
             }).catch(() => {});
           }
+
+          // Document process streaming: uploaded/parsing/parsed/deleted
+          if (msg?.type === 'document.process') {
+            const ev = msg.data || {};
+            // expose minimal bus: lastDocEvent for UI
+            set((state) => ({ ...state, lastDocEvent: ev } as any));
+          }
           
           if (msg?.type === 'discovery.project' || msg?.type === 'discoveryProject') {
             console.log('[WS] New project event:', msg.data);

@@ -20,17 +20,19 @@ type AgentProfileSnapshot struct {
 	Provider     string          `json:"provider" firestore:"provider"` // gemini|openai|grok
 	Model        string          `json:"model" firestore:"model"`
 	Version      *string         `json:"version,omitempty" firestore:"version,omitempty"`
-	Capabilities map[string]bool `json:"capabilities,omitempty" firestore:"capabilities,omitempty"` // tools, webSearch, reasoning
+	Capabilities map[string]bool `json:"capabilities,omitempty" firestore:"capabilities,omitempty"` // tools, webSearch, reasoning, refinePrevious, etc.
 	Params       map[string]any  `json:"params,omitempty" firestore:"params,omitempty"`             // temperature, systemPromptHash, etc.
 }
 
 type Interaction struct {
-	ID        string  `json:"id" firestore:"id"`
-	TenantID  string  `json:"tenantId" firestore:"tenantId"`
-	ProjectID string  `json:"projectId" firestore:"projectId"`
-	Kind      string  `json:"kind" firestore:"kind"` // e.g., "discovery.answer"
-	Content   string  `json:"content" firestore:"content"`
-	Summary   *string `json:"summary,omitempty" firestore:"summary,omitempty"`
+	ID               string  `json:"id" firestore:"id"`
+	TenantID         string  `json:"tenantId" firestore:"tenantId"`
+	ProjectID        string  `json:"projectId" firestore:"projectId"`
+	Kind             string  `json:"kind" firestore:"kind"` // e.g., "discovery.answer"
+	Subkind          *string `json:"subkind,omitempty" firestore:"subkind,omitempty"`
+	Content          string  `json:"content" firestore:"content"`
+	ContentSanitized *string `json:"contentSanitized,omitempty" firestore:"contentSanitized,omitempty"`
+	Summary          *string `json:"summary,omitempty" firestore:"summary,omitempty"`
 	// Optional model/provider metadata for assistant/system interactions
 	Model *string    `json:"model,omitempty" firestore:"model,omitempty"`
 	Usage *UsageMeta `json:"usage,omitempty" firestore:"usage,omitempty"`
@@ -40,7 +42,28 @@ type Interaction struct {
 	ReplyTo      *string               `json:"replyTo,omitempty" firestore:"replyTo,omitempty"`
 	AgentProfile *AgentProfileSnapshot `json:"agentProfile,omitempty" firestore:"agentProfile,omitempty"`
 	Evaluations  map[string]any        `json:"evaluations,omitempty" firestore:"evaluations,omitempty"`
-	CreatedAt    time.Time             `json:"createdAt" firestore:"createdAt"`
+	// Relations between interactions (answers/refines/evaluates)
+	Relations []struct {
+		Type     string `json:"type" firestore:"type"`
+		TargetID string `json:"targetId" firestore:"targetId"`
+	} `json:"relations,omitempty" firestore:"relations,omitempty"`
+	// Additional optional metadata used by the UI
+	Language                 *string `json:"language,omitempty" firestore:"language,omitempty"`
+	SystemInstructionApplied *string `json:"systemInstructionApplied,omitempty" firestore:"systemInstructionApplied,omitempty"`
+	GenerationParams         *struct {
+		Temperature      *float64 `json:"temperature,omitempty" firestore:"temperature,omitempty"`
+		MaxOutputTokens  *int     `json:"maxOutputTokens,omitempty" firestore:"maxOutputTokens,omitempty"`
+		GroundingEnabled *bool    `json:"groundingEnabled,omitempty" firestore:"groundingEnabled,omitempty"`
+	} `json:"generationParams,omitempty" firestore:"generationParams,omitempty"`
+	HighRisk *struct {
+		Level     string   `json:"level" firestore:"level"`
+		Score     float64  `json:"score" firestore:"score"`
+		Rationale *string  `json:"rationale,omitempty" firestore:"rationale,omitempty"`
+		Triggers  []string `json:"triggers,omitempty" firestore:"triggers,omitempty"`
+	} `json:"highRisk,omitempty" firestore:"highRisk,omitempty"`
+	OriginalMessageID *string   `json:"originalMessageId,omitempty" firestore:"originalMessageId,omitempty"`
+	CoreDocID         *string   `json:"coreDocId,omitempty" firestore:"coreDocId,omitempty"`
+	CreatedAt         time.Time `json:"createdAt" firestore:"createdAt"`
 }
 
 // UsageMeta captures token usage and related counters reported by providers

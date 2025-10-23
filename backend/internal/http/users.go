@@ -101,6 +101,22 @@ func (h *UsersHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce waitlist: user must be approved
+	// Best-effort: if waitlist repo accessible from context
+	if uraw := r.Context().Value(waitlistRepoKey{}); uraw != nil {
+		if wl, ok := uraw.(*repo.WaitlistRepository); ok && wl != nil {
+			if e, err := wl.Get(r.Context(), strings.ToLower(req.Email)); err == nil && e != nil {
+				if e.Status != "approved" {
+					WriteForbidden(w, "User not approved for beta")
+					return
+				}
+			} else {
+				WriteForbidden(w, "User not found in waitlist")
+				return
+			}
+		}
+	}
+
 	// Create user
 	now := time.Now().UTC()
 	role := "user"
@@ -269,6 +285,16 @@ func (h *UsersHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		if len(v) == 2 {
 			userToUpdate.CountryOfResidence = &v
 		}
+	}
+	// Parent-child link and demographics
+	if updates.ParentUserID != nil {
+		userToUpdate.ParentUserID = updates.ParentUserID
+	}
+	if updates.Gender != nil {
+		userToUpdate.Gender = updates.Gender
+	}
+	if updates.Age != nil {
+		userToUpdate.Age = updates.Age
 	}
 
 	// Admin can update role and status (for now, simplified - no admin check)

@@ -29,6 +29,11 @@ type DataSourcesRepository struct {
 	db  *firestore.Client
 }
 type SourceProfilesRepository struct{ col *firestore.CollectionRef }
+type CoreDocsRepository struct{ col *firestore.CollectionRef }
+type WaitlistRepository struct{ col *firestore.CollectionRef }
+type MetaAnalysesRepository struct{ col *firestore.CollectionRef }
+type MetaAggregateProjectsRepository struct{ col *firestore.CollectionRef }
+type MetaAggregateUsersRepository struct{ col *firestore.CollectionRef }
 
 func NewUsersRepository(db *firestore.Client) *UsersRepository {
 	return &UsersRepository{col: db.Collection("core_users")}
@@ -44,6 +49,160 @@ func NewDataSourcesRepository(db *firestore.Client) *DataSourcesRepository {
 
 func NewSourceProfilesRepository(db *firestore.Client) *SourceProfilesRepository {
 	return &SourceProfilesRepository{col: db.Collection("core_source_profiles")}
+}
+
+func NewCoreDocsRepository(db *firestore.Client) *CoreDocsRepository {
+	return &CoreDocsRepository{col: db.Collection("core_docs")}
+}
+
+func NewWaitlistRepository(db *firestore.Client) *WaitlistRepository {
+	return &WaitlistRepository{col: db.Collection("core_waitlist")}
+}
+
+func NewMetaAnalysesRepository(db *firestore.Client) *MetaAnalysesRepository {
+	return &MetaAnalysesRepository{col: db.Collection("meta_analyses")}
+}
+
+func NewMetaAggregateProjectsRepository(db *firestore.Client) *MetaAggregateProjectsRepository {
+	return &MetaAggregateProjectsRepository{col: db.Collection("meta_aggregate_project")}
+}
+
+func NewMetaAggregateUsersRepository(db *firestore.Client) *MetaAggregateUsersRepository {
+	return &MetaAggregateUsersRepository{col: db.Collection("meta_aggregate_user")}
+}
+
+// --- Meta Analyses ---
+
+func (r *MetaAnalysesRepository) Create(ctx context.Context, e *models.MetaAnalysisEvent) (string, error) {
+	if e == nil {
+		return "", ErrInvalidDocument
+	}
+	now := time.Now().UTC()
+	e.CreatedAt = now
+	doc := r.col.NewDoc()
+	e.ID = doc.ID
+	if _, err := doc.Set(ctx, e); err != nil {
+		return "", err
+	}
+	return e.ID, nil
+}
+
+func (r *MetaAnalysesRepository) ListByProject(ctx context.Context, projectID string, limit int) ([]*models.MetaAnalysisEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	q := r.col.Where("projectId", "==", projectID).OrderBy("createdAt", firestore.Desc).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.MetaAnalysisEvent
+	for _, d := range docs {
+		var e models.MetaAnalysisEvent
+		if err := d.DataTo(&e); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
+func (r *MetaAnalysesRepository) ListByUser(ctx context.Context, tenantID, userID string, limit int) ([]*models.MetaAnalysisEvent, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	q := r.col.Where("tenantId", "==", tenantID).Where("userId", "==", userID).OrderBy("createdAt", firestore.Desc).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.MetaAnalysisEvent
+	for _, d := range docs {
+		var e models.MetaAnalysisEvent
+		if err := d.DataTo(&e); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
+func (r *MetaAnalysesRepository) DeleteByProject(ctx context.Context, projectID string) error {
+	q := r.col.Where("projectId", "==", projectID)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return err
+	}
+	for _, d := range docs {
+		_, _ = r.col.Doc(d.Ref.ID).Delete(ctx)
+	}
+	return nil
+}
+
+// --- Meta Aggregates Project ---
+
+func (r *MetaAggregateProjectsRepository) Upsert(ctx context.Context, a *models.MetaAggregateProject) error {
+	if a == nil || a.ProjectID == "" {
+		return ErrInvalidDocument
+	}
+	a.ID = a.ProjectID
+	if a.Version == "" {
+		a.Version = "coach.v1"
+	}
+	a.UpdatedAt = time.Now().UTC()
+	_, err := r.col.Doc(a.ID).Set(ctx, a)
+	return err
+}
+
+func (r *MetaAggregateProjectsRepository) Get(ctx context.Context, projectID string) (*models.MetaAggregateProject, error) {
+	snap, err := r.col.Doc(projectID).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var a models.MetaAggregateProject
+	if err := snap.DataTo(&a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (r *MetaAggregateProjectsRepository) Delete(ctx context.Context, projectID string) error {
+	_, err := r.col.Doc(projectID).Delete(ctx)
+	return err
+}
+
+// --- Meta Aggregates User ---
+
+func (r *MetaAggregateUsersRepository) Upsert(ctx context.Context, a *models.MetaAggregateUser) error {
+	if a == nil || a.UserID == "" || a.TenantID == "" {
+		return ErrInvalidDocument
+	}
+	a.ID = a.TenantID + "_" + a.UserID
+	if a.Version == "" {
+		a.Version = "coach.v1"
+	}
+	a.UpdatedAt = time.Now().UTC()
+	_, err := r.col.Doc(a.ID).Set(ctx, a)
+	return err
+}
+
+func (r *MetaAggregateUsersRepository) Get(ctx context.Context, tenantID, userID string) (*models.MetaAggregateUser, error) {
+	id := tenantID + "_" + userID
+	snap, err := r.col.Doc(id).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var a models.MetaAggregateUser
+	if err := snap.DataTo(&a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (r *MetaAggregateUsersRepository) Delete(ctx context.Context, tenantID, userID string) error {
+	id := tenantID + "_" + userID
+	_, err := r.col.Doc(id).Delete(ctx)
+	return err
 }
 
 // --- Users ---
@@ -63,6 +222,63 @@ func (r *UsersRepository) Upsert(ctx context.Context, u *models.User) error {
 	docID := u.TenantID + "_" + u.ID
 	_, err := r.col.Doc(docID).Set(ctx, u)
 	return err
+}
+
+// --- Waitlist ---
+func (r *WaitlistRepository) Upsert(ctx context.Context, e *models.WaitlistEntry) error {
+	if e == nil || e.Email == "" {
+		return ErrInvalidDocument
+	}
+	now := time.Now().UTC()
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = now
+	}
+	if e.Status == "" {
+		e.Status = "pending"
+	}
+	e.UpdatedAt = now
+	id := e.ID
+	if id == "" {
+		id = e.Email
+		e.ID = id
+	}
+	_, err := r.col.Doc(id).Set(ctx, e)
+	return err
+}
+
+func (r *WaitlistRepository) Get(ctx context.Context, email string) (*models.WaitlistEntry, error) {
+	if email == "" {
+		return nil, ErrInvalidDocument
+	}
+	snap, err := r.col.Doc(email).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var e models.WaitlistEntry
+	if err := snap.DataTo(&e); err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+func (r *WaitlistRepository) List(ctx context.Context, status *string) ([]*models.WaitlistEntry, error) {
+	q := r.col.Query
+	if status != nil && *status != "" {
+		q = q.Where("status", "==", *status)
+	}
+	docs, err := q.OrderBy("createdAt", firestore.Desc).Limit(500).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.WaitlistEntry
+	for _, d := range docs {
+		var e models.WaitlistEntry
+		if err := d.DataTo(&e); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
 }
 
 func (r *UsersRepository) Get(ctx context.Context, id string) (*models.User, error) {
@@ -519,26 +735,4 @@ func (r *DataSourcesRepository) DeleteByProject(ctx context.Context, projectID s
 	return nil
 }
 
-// helper functions
-// contains: legacy helper; currently unused but retained for symmetry with remove.
-// nolint:unused
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-// remove: legacy helper; currently unused.
-// nolint:unused
-func remove(slice []string, item string) []string {
-	result := make([]string, 0, len(slice))
-	for _, s := range slice {
-		if s != item {
-			result = append(result, s)
-		}
-	}
-	return result
-}
+// (legacy helpers removed)

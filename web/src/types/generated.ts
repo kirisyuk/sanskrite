@@ -186,6 +186,9 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsUser {
   };
   preferredLanguage?: string;
   countryOfResidence?: string;
+  parentUserId?: string;
+  gender?: string;
+  age?: number;
   createdAt: string;
   updatedAt: string;
   schemaVersion: string;

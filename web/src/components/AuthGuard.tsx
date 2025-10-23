@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import lightLogo from '../assets/hatl-light-theme.png';
 import darkLogo from '../assets/hatl-dark-theme.png';
 import { ThemeContext } from './ThemeProvider';
+import { TopBar } from './TopBar';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -120,15 +121,17 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
 
   // Auth form
   if (!user) {
-    return (
-      <div className="auth-container">
+  return (
+      <>
+        <TopBar />
+        <div className="auth-container">
         <div className="auth-card">
           <div className="text-center mb-8">
-            <img src={darkLogo} alt="Sanskrite" className="auth-logo" />
+            <img src={theme === 'dark' ? darkLogo : lightLogo} alt="Sanskrite" className="auth-logo" />
             <h1 className="auth-title">{getTitle()}</h1>
             <p className="auth-subtitle">
-              {currentView === 'login' && 'Welcome back to Sanskrite'}
-              {currentView === 'signup' && 'Join Sanskrite to make informed decisions'}
+              {currentView === 'login' && ''}
+              {currentView === 'signup' && ''}
               {currentView === 'reset' && 'Enter your email to reset your password'}
             </p>
           </div>
@@ -313,6 +316,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
           </form>
         </div>
       </div>
+      </>
     );
   }
 

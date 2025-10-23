@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
+import type { SxInstruction, SxEntityMark, SxMonitorMetric } from '../types/sx';
+import { parseSxInstructionsFromContent } from '../lib/sxUtils';
 import type { GenaiToolCall } from './genaiStore';
+import { useGenAISettings } from './genaiSettingsStore';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -14,7 +17,7 @@ export interface StartStreamArgs {
   prompt: string;
   tools?: any[];
   options?: any;
-  agentMeta?: { displayName?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } };
+  agentMeta?: { displayName?: string; replyTo?: string; subkind?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } };
   suppressUserEcho?: boolean;
 }
 
@@ -23,15 +26,24 @@ export interface LocalInteraction {
   id: string;
   projectId: string; // temporary local id binding
   kind: InteractionKind;
+  subkind?: string;
   content: string;
+  contentSanitized?: string;
+  sxInstructions?: SxInstruction[];
   summary?: string;
+  originalMessageId?: string;
   model?: string;
   usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number };
   // Extended fields (optional; defaults keep UI working)
   author?: { participantId: string; kind: 'human'|'ai'|'system'|'tool'; displayName?: string };
   recipients?: string[];
   replyTo?: string;
+  relations?: Array<{ type: 'answers'|'refines'|'evaluates'; targetId: string }>;
   agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> };
+  systemInstructionApplied?: string;
+  language?: string;
+  generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean };
+  highRisk?: { level: 'High'|'Medium'|'Low'; score: number; rationale?: string; triggers?: string[] };
   evaluations?: Record<string, any>;
   createdAt: string;
 }
@@ -47,16 +59,27 @@ interface GenaiChatState {
   // Per-message structured evaluations
   evaluations: Record<string, { biasLevel: number; thoughtfulness: number; biases: string[]; biasTypes?: string[] }>;
   // Per-message UI meta (e.g., custom header for agent messages)
-  messageMeta: Record<string, { headerText?: string; title?: string; leftAccent?: boolean; bgOverride?: string; refineEnabled?: boolean }>;
+  messageMeta: Record<string, { headerText?: string; title?: string; leftAccent?: boolean; bgOverride?: string; refineEnabled?: boolean; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } }>;
   usage?: { promptTokens: number; outputTokens: number; totalTokens: number };
 
   // local-only interactions cache for Unfold
   projectId: string; // temporary project id (frontend-owned)
   interactions: LocalInteraction[];
+  // Centralized artifacts extracted from @sx instructions (deduplicated)
+  artifacts: { entities: SxEntityMark[]; metrics: SxMonitorMetric[] };
+  // Metric overlay (full-screen over chat) state and cache
+  metricOverlayOpenKey?: string | null;
+  metricOverlayLoading?: boolean;
+  metricOverlayCache: Record<string, { key: string; metric: SxMonitorMetric; content: string; fetchedAt: string }>;
   pendingAssistantMeta?: { displayName?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } };
+  pendingAssistantOptions?: any;
+  pendingAssistantPrompt?: string;
+  pendingAssistantTools?: any[];
 
   startStream: (args: StartStreamArgs) => Promise<void>;
   reset: () => void;
+  openMetricOverlay: (metric: SxMonitorMetric) => Promise<void>;
+  closeMetricOverlay: () => void;
 
   onStart: () => void;
   onChunk: (text: string) => void;
@@ -69,6 +92,7 @@ interface GenaiChatState {
 
   // helpers to manage local interactions
   setProjectId: (id: string) => void;
+  ensureProject: () => Promise<string>;
 }
 
 export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
@@ -83,32 +107,108 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   messageMeta: {},
   projectId: 'local-unfold',
   interactions: [],
+  artifacts: { entities: [], metrics: [] },
+  metricOverlayOpenKey: null,
+  metricOverlayLoading: false,
+  metricOverlayCache: {},
 
-  reset: () => set({ messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [] }),
+  reset: () => set({ messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {} }),
 
   setProjectId: (id) => set({ projectId: id || 'local-unfold' }),
 
+  ensureProject: async () => {
+    let pid = get().projectId;
+    if (!pid || pid === 'local-unfold') {
+      try {
+        const res = await api.createProject({ displayName: 'Draft', view: 'draft' });
+        pid = res.id as unknown as string;
+        set({ projectId: pid });
+      } catch (e) {
+        console.error('[ensureProject] failed to create draft project', e);
+        throw e;
+      }
+    }
+    return pid;
+  },
+
+  openMetricOverlay: async (metric: SxMonitorMetric) => {
+    const key = String((metric as any).id || (metric as any).metricName || (metric as any).name || '').toLowerCase();
+    if (!key) return;
+    const st = get();
+    // If already cached, just open
+    if (st.metricOverlayCache[key]?.content) {
+      set({ metricOverlayOpenKey: key });
+      return;
+    }
+    set({ metricOverlayLoading: true, metricOverlayOpenKey: key });
+    try {
+      const settings = useGenAISettings.getState();
+      const model = settings.model;
+      const preferred = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN');
+      // First user request in this Unfold session, fallback to earliest message
+      let firstRequest = '';
+      try {
+        const inters = get().interactions;
+        const firstUser = inters.find((it) => it.kind === 'user');
+        if (firstUser) firstRequest = firstUser.content || '';
+        if (!firstRequest) {
+          const msgs = get().messages;
+          const firstMsg = msgs.find((m) => m.role === 'user');
+          if (firstMsg) firstRequest = firstMsg.content || '';
+        }
+      } catch {}
+      const today = new Date();
+      const dateStr = today.toISOString().slice(0, 10);
+      const metricJson = JSON.stringify(metric, null, 2);
+      const prompt = `PreferredLanguage: ${preferred}\nCurrentDate: ${dateStr}\n\nWe need a detailed, up-to-date insight for the following metric. Return ONLY Markdown.\n\nRequirements:\n- Start with a compact table summarizing current understanding of the metric (name, definition, unit, frequency, thresholds if any, typical ranges, data sources).\n- Follow with a concise article: definition, why it matters, how to track, caveats, and suggested next steps.\n- Use headings (###), bullet lists, and short paragraphs.\n- If data is uncertain, clearly say so and propose how to validate.\n\nContext:\n- METRIC:\n${metricJson}\n\n- ORIGINAL_USER_REQUEST:\n${firstRequest}\n\nWrite in PreferredLanguage. Use neutral, factual tone.`;
+      const maxTok = Math.max(2048, settings.maxOutputTokens || 4096);
+      const res = await api.genaiGenerate({ model, prompt, strictJSONEnabled: false, maxOutputTokens: maxTok, webSearchEnabled: true, systemInstruction: settings.systemInstruction || undefined });
+      const content = (res?.content || '').toString().trim();
+      set((s) => ({ metricOverlayCache: { ...s.metricOverlayCache, [key]: { key, metric, content, fetchedAt: new Date().toISOString() } }, metricOverlayLoading: false, metricOverlayOpenKey: key } as any));
+    } catch (e) {
+      console.error('[metricOverlay] fetch failed', e);
+      set({ metricOverlayLoading: false });
+    }
+  },
+  closeMetricOverlay: () => set({ metricOverlayOpenKey: null }),
+
   startStream: async ({ prompt, tools, options, agentMeta, suppressUserEcho }) => {
     if (get().streaming) return;
+    // ensure we have a real project id (create Draft on demand)
+    try { await get().ensureProject(); } catch {}
     const now = Date.now().toString();
     const projectId = get().projectId;
     const createdAt = new Date().toISOString();
     // add user message and a placeholder assistant message
-    set((s) => ({
+    set((s) => {
+      // prune trailing empty assistant placeholders to avoid stale skeletons
+      const pruned = [...s.messages];
+      while (pruned.length > 0) {
+        const last = pruned[pruned.length - 1];
+        if (last.role === 'assistant' && (!last.content || last.content.trim().length === 0)) {
+          pruned.pop();
+          continue;
+        }
+        break;
+      }
+      return ({
       messages: [
-        ...s.messages,
+        ...pruned,
         ...(suppressUserEcho ? [] : [{ id: now + '-u', role: 'user', content: prompt } as ChatMessage]),
         { id: now + '-a', role: 'assistant', content: '' },
       ],
       streaming: true,
       error: null,
       pendingAssistantMeta: agentMeta,
+      pendingAssistantOptions: options,
+      pendingAssistantPrompt: prompt,
+      pendingAssistantTools: tools,
       // also record local interaction for user unless suppressed
       interactions: [
         ...s.interactions,
-        ...(suppressUserEcho ? [] : [{ id: now + '-iu', projectId, kind: 'user' as InteractionKind, content: prompt, createdAt } as LocalInteraction]),
+        ...(suppressUserEcho ? [] : [{ id: now + '-iu', projectId, kind: 'user' as InteractionKind, content: prompt, createdAt, originalMessageId: now + '-u' } as LocalInteraction]),
       ],
-    }));
+    }) as any;});
     try {
       // Build messages from local interactions (summary preferred, else content)
       const interactions = get().interactions;
@@ -118,6 +218,23 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       }));
       // Append current user prompt as the latest message
       messages.push({ role: 'user', text: prompt });
+      try {
+        const modelOverride = options?.modelOverride;
+        const provider = (agentMeta as any)?.agentProfile?.provider;
+        const model = (agentMeta as any)?.agentProfile?.model || modelOverride;
+        console.log('[GenAI Stream] start', {
+          kind: (agentMeta as any)?.subkind || 'chat',
+          agentName: agentMeta?.displayName,
+          provider,
+          model,
+          promptChars: (prompt || '').length,
+          hasTools: Array.isArray(tools) && tools.length > 0,
+          groundingEnabled: !!options?.groundingEnabled,
+          temperature: options?.temperature,
+          maxOutputTokens: options?.maxOutputTokens,
+          lang: options?.__lang,
+        });
+      } catch {}
       await api.genaiStream({ prompt, tools, options, messages });
     } catch (e: any) {
       set({ streaming: false, error: e?.message || 'Stream start failed' });
@@ -146,19 +263,128 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         const id = Date.now().toString() + '-ia';
         const createdAt = new Date().toISOString();
         const meta = s.pendingAssistantMeta;
-        const nextMeta = { ...s.messageMeta } as Record<string, { headerText?: string; title?: string; leftAccent?: boolean; bgOverride?: string; refineEnabled?: boolean }>;
+        const opts = s.pendingAssistantOptions || {};
+        const nextMeta = { ...s.messageMeta } as Record<string, { headerText?: string; title?: string; leftAccent?: boolean; bgOverride?: string; refineEnabled?: boolean; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } }>;
         if (meta?.displayName) {
-          nextMeta[lastAssistant.id] = { headerText: meta.displayName, leftAccent: true, refineEnabled: !!meta?.agentProfile?.capabilities?.refinePrevious };
+          nextMeta[lastAssistant.id] = { headerText: meta.displayName, leftAccent: true, refineEnabled: !!meta?.agentProfile?.capabilities?.refinePrevious, agentProfile: meta?.agentProfile };
         }
-        return { streaming: false, pendingAssistantMeta: undefined, messageMeta: nextMeta, interactions: [...s.interactions, { id, projectId, kind: 'assistant', content: lastAssistant.content, createdAt, author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined, agentProfile: meta?.agentProfile }] } as any;
+        // Parse hidden @sx with minimal validation and sanitize content centrally
+        const { sanitized, instructions: sx } = parseSxInstructionsFromContent(lastAssistant.content);
+        const base = { id, projectId, kind: 'assistant' as InteractionKind, subkind: (s.pendingAssistantMeta as any)?.subkind, content: lastAssistant.content, contentSanitized: sanitized, sxInstructions: sx, createdAt, author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined, agentProfile: meta?.agentProfile, systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined, language: opts?.__lang, generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled }, originalMessageId: lastAssistant.id } as LocalInteraction;
+        const replyTo = (s.pendingAssistantMeta as any)?.replyTo as string | undefined;
+        if (replyTo) {
+          (base as any).replyTo = replyTo;
+          (base as any).relations = [{ type: 'answers', targetId: replyTo }];
+        }
+        // duplicate meta under interaction id as well for interaction-based rendering
+        if (meta?.displayName) {
+          (nextMeta as any)[id] = { headerText: meta.displayName, leftAccent: true, refineEnabled: !!meta?.agentProfile?.capabilities?.refinePrevious, agentProfile: meta?.agentProfile };
+        }
+        // Merge artifacts into centralized state (deduplicated)
+        const currentArtifacts = s.artifacts || { entities: [], metrics: [] };
+        const nextEntities: SxEntityMark[] = [...currentArtifacts.entities];
+        const nextMetrics: SxMonitorMetric[] = [...currentArtifacts.metrics];
+        const seenEntity = new Set(nextEntities.map((e) => `entity:${(e as any).kind || 'other'}:${String((e as any).name || (e as any).id || '').toLowerCase()}`));
+        const seenMetric = new Set(nextMetrics.map((m) => `metric:${String((m as any).id || (m as any).metricName || (m as any).name || '').toLowerCase()}`));
+        for (const instr of sx) {
+          if (instr.type === 'entity_mark') {
+            const e = instr as SxEntityMark;
+            const key = `entity:${(e as any).kind || 'other'}:${String((e as any).name || (e as any).id || '').toLowerCase()}`;
+            if (!seenEntity.has(key)) { seenEntity.add(key); nextEntities.push(e); }
+          } else if (instr.type === 'monitor_metric') {
+            const m = instr as SxMonitorMetric;
+            const key = `metric:${String((m as any).id || (m as any).metricName || (m as any).name || '').toLowerCase()}`;
+            if (!seenMetric.has(key)) { seenMetric.add(key); nextMetrics.push(m); }
+          }
+        }
+        return { streaming: false, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: [...s.interactions, base], artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
       }
-      return { streaming: false } as any;
+      // If we are here, assistant produced no chunks and content is empty.
+      // Remove the trailing empty placeholder and create a stub interaction so the user sees the outcome.
+      const msgs = [...s.messages];
+      if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant' && !msgs[msgs.length - 1].content) {
+        msgs.pop();
+      }
+      const id = Date.now().toString() + '-ia';
+      const createdAt = new Date().toISOString();
+      const meta = s.pendingAssistantMeta;
+      const opts = s.pendingAssistantOptions || {};
+      const nextMeta = { ...s.messageMeta } as Record<string, { headerText?: string; title?: string; leftAccent?: boolean; bgOverride?: string; refineEnabled?: boolean; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } }>;
+      const stub = 'Empty reply (no text was returned by the model).';
+      const base: LocalInteraction = {
+        id,
+        projectId,
+        kind: 'assistant',
+        subkind: (s.pendingAssistantMeta as any)?.subkind,
+        content: stub,
+        contentSanitized: stub,
+        createdAt,
+        author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined,
+        agentProfile: meta?.agentProfile,
+        systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined,
+        language: opts?.__lang,
+        generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled },
+        originalMessageId: id,
+      } as any;
+      const replyTo = (s.pendingAssistantMeta as any)?.replyTo as string | undefined;
+      if (replyTo) {
+        (base as any).replyTo = replyTo;
+        (base as any).relations = [{ type: 'answers', targetId: replyTo }];
+      }
+      if (meta?.displayName) {
+        nextMeta[id] = { headerText: meta.displayName, leftAccent: true, refineEnabled: !!meta?.agentProfile?.capabilities?.refinePrevious, agentProfile: meta?.agentProfile };
+      }
+      console.warn('[GenAI Stream] done without chunks: created empty reply stub');
+      return { streaming: false, messages: msgs, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: [...s.interactions, base] } as any;
     }),
-  onError: (err) => set({ streaming: false, error: err || 'Stream error' }),
+  onError: (err) => {
+    try {
+      const st = get();
+      console.error('[GenAI Stream] error', {
+        error: err,
+        kind: (st.pendingAssistantMeta as any)?.subkind || 'chat',
+        agentName: st.pendingAssistantMeta?.displayName,
+        provider: (st.pendingAssistantMeta as any)?.agentProfile?.provider,
+        model: (st.pendingAssistantMeta as any)?.agentProfile?.model || st.pendingAssistantOptions?.modelOverride,
+        promptChars: (st.pendingAssistantPrompt || '').length,
+        lang: st.pendingAssistantOptions?.__lang,
+        hasTools: Array.isArray(st.pendingAssistantTools) && st.pendingAssistantTools.length > 0,
+        groundingEnabled: !!st.pendingAssistantOptions?.groundingEnabled,
+      });
+    } catch {}
+    // Also prune trailing empty assistant placeholder so skeleton doesn't stick
+    const st = get();
+    const pruned = [...st.messages];
+    if (pruned.length > 0 && pruned[pruned.length - 1].role === 'assistant' && (!pruned[pruned.length - 1].content || pruned[pruned.length - 1].content.trim().length === 0)) {
+      pruned.pop();
+    }
+    set({ streaming: false, messages: pruned, error: err || 'Stream error', pendingAssistantMeta: undefined, pendingAssistantOptions: get().pendingAssistantOptions, pendingAssistantPrompt: get().pendingAssistantPrompt, pendingAssistantTools: get().pendingAssistantTools });
+  },
   onToolCall: (calls) => set({ toolCalls: calls || [] }),
   onToolResult: (calls) => set((s) => ({ toolResults: [...s.toolResults, ...(calls || [])] })),
   onDoneMeta: (meta) => set({ usage: meta.usage, attributions: meta.attributions || [], searchQueries: meta.searchQueries || [] }),
-  setEvaluation: (messageId, ev) => set((s) => ({ evaluations: { ...s.evaluations, [messageId]: ev } })),
+  setEvaluation: (messageId, ev) => set((s) => {
+    const next = { ...s.evaluations, [messageId]: ev };
+    // Map messageId -> assistant interaction id via originalMessageId
+    const assistantInter = s.interactions.find((it) => it.kind === 'assistant' && (it as any).originalMessageId === messageId);
+    const replyToId = assistantInter?.id || messageId;
+    const exists = s.interactions.find((it) => it.subkind === 'eval.bias' && it.replyTo === replyToId);
+    const interactions = exists ? s.interactions : [
+      ...s.interactions,
+      {
+        id: Date.now().toString() + '-eval-bias-auto',
+        projectId: s.projectId,
+        kind: 'system',
+        subkind: 'eval.bias',
+        content: JSON.stringify(ev),
+        contentSanitized: JSON.stringify(ev),
+        replyTo: replyToId,
+        relations: [{ type: 'evaluates', targetId: replyToId }],
+        createdAt: new Date().toISOString(),
+      } as any,
+    ];
+    return { evaluations: next, interactions } as any;
+  }),
 }));
 
 

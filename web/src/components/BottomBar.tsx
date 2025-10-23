@@ -1,8 +1,15 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useWsStore } from '../stores/wsStore';
 
 export const BottomBar: React.FC = () => {
   const { connected } = useWsStore();
+  const navigate = useNavigate();
+
+  const handleLegalClick = (e: React.MouseEvent<HTMLAnchorElement>, type: 'terms' | 'privacy') => {
+    e.preventDefault();
+    navigate(`/${type}`);
+  };
 
   return (
     <div className="bottombar">
@@ -26,8 +33,22 @@ export const BottomBar: React.FC = () => {
 
       {/* Right side - Links */}
       <div className="flex items-center gap-3 px-6">
-        <a href="#" className="text-12 underline" style={{ color: 'var(--text-secondary-strong)' }} onClick={(e) => { e.preventDefault(); const ev = new CustomEvent('ui.openPage', { detail: { kind: 'privacy' } }); window.dispatchEvent(ev); }}>Privacy Notice</a>
-        <a href="#" className="text-12 underline" style={{ color: 'var(--text-secondary-strong)' }} onClick={(e) => { e.preventDefault(); const ev = new CustomEvent('ui.openPage', { detail: { kind: 'terms' } }); window.dispatchEvent(ev); }}>Terms of Usage</a>
+        <a 
+          href="/privacy" 
+          className="text-12 underline" 
+          style={{ color: 'var(--text-secondary-strong)' }} 
+          onClick={(e) => handleLegalClick(e, 'privacy')}
+        >
+          Privacy Notice
+        </a>
+        <a 
+          href="/terms" 
+          className="text-12 underline" 
+          style={{ color: 'var(--text-secondary-strong)' }} 
+          onClick={(e) => handleLegalClick(e, 'terms')}
+        >
+          Terms of Usage
+        </a>
       </div>
     </div>
   );
