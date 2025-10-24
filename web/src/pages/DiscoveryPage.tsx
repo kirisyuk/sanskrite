@@ -155,39 +155,32 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
                     const msgs = useGenaiChatStore.getState().messages;
                     const idx = msgs.findIndex((m) => m.id === messageId);
                     let prevPrimary: string | null = null;
+                    let prevPrimaryId: string | null = null;
                     for (let i = idx - 1; i >= 0; i--) {
                       const mm = msgs[i];
                       if (mm.role === 'assistant') {
                         const mmeta = useGenaiChatStore.getState().messageMeta[mm.id];
-                        if (!mmeta?.headerText) { prevPrimary = mm.content; break; }
+                        if (!mmeta?.headerText) { prevPrimary = mm.content; prevPrimaryId = mm.id; break; }
                       }
                     }
                     if (!prevPrimary) return;
                     const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
                     const contribution = msg?.content || '';
                     const prompt = `Language: ${preferredLang}.\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
-                    const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
-                    const sxSystemInstruction = (
-                      `Hidden-instructions protocol (do not show to users):\n` +
-                      `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
-                      `- JSON must be valid and match v: \"1\" with one of types: entity_mark, monitor_metric, watchlist_add, link_reference.\n` +
-                      `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
-                      `- Examples: <!-- @sx:{\\\"v\\\":\\\"1\\\",\\\"type\\\":\\\"entity_mark\\\",\\\"id\\\":\\\"ent-001\\\",\\\"kind\\\":\\\"person\\\",\\\"name\\\":\\\"…\\\",\\\"description\\\":\\\"…\\\"} -->`
-                    );
-                    const combinedSystemInstruction = [settings.systemInstruction || '', sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
-                    const options: any = {
-                      profile: /_quality$/i.test(settings.model || '') ? 'quality' : 'fast',
-                      modelOverride: settings.model,
-                      groundingEnabled: settings.groundingEnabled,
-                      temperature: settings.temperature,
-                      maxOutputTokens: settings.maxOutputTokens,
-                      systemInstruction: combinedSystemInstruction,
+                    const res = await api.genaiGenerate({ model: settings.model, prompt, strictJSONEnabled: false, maxOutputTokens: Math.max(1024, settings.maxOutputTokens || 2048), webSearchEnabled: false, systemInstruction: settings.systemInstruction || undefined });
+                    const stripFences = (s: string) => {
+                      let t = (s || '').toString().trim();
+                      t = t.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim();
+                      t = t.replace(/^```[\s\S]*?```$/m, (m) => m.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')).trim();
+                      if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) t = t.slice(1, -1);
+                      return t.trim();
                     };
-                    // Insert left-aligned info bubble (refine start)
+                    const refined = stripFences(res?.content || '');
+                    if (!refined || !prevPrimaryId) return;
                     useGenaiChatStore.setState((s) => ({
-                      messages: [...s.messages, { id: Date.now().toString() + '-refine', role: 'assistant', content: 'AI is refining its previous answer based on the contribution.' }]
-                    }));
-                    await useGenaiChatStore.getState().startStream({ prompt, tools, options: { ...options, __lang: preferredLang }, agentMeta: { subkind: 'agent.refine', replyTo: (useGenaiChatStore.getState().messages.find((m) => m.id === messageId)?.id) }, suppressUserEcho: true });
+                      messages: s.messages.map((m) => m.id === prevPrimaryId ? { ...m, content: refined } : m),
+                      interactions: s.interactions.map((it: any) => it.id === prevPrimaryId ? ({ ...it, contentSanitized: refined, content: refined }) : it),
+                    } as any));
                   } catch {}
                 }}
               >
@@ -199,7 +192,7 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
                 <span className="text-[11px]">Refine the previous answer</span>
               </button>
             )}
-            {/* Bring In second */}
+            {/* Bring In after Refine */}
             <button
               type="button"
               aria-label="Bring in another model"
@@ -460,6 +453,58 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
             );
           })()}
           {/* Ask button is shown in EvaluationDetails near Refine; ActionRow keeps Bring In / Copy only */}
+          {/* Refine button should be left of Bring In */}
+          {(() => {
+            const meta = genaiChat.messageMeta[messageId];
+            if (!meta?.refineEnabled) return null;
+            return (
+              <button
+                type="button"
+                aria-label="Refine the previous answer"
+                title="Refine the previous primary answer based on this contribution."
+                className="rounded-lg"
+                style={{ height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', border: '1px solid var(--overlay-line-90)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={async () => {
+                  try {
+                    const msgs = useGenaiChatStore.getState().messages;
+                    const idx = msgs.findIndex((m) => m.id === messageId);
+                    let prevPrimary: string | null = null;
+                    let prevPrimaryId: string | null = null;
+                    for (let i = idx - 1; i >= 0; i--) {
+                      const mm = msgs[i];
+                      if (mm.role === 'assistant') {
+                        const mmeta = useGenaiChatStore.getState().messageMeta[mm.id];
+                        if (!mmeta?.headerText) { prevPrimary = mm.content; prevPrimaryId = mm.id; break; }
+                      }
+                    }
+                    if (!prevPrimary) return;
+                    const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                    const contribution = msgs.find((m) => m.id === messageId)?.content || '';
+                    const prompt = `Language: ${preferredLang}.\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
+                    const gs = useGenAISettings.getState();
+                    const res = await (await import('../lib/api')).api.genaiGenerate({ model: gs.model, prompt, strictJSONEnabled: false, maxOutputTokens: Math.max(1024, gs.maxOutputTokens || 2048), webSearchEnabled: false, systemInstruction: gs.systemInstruction || undefined });
+                    const stripFences = (s: string) => { let t = (s || '').toString().trim(); t = t.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim(); t = t.replace(/^```[\s\S]*?```$/m, (m) => m.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')).trim(); if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) t = t.slice(1, -1); return t.trim(); };
+                    const refined = stripFences(res?.content || '');
+                    if (!refined || !prevPrimaryId) return;
+                    useGenaiChatStore.setState((s) => ({
+                      messages: s.messages.map((m) => m.id === prevPrimaryId ? { ...m, content: refined } : m),
+                      interactions: s.interactions.map((it: any) => it.id === prevPrimaryId ? ({ ...it, contentSanitized: refined, content: refined }) : it),
+                    } as any));
+                  } catch {}
+                }}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M3 17v4h4" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M7 17l5-5" strokeWidth="2" strokeLinecap="round" />
+                  <rect x="10" y="3" width="11" height="11" rx="2" strokeWidth="2" />
+                </svg>
+                <span className="text-[11px]">Refine the previous answer</span>
+              </button>
+            );
+          })()}
+
           <button
             type="button"
             aria-label="Bring in another model"
@@ -534,59 +579,7 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
               <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </button>
-          {/* Refine previous primary answer, enabled only for invited agent replies */}
-          {(() => {
-            const meta = genaiChat.messageMeta[messageId];
-            if (!meta?.refineEnabled) return null;
-            return (
-              <button
-                type="button"
-                aria-label="Refine the previous answer"
-                title="Refine the previous primary answer based on this contribution."
-                className="rounded-lg"
-                style={{ height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', border: '1px solid var(--overlay-line-90)' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={async () => {
-                  try {
-                    // find the most recent non-agent assistant message before this one
-                    const msgs = useGenaiChatStore.getState().messages;
-                    const idx = msgs.findIndex((m) => m.id === messageId);
-                    let prevPrimary: string | null = null;
-                    for (let i = idx - 1; i >= 0; i--) {
-                      const mm = msgs[i];
-                      if (mm.role === 'assistant') {
-                        const mmeta = useGenaiChatStore.getState().messageMeta[mm.id];
-                        if (!mmeta?.headerText) { prevPrimary = mm.content; break; }
-                      }
-                    }
-                    if (!prevPrimary) return;
-                    const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                    const st = useGenaiChatStore.getState();
-                    const contribution = msgs.find((m) => m.id === messageId)?.content || '';
-                    const prompt = `Language: ${preferredLang}.\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
-                    const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
-                    const options: any = {
-                      profile: /_quality$/i.test(settings.model || '') ? 'quality' : 'fast',
-                      modelOverride: settings.model,
-                      groundingEnabled: settings.groundingEnabled,
-                      temperature: settings.temperature,
-                      maxOutputTokens: settings.maxOutputTokens,
-                      systemInstruction: settings.systemInstruction || undefined,
-                    };
-                    await useGenaiChatStore.getState().startStream({ prompt, tools, options, suppressUserEcho: true });
-                  } catch {}
-                }}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path d="M3 17v4h4" strokeWidth="2" strokeLinecap="round" />
-                  <path d="M7 17l5-5" strokeWidth="2" strokeLinecap="round" />
-                  <rect x="10" y="3" width="11" height="11" rx="2" strokeWidth="2" />
-                </svg>
-                <span className="text-[11px]">Refine the previous answer</span>
-              </button>
-            );
-          })()}
+          {/* Refine button moved earlier (before Bring In) */}
         </div>
       </div>
     </div>
@@ -708,8 +701,8 @@ All natural-language fields (stance, riskProfile.rationale) must be written stri
 Do not use words from other languages, except established terms or proper names that are equally acceptable in RequiredLanguage.
 
 Task: From the user queries below, neutrally extract:
-- stance: 1–2 concise sentences (<=100 words) that state what the user seems to be pursuing, their perspective and deep intent, avoiding moral judgement and unsupported assumptions.
-- riskProfile: EU AI Act risk assessment with score 0..1 and derived level.
+- stance: 1–2 concise sentences (<=100 words) written DIRECTLY to the user in SECOND PERSON ("you"). Do NOT describe the user in the third person. State what you seem to be pursuing, your perspective and deep intent, avoiding moral judgement and unsupported assumptions.
+- riskProfile: EU AI Act risk assessment with score 0..1 and derived level. If you need to reference the user in rationale, also use SECOND PERSON ("you").
 
 High risk auto-triggers (must set level to High ONLY if the user seeks PERSONAL, ACTIONABLE advice in these areas; general or educational discussion does NOT trigger High):
 - Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов — только персональные рекомендации/советы по здоровью, диагнозам, схемам/дозировкам/отмене; НЕ включает общие сведения, новости фарма/здравполитики, обсуждение индустрии или науки без личных указаний.
@@ -1325,7 +1318,7 @@ const DiscussionFlow: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResul
 };
 
 // Inline lightweight component to fetch and display title suggestions
-const TitleSuggestions: React.FC = () => {
+const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvailableChange?: (available: boolean) => void }> = ({ visible, onClose, onAvailableChange }) => {
   const [titles, setTitles] = React.useState<string[] | null>(null);
   const [loading, setLoading] = React.useState(false);
   const genaiChat = useGenaiChatStore();
@@ -1371,15 +1364,31 @@ const TitleSuggestions: React.FC = () => {
     return () => { cancelled = true; };
   }, [genaiChat.messages.length, currentUser?.uid, hasAssistant]);
 
-  // Do not render until first assistant answer is present
-  if (!hasAssistant) return null;
+  React.useEffect(() => {
+    try { onAvailableChange && onAvailableChange(!!(titles && titles.length > 0)); } catch {}
+  }, [titles?.length]);
 
-  // During the very first request do not show the block until data arrives
+  // Do not render content until we have assistant answer and titles available
+  if (!hasAssistant) return null;
   if (loading && (!titles || titles.length === 0)) return null;
   if (!titles || titles.length === 0) return null;
   return (
-    <div className="mt-3 p-3 fade-in">
-      <div className="text-13 mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>How would you name this topic?</div>
+    <div className="mt-3 p-3 fade-in" style={{ display: visible ? 'block' as const : 'none' }}>
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-13" style={{ color: 'var(--text-tertiary-weak)' }}>How would you name this topic?</div>
+        <button
+          type="button"
+          aria-label="Hide title suggestions"
+          title="Hide title suggestions"
+          className="rounded-lg"
+          onClick={onClose}
+          style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 6l12 12M18 6L6 18" strokeWidth="2"/></svg>
+        </button>
+      </div>
       <div className="flex flex-wrap gap-1">
         {titles.slice(0, 5).map((t, i) => (
           <span key={i} className="chip" title={t}>
@@ -1433,6 +1442,10 @@ const DiscoveryPage: React.FC = () => {
   const [badgeArtifacts, setBadgeArtifacts] = useState(false);
   // Bottom slot (TitleSuggestions) min height to align its top with chat input top
   const [titleSlotMinHeight, setTitleSlotMinHeight] = useState<number>(48);
+  const [titlesVisible, setTitlesVisible] = useState(true);
+  const [titlesAvailable, setTitlesAvailable] = useState(false);
+  const [titlesGlow, setTitlesGlow] = useState(false);
+  React.useEffect(() => { if (sideOpen) setTitlesGlow(false); }, [sideOpen]);
   const [availUserAnalysis, setAvailUserAnalysis] = useState(false);
   const [availLLMReview, setAvailLLMReview] = useState(false);
   const [availDiscussionFlow, setAvailDiscussionFlow] = useState(false);
@@ -2581,6 +2594,60 @@ const DiscoveryPage: React.FC = () => {
               )}
             </div>
 
+            {/* Analysis shortcuts (duplicate of floating buttons when sidebar hidden) */}
+            <div className="mb-4 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
+              <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                Analysis
+              </div>
+              <button
+                type="button"
+                disabled={!availUserAnalysis}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
+                style={{ backgroundColor: leftPanel === 'user' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)', opacity: availUserAnalysis ? 1 : 0.5, cursor: availUserAnalysis ? 'pointer' : 'not-allowed' }}
+                onMouseEnter={(e) => { if (leftPanel !== 'user' && availUserAnalysis) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { if (leftPanel !== 'user' && availUserAnalysis) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => availUserAnalysis && setLeftPanel((p) => (p === 'user' ? null : 'user'))}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <circle cx="12" cy="8" r="3.5" strokeWidth={2} />
+                  <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth={2} strokeLinecap="round" />
+                </svg>
+                <span className="text-12">Your stance</span>
+              </button>
+              <button
+                type="button"
+                disabled={!availDiscussionFlow}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
+                style={{ backgroundColor: leftPanel === 'flow' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)', opacity: availDiscussionFlow ? 1 : 0.5, cursor: availDiscussionFlow ? 'pointer' : 'not-allowed' }}
+                onMouseEnter={(e) => { if (leftPanel !== 'flow' && availDiscussionFlow) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { if (leftPanel !== 'flow' && availDiscussionFlow) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => availDiscussionFlow && setLeftPanel((p) => (p === 'flow' ? null : 'flow'))}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M5 5h6v6H5z" strokeWidth={2} />
+                  <path d="M13 7h6" strokeWidth={2} strokeLinecap="round" />
+                  <path d="M13 17h6" strokeWidth={2} strokeLinecap="round" />
+                  <path d="M8 11v2c0 2.209 1.791 4 4 4h1" strokeWidth={2} strokeLinecap="round" />
+                </svg>
+                <span className="text-12">Discussion Flow</span>
+              </button>
+              <button
+                type="button"
+                disabled={!availArtifacts}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                style={{ backgroundColor: leftPanel === 'artifacts' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)', opacity: availArtifacts ? 1 : 0.5, cursor: availArtifacts ? 'pointer' : 'not-allowed' }}
+                onMouseEnter={(e) => { if (leftPanel !== 'artifacts' && availArtifacts) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { if (leftPanel !== 'artifacts' && availArtifacts) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => availArtifacts && setLeftPanel((p) => (p === 'artifacts' ? null : 'artifacts'))}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <rect x="5" y="5" width="14" height="6" rx="1.5" strokeWidth={2} />
+                  <rect x="5" y="13" width="14" height="6" rx="1.5" strokeWidth={2} />
+                </svg>
+                <span className="text-12">Artifacts</span>
+              </button>
+            </div>
+
             {/* Bottom settings button */}
             <div className="mt-auto pt-4">
               {isAdmin && (
@@ -2619,6 +2686,8 @@ const DiscoveryPage: React.FC = () => {
               </button>
             </div>
           </div>
+
+          
         </div>
       )}
 
@@ -2904,8 +2973,35 @@ const DiscoveryPage: React.FC = () => {
           )}
 
           {/* Bottom slot: topic title suggestions (reserved area, fixed at column bottom) */}
-          <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight }}>
-            <TitleSuggestions />
+          <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight, position: 'relative' }}>
+            {/* Floating reopen button (left rail), appears only when suggestions exist and panel is hidden */}
+            {!titlesVisible && titlesAvailable && !sideOpen && (
+              <button
+                type="button"
+                aria-label="Show title suggestions"
+                title="Show title suggestions"
+                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300 ${titlesGlow ? 'animate-pulse' : ''}`}
+                style={{ position: 'fixed', left: 8, bottom: Math.max(56, titleSlotMinHeight) + 12, backgroundColor: 'var(--newchat-bg)', color: 'var(--text-heading)', boxShadow: titlesGlow ? '0 0 0 3px rgba(0, 200, 200, 0.28), 0 0 16px rgba(0, 200, 200, 0.60), 0 0 28px rgba(0, 180, 180, 0.45)' : 'none' }}
+                onClick={() => { setTitlesVisible(true); setTitlesGlow(false); }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)'; }}
+              >
+                {/* Label/tag icon */}
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ filter: titlesGlow ? 'drop-shadow(0 0 6px rgba(0, 200, 200, 0.65))' : 'none' }}>
+                  <path d="M3 12l7-7h4l7 7-7 7h-4z" strokeWidth="2" />
+                  <circle cx="10" cy="10" r="1.5" fill="currentColor" />
+                </svg>
+              </button>
+            )}
+            <TitleSuggestions
+              visible={titlesVisible}
+              onClose={() => {
+                setTitlesVisible(false);
+                setTitlesGlow(true);
+                window.setTimeout(() => setTitlesGlow(false), 1600);
+              }}
+              onAvailableChange={setTitlesAvailable}
+            />
           </div>
 
           {/* Add source button (only when chat exists and has sources) */}

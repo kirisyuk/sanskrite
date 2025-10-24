@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLocation } from 'react-router-dom';
 import { ThemeContext } from './ThemeProvider';
 import { useAuth } from '../contexts/AuthContext';
 import logoDarkTheme from '../assets/hatl-dark-theme.png';
@@ -8,6 +9,16 @@ import { UserProfile } from './UserProfile';
 export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) => {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { currentUser } = useAuth();
+  const location = useLocation();
+  const isChat = React.useMemo(() => {
+    try {
+      const params = new URLSearchParams(location.search);
+      const isUnfold = params.get('app') === 'unfold';
+      return location.pathname === '/' && (isUnfold || !!currentUser);
+    } catch {
+      return !!currentUser;
+    }
+  }, [location.pathname, location.search, currentUser]);
 
   const toggleTheme = React.useCallback(() => {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -30,7 +41,7 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
           />
         </a>
         {/* Link to Unfold chat when logged in */}
-        {currentUser && (
+        {currentUser && !isChat && (
           <a
             href="/?app=unfold"
             className="text-12 px-2 py-1 rounded"

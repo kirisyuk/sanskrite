@@ -3,7 +3,6 @@ import { useAuth } from '../contexts/AuthContext';
 import lightLogo from '../assets/hatl-light-theme.png';
 import darkLogo from '../assets/hatl-dark-theme.png';
 import { ThemeContext } from './ThemeProvider';
-import { TopBar } from './TopBar';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -123,7 +122,6 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
   if (!user) {
   return (
       <>
-        <TopBar />
         <div className="auth-container">
         <div className="auth-card">
           <div className="text-center mb-8">
