@@ -213,7 +213,7 @@ deploy_api() {
     --max-instances=3 \
     --cpu=1 \
     --memory=512Mi \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGIN=http://localhost:5173,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs" \
+    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs" \
     --set-secrets "VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,GROK_API_KEY=grok_api_key:latest" \
     --project "$PROJECT_ID" \
     --quiet

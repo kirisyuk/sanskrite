@@ -20,12 +20,14 @@ import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Legend, Tooltip } from 'recharts';
+import { useTranslation } from 'react-i18next';
 import { AGENT_PRESETS } from '../lib/agentPresets';
 import { ThemeContext } from '../components/ThemeProvider';
 
 // Inline evaluation details renderer (reads eval.bias interactions)
 const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
   const genaiChat = useGenaiChatStore();
+  const { t } = useTranslation();
   const ev = React.useMemo(() => {
     try {
       const found = [...genaiChat.interactions].reverse().find((it) => it.subkind === 'eval.bias' && it.replyTo === messageId);
@@ -79,8 +81,8 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
             {meta?.headerText && (
               <button
                 type="button"
-                aria-label="Ask this agent"
-                title="Ask this agent"
+                aria-label={t('unfold.actions.askAgent')}
+                title={t('unfold.titles.askAgent')}
                 className="rounded-lg"
                 style={{ height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', border: '1px solid var(--overlay-line-90)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
@@ -88,15 +90,15 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
                 onClick={() => setShowAsk((v) => !v)}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20l-3.5-3H6a4 4 0 01-4-4V7a4 4 0 014-4h12a4 4 0 014 4v6a4 4 0 01-4 4h-2.5L12 20z" strokeWidth="2"/></svg>
-                <span className="text-[11px]">Ask this agent</span>
+                <span className="text-[11px]">{t('unfold.actions.askAgent')}</span>
               </button>
             )}
             {showAsk && meta?.headerText && (
               <div ref={askRef} className="rounded-lg" style={{ position: 'absolute', top: 26, right: 190, background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', padding: 6, zIndex: 10, width: 300 }}>
-                <div className="text-[11px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>Follow-up to {meta.headerText}</div>
+                <div className="text-[11px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.actions.askAgent')}: {meta.headerText}</div>
                 <textarea rows={3} className="w-full" value={askText} onChange={(e) => setAskText(e.target.value)} style={{ background: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 6, padding: 6 }} />
                 <div className="mt-2 flex items-center justify-end gap-2">
-                  <button className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }} onClick={() => { setShowAsk(false); setAskText(''); }}>Cancel</button>
+                  <button className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }} onClick={() => { setShowAsk(false); setAskText(''); }}>{t('unfold.actions.cancel')}</button>
                   <button className="text-[11px]" style={{ color: 'var(--text-heading)', background: 'var(--white-10)', border: '1px solid var(--overlay-line-90)', borderRadius: 6, padding: '4px 8px' }} onClick={async () => {
                     const question = (askText || '').trim();
                     if (!question) { setShowAsk(false); return; }
@@ -137,15 +139,15 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
                       const stMsg = useGenaiChatStore.getState().messages.find((m) => m.id === messageId);
                       await useGenaiChatStore.getState().startStream({ prompt: userEcho, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: agentName, agentProfile: prof || undefined, subkind: 'agent.ask', replyTo: stMsg ? stMsg.id : messageId } });
                     } catch {}
-                  }}>Send</button>
+                  }}>{t('unfold.actions.send')}</button>
                 </div>
               </div>
             )}
             {meta?.headerText && (
               <button
                 type="button"
-                aria-label="Refine the previous answer"
-                title="Refine the previous primary answer based on this contribution."
+                aria-label={t('unfold.actions.refinePrev')}
+                title={t('unfold.titles.refinePrevExplain')}
                 className="rounded-lg"
                 style={{ height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', border: '1px solid var(--overlay-line-90)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
@@ -189,14 +191,14 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
                   <path d="M7 17l5-5" strokeWidth="2" strokeLinecap="round" />
                   <rect x="10" y="3" width="11" height="11" rx="2" strokeWidth="2" />
                 </svg>
-                <span className="text-[11px]">Refine the previous answer</span>
+                <span className="text-[11px]">{t('unfold.actions.refinePrev')}</span>
               </button>
             )}
             {/* Bring In after Refine */}
             <button
               type="button"
-              aria-label="Bring in another model"
-              title="Bring in another AI model to the discussion."
+              aria-label={t('unfold.actions.bringIn')}
+              title={t('unfold.titles.bringInExplain')}
               className="rounded-lg"
               style={{ width: 24, height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
@@ -255,8 +257,8 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
             {/* Copy last */}
             <button
               type="button"
-              aria-label="Copy answer"
-              title="Copy answer"
+              aria-label={t('unfold.actions.copyAnswer')}
+              title={t('unfold.titles.copyAnswer')}
               className="rounded-lg"
               style={{ width: 24, height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
               onClick={() => { try { navigator.clipboard.writeText(msg.content); } catch {} }}
@@ -303,6 +305,7 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
 // otherwise shows action buttons (Bring In, Copy) immediately after message
 const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: string }> = ({ messageId, isAssistant, content }) => {
   const genaiChat = useGenaiChatStore();
+  const { t } = useTranslation();
   const hasEvalBias = React.useMemo(() => {
     try { return !![...genaiChat.interactions].reverse().find((it) => it.subkind === 'eval.bias' && it.replyTo === messageId); } catch { return false; }
   }, [genaiChat.interactions, messageId]);
@@ -363,17 +366,17 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                         await useGenaiChatStore.getState().startStream({ prompt: pPrompt, tools: st.pendingAssistantTools, options: pOpts, agentMeta: pMeta, suppressUserEcho: true });
                       } catch {}
                     }}
-                  >Retry</button>
+                  >{t('unfold.actions.retry')}</button>
                   <button
                     className="text-[11px] rounded px-2 py-0.5"
                     style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-secondary-strong)' }}
                     onClick={() => setShowBringIn((v) => !v)}
-                  >Switch model…</button>
+                  >{t('unfold.actions.switchModel')}</button>
                   <button
                     className="text-[11px] rounded px-2 py-0.5"
                     style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-secondary-strong)' }}
                     onClick={() => { try { navigator.clipboard.writeText(pPrompt); } catch {} }}
-                  >Copy request</button>
+                  >{t('unfold.actions.copyRequest')}</button>
                 </div>
               );
             } catch { return null; }

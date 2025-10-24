@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -475,7 +476,18 @@ func main() {
 			}
 		}
 	} else {
-		allowedOrigins = []string{getEnv("FRONTEND_ORIGIN", "http://localhost:5173")}
+		legacy := getEnv("FRONTEND_ORIGIN", "")
+		if legacy != "" {
+			allowedOrigins = []string{legacy}
+		} else {
+			allowedOrigins = []string{
+				"http://localhost:5173",
+				"http://localhost:3000",
+				"https://hatl.one",
+				"https://www.hatl.one",
+				"https://*.hatl.one",
+			}
+		}
 	}
 
 	// Admin job token middleware for Cloud Scheduler (bypasses Firebase auth for admin route only)
@@ -593,7 +605,7 @@ func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 						break
 					}
 				}
-				// For local dev, also allow same-origin when wildcard "same-origin" is used
+				// Global wildcard support
 				if allowOrigin == "" {
 					for _, ao := range allowedOrigins {
 						if ao == "*" {
@@ -602,15 +614,48 @@ func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 						}
 					}
 				}
+				// Subdomain wildcard entries like "*.hatl.one" or URL with scheme
+				if allowOrigin == "" {
+					u, err := url.Parse(origin)
+					if err == nil {
+						host := u.Hostname()
+						scheme := u.Scheme
+						for _, ao := range allowedOrigins {
+							if strings.HasPrefix(ao, "http://") || strings.HasPrefix(ao, "https://") {
+								if au, err2 := url.Parse(ao); err2 == nil {
+									ahost := au.Hostname()
+									if strings.HasPrefix(ahost, "*.") {
+										if strings.HasSuffix(host, strings.TrimPrefix(ahost, "*")) && au.Scheme == scheme {
+											allowOrigin = origin
+											break
+										}
+									}
+								}
+							} else if strings.HasPrefix(ao, "*.") {
+								if strings.HasSuffix(host, strings.TrimPrefix(ao, "*")) {
+									allowOrigin = origin
+									break
+								}
+							}
+						}
+					}
+				}
 			}
 
 			if allowOrigin != "" {
 				w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
-				w.Header().Set("Vary", "Origin")
+				w.Header().Add("Vary", "Origin")
+				w.Header().Add("Vary", "Access-Control-Request-Headers")
+				w.Header().Add("Vary", "Access-Control-Request-Method")
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			}
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			if acrh := r.Header.Get("Access-Control-Request-Headers"); acrh != "" {
+				w.Header().Set("Access-Control-Allow-Headers", acrh)
+			} else {
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Requested-With, X-Job-Token")
+			}
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD")
+			w.Header().Set("Access-Control-Max-Age", "600")
 
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
