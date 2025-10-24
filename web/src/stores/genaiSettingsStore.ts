@@ -82,8 +82,8 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
 
   const initial: Omit<GenAISettingsState, 'setProvider' | 'setStrength' | 'setStanceProvider' | 'setStanceStrength' | 'setStanceModel' | 'setGrounding' | 'setTemperature' | 'setMaxOutputTokens' | 'setSystemInstruction' | 'setEnableTelegramTool' | 'save'> = {
     provider: (persisted as any)?.provider || 'gemini',
-    strength: (persisted as any)?.strength || 'quality',
-    model: (persisted?.model as GenAIModel) || 'gemini_quality',
+    strength: (persisted as any)?.strength || 'fast',
+    model: (persisted?.model as GenAIModel) || 'gemini_fast',
     stanceProvider: (persisted as any)?.stanceProvider || 'gemini',
     stanceStrength: (persisted as any)?.stanceStrength || 'fast',
     stanceModel: (persisted?.stanceModel as GenAIModel) || 'gemini_fast',
@@ -109,11 +109,13 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
         groundingEnabled: caps.grounding ? current.groundingEnabled : false,
         enableTelegramTool: caps.tools ? current.enableTelegramTool : false,
       });
+      try { get().save(); } catch {}
     },
     setStrength: (s) => {
       const current = get();
       const alias = mapProviderStrengthToModel(current.provider, s);
       set({ strength: s, model: alias });
+      try { get().save(); } catch {}
     },
     setStanceProvider: (p) => {
       const current = get();
@@ -122,12 +124,14 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
       const alias = mapProviderStrengthToModel(p, strength);
       set({ stanceProvider: p, stanceModel: alias });
       // no change to chat capabilities
+      try { get().save(); } catch {}
     },
     setStanceStrength: (s) => {
       const current = get();
       const prov = current.stanceProvider || 'gemini';
       const alias = mapProviderStrengthToModel(prov, s);
       set({ stanceStrength: s, stanceModel: alias });
+      try { get().save(); } catch {}
     },
     setStanceModel: (m) => set({ stanceModel: m }),
     setGrounding: (v) => set({ groundingEnabled: v }),

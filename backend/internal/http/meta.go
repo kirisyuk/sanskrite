@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -21,10 +22,11 @@ type MetaHandler struct {
 	aggProj      *repo.MetaAggregateProjectsRepository
 	aggUser      *repo.MetaAggregateUsersRepository
 	exec         *ai.AITaskExecutor
+	logger       *log.Logger
 }
 
-func NewMetaHandler(projects *repo.ProjectsRepository, interactions *repo.InteractionsRepository, events *repo.MetaAnalysesRepository, aggProj *repo.MetaAggregateProjectsRepository, aggUser *repo.MetaAggregateUsersRepository, exec *ai.AITaskExecutor) *MetaHandler {
-	return &MetaHandler{projects: projects, interactions: interactions, eventsRepo: events, aggProj: aggProj, aggUser: aggUser, exec: exec}
+func NewMetaHandler(projects *repo.ProjectsRepository, interactions *repo.InteractionsRepository, events *repo.MetaAnalysesRepository, aggProj *repo.MetaAggregateProjectsRepository, aggUser *repo.MetaAggregateUsersRepository, exec *ai.AITaskExecutor, logger *log.Logger) *MetaHandler {
+	return &MetaHandler{projects: projects, interactions: interactions, eventsRepo: events, aggProj: aggProj, aggUser: aggUser, exec: exec, logger: logger}
 }
 
 // Analyze request/response
@@ -98,6 +100,9 @@ func (h *MetaHandler) Analyze(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs, err := h.resolveWindow(r.Context(), projectID, req.Interactions)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("meta: resolveWindow error: %v (project=%s, analyzers=%v)", err, projectID, req.Analyzers)
+		}
 		WriteBadRequest(w, "INVALID_INTERACTIONS", err.Error())
 		return
 	}
@@ -108,6 +113,9 @@ func (h *MetaHandler) Analyze(w http.ResponseWriter, r *http.Request) {
 	// 1) Dialog control classification (common)
 	who, leadIdx, focus, structure, err := h.classifyDialogControl(r.Context(), window)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("meta: classify dialog error: %v (windowChars=%d)", err, len(window))
+		}
 		WriteInternalError(w, fmt.Sprintf("Dialog control classification failed: %v", err))
 		return
 	}
@@ -117,6 +125,10 @@ func (h *MetaHandler) Analyze(w http.ResponseWriter, r *http.Request) {
 	for _, a := range req.Analyzers {
 		resMap, runErr := h.runAnalyzer(r.Context(), a, window)
 		if runErr != nil {
+			if h.logger != nil {
+				// Common place to catch JSON decode/validation mismatches
+				h.logger.Printf("meta: analyzer %s failed: %v (windowChars=%d)", a, runErr, len(window))
+			}
 			WriteInternalError(w, fmt.Sprintf("Analyzer %s failed: %v", a, runErr))
 			return
 		}

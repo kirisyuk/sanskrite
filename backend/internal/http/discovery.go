@@ -808,10 +808,32 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		Model   *string         `json:"model,omitempty"`
 		Usage   *repo.UsageMeta `json:"usage,omitempty"`
 		// Optional extended fields (safe defaults if missing)
-		Author       *repo.ParticipantRef       `json:"author,omitempty"`
-		Recipients   []string                   `json:"recipients,omitempty"`
-		ReplyTo      *string                    `json:"replyTo,omitempty"`
-		AgentProfile *repo.AgentProfileSnapshot `json:"agentProfile,omitempty"`
+		Subkind          *string                    `json:"subkind,omitempty"`
+		ContentSanitized *string                    `json:"contentSanitized,omitempty"`
+		Author           *repo.ParticipantRef       `json:"author,omitempty"`
+		Recipients       []string                   `json:"recipients,omitempty"`
+		ReplyTo          *string                    `json:"replyTo,omitempty"`
+		AgentProfile     *repo.AgentProfileSnapshot `json:"agentProfile,omitempty"`
+		Evaluations      map[string]any             `json:"evaluations,omitempty"`
+		Relations        []struct {
+			Type     string `json:"type" firestore:"type"`
+			TargetID string `json:"targetId" firestore:"targetId"`
+		} `json:"relations,omitempty"`
+		Language                 *string `json:"language,omitempty"`
+		SystemInstructionApplied *string `json:"systemInstructionApplied,omitempty"`
+		GenerationParams         *struct {
+			Temperature      *float64 `json:"temperature,omitempty" firestore:"temperature,omitempty"`
+			MaxOutputTokens  *int     `json:"maxOutputTokens,omitempty" firestore:"maxOutputTokens,omitempty"`
+			GroundingEnabled *bool    `json:"groundingEnabled,omitempty" firestore:"groundingEnabled,omitempty"`
+		} `json:"generationParams,omitempty"`
+		HighRisk *struct {
+			Level     string   `json:"level" firestore:"level"`
+			Score     float64  `json:"score" firestore:"score"`
+			Rationale *string  `json:"rationale,omitempty" firestore:"rationale,omitempty"`
+			Triggers  []string `json:"triggers,omitempty" firestore:"triggers,omitempty"`
+		} `json:"highRisk,omitempty"`
+		OriginalMessageID *string `json:"originalMessageId,omitempty"`
+		CoreDocID         *string `json:"coreDocId,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Content) == "" {
 		WriteBadRequest(w, "INVALID_JSON", "kind and content are required")
@@ -825,17 +847,27 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		k = "note"
 	}
 	id, err := h.interactionsRepo.Create(r.Context(), &repo.Interaction{
-		TenantID:     authInfo.TenantID,
-		ProjectID:    projectID,
-		Kind:         k,
-		Content:      body.Content,
-		Summary:      body.Summary,
-		Model:        body.Model,
-		Usage:        body.Usage,
-		Author:       body.Author,
-		Recipients:   body.Recipients,
-		ReplyTo:      body.ReplyTo,
-		AgentProfile: body.AgentProfile,
+		TenantID:                 authInfo.TenantID,
+		ProjectID:                projectID,
+		Kind:                     k,
+		Content:                  body.Content,
+		Summary:                  body.Summary,
+		Model:                    body.Model,
+		Usage:                    body.Usage,
+		Subkind:                  body.Subkind,
+		ContentSanitized:         body.ContentSanitized,
+		Author:                   body.Author,
+		Recipients:               body.Recipients,
+		ReplyTo:                  body.ReplyTo,
+		AgentProfile:             body.AgentProfile,
+		Evaluations:              body.Evaluations,
+		Relations:                body.Relations,
+		Language:                 body.Language,
+		SystemInstructionApplied: body.SystemInstructionApplied,
+		GenerationParams:         body.GenerationParams,
+		HighRisk:                 body.HighRisk,
+		OriginalMessageID:        body.OriginalMessageID,
+		CoreDocID:                body.CoreDocID,
 	})
 	if err != nil {
 		WriteInternalError(w, "Failed to create interaction")
@@ -880,6 +912,73 @@ func (h *DiscoveryHandler) DeleteProjectInteraction(w http.ResponseWriter, r *ht
 	}
 	if err := h.interactionsRepo.DeleteByID(r.Context(), interactionID); err != nil {
 		WriteInternalError(w, "Failed to delete interaction")
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+// UpdateProjectInteraction handles PATCH /api/v1/projects/{id}/interactions/{interactionId}
+func (h *DiscoveryHandler) UpdateProjectInteraction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only PATCH is allowed", nil)
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	if h.interactionsRepo == nil {
+		WriteInternalError(w, "Interactions repo not configured")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project and Interaction IDs are required")
+		return
+	}
+	projectID := parts[3]
+	interactionID := parts[5]
+	project, err := h.projectsRepo.Get(r.Context(), projectID)
+	if err != nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	// verify interaction belongs to project and tenant
+	it, err := h.interactionsRepo.Get(r.Context(), interactionID)
+	if err != nil || it == nil || it.ProjectID != projectID || it.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	var payload map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse body")
+		return
+	}
+	if len(payload) == 0 {
+		WriteBadRequest(w, "VALIDATION_ERROR", "No fields to update")
+		return
+	}
+	// Whitelist fields allowed for update
+	allowed := map[string]struct{}{
+		"kind": {}, "subkind": {}, "content": {}, "contentSanitized": {}, "summary": {},
+		"model": {}, "usage": {}, "author": {}, "recipients": {}, "replyTo": {},
+		"agentProfile": {}, "evaluations": {}, "relations": {}, "language": {},
+		"systemInstructionApplied": {}, "generationParams": {}, "highRisk": {},
+		"originalMessageId": {}, "coreDocId": {},
+	}
+	updates := map[string]interface{}{}
+	for k, v := range payload {
+		if _, ok := allowed[k]; ok {
+			updates[k] = v
+		}
+	}
+	if len(updates) == 0 {
+		WriteBadRequest(w, "VALIDATION_ERROR", "No updatable fields provided")
+		return
+	}
+	if err := h.interactionsRepo.Update(r.Context(), interactionID, updates); err != nil {
+		WriteInternalError(w, "Failed to update interaction")
 		return
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{"success": true})

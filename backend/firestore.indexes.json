@@ -9,6 +9,14 @@
       ]
     },
     {
+      "collectionGroup": "core_waitlist",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "core_projects",
       "queryScope": "COLLECTION",
       "fields": [

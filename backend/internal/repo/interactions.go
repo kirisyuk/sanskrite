@@ -92,6 +92,23 @@ func (r *InteractionsRepository) Create(ctx context.Context, it *Interaction) (s
 	return doc.ID, nil
 }
 
+// Update applies a partial update to an interaction document by id using merge semantics
+func (r *InteractionsRepository) Update(ctx context.Context, id string, updates map[string]interface{}) error {
+	if id == "" {
+		return ErrInvalidDocument
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	// ensure server-side updated CreatedAt is not accidentally overwritten
+	delete(updates, "id")
+	delete(updates, "tenantId")
+	delete(updates, "projectId")
+	delete(updates, "createdAt")
+	_, err := r.col.Doc(id).Set(ctx, updates, firestore.MergeAll)
+	return err
+}
+
 // Get returns an interaction by id
 func (r *InteractionsRepository) Get(ctx context.Context, id string) (*Interaction, error) {
 	if id == "" {

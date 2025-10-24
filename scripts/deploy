@@ -374,8 +374,10 @@ create_indexes() {
   fi
 }
 
-# Setup infrastructure first (idempotent)
-setup_infrastructure
+# Setup infrastructure first (idempotent) — skip for web-only deploys to avoid gcloud prompts
+if [[ "$TARGET_API" -eq 1 || "$TARGET_PY" -eq 1 ]]; then
+  setup_infrastructure
+fi
 
 if [[ "$TARGET_WEB" -eq 1 ]]; then
   deploy_web
@@ -389,7 +391,10 @@ if [[ "$TARGET_PY" -eq 1 ]]; then
   deploy_py
 fi
 
-create_indexes
+# Firestore indexes are only relevant for backend; skip for web-only
+if [[ "$TARGET_API" -eq 1 || "$TARGET_PY" -eq 1 ]]; then
+  create_indexes
+fi
 
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"

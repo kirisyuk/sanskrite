@@ -3,7 +3,6 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -12,47 +11,138 @@ type BaseVerifier struct{}
 
 // CleanAndFixJSON очищает и исправляет JSON перед парсингом
 func (v *BaseVerifier) CleanAndFixJSON(rawJSON string) (string, error) {
-	if strings.TrimSpace(rawJSON) == "" {
+	s := strings.TrimSpace(rawJSON)
+	if s == "" {
 		return "", fmt.Errorf("JSON string is empty")
 	}
-
-	// Удаляем BOM если есть
-	rawJSON = strings.TrimPrefix(rawJSON, "\uFEFF")
-
-	// Удаляем trailing commas перед } или ]
-	re := regexp.MustCompile(`,\s*([}\]])`)
-	fixed := re.ReplaceAllString(rawJSON, "$1")
-
-	// Удаляем однострочные комментарии
-	re = regexp.MustCompile(`//.*?\n`)
-	fixed = re.ReplaceAllString(fixed, "\n")
-
-	// Удаляем многострочные комментарии
-	re = regexp.MustCompile(`/\*.*?\*/`)
-	fixed = re.ReplaceAllString(fixed, "")
-
-	// Исправляем одиночные кавычки на двойные (только если они используются как кавычки для строк)
-	// Это упрощенная версия, для полной реализации нужен более сложный парсер
-	re = regexp.MustCompile(`'([^']*?)'`)
-	fixed = re.ReplaceAllStringFunc(fixed, func(s string) string {
-		// Проверяем, является ли это строковым значением JSON
-		if strings.HasPrefix(strings.TrimSpace(s), "':") || strings.HasSuffix(strings.TrimSpace(s), ":'") {
-			return s
+	s = strings.TrimPrefix(s, "\uFEFF")
+	// Удаляем Markdown code fences ```json ... ``` / ``` ... ```
+	if strings.HasPrefix(s, "```") {
+		// отбросить первый блок ```...\n
+		if idx := strings.Index(s, "\n"); idx > 0 {
+			s = s[idx+1:]
 		}
-		return `"` + s[1:len(s)-1] + `"`
-	})
-
-	// Удаляем дублирующиеся запятые
-	re = regexp.MustCompile(`,\s*,`)
-	fixed = re.ReplaceAllString(fixed, ",")
-
-	// Исправляем missing commas между объектами/массивами
-	re = regexp.MustCompile(`}\s*{`)
-	fixed = re.ReplaceAllString(fixed, "},{")
-	re = regexp.MustCompile(`]\s*\[`)
-	fixed = re.ReplaceAllString(fixed, "],[")
-
-	return strings.TrimSpace(fixed), nil
+		if j := strings.LastIndex(s, "```"); j > 0 {
+			s = s[:j]
+		}
+	}
+	// Вырезаем чистую JSON-структуру по скобкам (игнорируя содержимое строк)
+	start := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == '{' || s[i] == '[' {
+			start = i
+			break
+		}
+	}
+	if start > 0 {
+		s = s[start:]
+	}
+	// Найти позицию закрывающей скобки, учитывая строки и экранирование
+	buf := make([]byte, 0, len(s))
+	inStr := false
+	esc := false
+	depthObj := 0
+	depthArr := 0
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		buf = append(buf, ch)
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if ch == '\\' {
+				esc = true
+				continue
+			}
+			if ch == '"' {
+				inStr = false
+			}
+			continue
+		}
+		if ch == '"' {
+			inStr = true
+			continue
+		}
+		switch ch {
+		case '{':
+			depthObj++
+		case '}':
+			if depthObj > 0 {
+				depthObj--
+			}
+		case '[':
+			depthArr++
+		case ']':
+			if depthArr > 0 {
+				depthArr--
+			}
+		}
+	}
+	cleaned := string(buf)
+	// Проход для удаления однострочных/многострочных комментариев и хвостовых запятых вне строк
+	out := make([]byte, 0, len(cleaned))
+	inStr = false
+	esc = false
+	for i := 0; i < len(cleaned); i++ {
+		ch := cleaned[i]
+		if inStr {
+			out = append(out, ch)
+			if esc {
+				esc = false
+				continue
+			}
+			if ch == '\\' {
+				esc = true
+			} else if ch == '"' {
+				inStr = false
+			}
+			continue
+		}
+		if ch == '"' {
+			inStr = true
+			out = append(out, ch)
+			continue
+		}
+		// strip // comments
+		if ch == '/' && i+1 < len(cleaned) && cleaned[i+1] == '/' {
+			// skip until newline
+			i += 2
+			for i < len(cleaned) && cleaned[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		// strip /* */ comments
+		if ch == '/' && i+1 < len(cleaned) && cleaned[i+1] == '*' {
+			i += 2
+			for i+1 < len(cleaned) {
+				if cleaned[i] == '*' && cleaned[i+1] == '/' {
+					i += 1
+					break
+				}
+				i++
+			}
+			continue
+		}
+		// remove trailing commas: ,\s*([}\]])
+		if ch == ',' {
+			j := i + 1
+			for j < len(cleaned) && (cleaned[j] == ' ' || cleaned[j] == '\n' || cleaned[j] == '\r' || cleaned[j] == '\t') {
+				j++
+			}
+			if j < len(cleaned) && (cleaned[j] == '}' || cleaned[j] == ']') {
+				// skip comma (do not advance i; next loop will copy the brace)
+				continue
+			}
+		}
+		out = append(out, ch)
+	}
+	cleaned = strings.TrimSpace(string(out))
+	if !json.Valid([]byte(cleaned)) {
+		return "", fmt.Errorf("invalid JSON after cleaning")
+	}
+	return cleaned, nil
 }
 
 // ValidateAndParse проверяет валидность JSON и парсит его
@@ -386,4 +476,3 @@ func NewSummarizationVerifier() *SummarizationVerifier {
 		},
 	}
 }
-

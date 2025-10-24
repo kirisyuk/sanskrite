@@ -40,10 +40,6 @@ func parsePDFBytes(data []byte) (string, *int, error) {
 
 	// ledongthuc/pdf API via Open(path)
 	// import at compile time; noop here
-	type pdfReader interface {
-		GetPlainText() (string, error)
-		NumPage() int
-	}
 	// actual implementation in separate helper to avoid unused import when tests stub
 	return parsePDFFile(tmp.Name())
 }

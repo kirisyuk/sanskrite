@@ -208,7 +208,7 @@ func main() {
 		metaEvents := repo.NewMetaAnalysesRepository(fsClient.Client())
 		metaAggProj := repo.NewMetaAggregateProjectsRepository(fsClient.Client())
 		metaAggUser := repo.NewMetaAggregateUsersRepository(fsClient.Client())
-		metaHandler = httphandlers.NewMetaHandler(s.projs, interactions, metaEvents, metaAggProj, metaAggUser, exec)
+		metaHandler = httphandlers.NewMetaHandler(s.projs, interactions, metaEvents, metaAggProj, metaAggUser, exec, logger)
 		// Wire to projects handler for cascade delete
 		s.projectsHandler = s.projectsHandler.WithMeta(metaEvents, metaAggProj, metaAggUser)
 	}
@@ -401,6 +401,10 @@ func main() {
 		// interactions create/delete
 		if strings.HasSuffix(r.URL.Path, "/interactions") && r.Method == http.MethodPost {
 			s.discoveryHandler.CreateProjectInteraction(w, r)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/interactions/") && r.Method == http.MethodPatch {
+			s.discoveryHandler.UpdateProjectInteraction(w, r)
 			return
 		}
 		if strings.Contains(r.URL.Path, "/interactions/") && r.Method == http.MethodDelete {

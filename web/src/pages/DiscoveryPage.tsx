@@ -27,31 +27,38 @@ import { ThemeContext } from '../components/ThemeProvider';
 // Inline evaluation details renderer (reads eval.bias interactions)
 const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
   const genaiChat = useGenaiChatStore();
+  // Hydrate interactions when a concrete project is selected
+  React.useEffect(() => {
+    try {
+      if (genaiChat.projectId && genaiChat.projectId !== 'local-unfold') {
+        genaiChat.hydrateInteractions();
+        genaiChat.ensureStanceAggregate();
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [genaiChat.projectId]);
   const { t } = useTranslation();
   const ev = React.useMemo(() => {
     try {
-      const found = [...genaiChat.interactions].reverse().find((it) => it.subkind === 'eval.bias' && it.replyTo === messageId);
+      const map = (genaiChat as any).persistedByLocalId || {};
+      const serverId = map[messageId];
+      // Build reverse map for bidirectional lookup
+      const reverseMap: Record<string, string[]> = {};
+      Object.entries(map).forEach(([local, server]) => {
+        if (!reverseMap[server as string]) reverseMap[server as string] = [];
+        reverseMap[server as string].push(local);
+      });
+      const localIds = reverseMap[messageId] || [];
+      const found = [...genaiChat.interactions].reverse().find((it: any) => 
+        it.subkind === 'eval.bias' && 
+        (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
+      );
       if (!found) return null;
-      try { return JSON.parse(found.content || '{}'); } catch { try { return JSON.parse(found.contentSanitized || '{}'); } catch { return null; } }
+      try { return JSON.parse((found as any).content || '{}'); } catch { try { return JSON.parse((found as any).contentSanitized || '{}'); } catch { return null; } }
     } catch { return null; }
-  }, [genaiChat.interactions, messageId]);
+  }, [genaiChat.interactions, (genaiChat as any).persistedByLocalId, messageId]);
   const [open, setOpen] = React.useState(false);
   const msg = React.useMemo(() => genaiChat.messages.find((m) => m.id === messageId), [genaiChat.messages, messageId]);
-  const settings = useGenAISettings();
-  const meta = genaiChat.messageMeta ? genaiChat.messageMeta[messageId] : undefined;
-  const [showBringIn, setShowBringIn] = React.useState(false);
-  const [showAsk, setShowAsk] = React.useState(false);
-  const [askText, setAskText] = React.useState('');
-  const askRef = React.useRef<HTMLDivElement | null>(null);
-  React.useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!showAsk) return;
-      const el = askRef.current;
-      if (el && !el.contains(e.target as Node)) setShowAsk(false);
-    };
-    document.addEventListener('mousedown', onDocClick, { capture: true });
-    return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
-  }, [showAsk]);
   const { theme } = React.useContext(ThemeContext);
   if (!ev) return null;
   const level = Math.max(0, Math.min(1, Number(ev.biasLevel || 0)));
@@ -74,204 +81,7 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
           <div style={{ width: pct + '%', height: '100%', backgroundColor: fill }} />
         </div>
         <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{labelLevel.toFixed(1)} {bucketLabel}</div>
-        <button className="text-[11px] underline" style={{ color: 'var(--text-secondary-strong)' }} onClick={() => setOpen(!open)}>Details</button>
-        {msg && msg.role === 'assistant' && msg.content && msg.content.trim().length > 0 && (
-          <div className="flex items-center gap-1 ml-auto" style={{ position: 'relative' }}>
-            {/* Ask + Refine for invited agent answers */}
-            {meta?.headerText && (
-              <button
-                type="button"
-                aria-label={t('unfold.actions.askAgent')}
-                title={t('unfold.titles.askAgent')}
-                className="rounded-lg"
-                style={{ height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', border: '1px solid var(--overlay-line-90)' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => setShowAsk((v) => !v)}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20l-3.5-3H6a4 4 0 01-4-4V7a4 4 0 014-4h12a4 4 0 014 4v6a4 4 0 01-4 4h-2.5L12 20z" strokeWidth="2"/></svg>
-                <span className="text-[11px]">{t('unfold.actions.askAgent')}</span>
-              </button>
-            )}
-            {showAsk && meta?.headerText && (
-              <div ref={askRef} className="rounded-lg" style={{ position: 'absolute', top: 26, right: 190, background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', padding: 6, zIndex: 10, width: 300 }}>
-                <div className="text-[11px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.actions.askAgent')}: {meta.headerText}</div>
-                <textarea rows={3} className="w-full" value={askText} onChange={(e) => setAskText(e.target.value)} style={{ background: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 6, padding: 6 }} />
-                <div className="mt-2 flex items-center justify-end gap-2">
-                  <button className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }} onClick={() => { setShowAsk(false); setAskText(''); }}>{t('unfold.actions.cancel')}</button>
-                  <button className="text-[11px]" style={{ color: 'var(--text-heading)', background: 'var(--white-10)', border: '1px solid var(--overlay-line-90)', borderRadius: 6, padding: '4px 8px' }} onClick={async () => {
-                    const question = (askText || '').trim();
-                    if (!question) { setShowAsk(false); return; }
-                    try {
-                      const msgs = useGenaiChatStore.getState().messages;
-                      const idx = msgs.findIndex((m) => m.id === messageId);
-                      let origUser: string | null = null;
-                      for (let i = idx - 1; i >= 0; i--) {
-                        const mm = msgs[i];
-                        if (mm.role === 'user' && mm.content && mm.content.trim()) { origUser = mm.content; break; }
-                      }
-                      const agentAnswer = msg?.content || '';
-                      const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                      const agentName = meta?.headerText || 'agent';
-                      const prof = useGenaiChatStore.getState().messageMeta[messageId]?.agentProfile;
-                      const prompt = `Language: ${preferredLang}. You are ${agentName}. The user has a follow-up question to your previous answer.\n\nOriginal user question (context):\n${origUser || '(not found)'}\n\nYour previous answer:\n${agentAnswer}\n\nUser follow-up (address this directly):\n${question}`;
-                      const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
-                      const useModel = prof?.model || settings.model;
-                      const sxSystemInstruction = (
-                        `Hidden-instructions protocol (do not show to users):\n` +
-                        `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
-                        `- JSON must be valid and match v: \"1\" with one of types: entity_mark, monitor_metric, watchlist_add, link_reference.\n` +
-                        `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
-                        `- Examples: <!-- @sx:{\\\"v\\\":\\\"1\\\",\\\"type\\\":\\\"entity_mark\\\",\\\"id\\\":\\\"ent-001\\\",\\\"kind\\\":\\\"person\\\",\\\"name\\\":\\\"…\\\",\\\"description\\\":\\\"…\\\"} -->`
-                      );
-                      const combinedSystemInstruction = [settings.systemInstruction || '', sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
-                      const options: any = {
-                        profile: /_quality$/i.test(useModel || '') ? 'quality' : 'fast',
-                        modelOverride: useModel,
-                        groundingEnabled: settings.groundingEnabled,
-                        temperature: settings.temperature,
-                        maxOutputTokens: settings.maxOutputTokens,
-                        systemInstruction: combinedSystemInstruction,
-                      };
-                      const userEcho = `${question}`;
-                      setShowAsk(false);
-                      setAskText('');
-                      const stMsg = useGenaiChatStore.getState().messages.find((m) => m.id === messageId);
-                      await useGenaiChatStore.getState().startStream({ prompt: userEcho, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: agentName, agentProfile: prof || undefined, subkind: 'agent.ask', replyTo: stMsg ? stMsg.id : messageId } });
-                    } catch {}
-                  }}>{t('unfold.actions.send')}</button>
-                </div>
-              </div>
-            )}
-            {meta?.headerText && (
-              <button
-                type="button"
-                aria-label={t('unfold.actions.refinePrev')}
-                title={t('unfold.titles.refinePrevExplain')}
-                className="rounded-lg"
-                style={{ height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', border: '1px solid var(--overlay-line-90)' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={async () => {
-                  try {
-                    const msgs = useGenaiChatStore.getState().messages;
-                    const idx = msgs.findIndex((m) => m.id === messageId);
-                    let prevPrimary: string | null = null;
-                    let prevPrimaryId: string | null = null;
-                    for (let i = idx - 1; i >= 0; i--) {
-                      const mm = msgs[i];
-                      if (mm.role === 'assistant') {
-                        const mmeta = useGenaiChatStore.getState().messageMeta[mm.id];
-                        if (!mmeta?.headerText) { prevPrimary = mm.content; prevPrimaryId = mm.id; break; }
-                      }
-                    }
-                    if (!prevPrimary) return;
-                    const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                    const contribution = msg?.content || '';
-                    const prompt = `Language: ${preferredLang}.\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
-                    const res = await api.genaiGenerate({ model: settings.model, prompt, strictJSONEnabled: false, maxOutputTokens: Math.max(1024, settings.maxOutputTokens || 2048), webSearchEnabled: false, systemInstruction: settings.systemInstruction || undefined });
-                    const stripFences = (s: string) => {
-                      let t = (s || '').toString().trim();
-                      t = t.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim();
-                      t = t.replace(/^```[\s\S]*?```$/m, (m) => m.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')).trim();
-                      if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) t = t.slice(1, -1);
-                      return t.trim();
-                    };
-                    const refined = stripFences(res?.content || '');
-                    if (!refined || !prevPrimaryId) return;
-                    useGenaiChatStore.setState((s) => ({
-                      messages: s.messages.map((m) => m.id === prevPrimaryId ? { ...m, content: refined } : m),
-                      interactions: s.interactions.map((it: any) => it.id === prevPrimaryId ? ({ ...it, contentSanitized: refined, content: refined }) : it),
-                    } as any));
-                  } catch {}
-                }}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path d="M3 17v4h4" strokeWidth="2" strokeLinecap="round" />
-                  <path d="M7 17l5-5" strokeWidth="2" strokeLinecap="round" />
-                  <rect x="10" y="3" width="11" height="11" rx="2" strokeWidth="2" />
-                </svg>
-                <span className="text-[11px]">{t('unfold.actions.refinePrev')}</span>
-              </button>
-            )}
-            {/* Bring In after Refine */}
-            <button
-              type="button"
-              aria-label={t('unfold.actions.bringIn')}
-              title={t('unfold.titles.bringInExplain')}
-              className="rounded-lg"
-              style={{ width: 24, height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-              onClick={() => setShowBringIn((v) => !v)}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path d="M12 7a3 3 0 1 1 0 6a3 3 0 0 1 0-6" strokeWidth="2" />
-                <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth="2" strokeLinecap="round" />
-                <path d="M18 7v4M16 9h4" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            </button>
-            {showBringIn && (
-              <div className="rounded-lg" style={{ position: 'absolute', top: 26, right: 28, background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', padding: 6, zIndex: 10, minWidth: 180 }}>
-                {AGENT_PRESETS.map((p) => (
-                  <button key={p.id} type="button" className="w-full text-left rounded px-2 py-1 text-[12px]" style={{ background: 'transparent', color: 'var(--text-heading)' }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                    onClick={async () => {
-                      setShowBringIn(false);
-                      try {
-                        const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
-                        const model = p.modelAlias;
-                        const options: any = {
-                          profile: /_quality$/i.test(model) ? 'quality' : 'fast',
-                          modelOverride: model,
-                          groundingEnabled: p.capabilities?.webSearch ?? settings.groundingEnabled,
-                          temperature: typeof p.params?.temperature === 'number' ? p.params?.temperature : settings.temperature,
-                          maxOutputTokens: settings.maxOutputTokens,
-                          systemInstruction: [settings.systemInstruction || '', p.params?.systemInstruction || ''].filter(Boolean).join('\n\n').trim() || undefined,
-                        };
-                        const st = useGenaiChatStore.getState();
-                        const prior = st.messages.filter((m) => m.content && m.content.trim()).slice(-6);
-                        const transcript = prior.map((m) => (m.role === 'user' ? `USER: ${m.content}` : `ASSISTANT: ${m.content}`)).join('\n');
-                        const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                        // Include bias evaluation of this answer to help the agent calibrate its stance
-                        const biasBlock = (() => {
-                          try {
-                            const obj = { biasLevel: ev.biasLevel, thoughtfulness: ev.thoughtfulness, biases: ev.biases, biasTypes: ev.biasTypes };
-                            return `\n\nAutomatic bias analysis (for your awareness; do not echo):\n${JSON.stringify(obj, null, 2)}`;
-                          } catch { return ''; }
-                        })();
-                        const prompt = `Language: ${preferredLang}.\nYou are ${p.displayName}, an invited AI participant joining an ongoing discussion.\nProvide a concise, well-reasoned contribution that adds value (no repetition).\nIf a strong counterpoint exists, articulate it constructively.\nDo not ask clarifying questions or request additional input; rely only on the provided context.\nDo not restate the prompt or context; respond directly with your contribution.\n\nContext (most recent first):\n${transcript}${biasBlock}\n\nYour reply:`;
-                        // Insert left-aligned info bubble (agent bring-in)
-                        useGenaiChatStore.setState((s) => ({
-                          messages: [...s.messages, { id: Date.now().toString() + '-info', role: 'assistant', content: "We're bringing in an additional agent to the discussion" }]
-                        }));
-                        await useGenaiChatStore.getState().startStream({ prompt, tools, options, agentMeta: { displayName: p.displayName, agentProfile: { provider: p.provider, model: model, capabilities: { tools: !!p.capabilities?.tools, webSearch: !!p.capabilities?.webSearch, reasoning: !!p.capabilities?.reasoning, refinePrevious: !!p.capabilities?.refinePrevious }, params: p.params } }, suppressUserEcho: true });
-                      } catch {}
-                    }}>
-                    {p.displayName}
-                  </button>
-                ))}
-              </div>
-            )}
-            {/* Copy last */}
-            <button
-              type="button"
-              aria-label={t('unfold.actions.copyAnswer')}
-              title={t('unfold.titles.copyAnswer')}
-              className="rounded-lg"
-              style={{ width: 24, height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              onClick={() => { try { navigator.clipboard.writeText(msg.content); } catch {} }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <rect x="9" y="9" width="11" height="11" rx="2" strokeWidth="2" />
-                <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
-        )}
+        <button className="text-[11px] underline ml-auto" style={{ color: 'var(--text-secondary-strong)' }} onClick={() => setOpen(!open)}>Details</button>
       </div>
       {open && (
         <div className="mt-2 space-y-2">
@@ -307,8 +117,22 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
   const genaiChat = useGenaiChatStore();
   const { t } = useTranslation();
   const hasEvalBias = React.useMemo(() => {
-    try { return !![...genaiChat.interactions].reverse().find((it) => it.subkind === 'eval.bias' && it.replyTo === messageId); } catch { return false; }
-  }, [genaiChat.interactions, messageId]);
+    try {
+      const map = (genaiChat as any).persistedByLocalId || {};
+      const serverId = map[messageId];
+      // Build reverse map for bidirectional lookup
+      const reverseMap: Record<string, string[]> = {};
+      Object.entries(map).forEach(([local, server]) => {
+        if (!reverseMap[server as string]) reverseMap[server as string] = [];
+        reverseMap[server as string].push(local);
+      });
+      const localIds = reverseMap[messageId] || [];
+      return !![...genaiChat.interactions].reverse().find((it: any) => 
+        it.subkind === 'eval.bias' && 
+        (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
+      );
+    } catch { return false; }
+  }, [genaiChat.interactions, (genaiChat as any).persistedByLocalId, messageId]);
   const settings = useGenAISettings();
   const [showBringIn, setShowBringIn] = React.useState(false);
   const [showAsk, setShowAsk] = React.useState(false);
@@ -317,6 +141,28 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
   const askRef = React.useRef<HTMLDivElement | null>(null);
   const [paletteAskOpen, setPaletteAskOpen] = React.useState(false);
   const [paletteBringOpen, setPaletteBringOpen] = React.useState(false);
+  const interForMessage = React.useMemo(() => {
+    try { return genaiChat.interactions.find((x) => x.id === messageId); } catch { return undefined as any; }
+  }, [genaiChat.interactions, messageId]);
+  const derivedHeaderText = React.useMemo(() => {
+    try {
+      const meta = genaiChat.messageMeta[messageId];
+      return meta?.headerText || interForMessage?.author?.displayName || (interForMessage?.agentProfile ? 'agent' : undefined);
+    } catch { return undefined; }
+  }, [genaiChat.messageMeta, interForMessage, messageId]);
+  const derivedAgentProfile = React.useMemo(() => {
+    try {
+      const meta = genaiChat.messageMeta[messageId];
+      return meta?.agentProfile || interForMessage?.agentProfile;
+    } catch { return undefined; }
+  }, [genaiChat.messageMeta, interForMessage, messageId]);
+  const derivedRefineEnabled = React.useMemo(() => {
+    try {
+      const meta = genaiChat.messageMeta[messageId];
+      if (typeof meta?.refineEnabled === 'boolean') return meta.refineEnabled;
+      return !!interForMessage?.agentProfile?.capabilities?.refinePrevious;
+    } catch { return false; }
+  }, [genaiChat.messageMeta, interForMessage, messageId]);
   React.useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       if (!showBringIn) return;
@@ -382,8 +228,8 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
             } catch { return null; }
           })()}
           {(() => {
-            const meta = genaiChat.messageMeta[messageId];
-            if (!meta?.headerText) return null;
+            const displayName = derivedHeaderText;
+            if (!displayName) return null;
             return (
               <>
                 <button
@@ -402,8 +248,8 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                 <AgentPalette
                   mode="ask"
                   visible={paletteAskOpen}
-                  title={`Ask: ${meta.headerText}`}
-                  subtitle={`${meta.agentProfile?.provider ?? ''} · ${meta.agentProfile?.model ?? ''}`}
+                  title={`Ask: ${displayName}`}
+                  subtitle={`${derivedAgentProfile?.provider ?? ''} · ${derivedAgentProfile?.model ?? ''}`}
                   initialAskText={''}
                   anchorRect={(() => {
                     try {
@@ -425,9 +271,9 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                       const assistantInter = ints.find((it) => it.id === messageId);
                       const agentAnswer = (assistantInter?.contentSanitized || assistantInter?.content || '').toString();
                       const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                      const agentName = meta?.headerText || 'agent';
-                      const prof = meta?.agentProfile;
-                      const prompt = `Language: ${preferredLang}. You are ${agentName}. The user has a follow-up question to your previous answer.\n\nOriginal user question (context):\n${origUser || '(not found)'}\n\nYour previous answer:\n${agentAnswer}\n\nUser follow-up (address this directly):\n${question}`;
+                      const agentName = displayName || 'agent';
+                      const prof = derivedAgentProfile;
+                      const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. The user has a follow-up question to your previous answer.\n\nOriginal user question (context):\n${origUser || '(not found)'}\n\nYour previous answer:\n${agentAnswer}\n\nUser follow-up (address this directly):\n${question}`;
                       const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
                       const useModel = prof?.model || settings.model;
                       const sxSystemInstruction = (
@@ -458,8 +304,7 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
           {/* Ask button is shown in EvaluationDetails near Refine; ActionRow keeps Bring In / Copy only */}
           {/* Refine button should be left of Bring In */}
           {(() => {
-            const meta = genaiChat.messageMeta[messageId];
-            if (!meta?.refineEnabled) return null;
+            if (!derivedRefineEnabled) return null;
             return (
               <button
                 type="button"
@@ -485,7 +330,7 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                     if (!prevPrimary) return;
                     const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
                     const contribution = msgs.find((m) => m.id === messageId)?.content || '';
-                    const prompt = `Language: ${preferredLang}.\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
+                    const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
                     const gs = useGenAISettings.getState();
                     const res = await (await import('../lib/api')).api.genaiGenerate({ model: gs.model, prompt, strictJSONEnabled: false, maxOutputTokens: Math.max(1024, gs.maxOutputTokens || 2048), webSearchEnabled: false, systemInstruction: gs.systemInstruction || undefined });
                     const stripFences = (s: string) => { let t = (s || '').toString().trim(); t = t.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim(); t = t.replace(/^```[\s\S]*?```$/m, (m) => m.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')).trim(); if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) t = t.slice(1, -1); return t.trim(); };
@@ -560,10 +405,46 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                       };
                       const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
                       const st = useGenaiChatStore.getState();
-                      const prior = st.messages.filter((m) => m.content && m.content.trim()).slice(-6);
-                      const transcript = prior.map((m) => (m.role === 'user' ? `USER: ${m.content}` : `ASSISTANT: ${m.content}`)).join('\n');
-                      const prompt = `Language: ${preferredLang}.\nYou are ${p.displayName}, an invited AI participant joining an ongoing discussion.\nProvide a concise, well-reasoned contribution that adds value (no repetition).\nIf a strong counterpoint exists, articulate it constructively.\nDo not ask clarifying questions or request additional input; rely only on the provided context.\nDo not restate the prompt or context; respond directly with your contribution.\n\nContext (most recent first):\n${transcript}\n\nYour reply:`;
-                await useGenaiChatStore.getState().startStream({ prompt, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: p.displayName, agentProfile: { provider: p.provider, model: model, capabilities: { tools: !!p.capabilities?.tools, webSearch: !!p.capabilities?.webSearch, reasoning: !!p.capabilities?.reasoning, refinePrevious: !!p.capabilities?.refinePrevious }, params: p.params }, subkind: 'agent.bring_in', replyTo: (useGenaiChatStore.getState().messages.at(-1)?.id) }, suppressUserEcho: true });
+                      // Find the specific message that triggered Bring In and the previous user message
+                      const msgs = st.messages.filter((m) => m.content && m.content.trim());
+                      const targetIdx = msgs.findIndex((m) => m.id === messageId);
+                      const targetMsg = targetIdx >= 0 ? msgs[targetIdx] : null;
+                      let prevUserMsg: typeof msgs[0] | null = null;
+                      if (targetIdx >= 0) {
+                        for (let i = targetIdx - 1; i >= 0; i--) {
+                          if (msgs[i].role === 'user') {
+                            prevUserMsg = msgs[i];
+                            break;
+                          }
+                        }
+                      }
+                      const transcript = [
+                        prevUserMsg ? `USER: ${prevUserMsg.content}` : null,
+                        targetMsg ? `ASSISTANT: ${targetMsg.content}` : null,
+                      ].filter(Boolean).join('\n');
+                      // Include bias evaluation of this answer to help the agent calibrate its stance
+                      const biasBlock = (() => {
+                        try {
+                          const map = (genaiChat as any).persistedByLocalId || {};
+                          const serverId = map[messageId];
+                          const reverseMap: Record<string, string[]> = {};
+                          Object.entries(map).forEach(([local, server]) => {
+                            if (!reverseMap[server as string]) reverseMap[server as string] = [];
+                            reverseMap[server as string].push(local);
+                          });
+                          const localIds = reverseMap[messageId] || [];
+                          const evalNode = [...genaiChat.interactions].reverse().find((it: any) => 
+                            it.subkind === 'eval.bias' && 
+                            (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
+                          );
+                          if (!evalNode) return '';
+                          const ev = JSON.parse((evalNode as any).content || '{}');
+                          const obj = { biasLevel: ev.biasLevel, thoughtfulness: ev.thoughtfulness, biases: ev.biases, biasTypes: ev.biasTypes };
+                          return `\n\nAutomatic bias analysis (for your awareness; do not echo):\n${JSON.stringify(obj, null, 2)}`;
+                        } catch { return ''; }
+                      })();
+                      const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${p.displayName}, an invited AI participant analyzing an AI assistant's response to a user query.\n\nYour task: Evaluate the ASSISTANT's answer and provide an alternative perspective or counterpoint. If the ASSISTANT's response has limitations, biases, or missing viewpoints, articulate them constructively. Present a well-reasoned contribution that adds value through critical analysis or an alternative angle.\n\nDo not ask clarifying questions or request additional input; rely only on the provided context.\nDo not restate the prompt or context; respond directly with your perspective.\n\nContext:\n${transcript}${biasBlock}\n\nYour perspective:`;
+                await useGenaiChatStore.getState().startStream({ prompt, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: p.displayName, agentProfile: { provider: p.provider, model: model, capabilities: { tools: !!p.capabilities?.tools, webSearch: !!p.capabilities?.webSearch, reasoning: !!p.capabilities?.reasoning, refinePrevious: !!p.capabilities?.refinePrevious }, params: p.params }, subkind: 'agent.bring_in', replyTo: messageId }, suppressUserEcho: true });
                     } catch {}
             }}
           />
@@ -596,6 +477,7 @@ const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRiskUpdate?
   const [loading, setLoading] = React.useState(false);
   const [durationMs, setDurationMs] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [showMetaDetails, setShowMetaDetails] = React.useState(false);
   const genaiChat = useGenaiChatStore();
   const { currentUser } = useAuth();
   const hasAssistant = React.useMemo(
@@ -699,9 +581,8 @@ const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRiskUpdate?
           : '';
         const prompt = `In this request, you act as an external expert and must return your assessment STRICTLY following the provided JSON schema. Return ONLY JSON (no prose, no markdown, no code fences).
 
-RequiredLanguage: ${lang}.
-All natural-language fields (stance, riskProfile.rationale) must be written strictly in RequiredLanguage.
-Do not use words from other languages, except established terms or proper names that are equally acceptable in RequiredLanguage.
+User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
+All natural-language fields (stance, riskProfile.rationale) must be written strictly in the required language.
 
 Task: From the user queries below, neutrally extract:
 - stance: 1–2 concise sentences (<=100 words) written DIRECTLY to the user in SECOND PERSON ("you"). Do NOT describe the user in the third person. State what you seem to be pursuing, your perspective and deep intent, avoiding moral judgement and unsupported assumptions.
@@ -841,6 +722,7 @@ ${prevBlock}`;
   const sanitizeSx = (s: string) => {
     try { return (s || '').replace(/<!--\s*@sx:[\s\S]*?-->/g, '').trim(); } catch { return s; }
   };
+  const agg = genaiChat.stanceAggregate;
 
   return (
     <div className="mt-3 p-3">
@@ -871,6 +753,125 @@ ${prevBlock}`;
           {typeof durationMs === 'number' && !stanceForLatestUser && (
             <div className="text-[11px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
               Time: {durationMs} ms
+            </div>
+          )}
+          {agg && typeof agg === 'object' && (
+            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                  Meta-analysis{typeof agg.samples === 'number' && agg.samples > 0 ? ` (${agg.samples} sample${agg.samples > 1 ? 's' : ''})` : ''}
+                </div>
+                <button
+                  type="button"
+                  className="text-[10px] underline"
+                  style={{ color: 'var(--text-secondary-strong)' }}
+                  onClick={() => setShowMetaDetails(!showMetaDetails)}
+                >
+                  {showMetaDetails ? 'Hide details' : 'Show details'}
+                </button>
+              </div>
+              <div className="space-y-2">
+                {typeof agg.whoLeads === 'string' && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>Dialog control:</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>{agg.whoLeads}</span>
+                  </div>
+                )}
+                {typeof agg.effectiveness === 'number' && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>Effectiveness:</span>
+                      <span className="text-[11px]" style={{ color: 'var(--text-heading)' }}>{(agg.effectiveness * 100).toFixed(0)}%</span>
+                    </div>
+                    <div style={{ width: '100%', height: 4, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ width: `${agg.effectiveness * 100}%`, height: '100%', backgroundColor: 'hsl(160, 50%, 50%)', transition: 'width 0.3s ease' }} />
+                    </div>
+                  </div>
+                )}
+                {showMetaDetails && (
+                  <>
+                    {typeof agg.leadershipIndex === 'number' && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Leadership:</span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{(agg.leadershipIndex * 100).toFixed(0)}%</span>
+                        </div>
+                        <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
+                          <div style={{ width: `${agg.leadershipIndex * 100}%`, height: '100%', backgroundColor: 'hsl(200, 50%, 50%)' }} />
+                        </div>
+                      </div>
+                    )}
+                    {typeof agg.focusRetention === 'number' && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Focus retention:</span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{(agg.focusRetention * 100).toFixed(0)}%</span>
+                        </div>
+                        <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
+                          <div style={{ width: `${agg.focusRetention * 100}%`, height: '100%', backgroundColor: 'hsl(280, 50%, 50%)' }} />
+                        </div>
+                      </div>
+                    )}
+                    {typeof agg.structureScore === 'number' && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Structure:</span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{(agg.structureScore * 100).toFixed(0)}%</span>
+                        </div>
+                        <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
+                          <div style={{ width: `${agg.structureScore * 100}%`, height: '100%', backgroundColor: 'hsl(40, 50%, 50%)' }} />
+                        </div>
+                      </div>
+                    )}
+                    {agg.lastResults && typeof agg.lastResults === 'object' && (() => {
+                      try {
+                        const res = agg.lastResults as any;
+                        // lastResults structure: { results: [{analyzer: string, result: {...}}] }
+                        const results = Array.isArray(res.results) ? res.results : [];
+                        if (results.length === 0) return null;
+                        
+                        // Extract detailed analyzer results
+                        const analyzerDetails = results.map((r: any) => {
+                          const name = r.analyzer || r.Analyzer || 'unknown';
+                          const resultData = r.result || r.Result || {};
+                          return { name, data: resultData };
+                        });
+
+                        return (
+                          <div className="mt-2 pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
+                            <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
+                              Analyzers ({analyzerDetails.length}):
+                            </div>
+                            <div className="space-y-2">
+                              {analyzerDetails.map((a: any, i: number) => {
+                                const dataKeys = Object.keys(a.data);
+                                const hasData = dataKeys.length > 0;
+                                return (
+                                  <div key={i}>
+                                    <div className="flex items-center gap-2">
+                                      <span className="px-2 py-0.5 rounded text-[9px]" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>
+                                        {a.name}
+                                      </span>
+                                      {hasData && (
+                                        <span className="text-[9px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                                          {dataKeys.slice(0, 3).join(', ')}{dataKeys.length > 3 ? '...' : ''}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      } catch (e) { 
+                        console.error('[Meta] Failed to parse lastResults:', e, agg.lastResults);
+                        return null; 
+                      }
+                    })()}
+                  </>
+                )}
+              </div>
             </div>
           )}
         </>
@@ -930,7 +931,7 @@ const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult
         const transcript = texts.join('\n\n---\n\n');
         const lang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
         const nowISO = new Date().toISOString();
-        const prompt = `You are an expert LLM output reviewer. Language: ${lang}.
+        const prompt = `User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are an expert LLM output reviewer.
 Current date/time (trustworthy, real-time): ${nowISO}.
 The ASSISTANT model that produced these replies had access to up-to-date information via search grounding (web search).
 
@@ -1001,7 +1002,7 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                   ? `USER_MESSAGE (context, do NOT evaluate this text):\n${prevUserText}\n\n`
                   : '';
                 const targetBlock = `ASSISTANT_REPLY (to evaluate):\n${textToEvaluate}`;
-                const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nPreferredLanguage: ${preferredLang}.\nField names must be exactly: biasLevel, thoughtfulness, biases, biasTypes.\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counterfacts; categorical claims.\n\nThoughtfulness (0..1):\n- Low: shallow, binary conclusions, no uncertainty handling, no citations.\n- Medium: some analysis, limited trade-offs.\n- High: nuanced, considers uncertainty, alternatives and trade-offs, sober tone.\n\nBiases array (3–5 items): short natural-language notes explaining concrete bias manifestations in PreferredLanguage (not field names).\n\nBiasTypes array: choose zero or more labels STRICTLY from DICTIONARY (English tokens only):\n${dictText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\n${ctxBlock}${targetBlock}\n\nEvaluate ONLY the ASSISTANT_REPLY both standalone and IN RELATION to USER_MESSAGE (if provided). Do NOT assess the user's content. Return only the JSON.`;
+                const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\nField names must be exactly: biasLevel, thoughtfulness, biases, biasTypes.\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counterfacts; categorical claims.\n\nThoughtfulness (0..1):\n- Low: shallow, binary conclusions, no uncertainty handling, no citations.\n- Medium: some analysis, limited trade-offs.\n- High: nuanced, considers uncertainty, alternatives and trade-offs, sober tone.\n\nBiases array (3–5 items): short natural-language notes explaining concrete bias manifestations in PreferredLanguage (not field names).\n\nBiasTypes array: choose zero or more labels STRICTLY from DICTIONARY (English tokens only):\n${dictText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\n${ctxBlock}${targetBlock}\n\nEvaluate ONLY the ASSISTANT_REPLY both standalone and IN RELATION to USER_MESSAGE (if provided). Do NOT assess the user's content. Return only the JSON.`;
                 console.log('[StanceEval] sending structured eval', { model: evalModel, promptChars: promptEval.length });
                 const res = await api.genaiGenerate({
                   model: evalModel,
@@ -1106,7 +1107,7 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                     const schemaText = JSON.stringify(schemaSt, null, 2);
                     const categoriesText = JSON.stringify(riskCategories);
                     const requiredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                    const promptSt = `In this request, you act as an external expert and must return your assessment STRICTLY following the provided JSON schema. Return ONLY JSON (no prose, no markdown, no code fences).\n\nRequiredLanguage: ${requiredLang}.\nAll natural-language fields (stance, riskProfile.rationale) must be written strictly in RequiredLanguage.\nDo not use words from other languages, except established terms or proper names that are equally acceptable in RequiredLanguage.\n\nTask: From the assistant's reply below, neutrally extract:\n- stance: 1–2 concise sentences (<=100 words) that state what the assistant seems to be asserting/pursuing, avoiding moral judgement and unsupported assumptions.\n- riskProfile: EU AI Act risk assessment with score 0..1 and derived level.\n\nHigh risk auto-triggers (must set level to High ONLY if the content provides PERSONAL, ACTIONABLE guidance in these areas; general/educational discussion does NOT trigger High):\n- Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов (только персональные рекомендации)\n- Самоповреждение/суицид/угрозы жизни и безопасности (всегда High при инструкциях)\n- Право/иммиграция/налоги/личные финансы/инвестиции/страхование (только персональные советы)\n- Отношения/абьюз/дети/уязвимые группы (только персональные ситуации и советы)\n- Безопасность/экстренные ситуации (персональные инструкции)\n\nRISK LEVEL RULES:\n- High: score in [0.7, 1]\n- Medium: score in [0.3, 0.7)\n- Low: score in [0, 0.3)\n\nUse triggerCategories strictly from DICTIONARY (English tokens only):\n${categoriesText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\nASSISTANT REPLY:\n${textToEvaluate}`;
+                    const promptSt = `In this request, you act as an external expert and must return your assessment STRICTLY following the provided JSON schema. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${requiredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\nAll natural-language fields (stance, riskProfile.rationale) must be written strictly in the required language.\n\nTask: From the assistant's reply below, neutrally extract:\n- stance: 1–2 concise sentences (<=100 words) that state what the assistant seems to be asserting/pursuing, avoiding moral judgement and unsupported assumptions.\n- riskProfile: EU AI Act risk assessment with score 0..1 and derived level.\n\nHigh risk auto-triggers (must set level to High ONLY if the content provides PERSONAL, ACTIONABLE guidance in these areas; general/educational discussion does NOT trigger High):\n- Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов (только персональные рекомендации)\n- Самоповреждение/суицид/угрозы жизни и безопасности (всегда High при инструкциях)\n- Право/иммиграция/налоги/личные финансы/инвестиции/страхование (только персональные советы)\n- Отношения/абьюз/дети/уязвимые группы (только персональные ситуации и советы)\n- Безопасность/экстренные ситуации (персональные инструкции)\n\nRISK LEVEL RULES:\n- High: score in [0.7, 1]\n- Medium: score in [0.3, 0.7)\n- Low: score in [0, 0.3)\n\nUse triggerCategories strictly from DICTIONARY (English tokens only):\n${categoriesText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\nASSISTANT REPLY:\n${textToEvaluate}`;
                     const stRes = await api.genaiGenerate({ model: evalModel, prompt: promptSt, strictJSONEnabled: true, jsonSchema: schemaSt, maxOutputTokens: 2048, webSearchEnabled: false });
                     let parsedSt: any = null;
                     try {
@@ -1326,6 +1327,10 @@ const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvai
   const [loading, setLoading] = React.useState(false);
   const genaiChat = useGenaiChatStore();
   const { currentUser } = useAuth();
+  const { currentProject } = useProjectsStore();
+  const appliedProjectRef = React.useRef<string | null>(null);
+  const finalizedRef = React.useRef(false);
+  const fetchedForProjectRef = React.useRef<string | null>(null);
   const hasAssistant = React.useMemo(() =>
     genaiChat.messages.some((m) => m.role === 'assistant' && m.content && m.content.trim().length > 0),
     [genaiChat.messages]
@@ -1337,6 +1342,24 @@ const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvai
       // Require authenticated user and at least first assistant answer
       if (!currentUser?.uid) return;
       if (!hasAssistant) return;
+      // Guard: operate only for the active chat project id
+      let pid: string | null = null;
+      try {
+        pid = useGenaiChatStore.getState().projectId;
+        const cpid = useProjectsStore.getState().currentProject?.id;
+        if (!pid || pid === 'local-unfold' || !cpid || pid !== cpid) return;
+      } catch {}
+      // If user has already finalized a title or project already named (not Draft), skip fetching
+      try {
+        const projectId = useGenaiChatStore.getState().projectId || currentProject?.id;
+        if (projectId && projectId !== 'local-unfold' && typeof window !== 'undefined') {
+          finalizedRef.current = window.localStorage.getItem(`chatTitleFinal:${projectId}`) === '1';
+        }
+        const name = (useProjectsStore.getState().currentProject?.displayName || '').trim();
+        if (finalizedRef.current || (name && name.toLowerCase() !== 'draft')) return;
+      } catch {}
+      // If we already fetched titles for this project, don't fetch again
+      if (fetchedForProjectRef.current === pid) return;
       setLoading(true);
       try {
         // Build messages from local interactions for better signal (summary if available)
@@ -1356,7 +1379,11 @@ const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvai
           fallback.forEach((mm) => messages.push(mm));
         }
         const res = await api.suggestChatTitles(messages as Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>);
-        if (!cancelled) setTitles(res);
+        if (!cancelled) {
+          setTitles(res);
+          // Mark this project as having titles fetched
+          if (pid) fetchedForProjectRef.current = pid;
+        }
       } catch {
         if (!cancelled) setTitles([]);
       } finally {
@@ -1365,11 +1392,64 @@ const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvai
     };
     run();
     return () => { cancelled = true; };
-  }, [genaiChat.messages.length, currentUser?.uid, hasAssistant]);
+  }, [genaiChat.messages.length, currentUser?.uid, hasAssistant, currentProject?.id]);
 
   React.useEffect(() => {
     try { onAvailableChange && onAvailableChange(!!(titles && titles.length > 0)); } catch {}
   }, [titles?.length]);
+
+  // When title suggestions appear, set the first suggestion as chat title, switch view to discovery and persist
+  React.useEffect(() => {
+    try {
+      if (!titles || titles.length === 0) return;
+      const first = (titles[0] || '').trim();
+      if (!first) return;
+      try {
+        const activePid = useGenaiChatStore.getState().projectId;
+        const sidePid = useProjectsStore.getState().currentProject?.id;
+        console.log('[Titles] apply candidate', { first, activePid, sidePid });
+      } catch {}
+      // Guard: only auto-apply for the exact active chat project id
+      const activePid = ((): string | null => { try { return useGenaiChatStore.getState().projectId || null; } catch { return null; } })();
+      if (!activePid || !currentProject?.id || activePid !== currentProject.id) return;
+      const proj = currentProject;
+      if (!proj?.id) {
+        // Hydrate currentProject from genaiChat if it was created via ensureProject()
+        (async () => {
+          try {
+            const pid = activePid;
+            if (pid && pid !== 'local-unfold') {
+              const p = await api.getProject(pid);
+              useProjectsStore.setState((prev) => ({
+                projects: [p as any, ...prev.projects.filter((x) => x.id !== (p as any).id)],
+                currentProject: p as any,
+              }));
+            }
+          } catch {}
+        })();
+        return;
+      }
+      if (appliedProjectRef.current === proj.id) return; // already applied for this project instance
+      if ((proj.displayName || '').trim() === first && (proj.view || '') === 'discovery') { appliedProjectRef.current = proj.id; return; }
+      (async () => {
+        try {
+          await api.updateProject(activePid, { displayName: first, view: 'discovery' } as any);
+          console.log('[Titles] auto-applied to project', { projectId: activePid, name: first });
+          useProjectsStore.setState((prev) => {
+            const exists = prev.projects.some((p) => p.id === activePid);
+            const updated = { ...(prev.currentProject || proj), id: activePid, displayName: first, view: 'discovery' } as any;
+            return {
+              projects: exists
+                ? prev.projects.map((p) => (p.id === activePid ? { ...p, displayName: first, view: 'discovery' } : p))
+                : [{ id: activePid, displayName: first, view: 'discovery' } as any, ...prev.projects],
+              currentProject: updated,
+            } as any;
+          });
+          appliedProjectRef.current = activePid;
+        } catch {}
+      })();
+    } catch {}
+  }, [titles && titles[0], currentProject?.id]);
 
   // Do not render content until we have assistant answer and titles available
   if (!hasAssistant) return null;
@@ -1394,9 +1474,39 @@ const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvai
       </div>
       <div className="flex flex-wrap gap-1">
         {titles.slice(0, 5).map((t, i) => (
-          <span key={i} className="chip" title={t}>
+          <button
+            key={i}
+            type="button"
+            className="chip"
+            title={t}
+            onClick={async () => {
+              try {
+                // Resolve active chat project id
+                const activePid = useGenaiChatStore.getState().projectId;
+                if (!activePid || activePid === 'local-unfold') return;
+                // Persist selection
+                await api.updateProject(activePid, { displayName: t, view: 'discovery' } as any);
+              console.log('[Titles] clicked, applied to project', { projectId: activePid, name: t });
+                useProjectsStore.setState((prev) => {
+                  const exists = prev.projects.some((p) => p.id === activePid);
+                  const updated = { ...(prev.currentProject || {}), id: activePid, displayName: t, view: 'discovery' } as any;
+                  return {
+                    projects: exists
+                      ? prev.projects.map((p) => (p.id === activePid ? { ...p, displayName: t, view: 'discovery' } : p))
+                      : [{ id: activePid, displayName: t, view: 'discovery' } as any, ...prev.projects],
+                    currentProject: updated,
+                  } as any;
+                });
+                // Mark finalized to suppress future suggestions and hide component
+                try { if (typeof window !== 'undefined') window.localStorage.setItem(`chatTitleFinal:${activePid}`, '1'); } catch {}
+                finalizedRef.current = true;
+                setTitles(null);
+                onClose();
+              } catch {}
+            }}
+          >
             {t}
-          </span>
+          </button>
         ))}
       </div>
     </div>
@@ -1448,6 +1558,7 @@ const DiscoveryPage: React.FC = () => {
   const [titlesVisible, setTitlesVisible] = useState(true);
   const [titlesAvailable, setTitlesAvailable] = useState(false);
   const [titlesGlow, setTitlesGlow] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
   React.useEffect(() => { if (sideOpen) setTitlesGlow(false); }, [sideOpen]);
   const [availUserAnalysis, setAvailUserAnalysis] = useState(false);
   const [availLLMReview, setAvailLLMReview] = useState(false);
@@ -1471,13 +1582,13 @@ const DiscoveryPage: React.FC = () => {
 
   // If server already sent stance, make the User button available
   React.useEffect(() => {
-    if (stanceFromInteractionsTop) setAvailUserAnalysis(true);
+    setAvailUserAnalysis(!!stanceFromInteractionsTop);
   }, [stanceFromInteractionsTop]);
 
   // Derive Discussion Flow availability from message count (2+ turns)
   React.useEffect(() => {
     const hasFlow = genaiChat.messages.length >= 2;
-    if (hasFlow) setAvailDiscussionFlow(true);
+    setAvailDiscussionFlow(hasFlow);
   }, [genaiChat.messages.length]);
 
   // Floating selection button state (position in viewport)
@@ -1583,8 +1694,14 @@ const DiscoveryPage: React.FC = () => {
 
   useEffect(() => {
     if (currentProject) {
+      try { useGenaiChatStore.getState().setProjectId(currentProject.id); } catch {}
       fetchProjectSources(currentProject.id);
       fetchProjectInteractions(currentProject.id);
+      try {
+        const st = useGenaiChatStore.getState();
+        st.hydrateInteractions();
+        st.ensureStanceAggregate();
+      } catch {}
     } else {
       clearSources();
     }
@@ -1757,7 +1874,7 @@ const DiscoveryPage: React.FC = () => {
                 if (!request.trim()) return;
                 setFrozenEdits((s) => ({ ...s, [interId]: true }));
                 // Plain text instruction: return only updated fragment, no formatting wrappers
-                const prompt = `Language: ${preferredLang}. You are ${agentName}. We provide the full assistant answer (FULL_ANSWER) and a specific fragment (SELECTED_FRAGMENT) the user wants to modify. The user request is (USER_REQUEST).\n\nReturn ONLY the updated fragment. Preserve the fragment's existing formatting and structure where possible, and use Markdown appropriately (headings ###, lists, emphasis, blank lines) if it helps readability and does not contradict the request. Do not add any preface, labels, or explanations. Do not wrap the result in code fences. Do NOT return JSON.\n\nFULL_ANSWER:\n${full}\n\nSELECTED_FRAGMENT:\n${selectedText}\n\nUSER_REQUEST:\n${request}\n`;
+                const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. We provide the full assistant answer (FULL_ANSWER) and a specific fragment (SELECTED_FRAGMENT) the user wants to modify. The user request is (USER_REQUEST).\n\nReturn ONLY the updated fragment. Preserve the fragment's existing formatting and structure where possible, and use Markdown appropriately (headings ###, lists, emphasis, blank lines) if it helps readability and does not contradict the request. Do not add any preface, labels, or explanations. Do not wrap the result in code fences. Do NOT return JSON.\n\nFULL_ANSWER:\n${full}\n\nSELECTED_FRAGMENT:\n${selectedText}\n\nUSER_REQUEST:\n${request}\n`;
                 const settings = useGenAISettings.getState();
                 const useModel = prof?.model || settings.model;
                 const sxSystemInstruction = `Hidden-instructions protocol (do not show to users):\n- When you need to output service instructions (entities, metrics, watchlist, relations), emit ONLY HTML comments <!-- @sx:{JSON} -->.`;
@@ -2478,6 +2595,7 @@ const DiscoveryPage: React.FC = () => {
     );
   };
 
+
   React.useEffect(() => {
     const handler = (e: any) => {
       const kind = e?.detail?.kind as 'privacy' | 'terms';
@@ -2534,6 +2652,9 @@ const DiscoveryPage: React.FC = () => {
                   // Reset Unfold chat state and analysis artifacts
                   try {
                     useGenaiChatStore.getState().reset();
+                    // Force new Draft creation on next message
+                    useGenaiChatStore.getState().setProjectId('local-unfold');
+                    try { console.log('[NewChat] reset -> projectId set to local-unfold'); } catch {}
                   } catch {}
                   setShowUserAnalysis(false);
                   setShowLLMReview(false);
@@ -2597,18 +2718,19 @@ const DiscoveryPage: React.FC = () => {
             </div>
 
             {/* Analysis shortcuts (duplicate of floating buttons when sidebar hidden) */}
+            {(availUserAnalysis || availDiscussionFlow || availArtifacts) && (
             <div className="mb-4 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
               <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
                 Analysis
               </div>
+              {availUserAnalysis && (
               <button
                 type="button"
-                disabled={!availUserAnalysis}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
-                style={{ backgroundColor: leftPanel === 'user' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)', opacity: availUserAnalysis ? 1 : 0.5, cursor: availUserAnalysis ? 'pointer' : 'not-allowed' }}
-                onMouseEnter={(e) => { if (leftPanel !== 'user' && availUserAnalysis) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { if (leftPanel !== 'user' && availUserAnalysis) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => availUserAnalysis && setLeftPanel((p) => (p === 'user' ? null : 'user'))}
+                style={{ backgroundColor: leftPanel === 'user' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { if (leftPanel !== 'user') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { if (leftPanel !== 'user') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => setLeftPanel((p) => (p === 'user' ? null : 'user'))}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <circle cx="12" cy="8" r="3.5" strokeWidth={2} />
@@ -2616,14 +2738,15 @@ const DiscoveryPage: React.FC = () => {
                 </svg>
                 <span className="text-12">Your stance</span>
               </button>
+              )}
+              {availDiscussionFlow && (
               <button
                 type="button"
-                disabled={!availDiscussionFlow}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
-                style={{ backgroundColor: leftPanel === 'flow' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)', opacity: availDiscussionFlow ? 1 : 0.5, cursor: availDiscussionFlow ? 'pointer' : 'not-allowed' }}
-                onMouseEnter={(e) => { if (leftPanel !== 'flow' && availDiscussionFlow) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { if (leftPanel !== 'flow' && availDiscussionFlow) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => availDiscussionFlow && setLeftPanel((p) => (p === 'flow' ? null : 'flow'))}
+                style={{ backgroundColor: leftPanel === 'flow' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { if (leftPanel !== 'flow') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { if (leftPanel !== 'flow') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => setLeftPanel((p) => (p === 'flow' ? null : 'flow'))}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M5 5h6v6H5z" strokeWidth={2} />
@@ -2633,14 +2756,15 @@ const DiscoveryPage: React.FC = () => {
                 </svg>
                 <span className="text-12">Discussion Flow</span>
               </button>
+              )}
+              {availArtifacts && (
               <button
                 type="button"
-                disabled={!availArtifacts}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
-                style={{ backgroundColor: leftPanel === 'artifacts' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)', opacity: availArtifacts ? 1 : 0.5, cursor: availArtifacts ? 'pointer' : 'not-allowed' }}
-                onMouseEnter={(e) => { if (leftPanel !== 'artifacts' && availArtifacts) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { if (leftPanel !== 'artifacts' && availArtifacts) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => availArtifacts && setLeftPanel((p) => (p === 'artifacts' ? null : 'artifacts'))}
+                style={{ backgroundColor: leftPanel === 'artifacts' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { if (leftPanel !== 'artifacts') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { if (leftPanel !== 'artifacts') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => setLeftPanel((p) => (p === 'artifacts' ? null : 'artifacts'))}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <rect x="5" y="5" width="14" height="6" rx="1.5" strokeWidth={2} />
@@ -2648,7 +2772,9 @@ const DiscoveryPage: React.FC = () => {
                 </svg>
                 <span className="text-12">Artifacts</span>
               </button>
+              )}
             </div>
+            )}
 
             {/* Bottom settings button */}
             <div className="mt-auto pt-4">
@@ -2695,7 +2821,7 @@ const DiscoveryPage: React.FC = () => {
 
       {/* Toggle + New Chat buttons stacked (visible only when sidebar is hidden) */}
       {!sideOpen && (
-        <div className="flex-shrink-0 ml-2 mr-2 flex flex-col" style={{ alignSelf: 'flex-start', marginTop: '20px' }}>
+        <div id="left-toggle-anchor" className="flex-shrink-0 ml-2 mr-2 flex flex-col" style={{ alignSelf: 'flex-start', marginTop: '20px' }}>
           <button
             onClick={() => setSideOpen(true)}
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
@@ -2717,6 +2843,8 @@ const DiscoveryPage: React.FC = () => {
                 setRiskBanner(null);
               try {
                 useGenaiChatStore.getState().reset();
+                useGenaiChatStore.getState().setProjectId('local-unfold');
+                try { console.log('[NewChat:compact] reset -> projectId set to local-unfold'); } catch {}
               } catch {}
               setShowUserAnalysis(false);
               setShowLLMReview(false);
@@ -2793,6 +2921,23 @@ const DiscoveryPage: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* Mirror toggle button on the right edge (independent of sidebar) */}
+      <button
+        type="button"
+        aria-label="Toggle Right Panel"
+        className="mirror-doc-btn rounded-lg flex items-center justify-center transition-all duration-300"
+        style={{ position: 'fixed', right: 8, top: 76, width: 32, height: 32, color: 'white', zIndex: 40 }}
+        onClick={() => {
+          console.log('[RightPanel] toggle', !rightPanelOpen);
+          setRightPanelOpen(!rightPanelOpen);
+        }}
+      >
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path d="M6 3h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M13 3v5h5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
 
       {/* Floating Settings button (visible only when sidebar is hidden) */}
       {!sideOpen && !showSettings && (
@@ -2880,7 +3025,7 @@ const DiscoveryPage: React.FC = () => {
               {/* Header: chosen section title + close */}
               {leftPanel && (
                 <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
-                  <div className="text-13" style={{ color: '#669999' }}>{leftPanel === 'user' ? 'You in this discussion' : (leftPanel === 'flow' ? 'Discussion flow' : 'Artifacts')}</div>
+                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? 'You in this discussion' : (leftPanel === 'flow' ? 'Discussion flow' : 'Artifacts')}</h3>
                   <button type="button" aria-label="Close" title="Close" className="p-2 rounded-lg transition-colors" style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }} onClick={() => setLeftPanel(null)}>
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
@@ -3248,10 +3393,18 @@ const DiscoveryPage: React.FC = () => {
             {/* GenAI chat history */}
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]">
               <div className="space-y-2">
-                {(genaiChat.streaming ? genaiChat.messages : []).map((m) => {
+                {(genaiChat.streaming ? genaiChat.messages.filter((m) => {
+                  // During streaming, only show messages that aren't already in interactions
+                  // (avoid duplicates when messages are being persisted as interactions)
+                  const hasInteraction = genaiChat.interactions.some((it) => 
+                    (it as any).originalMessageId === m.id || it.id === m.id
+                  );
+                  return !hasInteraction;
+                }) : []).map((m) => {
                   const isUser = m.role === 'user';
                   const isAssistantPlaceholder = !isUser && genaiChat.streaming && !m.content;
                   const isAssistantError = !isUser && !genaiChat.streaming && !m.content && !!genaiChat.error;
+                  if (isAssistantPlaceholder) return null;
                   return (
                     <ChatMessage
                       key={m.id}
@@ -3380,8 +3533,7 @@ const DiscoveryPage: React.FC = () => {
                     </ChatMessage>
                   );
                 })}
-                {!genaiChat.streaming && (
-                  genaiChat.interactions
+                {genaiChat.interactions
                     .filter((it) => it.kind === 'user' || it.kind === 'assistant')
                     .map((it) => {
                       const isUser = it.kind === 'user';
@@ -3396,7 +3548,18 @@ const DiscoveryPage: React.FC = () => {
                               {/* Lightweight action row for USER: only evaluation, no buttons */}
                               {(() => {
                                 try {
-                                  const evalNode = [...genaiChat.interactions].reverse().find((n) => n.subkind === 'eval.bias' && n.replyTo === it.id);
+                                  // Find eval.bias with bidirectional mapping support
+                                  const map = (genaiChat as any).persistedByLocalId || {};
+                                  const reverseMap: Record<string, string[]> = {};
+                                  Object.entries(map).forEach(([local, server]) => {
+                                    if (!reverseMap[server as string]) reverseMap[server as string] = [];
+                                    reverseMap[server as string].push(local);
+                                  });
+                                  const localIds = reverseMap[it.id] || [];
+                                  const evalNode = [...genaiChat.interactions].reverse().find((n) => 
+                                    n.subkind === 'eval.bias' && 
+                                    (n.replyTo === it.id || localIds.includes(n.replyTo || ''))
+                                  );
                                   if (!evalNode) return null;
                                   return (
                                     <div className="mt-1">
@@ -3479,7 +3642,7 @@ const DiscoveryPage: React.FC = () => {
                                               maxOutputTokens: Math.max(512, settings.maxOutputTokens || 1024),
                                               systemInstruction: [settings.systemInstruction || '', sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined,
                                             };
-                                            const prompt = `Language: ${preferredLang}. You are ${agentName}. We provide the full assistant answer (FULL_ANSWER) and a specific fragment (SELECTED_FRAGMENT) the user wants to modify. The user request is (USER_REQUEST).\n\nReturn ONLY the updated fragment. Preserve the fragment's existing formatting and structure where possible, and use Markdown appropriately (headings ###, lists, emphasis, blank lines) if it helps readability and does not contradict the request. Do not add any preface, labels, or explanations. Do not wrap the result in code fences. Do NOT return JSON.\n\nFULL_ANSWER:\n${full}\n\nSELECTED_FRAGMENT:\n${selText}\n\nUSER_REQUEST:\n${req}\n`;
+                                            const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. We provide the full assistant answer (FULL_ANSWER) and a specific fragment (SELECTED_FRAGMENT) the user wants to modify. The user request is (USER_REQUEST).\n\nReturn ONLY the updated fragment. Preserve the fragment's existing formatting and structure where possible, and use Markdown appropriately (headings ###, lists, emphasis, blank lines) if it helps readability and does not contradict the request. Do not add any preface, labels, or explanations. Do not wrap the result in code fences. Do NOT return JSON.\n\nFULL_ANSWER:\n${full}\n\nSELECTED_FRAGMENT:\n${selText}\n\nUSER_REQUEST:\n${req}\n`;
                                             setFrozenEdits((s) => ({ ...s, [it.id]: true }));
                                             try {
                                               const res = await api.genaiGenerate({ model: useModel, prompt, strictJSONEnabled: false, maxOutputTokens: options.maxOutputTokens, webSearchEnabled: false, systemInstruction: options.systemInstruction });
@@ -3538,8 +3701,48 @@ const DiscoveryPage: React.FC = () => {
                           )}
                         </ChatMessage>
                       );
-                    })
-                )}
+                    })}
+                {genaiChat.streaming && (() => {
+                  try {
+                    const m = genaiChat.messages[genaiChat.messages.length - 1];
+                    if (!m || m.role !== 'assistant' || m.content) return null;
+                    const header = (genaiChat.messageMeta?.[m.id]?.headerText || 'assistant');
+                    const leftAccent = !!genaiChat.messageMeta?.[m.id]?.leftAccent;
+                    const isQuality = genaiSettings.strength === 'quality' || /_quality$/.test(genaiSettings.model || '');
+                    const threshold = genaiSettings.groundingEnabled ? 35 : 20;
+                    const showInfo = (genaiThinkingSeconds || 0) >= threshold && isQuality;
+                    const infoMsg = genaiSettings.groundingEnabled
+                      ? 'The complex‑reasoning model is updating its analysis with up‑to‑date information, which may take additional time.'
+                      : 'This model is performing complex reasoning and may respond more slowly than usual.';
+                    return (
+                      <ChatMessage
+                        key={m.id}
+                        role="assistant"
+                        align="left"
+                        isThinking={true}
+                        thinkingSeconds={genaiThinkingSeconds}
+                        isError={false}
+                        headerText={header}
+                        leftAccent={leftAccent}
+                        footer={undefined}
+                      >
+                        <div className="space-y-1">
+                          <div style={{ width: 160, height: 10, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                          </div>
+                          <div style={{ width: 220, height: 10, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                          </div>
+                          {showInfo && (
+                            <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
+                              {infoMsg}
+                            </div>
+                          )}
+                        </div>
+                      </ChatMessage>
+                    );
+                  } catch { return null; }
+                })()}
               </div>
             </div>
             {/* Edit status indicator */}
@@ -3714,7 +3917,7 @@ const DiscoveryPage: React.FC = () => {
                       const ctxBlock = prevAssistantText && prevAssistantText.trim().length > 0
                         ? `ASSISTANT_REPLY (context, do NOT evaluate this text):\n${prevAssistantText}\n\n`
                         : '';
-                      const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nPreferredLanguage: ${preferredLang}.\nField names must be exactly: biasLevel, thoughtfulness, biases, biasTypes.\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counterfacts; categorical claims.\n\nThoughtfulness (0..1):\n- Low: shallow, binary conclusions, no uncertainty handling, no citations.\n- Medium: some analysis, limited trade-offs.\n- High: nuanced, considers uncertainty, alternatives and trade-offs, sober tone.\n\nBiases array (3–5 items): short natural-language notes explaining concrete bias manifestations in PreferredLanguage (not field names).\n\nBiasTypes array: choose zero or more labels STRICTLY from DICTIONARY (English tokens only):\n${dictText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\n${ctxBlock}USER_MESSAGE (to evaluate):\n${textToEvaluate}\n\nEvaluate ONLY the USER_MESSAGE both standalone and in relation to ASSISTANT_REPLY (if provided). Do NOT assess the assistant's content. Return only the JSON.`;
+                      const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\nField names must be exactly: biasLevel, thoughtfulness, biases, biasTypes.\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counterfacts; categorical claims.\n\nThoughtfulness (0..1):\n- Low: shallow, binary conclusions, no uncertainty handling, no citations.\n- Medium: some analysis, limited trade-offs.\n- High: nuanced, considers uncertainty, alternatives and trade-offs, sober tone.\n\nBiases array (3–5 items): short natural-language notes explaining concrete bias manifestations in PreferredLanguage (not field names).\n\nBiasTypes array: choose zero or more labels STRICTLY from DICTIONARY (English tokens only):\n${dictText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\n${ctxBlock}USER_MESSAGE (to evaluate):\n${textToEvaluate}\n\nEvaluate ONLY the USER_MESSAGE both standalone and in relation to ASSISTANT_REPLY (if provided). Do NOT assess the assistant's content. Return only the JSON.`;
                       const res = await api.genaiGenerate({
                         model: evalModel,
                         prompt: promptEval,
@@ -3951,8 +4154,46 @@ const DiscoveryPage: React.FC = () => {
         )}
         </div>
 
-        {/* Right column (buffer) - hidden when graph spans it */}
-        {viewMode !== 'graph' && <div className="min-h-0" />}
+        {/* Right column: container for contextual panels (transparent, no border) */}
+        {viewMode !== 'graph' && (
+          <div className="min-h-0 h-full" style={{ background: 'transparent', display: 'flex', flexDirection: 'column', marginRight: 48 }}>
+            {rightPanelOpen && (
+              <div
+                className="mt-3 p-3 rounded-xl sidebar-panel"
+                style={{
+                  backgroundColor: 'var(--bg-sidebar)',
+                  border: '1px solid var(--overlay-line-90)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: 'auto',
+                }}
+              >
+                <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
+                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Documents & Sources</h3>
+                  <button
+                    type="button"
+                    aria-label="Close right panel"
+                    title="Close"
+                    className="p-2 rounded-lg transition-colors"
+                    style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                    onClick={() => setRightPanelOpen(false)}
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
+                  </button>
+                </div>
+                {/* Placeholder body for future content */}
+                <div style={{ flex: 1, minHeight: 0 }} />
+              </div>
+            )}
+
+            {/* Bottom slot: reserved area to match left column layout */}
+            <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight, position: 'relative' }} />
+          </div>
+        )}
       </div>
     </div>
   );

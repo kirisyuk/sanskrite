@@ -34,7 +34,7 @@ const resources = {
           },
           attachTitle: 'Attach document',
           modelStrengthLabel: 'Model strength',
-          strengthFast: 'Fast model',
+          strengthFast: 'Everyday use',
           strengthBalanced: 'Balanced model',
           strengthQuality: 'Best available model',
           webSearch: 'Web search',

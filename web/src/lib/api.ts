@@ -38,6 +38,17 @@ class ApiClient {
     return response.data;
   }
 
+  async waitlistList(status?: 'pending' | 'approved' | 'rejected'): Promise<Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }>> {
+    const params = status ? { status } : {};
+    const response = await this.client.get<{ items: Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }> }>(`/api/v1/waitlist/list`, { params });
+    return response.data.items;
+  }
+
+  async waitlistApprove(email: string): Promise<{ ok: boolean }> {
+    const response = await this.client.post<{ ok: boolean }>(`/api/v1/waitlist/approve`, { email });
+    return response.data;
+  }
+
   // Users
   async createUser(data: {
     firebaseUid: string;
@@ -124,6 +135,35 @@ class ApiClient {
 
   async deleteProjectInteraction(projectId: string, interactionId: string): Promise<{ success: boolean }> {
     const response = await this.client.delete<{ success: boolean }>(`/api/v1/projects/${projectId}/interactions/${interactionId}`);
+    return response.data;
+  }
+
+  async updateProjectInteraction(
+    projectId: string,
+    interactionId: string,
+    data: Partial<{
+      kind: 'user'|'assistant'|'system'|'note';
+      content: string;
+      summary?: string;
+      model?: string;
+      usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number };
+      subkind?: string;
+      contentSanitized?: string;
+      author?: { participantId: string; kind: string; displayName?: string };
+      recipients?: string[];
+      replyTo?: string;
+      agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> };
+      evaluations?: Record<string, any>;
+      relations?: Array<{ type: string; targetId: string }>;
+      language?: string;
+      systemInstructionApplied?: string;
+      generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean };
+      highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] };
+      originalMessageId?: string;
+      coreDocId?: string;
+    }>
+  ): Promise<{ success: boolean }> {
+    const response = await this.client.patch<{ success: boolean }>(`/api/v1/projects/${projectId}/interactions/${interactionId}`, data);
     return response.data;
   }
 
@@ -269,7 +309,7 @@ class ApiClient {
   async suggestChatTitles(messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>, language?: string): Promise<string[]> {
     const transcript = messages.map(m => `- ${m.role}: ${m.text}`).join('\n');
     const lang = (language || (localStorage.getItem('preferredLanguage') || 'EN')).toLowerCase();
-    const prompt = `You are naming a chat based on its conversation. Language: ${lang}.\n\nTranscript (most recent last):\n${transcript}\n\nTask: Propose 3 concise, specific, non-generic titles that reflect the supposed user's intent behind the conversation. Each <= 35 characters. Titles must: (1) reflect the user's specific interest in the topic overall based on the user's own requests; (2) present distinct viewpoints/angles on the user's context (not duplicates, different perspectives).\nReturn strictly JSON only, no markdown/code fences, matching this shape: { "titles": ["title1", "title2", "title3"] }.`;
+    const prompt = `User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are naming a chat based on its conversation.\n\nTranscript (most recent last):\n${transcript}\n\nTask: Propose 3 concise, specific, non-generic titles that reflect the supposed user's intent behind the conversation. Each <= 35 characters. Titles must: (1) reflect the user's specific interest in the topic overall based on the user's own requests; (2) present distinct viewpoints/angles on the user's context (not duplicates, different perspectives).\nReturn strictly JSON only, no markdown/code fences, matching this shape: { "titles": ["title1", "title2", "title3"] }.`;
     try {
       const res = await this.client.post<{ ok: boolean; result: any }>(`/api/v1/ai/structured`, {
         prompt,

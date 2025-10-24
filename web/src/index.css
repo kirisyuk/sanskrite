@@ -1,4 +1,14 @@
-﻿.topic-suggest-slot:empty {
+﻿/* Right-edge mirror button (document) */
+.mirror-doc-btn {
+  background-color: #E9B27E;
+}
+[data-theme="light"] .mirror-doc-btn:hover {
+  background-color: #F0BE8D;
+}
+[data-theme="dark"] .mirror-doc-btn:hover {
+  background-color: #D79F66;
+}
+.topic-suggest-slot:empty {
   display: none;
 }
 @import "tailwindcss";
