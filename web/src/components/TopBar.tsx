@@ -5,11 +5,16 @@ import { useAuth } from '../contexts/AuthContext';
 import logoDarkTheme from '../assets/hatl-dark-theme.png';
 import logoLightTheme from '../assets/hatl-light-theme.png';
 import { UserProfile } from './UserProfile';
+import { useTranslation } from 'react-i18next';
+import { useUIStore } from '../stores/uiStore';
 
 export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) => {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { currentUser } = useAuth();
   const location = useLocation();
+  const { i18n } = useTranslation();
+  const uiLanguage = useUIStore((s) => s.uiLanguage);
+  const setUiLanguage = useUIStore((s) => s.setUiLanguage);
   const isChat = React.useMemo(() => {
     try {
       const params = new URLSearchParams(location.search);
@@ -24,6 +29,25 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
   }, [theme, setTheme]);
+
+  // Keep UI store in sync with i18n (initial mount and external changes)
+  React.useEffect(() => {
+    const current = (i18n.language || 'en').toLowerCase();
+    setUiLanguage(current);
+    try {
+      document.documentElement.setAttribute('lang', current);
+    } catch {}
+  }, [i18n.language, setUiLanguage]);
+
+  const handleLanguageChange = React.useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    const raw = (e.target.value || 'en').toLowerCase();
+    const mapped = raw === 'kz' ? 'kk' : raw;
+    setUiLanguage(mapped);
+    try { document.documentElement.setAttribute('lang', mapped); } catch {}
+    i18n.changeLanguage(mapped);
+  }, [i18n, setUiLanguage]);
+
+  const selectedUi = uiLanguage === 'kk' ? 'kz' : (uiLanguage || 'en');
 
   return (
     <div className="topbar">
@@ -57,8 +81,22 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
       {/* Center - View mode toggle temporarily disabled */}
       <div />
 
-      {/* Right - Theme toggle and User profile */}
+      {/* Right - Language switcher, Theme toggle and User profile */}
       <div className="flex items-center gap-3 px-2">
+        {/* Language switcher */}
+        <select
+          aria-label="Select language"
+          className="text-12 px-2 py-1 rounded"
+          value={selectedUi}
+          onChange={handleLanguageChange}
+          style={{ backgroundColor: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--white-10)' }}
+       >
+          <option value="en">EN</option>
+          <option value="de">DE</option>
+          <option value="es">ES</option>
+          <option value="ru">RU</option>
+          <option value="kz">KZ</option>
+        </select>
         {/* Theme toggle */}
         <button
           className="p-2 rounded"

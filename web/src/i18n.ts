@@ -17,6 +17,27 @@ const resources = {
       homepage: { title: 'Главная', soon: 'Скоро здесь будет контент' },
     },
   },
+  de: {
+    translation: {
+      app: { title: 'Sanskrite' },
+      search: { placeholder: 'Suchen…' },
+      homepage: { title: 'Startseite', soon: 'Inhalt folgt in Kürze' },
+    },
+  },
+  es: {
+    translation: {
+      app: { title: 'Sanskrite' },
+      search: { placeholder: 'Buscar…' },
+      homepage: { title: 'Inicio', soon: 'Contenido próximamente' },
+    },
+  },
+  kk: {
+    translation: {
+      app: { title: 'Sanskrite' },
+      search: { placeholder: 'Іздеу…' },
+      homepage: { title: 'Басты бет', soon: 'Жақында мазмұн пайда болады' },
+    },
+  },
 };
 
 i18n
@@ -25,7 +46,7 @@ i18n
   .init({
     resources,
     fallbackLng: 'en',
-    supportedLngs: ['en', 'ru'],
+    supportedLngs: ['en', 'ru', 'de', 'es', 'kk'],
     interpolation: { escapeValue: false },
     detection: { order: ['querystring', 'localStorage', 'navigator'] },
   });

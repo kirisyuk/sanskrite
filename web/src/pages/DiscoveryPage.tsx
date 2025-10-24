@@ -1547,7 +1547,7 @@ const DiscoveryPage: React.FC = () => {
     } catch {}
   }, [genaiChat.interactions.length]);
 
-  // Background-load user preferred language and set app language (does not block UI)
+  // Background-load user preferred language (does not block UI). Do not change UI language or <html lang> here.
   useEffect(() => {
     const loadLang = async () => {
       try {
@@ -1561,7 +1561,6 @@ const DiscoveryPage: React.FC = () => {
         const code = (user?.preferredLanguage || localStorage.getItem('preferredLanguage') || 'EN').toUpperCase();
         if (code && code.length === 2) {
           localStorage.setItem('preferredLanguage', code);
-          document.documentElement.setAttribute('lang', code.toLowerCase());
         }
       } catch {}
     };
