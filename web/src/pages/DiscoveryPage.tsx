@@ -16,6 +16,7 @@ import DiscoveryRequest from '../components/DiscoveryRequest';
 import UnfoldRequest from '../components/UnfoldRequest';
 import ChatMessage from '../components/ChatMessage';
 import AgentPalette from '../components/AgentPalette';
+import DocumentsAndSources from '../components/DocumentsAndSources';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
@@ -23,6 +24,25 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Lege
 import { useTranslation } from 'react-i18next';
 import { AGENT_PRESETS } from '../lib/agentPresets';
 import { ThemeContext } from '../components/ThemeProvider';
+import { toggleInteractionPin, isInteractionPinned } from '../lib/interactionHelpers';
+import { highlightNotes, clearHighlights, findFirstRange, applyGlobalHighlight, clearGlobalHighlight } from '../lib/textHighlight';
+import { 
+  generateKeyInsights, 
+  interpretThinkingDepth, 
+  interpretTimeHorizon, 
+  interpretUncertainty,
+  interpretDecisionProcess,
+  interpretRiskAttitude,
+  interpretCriteriaStyle,
+  interpretClarity,
+  interpretAbstraction,
+  interpretContextCompleteness,
+  interpretLearningDynamics,
+  interpretIntegration,
+  interpretMetaAwareness,
+  getMetricColor,
+  formatPercent
+} from '../lib/metaInterpretations';
 
 // Inline evaluation details renderer (reads eval.bias interactions)
 const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
@@ -76,13 +96,17 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
 
   return (
     <div className="mt-1" style={{ width: '100%', position: 'relative' }}>
-      <div className="flex items-center gap-2">
+      <button
+        type="button"
+        className="flex items-center gap-2 w-full text-left"
+        onClick={() => setOpen(!open)}
+        style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}
+      >
         <div style={{ width: 120, height: 6, backgroundColor: (theme === 'dark' && msg?.role === 'user') ? 'var(--white-20)' : 'var(--overlay-line-90)', borderRadius: 4, overflow: 'hidden' }}>
           <div style={{ width: pct + '%', height: '100%', backgroundColor: fill }} />
         </div>
         <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{labelLevel.toFixed(1)} {bucketLabel}</div>
-        <button className="text-[11px] underline ml-auto" style={{ color: 'var(--text-secondary-strong)' }} onClick={() => setOpen(!open)}>Details</button>
-      </div>
+      </button>
       {open && (
         <div className="mt-2 space-y-2">
           {Array.isArray(ev.biases) && ev.biases.length > 0 && (
@@ -478,6 +502,7 @@ const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRiskUpdate?
   const [durationMs, setDurationMs] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [showMetaDetails, setShowMetaDetails] = React.useState(false);
+  const [showTechnicalDetails, setShowTechnicalDetails] = React.useState(false);
   const genaiChat = useGenaiChatStore();
   const { currentUser } = useAuth();
   const hasAssistant = React.useMemo(
@@ -671,10 +696,14 @@ ${prevBlock}`;
               setRisk(null);
               try { onRiskUpdate && onRiskUpdate(null); } catch {}
             }
-            // Create eval.stance interaction linked to the latest USER interaction
+            // Create eval.stance interaction linked to the latest USER interaction and persist to server
             try {
               const stAll = useGenaiChatStore.getState();
               const evalId = Date.now().toString() + '-eval-stance-u';
+              const projectId = stAll.projectId;
+              const risk = (riskLevel && typeof riskScore === 'number') ? { level: riskLevel as any, score: riskScore, rationale: riskRationale || undefined } : undefined;
+              
+              // Add to local state
               useGenaiChatStore.setState((s) => ({
                 interactions: [
                   ...s.interactions,
@@ -687,13 +716,53 @@ ${prevBlock}`;
                     contentSanitized: stanceText,
                     replyTo: lastUserInter ? lastUserInter.id : undefined,
                     relations: lastUserInter ? [{ type: 'evaluates', targetId: lastUserInter.id }] : undefined,
-                    highRisk: (riskLevel && typeof riskScore === 'number') ? { level: riskLevel as any, score: riskScore, rationale: riskRationale || undefined } : undefined,
+                    highRisk: risk,
                     language: lang,
                     createdAt: new Date().toISOString(),
                   } as any,
                 ],
               } as any));
-            } catch {}
+              
+              // Persist to server
+              if (projectId && projectId !== 'local-unfold' && lastUserInter) {
+                (async () => {
+                  try {
+                    const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
+                    const serverReplyTo = map[lastUserInter.id] || lastUserInter.id;
+                    
+                    const payload: any = {
+                      kind: 'system',
+                      subkind: 'eval.stance',
+                      content: stanceText,
+                      replyTo: serverReplyTo,
+                      relations: [{ type: 'evaluates', targetId: serverReplyTo }],
+                      language: lang,
+                    };
+                    if (risk) payload.highRisk = risk;
+                    
+                    const res = await api.createProjectInteraction(projectId, payload);
+                    
+                    // Update local interaction with server ID
+                    useGenaiChatStore.setState((st) => {
+                      const items = [...st.interactions];
+                      const idx = items.findIndex((it) => it.id === evalId);
+                      if (idx >= 0) { (items[idx] as any).id = res.id; }
+                      
+                      const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                      newMap[evalId] = res.id;
+                      
+                      return { interactions: items, persistedByLocalId: newMap } as any;
+                    });
+                    
+                    console.log('[UserPositionAnalysis] eval.stance persisted to server', { evalId, serverId: res.id });
+                  } catch (e) {
+                    console.warn('[UserPositionAnalysis] Failed to persist eval.stance to server', e);
+                  }
+                })();
+              }
+            } catch (e) {
+              console.warn('[UserPositionAnalysis] Failed to create eval.stance', e);
+            }
             setDurationMs(Math.max(1, Math.round(finished - started)));
             setError(null);
             if (!notifiedRef.current) {
@@ -724,30 +793,70 @@ ${prevBlock}`;
   };
   const agg = genaiChat.stanceAggregate;
 
+  // Display content: prefer stanceForLatestUser, fallback to position, then previousStanceText
+  const displayContent = stanceForLatestUser 
+    ? (stanceForLatestUser.contentSanitized || stanceForLatestUser.content)
+    : position 
+      ? position 
+      : previousStanceText;
+  
+  // Display risk: prefer from stanceForLatestUser, fallback to local risk state
+  const displayRisk = stanceForLatestUser?.highRisk || risk;
+
   return (
     <div className="mt-3 p-3">
-      {!hideTitle && (<div className="text-13 mb-2" style={{ color: '#669999' }}>You in this discussion</div>)}
+      {!hideTitle && (<div className="text-13 mb-2" style={{ color: '#669999' }}>How you engage</div>)}
       {error ? (
         <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{error}</div>
-      ) : (stanceForLatestUser || position) ? (
+      ) : displayContent ? (
         <>
-          <div className="text-12 fade-in" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5' }}>
-            {stanceForLatestUser ? (stanceForLatestUser.contentSanitized || stanceForLatestUser.content) : sanitizeSx(position as string)}
+          <div className="text-12 fade-in" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5', opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+            {sanitizeSx(displayContent as string)}
           </div>
-          {(stanceForLatestUser?.highRisk || risk) && (
-            <div className="text-[11px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+          {displayRisk && (
+            <div className="mt-2 mb-2">
               {(() => {
-                const hr = stanceForLatestUser?.highRisk || risk;
+                const hr = displayRisk;
                 if (!hr) return null as any;
-                return (<>
-                  Risk: <span style={{ color: 'var(--text-secondary-strong)' }}>{hr.level}</span>{typeof hr.score === 'number' ? ` (score: ${Number(hr.score).toFixed(2)})` : ''}
-                </>);
+                
+                const level = hr.level || 'Low';
+                
+                // Determine badge text and colors based on risk level
+                let badgeText = 'This discussion is safe';
+                let bgColor = 'rgba(34, 197, 94, 0.1)'; // green
+                let borderColor = 'rgba(34, 197, 94, 0.3)';
+                let textColor = 'rgb(34, 197, 94)';
+                
+                if (level === 'High') {
+                  badgeText = 'High risk detected';
+                  bgColor = 'rgba(239, 68, 68, 0.1)'; // red
+                  borderColor = 'rgba(239, 68, 68, 0.3)';
+                  textColor = 'rgb(239, 68, 68)';
+                } else if (level === 'Medium') {
+                  badgeText = 'Moderate risk detected';
+                  bgColor = 'rgba(251, 191, 36, 0.1)'; // yellow/orange
+                  borderColor = 'rgba(251, 191, 36, 0.3)';
+                  textColor = 'rgb(251, 191, 36)';
+                }
+                
+                return (
+                  <span 
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium"
+                    style={{ 
+                      backgroundColor: bgColor,
+                      border: `1px solid ${borderColor}`,
+                      color: textColor
+                    }}
+                  >
+                    {badgeText}
+                  </span>
+                );
               })()}
             </div>
           )}
-          {(stanceForLatestUser?.highRisk?.rationale || risk?.rationale) && (
+          {displayRisk?.rationale && (
             <div className="text-[11px] mt-1" style={{ color: 'var(--text-secondary-strong)' }}>
-              {(stanceForLatestUser?.highRisk?.rationale || risk?.rationale) as string}
+              {displayRisk.rationale}
             </div>
           )}
           {typeof durationMs === 'number' && !stanceForLatestUser && (
@@ -759,7 +868,14 @@ ${prevBlock}`;
             <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                  Meta-analysis{typeof agg.samples === 'number' && agg.samples > 0 ? ` (${agg.samples} sample${agg.samples > 1 ? 's' : ''})` : ''}
+                  {(() => {
+                    const messagesAnalyzed = (agg as any)?.lastAnalyzedMessageCount;
+                    const samples = (agg as any)?.samples;
+                    const label = typeof messagesAnalyzed === 'number' && messagesAnalyzed > 0
+                      ? `Conversation insights (${messagesAnalyzed} messages)`
+                      : (typeof samples === 'number' && samples > 0 ? `Conversation insights (${samples} update${samples > 1 ? 's' : ''})` : 'Conversation insights');
+                    return label;
+                  })()}
                 </div>
                 <button
                   type="button"
@@ -767,111 +883,205 @@ ${prevBlock}`;
                   style={{ color: 'var(--text-secondary-strong)' }}
                   onClick={() => setShowMetaDetails(!showMetaDetails)}
                 >
-                  {showMetaDetails ? 'Hide details' : 'Show details'}
+                  {showMetaDetails ? 'Hide' : 'Show'}
                 </button>
               </div>
-              <div className="space-y-2">
-                {typeof agg.whoLeads === 'string' && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>Dialog control:</span>
-                    <span className="text-[11px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>{agg.whoLeads}</span>
+              
+              {/* Who Leads - Always visible */}
+              {typeof agg.whoLeads === 'string' && (
+                <div className="mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>
+                      {agg.whoLeads === 'User' ? 'You lead' : agg.whoLeads === 'AI' ? 'AI leads' : 'Mixed control'}
+                    </span>
                   </div>
-                )}
-                {typeof agg.effectiveness === 'number' && (
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>Effectiveness:</span>
-                      <span className="text-[11px]" style={{ color: 'var(--text-heading)' }}>{(agg.effectiveness * 100).toFixed(0)}%</span>
-                    </div>
-                    <div style={{ width: '100%', height: 4, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                      <div style={{ width: `${agg.effectiveness * 100}%`, height: '100%', backgroundColor: 'hsl(160, 50%, 50%)', transition: 'width 0.3s ease' }} />
-                    </div>
+                  <div className="text-[10px] mt-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                    {agg.whoLeads === 'User' 
+                      ? 'You drive the discussion by asking clear questions, setting direction, and making decisions'
+                      : agg.whoLeads === 'AI' 
+                      ? 'The AI is steering the conversation by suggesting topics and next steps - you can take more control by being more directive'
+                      : 'You and the AI take turns driving the conversation, sharing initiative'}
                   </div>
-                )}
-                {showMetaDetails && (
-                  <>
-                    {typeof agg.leadershipIndex === 'number' && (
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Leadership:</span>
-                          <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{(agg.leadershipIndex * 100).toFixed(0)}%</span>
+                </div>
+              )}
+              
+              {showMetaDetails && (
+                <>
+                  {/* Key Insights */}
+                  {(() => {
+                    try {
+                      const insights = generateKeyInsights(agg);
+                      if (insights.length === 0) return null;
+                      return (
+                        <div className="space-y-2 mb-3">
+                          {insights.map((insight, idx) => {
+                            const iconColor = insight.sentiment === 'positive' ? 'hsl(120, 50%, 50%)' : insight.sentiment === 'negative' ? 'hsl(0, 50%, 50%)' : 'hsl(45, 70%, 55%)';
+                            return (
+                              <div key={idx} className="flex items-start gap-2">
+                                <div className="w-1 h-1 rounded-full mt-1.5" style={{ backgroundColor: iconColor, flexShrink: 0 }} />
+                                <div className="flex-1">
+                                  <div className="text-[11px]" style={{ color: 'var(--text-heading)' }}>{insight.title}</div>
+                                  <div className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{insight.description}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                          <div style={{ width: `${agg.leadershipIndex * 100}%`, height: '100%', backgroundColor: 'hsl(200, 50%, 50%)' }} />
-                        </div>
-                      </div>
-                    )}
-                    {typeof agg.focusRetention === 'number' && (
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Focus retention:</span>
-                          <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{(agg.focusRetention * 100).toFixed(0)}%</span>
-                        </div>
-                        <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                          <div style={{ width: `${agg.focusRetention * 100}%`, height: '100%', backgroundColor: 'hsl(280, 50%, 50%)' }} />
-                        </div>
-                      </div>
-                    )}
-                    {typeof agg.structureScore === 'number' && (
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Structure:</span>
-                          <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{(agg.structureScore * 100).toFixed(0)}%</span>
-                        </div>
-                        <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                          <div style={{ width: `${agg.structureScore * 100}%`, height: '100%', backgroundColor: 'hsl(40, 50%, 50%)' }} />
-                        </div>
-                      </div>
-                    )}
-                    {agg.lastResults && typeof agg.lastResults === 'object' && (() => {
-                      try {
-                        const res = agg.lastResults as any;
-                        // lastResults structure: { results: [{analyzer: string, result: {...}}] }
-                        const results = Array.isArray(res.results) ? res.results : [];
-                        if (results.length === 0) return null;
-                        
-                        // Extract detailed analyzer results
-                        const analyzerDetails = results.map((r: any) => {
-                          const name = r.analyzer || r.Analyzer || 'unknown';
-                          const resultData = r.result || r.Result || {};
-                          return { name, data: resultData };
-                        });
+                      );
+                    } catch (e) {
+                      console.error('[Meta] Failed to generate insights:', e);
+                      return null;
+                    }
+                  })()}
 
-                        return (
-                          <div className="mt-2 pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-                            <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-                              Analyzers ({analyzerDetails.length}):
-                            </div>
-                            <div className="space-y-2">
-                              {analyzerDetails.map((a: any, i: number) => {
-                                const dataKeys = Object.keys(a.data);
-                                const hasData = dataKeys.length > 0;
-                                return (
-                                  <div key={i}>
-                                    <div className="flex items-center gap-2">
-                                      <span className="px-2 py-0.5 rounded text-[9px]" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>
-                                        {a.name}
-                                      </span>
-                                      {hasData && (
-                                        <span className="text-[9px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                                          {dataKeys.slice(0, 3).join(', ')}{dataKeys.length > 3 ? '...' : ''}
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
+                  {/* Technical Details Toggle */}
+                  <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
+                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Technical details</span>
+                    <button
+                      type="button"
+                      className="text-[9px] underline"
+                      style={{ color: 'var(--text-secondary-strong)' }}
+                      onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
+                    >
+                      {showTechnicalDetails ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+
+                  {showTechnicalDetails && (
+                    <div className="space-y-2 mt-2">
+                      {typeof agg.whoLeads === 'string' && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Dialog control:</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>{agg.whoLeads}</span>
+                        </div>
+                      )}
+                      {typeof agg.effectiveness === 'number' && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Effectiveness:</span>
+                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.effectiveness)}</span>
                           </div>
-                        );
-                      } catch (e) { 
-                        console.error('[Meta] Failed to parse lastResults:', e, agg.lastResults);
-                        return null; 
-                      }
-                    })()}
-                  </>
-                )}
-              </div>
+                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ width: formatPercent(agg.effectiveness), height: '100%', backgroundColor: getMetricColor(agg.effectiveness), transition: 'width 0.3s ease' }} />
+                          </div>
+                        </div>
+                      )}
+                      {typeof agg.leadershipIndex === 'number' && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Leadership:</span>
+                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.leadershipIndex)}</span>
+                          </div>
+                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ width: formatPercent(agg.leadershipIndex), height: '100%', backgroundColor: getMetricColor(agg.leadershipIndex) }} />
+                          </div>
+                        </div>
+                      )}
+                      {typeof agg.focusRetention === 'number' && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Focus retention:</span>
+                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.focusRetention)}</span>
+                          </div>
+                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ width: formatPercent(agg.focusRetention), height: '100%', backgroundColor: getMetricColor(agg.focusRetention) }} />
+                          </div>
+                        </div>
+                      )}
+                      {typeof agg.structureScore === 'number' && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Structure:</span>
+                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.structureScore)}</span>
+                          </div>
+                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ width: formatPercent(agg.structureScore), height: '100%', backgroundColor: getMetricColor(agg.structureScore) }} />
+                          </div>
+                        </div>
+                      )}
+                      {agg.lastResults && typeof agg.lastResults === 'object' && (() => {
+                        try {
+                          const res = agg.lastResults as any;
+                          const results = Array.isArray(res.results) ? res.results : [];
+                          if (results.length === 0) return null;
+                          
+                          const analyzerDetails = results.map((r: any) => {
+                            const name = r.analyzer || r.Analyzer || 'unknown';
+                            const resultData = r.result || r.Result || {};
+                            return { name, data: resultData };
+                          });
+
+                          return (
+                            <div className="mt-2 pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
+                              <div className="text-[9px] mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                                Detailed patterns ({analyzerDetails.length} analyzers):
+                              </div>
+                              <div className="space-y-3">
+                                {analyzerDetails.map((a: any, i: number) => {
+                                  const data: any = a.data || {};
+                                  const interpretations: string[] = [];
+                                  
+                                  try {
+                                    if (a.name === 'thinking') {
+                                      if (data.depth?.label) interpretations.push(interpretThinkingDepth(data.depth.label));
+                                      if (Array.isArray(data.timeHorizon) && data.timeHorizon.length > 0) {
+                                        data.timeHorizon.slice(0, 2).forEach((h: any) => {
+                                          if (h?.label) interpretations.push(interpretTimeHorizon(h.label));
+                                        });
+                                      }
+                                      if (data.uncertainty?.label) interpretations.push(interpretUncertainty(data.uncertainty.label));
+                                    } else if (a.name === 'decisions') {
+                                      if (data.process?.label) interpretations.push(interpretDecisionProcess(data.process.label));
+                                      if (data.riskAttitude?.label) interpretations.push(interpretRiskAttitude(data.riskAttitude.label));
+                                      if (data.criteriaStyle?.label) interpretations.push(interpretCriteriaStyle(data.criteriaStyle.label));
+                                    } else if (a.name === 'comm' || a.name === 'communication' || a.name === 'communicationPatterns') {
+                                      if (data.clarity?.label) interpretations.push(interpretClarity(data.clarity.label));
+                                      if (data.abstraction?.label) interpretations.push(interpretAbstraction(data.abstraction.label));
+                                      if (data.contextCompleteness?.label) interpretations.push(interpretContextCompleteness(data.contextCompleteness.label));
+                                    } else if (a.name === 'learning') {
+                                      if (data.metaAwareness?.label) interpretations.push(interpretMetaAwareness(data.metaAwareness.label));
+                                      if (data.dynamics?.label) interpretations.push(interpretLearningDynamics(data.dynamics.label));
+                                      if (data.integration?.label) interpretations.push(interpretIntegration(data.integration.label));
+                                    } else if (a.name === 'biases') {
+                                      if (Array.isArray(data.biases) && data.biases.length > 0) {
+                                        data.biases.slice(0, 3).forEach((b: any) => {
+                                          if (b?.label) interpretations.push(`${b.label}${b.intensity ? ` (${formatPercent(b.intensity)})` : ''}`);
+                                        });
+                                      }
+                                    }
+                                  } catch {}
+                                  
+                                  if (interpretations.length === 0) return null;
+                                  
+                                  const analyzerLabel = a.name === 'thinking' ? 'Thinking' : a.name === 'decisions' ? 'Decision-making' : a.name === 'comm' || a.name === 'communication' ? 'Communication' : a.name === 'learning' ? 'Learning' : a.name === 'biases' ? 'Cognitive biases' : a.name;
+                                  
+                                  return (
+                                    <div key={i}>
+                                      <div className="text-[9px] mb-1" style={{ color: 'var(--text-heading)' }}>
+                                        {analyzerLabel}
+                                      </div>
+                                      <div className="space-y-0.5">
+                                        {interpretations.map((interp, idx) => (
+                                          <div key={idx} className="text-[9px] pl-2" style={{ color: 'var(--text-secondary-strong)' }}>
+                                            • {interp}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        } catch (e) { 
+                          console.error('[Meta] Failed to parse lastResults:', e, agg.lastResults);
+                          return null; 
+                        }
+                      })()}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
         </>
@@ -908,6 +1118,30 @@ const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult
       if (genaiChat.streaming) return;
       if (!lastAssistant) return;
       if (lastReviewedId.current === lastAssistant.id) return;
+      
+      // Check if eval.bias already exists for this assistant message
+      try {
+        const map = (genaiChat as any).persistedByLocalId || {};
+        const serverId = map[lastAssistant.id];
+        const reverseMap: Record<string, string[]> = {};
+        Object.entries(map).forEach(([local, server]) => {
+          if (!reverseMap[server as string]) reverseMap[server as string] = [];
+          reverseMap[server as string].push(local);
+        });
+        const localIds = reverseMap[lastAssistant.id] || [];
+        const existingEvalBias = [...genaiChat.interactions].reverse().find((it: any) => 
+          it.subkind === 'eval.bias' && 
+          (it.replyTo === lastAssistant.id || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
+        );
+        if (existingEvalBias) {
+          console.log('[LLMEvaluation] eval.bias already exists for message', lastAssistant.id, '- skipping recalculation');
+          lastReviewedId.current = lastAssistant.id;
+          return; // Skip evaluation if it already exists
+        }
+      } catch (e) {
+        console.warn('[LLMEvaluation] Failed to check existing eval.bias', e);
+      }
+      
       setLoading(true);
       setError(null);
       try {
@@ -1054,9 +1288,12 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                 };
                 console.log('[StanceEval] structured eval result', { model: evalModel, ev });
                 useGenaiChatStore.getState().setEvaluation(lastAssistant.id, ev);
-                // Create eval.bias for assistant
+                // Create eval.bias for assistant and persist to server
                 try {
                   const evalId = Date.now().toString() + '-eval-bias-a';
+                  const projectId = useGenaiChatStore.getState().projectId;
+                  
+                  // Add to local state first
                   useGenaiChatStore.setState((s) => ({
                     interactions: [
                       ...s.interactions,
@@ -1073,11 +1310,71 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                       } as any,
                     ],
                   } as any));
-                } catch {}
+                  
+                  // Persist to server (async, don't block UI)
+                  if (projectId && projectId !== 'local-unfold') {
+                    (async () => {
+                      try {
+                        const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
+                        const serverReplyTo = map[lastAssistant.id] || lastAssistant.id;
+                        
+                        const payload: any = {
+                          kind: 'system',
+                          subkind: 'eval.bias',
+                          content: JSON.stringify(ev),
+                          replyTo: serverReplyTo,
+                          relations: [{ type: 'evaluates', targetId: serverReplyTo }],
+                        };
+                        
+                        const res = await api.createProjectInteraction(projectId, payload);
+                        
+                        // Update local interaction with server ID
+                        useGenaiChatStore.setState((st) => {
+                          const items = [...st.interactions];
+                          const idx = items.findIndex((it) => it.id === evalId);
+                          if (idx >= 0) { (items[idx] as any).id = res.id; }
+                          
+                          const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                          newMap[evalId] = res.id;
+                          
+                          return { interactions: items, persistedByLocalId: newMap } as any;
+                        });
+                        
+                        console.log('[LLMEvaluation] eval.bias persisted to server', { evalId, serverId: res.id });
+                      } catch (e) {
+                        console.warn('[LLMEvaluation] Failed to persist eval.bias to server', e);
+                      }
+                    })();
+                  }
+                } catch (e) {
+                  console.warn('[LLMEvaluation] Failed to create eval.bias', e);
+                }
 
                 // Also derive assistant stance with risk (eval.stance for assistant)
                 try {
                   (async () => {
+                    // Check if eval.stance already exists
+                    try {
+                      const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
+                      const serverId = map[lastAssistant.id];
+                      const reverseMap: Record<string, string[]> = {};
+                      Object.entries(map).forEach(([local, server]) => {
+                        if (!reverseMap[server as string]) reverseMap[server as string] = [];
+                        reverseMap[server as string].push(local);
+                      });
+                      const localIds = reverseMap[lastAssistant.id] || [];
+                      const existingStance = [...useGenaiChatStore.getState().interactions].reverse().find((it: any) => 
+                        it.subkind === 'eval.stance' && 
+                        (it.replyTo === lastAssistant.id || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
+                      );
+                      if (existingStance) {
+                        console.log('[StanceEval] eval.stance already exists for message', lastAssistant.id, '- skipping');
+                        return;
+                      }
+                    } catch (e) {
+                      console.warn('[StanceEval] Failed to check existing eval.stance', e);
+                    }
+                    
                     const riskCategories = [
                       'medical_or_mental_health',
                       'self_harm_or_life_threats',
@@ -1127,6 +1424,9 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                       const clamp01b = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
                       const risk = (rp && typeof rp.level === 'string') ? { level: rp.level as any, score: clamp01b(rp.score), rationale: typeof rp.rationale === 'string' ? rp.rationale : undefined, triggers: Array.isArray(rp.triggerCategories) ? rp.triggerCategories : undefined } : undefined;
                       const evalId2 = Date.now().toString() + '-eval-stance-a';
+                      const projectId = useGenaiChatStore.getState().projectId;
+                      
+                      // Add to local state
                       useGenaiChatStore.setState((s) => ({
                         interactions: [
                           ...s.interactions,
@@ -1145,6 +1445,44 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                           } as any,
                         ],
                       } as any));
+                      
+                      // Persist to server
+                      if (projectId && projectId !== 'local-unfold') {
+                        (async () => {
+                          try {
+                            const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
+                            const serverReplyTo = map[lastAssistant.id] || lastAssistant.id;
+                            
+                            const payload: any = {
+                              kind: 'system',
+                              subkind: 'eval.stance',
+                              content: stanceText,
+                              replyTo: serverReplyTo,
+                              relations: [{ type: 'evaluates', targetId: serverReplyTo }],
+                              language: requiredLang,
+                            };
+                            if (risk) payload.highRisk = risk;
+                            
+                            const res = await api.createProjectInteraction(projectId, payload);
+                            
+                            // Update local interaction with server ID
+                            useGenaiChatStore.setState((st) => {
+                              const items = [...st.interactions];
+                              const idx = items.findIndex((it) => it.id === evalId2);
+                              if (idx >= 0) { (items[idx] as any).id = res.id; }
+                              
+                              const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                              newMap[evalId2] = res.id;
+                              
+                              return { interactions: items, persistedByLocalId: newMap } as any;
+                            });
+                            
+                            console.log('[LLMEvaluation] eval.stance persisted to server', { evalId: evalId2, serverId: res.id });
+                          } catch (e) {
+                            console.warn('[LLMEvaluation] Failed to persist eval.stance to server', e);
+                          }
+                        })();
+                      }
                     }
                   })();
                 } catch {}
@@ -1153,6 +1491,31 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
               }
             })();
           }
+        }
+
+        // Check if eval.review already exists for this assistant message
+        try {
+          const map = (genaiChat as any).persistedByLocalId || {};
+          const serverId = map[lastAssistant.id];
+          const reverseMap: Record<string, string[]> = {};
+          Object.entries(map).forEach(([local, server]) => {
+            if (!reverseMap[server as string]) reverseMap[server as string] = [];
+            reverseMap[server as string].push(local);
+          });
+          const localIds = reverseMap[lastAssistant.id] || [];
+          const existingReview = [...genaiChat.interactions].reverse().find((it: any) => 
+            it.subkind === 'eval.review' && 
+            (it.replyTo === lastAssistant.id || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
+          );
+          if (existingReview) {
+            console.log('[LLMEvaluation] eval.review already exists for message', lastAssistant.id, '- skipping');
+            lastReviewedId.current = lastAssistant.id;
+            setReview((existingReview as any).content || (existingReview as any).contentSanitized || '');
+            setLoading(false);
+            return;
+          }
+        } catch (e) {
+          console.warn('[LLMEvaluation] Failed to check existing eval.review', e);
         }
 
         const settingsState2 = useGenAISettings.getState();
@@ -1182,6 +1545,9 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
             try {
               const evalId = Date.now().toString() + '-eval-review-a';
               const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+              const projectId = useGenaiChatStore.getState().projectId;
+              
+              // Add to local state
               useGenaiChatStore.setState((s) => ({
                 interactions: [
                   ...s.interactions,
@@ -1199,7 +1565,46 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                   } as any,
                 ],
               } as any));
-            } catch {}
+              
+              // Persist to server
+              if (projectId && projectId !== 'local-unfold' && lastAssistant?.id) {
+                (async () => {
+                  try {
+                    const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
+                    const serverReplyTo = map[lastAssistant.id] || lastAssistant.id;
+                    
+                    const payload: any = {
+                      kind: 'system',
+                      subkind: 'eval.review',
+                      content: content,
+                      replyTo: serverReplyTo,
+                      relations: [{ type: 'evaluates', targetId: serverReplyTo }],
+                      language: preferredLang,
+                    };
+                    
+                    const res = await api.createProjectInteraction(projectId, payload);
+                    
+                    // Update local interaction with server ID
+                    useGenaiChatStore.setState((st) => {
+                      const items = [...st.interactions];
+                      const idx = items.findIndex((it) => it.id === evalId);
+                      if (idx >= 0) { (items[idx] as any).id = res.id; }
+                      
+                      const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                      newMap[evalId] = res.id;
+                      
+                      return { interactions: items, persistedByLocalId: newMap } as any;
+                    });
+                    
+                    console.log('[LLMEvaluation] eval.review persisted to server', { evalId, serverId: res.id });
+                  } catch (e) {
+                    console.warn('[LLMEvaluation] Failed to persist eval.review to server', e);
+                  }
+                })();
+              }
+            } catch (e) {
+              console.warn('[LLMEvaluation] Failed to create eval.review', e);
+            }
           } else {
             setError('The model returned an empty review.');
           }
@@ -1559,6 +1964,46 @@ const DiscoveryPage: React.FC = () => {
   const [titlesAvailable, setTitlesAvailable] = useState(false);
   const [titlesGlow, setTitlesGlow] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightContextOpen, setRightContextOpen] = useState(false);
+  const [rightArtifactsOpen, setRightArtifactsOpen] = useState(false);
+  const hasPinned = React.useMemo(() => {
+    try {
+      return useGenaiChatStore.getState().interactions.some((it: any) => !!it?.metadata?.pinned);
+    } catch { return false; }
+  }, [genaiChat.interactions, rightContextOpen, rightPanelOpen]);
+  React.useEffect(() => { if (!hasPinned) setRightContextOpen(false); }, [hasPinned]);
+  // Ensure interactions are loaded on chat load to detect pinned items
+  React.useEffect(() => {
+    try {
+      if (genaiChat.projectId && genaiChat.projectId !== 'local-unfold') {
+        genaiChat.hydrateInteractions();
+      }
+    } catch {}
+  }, [genaiChat.projectId]);
+  const pinnedInteractions = React.useMemo(() => {
+    try {
+      return (genaiChat.interactions || []).filter((it: any) => !!it?.metadata?.pinned);
+    } catch { return []; }
+  }, [genaiChat.interactions]);
+  const truncateCenterWords = (s: string, headWords: number = 12, tailWords: number = 12) => {
+    try {
+      const t = (s || '').toString().replace(/\s+/g, ' ').trim();
+      if (!t) return t;
+      const words = t.split(' ');
+      if (words.length <= headWords + tailWords + 2) return t;
+      const head = words.slice(0, headWords).join(' ');
+      const tail = words.slice(-tailWords).join(' ');
+      return `${head} … ${tail}`;
+    } catch { return s as any; }
+  };
+  const scrollToInteraction = (id: string) => {
+    try {
+      const el = typeof document !== 'undefined' ? document.querySelector(`[data-interaction-id="${id}"]`) as HTMLElement | null : null;
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    } catch {}
+  };
   React.useEffect(() => { if (sideOpen) setTitlesGlow(false); }, [sideOpen]);
   const [availUserAnalysis, setAvailUserAnalysis] = useState(false);
   const [availLLMReview, setAvailLLMReview] = useState(false);
@@ -2056,6 +2501,35 @@ const DiscoveryPage: React.FC = () => {
 
       const editBtn = mkBtn('Ask to edit selected', 'edit');
       const notesBtn = mkBtn('Add to Notes', 'note');
+      // Wire Add to Notes: pin if needed + append selected text to metadata.notes
+      if (notesBtn) {
+        notesBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          try {
+            const sel = window.getSelection?.()?.toString()?.trim() || '';
+            if (!sel) return;
+            const range = document.getSelection()?.getRangeAt(0);
+            const startEl = range ? (range.startContainer.nodeType === 3 ? (range.startContainer.parentElement) : (range.startContainer as Element)) as Element | null : null;
+            const interId = startEl?.closest('.markdown')?.getAttribute('data-interaction-id') || '';
+            const it = interId ? useGenaiChatStore.getState().interactions.find((x: any) => x.id === interId) : undefined as any;
+            if (!it) return;
+            const meta = it.metadata || {};
+            const notes = Array.isArray(meta.notes) ? [...meta.notes] : [];
+            notes.push(sel);
+            await api.updateProjectInteraction(useGenaiChatStore.getState().projectId, it.id, { metadata: { pinned: true, notes } });
+            await useGenaiChatStore.getState().hydrateInteractions();
+            // Hide selection UI and clear selection after successful add
+            if (selectionMenuRef.current) selectionMenuRef.current.style.display = 'none';
+            if (selectionBtnRef.current) selectionBtnRef.current.style.display = 'none';
+            setTimeout(() => {
+              const s = window.getSelection && window.getSelection();
+              if (s && s.removeAllRanges) s.removeAllRanges();
+            }, 100);
+          } catch (err) {
+            console.warn('[AddToNotes] failed', err);
+          }
+        });
+      }
       menu.appendChild(editBtn);
       menu.appendChild(notesBtn);
       // Prevent selection clearing when starting interaction with the menu
@@ -2229,6 +2703,36 @@ const DiscoveryPage: React.FC = () => {
       }
     };
   }, [messagesRef.current]);
+
+  // Highlight notes in message content
+  useEffect(() => {
+    // Defer until DOM is rendered to avoid flicker
+    const t = window.setTimeout(() => {
+      try {
+        const interactions = genaiChat.interactions || [];
+        const pairs: Array<{ container: Element; notes: string[] }> = [];
+        for (const it of interactions as any[]) {
+          const notes = (it?.metadata?.notes || []) as string[];
+          if (Array.isArray(notes) && notes.length > 0) {
+            const container = document.querySelector(`.markdown[data-interaction-id=\"${it.id}\"]`);
+            if (container) {
+              pairs.push({ container: container as Element, notes });
+            }
+          }
+        }
+        if (pairs.length > 0) {
+          const success = applyGlobalHighlight(pairs);
+          if (!success) {
+            pairs.forEach(({ container, notes }) => highlightNotes(container, notes));
+          }
+        }
+        // Important: do NOT clear highlights on interim empty states to avoid flicker
+      } catch (e) {
+        console.warn('[Highlight] Failed to process highlights', e);
+      }
+    }, 50); // Increased delay to ensure DOM is stable after React re-render
+    return () => { window.clearTimeout(t); };
+  }, [genaiChat.interactions, rightContextOpen, rightPanelOpen]);
 
   // GenAI thinking seconds timer: runs until first chunk arrives
   useEffect(() => {
@@ -2736,7 +3240,7 @@ const DiscoveryPage: React.FC = () => {
                   <circle cx="12" cy="8" r="3.5" strokeWidth={2} />
                   <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth={2} strokeLinecap="round" />
                 </svg>
-                <span className="text-12">Your stance</span>
+                <span className="text-12">How you engage</span>
               </button>
               )}
               {availDiscussionFlow && (
@@ -2930,12 +3434,82 @@ const DiscoveryPage: React.FC = () => {
         style={{ position: 'fixed', right: 8, top: 76, width: 32, height: 32, color: 'white', zIndex: 40 }}
         onClick={() => {
           console.log('[RightPanel] toggle', !rightPanelOpen);
-          setRightPanelOpen(!rightPanelOpen);
+          // Ensure mutual exclusivity
+          setRightContextOpen(false);
+          setRightArtifactsOpen(false);
+          setRightPanelOpen((v) => !v);
         }}
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
           <path d="M6 3h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
           <path d="M13 3v5h5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {/* Context Navigation button (gray, like New Chat) shown on right edge */}
+      {hasPinned && (
+        <button
+          type="button"
+          aria-label="Context Navigation"
+          title="Context Navigation"
+          onClick={() => {
+            // Ensure mutual exclusivity
+            setRightPanelOpen(false);
+            setRightArtifactsOpen(false);
+            setRightContextOpen((v) => !v);
+          }}
+          className="rounded-lg flex items-center justify-center transition-all duration-300"
+          style={{
+            position: 'fixed',
+            right: 8,
+            top: 116,
+            width: 32,
+            height: 32,
+            backgroundColor: 'var(--newchat-bg)',
+            color: 'var(--text-heading)',
+            zIndex: 40,
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)'; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)'; }}
+        >
+          {/* Icon: compass/graph for context navigation */}
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <circle cx="12" cy="12" r="9" strokeWidth={2} />
+            <path d="M10 14l2-6 6-2-2 6-6 2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
+
+      {/* Workspace Artifacts button (pastel green) shown on right edge */}
+      <button
+        type="button"
+        aria-label="Workspace Artifacts"
+        title="Workspace Artifacts"
+        onClick={() => {
+          // Ensure mutual exclusivity
+          setRightPanelOpen(false);
+          setRightContextOpen(false);
+          setRightArtifactsOpen((v) => !v);
+        }}
+        className="rounded-lg flex items-center justify-center transition-all duration-300"
+        style={{
+          position: 'fixed',
+          right: 8,
+          top: hasPinned ? 156 : 116,
+          width: 32,
+          height: 32,
+          backgroundColor: rightArtifactsOpen ? 'hsl(140, 45%, 65%)' : 'hsl(140, 40%, 70%)',
+          color: 'hsl(140, 50%, 20%)',
+          zIndex: 40,
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'hsl(140, 45%, 65%)'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = rightArtifactsOpen ? 'hsl(140, 45%, 65%)' : 'hsl(140, 40%, 70%)'; }}
+      >
+        {/* Icon: layers/stack for artifacts */}
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M12 2L2 7l10 5 10-5-10-5z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M2 17l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M2 12l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
 
@@ -3025,7 +3599,7 @@ const DiscoveryPage: React.FC = () => {
               {/* Header: chosen section title + close */}
               {leftPanel && (
                 <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
-                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? 'You in this discussion' : (leftPanel === 'flow' ? 'Discussion flow' : 'Artifacts')}</h3>
+                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? 'How you engage' : (leftPanel === 'flow' ? 'Discussion flow' : 'Artifacts')}</h3>
                   <button type="button" aria-label="Close" title="Close" className="p-2 rounded-lg transition-colors" style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }} onClick={() => setLeftPanel(null)}>
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
@@ -3365,7 +3939,13 @@ const DiscoveryPage: React.FC = () => {
                       className="rounded-lg transition-colors"
                       aria-label="Close"
                       title="Close"
-                      onClick={() => { try { genaiChat.closeMetricOverlay(); } catch {} }}
+                      onClick={() => {
+                        try {
+                          genaiChat.closeMetricOverlay();
+                        } catch (e) {
+                          console.error('[MetricOverlay] Error closing overlay:', e);
+                        }
+                      }}
                       style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
@@ -3393,14 +3973,41 @@ const DiscoveryPage: React.FC = () => {
             {/* GenAI chat history */}
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]">
               <div className="space-y-2">
-                {(genaiChat.streaming ? genaiChat.messages.filter((m) => {
-                  // During streaming, only show messages that aren't already in interactions
-                  // (avoid duplicates when messages are being persisted as interactions)
-                  const hasInteraction = genaiChat.interactions.some((it) => 
-                    (it as any).originalMessageId === m.id || it.id === m.id
-                  );
-                  return !hasInteraction;
-                }) : []).map((m) => {
+                {(() => {
+                  // Merge messages and interactions, sort by timestamp to ensure correct order
+                  type MergedItem = { type: 'message' | 'interaction'; data: any; timestamp: number; };
+                  const merged: MergedItem[] = [];
+
+                  // Add filtered messages (only during streaming, and not already in interactions)
+                  if (genaiChat.streaming) {
+                    genaiChat.messages.forEach((m) => {
+                      const hasInteraction = genaiChat.interactions.some((it) => 
+                        (it as any).originalMessageId === m.id || it.id === m.id
+                      );
+                      if (!hasInteraction) {
+                        // Parse timestamp from id (format: "timestamp-role")
+                        const ts = parseInt(m.id.split('-')[0]) || 0;
+                        merged.push({ type: 'message', data: m, timestamp: ts });
+                      }
+                    });
+                  }
+
+                  // Add interactions (user & assistant only)
+                  genaiChat.interactions
+                    .filter((it) => it.kind === 'user' || it.kind === 'assistant')
+                    .forEach((it) => {
+                      const ts = (it as any).createdAt?.seconds * 1000 || 0;
+                      merged.push({ type: 'interaction', data: it, timestamp: ts });
+                    });
+
+                  // Sort by timestamp
+                  merged.sort((a, b) => a.timestamp - b.timestamp);
+
+                  return merged.map((item) => {
+                    if (item.type === 'message') {
+                      const m = item.data;
+                      return (
+                        (function() {
                   const isUser = m.role === 'user';
                   const isAssistantPlaceholder = !isUser && genaiChat.streaming && !m.content;
                   const isAssistantError = !isUser && !genaiChat.streaming && !m.content && !!genaiChat.error;
@@ -3532,16 +4139,79 @@ const DiscoveryPage: React.FC = () => {
                       )}
                     </ChatMessage>
                   );
-                })}
-                {genaiChat.interactions
-                    .filter((it) => it.kind === 'user' || it.kind === 'assistant')
-                    .map((it) => {
+                        })()
+                      );
+                    } else { // item.type === 'interaction'
+                      const it = item.data;
                       const isUser = it.kind === 'user';
                       const meta = genaiChat.messageMeta[it.id];
                       const header = !isUser ? (meta?.headerText || it.author?.displayName || (it.agentProfile ? 'agent' : 'assistant')) : undefined;
                       const leftAccent = !isUser ? (meta?.leftAccent ?? !!it.agentProfile) : false;
+                      
+                      const handleDelete = async () => {
+                const targetName = isUser ? 'user message' : 'assistant response';
+                if (window.confirm(`Delete this ${targetName}?`)) {
+                          try {
+                            await genaiChat.deleteInteraction(it.id);
+                          } catch (e) {
+                            alert('Failed to delete message. Please try again.');
+                            console.error('[Delete] Error:', e);
+                          }
+                        }
+                      };
+                      
+                      const isPinned = !isUser && isInteractionPinned(it);
+                      const handlePinToggle = async () => {
+                        if (isUser) return; // Only for assistant messages
+                        try {
+                          await toggleInteractionPin(genaiChat.projectId, it.id, isPinned);
+                          // Refresh interactions to update pin state
+                          await genaiChat.hydrateInteractions();
+                        } catch (e) {
+                          alert('Failed to toggle pin. Please try again.');
+                          console.error('[Pin] Error:', e);
+                        }
+                      };
+                      
                       return (
-                        <ChatMessage key={it.id} role={isUser ? 'user' : 'assistant'} align={isUser ? 'right' : 'left'} isThinking={false} thinkingSeconds={0} isError={false} headerText={header} leftAccent={leftAccent} footer={undefined}>
+                        <div key={it.id} className="group relative">
+                          {/* Pin button - appears on hover for assistant messages only */}
+                          {!isUser && (
+                            <button
+                              type="button"
+                              aria-label={isPinned ? "Unpin message" : "Pin message"}
+                              className="absolute top-2 right-10 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                              style={{ backgroundColor: 'transparent' }}
+                              onClick={handlePinToggle}
+                              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                            >
+                              {isPinned ? (
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" style={{ color: 'var(--text-secondary-strong)' }}>
+                                  <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                                </svg>
+                              ) : (
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: 'var(--text-secondary-strong)' }}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                                </svg>
+                              )}
+                            </button>
+                          )}
+                          {/* Delete button - appears on hover */}
+                          <button
+                            type="button"
+                            aria-label="Delete message"
+                            className="absolute top-2 right-2 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                            style={{ backgroundColor: 'transparent' }}
+                            onClick={handleDelete}
+                            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: 'var(--text-secondary-strong)' }}>
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        <ChatMessage role={isUser ? 'user' : 'assistant'} align={isUser ? 'right' : 'left'} isThinking={false} thinkingSeconds={0} isError={false} headerText={header} leftAccent={leftAccent} footer={undefined}>
                           {isUser ? (
                             <>
                               <div className="text-13" style={{ color: 'var(--text-heading)', whiteSpace: 'pre-wrap' }}>{it.content}</div>
@@ -3700,8 +4370,11 @@ const DiscoveryPage: React.FC = () => {
                             <ActionRow messageId={it.id} isAssistant={!isUser} content={(it.contentSanitized || it.content)} />
                           )}
                         </ChatMessage>
+                        </div>
                       );
-                    })}
+                    }
+                  });
+                })()}
                 {genaiChat.streaming && (() => {
                   try {
                     const m = genaiChat.messages[genaiChat.messages.length - 1];
@@ -4157,7 +4830,7 @@ const DiscoveryPage: React.FC = () => {
         {/* Right column: container for contextual panels (transparent, no border) */}
         {viewMode !== 'graph' && (
           <div className="min-h-0 h-full" style={{ background: 'transparent', display: 'flex', flexDirection: 'column', marginRight: 48 }}>
-            {rightPanelOpen && (
+            {(rightPanelOpen || rightContextOpen || rightArtifactsOpen) && (
               <div
                 className="mt-3 p-3 rounded-xl sidebar-panel"
                 style={{
@@ -4171,7 +4844,9 @@ const DiscoveryPage: React.FC = () => {
                 }}
               >
                 <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
-                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Documents & Sources</h3>
+                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>
+                    {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : 'Documents & Sources'}
+                  </h3>
                   <button
                     type="button"
                     aria-label="Close right panel"
@@ -4180,13 +4855,123 @@ const DiscoveryPage: React.FC = () => {
                     style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }}
                     onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                     onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                    onClick={() => setRightPanelOpen(false)}
+                    onClick={() => { setRightPanelOpen(false); setRightContextOpen(false); setRightArtifactsOpen(false); }}
                   >
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
                 </div>
-                {/* Placeholder body for future content */}
-                <div style={{ flex: 1, minHeight: 0 }} />
+                {/* Panel content */}
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+                  {rightArtifactsOpen ? (
+                    <div className="space-y-3">
+                      {/* Placeholder for Workspace Artifacts */}
+                      <div className="text-center py-8">
+                        <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>
+                          Workspace Artifacts
+                        </div>
+                        <div className="text-11 mt-2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                          Create dynamic documents from conversation sections
+                        </div>
+                        <button
+                          type="button"
+                          className="mt-4 px-3 py-2 rounded-lg text-11 transition-colors"
+                          style={{ backgroundColor: 'hsl(140, 40%, 70%)', color: 'hsl(140, 50%, 20%)' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'hsl(140, 45%, 65%)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'hsl(140, 40%, 70%)'; }}
+                        >
+                          + Create Artifact
+                        </button>
+                      </div>
+                    </div>
+                  ) : rightContextOpen ? (
+                    <div className="space-y-2">
+                      {pinnedInteractions.length === 0 ? (
+                        <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>No pinned messages yet.</div>
+                      ) : (
+                        pinnedInteractions.map((it) => (
+                          <div key={it.id} className="p-2 rounded text-left w-full transition-colors" style={{ background: 'var(--white-06)', border: '1px solid var(--overlay-line-90)' }}>
+                            <div className="flex items-start justify-between gap-2">
+                              <button type="button" onClick={() => scrollToInteraction(it.id)} className="text-left" style={{ flex: 1 }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).parentElement!.parentElement!.style.backgroundColor = 'var(--white-12)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).parentElement!.parentElement!.style.backgroundColor = 'var(--white-06)'; }}>
+                            <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
+                              {it.kind === 'assistant' ? 'Assistant' : it.kind === 'user' ? 'User' : (it.agentProfile ? 'Agent' : (it.kind || ''))}
+                            </div>
+                            <div className="text-12" style={{ color: 'var(--text-heading)', whiteSpace: 'pre-wrap' }}>
+                              {truncateCenterWords(it.contentSanitized || it.content || '')}
+                            </div>
+                              </button>
+                            </div>
+                            {Array.isArray(it?.metadata?.notes) && it.metadata!.notes!.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                {it.metadata!.notes!.map((note, idx) => (
+                                  <div key={idx} className="flex items-start justify-between gap-2 p-1 rounded" style={{ background: 'var(--white-10)' }}>
+                                    <button
+                                      type="button"
+                                      className="text-left flex-1"
+                                      style={{ color: 'var(--text-secondary-strong)', whiteSpace: 'pre-wrap' }}
+                                      title="Scroll to note in message"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        // Try to scroll to the first occurrence of this note within the message
+                                        try {
+                                          const container = document.querySelector(`.markdown[data-interaction-id=\\"${it.id}\\"]`) as HTMLElement | null;
+                                          if (container) {
+                                            const r = findFirstRange(container, String(note));
+                                            if (r) {
+                                              const rect = r.getBoundingClientRect();
+                                              const host = messagesRef.current as HTMLElement | null;
+                                              if (host) {
+                                                const hostRect = host.getBoundingClientRect();
+                                                const offset = rect.top - hostRect.top + host.scrollTop - host.clientHeight / 2;
+                                                host.scrollTo({ top: Math.max(0, offset), behavior: 'smooth' });
+                                              } else {
+                                                (container as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                              }
+                                            } else {
+                                              (container as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                            }
+                                          }
+                                        } catch {}
+                                      }}
+                                    >
+                                      <span className="text-[12px]">{note}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      aria-label="Remove note"
+                                      className="p-1 rounded"
+                                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)' }}
+                                      onClick={async (ev) => {
+                                        ev.stopPropagation();
+                                        try {
+                                          const notes = (it.metadata?.notes || []).filter((_, i) => i !== idx);
+                                          const pinned = it.metadata?.pinned === true || notes.length > 0; // keep pinned if still notes exist
+                                          await api.updateProjectInteraction(genaiChat.projectId, it.id, { metadata: { pinned, notes } });
+                                          await genaiChat.hydrateInteractions();
+                                        } catch {}
+                                      }}
+                                      onMouseEnter={(ev) => { (ev.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-12)'; }}
+                                      onMouseLeave={(ev) => { (ev.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                                    >
+                                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18"/></svg>
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    <DocumentsAndSources 
+                      projectId={genaiChat.projectId} 
+                      onDocumentDelete={(docId: string) => {
+                        console.log('[DiscoveryPage] Document deleted', { docId });
+                        // Optionally refresh interactions or handle cleanup
+                      }}
+                    />
+                  )}
+                </div>
               </div>
             )}
 

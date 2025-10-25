@@ -290,20 +290,22 @@ type MetaAnalysisEvent struct {
 
 // MetaAggregateProject stores rolling EMA aggregates per project
 type MetaAggregateProject struct {
-	ID              string         `json:"id" firestore:"id"` // same as projectId
-	TenantID        string         `json:"tenantId" firestore:"tenantId"`
-	ProjectID       string         `json:"projectId" firestore:"projectId"`
-	OwnerUserID     string         `json:"ownerUserId" firestore:"ownerUserId"`
-	Version         string         `json:"version" firestore:"version"`
-	UpdatedAt       time.Time      `json:"updatedAt" firestore:"updatedAt"`
-	Samples         int            `json:"samples" firestore:"samples"`
-	WhoLeads        string         `json:"whoLeads" firestore:"whoLeads"`
-	LeadershipIndex float64        `json:"leadershipIndex" firestore:"leadershipIndex"`
-	FocusRetention  float64        `json:"focusRetention" firestore:"focusRetention"`
-	StructureScore  float64        `json:"structureScore" firestore:"structureScore"`
-	Effectiveness   float64        `json:"effectiveness" firestore:"effectiveness"`
-	LastAnalyzers   []string       `json:"lastAnalyzers,omitempty" firestore:"lastAnalyzers,omitempty"`
-	LastResults     map[string]any `json:"lastResults,omitempty" firestore:"lastResults,omitempty"`
+	ID                       string         `json:"id" firestore:"id"` // same as projectId
+	TenantID                 string         `json:"tenantId" firestore:"tenantId"`
+	ProjectID                string         `json:"projectId" firestore:"projectId"`
+	OwnerUserID              string         `json:"ownerUserId" firestore:"ownerUserId"`
+	Version                  string         `json:"version" firestore:"version"`
+	UpdatedAt                time.Time      `json:"updatedAt" firestore:"updatedAt"`
+	Samples                  int            `json:"samples" firestore:"samples"`
+	WhoLeads                 string         `json:"whoLeads" firestore:"whoLeads"`
+	LeadershipIndex          float64        `json:"leadershipIndex" firestore:"leadershipIndex"`
+	FocusRetention           float64        `json:"focusRetention" firestore:"focusRetention"`
+	StructureScore           float64        `json:"structureScore" firestore:"structureScore"`
+	Effectiveness            float64        `json:"effectiveness" firestore:"effectiveness"`
+	LastAnalyzers            []string       `json:"lastAnalyzers,omitempty" firestore:"lastAnalyzers,omitempty"`
+	LastResults              map[string]any `json:"lastResults,omitempty" firestore:"lastResults,omitempty"`
+	LastAnalyzedMessageCount int            `json:"lastAnalyzedMessageCount" firestore:"lastAnalyzedMessageCount"`
+	LastAnalyzedAt           time.Time      `json:"lastAnalyzedAt" firestore:"lastAnalyzedAt"`
 }
 
 // MetaAggregateUser stores weighted aggregates across projects for a user

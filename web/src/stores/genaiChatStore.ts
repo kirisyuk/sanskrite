@@ -47,6 +47,8 @@ export interface LocalInteraction {
   generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean };
   highRisk?: { level: 'High'|'Medium'|'Low'; score: number; rationale?: string; triggers?: string[] };
   evaluations?: Record<string, any>;
+  coreDocIds?: string[];
+  metadata?: { pinned?: boolean; notes?: string[] };
   createdAt: string;
 }
 
@@ -58,6 +60,7 @@ interface GenaiChatState {
   toolResults: GenaiToolCall[];
   attributions: Array<{ title?: string; url?: string }>;
   searchQueries: string[];
+  sources: string[];
   // Per-message structured evaluations
   evaluations: Record<string, { biasLevel: number; thoughtfulness: number; biases: string[]; biasTypes?: string[] }>;
   // Per-message UI meta (e.g., custom header for agent messages)
@@ -79,8 +82,10 @@ interface GenaiChatState {
   pendingAssistantOptions?: any;
   pendingAssistantPrompt?: string;
   pendingAssistantTools?: any[];
+  pendingAttachedDocIds: string[];
 
   startStream: (args: StartStreamArgs) => Promise<void>;
+  setPendingAttachedDocIds: (ids: string[]) => void;
   reset: () => void;
   openMetricOverlay: (metric: SxMonitorMetric) => Promise<void>;
   closeMetricOverlay: () => void;
@@ -91,13 +96,14 @@ interface GenaiChatState {
   onError: (err: string) => void;
   onToolCall: (calls: GenaiToolCall[]) => void;
   onToolResult: (calls: GenaiToolCall[]) => void;
-  onDoneMeta: (meta: { usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; attributions?: Array<{ title?: string; url?: string }>; searchQueries?: string[] }) => void;
+  onDoneMeta: (meta: { usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; attributions?: Array<{ title?: string; url?: string }>; searchQueries?: string[]; sources?: string[] }) => void;
   setEvaluation: (messageId: string, ev: { biasLevel: number; thoughtfulness: number; biases: string[]; biasTypes?: string[] }) => void;
 
   // helpers to manage local interactions
   setProjectId: (id: string) => void;
   ensureProject: () => Promise<string>;
   hydrateInteractions: () => Promise<void>;
+  deleteInteraction: (interactionId: string) => Promise<void>;
 
   // Your stance (meta aggregate) cache and actions
   stanceAggregate?: any;
@@ -114,6 +120,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   toolResults: [],
   attributions: [],
   searchQueries: [],
+  sources: [],
   evaluations: {},
   messageMeta: {},
   projectId: 'local-unfold',
@@ -125,8 +132,11 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   persistedByLocalId: {},
   stanceAggregate: undefined,
   stanceLoading: false,
+  pendingAttachedDocIds: [],
 
-  reset: () => set({ messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false }),
+  reset: () => set({ messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [] }),
+  
+  setPendingAttachedDocIds: (ids) => set({ pendingAttachedDocIds: ids }),
 
   setProjectId: (id) => set({
     projectId: id || 'local-unfold',
@@ -144,6 +154,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     streaming: false,
     stanceAggregate: undefined,
     stanceLoading: false,
+    pendingAttachedDocIds: [],
   }),
 
   ensureProject: async () => {
@@ -188,10 +199,37 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           keepLocals.push(l);
         }
         const merged = [...(serverItems as any[]), ...keepLocals];
-        return { interactions: merged } as any;
+        
+        // Restore searchQueries and sources from last assistant interaction
+        const lastAssistant = [...merged].reverse().find((it: any) => it.kind === 'assistant');
+        const restoredQueries = lastAssistant?.searchQueries || [];
+        const restoredSources = lastAssistant?.sources || [];
+        
+        // Merge restored sources into attributions with dedup
+        const allAttributions = [...s.attributions];
+        const seenUrls = new Set(allAttributions.map(a => a.url).filter(Boolean));
+        for (const url of restoredSources) {
+          if (url && !seenUrls.has(url)) {
+            allAttributions.push({ url });
+            seenUrls.add(url);
+          }
+        }
+        
+        return { 
+          interactions: merged,
+          searchQueries: restoredQueries,
+          sources: restoredSources,
+          attributions: allAttributions
+        } as any;
       });
-    } catch (e) {
-      console.error('[hydrateInteractions] failed', e);
+    } catch (e: any) {
+      // Log with status code for debugging
+      const status = e?.response?.status;
+      if (status === 500) {
+        console.error('[hydrateInteractions] Server error (500) - project may be initializing', { projectId });
+      } else {
+        console.error('[hydrateInteractions] Failed to load interactions', { projectId, status, error: e });
+      }
     }
   },
 
@@ -202,7 +240,13 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     try {
       const agg = await api.metaGetAggregate(projectId);
       set({ stanceAggregate: agg, stanceLoading: false });
-    } catch (e) {
+    } catch (e: any) {
+      // 404 is normal for projects without aggregate yet
+      if (e?.response?.status === 404) {
+        console.log('[loadStanceAggregate] No aggregate yet (404) - normal for new project');
+      } else {
+        console.warn('[loadStanceAggregate] Failed to load aggregate', e);
+      }
       set({ stanceLoading: false });
     }
   },
@@ -210,57 +254,105 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   ensureStanceAggregate: async () => {
     const projectId = get().projectId;
     if (!projectId || projectId === 'local-unfold') return;
-    // Avoid 404: check if any meta events exist first; if none, run analyze before first GET
+    
+    // Don't load aggregate if project is empty (no interactions yet)
+    const hasInteractions = get().interactions.length > 0;
+    if (!hasInteractions) {
+      console.log('[ensureStanceAggregate] Skipping for empty project - no interactions yet');
+      return;
+    }
+    
+    // Only load existing aggregate; do not run analysis here
     try {
       set({ stanceLoading: true });
-      const events = await api.metaListEvents(projectId);
-      if (Array.isArray(events) && events.length > 0) {
-        await get().loadStanceAggregate();
-        const current = get().stanceAggregate;
-        if (current && typeof current === 'object') { set({ stanceLoading: false }); return; }
-      }
-    } catch {}
-    // Run meta:analyze over recent interactions (use server ids if present)
-    try {
-      const inters = get().interactions || [];
-      const refs: AnalyzeInteractionRef[] = [];
-      const take = Math.min(20, inters.length);
-      for (let i = Math.max(0, inters.length - take); i < inters.length; i++) {
-        const it = inters[i] as any;
-        if (!it || !it.content) continue;
-        // Use refId only for server-backed interactions; exclude known local-only ids
-        if (
-          it.id && typeof it.id === 'string'
-          && !it.id.endsWith('-iu') && !it.id.endsWith('-ia')
-          && it.id.indexOf('-eval-') === -1 && it.id.indexOf('eval-bias-auto') === -1
-        ) {
-          refs.push({ refId: it.id });
-        } else {
-          const role = (it.kind === 'assistant') ? 'assistant' : (it.kind === 'system' ? 'system' : 'user');
-          refs.push({ inline: { role, text: String(it.content), timestamp: it.createdAt } });
-        }
-      }
-      const req: AnalyzeRequest = { analyzers: ['thinking','biases','decisions','comm','learning'], interactions: refs } as any;
-      await api.metaAnalyze(projectId, req as any);
-      // Refresh aggregate after analysis
       await get().loadStanceAggregate();
-      // Optionally persist a compact stance snapshot as an interaction for quick UI access
-      try {
-        const agg = get().stanceAggregate;
-        if (agg) {
-          await api.createProjectInteraction(projectId, {
-            kind: 'system',
-            content: JSON.stringify({ stance: 'aggregate', common: agg?.common, lastResults: agg?.lastResults }),
-            // tag as stance snapshot
-            // subkind is accepted via extended fields already supported server-side
-            // @ts-ignore
-            subkind: 'stance',
-          } as any);
+    } catch (e: any) {
+      // 404 is expected for new projects without analysis yet
+      if (e?.response?.status !== 404) {
+        console.warn('[ensureStanceAggregate] Error loading aggregate', e);
+      }
+    } finally {
+      set({ stanceLoading: false });
+    }
+  },
+
+  deleteInteraction: async (interactionId: string) => {
+    const projectId = get().projectId;
+    if (!projectId || projectId === 'local-unfold') return;
+
+    const interactions = get().interactions;
+    const targetIdx = interactions.findIndex((it) => it.id === interactionId);
+    if (targetIdx === -1) return;
+
+    // Build cascade set: include selected id and any evaluations/system notes tied via replyTo or relations
+    const idSet = new Set<string>();
+    idSet.add(interactionId);
+
+    // Expand with local/server mapping variants
+    try {
+      const map = (get() as any).persistedByLocalId || ({} as Record<string, string>);
+      // If selected id maps to server id, include it
+      if (map[interactionId]) idSet.add(map[interactionId]);
+      // Reverse map: collect all locals that point to selected id
+      const reverse: Record<string, string[]> = {};
+      Object.entries(map).forEach(([local, server]) => {
+        const serverId = String(server);
+        const localId = String(local);
+        if (!reverse[serverId]) reverse[serverId] = [];
+        reverse[serverId].push(localId);
+      });
+      const locals = reverse[interactionId] || [];
+      for (const lid of locals) idSet.add(lid);
+    } catch {}
+
+    // Find dependent interactions (evaluations or system/note referencing target)
+    for (const it of interactions) {
+      const repliesToTarget = it.replyTo && idSet.has(it.replyTo);
+      const relatesToTarget = Array.isArray(it.relations) && it.relations.some((r) => r && idSet.has(r.targetId));
+      const isEval = typeof it.subkind === 'string' && it.subkind.startsWith('eval.');
+      const isSystemOrNote = it.kind === 'system' || it.kind === 'note';
+      if ((repliesToTarget || relatesToTarget) && (isEval || isSystemOrNote)) {
+        idSet.add(it.id);
+      }
+    }
+
+    const idsToDelete = Array.from(idSet);
+
+    // Delete on server (best-effort for each; ignore 404s)
+    try {
+      await Promise.all(idsToDelete.map(async (id) => {
+        try {
+          await api.deleteProjectInteraction(projectId, id);
+        } catch (err: any) {
+          const status = err?.response?.status;
+          if (status !== 404) {
+            // Log but don't block local cleanup for dependents
+            console.warn('[deleteInteraction] Server delete failed', { id, status, err });
+            // Only throw if it's the main selected id and error isn't 404
+            if (id === interactionId) throw err;
+          }
         }
-      } catch {}
+      }));
     } catch (e) {
-      // ignore
-    } finally { set({ stanceLoading: false }); }
+      console.error('[deleteInteraction] Failed to delete selected interaction on server', e);
+      throw e;
+    }
+
+    // Local cleanup: remove interactions and any mapped ids from persisted map
+    set((s) => {
+      const toDelete = new Set(idsToDelete);
+      const nextInteractions = s.interactions.filter((it) => !toDelete.has(it.id));
+      const nextMessages = s.messages.filter((m) => !toDelete.has(m.id));
+      const nextMap: Record<string,string> = { ...(s.persistedByLocalId || {}) } as any;
+      for (const [k, v] of Object.entries(nextMap)) {
+        if (toDelete.has(k) || toDelete.has(v)) {
+          delete nextMap[k];
+        }
+      }
+      return { interactions: nextInteractions, messages: nextMessages, persistedByLocalId: nextMap } as any;
+    });
+
+    console.log('[deleteInteraction] Deleted interactions (cascade)', { idsToDelete });
   },
 
   openMetricOverlay: async (metric: SxMonitorMetric) => {
@@ -302,7 +394,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       set({ metricOverlayLoading: false });
     }
   },
-  closeMetricOverlay: () => set({ metricOverlayOpenKey: null }),
+  closeMetricOverlay: () => {
+    set({ metricOverlayOpenKey: null });
+  },
 
   startStream: async ({ prompt, tools, options, agentMeta, suppressUserEcho }) => {
     if (get().streaming) return;
@@ -347,7 +441,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       try {
         const userLocalId = now + '-iu';
         const meta = agentMeta as any;
-        const payload: any = { kind: 'user', content: prompt };
+        const payload: any = { kind: 'user', content: prompt, originalMessageId: now + '-u' };
         if (meta?.subkind) payload.subkind = meta.subkind;
         if (meta?.replyTo) {
           const map = (get() as any).persistedByLocalId || {};
@@ -355,7 +449,15 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           if (serverReply) payload.replyTo = serverReply;
         }
         if (meta?.agentProfile) payload.agentProfile = meta.agentProfile;
+        // Attach document IDs if any
+        const attachedDocIds = get().pendingAttachedDocIds;
+        if (attachedDocIds && attachedDocIds.length > 0) {
+          payload.coreDocIds = attachedDocIds;
+          console.log('[Chat] Attaching documents to interaction', { docIds: attachedDocIds });
+        }
         const res = await api.createProjectInteraction(projectId, payload);
+        // Clear attached docs after creating interaction
+        set({ pendingAttachedDocIds: [] });
         set((st) => {
           const items = [...st.interactions];
           const idx = items.findIndex((it) => it.id === userLocalId);
@@ -401,19 +503,50 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     }
   },
 
-  onStart: () => set({ streaming: true, error: null, toolCalls: [], toolResults: [], attributions: [], usage: undefined }),
-  onChunk: (text: string) =>
+  onStart: () => set((s) => {
+    // Ensure we have an assistant message placeholder for streaming
+    const msgs = [...s.messages];
+    const hasAssistant = msgs.some(m => m.role === 'assistant');
+    
+    if (!hasAssistant) {
+      // After hot-reload, create assistant message placeholder
+      const id = Date.now().toString() + '-a';
+      msgs.push({ id, role: 'assistant', content: '' });
+    }
+    
+    return { 
+      streaming: true, 
+      error: null, 
+      toolCalls: [], 
+      toolResults: [], 
+      attributions: [], 
+      usage: undefined,
+      messages: msgs 
+    } as any;
+  }),
+  onChunk: (text: string) => {
     set((s) => {
       const msgs = [...s.messages];
-      // append to last assistant message
+      
+      // Find last assistant message
+      let found = false;
       for (let i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i].role === 'assistant') {
           msgs[i] = { ...msgs[i], content: msgs[i].content + text };
+          found = true;
           break;
         }
       }
+      
+      // If no assistant message exists (e.g., after hot-reload), create one
+      if (!found) {
+        const id = Date.now().toString() + '-a';
+        msgs.push({ id, role: 'assistant', content: text });
+      }
+      
       return { messages: msgs } as any;
-    }),
+    });
+  },
   onDone: () =>
     set((s) => {
       // capture final assistant message into local interactions
@@ -471,6 +604,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               language: opts?.__lang,
               generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled },
               originalMessageId: lastAssistant.id,
+              usage: s.usage,
+              searchQueries: s.searchQueries,
+              sources: s.sources,
             };
             const map = (get() as any).persistedByLocalId || {};
             const replyToMsg = (s.pendingAssistantMeta as any)?.replyTo as string | undefined;
@@ -493,6 +629,51 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             });
           } catch (e) {
             console.warn('[persist assistant] failed', e);
+          }
+        })();
+
+        // Trigger meta-analysis only for standard USER→ASSISTANT exchanges on server-backed projects
+        (async () => {
+          try {
+            if (!projectId || projectId === 'local-unfold') return;
+            // Skip if this is an agent reply (has displayName)
+            if (meta?.displayName) return;
+            const inters = get().interactions || [];
+            if (inters.length === 0) return;
+            // Freshness guard: do not analyze if aggregate is up-to-date
+            const agg = get().stanceAggregate;
+            const last = inters[inters.length - 1];
+            const aggUpdatedAt = agg && (agg.updatedAt || agg.UpdatedAt);
+            if (aggUpdatedAt && last?.createdAt) {
+              try {
+                const a = new Date(aggUpdatedAt);
+                const b = new Date(last.createdAt);
+                if (!Number.isNaN(a.getTime()) && !Number.isNaN(b.getTime()) && a >= b) {
+                  console.log('[Meta] Skip analyze: aggregate is fresh');
+                  return;
+                }
+              } catch {}
+            }
+            // Build last 20 refs
+            const refs: AnalyzeInteractionRef[] = [];
+            const take = Math.min(20, inters.length);
+            for (let i = Math.max(0, inters.length - take); i < inters.length; i++) {
+              const it = inters[i] as any;
+              if (!it || !it.content) continue;
+              const isServerBacked = it.id && typeof it.id === 'string' && !it.id.endsWith('-iu') && !it.id.endsWith('-ia') && it.id.indexOf('-eval-') === -1 && it.id.indexOf('eval-bias-auto') === -1;
+              if (isServerBacked) {
+                refs.push({ refId: it.id });
+              } else {
+                const role = (it.kind === 'assistant') ? 'assistant' : (it.kind === 'system' ? 'system' : 'user');
+                refs.push({ inline: { role, text: String(it.content), timestamp: it.createdAt } });
+              }
+            }
+            const req: AnalyzeRequest = { analyzers: ['thinking','biases','decisions','comm','learning'], interactions: refs } as any;
+            console.log('[Meta] Analyzing recent window', { count: refs.length });
+            await api.metaAnalyze(projectId, req as any);
+            await get().loadStanceAggregate();
+          } catch (e) {
+            console.warn('[Meta] analysis failed', e);
           }
         })();
         return { streaming: false, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: nextInteractions, artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
@@ -561,21 +742,22 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   onToolCall: (calls) => set({ toolCalls: calls || [] }),
   onToolResult: (calls) => set((s) => ({ toolResults: [...s.toolResults, ...(calls || [])] })),
   onDoneMeta: (meta) => set((s) => {
-    // If we have usage and last assistant persisted, patch it on server
-    try {
-      if (meta?.usage) {
-        const msgs = [...s.messages];
-        const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant');
-        if (lastAssistant) {
-          const map = (s as any).persistedByLocalId || {};
-          const serverId = map[lastAssistant.id];
-          if (serverId) {
-            api.updateProjectInteraction(s.projectId, serverId, { usage: meta.usage as any }).catch(() => {});
-          }
-        }
+    // Merge sources into attributions with dedup by url
+    const allAttributions = [...(meta.attributions || [])];
+    const seenUrls = new Set(allAttributions.map(a => a.url).filter(Boolean));
+    for (const url of (meta.sources || [])) {
+      if (url && !seenUrls.has(url)) {
+        allAttributions.push({ url });
+        seenUrls.add(url);
       }
-    } catch {}
-    return { usage: meta.usage, attributions: meta.attributions || [], searchQueries: meta.searchQueries || [] } as any;
+    }
+    
+    return { 
+      usage: meta.usage, 
+      attributions: allAttributions, 
+      searchQueries: meta.searchQueries || [], 
+      sources: meta.sources || [] 
+    } as any;
   }),
   setEvaluation: (messageId, ev) => set((s) => {
     const next = { ...s.evaluations, [messageId]: ev };

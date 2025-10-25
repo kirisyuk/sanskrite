@@ -24,6 +24,12 @@ type AgentProfileSnapshot struct {
 	Params       map[string]any  `json:"params,omitempty" firestore:"params,omitempty"`             // temperature, systemPromptHash, etc.
 }
 
+// InteractionMetadata contains extensible metadata flags and settings
+type InteractionMetadata struct {
+	Pinned *bool    `json:"pinned,omitempty" firestore:"pinned,omitempty"` // User-pinned for quick access
+	Notes  []string `json:"notes,omitempty" firestore:"notes,omitempty"`
+}
+
 type Interaction struct {
 	ID               string  `json:"id" firestore:"id"`
 	TenantID         string  `json:"tenantId" firestore:"tenantId"`
@@ -42,6 +48,7 @@ type Interaction struct {
 	ReplyTo      *string               `json:"replyTo,omitempty" firestore:"replyTo,omitempty"`
 	AgentProfile *AgentProfileSnapshot `json:"agentProfile,omitempty" firestore:"agentProfile,omitempty"`
 	Evaluations  map[string]any        `json:"evaluations,omitempty" firestore:"evaluations,omitempty"`
+	Metadata     *InteractionMetadata  `json:"metadata,omitempty" firestore:"metadata,omitempty"`
 	// Relations between interactions (answers/refines/evaluates)
 	Relations []struct {
 		Type     string `json:"type" firestore:"type"`
@@ -62,7 +69,9 @@ type Interaction struct {
 		Triggers  []string `json:"triggers,omitempty" firestore:"triggers,omitempty"`
 	} `json:"highRisk,omitempty" firestore:"highRisk,omitempty"`
 	OriginalMessageID *string   `json:"originalMessageId,omitempty" firestore:"originalMessageId,omitempty"`
-	CoreDocID         *string   `json:"coreDocId,omitempty" firestore:"coreDocId,omitempty"`
+	CoreDocIDs        []string  `json:"coreDocIds,omitempty" firestore:"coreDocIds,omitempty"`
+	SearchQueries     []string  `json:"searchQueries,omitempty" firestore:"searchQueries,omitempty"`
+	Sources           []string  `json:"sources,omitempty" firestore:"sources,omitempty"`
 	CreatedAt         time.Time `json:"createdAt" firestore:"createdAt"`
 }
 

@@ -815,6 +815,7 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		ReplyTo          *string                    `json:"replyTo,omitempty"`
 		AgentProfile     *repo.AgentProfileSnapshot `json:"agentProfile,omitempty"`
 		Evaluations      map[string]any             `json:"evaluations,omitempty"`
+		Metadata         *repo.InteractionMetadata  `json:"metadata,omitempty"`
 		Relations        []struct {
 			Type     string `json:"type" firestore:"type"`
 			TargetID string `json:"targetId" firestore:"targetId"`
@@ -832,8 +833,10 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 			Rationale *string  `json:"rationale,omitempty" firestore:"rationale,omitempty"`
 			Triggers  []string `json:"triggers,omitempty" firestore:"triggers,omitempty"`
 		} `json:"highRisk,omitempty"`
-		OriginalMessageID *string `json:"originalMessageId,omitempty"`
-		CoreDocID         *string `json:"coreDocId,omitempty"`
+		OriginalMessageID *string  `json:"originalMessageId,omitempty"`
+		CoreDocIDs        []string `json:"coreDocIds,omitempty"`
+		SearchQueries     []string `json:"searchQueries,omitempty"`
+		Sources           []string `json:"sources,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Content) == "" {
 		WriteBadRequest(w, "INVALID_JSON", "kind and content are required")
@@ -861,13 +864,16 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		ReplyTo:                  body.ReplyTo,
 		AgentProfile:             body.AgentProfile,
 		Evaluations:              body.Evaluations,
+		Metadata:                 body.Metadata,
 		Relations:                body.Relations,
 		Language:                 body.Language,
 		SystemInstructionApplied: body.SystemInstructionApplied,
 		GenerationParams:         body.GenerationParams,
 		HighRisk:                 body.HighRisk,
 		OriginalMessageID:        body.OriginalMessageID,
-		CoreDocID:                body.CoreDocID,
+		CoreDocIDs:               body.CoreDocIDs,
+		SearchQueries:            body.SearchQueries,
+		Sources:                  body.Sources,
 	})
 	if err != nil {
 		WriteInternalError(w, "Failed to create interaction")
@@ -963,9 +969,9 @@ func (h *DiscoveryHandler) UpdateProjectInteraction(w http.ResponseWriter, r *ht
 	allowed := map[string]struct{}{
 		"kind": {}, "subkind": {}, "content": {}, "contentSanitized": {}, "summary": {},
 		"model": {}, "usage": {}, "author": {}, "recipients": {}, "replyTo": {},
-		"agentProfile": {}, "evaluations": {}, "relations": {}, "language": {},
+		"agentProfile": {}, "evaluations": {}, "metadata": {}, "relations": {}, "language": {},
 		"systemInstructionApplied": {}, "generationParams": {}, "highRisk": {},
-		"originalMessageId": {}, "coreDocId": {},
+		"originalMessageId": {}, "coreDocIds": {}, "searchQueries": {}, "sources": {},
 	}
 	updates := map[string]interface{}{}
 	for k, v := range payload {

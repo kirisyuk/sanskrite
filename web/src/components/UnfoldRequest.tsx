@@ -4,7 +4,24 @@ import { api } from '../lib/api';
 import { useGenAISettings, providerCapabilities } from '../stores/genaiSettingsStore';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
+import { useDiscoveryStore } from '../stores/discoveryStore';
 import { ThemeContext } from './ThemeProvider';
+import AttachedDocuments from './AttachedDocuments';
+
+interface AttachedDoc {
+  id: string;
+  filename: string;
+  sizeBytes?: number;
+  status: 'uploading' | 'parsing' | 'parsed' | 'failed';
+  error?: string;
+}
+
+interface StatusMessage {
+  id: string;
+  type: 'warning' | 'error' | 'info';
+  text: string;
+  fadingOut: boolean;
+}
 
 interface UnfoldRequestProps {
   value: string;
@@ -22,6 +39,10 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
   const settings = useGenAISettings();
   const hasHistory = useGenaiChatStore((s) => (s.messages && s.messages.length > 0) || (s.interactions && s.interactions.length > 0));
   const { t } = useTranslation();
+  const [attachedDocs, setAttachedDocs] = React.useState<AttachedDoc[]>([]);
+  const lastDocEvent = useDiscoveryStore((s: any) => s.lastDocEvent);
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [statusMessages, setStatusMessages] = React.useState<StatusMessage[]>([]);
 
   const initialPlaceholders = React.useMemo(() => {
     const arr = t('unfold.request.placeholders.initial', { returnObjects: true }) as string[] | undefined;
@@ -50,6 +71,38 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
     // We intentionally do not depend on value to avoid re-randomizing while typing
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasHistory, ongoingPlaceholders, initialPlaceholders]);
+
+  // Listen for document processing events from WebSocket
+  React.useEffect(() => {
+    if (!lastDocEvent) return;
+    
+    const { docId, status, error } = lastDocEvent;
+    if (!docId) return;
+
+    console.log('[Attach] WebSocket doc event', { docId, status, error });
+
+    setAttachedDocs(prev => {
+      const doc = prev.find(d => d.id === docId);
+      if (!doc) return prev;
+
+      return prev.map(d => {
+        if (d.id !== docId) return d;
+        
+        // Map backend status to UI status
+        let uiStatus: AttachedDoc['status'] = d.status;
+        if (status === 'uploaded') uiStatus = 'parsing';
+        else if (status === 'parsing') uiStatus = 'parsing';
+        else if (status === 'parsed') uiStatus = 'parsed';
+        else if (status === 'failed' || error) uiStatus = 'failed';
+        
+        return {
+          ...d,
+          status: uiStatus,
+          error: error || d.error,
+        };
+      });
+    });
+  }, [lastDocEvent]);
   const containerStyle: React.CSSProperties = React.useMemo(() => ({
     borderColor: dangerTint ? 'rgba(220, 20, 60, 0.35)' : 'var(--overlay-line-90)',
     backgroundColor: 'var(--bg-elevated)',
@@ -57,9 +110,260 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
     backgroundImage: dangerTint ? 'linear-gradient(0deg, rgba(255,0,0,0.04), rgba(255,0,0,0.04))' : undefined,
   }), [theme, dangerTint]);
 
+  // Supported file types (same as input accept attribute)
+  const SUPPORTED_TYPES = React.useMemo(() => [
+    'text/plain',
+    'text/markdown',
+    'text/csv',
+    'text/tab-separated-values',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  ], []);
+
+  const SUPPORTED_EXTENSIONS = React.useMemo(() => [
+    '.txt', '.md', '.csv', '.tsv', '.pdf', '.doc', '.docx'
+  ], []);
+
+  const isFileSupported = React.useCallback((file: File): boolean => {
+    if (SUPPORTED_TYPES.includes(file.type)) return true;
+    // Check by extension as fallback
+    const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+    return SUPPORTED_EXTENSIONS.includes(ext);
+  }, [SUPPORTED_TYPES, SUPPORTED_EXTENSIONS]);
+
+  const addStatusMessage = React.useCallback((type: StatusMessage['type'], text: string) => {
+    const id = `status-${Date.now()}-${Math.random()}`;
+    const message: StatusMessage = { id, type, text, fadingOut: false };
+    
+    setStatusMessages(prev => [...prev, message]);
+    
+    // Start fade out after 4.5 seconds
+    setTimeout(() => {
+      setStatusMessages(prev => prev.map(m => m.id === id ? { ...m, fadingOut: true } : m));
+    }, 4500);
+    
+    // Remove after 5 seconds (fade out duration: 500ms)
+    setTimeout(() => {
+      setStatusMessages(prev => prev.filter(m => m.id !== id));
+    }, 5000);
+  }, []);
+
+  const handleFileUpload = React.useCallback(async (file: File) => {
+    if (!isFileSupported(file)) {
+      console.warn('[Attach] Unsupported file type', { name: file.name, type: file.type });
+      addStatusMessage('warning', `File type not supported: ${file.name}`);
+      return;
+    }
+
+    // Create temporary doc entry with uploading status
+    const tempId = `temp-${Date.now()}`;
+    const tempDoc: AttachedDoc = {
+      id: tempId,
+      filename: file.name,
+      sizeBytes: file.size,
+      status: 'uploading',
+    };
+    setAttachedDocs(prev => [...prev, tempDoc]);
+    
+    try {
+      // project id from chat store
+      const { useGenaiChatStore } = await import('../stores/genaiChatStore');
+      const store = useGenaiChatStore.getState();
+      const pid = await store.ensureProject();
+      console.log('[Attach] uploading', { name: file.name, size: file.size, type: file.type, projectId: pid });
+      
+      const doc = await api.docsUpload(pid, file);
+      console.log('[Attach] uploaded', doc);
+      
+      // Update with real doc ID and parsing status
+      setAttachedDocs(prev => prev.map(d => 
+        d.id === tempId 
+          ? { ...d, id: doc.id, status: 'parsing' as const }
+          : d
+      ));
+      
+      // Update store with real IDs
+      const currentIds = store.pendingAttachedDocIds.filter(id => !id.startsWith('temp-'));
+      store.setPendingAttachedDocIds([...currentIds, doc.id]);
+      
+      // Trigger parse and wait for completion
+      try {
+        await api.docsParse(pid, doc.id);
+        setAttachedDocs(prev => prev.map(d => 
+          d.id === doc.id 
+            ? { ...d, status: 'parsed' as const }
+            : d
+        ));
+      } catch (parseErr) {
+        console.warn('[Attach] parse failed, but doc uploaded', parseErr);
+        // Keep as parsing - will check status later
+      }
+    } catch (err) {
+      console.error('[Attach] failed', err);
+      // Mark as failed
+      setAttachedDocs(prev => prev.map(d => 
+        d.id === tempId 
+          ? { ...d, status: 'failed' as const, error: 'Upload failed' }
+          : d
+      ));
+    }
+  }, [isFileSupported, addStatusMessage]);
+
+  const handleRemoveDoc = React.useCallback(async (docId: string) => {
+    // Remove from UI immediately
+    setAttachedDocs(prev => prev.filter(d => d.id !== docId));
+    
+    // Update store
+    const { useGenaiChatStore } = await import('../stores/genaiChatStore');
+    const store = useGenaiChatStore.getState();
+    const currentIds = store.pendingAttachedDocIds.filter(id => id !== docId);
+    store.setPendingAttachedDocIds(currentIds);
+    
+    // Delete from server if not a temp ID
+    if (!docId.startsWith('temp-')) {
+      try {
+        const pid = store.projectId;
+        if (pid && pid !== 'local-unfold') {
+          await api.docsDelete(pid, docId);
+          console.log('[Attach] deleted from server', { docId });
+        }
+      } catch (err) {
+        console.error('[Attach] failed to delete from server', err);
+      }
+    }
+  }, []);
+
   return (
-    <div id="unfold-request-container" className="rounded-xl border overflow-hidden mt-2" style={containerStyle}>
-      <div className="p-3">
+    <>
+      {/* Status messages banner */}
+      {statusMessages.length > 0 && (
+        <div className="mb-2 space-y-1">
+          {statusMessages.map((msg) => (
+            <div
+              key={msg.id}
+              className="rounded-lg px-3 py-2 flex items-start gap-2 transition-opacity duration-500"
+              style={{
+                backgroundColor: msg.type === 'error' ? 'rgba(248, 113, 113, 0.1)' : 
+                                msg.type === 'warning' ? 'rgba(251, 191, 36, 0.1)' : 
+                                'rgba(96, 165, 250, 0.1)',
+                border: `1px solid ${msg.type === 'error' ? 'rgba(248, 113, 113, 0.3)' : 
+                                      msg.type === 'warning' ? 'rgba(251, 191, 36, 0.3)' : 
+                                      'rgba(96, 165, 250, 0.3)'}`,
+                opacity: msg.fadingOut ? 0 : 1,
+              }}
+            >
+              {/* Icon */}
+              <div className="flex-shrink-0 mt-0.5" style={{ 
+                color: msg.type === 'error' ? '#f87171' : 
+                       msg.type === 'warning' ? '#fbbf24' : 
+                       '#60a5fa' 
+              }}>
+                {msg.type === 'error' && (
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <circle cx="12" cy="12" r="10" strokeWidth="2" />
+                    <path d="M12 8v4M12 16h.01" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                )}
+                {msg.type === 'warning' && (
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M12 9v4M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 17h.01" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+                {msg.type === 'info' && (
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <circle cx="12" cy="12" r="10" strokeWidth="2" />
+                    <path d="M12 16v-4M12 8h.01" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                )}
+              </div>
+              
+              {/* Message text */}
+              <div className="flex-1 text-xs" style={{ 
+                color: msg.type === 'error' ? '#f87171' : 
+                       msg.type === 'warning' ? '#fbbf24' : 
+                       '#60a5fa' 
+              }}>
+                {msg.text}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      
+      {/* Attached documents list (shown above input) */}
+      <AttachedDocuments docs={attachedDocs} onRemove={handleRemoveDoc} />
+      
+      <div 
+        id="unfold-request-container" 
+        className="rounded-xl border overflow-hidden mt-2 relative" 
+        style={{
+          ...containerStyle,
+          transition: 'all 0.2s ease',
+          ...(isDragging ? {
+            borderColor: 'var(--text-secondary)',
+            backgroundColor: 'var(--white-10)',
+            boxShadow: '0 0 0 2px var(--white-06)',
+          } : {}),
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!isDragging) setIsDragging(true);
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDragging(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          // Only set to false if leaving the container itself (not child elements)
+          if (e.currentTarget === e.target) {
+            setIsDragging(false);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDragging(false);
+          
+          const files = Array.from(e.dataTransfer.files);
+          console.log('[Attach] Drop files', { count: files.length });
+          
+          // Upload each supported file
+          files.forEach(file => {
+            handleFileUpload(file); // handleFileUpload will show warning if unsupported
+          });
+        }}
+      >
+        {/* Drag overlay */}
+        {isDragging && (
+          <div 
+            className="absolute inset-0 flex items-center justify-center pointer-events-none z-10"
+            style={{
+              backgroundColor: 'var(--white-06)',
+              backdropFilter: 'blur(2px)',
+            }}
+          >
+            <div 
+              className="flex flex-col items-center gap-2 px-4 py-3 rounded-lg"
+              style={{
+                backgroundColor: 'var(--bg-elevated)',
+                border: '2px dashed var(--text-secondary)',
+                color: 'var(--text-heading)',
+              }}
+            >
+              <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="text-sm font-medium">Drop files to attach</span>
+            </div>
+          </div>
+        )}
+        
+        <div className="p-3">
         {/* Top: input field only */}
         <div className="mb-2">
           <textarea
@@ -74,6 +378,8 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 onSubmit();
+                // Clear attached docs after sending message
+                setAttachedDocs([]);
               }
             }}
           />
@@ -91,21 +397,9 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
                 onChange={async (e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-                  try {
-                    // project id from chat store
-                    const { useGenaiChatStore } = await import('../stores/genaiChatStore');
-                    const store = useGenaiChatStore.getState();
-                    const pid = await store.ensureProject();
-                    console.log('[Attach] uploading', { name: file.name, size: file.size, type: file.type, projectId: pid });
-                    const doc = await api.docsUpload(pid, file);
-                    console.log('[Attach] uploaded', doc);
-                    // optionally trigger parse explicitly (autoparse also runs on backend)
-                    try { await api.docsParse(pid, doc.id); } catch {}
-                  } catch (err) {
-                    console.error('[Attach] failed', err);
-                  } finally {
-                    e.currentTarget.value = '';
-                  }
+                  
+                  await handleFileUpload(file);
+                  e.currentTarget.value = '';
                 }}
               />
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
@@ -184,7 +478,13 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
               type="button"
               aria-label={t('unfold.request.send')}
               className="flex items-center justify-center rounded-full"
-              onClick={() => { if (!disabled) onSubmit(); }}
+              onClick={() => { 
+                if (!disabled) {
+                  onSubmit();
+                  // Clear attached docs after sending message
+                  setAttachedDocs([]);
+                }
+              }}
               disabled={disabled}
               style={{
                 width: '32px',
@@ -294,7 +594,8 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 };
 

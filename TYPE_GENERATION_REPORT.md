@@ -67,17 +67,35 @@ cd ../web
 npm run gen:types
 ```
 
-## 📦 Сгенерированные типы
+## 📦 Типы Frontend
 
-### Доступные типы:
+### Автогенерированные типы (из `backend/internal/models/`):
 - `User` - пользователь системы (из `models.User`)
 - `Project` - проект (из `models.Project`)
 - `DataSource` - источник данных (из `models.DataSource`)
+- `Document` - документ (из `models.Document`)
+- `SourceProfile` - профиль источника (из `models.SourceProfile`)
+
+### Ручные типы (из `backend/internal/repo/`):
+- `Interaction` - взаимодействие/сообщение (из `repo.Interaction`)
+  - `InteractionMetadata` - метаданные взаимодействия (pinned, и др.)
+  - `ParticipantRef` - ссылка на участника
+  - `AgentProfileSnapshot` - снимок профиля агента
+  - `UsageMeta` - метрики использования токенов
+  - `InteractionRelation` - связи между взаимодействиями
+  - `GenerationParams` - параметры генерации
+  - `HighRisk` - информация о высоком риске
+
+**Примечание:** Типы `Interaction` и связанные с ним поддерживаются вручную, так как они находятся в `repo` пакете, который не включен в автоматическую генерацию. См. `docs/development/type-organization.md` для деталей.
 
 ### Использование в коде:
 
 ```typescript
+// Автогенерированные типы
 import { User, Project, DataSource } from '@/types';
+
+// Ручные типы
+import { Interaction, InteractionMetadata } from '@/types';
 
 // API клиент с типизацией
 async function getUser(id: string): Promise<User> {
@@ -131,8 +149,10 @@ interface ProjectCardProps {
 
 Полная документация доступна в:
 - **Руководство разработчика:** `docs/development/type-generation.md`
+- **Организация типов:** `docs/development/type-organization.md` ⭐ NEW
 - **Краткая справка:** `web/src/types/README.md`
 - **Примеры использования:** `web/src/types/example.ts`
+- **Скрипты генерации:** `web/scripts/README.md`
 
 ## 🎯 Преимущества
 
@@ -144,10 +164,23 @@ interface ProjectCardProps {
 
 ## 🔧 Для добавления новых типов
 
+### Автогенерируемые типы (предпочтительно):
 1. Создайте Go модель в `backend/internal/models/models.go`
-2. Добавьте её в `backend/internal/tools/schemagen/main.go`
+2. Добавьте её в `backend/internal/tools/schemagen/main.go`:
+   ```go
+   {File: "NewModel.schema.json", Val: new(models.NewModel)}
+   ```
 3. Запустите `npm run gen:schemas && npm run gen:types`
-4. Добавьте экспорт в `web/src/types/index.ts`
+4. Добавьте экспорт в `web/src/types/index.ts` (секция auto-generated)
+
+### Ручные типы (только если необходимо):
+1. Создайте файл `web/src/types/[name].ts`
+2. Добавьте JSDoc с объяснением, почему тип ручной
+3. Синхронизируйте с Go структурой вручную
+4. Добавьте экспорт в `web/src/types/index.ts` (секция manually maintained)
+5. Документируйте в `docs/development/type-organization.md`
+
+**См. также:** `docs/development/type-organization.md` - полное описание организации типов
 
 ## 📝 Примечания
 

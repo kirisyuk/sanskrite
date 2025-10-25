@@ -27,7 +27,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       const projects = await api.listProjects(view);
       set({ projects, loading: false });
     } catch (error: any) {
-      set({ error: error.message, loading: false });
+      // Network errors are handled by the global error interceptor
+      // Only set local error for non-network issues
+      if (error.response) {
+        set({ error: error.message, loading: false });
+      } else {
+        // Network error - just stop loading, global banner will show
+        set({ loading: false });
+      }
     }
   },
 
@@ -41,7 +48,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       }));
       return project;
     } catch (error: any) {
-      set({ error: error.message, loading: false });
+      // Network errors are handled by the global error interceptor
+      if (error.response) {
+        set({ error: error.message, loading: false });
+      } else {
+        set({ loading: false });
+      }
       throw error;
     }
   },
@@ -56,7 +68,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         loading: false,
       }));
     } catch (error: any) {
-      set({ error: error.message, loading: false });
+      // Network errors are handled by the global error interceptor
+      if (error.response) {
+        set({ error: error.message, loading: false });
+      } else {
+        set({ loading: false });
+      }
       throw error;
     }
   },

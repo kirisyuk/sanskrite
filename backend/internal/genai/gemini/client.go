@@ -561,12 +561,14 @@ func (c *Client) parseGenerateRoot(root map[string]interface{}, model string) (*
 
 // StreamEvent represents incremental streaming callbacks
 type StreamEvent struct {
-	Type         string        `json:"type"` // start|chunk|tool_call|done|error
-	Text         string        `json:"text,omitempty"`
-	ToolCalls    []ToolCall    `json:"toolCalls,omitempty"`
-	Usage        Usage         `json:"usage,omitempty"`
-	Attributions []Attribution `json:"attributions,omitempty"`
-	Error        string        `json:"error,omitempty"`
+	Type          string        `json:"type"` // start|chunk|tool_call|done|error
+	Text          string        `json:"text,omitempty"`
+	ToolCalls     []ToolCall    `json:"toolCalls,omitempty"`
+	Usage         Usage         `json:"usage,omitempty"`
+	Attributions  []Attribution `json:"attributions,omitempty"`
+	SearchQueries []string      `json:"searchQueries,omitempty"`
+	Sources       []string      `json:"sources,omitempty"`
+	Error         string        `json:"error,omitempty"`
 }
 
 // StreamConversation streams with arbitrary contents history (for tool follow-ups)
@@ -643,6 +645,7 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 	var eventBuf strings.Builder
 	var accUsage Usage
 	var accAtts []Attribution
+	var accSources []string
 	flushEvent := func() {
 		payload := strings.TrimSpace(eventBuf.String())
 		eventBuf.Reset()
@@ -678,6 +681,31 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 						}
 					}
 					if gm, ok := cand["groundingMetadata"].(map[string]interface{}); ok {
+						// collect sources from groundingChunks.web.uri, filtering vertex redirect hosts
+						if chs, ok := gm["groundingChunks"].([]interface{}); ok {
+							for _, ch := range chs {
+								if m, ok := ch.(map[string]interface{}); ok {
+									if w, ok := m["web"].(map[string]interface{}); ok {
+										if uri, ok := w["uri"].(string); ok {
+											u := strings.TrimSpace(uri)
+											if u != "" && !strings.Contains(strings.ToLower(u), "vertexaisearch.cloud.google.com") {
+												// append unique
+												exists := false
+												for _, ex := range accSources {
+													if ex == u {
+														exists = true
+														break
+													}
+												}
+												if !exists {
+													accSources = append(accSources, u)
+												}
+											}
+										}
+									}
+								}
+							}
+						}
 						if atts, ok := gm["groundingAttributions"].([]interface{}); ok {
 							for _, a := range atts {
 								if am, ok := a.(map[string]interface{}); ok {
@@ -688,6 +716,19 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 									}
 									if att.URL != "" || att.Title != "" {
 										accAtts = append(accAtts, att)
+										// also collect non-vertex URLs into sources
+										if strings.TrimSpace(att.URL) != "" && !strings.Contains(strings.ToLower(att.URL), "vertexaisearch.cloud.google.com") {
+											exists := false
+											for _, ex := range accSources {
+												if ex == att.URL {
+													exists = true
+													break
+												}
+											}
+											if !exists {
+												accSources = append(accSources, att.URL)
+											}
+										}
 									}
 								}
 							}
@@ -777,7 +818,7 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 		return err
 	}
 	if onEvent != nil {
-		_ = onEvent(StreamEvent{Type: "done", Usage: accUsage, Attributions: accAtts})
+		_ = onEvent(StreamEvent{Type: "done", Usage: accUsage, Attributions: accAtts, Sources: accSources})
 	}
 	return nil
 }

@@ -72,7 +72,12 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
       return response;
     } catch (error: any) {
       console.error('[Store] API error:', error);
-      set({ error: error.message, loading: false });
+      // Network errors are handled by the global error interceptor
+      if (error.response) {
+        set({ error: error.message, loading: false });
+      } else {
+        set({ loading: false });
+      }
       throw error;
     }
   },
@@ -98,7 +103,12 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
         return { sources: merged, loading: false };
       });
     } catch (error: any) {
-      set({ error: error.message, loading: false });
+      // Network errors are handled by the global error interceptor
+      if (error.response) {
+        set({ error: error.message, loading: false });
+      } else {
+        set({ loading: false });
+      }
     }
   },
 
@@ -107,7 +117,11 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
       const items = await api.getProjectInteractions(projectId);
       set({ interactions: items });
     } catch (error: any) {
-      set({ error: error.message });
+      // Network errors are handled by the global error interceptor
+      if (error.response) {
+        set({ error: error.message });
+      }
+      // Silently fail for network errors
     }
   },
   sendChatMessage: async (projectId: string, message: string, language?: string) => {
@@ -243,6 +257,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
                   // optional: could merge with toolCalls list
                   break;
                 case 'genai.stream.done':
+                  // First set metadata, then finalize (unused path for Unfold)
                   useGenaiStore.setState({ streaming: false });
                   break;
                 case 'genai.stream.error':
@@ -345,8 +360,14 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
                   if (Array.isArray(msg.data?.toolCalls)) st.onToolResult(msg.data.toolCalls);
                   break;
                 case 'genai.stream.done':
+                  // CRITICAL: onDoneMeta must run BEFORE onDone so that usage/searchQueries/sources are in state when creating Interaction
+                  st.onDoneMeta({ 
+                    usage: msg.data?.usage, 
+                    attributions: msg.data?.attributions,
+                    searchQueries: msg.data?.searchQueries,
+                    sources: msg.data?.sources
+                  });
                   st.onDone();
-                  st.onDoneMeta({ usage: msg.data?.usage, attributions: msg.data?.attributions });
                   break;
                 case 'genai.stream.error':
                   st.onError(msg.data?.error || 'Stream error');

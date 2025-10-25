@@ -933,3 +933,34 @@ html, body, .content-area, .main-content-container, .card {
     min-height: 0;
   }
 }
+
+/* Note highlights in message content */
+.note-highlight {
+  background-color: rgba(251, 191, 36, 0.25);
+  border-radius: 2px;
+  padding: 1px 2px;
+  cursor: help;
+  transition: background-color 0.15s ease;
+}
+
+.note-highlight:hover {
+  background-color: rgba(251, 191, 36, 0.4);
+}
+
+[data-theme="light"] .note-highlight {
+  background-color: rgba(251, 191, 36, 0.2);
+}
+
+[data-theme="light"] .note-highlight:hover {
+  background-color: rgba(251, 191, 36, 0.35);
+}
+
+/* CSS Custom Highlight API support (modern browsers) */
+::highlight(note-highlight) {
+  background-color: rgba(251, 191, 36, 0.25);
+  color: inherit;
+}
+
+[data-theme="light"]::highlight(note-highlight) {
+  background-color: rgba(251, 191, 36, 0.2);
+}

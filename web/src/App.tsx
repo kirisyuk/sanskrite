@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import AuthGuard from './components/AuthGuard';
 import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
+import { ServerUnavailableBanner } from './components/ServerUnavailableBanner';
 import DiscoveryPage from './pages/DiscoveryPage';
 import Homepage from './pages/homepage';
 import TermsOfUsage from './pages/TermsOfUsage';
@@ -64,6 +65,7 @@ function AppContent() {
     <div className="layout-main">
       <div className="main-content">
         <TopBar />
+        <ServerUnavailableBanner />
         <div className="content-area">
           <Routes>
             <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />

@@ -25,6 +25,32 @@ class ApiClient {
       }
       return config;
     });
+
+    // Add response interceptor to handle errors
+    this.client.interceptors.response.use(
+      (response) => {
+        // On successful response, mark server as available
+        import('../stores/serverStatusStore').then(({ useServerStatusStore }) => {
+          useServerStatusStore.getState().setServerAvailable();
+        }).catch(() => {});
+        return response;
+      },
+      (error) => {
+        // Check if it's a network error (CORS, server down, etc.)
+        if (!error.response) {
+          // Network error - no response from server
+          import('../stores/serverStatusStore').then(({ useServerStatusStore }) => {
+            useServerStatusStore.getState().setServerUnavailable('Server is temporarily unavailable. Please try again later.');
+          }).catch(() => {});
+        } else if (error.response.status >= 500) {
+          // Server error (5xx)
+          import('../stores/serverStatusStore').then(({ useServerStatusStore }) => {
+            useServerStatusStore.getState().setServerUnavailable('Server error. Please try again later.');
+          }).catch(() => {});
+        }
+        return Promise.reject(error);
+      }
+    );
   }
 
   // Waitlist
@@ -123,12 +149,12 @@ class ApiClient {
     return response.data;
   }
 
-  async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any> }[]> {
-    const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any> }[] }>(`/api/v1/projects/${projectId}/interactions`);
+  async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[]> {
+    const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[] }>(`/api/v1/projects/${projectId}/interactions`);
     return response.data.items;
   }
 
-  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'; content: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } }): Promise<{ id: string }> {
+  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'; content: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean } }): Promise<{ id: string }> {
     const response = await this.client.post<{ id: string }>(`/api/v1/projects/${projectId}/interactions`, data);
     return response.data;
   }
@@ -154,13 +180,14 @@ class ApiClient {
       replyTo?: string;
       agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> };
       evaluations?: Record<string, any>;
+      metadata?: { pinned?: boolean; notes?: string[] };
       relations?: Array<{ type: string; targetId: string }>;
       language?: string;
       systemInstructionApplied?: string;
       generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean };
       highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] };
       originalMessageId?: string;
-      coreDocId?: string;
+      coreDocIds?: string[];
     }>
   ): Promise<{ success: boolean }> {
     const response = await this.client.patch<{ success: boolean }>(`/api/v1/projects/${projectId}/interactions/${interactionId}`, data);

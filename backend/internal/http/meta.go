@@ -110,6 +110,15 @@ func (h *MetaHandler) Analyze(w http.ResponseWriter, r *http.Request) {
 	// Build plain text window with roles
 	window := buildWindowText(msgs)
 
+	// Log window size for monitoring
+	if h.logger != nil {
+		h.logger.Printf("meta: analyze request (messageCount=%d, windowChars=%d, windowTokensEst=%d)",
+			len(msgs), len(window), len(window)/4)
+		if len(window) > 100000 {
+			h.logger.Printf("WARNING: meta: large window detected (>100KB). Consider limiting message count.")
+		}
+	}
+
 	// 1) Dialog control classification (common)
 	who, leadIdx, focus, structure, err := h.classifyDialogControl(r.Context(), window)
 	if err != nil {
@@ -227,16 +236,27 @@ type dialogControlJSON struct {
 }
 
 func (h *MetaHandler) classifyDialogControl(ctx context.Context, window string) (string, float64, float64, float64, error) {
+	// Create a context with timeout for AI task execution
+	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
 	schema := `{"type":"object","additionalProperties":false,"properties":{"whoLeads":{"type":"string","enum":["User","AI","Mixed"]},"leadershipIndex":{"type":"number","minimum":0,"maximum":1},"focusRetention":{"type":"number","minimum":0,"maximum":1},"structureScore":{"type":"number","minimum":0,"maximum":1}},"required":["whoLeads","leadershipIndex","focusRetention","structureScore"]}`
-	prompt := fmt.Sprintf("Return ONLY JSON strictly matching the schema. Classify dialog control over the conversation window.\n\nSchema:%s\n\nWINDOW:\n%s", schema, window)
+	prompt := fmt.Sprintf("Analyze USER behavior and dialog dynamics in this conversation. USER lines are marked 'USER:'; ASSISTANT lines are context only. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", schema, window)
 	task := &ai.AITask{
 		TaskType:       ai.TaskTypeTextProcessing,
 		InputContent:   prompt,
 		AIRequirements: ai.AIRequirements{MinContextWindow: intMax(4096, len(prompt)/4), TextGenerationCapability: true, MinCapabilityScore: 6},
 		Verifier:       ai.NewGenericVerifier(func(dc dialogControlJSON) error { return nil }),
 	}
-	res, err := h.exec.ExecuteStructuredTask(ctx, task)
+	if h.logger != nil {
+		h.logger.Printf("meta: classifyDialogControl starting (windowChars=%d, promptChars=%d, tokensEst=%d)",
+			len(window), len(prompt), len(prompt)/4)
+	}
+	res, err := h.exec.ExecuteStructuredTask(taskCtx, task)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("ERROR: meta: classifyDialogControl failed: %v", err)
+		}
 		return "", 0, 0, 0, err
 	}
 	dc := res.(dialogControlJSON)
@@ -278,11 +298,23 @@ func (h *MetaHandler) runThinking(ctx context.Context, window string) (map[strin
 		"required": []string{"depth", "timeHorizon", "uncertainty", "thinkingType"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Return ONLY JSON strictly matching the schema below. Classify thinking patterns over the conversation window.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Analyze USER thinking patterns in this conversation. Focus on USER lines ('USER:'); ASSISTANT lines are context only. Return ONLY JSON strictly matching the schema below.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.ThinkingPatternsResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
-	res, err := h.exec.ExecuteStructuredTask(ctx, task)
+
+	// Create a context with timeout for AI task execution
+	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if h.logger != nil {
+		h.logger.Printf("meta: runThinking starting (windowChars=%d, promptChars=%d, tokensEst=%d)",
+			len(window), len(prompt), len(prompt)/4)
+	}
+	res, err := h.exec.ExecuteStructuredTask(taskCtx, task)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("ERROR: meta: runThinking failed: %v", err)
+		}
 		return nil, err
 	}
 	return toMap(res)
@@ -299,11 +331,23 @@ func (h *MetaHandler) runBiases(ctx context.Context, window string) (map[string]
 		"required": []string{"biases"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Return ONLY JSON strictly matching the schema below. Detect cognitive biases in the conversation window.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Detect cognitive biases in USER messages only (lines starting with 'USER:'). Treat 'ASSISTANT:' lines as context and do not assess them. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.CognitiveBiasesResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
-	res, err := h.exec.ExecuteStructuredTask(ctx, task)
+
+	// Create a context with timeout for AI task execution
+	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if h.logger != nil {
+		h.logger.Printf("meta: runBiases starting (windowChars=%d, promptChars=%d, tokensEst=%d)",
+			len(window), len(prompt), len(prompt)/4)
+	}
+	res, err := h.exec.ExecuteStructuredTask(taskCtx, task)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("ERROR: meta: runBiases failed: %v", err)
+		}
 		return nil, err
 	}
 	return toMap(res)
@@ -325,11 +369,23 @@ func (h *MetaHandler) runDecisions(ctx context.Context, window string) (map[stri
 		"required": []string{"process", "riskAttitude", "criteriaStyle", "speed"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Return ONLY JSON strictly matching the schema below. Classify decision-making style.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Classify USER decision-making style. Analyze 'USER:' lines; use 'ASSISTANT:' as context only. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.DecisionMakingResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
-	res, err := h.exec.ExecuteStructuredTask(ctx, task)
+
+	// Create a context with timeout for AI task execution
+	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if h.logger != nil {
+		h.logger.Printf("meta: runDecisions starting (windowChars=%d, promptChars=%d, tokensEst=%d)",
+			len(window), len(prompt), len(prompt)/4)
+	}
+	res, err := h.exec.ExecuteStructuredTask(taskCtx, task)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("ERROR: meta: runDecisions failed: %v", err)
+		}
 		return nil, err
 	}
 	return toMap(res)
@@ -351,11 +407,23 @@ func (h *MetaHandler) runComm(ctx context.Context, window string) (map[string]an
 		"required": []string{"clarity", "abstraction", "contextCompleteness", "feedbackLoop"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Return ONLY JSON strictly matching the schema below. Classify communication patterns.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Classify USER communication patterns (clarity, abstraction, context, feedback). Analyze 'USER:' lines; 'ASSISTANT:' lines are context only. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.CommunicationPatternsResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
-	res, err := h.exec.ExecuteStructuredTask(ctx, task)
+
+	// Create a context with timeout for AI task execution
+	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if h.logger != nil {
+		h.logger.Printf("meta: runComm starting (windowChars=%d, promptChars=%d, tokensEst=%d)",
+			len(window), len(prompt), len(prompt)/4)
+	}
+	res, err := h.exec.ExecuteStructuredTask(taskCtx, task)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("ERROR: meta: runComm failed: %v", err)
+		}
 		return nil, err
 	}
 	return toMap(res)
@@ -375,11 +443,23 @@ func (h *MetaHandler) runLearning(ctx context.Context, window string) (map[strin
 		"required": []string{"dynamics", "integration", "metaAwareness"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Return ONLY JSON strictly matching the schema below. Classify learning trajectory.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Classify USER learning trajectory (dynamics, integration, meta-awareness). Analyze 'USER:' lines; use 'ASSISTANT:' lines as context only. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.LearningTrajectoryResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
-	res, err := h.exec.ExecuteStructuredTask(ctx, task)
+
+	// Create a context with timeout for AI task execution
+	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if h.logger != nil {
+		h.logger.Printf("meta: runLearning starting (windowChars=%d, promptChars=%d, tokensEst=%d)",
+			len(window), len(prompt), len(prompt)/4)
+	}
+	res, err := h.exec.ExecuteStructuredTask(taskCtx, task)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("ERROR: meta: runLearning failed: %v", err)
+		}
 		return nil, err
 	}
 	return toMap(res)
@@ -432,6 +512,9 @@ func (h *MetaHandler) updateProjectAggregate(ctx context.Context, p *models.Proj
 	a.WhoLeads = evt.Common.WhoLeads
 	a.Effectiveness = 0.5*a.LeadershipIndex + 0.25*a.FocusRetention + 0.25*a.StructureScore
 	a.LastResults = evt.Result
+	a.LastAnalyzedMessageCount = evt.Window.MessageCount
+	a.LastAnalyzedAt = time.Now().UTC()
+	a.UpdatedAt = time.Now().UTC()
 	return h.aggProj.Upsert(ctx, a)
 }
 

@@ -101,7 +101,8 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 // и использует для его проверки верификатор из объекта AITask
 func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask) (interface{}, error) {
 	log.Printf("ExecuteStructuredTask called with task type: %s", task.TaskType)
-	inputTokens := len(task.InputContent)
+	inputChars := len(task.InputContent)
+	inputTokens := inputChars / 4 // Approximate token count (4 chars per token)
 	startedAt := time.Now()
 
 	if task.Verifier == nil {
@@ -113,8 +114,9 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 	for {
 		currentModel := e.modelManager.SelectFallbackModel(task.AIRequirements, inputTokens, triedModels)
 		if currentModel == "" {
-			log.Printf("All models tried or unavailable for structured task '%s'.", task.TaskType)
-			return nil, fmt.Errorf("unable to complete structured task '%s': No suitable AI models available after all fallbacks", task.TaskType)
+			log.Printf("ERROR: All models tried or unavailable for structured task '%s'. Total models tried: %d, Input size: %d chars (%d tokens est)",
+				task.TaskType, len(triedModels), inputChars, inputTokens)
+			return nil, fmt.Errorf("unable to complete structured task '%s': No suitable AI models available after all fallbacks (windowChars=%d)", task.TaskType, inputChars)
 		}
 
 		modelCapabilities, err := e.modelManager.GetModelCapabilities(currentModel)
@@ -131,15 +133,28 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 			continue
 		}
 
+		log.Printf("[%s] Executing structured task with model %s (input: %d chars, %d tokens est)",
+			modelCapabilities.Provider, currentModel, inputChars, inputTokens)
+
 		result, err := aiService.ExecuteTask(ctx, task, currentModel)
 		if err != nil {
-			log.Printf("Error executing task with model %s. Message: %v. Attempting fallback.", currentModel, err)
+			// Log detailed information about the request when it fails
+			log.Printf("WARNING: Task failed with model %s. Error: %v", currentModel, err)
+			log.Printf("WARNING: Request details: TaskType=%s, InputSize=%d chars (%d tokens est), Provider=%s",
+				task.TaskType, inputChars, inputTokens, modelCapabilities.Provider)
+
+			// If context was canceled, log a specific message
+			if ctx.Err() != nil {
+				log.Printf("WARNING: Context error detected: %v. This usually means timeout or cancellation.", ctx.Err())
+			}
+
+			log.Printf("WARNING: Error executing task with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
 
 		if result.Status != AITaskStatusCompleted {
-			log.Printf("Task with model %s did not complete successfully (Status: %s). Trying fallback.", currentModel, result.Status)
+			log.Printf("WARNING: Task with model %s did not complete successfully (Status: %s). Trying fallback.", currentModel, result.Status)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -147,16 +162,16 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 		// Extract strict JSON in case provider wrapped it (markdown/code fences, preambles)
 		cleanJSON, err := e.extractValidJSON(result.Content)
 		if err != nil {
-			log.Printf("[Raw LLM Response that failed JSON extraction BEGIN]\n%s\n[Raw LLM Response that failed JSON extraction END]", result.Content)
-			log.Printf("Failed to extract JSON from response with model %s. Message: %v. Attempting fallback.", currentModel, err)
+			log.Printf("WARNING: [Raw LLM Response that failed JSON extraction BEGIN]\n%s\n[Raw LLM Response that failed JSON extraction END]", result.Content)
+			log.Printf("WARNING: Failed to extract JSON from response with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
 
 		parsedResult, err := task.Verifier.VerifyAndParse(cleanJSON)
 		if err != nil {
-			log.Printf("[Raw LLM Response that failed verification BEGIN]\n%s\n[Raw LLM Response that failed verification END]", result.Content)
-			log.Printf("Failed to verify result with model %s. Message: %v. Attempting fallback.", currentModel, err)
+			log.Printf("WARNING: [Raw LLM Response that failed verification BEGIN]\n%s\n[Raw LLM Response that failed verification END]", result.Content)
+			log.Printf("WARNING: Failed to verify result with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -553,4 +568,3 @@ func (e *AITaskExecutor) tryFixJSON(jsonStr string) string {
 
 	return fixed
 }
-

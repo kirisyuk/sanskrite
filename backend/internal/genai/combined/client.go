@@ -252,7 +252,7 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 		if r.Content != "" {
 			_ = onEvent(StreamEvent{Type: "chunk", Text: r.Content})
 		}
-		_ = onEvent(StreamEvent{Type: "done"})
+		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources})
 		return nil
 	}
 	return c.gem.Stream(ctx, prompt, tools, c.normalizeOptionsForGemini(opts), onEvent)
@@ -276,7 +276,7 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 			if r.Content != "" {
 				_ = onEvent(StreamEvent{Type: "chunk", Text: r.Content})
 			}
-			_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r.Usage)})
+			_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources})
 			return nil
 		}
 		// Emit tool_call event(s)
@@ -312,7 +312,10 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 		if r2.Content != "" {
 			_ = onEvent(StreamEvent{Type: "chunk", Text: r2.Content})
 		}
-		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r2.Usage)})
+		// Merge SearchQueries and Sources from both calls with deduplication
+		mergedQueries := mergeUniqueStrings(r.SearchQueries, r2.SearchQueries)
+		mergedSources := mergeUniqueStrings(r.Sources, r2.Sources)
+		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r2.Usage), SearchQueries: mergedQueries, Sources: mergedSources})
 		return nil
 	}
 	return c.gem.StreamWithTools(ctx, prompt, tools, reg, c.normalizeOptionsForGemini(opts), onEvent)
@@ -370,6 +373,25 @@ func toGemToolsFromGrok(cs []gr.ToolCall) []g.ToolCall {
 
 func toGemUsageFromGrok(u gr.Usage) g.Usage {
 	return g.Usage{PromptTokens: u.PromptTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens, ReasoningTokens: u.ReasoningTokens}
+}
+
+// mergeUniqueStrings combines two string slices and removes duplicates
+func mergeUniqueStrings(a, b []string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			result = append(result, s)
+		}
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 // GenAIGenerate performs a unified generation across providers with optional tools, web search, and strict JSON

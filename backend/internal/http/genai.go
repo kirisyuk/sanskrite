@@ -287,13 +287,19 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		case "error":
 			return h.publisher.PublishJSON(ctx, "genai.stream.error", auth.TenantID, map[string]any{"error": e.Error})
 		case "done":
-			// include usage/attributions if accumulated
+			// include usage/attributions/searchQueries/sources if accumulated
 			payload := map[string]any{"ts": time.Now().UnixMilli()}
 			if e.Usage.TotalTokens > 0 {
 				payload["usage"] = e.Usage
 			}
 			if len(e.Attributions) > 0 {
 				payload["attributions"] = e.Attributions
+			}
+			if len(e.SearchQueries) > 0 {
+				payload["searchQueries"] = e.SearchQueries
+			}
+			if len(e.Sources) > 0 {
+				payload["sources"] = e.Sources
 			}
 			return h.publisher.PublishJSON(ctx, "genai.stream.done", auth.TenantID, payload)
 		case "start":
