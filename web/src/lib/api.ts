@@ -66,8 +66,8 @@ class ApiClient {
 
   async waitlistList(status?: 'pending' | 'approved' | 'rejected'): Promise<Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }>> {
     const params = status ? { status } : {};
-    const response = await this.client.get<{ items: Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }> }>(`/api/v1/waitlist/list`, { params });
-    return response.data.items;
+    const response = await this.client.get<{ items: Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }> | null | undefined }>(`/api/v1/waitlist/list`, { params });
+    return Array.isArray(response.data?.items) ? response.data.items : [];
   }
 
   async waitlistApprove(email: string): Promise<{ ok: boolean }> {
@@ -149,12 +149,12 @@ class ApiClient {
     return response.data;
   }
 
-  async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[]> {
-    const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[] }>(`/api/v1/projects/${projectId}/interactions`);
+  async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[]> {
+    const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[] }>(`/api/v1/projects/${projectId}/interactions`);
     return response.data.items;
   }
 
-  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'; content: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean } }): Promise<{ id: string }> {
+  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'; content: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean } }): Promise<{ id: string }> {
     const response = await this.client.post<{ id: string }>(`/api/v1/projects/${projectId}/interactions`, data);
     return response.data;
   }
@@ -291,6 +291,30 @@ class ApiClient {
     return response.data;
   }
 
+  // --- Analysis: Entities ---
+  async analyzeEntities(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/entities`, { prompt: prompt || '' });
+    return res.data as any;
+  }
+
+  // --- Analysis: Facts/Events/Metrics/Decisions ---
+  async analyzeFacts(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/facts`, { prompt: prompt || '' });
+    return res.data as any;
+  }
+  async analyzeEvents(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/events`, { prompt: prompt || '' });
+    return res.data as any;
+  }
+  async analyzeMetrics(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/metrics`, { prompt: prompt || '' });
+    return res.data as any;
+  }
+  async analyzeDecisions(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/decisions`, { prompt: prompt || '' });
+    return res.data as any;
+  }
+
   async genaiStream(data: {
     prompt: string;
     tools?: Array<{ name: string; description?: string; parameters: any }>;
@@ -306,6 +330,16 @@ class ApiClient {
   async docsList(projectId: string) {
     const res = await this.client.get(`/api/v1/projects/${projectId}/docs`);
     return res.data as any[];
+  }
+
+  async docsCreateFromText(projectId: string, data: { filename: string; contentType: string; text: string; description?: string }) {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/docs/from-text`, data);
+    return res.data as any;
+  }
+
+  async docsCreate(projectId: string, data: { filename: string; contentType: string; description?: string; extractedText?: string }) {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/docs`, data);
+    return res.data as any;
   }
 
   async docsUpload(projectId: string, file: File, description?: string) {
@@ -329,8 +363,25 @@ class ApiClient {
   }
 
   async docsDownload(projectId: string, docId: string): Promise<Blob> {
-    const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/download`, { responseType: 'blob' });
-    return res.data as Blob;
+    try {
+      const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/download`, { responseType: 'blob' });
+      return res.data as Blob;
+    } catch (e: any) {
+      // Fallback: if server returns 400 NO_STORAGE, fetch doc and synthesize blob from extractedText
+      const status = e?.response?.status;
+      if (status === 400) {
+        try {
+          const meta = await this.client.get(`/api/v1/projects/${projectId}/docs`);
+          const arr = (meta.data as any[]) || [];
+          const found = arr.find((d: any) => d && (d.id === docId));
+          if (found && typeof found.extractedText === 'string') {
+            const ct = typeof found.contentType === 'string' && found.contentType ? found.contentType : 'application/octet-stream';
+            return new Blob([found.extractedText], { type: ct });
+          }
+        } catch {}
+      }
+      throw e;
+    }
   }
 
   async suggestChatTitles(messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>, language?: string): Promise<string[]> {
@@ -349,6 +400,129 @@ class ApiClient {
     } catch {
       return [];
     }
+  }
+
+  // --- Artifact Templates ---
+  async listArtifactTemplates(category?: string): Promise<any[]> {
+    const params = category ? { category } : {};
+    const res = await this.client.get(`/api/v1/artifact-templates`, { params });
+    return res.data as any[];
+  }
+
+  async getArtifactTemplate(templateId: string): Promise<any> {
+    const res = await this.client.get(`/api/v1/artifact-templates/${templateId}`);
+    return res.data;
+  }
+
+  async createArtifactTemplate(template: any): Promise<{ id: string }> {
+    const res = await this.client.post(`/api/v1/artifact-templates`, template);
+    return res.data;
+  }
+
+  async updateArtifactTemplate(templateId: string, template: any): Promise<{ success: boolean }> {
+    const res = await this.client.put(`/api/v1/artifact-templates/${templateId}`, template);
+    return res.data;
+  }
+
+  async deleteArtifactTemplate(templateId: string): Promise<{ success: boolean }> {
+    const res = await this.client.delete(`/api/v1/artifact-templates/${templateId}`);
+    return res.data;
+  }
+
+  async publishArtifactTemplate(templateId: string): Promise<{ success: boolean }> {
+    const res = await this.client.post(`/api/v1/artifact-templates/${templateId}/publish`);
+    return res.data;
+  }
+
+  async generateArtifactStructure(requirements: {
+    documentType: string;
+    topic: string;
+    audience: string;
+    detailLevel: string;
+    language: string;
+  }): Promise<{ sections: any[] }> {
+    const res = await this.client.post(`/api/v1/artifact-templates/generate-structure`, requirements);
+    return res.data;
+  }
+
+  async createTemplateFromArtifact(request: {
+    artifactId: string;
+    templateName: string;
+    description: string;
+    category: string;
+    includeExamples?: boolean;
+    includePromptHistory?: boolean;
+    includeSettings?: boolean;
+    visibility?: 'private' | 'team' | 'public';
+    sectionCustomizations?: Record<string, any>;
+  }): Promise<{ id: string }> {
+    const res = await this.client.post(`/api/v1/artifact-templates/from-artifact`, request);
+    return res.data;
+  }
+
+  // --- Artifact Generation ---
+  async startArtifactGeneration(artifactId: string, mode: 'auto' | 'interactive', projectId: string): Promise<any> {
+    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/generate`, { mode, projectId });
+    return res.data;
+  }
+
+  async generateArtifactSection(
+    artifactId: string,
+    sectionId: string,
+    sessionId: string,
+    projectId: string,
+    promptOverride?: string,
+    modelOverride?: string
+  ): Promise<any> {
+    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/sections/${sectionId}/generate`, {
+      sessionId,
+      projectId,
+      promptOverride,
+      modelOverride,
+    });
+    return res.data;
+  }
+
+  async regenerateArtifactSection(
+    artifactId: string,
+    sectionId: string,
+    sessionId: string,
+    projectId: string,
+    newPrompt: string,
+    model?: string
+  ): Promise<any> {
+    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/sections/${sectionId}/regenerate`, {
+      sessionId,
+      projectId,
+      newPrompt,
+      model,
+    });
+    return res.data;
+  }
+
+  async assembleArtifactDocument(artifactId: string, sessionId: string): Promise<{ content: string }> {
+    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/assemble`, { sessionId });
+    return res.data;
+  }
+
+  async saveArtifactVersion(artifactId: string, sessionId: string, trigger: 'manual' | 'auto' | 'scheduled' = 'manual'): Promise<any> {
+    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/versions`, { sessionId, trigger });
+    return res.data;
+  }
+
+  async restoreArtifactVersion(artifactId: string, versionId: string): Promise<{ success: boolean }> {
+    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/versions/${versionId}/restore`);
+    return res.data;
+  }
+
+  async getGenerationSession(sessionId: string): Promise<any> {
+    const res = await this.client.get(`/api/v1/generation-sessions/${sessionId}`);
+    return res.data;
+  }
+
+  async cancelGeneration(sessionId: string): Promise<{ success: boolean }> {
+    const res = await this.client.post(`/api/v1/generation-sessions/${sessionId}/cancel`);
+    return res.data;
   }
 }
 

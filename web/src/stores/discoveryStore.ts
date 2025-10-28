@@ -33,6 +33,8 @@ interface DiscoveryState {
   answer: string | null;
   interactions: Array<{ id: string; kind: string; content: string; createdAt: string }>;
   pendingSources: Array<{ id: string; kind: 'web' | 'telegram'; status: string }>;
+  lastDocEvent?: any;
+  lastAnalysisStatus?: { projectId: string; kind: string; status: 'started'|'done'|'failed'; elapsedMs?: number; count?: number; error?: string; ts: number } | undefined;
   connectWs: (tenantId: string) => Promise<void>;
   
   // Actions
@@ -57,6 +59,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
   answer: null,
   interactions: [],
   pendingSources: [],
+  lastAnalysisStatus: undefined,
 
   setPendingSources: (sources) => set({ pendingSources: sources }),
 
@@ -381,8 +384,18 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
           // Document process streaming: uploaded/parsing/parsed/deleted
           if (msg?.type === 'document.process') {
             const ev = msg.data || {};
+            console.log('[WS] document.process event received:', ev);
             // expose minimal bus: lastDocEvent for UI
             set((state) => ({ ...state, lastDocEvent: ev } as any));
+          }
+
+          // Unified analysis status: analysis.status
+          if (msg?.type === 'analysis.status') {
+            const ev = msg.data || {};
+            console.log('[WS] analysis.status event received:', ev);
+            if (ev && typeof ev.projectId === 'string' && typeof ev.kind === 'string' && typeof ev.status === 'string') {
+              set({ lastAnalysisStatus: ev });
+            }
           }
           
           if (msg?.type === 'discovery.project' || msg?.type === 'discoveryProject') {

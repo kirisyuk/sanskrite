@@ -505,6 +505,7 @@ type ExternalDocRef struct {
 
 // CoreDoc represents a project-scoped document the user attached to a project.
 // It can be stored in our storage (StoragePath) or referenced externally (External).
+// Can also be a dynamic artifact with generation config (DocType = "dynamic_artifact").
 type CoreDoc struct {
 	ID          string  `json:"id" firestore:"id"`
 	TenantID    string  `json:"tenantId" firestore:"tenantId"`
@@ -524,8 +525,343 @@ type CoreDoc struct {
 	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
 
 	// Parsed text (extraction result) and metadata
+	// For artifacts: contains the full assembled document (current version)
 	ExtractedText *string        `json:"extractedText,omitempty" firestore:"extractedText,omitempty"`
 	ParseStatus   *string        `json:"parseStatus,omitempty" firestore:"parseStatus,omitempty"` // new|parsed|error
 	ParseMeta     map[string]any `json:"parseMeta,omitempty" firestore:"parseMeta,omitempty"`
 	PageCount     *int           `json:"pageCount,omitempty" firestore:"pageCount,omitempty"`
+
+	// Artifact-specific fields
+	DocType        *string         `json:"docType,omitempty" firestore:"docType,omitempty"`               // "static" | "dynamic_artifact"
+	ArtifactConfig *ArtifactConfig `json:"artifactConfig,omitempty" firestore:"artifactConfig,omitempty"` // nil for static docs
+}
+
+// ArtifactConfig contains configuration for dynamic artifact generation
+type ArtifactConfig struct {
+	Format              string                     `json:"format" firestore:"format"`                                               // "text" | "table" | "report" | "presentation"
+	Focus               string                     `json:"focus" firestore:"focus"`                                                 // "brief" | "analysis" | "narrative" | "proposal" | "technical" | "executive"
+	OrchestratorModel   string                     `json:"orchestratorModel" firestore:"orchestratorModel"`                         // model for final review/assembly
+	DefaultModel        string                     `json:"defaultModel" firestore:"defaultModel"`                                   // default model for sections
+	ReviewPrompt        string                     `json:"reviewPrompt" firestore:"reviewPrompt"`                                   // prompt for orchestrator review
+	Structure           []ArtifactSection          `json:"structure" firestore:"structure"`                                         // document structure (sections)
+	ContextSources      ArtifactContextSources     `json:"contextSources" firestore:"contextSources"`                               // context for generation
+	AutoUpdateEnabled   bool                       `json:"autoUpdateEnabled" firestore:"autoUpdateEnabled"`                         // enable auto-updates
+	AutoUpdateConfig    *ArtifactAutoUpdate        `json:"autoUpdateConfig,omitempty" firestore:"autoUpdateConfig,omitempty"`       // auto-update configuration
+	CurrentVersionID    string                     `json:"currentVersionID" firestore:"currentVersionID"`                           // ID of current version
+	VersionsRetained    int                        `json:"versionsRetained" firestore:"versionsRetained"`                           // number of versions to keep (default: 10)
+	Versions            []ArtifactVersion          `json:"versions" firestore:"versions"`                                           // version history (sorted by timestamp desc)
+	StructureGeneration *StructureGenerationConfig `json:"structureGeneration,omitempty" firestore:"structureGeneration,omitempty"` // how structure was created
+	GenerationSettings  GenerationSettings         `json:"generationSettings" firestore:"generationSettings"`                       // generation settings
+}
+
+// ArtifactSection defines a section of the artifact with its generation config
+type ArtifactSection struct {
+	ID               string                  `json:"id" firestore:"id"`
+	Title            string                  `json:"title" firestore:"title"`
+	Order            int                     `json:"order" firestore:"order"`
+	Prompt           string                  `json:"prompt" firestore:"prompt"`                                         // prompt for generating this section
+	Model            *string                 `json:"model,omitempty" firestore:"model,omitempty"`                       // override default model
+	ContextOverride  *ArtifactContextSources `json:"contextOverride,omitempty" firestore:"contextOverride,omitempty"`   // override context sources
+	Content          *string                 `json:"content,omitempty" firestore:"content,omitempty"`                   // current content (from current version)
+	GeneratedAt      *time.Time              `json:"generatedAt,omitempty" firestore:"generatedAt,omitempty"`           // when this section was last generated
+	TokensUsed       *int                    `json:"tokensUsed,omitempty" firestore:"tokensUsed,omitempty"`             // tokens used for generation
+	Description      *string                 `json:"description,omitempty" firestore:"description,omitempty"`           // what this section should contain
+	Required         bool                    `json:"required" firestore:"required"`                                     // is this section required
+	Editable         bool                    `json:"editable" firestore:"editable"`                                     // can user edit/delete this section
+	DependsOn        []string                `json:"dependsOn,omitempty" firestore:"dependsOn,omitempty"`               // IDs of sections that must be generated first
+	GenerationStatus *string                 `json:"generationStatus,omitempty" firestore:"generationStatus,omitempty"` // "pending" | "generating" | "completed" | "failed" | "skipped"
+	PromptHistory    []PromptVersion         `json:"promptHistory,omitempty" firestore:"promptHistory,omitempty"`       // history of prompt changes
+}
+
+// ArtifactContextSources defines what context to use for generation
+type ArtifactContextSources struct {
+	ConversationRange *struct {
+		From string `json:"from" firestore:"from"` // interaction/message ID
+		To   string `json:"to" firestore:"to"`     // interaction/message ID
+	} `json:"conversationRange,omitempty" firestore:"conversationRange,omitempty"`
+	Documents      []string `json:"documents,omitempty" firestore:"documents,omitempty"`           // CoreDoc IDs
+	SearchQuery    *string  `json:"searchQuery,omitempty" firestore:"searchQuery,omitempty"`       // search query for grounding
+	PinnedMessages []string `json:"pinnedMessages,omitempty" firestore:"pinnedMessages,omitempty"` // interaction IDs
+}
+
+// ArtifactAutoUpdate defines auto-update behavior
+type ArtifactAutoUpdate struct {
+	Trigger     string                     `json:"trigger" firestore:"trigger"`                             // "on_new_message" | "daily" | "weekly" | "on_new_document"
+	Conditions  *ArtifactUpdateConditions  `json:"conditions,omitempty" firestore:"conditions,omitempty"`   // conditions for triggering update
+	SmartUpdate *ArtifactSmartUpdateConfig `json:"smartUpdate,omitempty" firestore:"smartUpdate,omitempty"` // smart update configuration
+}
+
+// ArtifactUpdateConditions defines when to trigger auto-update
+type ArtifactUpdateConditions struct {
+	MinNewMessages     *int     `json:"minNewMessages,omitempty" firestore:"minNewMessages,omitempty"`     // minimum new messages to trigger
+	MinContextChange   *float64 `json:"minContextChange,omitempty" firestore:"minContextChange,omitempty"` // minimum context change (0-1)
+	Keywords           []string `json:"keywords,omitempty" firestore:"keywords,omitempty"`                 // trigger if these keywords appear
+	SearchQueryChanged bool     `json:"searchQueryChanged" firestore:"searchQueryChanged"`                 // trigger if search results changed
+}
+
+// ArtifactSmartUpdateConfig defines smart update behavior
+type ArtifactSmartUpdateConfig struct {
+	CheckQuality        bool    `json:"checkQuality" firestore:"checkQuality"`               // check quality before replacing
+	MinQualityThreshold float64 `json:"minQualityThreshold" firestore:"minQualityThreshold"` // don't replace if new version is worse (0-1)
+	NotifyOnUpdate      bool    `json:"notifyOnUpdate" firestore:"notifyOnUpdate"`           // notify user on update
+}
+
+// ArtifactVersion represents a snapshot of the artifact at a point in time
+type ArtifactVersion struct {
+	ID                string                             `json:"id" firestore:"id"`
+	Timestamp         time.Time                          `json:"timestamp" firestore:"timestamp"`
+	Trigger           string                             `json:"trigger" firestore:"trigger"`                     // "manual" | "auto" | "scheduled"
+	FullDocument      string                             `json:"fullDocument" firestore:"fullDocument"`           // full assembled document
+	Sections          map[string]ArtifactSectionSnapshot `json:"sections" firestore:"sections"`                   // sectionId -> snapshot
+	ContextSnapshot   ArtifactContextSnapshot            `json:"contextSnapshot" firestore:"contextSnapshot"`     // context at generation time
+	GenerationMeta    ArtifactGenerationMeta             `json:"generationMeta" firestore:"generationMeta"`       // generation metadata
+	GenerationMode    string                             `json:"generationMode" firestore:"generationMode"`       // "auto" | "interactive"
+	GenerationParams  GenerationParams                   `json:"generationParams" firestore:"generationParams"`   // parameters used for generation
+	StructureSnapshot []ArtifactSection                  `json:"structureSnapshot" firestore:"structureSnapshot"` // structure at generation time
+}
+
+// ArtifactSectionSnapshot captures a section's state in a version
+type ArtifactSectionSnapshot struct {
+	Content     string               `json:"content" firestore:"content"`
+	Prompt      string               `json:"prompt" firestore:"prompt"` // prompt used for generation
+	Model       string               `json:"model" firestore:"model"`   // model used for generation
+	TokensUsed  int                  `json:"tokensUsed" firestore:"tokensUsed"`
+	GeneratedAt time.Time            `json:"generatedAt" firestore:"generatedAt"`
+	Quality     *float64             `json:"quality,omitempty" firestore:"quality,omitempty"`         // optional quality score (0-1)
+	QualityMeta *ArtifactQualityMeta `json:"qualityMeta,omitempty" firestore:"qualityMeta,omitempty"` // detailed quality metrics
+}
+
+// ArtifactQualityMeta contains detailed quality metrics for a section
+type ArtifactQualityMeta struct {
+	Coherence    float64 `json:"coherence" firestore:"coherence"`       // text coherence (0-1)
+	Completeness float64 `json:"completeness" firestore:"completeness"` // completeness of response (0-1)
+	Relevance    float64 `json:"relevance" firestore:"relevance"`       // relevance to context (0-1)
+}
+
+// ArtifactContextSnapshot captures the context state at generation time
+type ArtifactContextSnapshot struct {
+	ConversationRange *struct {
+		From string `json:"from" firestore:"from"`
+		To   string `json:"to" firestore:"to"`
+	} `json:"conversationRange,omitempty" firestore:"conversationRange,omitempty"`
+	Documents         []string `json:"documents" firestore:"documents"` // document IDs
+	SearchQuery       *string  `json:"searchQuery,omitempty" firestore:"searchQuery,omitempty"`
+	PinnedMessages    []string `json:"pinnedMessages" firestore:"pinnedMessages"`                           // interaction IDs
+	MessageCount      int      `json:"messageCount" firestore:"messageCount"`                               // number of messages in range
+	DocumentTitles    []string `json:"documentTitles" firestore:"documentTitles"`                           // titles of documents used
+	SearchResultCount *int     `json:"searchResultCount,omitempty" firestore:"searchResultCount,omitempty"` // number of search results
+}
+
+// ArtifactGenerationMeta contains metadata about the generation process
+type ArtifactGenerationMeta struct {
+	TotalTokensUsed   int      `json:"totalTokensUsed" firestore:"totalTokensUsed"`
+	DurationMs        int64    `json:"durationMs" firestore:"durationMs"`
+	SectionsGenerated int      `json:"sectionsGenerated" firestore:"sectionsGenerated"`
+	Errors            []string `json:"errors,omitempty" firestore:"errors,omitempty"`
+}
+
+// StructureGenerationConfig describes how the artifact structure was created
+type StructureGenerationConfig struct {
+	Mode             string     `json:"mode" firestore:"mode"`                                             // "manual" | "ai_generated" | "template"
+	SourceTemplate   *string    `json:"sourceTemplate,omitempty" firestore:"sourceTemplate,omitempty"`     // ID of template if used
+	GeneratedBy      *string    `json:"generatedBy,omitempty" firestore:"generatedBy,omitempty"`           // model that generated structure
+	GenerationPrompt *string    `json:"generationPrompt,omitempty" firestore:"generationPrompt,omitempty"` // prompt for structure generation
+	GeneratedAt      *time.Time `json:"generatedAt,omitempty" firestore:"generatedAt,omitempty"`
+	UserModified     bool       `json:"userModified" firestore:"userModified"` // user edited after generation
+}
+
+// GenerationSettings contains general generation settings
+type GenerationSettings struct {
+	PreferredLanguage        string  `json:"preferredLanguage" firestore:"preferredLanguage"`                                   // "en", "ru", "es"...
+	SystemPrompt             string  `json:"systemPrompt" firestore:"systemPrompt"`                                             // system prompt for all operations
+	OrchestratorSystemPrompt *string `json:"orchestratorSystemPrompt,omitempty" firestore:"orchestratorSystemPrompt,omitempty"` // for final assembly
+	Tone                     *string `json:"tone,omitempty" firestore:"tone,omitempty"`                                         // "formal", "casual", "technical", "executive"
+	Audience                 *string `json:"audience,omitempty" firestore:"audience,omitempty"`                                 // "technical", "executive", "general"
+	DetailLevel              *string `json:"detailLevel,omitempty" firestore:"detailLevel,omitempty"`                           // "brief", "moderate", "detailed"
+}
+
+// PromptVersion tracks changes to section prompts
+type PromptVersion struct {
+	Prompt        string    `json:"prompt" firestore:"prompt"`
+	ChangedAt     time.Time `json:"changedAt" firestore:"changedAt"`
+	ChangedBy     string    `json:"changedBy" firestore:"changedBy"`                             // userID or "system"
+	ResultQuality *float64  `json:"resultQuality,omitempty" firestore:"resultQuality,omitempty"` // quality of result with this prompt (0-1)
+}
+
+// GenerationParams captures parameters used for a specific version generation
+type GenerationParams struct {
+	PreferredLanguage string            `json:"preferredLanguage" firestore:"preferredLanguage"`
+	SystemPrompt      string            `json:"systemPrompt" firestore:"systemPrompt"`
+	OrchestratorModel string            `json:"orchestratorModel" firestore:"orchestratorModel"`
+	SectionModels     map[string]string `json:"sectionModels" firestore:"sectionModels"` // sectionID -> model
+	Tone              *string           `json:"tone,omitempty" firestore:"tone,omitempty"`
+	Audience          *string           `json:"audience,omitempty" firestore:"audience,omitempty"`
+	DetailLevel       *string           `json:"detailLevel,omitempty" firestore:"detailLevel,omitempty"`
+}
+
+// ArtifactTemplate defines a reusable artifact template
+type ArtifactTemplate struct {
+	ID                           string            `json:"id" firestore:"id"`
+	Name                         string            `json:"name" firestore:"name"`
+	Description                  string            `json:"description" firestore:"description"`
+	Category                     string            `json:"category" firestore:"category"` // "business", "technical", "legal", "research"
+	Type                         string            `json:"type" firestore:"type"`         // "system" | "community" | "custom"
+	RecommendedFormat            string            `json:"recommendedFormat" firestore:"recommendedFormat"`
+	RecommendedFocus             string            `json:"recommendedFocus" firestore:"recommendedFocus"`
+	RecommendedOrchestratorModel string            `json:"recommendedOrchestratorModel" firestore:"recommendedOrchestratorModel"`
+	RecommendedSectionModel      string            `json:"recommendedSectionModel" firestore:"recommendedSectionModel"`
+	DefaultStructure             []SectionTemplate `json:"defaultStructure" firestore:"defaultStructure"`
+	SystemPrompts                map[string]string `json:"systemPrompts" firestore:"systemPrompts"` // language -> prompt
+	CreatedBy                    string            `json:"createdBy" firestore:"createdBy"`         // "system" or userID
+	TenantID                     *string           `json:"tenantId,omitempty" firestore:"tenantId,omitempty"`
+	CreatedAt                    time.Time         `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt                    time.Time         `json:"updatedAt" firestore:"updatedAt"`
+	IsPublic                     bool              `json:"isPublic" firestore:"isPublic"`
+	IsFeatured                   bool              `json:"isFeatured" firestore:"isFeatured"`
+	UsageCount                   int               `json:"usageCount" firestore:"usageCount"`
+	Rating                       float64           `json:"rating" firestore:"rating"`
+	RatingCount                  int               `json:"ratingCount" firestore:"ratingCount"`
+	SourceArtifactID             *string           `json:"sourceArtifactId,omitempty" firestore:"sourceArtifactId,omitempty"` // if created from artifact
+	Tags                         []string          `json:"tags" firestore:"tags"`
+}
+
+// SectionTemplate defines a template for an artifact section
+type SectionTemplate struct {
+	ID             string   `json:"id" firestore:"id"`
+	Title          string   `json:"title" firestore:"title"`
+	Order          int      `json:"order" firestore:"order"`
+	Description    string   `json:"description" firestore:"description"`
+	PromptTemplate string   `json:"promptTemplate" firestore:"promptTemplate"` // template with placeholders
+	Required       bool     `json:"required" firestore:"required"`
+	Editable       bool     `json:"editable" firestore:"editable"`
+	DependsOn      []string `json:"dependsOn,omitempty" firestore:"dependsOn,omitempty"`
+	ExampleContent *string  `json:"exampleContent,omitempty" firestore:"exampleContent,omitempty"` // optional example
+}
+
+// GenerationSession tracks an active artifact generation session
+type GenerationSession struct {
+	ID                string                   `json:"id" firestore:"id"`
+	ArtifactID        string                   `json:"artifactId" firestore:"artifactId"`
+	Mode              string                   `json:"mode" firestore:"mode"`     // "auto" | "interactive"
+	Status            string                   `json:"status" firestore:"status"` // "preparing" | "generating" | "reviewing" | "completed" | "failed"
+	PreferredLanguage string                   `json:"preferredLanguage" firestore:"preferredLanguage"`
+	SystemPrompt      string                   `json:"systemPrompt" firestore:"systemPrompt"`
+	CurrentSection    *string                  `json:"currentSection,omitempty" firestore:"currentSection,omitempty"`
+	CompletedSections []string                 `json:"completedSections" firestore:"completedSections"`
+	Progress          float64                  `json:"progress" firestore:"progress"` // 0-1
+	SectionResults    map[string]SectionResult `json:"sectionResults" firestore:"sectionResults"`
+	Errors            []GenerationError        `json:"errors" firestore:"errors"`
+	WSConnectionID    *string                  `json:"wsConnectionId,omitempty" firestore:"wsConnectionId,omitempty"` // for interactive mode
+	CreatedAt         time.Time                `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt         time.Time                `json:"updatedAt" firestore:"updatedAt"`
+}
+
+// SectionResult captures the result of generating a section
+type SectionResult struct {
+	SectionID  string        `json:"sectionId" firestore:"sectionId"`
+	Content    string        `json:"content" firestore:"content"`
+	Model      string        `json:"model" firestore:"model"`
+	TokensUsed int           `json:"tokensUsed" firestore:"tokensUsed"`
+	Duration   time.Duration `json:"duration" firestore:"duration"`
+	Quality    *float64      `json:"quality,omitempty" firestore:"quality,omitempty"`
+	Status     string        `json:"status" firestore:"status"` // "pending" | "generating" | "completed" | "failed"
+}
+
+// GenerationError captures errors during generation
+type GenerationError struct {
+	SectionID *string   `json:"sectionId,omitempty" firestore:"sectionId,omitempty"`
+	Message   string    `json:"message" firestore:"message"`
+	Timestamp time.Time `json:"timestamp" firestore:"timestamp"`
+}
+
+// ---- System-level extracted analysis types ----
+
+// Entity represents a discovered entity in the system
+type Entity struct {
+	ID          string   `json:"id" firestore:"id"`
+	Name        string   `json:"name" firestore:"name"`
+	Type        string   `json:"type" firestore:"type"`
+	Aliases     []string `json:"aliases,omitempty" firestore:"aliases,omitempty"`
+	Description string   `json:"description,omitempty" firestore:"description,omitempty"`
+	Excluded    bool     `json:"excluded,omitempty" firestore:"excluded,omitempty"`
+}
+
+// Fact is a normalized factual statement
+type Fact struct {
+	Statement  string   `json:"statement" firestore:"statement"`
+	Evidence   []string `json:"evidence,omitempty" firestore:"evidence,omitempty"`
+	SourceIDs  []string `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
+	Confidence float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
+}
+
+// Event is a normalized event item with time and severity (0..1)
+type Event struct {
+	ID         string   `json:"id,omitempty" firestore:"id,omitempty"`
+	Ts         string   `json:"ts" firestore:"ts"`
+	Title      string   `json:"title" firestore:"title"`
+	Summary    string   `json:"summary,omitempty" firestore:"summary,omitempty"`
+	Actors     []string `json:"actors,omitempty" firestore:"actors,omitempty"`
+	Tags       []string `json:"tags,omitempty" firestore:"tags,omitempty"`
+	Evidence   []string `json:"evidence,omitempty" firestore:"evidence,omitempty"`
+	SourceIDs  []string `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
+	Severity   float64  `json:"severity,omitempty" firestore:"severity,omitempty"`
+	Confidence float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
+}
+
+// Metric describes a measurable indicator with methodology
+type Metric struct {
+	Key         string   `json:"key" firestore:"key"`
+	Label       string   `json:"label" firestore:"label"`
+	Description string   `json:"description,omitempty" firestore:"description,omitempty"`
+	Value       any      `json:"value" firestore:"value"`
+	Unit        string   `json:"unit,omitempty" firestore:"unit,omitempty"`
+	UpdateISO   string   `json:"updateISO,omitempty" firestore:"updateISO,omitempty"`
+	UpdateDays  *int     `json:"updateDays,omitempty" firestore:"updateDays,omitempty"`
+	Evidence    []string `json:"evidence,omitempty" firestore:"evidence,omitempty"`
+	SourceIDs   []string `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
+	Confidence  float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
+
+	Definition string `json:"definition" firestore:"definition"`
+	Scope      struct {
+		Geography string `json:"geography,omitempty" firestore:"geography,omitempty"`
+		Sector    string `json:"sector,omitempty" firestore:"sector,omitempty"`
+		Industry  string `json:"industry,omitempty" firestore:"industry,omitempty"`
+		Period    string `json:"period,omitempty" firestore:"period,omitempty"`
+	} `json:"scope" firestore:"scope"`
+	Computation struct {
+		Formula     string `json:"formula,omitempty" firestore:"formula,omitempty"`
+		Numerator   string `json:"numerator,omitempty" firestore:"numerator,omitempty"`
+		Denominator string `json:"denominator,omitempty" firestore:"denominator,omitempty"`
+		Aggregation string `json:"aggregation,omitempty" firestore:"aggregation,omitempty"`
+	} `json:"computation" firestore:"computation"`
+	DetectionCues struct {
+		Keywords         []string `json:"keywords,omitempty" firestore:"keywords,omitempty"`
+		Patterns         []string `json:"patterns,omitempty" firestore:"patterns,omitempty"`
+		PositiveExamples []string `json:"positiveExamples,omitempty" firestore:"positiveExamples,omitempty"`
+		NegativeExamples []string `json:"negativeExamples,omitempty" firestore:"negativeExamples,omitempty"`
+	} `json:"detectionCues" firestore:"detectionCues"`
+	DataSources  []string `json:"dataSources,omitempty" firestore:"dataSources,omitempty"`
+	QualityNotes string   `json:"qualityNotes,omitempty" firestore:"qualityNotes,omitempty"`
+}
+
+// Decision captures a decision with actors (entities) and normalized scores
+type Decision struct {
+	ID        string   `json:"id,omitempty" firestore:"id,omitempty"`
+	Title     string   `json:"title" firestore:"title"`
+	Rationale string   `json:"rationale" firestore:"rationale"`
+	Options   []string `json:"options,omitempty" firestore:"options,omitempty"`
+	Selected  string   `json:"selected,omitempty" firestore:"selected,omitempty"`
+	Criteria  []struct {
+		Name  string  `json:"name" firestore:"name"`
+		Score float64 `json:"score" firestore:"score"`
+	} `json:"criteria,omitempty" firestore:"criteria,omitempty"`
+	Actors []struct {
+		ID   string `json:"id,omitempty" firestore:"id,omitempty"`
+		Name string `json:"name" firestore:"name"`
+		Type string `json:"type,omitempty" firestore:"type,omitempty"`
+	} `json:"actors,omitempty" firestore:"actors,omitempty"`
+	Evidence   []string `json:"evidence,omitempty" firestore:"evidence,omitempty"`
+	SourceIDs  []string `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
+	Severity   float64  `json:"severity,omitempty" firestore:"severity,omitempty"`
+	Confidence float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
 }

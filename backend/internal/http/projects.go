@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -32,6 +33,8 @@ type ProjectsHandler struct {
 	storage StorageClient
 	bucket  string
 	pub     *realtime.Publisher
+	// ai executor for analysis tasks
+	exec *ai.AITaskExecutor
 }
 
 // NewProjectsHandler creates a new ProjectsHandler
@@ -79,6 +82,12 @@ func (h *ProjectsHandler) WithStorage(client StorageClient, bucket string) *Proj
 // WithPublisher wires realtime publisher for streaming events
 func (h *ProjectsHandler) WithPublisher(pub *realtime.Publisher) *ProjectsHandler {
 	h.pub = pub
+	return h
+}
+
+// WithAIExecutor wires AI TaskExecutor for analysis tasks
+func (h *ProjectsHandler) WithAIExecutor(exec *ai.AITaskExecutor) *ProjectsHandler {
+	h.exec = exec
 	return h
 }
 
@@ -410,6 +419,164 @@ func (h *ProjectsHandler) CreateProjectDoc(w http.ResponseWriter, r *http.Reques
 	WriteJSON(w, http.StatusCreated, doc)
 }
 
+// CreateProjectDocFromText handles POST /api/v1/projects/{id}/docs/from-text
+// Allows creating a CoreDoc directly from provided text content (e.g., LLM export),
+// without a separate upload step.
+func (h *ProjectsHandler) CreateProjectDocFromText(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.coreDocs == nil {
+		WriteInternalError(w, "Core docs repository is not configured")
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	// Extract projectId from path
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 6 { // /api/v1/projects/{id}/docs/from-text
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := pathParts[3]
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req struct {
+		Filename    string  `json:"filename"`
+		ContentType string  `json:"contentType"`
+		Description *string `json:"description,omitempty"`
+		Text        string  `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+	if req.Filename == "" || req.ContentType == "" {
+		WriteBadRequest(w, "VALIDATION_ERROR", "filename and contentType are required")
+		return
+	}
+
+	// Persist the text payload optionally to storage, to enable downloads
+	var storagePath *string
+	if h.storage != nil && h.bucket != "" {
+		objectPath := fmt.Sprintf("%s/%s/%d-%s", authInfo.TenantID, projectID, time.Now().UnixNano(), sanitizeFilename(req.Filename))
+		if err := h.storage.UploadBytes(r.Context(), h.bucket, objectPath, []byte(req.Text), req.ContentType, map[string]string{
+			"tenantId":  authInfo.TenantID,
+			"projectId": projectID,
+			"filename":  req.Filename,
+		}); err == nil {
+			p := fmt.Sprintf("gs://%s/%s", h.bucket, objectPath)
+			storagePath = &p
+		}
+	}
+
+	now := time.Now().UTC()
+	size := int64(len([]byte(req.Text)))
+	status := "parsed"
+	doc := &models.CoreDoc{
+		TenantID:      authInfo.TenantID,
+		ProjectID:     projectID,
+		Filename:      req.Filename,
+		ContentType:   req.ContentType,
+		Description:   req.Description,
+		SizeBytes:     &size,
+		StoragePath:   storagePath,
+		ExtractedText: &req.Text,
+		ParseStatus:   &status,
+		ParseMeta:     map[string]any{"createdFrom": "from-text", "updatedAt": now.Format(time.RFC3339)},
+		CreatedBy:     &authInfo.UID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	id, err := h.coreDocs.Create(r.Context(), doc)
+	if err != nil {
+		WriteInternalError(w, "Failed to create document")
+		return
+	}
+	doc.ID = id
+	if h.pub != nil {
+		// Notify UI about new document
+		_ = h.pub.PublishJSON(r.Context(), realtime.EventDocProcess, authInfo.TenantID, map[string]any{
+			"projectId": projectID,
+			"docId":     doc.ID,
+			"status":    "uploaded",
+			"ts":        time.Now().UnixMilli(),
+		})
+		_ = h.pub.PublishJSON(r.Context(), realtime.EventDocProcess, authInfo.TenantID, map[string]any{
+			"projectId": projectID,
+			"docId":     doc.ID,
+			"status":    "parsed",
+			"chars":     len(req.Text),
+			"ts":        time.Now().UnixMilli(),
+		})
+	}
+	WriteJSON(w, http.StatusCreated, doc)
+}
+
+// UpdateProjectDoc handles PATCH /api/v1/projects/{id}/docs/{docId}
+// Allows renaming and updating description of a CoreDoc.
+func (h *ProjectsHandler) UpdateProjectDoc(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only PATCH is allowed", nil)
+		return
+	}
+	if h.coreDocs == nil {
+		WriteInternalError(w, "Core docs repository is not configured")
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 7 { // /api/v1/projects/{id}/docs/{docId}
+		WriteBadRequest(w, "INVALID_PATH", "Project and document ID are required")
+		return
+	}
+	projectID, docID := parts[3], parts[5]
+	// Access check via project
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	cd, err := h.coreDocs.Get(r.Context(), docID)
+	if err != nil || cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
+		WriteNotFound(w, "Document not found")
+		return
+	}
+	var patch struct {
+		Filename    *string `json:"filename,omitempty"`
+		Description *string `json:"description,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Invalid request body")
+		return
+	}
+	if patch.Filename != nil && strings.TrimSpace(*patch.Filename) != "" {
+		cd.Filename = *patch.Filename
+	}
+	if patch.Description != nil {
+		cd.Description = patch.Description
+	}
+	cd.UpdatedAt = time.Now().UTC()
+	if err := h.coreDocs.Upsert(r.Context(), cd); err != nil {
+		WriteInternalError(w, "Failed to update document")
+		return
+	}
+	WriteJSON(w, http.StatusOK, cd)
+}
+
 // ListProjectDocs handles GET /api/v1/projects/{id}/docs
 func (h *ProjectsHandler) ListProjectDocs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -706,6 +873,957 @@ func (h *ProjectsHandler) DownloadProjectDoc(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
+
+// ---- Entities analysis ----
+
+type analyzeEntitiesRequest struct {
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// AnalyzeEntities handles POST /api/v1/projects/{id}/analyze/entities (async)
+func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.exec == nil || h.coreDocs == nil || h.interactions == nil {
+		WriteInternalError(w, "Entities analysis not configured")
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 { // /api/v1/projects/{id}/analyze/entities
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+	// Validate project
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	var req analyzeEntitiesRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	// Fire-and-forget worker with bounded timeout
+	go func(tenantID, pid, userPrompt string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		started := time.Now()
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{"projectId": pid, "kind": "entities", "status": "started", "ts": time.Now().UnixMilli()})
+		}
+
+		// Publish WS: analyzing start
+		if h.pub != nil {
+			payload := map[string]any{
+				"projectId": pid,
+				"docId":     "entities.json",
+				"status":    "parsing",
+				"ts":        time.Now().UnixMilli(),
+			}
+			log.Printf("[AnalyzeEntities] Publishing parsing status: %+v", payload)
+			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, payload)
+		}
+
+		// Load interactions (limit window size)
+		items, _ := h.interactions.ListByProject(ctx, pid)
+		// Build compact transcript
+		builder := &strings.Builder{}
+		maxChars := 16000
+		for _, it := range items {
+			if it == nil || (it.Kind != "user" && it.Kind != "assistant" && it.Kind != "system") {
+				continue
+			}
+			line := fmt.Sprintf("- %s: %s\n", it.Kind, it.Content)
+			if builder.Len()+len(line) > maxChars {
+				break
+			}
+			builder.WriteString(line)
+		}
+		transcript := builder.String()
+
+		// Load previous entities CoreDoc (latest)
+		var prevJSON string
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "entities.json") && d.ExtractedText != nil {
+					prevJSON = *d.ExtractedText
+					break
+				}
+			}
+		}
+
+		// Compose prompt
+		instructions := `You are extracting unique, concretely identifiable entities from the chat transcript.
+        Return STRICT JSON with shape: { "entities": [ { "id": string, "name": string, "type": "person"|"group_of_persons"|"organization_or_platform"|"project_or_product"|"classifier_or_standard"|"classification_code"|"regulatory_document"|"government_agency"|"contract_document"|"location"|"other", "aliases"?: string[], "description"?: string } ] }.
+        Rules:
+        - ONLY include concrete, named items (no abstract categories). Examples of ALLOWED vs REJECTED:
+          • ALLOWED: "GS1" (classifier_or_standard), "OKTRU" (classifier_or_standard), "OKTRU 01.11.11.110" (classification_code), "GTIN 04891234567890" (classification_code), "SPK" (organization_or_platform), "Agromarket" (organization_or_platform), "Contract No. 45/2024" (contract_document), "NK RK 14-2024" (regulatory_document), "Atyrau Region" (location).
+          • REJECTED: "technical regulation" (too generic), "open databases" (too generic), "contracts" (no identifier), "buyers", "sellers", technologies like "chat-bot", "OCR" (not entities).
+        - Names must be normalized to the official form (for Russian, nominative case) and without quotes.
+        - If user prompt provides scope, obey it. If empty, find all relevant entities.
+        - Do NOT include entities previously extracted (provided below) or those marked as excluded:true.
+        - Use description only if certain from transcript, otherwise from public well-known facts succinctly.
+        `
+		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_ENTITIES_JSON:\n" + strings.TrimSpace(prevJSON)
+
+		task := &ai.AITask{
+			TaskType:     ai.TaskTypeContentAnalysis,
+			InputContent: composed,
+			AIRequirements: ai.AIRequirements{
+				MinContextWindow:         8000,
+				MaxOutputSize:            4096,
+				MinCapabilityScore:       6,
+				TextGenerationCapability: true,
+			},
+			Verifier:        ai.NewMapVerifier([]string{"entities"}, nil),
+			EnableTelemetry: true,
+			TenantID:        tenantID,
+			Project:         pid,
+		}
+		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
+		if err != nil {
+			if h.pub != nil {
+				payload := map[string]any{"projectId": pid, "docId": "entities.json", "status": "failed", "error": err.Error(), "ts": time.Now().UnixMilli()}
+				log.Printf("[AnalyzeEntities] Publishing failed status: %+v", payload)
+				_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, payload)
+				_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+					"projectId": pid,
+					"kind":      "entities",
+					"status":    "failed",
+					"error":     err.Error(),
+					"elapsedMs": time.Since(started).Milliseconds(),
+					"ts":        time.Now().UnixMilli(),
+				})
+			}
+			return
+		}
+		// Merge with previous entities (dedup + preserve excluded)
+		// Normalize key: lower(name)|type
+		normKey := func(name, typ string) string {
+			n := strings.TrimSpace(strings.ToLower(name))
+			t := strings.TrimSpace(strings.ToLower(typ))
+			return n + "|" + t
+		}
+		type entity struct {
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Type        string   `json:"type"`
+			Aliases     []string `json:"aliases,omitempty"`
+			Description string   `json:"description,omitempty"`
+			Excluded    bool     `json:"excluded,omitempty"`
+		}
+		var prev struct {
+			Entities []entity `json:"entities"`
+		}
+		if prevJSON != "" {
+			_ = json.Unmarshal([]byte(prevJSON), &prev)
+		}
+		var cur struct {
+			Entities []entity `json:"entities"`
+		}
+		if bb, e := json.Marshal(parsed); e == nil {
+			_ = json.Unmarshal(bb, &cur)
+		}
+		prevMap := map[string]entity{}
+		excluded := map[string]bool{}
+		for _, e := range prev.Entities {
+			k := normKey(e.Name, e.Type)
+			prevMap[k] = e
+			if e.Excluded {
+				excluded[k] = true
+			}
+		}
+		merged := make([]entity, 0, len(prev.Entities)+len(cur.Entities))
+		merged = append(merged, prev.Entities...)
+		for _, e := range cur.Entities {
+			k := normKey(e.Name, e.Type)
+			if excluded[k] {
+				continue
+			}
+			if _, ok := prevMap[k]; ok {
+				continue
+			}
+			merged = append(merged, e)
+		}
+		out := struct {
+			Entities []entity `json:"entities"`
+		}{Entities: merged}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		text := string(b)
+
+		// Optionally persist to Cloud Storage to enable download API
+		var storagePath *string
+		if h.storage != nil && h.bucket != "" {
+			objectPath := fmt.Sprintf("%s/%s/%d-entities.json", tenantID, pid, time.Now().UnixNano())
+			if err := h.storage.UploadBytes(ctx, h.bucket, objectPath, []byte(text), "application/json", map[string]string{
+				"kind":     "coredoc",
+				"filename": "entities.json",
+			}); err == nil {
+				p := fmt.Sprintf("gs://%s/%s", h.bucket, objectPath)
+				storagePath = &p
+			}
+		}
+
+		// Upsert CoreDoc (fixed filename)
+		now := time.Now().UTC()
+		doc := &models.CoreDoc{
+			TenantID:      tenantID,
+			ProjectID:     pid,
+			Filename:      "entities.json",
+			ContentType:   "application/json",
+			ExtractedText: &text,
+			StoragePath:   storagePath,
+			ParseStatus:   strPtr("parsed"),
+			ParseMeta:     map[string]any{"updatedAt": now.Format(time.RFC3339)},
+			CreatedBy:     &auth.UID,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		// Try find existing entities.json to preserve ID
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "entities.json") {
+					doc.ID = d.ID
+					break
+				}
+			}
+		}
+		if doc.ID == "" {
+			if id, err := h.coreDocs.Create(ctx, doc); err == nil {
+				doc.ID = id
+			}
+		} else {
+			_ = h.coreDocs.Upsert(ctx, doc)
+		}
+		if h.pub != nil {
+			payload := map[string]any{"projectId": pid, "docId": "entities.json", "filename": "entities.json", "status": "parsed", "ts": time.Now().UnixMilli()}
+			log.Printf("[AnalyzeEntities] Publishing parsed status: %+v", payload)
+			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, payload)
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "entities",
+				"status":    "done",
+				"count":     len(merged),
+				"elapsedMs": time.Since(started).Milliseconds(),
+				"ts":        time.Now().UnixMilli(),
+			})
+		}
+	}(auth.TenantID, projectID, req.Prompt)
+
+	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
+}
+
+// ---- Generic analyzers (facts, events, metrics, decisions) ----
+
+// AnalyzeFacts handles POST /api/v1/projects/{id}/analyze/facts (async)
+func (h *ProjectsHandler) AnalyzeFacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.exec == nil || h.coreDocs == nil || h.interactions == nil {
+		WriteInternalError(w, "Facts analysis not configured")
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	var req analyzeEntitiesRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	go func(tenantID, pid, userPrompt string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		started := time.Now()
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "facts",
+				"status":    "started",
+				"ts":        time.Now().UnixMilli(),
+			})
+		}
+		items, _ := h.interactions.ListByProject(ctx, pid)
+		b := &strings.Builder{}
+		maxChars := 16000
+		for _, it := range items {
+			if it == nil || (it.Kind != "user" && it.Kind != "assistant" && it.Kind != "system") {
+				continue
+			}
+			line := fmt.Sprintf("- %s: %s\n", it.Kind, it.Content)
+			if b.Len()+len(line) > maxChars {
+				break
+			}
+			b.WriteString(line)
+		}
+		transcript := b.String()
+		var prevJSON string
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "facts.json") && d.ExtractedText != nil {
+					prevJSON = *d.ExtractedText
+					break
+				}
+			}
+		}
+		// Prompt
+		instructions := `Extract verifiable facts from the transcript.
+Return STRICT JSON: { "facts": [ { "statement": string, "confidence"?: number (0..1), "evidence"?: string[], "sourceIds"?: string[] } ] }.
+Guidelines:
+- Facts must be concrete statements derivable from the transcript (no opinions).
+- Prefer short, atomic statements; avoid duplicates.
+`
+		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_FACTS_JSON:\n" + strings.TrimSpace(prevJSON)
+		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"facts"}, nil), EnableTelemetry: true, TenantID: tenantID, Project: pid}
+		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
+		if err != nil {
+			if h.pub != nil {
+				_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "facts.json", "status": "failed", "error": err.Error(), "ts": time.Now().UnixMilli()})
+				_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+					"projectId": pid,
+					"kind":      "facts",
+					"status":    "failed",
+					"error":     err.Error(),
+					"elapsedMs": time.Since(started).Milliseconds(),
+					"ts":        time.Now().UnixMilli(),
+				})
+			}
+			return
+		}
+		type fact struct {
+			Statement  string   `json:"statement"`
+			Evidence   []string `json:"evidence,omitempty"`
+			SourceIDs  []string `json:"sourceIds,omitempty"`
+			Confidence float64  `json:"confidence,omitempty"`
+		}
+		var prev struct {
+			Facts []fact `json:"facts"`
+		}
+		if prevJSON != "" {
+			_ = json.Unmarshal([]byte(prevJSON), &prev)
+		}
+		var cur struct {
+			Facts []fact `json:"facts"`
+		}
+		if bb, e := json.Marshal(parsed); e == nil {
+			_ = json.Unmarshal(bb, &cur)
+		}
+		norm := func(s string) string { return strings.TrimSpace(strings.ToLower(s)) }
+		seen := map[string]bool{}
+		merged := make([]fact, 0, len(prev.Facts)+len(cur.Facts))
+		for _, f := range prev.Facts {
+			k := norm(f.Statement)
+			seen[k] = true
+			merged = append(merged, f)
+		}
+		for _, f := range cur.Facts {
+			k := norm(f.Statement)
+			if !seen[k] {
+				seen[k] = true
+				merged = append(merged, f)
+			}
+		}
+		out := struct {
+			Facts []fact `json:"facts"`
+		}{Facts: merged}
+		buf, _ := json.MarshalIndent(out, "", "  ")
+		text := string(buf)
+		var storagePath *string
+		if h.storage != nil && h.bucket != "" {
+			objectPath := fmt.Sprintf("%s/%s/%d-facts.json", tenantID, pid, time.Now().UnixNano())
+			if err := h.storage.UploadBytes(ctx, h.bucket, objectPath, []byte(text), "application/json", map[string]string{"kind": "coredoc", "filename": "facts.json"}); err == nil {
+				p := fmt.Sprintf("gs://%s/%s", h.bucket, objectPath)
+				storagePath = &p
+			}
+		}
+		now := time.Now().UTC()
+		doc := &models.CoreDoc{TenantID: tenantID, ProjectID: pid, Filename: "facts.json", ContentType: "application/json", ExtractedText: &text, StoragePath: storagePath, ParseStatus: strPtr("parsed"), ParseMeta: map[string]any{"updatedAt": now.Format(time.RFC3339)}, CreatedBy: &auth.UID, CreatedAt: now, UpdatedAt: now}
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "facts.json") {
+					doc.ID = d.ID
+					break
+				}
+			}
+		}
+		if doc.ID == "" {
+			if id, err := h.coreDocs.Create(ctx, doc); err == nil {
+				doc.ID = id
+			}
+		} else {
+			_ = h.coreDocs.Upsert(ctx, doc)
+		}
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "facts.json", "filename": "facts.json", "status": "parsed", "ts": time.Now().UnixMilli()})
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "facts",
+				"status":    "done",
+				"count":     len(merged),
+				"elapsedMs": time.Since(started).Milliseconds(),
+				"ts":        time.Now().UnixMilli(),
+			})
+		}
+	}(auth.TenantID, projectID, req.Prompt)
+	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
+}
+
+// AnalyzeEvents handles POST /api/v1/projects/{id}/analyze/events (async)
+func (h *ProjectsHandler) AnalyzeEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.exec == nil || h.coreDocs == nil || h.interactions == nil {
+		WriteInternalError(w, "Events analysis not configured")
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	var req analyzeEntitiesRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	go func(tenantID, pid, userPrompt string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		started := time.Now()
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "events.json", "status": "parsing", "ts": time.Now().UnixMilli()})
+		}
+		items, _ := h.interactions.ListByProject(ctx, pid)
+		b := &strings.Builder{}
+		maxChars := 16000
+		for _, it := range items {
+			if it == nil || (it.Kind != "user" && it.Kind != "assistant" && it.Kind != "system") {
+				continue
+			}
+			line := fmt.Sprintf("- %s: %s\n", it.Kind, it.Content)
+			if b.Len()+len(line) > maxChars {
+				break
+			}
+			b.WriteString(line)
+		}
+		transcript := b.String()
+		var prevJSON string
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "events.json") && d.ExtractedText != nil {
+					prevJSON = *d.ExtractedText
+					break
+				}
+			}
+		}
+		instructions := `Detect discrete events.
+Return STRICT JSON: { "events": [ { "ts": string(RFC3339), "title": string, "summary"?: string, "actors"?: string[], "tags"?: string[], "evidence"?: string[], "sourceIds"?: string[], "severity"?: number(0..1), "confidence"?: number(0..1) } ] }.
+Rules: prefer precise timestamps if available; severity/confidence in 0..1.
+`
+		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_EVENTS_JSON:\n" + strings.TrimSpace(prevJSON)
+		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"events"}, nil), EnableTelemetry: true, TenantID: tenantID, Project: pid}
+		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
+		if err != nil {
+			if h.pub != nil {
+				_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "events.json", "status": "failed", "error": err.Error(), "ts": time.Now().UnixMilli()})
+				_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+					"projectId": pid,
+					"kind":      "events",
+					"status":    "failed",
+					"error":     err.Error(),
+					"elapsedMs": time.Since(started).Milliseconds(),
+					"ts":        time.Now().UnixMilli(),
+				})
+			}
+			return
+		}
+		type event struct {
+			ID         string   `json:"id,omitempty"`
+			Ts         string   `json:"ts"`
+			Title      string   `json:"title"`
+			Summary    string   `json:"summary,omitempty"`
+			Actors     []string `json:"actors,omitempty"`
+			Tags       []string `json:"tags,omitempty"`
+			Evidence   []string `json:"evidence,omitempty"`
+			SourceIDs  []string `json:"sourceIds,omitempty"`
+			Severity   float64  `json:"severity,omitempty"`
+			Confidence float64  `json:"confidence,omitempty"`
+		}
+		var prev struct {
+			Events []event `json:"events"`
+		}
+		if prevJSON != "" {
+			_ = json.Unmarshal([]byte(prevJSON), &prev)
+		}
+		var cur struct {
+			Events []event `json:"events"`
+		}
+		if bb, e := json.Marshal(parsed); e == nil {
+			_ = json.Unmarshal(bb, &cur)
+		}
+		key := func(e event) string { return strings.ToLower(strings.TrimSpace(e.Ts + "|" + e.Title)) }
+		seen := map[string]bool{}
+		merged := make([]event, 0, len(prev.Events)+len(cur.Events))
+		for _, v := range prev.Events {
+			k := key(v)
+			seen[k] = true
+			merged = append(merged, v)
+		}
+		for _, v := range cur.Events {
+			k := key(v)
+			if !seen[k] {
+				seen[k] = true
+				merged = append(merged, v)
+			}
+		}
+		out := struct {
+			Events []event `json:"events"`
+		}{Events: merged}
+		buf, _ := json.MarshalIndent(out, "", "  ")
+		text := string(buf)
+		var storagePath *string
+		if h.storage != nil && h.bucket != "" {
+			objectPath := fmt.Sprintf("%s/%s/%d-events.json", tenantID, pid, time.Now().UnixNano())
+			if err := h.storage.UploadBytes(ctx, h.bucket, objectPath, []byte(text), "application/json", map[string]string{"kind": "coredoc", "filename": "events.json"}); err == nil {
+				p := fmt.Sprintf("gs://%s/%s", h.bucket, objectPath)
+				storagePath = &p
+			}
+		}
+		now := time.Now().UTC()
+		doc := &models.CoreDoc{TenantID: tenantID, ProjectID: pid, Filename: "events.json", ContentType: "application/json", ExtractedText: &text, StoragePath: storagePath, ParseStatus: strPtr("parsed"), ParseMeta: map[string]any{"updatedAt": now.Format(time.RFC3339)}, CreatedBy: &auth.UID, CreatedAt: now, UpdatedAt: now}
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "events.json") {
+					doc.ID = d.ID
+					break
+				}
+			}
+		}
+		if doc.ID == "" {
+			if id, err := h.coreDocs.Create(ctx, doc); err == nil {
+				doc.ID = id
+			}
+		} else {
+			_ = h.coreDocs.Upsert(ctx, doc)
+		}
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "events.json", "filename": "events.json", "status": "parsed", "ts": time.Now().UnixMilli()})
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "events",
+				"status":    "done",
+				"count":     len(merged),
+				"elapsedMs": time.Since(started).Milliseconds(),
+				"ts":        time.Now().UnixMilli(),
+			})
+		}
+	}(auth.TenantID, projectID, req.Prompt)
+	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
+}
+
+// AnalyzeMetrics handles POST /api/v1/projects/{id}/analyze/metrics (async)
+func (h *ProjectsHandler) AnalyzeMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.exec == nil || h.coreDocs == nil || h.interactions == nil {
+		WriteInternalError(w, "Metrics analysis not configured")
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	var req analyzeEntitiesRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	go func(tenantID, pid, userPrompt string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		started := time.Now()
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "metrics.json", "status": "parsing", "ts": time.Now().UnixMilli()})
+		}
+		items, _ := h.interactions.ListByProject(ctx, pid)
+		b := &strings.Builder{}
+		maxChars := 16000
+		for _, it := range items {
+			if it == nil || (it.Kind != "user" && it.Kind != "assistant" && it.Kind != "system") {
+				continue
+			}
+			line := fmt.Sprintf("- %s: %s\n", it.Kind, it.Content)
+			if b.Len()+len(line) > maxChars {
+				break
+			}
+			b.WriteString(line)
+		}
+		transcript := b.String()
+		var prevJSON string
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "metrics.json") && d.ExtractedText != nil {
+					prevJSON = *d.ExtractedText
+					break
+				}
+			}
+		}
+		instructions := `Extract measurable metrics with methodology.
+Return STRICT JSON: { "metrics": [ {
+  "key": string, "label": string, "description"?: string, "value": number|string, "unit"?: string,
+  "updateISO"?: string, "updateDays"?: number, "evidence"?: string[], "sourceIds"?: string[], "confidence"?: number(0..1),
+  "definition": string,
+  "scope": { "geography"?: string, "sector"?: string, "industry"?: string, "period"?: string },
+  "computation": { "formula"?: string, "numerator"?: string, "denominator"?: string, "aggregation"?: string },
+  "detectionCues": { "keywords"?: string[], "patterns"?: string[], "positiveExamples"?: string[], "negativeExamples"?: string[] },
+  "dataSources"?: string[], "qualityNotes"?: string
+} ] }.
+Guidelines: keys stable and normalized; prefer domain-specific scope.
+`
+		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_METRICS_JSON:\n" + strings.TrimSpace(prevJSON)
+		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"metrics"}, nil), EnableTelemetry: true, TenantID: tenantID, Project: pid}
+		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
+		if err != nil {
+			if h.pub != nil {
+				_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "metrics.json", "status": "failed", "error": err.Error(), "ts": time.Now().UnixMilli()})
+				_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+					"projectId": pid,
+					"kind":      "metrics",
+					"status":    "failed",
+					"error":     err.Error(),
+					"elapsedMs": time.Since(started).Milliseconds(),
+					"ts":        time.Now().UnixMilli(),
+				})
+			}
+			return
+		}
+		type metric struct {
+			Key         string   `json:"key"`
+			Label       string   `json:"label"`
+			Description string   `json:"description,omitempty"`
+			Value       any      `json:"value"`
+			Unit        string   `json:"unit,omitempty"`
+			UpdateISO   string   `json:"updateISO,omitempty"`
+			UpdateDays  *int     `json:"updateDays,omitempty"`
+			Evidence    []string `json:"evidence,omitempty"`
+			SourceIDs   []string `json:"sourceIds,omitempty"`
+			Confidence  float64  `json:"confidence,omitempty"`
+			Definition  string   `json:"definition"`
+			Scope       struct {
+				Geography string `json:"geography,omitempty"`
+				Sector    string `json:"sector,omitempty"`
+				Industry  string `json:"industry,omitempty"`
+				Period    string `json:"period,omitempty"`
+			} `json:"scope"`
+			Computation struct {
+				Formula     string `json:"formula,omitempty"`
+				Numerator   string `json:"numerator,omitempty"`
+				Denominator string `json:"denominator,omitempty"`
+				Aggregation string `json:"aggregation,omitempty"`
+			} `json:"computation"`
+			DetectionCues struct {
+				Keywords         []string `json:"keywords,omitempty"`
+				Patterns         []string `json:"patterns,omitempty"`
+				PositiveExamples []string `json:"positiveExamples,omitempty"`
+				NegativeExamples []string `json:"negativeExamples,omitempty"`
+			} `json:"detectionCues"`
+			DataSources  []string `json:"dataSources,omitempty"`
+			QualityNotes string   `json:"qualityNotes,omitempty"`
+		}
+		var prev struct {
+			Metrics []metric `json:"metrics"`
+		}
+		if prevJSON != "" {
+			_ = json.Unmarshal([]byte(prevJSON), &prev)
+		}
+		var cur struct {
+			Metrics []metric `json:"metrics"`
+		}
+		if bb, e := json.Marshal(parsed); e == nil {
+			_ = json.Unmarshal(bb, &cur)
+		}
+		normKey := func(s string) string { return strings.TrimSpace(strings.ToLower(s)) }
+		seen := map[string]bool{}
+		merged := make([]metric, 0, len(prev.Metrics)+len(cur.Metrics))
+		for _, m := range prev.Metrics {
+			k := normKey(m.Key)
+			seen[k] = true
+			merged = append(merged, m)
+		}
+		for _, m := range cur.Metrics {
+			k := normKey(m.Key)
+			if !seen[k] {
+				seen[k] = true
+				merged = append(merged, m)
+			}
+		}
+		out := struct {
+			Metrics []metric `json:"metrics"`
+		}{Metrics: merged}
+		buf, _ := json.MarshalIndent(out, "", "  ")
+		text := string(buf)
+		var storagePath *string
+		if h.storage != nil && h.bucket != "" {
+			objectPath := fmt.Sprintf("%s/%s/%d-metrics.json", tenantID, pid, time.Now().UnixNano())
+			if err := h.storage.UploadBytes(ctx, h.bucket, objectPath, []byte(text), "application/json", map[string]string{"kind": "coredoc", "filename": "metrics.json"}); err == nil {
+				p := fmt.Sprintf("gs://%s/%s", h.bucket, objectPath)
+				storagePath = &p
+			}
+		}
+		now := time.Now().UTC()
+		doc := &models.CoreDoc{TenantID: tenantID, ProjectID: pid, Filename: "metrics.json", ContentType: "application/json", ExtractedText: &text, StoragePath: storagePath, ParseStatus: strPtr("parsed"), ParseMeta: map[string]any{"updatedAt": now.Format(time.RFC3339)}, CreatedBy: &auth.UID, CreatedAt: now, UpdatedAt: now}
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "metrics.json") {
+					doc.ID = d.ID
+					break
+				}
+			}
+		}
+		if doc.ID == "" {
+			if id, err := h.coreDocs.Create(ctx, doc); err == nil {
+				doc.ID = id
+			}
+		} else {
+			_ = h.coreDocs.Upsert(ctx, doc)
+		}
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "metrics.json", "filename": "metrics.json", "status": "parsed", "ts": time.Now().UnixMilli()})
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "metrics",
+				"status":    "done",
+				"count":     len(merged),
+				"elapsedMs": time.Since(started).Milliseconds(),
+				"ts":        time.Now().UnixMilli(),
+			})
+		}
+	}(auth.TenantID, projectID, req.Prompt)
+	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
+}
+
+// AnalyzeDecisions handles POST /api/v1/projects/{id}/analyze/decisions (async)
+func (h *ProjectsHandler) AnalyzeDecisions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.exec == nil || h.coreDocs == nil || h.interactions == nil {
+		WriteInternalError(w, "Decisions analysis not configured")
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	var req analyzeEntitiesRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	go func(tenantID, pid, userPrompt string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		started := time.Now()
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "decisions",
+				"status":    "started",
+				"ts":        time.Now().UnixMilli(),
+			})
+		}
+		items, _ := h.interactions.ListByProject(ctx, pid)
+		b := &strings.Builder{}
+		maxChars := 16000
+		for _, it := range items {
+			if it == nil || (it.Kind != "user" && it.Kind != "assistant" && it.Kind != "system") {
+				continue
+			}
+			line := fmt.Sprintf("- %s: %s\n", it.Kind, it.Content)
+			if b.Len()+len(line) > maxChars {
+				break
+			}
+			b.WriteString(line)
+		}
+		transcript := b.String()
+		var prevJSON string
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "decisions.json") && d.ExtractedText != nil {
+					prevJSON = *d.ExtractedText
+					break
+				}
+			}
+		}
+		instructions := `Extract decisions.
+Return STRICT JSON: { "decisions": [ {
+  "id"?: string, "title": string, "rationale": string, "options"?: string[], "selected"?: string,
+  "criteria"?: [{"name": string, "score": number(0..1)}],
+  "actors"?: [{"id"?: string, "name": string, "type"?: string}],
+  "evidence"?: string[], "sourceIds"?: string[], "severity"?: number(0..1), "confidence"?: number(0..1)
+} ] }.
+`
+		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_DECISIONS_JSON:\n" + strings.TrimSpace(prevJSON)
+		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"decisions"}, nil), EnableTelemetry: true, TenantID: tenantID, Project: pid}
+		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
+		if err != nil {
+			if h.pub != nil {
+				_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "decisions.json", "status": "failed", "error": err.Error(), "ts": time.Now().UnixMilli()})
+				_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+					"projectId": pid,
+					"kind":      "decisions",
+					"status":    "failed",
+					"error":     err.Error(),
+					"elapsedMs": time.Since(started).Milliseconds(),
+					"ts":        time.Now().UnixMilli(),
+				})
+			}
+			return
+		}
+		type actor struct {
+			ID   string `json:"id,omitempty"`
+			Name string `json:"name"`
+			Type string `json:"type,omitempty"`
+		}
+		type decision struct {
+			ID        string   `json:"id,omitempty"`
+			Title     string   `json:"title"`
+			Rationale string   `json:"rationale"`
+			Selected  string   `json:"selected,omitempty"`
+			Options   []string `json:"options,omitempty"`
+			Criteria  []struct {
+				Name  string  `json:"name"`
+				Score float64 `json:"score"`
+			} `json:"criteria,omitempty"`
+			Actors     []actor  `json:"actors,omitempty"`
+			Evidence   []string `json:"evidence,omitempty"`
+			SourceIDs  []string `json:"sourceIds,omitempty"`
+			Severity   float64  `json:"severity,omitempty"`
+			Confidence float64  `json:"confidence,omitempty"`
+		}
+		var prev struct {
+			Decisions []decision `json:"decisions"`
+		}
+		if prevJSON != "" {
+			_ = json.Unmarshal([]byte(prevJSON), &prev)
+		}
+		var cur struct {
+			Decisions []decision `json:"decisions"`
+		}
+		if bb, e := json.Marshal(parsed); e == nil {
+			_ = json.Unmarshal(bb, &cur)
+		}
+		norm := func(s string) string { return strings.TrimSpace(strings.ToLower(s)) }
+		seen := map[string]bool{}
+		merged := make([]decision, 0, len(prev.Decisions)+len(cur.Decisions))
+		for _, d := range prev.Decisions {
+			k := norm(d.Title)
+			seen[k] = true
+			merged = append(merged, d)
+		}
+		for _, d := range cur.Decisions {
+			k := norm(d.Title)
+			if !seen[k] {
+				seen[k] = true
+				merged = append(merged, d)
+			}
+		}
+		out := struct {
+			Decisions []decision `json:"decisions"`
+		}{Decisions: merged}
+		buf, _ := json.MarshalIndent(out, "", "  ")
+		text := string(buf)
+		var storagePath *string
+		if h.storage != nil && h.bucket != "" {
+			objectPath := fmt.Sprintf("%s/%s/%d-decisions.json", tenantID, pid, time.Now().UnixNano())
+			if err := h.storage.UploadBytes(ctx, h.bucket, objectPath, []byte(text), "application/json", map[string]string{"kind": "coredoc", "filename": "decisions.json"}); err == nil {
+				p := fmt.Sprintf("gs://%s/%s", h.bucket, objectPath)
+				storagePath = &p
+			}
+		}
+		now := time.Now().UTC()
+		doc := &models.CoreDoc{TenantID: tenantID, ProjectID: pid, Filename: "decisions.json", ContentType: "application/json", ExtractedText: &text, StoragePath: storagePath, ParseStatus: strPtr("parsed"), ParseMeta: map[string]any{"updatedAt": now.Format(time.RFC3339)}, CreatedBy: &auth.UID, CreatedAt: now, UpdatedAt: now}
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+			for _, d := range docs {
+				if strings.EqualFold(d.Filename, "decisions.json") {
+					doc.ID = d.ID
+					break
+				}
+			}
+		}
+		if doc.ID == "" {
+			if id, err := h.coreDocs.Create(ctx, doc); err == nil {
+				doc.ID = id
+			}
+		} else {
+			_ = h.coreDocs.Upsert(ctx, doc)
+		}
+		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "decisions.json", "filename": "decisions.json", "status": "parsed", "ts": time.Now().UnixMilli()})
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "decisions",
+				"status":    "done",
+				"count":     len(merged),
+				"elapsedMs": time.Since(started).Milliseconds(),
+				"ts":        time.Now().UnixMilli(),
+			})
+		}
+	}(auth.TenantID, projectID, req.Prompt)
+	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
+}
+func strPtr(s string) *string { return &s }
 
 // DeleteProjectDoc handles DELETE /api/v1/projects/{id}/docs/{docId}
 func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Request) {

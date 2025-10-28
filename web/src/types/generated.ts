@@ -5,6 +5,202 @@
  * and run 'npm run gen:types' to regenerate this file.
  */
 
+export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsCoreDoc {
+  id: string;
+  tenantId: string;
+  projectId: string;
+  filename: string;
+  contentType: string;
+  description?: string;
+  sizeBytes?: number;
+  storagePath?: string;
+  external?: {
+    provider: string;
+    url: string;
+    resourceId?: string;
+    driveId?: string;
+    ownerEmail?: string;
+    eTag?: string;
+    mimeType?: string;
+    [k: string]: any;
+  };
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  extractedText?: string;
+  parseStatus?: 'new' | 'parsed' | 'error';
+  parseMeta?: {
+    [k: string]: any;
+  };
+  pageCount?: number;
+  docType?: 'static' | 'dynamic_artifact';
+  artifactConfig?: {
+    format: 'text' | 'table' | 'report' | 'presentation';
+    focus: 'brief' | 'analysis' | 'narrative' | 'proposal' | 'technical' | 'executive';
+    orchestratorModel: string;
+    defaultModel: string;
+    reviewPrompt: string;
+    structure: {
+      id: string;
+      title: string;
+      order: number;
+      prompt: string;
+      model?: string;
+      contextOverride?: ArtifactContextSources;
+      content?: string;
+      generatedAt?: string;
+      tokensUsed?: number;
+      description?: string;
+      required?: boolean;
+      editable?: boolean;
+      dependsOn?: string[];
+      generationStatus?: 'pending' | 'generating' | 'completed' | 'failed' | 'skipped';
+      promptHistory?: {
+        prompt: string;
+        changedAt: string;
+        changedBy: string;
+        resultQuality?: number;
+        [k: string]: any;
+      }[];
+      [k: string]: any;
+    }[];
+    contextSources: ArtifactContextSources;
+    autoUpdateEnabled: boolean;
+    autoUpdateConfig?: {
+      trigger: 'on_new_message' | 'daily' | 'weekly' | 'on_new_document';
+      conditions?: {
+        minNewMessages?: number;
+        minContextChange?: number;
+        keywords?: string[];
+        searchQueryChanged?: boolean;
+        [k: string]: any;
+      };
+      smartUpdate?: {
+        checkQuality: boolean;
+        minQualityThreshold: number;
+        notifyOnUpdate: boolean;
+        [k: string]: any;
+      };
+      [k: string]: any;
+    };
+    currentVersionID: string;
+    versionsRetained: number;
+    versions: {
+      id: string;
+      timestamp: string;
+      trigger: 'manual' | 'auto' | 'scheduled';
+      fullDocument: string;
+      sections: {
+        [k: string]: {
+          content: string;
+          prompt: string;
+          model: string;
+          tokensUsed: number;
+          generatedAt: string;
+          quality?: number;
+          qualityMeta?: {
+            coherence: number;
+            completeness: number;
+            relevance: number;
+            [k: string]: any;
+          };
+          [k: string]: any;
+        };
+      };
+      contextSnapshot: {
+        conversationRange?: {
+          from: string;
+          to: string;
+          [k: string]: any;
+        };
+        documents: string[];
+        searchQuery?: string;
+        pinnedMessages: string[];
+        messageCount: number;
+        documentTitles: string[];
+        searchResultCount?: number;
+        [k: string]: any;
+      };
+      generationMeta: {
+        totalTokensUsed: number;
+        durationMs: number;
+        sectionsGenerated: number;
+        errors?: string[];
+        [k: string]: any;
+      };
+      generationMode: 'auto' | 'interactive';
+      generationParams: {
+        preferredLanguage: string;
+        systemPrompt: string;
+        orchestratorModel: string;
+        sectionModels: {
+          [k: string]: string;
+        };
+        tone?: string;
+        audience?: string;
+        detailLevel?: string;
+        [k: string]: any;
+      };
+      structureSnapshot: ArtifactSection[];
+      [k: string]: any;
+    }[];
+    structureGeneration?: {
+      mode: 'manual' | 'ai_generated' | 'template';
+      sourceTemplate?: string;
+      generatedBy?: string;
+      generationPrompt?: string;
+      generatedAt?: string;
+      userModified: boolean;
+      [k: string]: any;
+    };
+    generationSettings: {
+      preferredLanguage: string;
+      systemPrompt: string;
+      orchestratorSystemPrompt?: string;
+      tone?: 'formal' | 'casual' | 'technical' | 'executive';
+      audience?: 'technical' | 'executive' | 'general';
+      detailLevel?: 'brief' | 'moderate' | 'detailed';
+      [k: string]: any;
+    };
+    [k: string]: any;
+  };
+}
+export interface ArtifactContextSources {
+  conversationRange?: {
+    from: string;
+    to: string;
+    [k: string]: any;
+  };
+  documents?: string[];
+  searchQuery?: string;
+  pinnedMessages?: string[];
+  [k: string]: any;
+}
+export interface ArtifactSection {
+  id: string;
+  title: string;
+  order: number;
+  prompt: string;
+  model?: string;
+  contextOverride?: ArtifactContextSources;
+  content?: string;
+  generatedAt?: string;
+  tokensUsed?: number;
+  description?: string;
+  required?: boolean;
+  editable?: boolean;
+  dependsOn?: string[];
+  generationStatus?: 'pending' | 'generating' | 'completed' | 'failed' | 'skipped';
+  promptHistory?: {
+    prompt: string;
+    changedAt: string;
+    changedBy: string;
+    resultQuality?: number;
+    [k: string]: any;
+  }[];
+  [k: string]: any;
+}
+
 export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
   id: string;
   tenantId?: string;
@@ -207,6 +403,7 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsUser {
 
 
 // Convenient type aliases
+export type CoreDoc = HttpsGithubComIgorkirisyukSanskriteInternalModelsCoreDoc;
 export type DataSource = HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource;
 export type Document = HttpsGithubComIgorkirisyukSanskriteInternalModelsDocument;
 export type Project = HttpsGithubComIgorkirisyukSanskriteInternalModelsProject;

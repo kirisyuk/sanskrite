@@ -62,15 +62,44 @@ func NewClient(geminiClient *g.Client, openaiKey string) *Client {
 }
 
 // route decides provider by model alias (gpt_* -> openai; gemini_* -> gemini; default gemini)
+// canonicalizeAlias normalizes model aliases from UI/user input to a stable form.
+// Rules:
+// - lower-case
+// - replace any non [a-z0-9]+ with underscore
+// - collapse multiple underscores
+// - trim leading/trailing underscores
+func canonicalizeAlias(s string) string {
+	t := strings.ToLower(strings.TrimSpace(s))
+	// Replace hyphens, spaces, dots and other non-alnum with underscore
+	b := make([]rune, 0, len(t))
+	for _, r := range t {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b = append(b, r)
+		} else {
+			b = append(b, '_')
+		}
+	}
+	u := string(b)
+	// Collapse consecutive underscores
+	u = strings.ReplaceAll(u, "__", "_")
+	for strings.Contains(u, "__") {
+		u = strings.ReplaceAll(u, "__", "_")
+	}
+	u = strings.Trim(u, "_")
+	return u
+}
+
 func route(opts Options) string {
-	m := strings.TrimSpace(opts.ModelOverride)
+	m := canonicalizeAlias(opts.ModelOverride)
 	if m == "" {
 		return "gemini"
 	}
-	if strings.HasPrefix(m, "gpt_") || strings.HasPrefix(strings.ToLower(m), "gpt-5") {
+	// Normalize variants for routing
+	ml := m
+	if strings.HasPrefix(ml, "gpt_") || strings.HasPrefix(ml, "gpt5") {
 		return "openai"
 	}
-	if strings.HasPrefix(m, "grok_") || strings.HasPrefix(strings.ToLower(m), "grok-4") {
+	if strings.HasPrefix(ml, "grok_") || strings.HasPrefix(ml, "grok4") {
 		return "grok"
 	}
 	return "gemini"
@@ -78,7 +107,8 @@ func route(opts Options) string {
 
 // map alias to concrete provider model id
 func (c *Client) normalizeOptionsForGemini(opts Options) Options {
-	switch opts.ModelOverride {
+	// Accept underscores, hyphens, spaces, dots and other variants
+	switch canonicalizeAlias(opts.ModelOverride) {
 	case "gemini_quality":
 		opts.ModelOverride = "gemini-2.5-pro"
 	case "gemini_fast":
@@ -91,13 +121,13 @@ func (c *Client) normalizeOptionsForGemini(opts Options) Options {
 
 func (c *Client) normalizeOptionsForOpenAI(opts Options) oa.Options {
 	out := oa.Options{
-		ModelOverride:     opts.ModelOverride,
+		ModelOverride:     canonicalizeAlias(opts.ModelOverride),
 		Temperature:       opts.Temperature,
 		MaxOutputTokens:   opts.MaxOutputTokens,
 		GroundingEnabled:  opts.GroundingEnabled,
 		SystemInstruction: opts.SystemInstruction,
 	}
-	switch opts.ModelOverride {
+	switch out.ModelOverride {
 	case "gpt_quality":
 		out.ModelOverride = "gpt-5"
 	case "gpt_balanced":
@@ -113,7 +143,7 @@ func (c *Client) normalizeOptionsForGrok(opts Options) gr.Options {
 		ModelOverride: map[string]string{
 			"grok_quality": "grok-4-0709",
 			"grok_fast":    "grok-4-fast-reasoning",
-		}[opts.ModelOverride],
+		}[canonicalizeAlias(opts.ModelOverride)],
 		Temperature:       opts.Temperature,
 		MaxOutputTokens:   opts.MaxOutputTokens,
 		GroundingEnabled:  opts.GroundingEnabled,
@@ -238,7 +268,8 @@ func (c *Client) ExecuteWithTools(ctx context.Context, prompt string, tools []To
 
 // Stream: for OpenAI emit one chunk + done (placeholder streaming)
 func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts Options, onEvent func(StreamEvent) error) error {
-	if route(opts) == "openai" {
+	switch route(opts) {
+	case "openai":
 		if c.oa == nil {
 			return errors.New("openai not configured")
 		}
@@ -252,14 +283,36 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 		if r.Content != "" {
 			_ = onEvent(StreamEvent{Type: "chunk", Text: r.Content})
 		}
-		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources})
+		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources, Model: r.Model})
 		return nil
+	case "grok":
+		if c.gr == nil {
+			return errors.New("grok not configured")
+		}
+		_ = onEvent(StreamEvent{Type: "start"})
+		r, err := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
+		if err != nil {
+			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+			return err
+		}
+		// Single-chunk placeholder streaming similar to OpenAI path
+		if r.Content != "" {
+			_ = onEvent(StreamEvent{Type: "chunk", Text: r.Content})
+		}
+		// If tool calls present, emit them (no follow-up execution in non-tools stream path)
+		if len(r.ToolCalls) > 0 {
+			_ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(r.ToolCalls)})
+		}
+		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources, Model: r.Model})
+		return nil
+	default:
+		return c.gem.Stream(ctx, prompt, tools, c.normalizeOptionsForGemini(opts), onEvent)
 	}
-	return c.gem.Stream(ctx, prompt, tools, c.normalizeOptionsForGemini(opts), onEvent)
 }
 
 func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Tool, reg g.ToolExecutor, opts Options, onEvent func(StreamEvent) error) error {
-	if route(opts) == "openai" {
+	switch route(opts) {
+	case "openai":
 		if c.oa == nil {
 			return errors.New("openai not configured")
 		}
@@ -317,8 +370,31 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 		mergedSources := mergeUniqueStrings(r.Sources, r2.Sources)
 		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r2.Usage), SearchQueries: mergedQueries, Sources: mergedSources})
 		return nil
+	case "grok":
+		if c.gr == nil {
+			return errors.New("grok not configured")
+		}
+		_ = onEvent(StreamEvent{Type: "start"})
+		// Single-step call to Grok
+		r, err := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
+		if err != nil {
+			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+			return err
+		}
+		if len(r.ToolCalls) == 0 {
+			if r.Content != "" {
+				_ = onEvent(StreamEvent{Type: "chunk", Text: r.Content})
+			}
+			_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources})
+			return nil
+		}
+		// Emit tool_call(s). For now, do not perform follow-up Respond for Grok.
+		_ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(r.ToolCalls)})
+		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r.Usage)})
+		return nil
+	default:
+		return c.gem.StreamWithTools(ctx, prompt, tools, reg, c.normalizeOptionsForGemini(opts), onEvent)
 	}
-	return c.gem.StreamWithTools(ctx, prompt, tools, reg, c.normalizeOptionsForGemini(opts), onEvent)
 }
 
 // Respond forwards to OpenAI Respond when provider is OpenAI; for Gemini not supported
@@ -398,7 +474,7 @@ func mergeUniqueStrings(a, b []string) []string {
 func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIResponse, error) {
 	// Build base options
 	opts := g.Options{
-		ModelOverride:     strings.TrimSpace(req.Model),
+		ModelOverride:     canonicalizeAlias(req.Model),
 		Temperature:       req.Temperature,
 		MaxOutputTokens:   req.MaxOutputTokens,
 		GroundingEnabled:  req.WebSearchEnabled,

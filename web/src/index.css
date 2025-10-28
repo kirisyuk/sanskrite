@@ -16,6 +16,17 @@
 @import "@fontsource/inter/500.css";
 @import "@fontsource/inter/600.css";
 
+/* Glow utility for artifacts button */
+.etg-glow {
+  box-shadow: 0 0 0 0 rgba(56, 161, 105, 0.65);
+  animation: etg-pulse 1.4s ease-out 1;
+}
+@keyframes etg-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(56, 161, 105, 0.65); }
+  70% { box-shadow: 0 0 0 12px rgba(56, 161, 105, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(56, 161, 105, 0); }
+}
+
 /* Theme variables */
 [data-theme="dark"], :root {
   /* Base backgrounds */

@@ -15,7 +15,7 @@ const AdminAccess: React.FC = () => {
     try {
       const status = statusFilter === 'all' ? undefined : statusFilter;
       const data = await api.waitlistList(status as any);
-      setItems(data);
+      setItems(Array.isArray(data) ? data : []);
     } catch (e) {
       setError('Failed to load waitlist');
     } finally {

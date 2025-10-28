@@ -39,6 +39,8 @@ type Interaction struct {
 	Content          string  `json:"content" firestore:"content"`
 	ContentSanitized *string `json:"contentSanitized,omitempty" firestore:"contentSanitized,omitempty"`
 	Summary          *string `json:"summary,omitempty" firestore:"summary,omitempty"`
+	// Sections: optional grouping of interactions inside Unfold chat
+	SectionID *string `json:"sectionId,omitempty" firestore:"sectionId,omitempty"`
 	// Optional model/provider metadata for assistant/system interactions
 	Model *string    `json:"model,omitempty" firestore:"model,omitempty"`
 	Usage *UsageMeta `json:"usage,omitempty" firestore:"usage,omitempty"`

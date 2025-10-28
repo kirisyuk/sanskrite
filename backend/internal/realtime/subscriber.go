@@ -31,7 +31,10 @@ func (s *Subscriber) Start(ctx context.Context, topicNames ...string) error {
 		if !exists {
 			t := s.client.Topic(tname)
 			if ok, _ := t.Exists(ctx); !ok {
-				return nil
+				if s.logger != nil {
+					s.logger.Printf("subscriber: topic %s not found; skipping subscription", tname)
+				}
+				continue
 			}
 			created, err := s.client.CreateSubscription(ctx, subID, pubsub.SubscriptionConfig{Topic: t, EnableMessageOrdering: true})
 			if err != nil {

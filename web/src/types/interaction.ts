@@ -64,6 +64,8 @@ export interface Interaction {
   content: string;
   contentSanitized?: string;
   summary?: string;
+  // Sections
+  sectionId?: string;
   model?: string;
   usage?: UsageMeta;
   author?: ParticipantRef;
@@ -84,5 +86,5 @@ export interface Interaction {
   createdAt: string;
 }
 
-export type InteractionKind = 'user' | 'assistant' | 'system' | 'note';
+export type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end';
 

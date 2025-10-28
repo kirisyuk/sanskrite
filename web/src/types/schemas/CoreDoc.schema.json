@@ -1,0 +1,605 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/igorkirisyuk/sanskrite/internal/models/core-doc",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "tenantId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "filename": {
+      "type": "string"
+    },
+    "contentType": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "sizeBytes": {
+      "type": "number"
+    },
+    "storagePath": {
+      "type": "string"
+    },
+    "external": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "resourceId": {
+          "type": "string"
+        },
+        "driveId": {
+          "type": "string"
+        },
+        "ownerEmail": {
+          "type": "string"
+        },
+        "eTag": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": ["provider", "url"]
+    },
+    "createdBy": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "extractedText": {
+      "type": "string"
+    },
+    "parseStatus": {
+      "type": "string",
+      "enum": ["new", "parsed", "error"]
+    },
+    "parseMeta": {
+      "type": "object"
+    },
+    "pageCount": {
+      "type": "number"
+    },
+    "docType": {
+      "type": "string",
+      "enum": ["static", "dynamic_artifact"]
+    },
+    "artifactConfig": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["text", "table", "report", "presentation"]
+        },
+        "focus": {
+          "type": "string",
+          "enum": ["brief", "analysis", "narrative", "proposal", "technical", "executive"]
+        },
+        "orchestratorModel": {
+          "type": "string"
+        },
+        "defaultModel": {
+          "type": "string"
+        },
+        "reviewPrompt": {
+          "type": "string"
+        },
+        "structure": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "order": {
+                "type": "number"
+              },
+              "prompt": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "contextOverride": {
+                "$ref": "#/$defs/ArtifactContextSources"
+              },
+              "content": {
+                "type": "string"
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tokensUsed": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "editable": {
+                "type": "boolean"
+              },
+              "dependsOn": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "generationStatus": {
+                "type": "string",
+                "enum": ["pending", "generating", "completed", "failed", "skipped"]
+              },
+              "promptHistory": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "prompt": {
+                      "type": "string"
+                    },
+                    "changedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "changedBy": {
+                      "type": "string"
+                    },
+                    "resultQuality": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": ["prompt", "changedAt", "changedBy"]
+                }
+              }
+            },
+            "required": ["id", "title", "order", "prompt"]
+          }
+        },
+        "contextSources": {
+          "$ref": "#/$defs/ArtifactContextSources"
+        },
+        "autoUpdateEnabled": {
+          "type": "boolean"
+        },
+        "autoUpdateConfig": {
+          "type": "object",
+          "properties": {
+            "trigger": {
+              "type": "string",
+              "enum": ["on_new_message", "daily", "weekly", "on_new_document"]
+            },
+            "conditions": {
+              "type": "object",
+              "properties": {
+                "minNewMessages": {
+                  "type": "number"
+                },
+                "minContextChange": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "keywords": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "searchQueryChanged": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "smartUpdate": {
+              "type": "object",
+              "properties": {
+                "checkQuality": {
+                  "type": "boolean"
+                },
+                "minQualityThreshold": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "notifyOnUpdate": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["checkQuality", "minQualityThreshold", "notifyOnUpdate"]
+            }
+          },
+          "required": ["trigger"]
+        },
+        "currentVersionID": {
+          "type": "string"
+        },
+        "versionsRetained": {
+          "type": "number"
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "trigger": {
+                "type": "string",
+                "enum": ["manual", "auto", "scheduled"]
+              },
+              "fullDocument": {
+                "type": "string"
+              },
+              "sections": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "prompt": {
+                      "type": "string"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "tokensUsed": {
+                      "type": "number"
+                    },
+                    "generatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "quality": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "qualityMeta": {
+                      "type": "object",
+                      "properties": {
+                        "coherence": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "completeness": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "relevance": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        }
+                      },
+                      "required": ["coherence", "completeness", "relevance"]
+                    }
+                  },
+                  "required": ["content", "prompt", "model", "tokensUsed", "generatedAt"]
+                }
+              },
+              "contextSnapshot": {
+                "type": "object",
+                "properties": {
+                  "conversationRange": {
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string"
+                      },
+                      "to": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["from", "to"]
+                  },
+                  "documents": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "searchQuery": {
+                    "type": "string"
+                  },
+                  "pinnedMessages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "messageCount": {
+                    "type": "number"
+                  },
+                  "documentTitles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "searchResultCount": {
+                    "type": "number"
+                  }
+                },
+                "required": ["documents", "pinnedMessages", "messageCount", "documentTitles"]
+              },
+              "generationMeta": {
+                "type": "object",
+                "properties": {
+                  "totalTokensUsed": {
+                    "type": "number"
+                  },
+                  "durationMs": {
+                    "type": "number"
+                  },
+                  "sectionsGenerated": {
+                    "type": "number"
+                  },
+                  "errors": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["totalTokensUsed", "durationMs", "sectionsGenerated"]
+              },
+              "generationMode": {
+                "type": "string",
+                "enum": ["auto", "interactive"]
+              },
+              "generationParams": {
+                "type": "object",
+                "properties": {
+                  "preferredLanguage": {
+                    "type": "string"
+                  },
+                  "systemPrompt": {
+                    "type": "string"
+                  },
+                  "orchestratorModel": {
+                    "type": "string"
+                  },
+                  "sectionModels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "tone": {
+                    "type": "string"
+                  },
+                  "audience": {
+                    "type": "string"
+                  },
+                  "detailLevel": {
+                    "type": "string"
+                  }
+                },
+                "required": ["preferredLanguage", "systemPrompt", "orchestratorModel", "sectionModels"]
+              },
+              "structureSnapshot": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ArtifactSection"
+                }
+              }
+            },
+            "required": ["id", "timestamp", "trigger", "fullDocument", "sections", "contextSnapshot", "generationMeta", "generationMode", "generationParams", "structureSnapshot"]
+          }
+        },
+        "structureGeneration": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["manual", "ai_generated", "template"]
+            },
+            "sourceTemplate": {
+              "type": "string"
+            },
+            "generatedBy": {
+              "type": "string"
+            },
+            "generationPrompt": {
+              "type": "string"
+            },
+            "generatedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "userModified": {
+              "type": "boolean"
+            }
+          },
+          "required": ["mode", "userModified"]
+        },
+        "generationSettings": {
+          "type": "object",
+          "properties": {
+            "preferredLanguage": {
+              "type": "string"
+            },
+            "systemPrompt": {
+              "type": "string"
+            },
+            "orchestratorSystemPrompt": {
+              "type": "string"
+            },
+            "tone": {
+              "type": "string",
+              "enum": ["formal", "casual", "technical", "executive"]
+            },
+            "audience": {
+              "type": "string",
+              "enum": ["technical", "executive", "general"]
+            },
+            "detailLevel": {
+              "type": "string",
+              "enum": ["brief", "moderate", "detailed"]
+            }
+          },
+          "required": ["preferredLanguage", "systemPrompt"]
+        }
+      },
+      "required": ["format", "focus", "orchestratorModel", "defaultModel", "reviewPrompt", "structure", "contextSources", "autoUpdateEnabled", "currentVersionID", "versionsRetained", "versions", "generationSettings"]
+    }
+  },
+  "$defs": {
+    "ArtifactContextSources": {
+      "type": "object",
+      "properties": {
+        "conversationRange": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": ["from", "to"]
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "searchQuery": {
+          "type": "string"
+        },
+        "pinnedMessages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ArtifactSection": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "order": {
+          "type": "number"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "contextOverride": {
+          "$ref": "#/$defs/ArtifactContextSources"
+        },
+        "content": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tokensUsed": {
+          "type": "number"
+        },
+        "description": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generationStatus": {
+          "type": "string",
+          "enum": ["pending", "generating", "completed", "failed", "skipped"]
+        },
+        "promptHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "type": "string"
+              },
+              "changedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "changedBy": {
+                "type": "string"
+              },
+              "resultQuality": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": ["prompt", "changedAt", "changedBy"]
+          }
+        }
+      },
+      "required": ["id", "title", "order", "prompt"]
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "id",
+    "tenantId",
+    "projectId",
+    "filename",
+    "contentType",
+    "createdAt",
+    "updatedAt"
+  ]
+}
+

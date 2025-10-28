@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api';
 import { useGenAISettings, providerCapabilities } from '../stores/genaiSettingsStore';
@@ -24,16 +25,16 @@ interface StatusMessage {
 }
 
 interface UnfoldRequestProps {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
+  // Removed value and onChange - now uncontrolled
+  onSubmit: (value: string) => void; // Always pass current value
+  onClear?: () => void; // Optional callback when cleared
   disabled?: boolean;
   dangerTint?: boolean;
   showHighRiskTag?: boolean;
   onHighRiskTagClick?: () => void;
 }
 
-const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick }) => {
+const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClear, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick }) => {
   const { theme } = React.useContext(ThemeContext);
   const [showSettings, setShowSettings] = React.useState(false);
   const settings = useGenAISettings();
@@ -43,6 +44,132 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
   const lastDocEvent = useDiscoveryStore((s: any) => s.lastDocEvent);
   const [isDragging, setIsDragging] = React.useState(false);
   const [statusMessages, setStatusMessages] = React.useState<StatusMessage[]>([]);
+  
+  // Now fully uncontrolled - manage our own state
+  const [value, setValue] = React.useState('');
+  // Slash commands state
+  const [showSlashMenu, setShowSlashMenu] = React.useState(false);
+  const [slashActiveIdx, setSlashActiveIdx] = React.useState(0);
+  const textAreaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const slashMenuRef = React.useRef<HTMLDivElement | null>(null);
+  // Feature toggle: lightweight hint-only mode (no dropdown)
+  const ENABLE_SLASH_MENU = false;
+  
+  // Pre-compute lowercase versions once to avoid repeated toLowerCase() calls
+  const SLASH_COMMANDS = React.useMemo(() => [
+    { key: '/section', title: 'Начать раздел', hint: 'Создать новый раздел', keyLower: '/section', titleLower: 'начать раздел' },
+    { key: '/end', title: 'Закрыть раздел', hint: 'Завершить текущий раздел', keyLower: '/end', titleLower: 'закрыть раздел' },
+    { key: '/analyze entities', title: 'Распознать сущности', hint: 'Извлечь entities из чата', keyLower: '/analyze entities', titleLower: 'распознать сущности' },
+  ], []);
+  
+  // Check if current value starts with slash
+  const isSlashInput = React.useMemo(() => {
+    const v = value || '';
+    return v.length > 0 && v[0] === '/';
+  }, [value]);
+  
+  // Only filter when actually needed (menu is open AND it's a slash input)
+  const slashItems = React.useMemo(() => {
+    if (!ENABLE_SLASH_MENU || !showSlashMenu || !isSlashInput) return [] as Array<{ key: string; title: string; hint: string }>;
+    
+    const v = value || '';
+    const query = v.slice(1).toLowerCase();
+    
+    if (!query) return SLASH_COMMANDS;
+    
+    // Use pre-computed lowercase values
+    return SLASH_COMMANDS.filter(c => c.keyLower.startsWith('/' + query) || c.titleLower.includes(query));
+  }, [showSlashMenu, isSlashInput, value, SLASH_COMMANDS]);
+
+  // Memoize slash menu item selection handler
+  const handleSlashSelect = React.useCallback((commandKey: string) => {
+    const newValue = commandKey + ' ';
+    setValue(newValue);
+    setShowSlashMenu(false);
+    setTimeout(() => textAreaRef.current?.focus(), 0);
+  }, []);
+
+  // Memoize styles for textarea
+  const textareaStyle = React.useMemo(() => ({
+    backgroundColor: 'transparent',
+    border: 'none',
+    outline: 'none',
+    color: 'var(--text-heading)'
+  }), []);
+  
+  // Simple onChange handler - no debouncing, no parent updates
+  const handleTextareaChange = React.useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const v = e.target.value;
+    setValue(v);
+    
+    // Update slash menu state
+    const isSlash = v.length > 0 && v[0] === '/';
+    if (ENABLE_SLASH_MENU && (isSlash !== showSlashMenu)) {
+      setShowSlashMenu(isSlash);
+    }
+    if (ENABLE_SLASH_MENU && !isSlash && slashActiveIdx !== 0) {
+      setSlashActiveIdx(0);
+    }
+  }, [showSlashMenu, slashActiveIdx]);
+
+  // Memoize onKeyDown handler
+  const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Slash menu keyboard handling
+    if (isSlashInput && slashItems.length > 0 && showSlashMenu) {
+      if (e.key === 'ArrowDown') { 
+        e.preventDefault(); 
+        setSlashActiveIdx((i) => Math.min(slashItems.length - 1, i + 1)); 
+        return; 
+      }
+      if (e.key === 'ArrowUp') { 
+        e.preventDefault(); 
+        setSlashActiveIdx((i) => Math.max(0, i - 1)); 
+        return; 
+      }
+      if (e.key === 'Enter' && !(e.metaKey || e.ctrlKey)) { 
+        e.preventDefault(); 
+        const sel = slashItems[slashActiveIdx] || slashItems[0];
+        setValue(sel.key + ' ');
+        setShowSlashMenu(false); 
+        return; 
+      }
+      if (e.key === 'Escape') { 
+        e.preventDefault(); 
+        setShowSlashMenu(false); 
+        return; 
+      }
+    }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      
+      if (!value.trim()) return;
+      
+      // Submit with current value
+      onSubmit(value);
+      
+      // Clear input and attached docs
+      setValue('');
+      setAttachedDocs([]);
+      
+      // Notify parent if needed
+      onClear?.();
+    }
+  }, [isSlashInput, slashItems, showSlashMenu, slashActiveIdx, value, onSubmit, onClear]);
+
+  // Hide slash menu on outside click or Escape is already handled in onKeyDown
+  React.useEffect(() => {
+    if (!showSlashMenu) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const ta = textAreaRef.current;
+      const menu = slashMenuRef.current;
+      const target = e.target as Node | null;
+      if (menu && menu.contains(target as Node)) return;
+      if (ta && ta.contains(target as Node)) return;
+      setShowSlashMenu(false);
+    }
+    document.addEventListener('mousedown', onDocMouseDown, { capture: true });
+    return () => document.removeEventListener('mousedown', onDocMouseDown, { capture: true } as any);
+  }, [showSlashMenu]);
 
   const initialPlaceholders = React.useMemo(() => {
     const arr = t('unfold.request.placeholders.initial', { returnObjects: true }) as string[] | undefined;
@@ -300,6 +427,7 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
         style={{
           ...containerStyle,
           transition: 'all 0.2s ease',
+          contain: 'layout paint style',
           ...(isDragging ? {
             borderColor: 'var(--text-secondary)',
             backgroundColor: 'var(--white-10)',
@@ -364,24 +492,61 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
         )}
         
         <div className="p-3">
+        {/* Slash commands popover (disabled by toggle) */}
+        {!disabled && ENABLE_SLASH_MENU && showSlashMenu && slashItems.length > 0 && (
+          <div
+            className="absolute left-2 right-2"
+            style={{ top: 4, zIndex: 20 }}
+            role="listbox"
+            aria-label="Slash commands"
+            ref={slashMenuRef}
+          >
+            <div className="rounded-lg border shadow-md overflow-hidden"
+                 style={{ background: 'var(--bg-elevated)', borderColor: 'var(--overlay-line-90)' }}>
+              {slashItems.map((c, i) => {
+                const active = i === slashActiveIdx;
+                return (
+                  <button
+                    key={c.key}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    className="w-full text-left px-3 py-2 flex items-center justify-between"
+                    style={{ background: active ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
+                    onMouseEnter={() => setSlashActiveIdx(i)}
+                    onClick={() => handleSlashSelect(c.key)}
+                  >
+                    <span style={{ fontSize: 13 }}>{c.key} — {c.title}</span>
+                    <span className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{c.hint}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {/* Top: input field only */}
         <div className="mb-2">
+          {/* Lightweight hint above input when user typed only '/' */}
+          {value === '/' && (
+            <div className="mb-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
+              /section — Начать раздел · /end — Закрыть раздел · /analyze entities — Распознать сущности
+            </div>
+          )}
           <textarea
             rows={3}
             value={value}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={handleTextareaChange}
             placeholder={placeholderText}
             className="w-full resize-none bg-transparent outline-none"
-            style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)' }}
+            style={{ ...textareaStyle, contain: 'content', willChange: 'transform' }}
             aria-label={t('unfold.request.ariaLabel')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                onSubmit();
-                // Clear attached docs after sending message
-                setAttachedDocs([]);
-              }
-            }}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            autoComplete="off"
+            inputMode="text"
+            ref={textAreaRef}
+            onKeyDown={handleKeyDown}
           />
         </div>
         {/* Bottom: controls row (icons) */}
@@ -479,10 +644,16 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
               aria-label={t('unfold.request.send')}
               className="flex items-center justify-center rounded-full"
               onClick={() => { 
-                if (!disabled) {
-                  onSubmit();
-                  // Clear attached docs after sending message
+                if (!disabled && value.trim()) {
+                  // Submit with current value
+                  onSubmit(value);
+                  
+                  // Clear input and attached docs
+                  setValue('');
                   setAttachedDocs([]);
+                  
+                  // Notify parent if needed
+                  onClear?.();
                 }
               }}
               disabled={disabled}
@@ -500,8 +671,8 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
           </div>
         </div>
       </div>
-      {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
+      {showSettings && createPortal(
+        <div className="fixed inset-0 z-[80] flex items-center justify-center" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/30" onClick={() => setShowSettings(false)} />
           <div className="relative w-full max-w-lg rounded-xl border p-4" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--overlay-line-90)' }}>
             <div className="flex items-center justify-between mb-3">
@@ -522,10 +693,10 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
                 </div>
                 <div>
                   <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.strength')}</label>
-            <select value={settings.strength} onChange={(e) => settings.setStrength(e.target.value as any)} className="w-full">
-              <option value="fast">{t('unfold.request.strengthFast')}</option>
-              <option value="balanced">{t('unfold.request.strengthBalanced')}</option>
-              <option value="quality">{t('unfold.request.strengthQuality')}</option>
+                  <select value={settings.strength} onChange={(e) => settings.setStrength(e.target.value as any)} className="w-full">
+                    <option value="fast">{t('unfold.request.strengthFast')}</option>
+                    <option value="balanced">{t('unfold.request.strengthBalanced')}</option>
+                    <option value="quality">{t('unfold.request.strengthQuality')}</option>
                   </select>
                 </div>
               </div>
@@ -592,12 +763,26 @@ const UnfoldRequest: React.FC<UnfoldRequestProps> = ({ value, onChange, onSubmit
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       </div>
     </>
   );
 };
+
+// Memoize to prevent re-renders when parent (DiscoveryPage) re-renders
+// Since we removed value/onChange, component is now much more stable
+const UnfoldRequest = React.memo(UnfoldRequestComponent, (prev, next) => {
+  return (
+    prev.disabled === next.disabled &&
+    prev.dangerTint === next.dangerTint &&
+    prev.showHighRiskTag === next.showHighRiskTag &&
+    prev.onSubmit === next.onSubmit &&
+    prev.onClear === next.onClear &&
+    prev.onHighRiskTagClick === next.onHighRiskTagClick
+  );
+});
 
 export default UnfoldRequest;
 

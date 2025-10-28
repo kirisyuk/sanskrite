@@ -49,6 +49,8 @@ type InlineMessage struct {
 type AnalyzeRequest struct {
 	Analyzers    []string                `json:"analyzers"`
 	Interactions []AnalyzeInteractionRef `json:"interactions"`
+	// Optional: previous aggregate to enable incremental update mode
+	PreviousAggregate map[string]any `json:"previousAggregate,omitempty"`
 }
 
 type AnalyzeResult struct {
@@ -107,8 +109,35 @@ func (h *MetaHandler) Analyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build plain text window with roles
-	window := buildWindowText(msgs)
+	// Build analysis window:
+	// If PreviousAggregate provided, switch to incremental mode:
+	// - include PREVIOUS_AGGREGATE JSON block
+	// - include only the last user/assistant pair as NEW_EXCHANGE
+	var window string
+	if req.PreviousAggregate != nil {
+		// Serialize previous aggregate to JSON
+		b, _ := json.Marshal(req.PreviousAggregate)
+		// Take last 2 messages if available
+		pair := msgs
+		if len(msgs) >= 2 {
+			pair = msgs[len(msgs)-2:]
+		}
+		var pb strings.Builder
+		pb.WriteString("PREVIOUS_AGGREGATE:\n")
+		pb.Write(b)
+		pb.WriteString("\n\nNEW_EXCHANGE:\n")
+		for _, m := range pair {
+			// Preserve role prefixes for analyzers
+			pb.WriteString(strings.ToUpper(m.Role))
+			pb.WriteString(": ")
+			pb.WriteString(m.Text)
+			pb.WriteString("\n\n")
+		}
+		window = pb.String()
+	} else {
+		// Full recompute mode: include provided window as-is
+		window = buildWindowText(msgs)
+	}
 
 	// Log window size for monitoring
 	if h.logger != nil {
@@ -241,7 +270,7 @@ func (h *MetaHandler) classifyDialogControl(ctx context.Context, window string) 
 	defer cancel()
 
 	schema := `{"type":"object","additionalProperties":false,"properties":{"whoLeads":{"type":"string","enum":["User","AI","Mixed"]},"leadershipIndex":{"type":"number","minimum":0,"maximum":1},"focusRetention":{"type":"number","minimum":0,"maximum":1},"structureScore":{"type":"number","minimum":0,"maximum":1}},"required":["whoLeads","leadershipIndex","focusRetention","structureScore"]}`
-	prompt := fmt.Sprintf("Analyze USER behavior and dialog dynamics in this conversation. USER lines are marked 'USER:'; ASSISTANT lines are context only. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", schema, window)
+	prompt := fmt.Sprintf("Analyze USER behavior and dialog dynamics. Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, you MUST update the previous values based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using USER lines (ASSISTANT lines are context only).\n\nSchema:%s\n\nWINDOW:\n%s", schema, window)
 	task := &ai.AITask{
 		TaskType:       ai.TaskTypeTextProcessing,
 		InputContent:   prompt,
@@ -298,7 +327,7 @@ func (h *MetaHandler) runThinking(ctx context.Context, window string) (map[strin
 		"required": []string{"depth", "timeHorizon", "uncertainty", "thinkingType"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Analyze USER thinking patterns in this conversation. Focus on USER lines ('USER:'); ASSISTANT lines are context only. Return ONLY JSON strictly matching the schema below.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Analyze USER thinking patterns. Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous assessment based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using USER lines (ASSISTANT lines are context only).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.ThinkingPatternsResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
 
@@ -331,7 +360,7 @@ func (h *MetaHandler) runBiases(ctx context.Context, window string) (map[string]
 		"required": []string{"biases"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Detect cognitive biases in USER messages only (lines starting with 'USER:'). Treat 'ASSISTANT:' lines as context and do not assess them. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Detect cognitive biases in USER messages. Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous biases based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using lines starting with 'USER:' (treat 'ASSISTANT:' as context).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.CognitiveBiasesResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
 
@@ -369,7 +398,7 @@ func (h *MetaHandler) runDecisions(ctx context.Context, window string) (map[stri
 		"required": []string{"process", "riskAttitude", "criteriaStyle", "speed"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Classify USER decision-making style. Analyze 'USER:' lines; use 'ASSISTANT:' as context only. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Classify USER decision-making style. Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous assessment based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using 'USER:' lines (use 'ASSISTANT:' as context).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.DecisionMakingResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
 
@@ -407,7 +436,7 @@ func (h *MetaHandler) runComm(ctx context.Context, window string) (map[string]an
 		"required": []string{"clarity", "abstraction", "contextCompleteness", "feedbackLoop"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Classify USER communication patterns (clarity, abstraction, context, feedback). Analyze 'USER:' lines; 'ASSISTANT:' lines are context only. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Classify USER communication patterns (clarity, abstraction, context, feedback). Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous assessment based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using 'USER:' lines ('ASSISTANT:' is context only).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.CommunicationPatternsResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
 
@@ -443,7 +472,7 @@ func (h *MetaHandler) runLearning(ctx context.Context, window string) (map[strin
 		"required": []string{"dynamics", "integration", "metaAwareness"},
 	}
 	schemaJSON, _ := json.Marshal(schema)
-	prompt := fmt.Sprintf("Classify USER learning trajectory (dynamics, integration, meta-awareness). Analyze 'USER:' lines; use 'ASSISTANT:' lines as context only. Return ONLY JSON strictly matching the schema.\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
+	prompt := fmt.Sprintf("Classify USER learning trajectory (dynamics, integration, meta-awareness). Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous assessment based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using 'USER:' lines ('ASSISTANT:' as context).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.LearningTrajectoryResult) error { return nil })
 	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
 

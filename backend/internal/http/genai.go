@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -60,12 +61,33 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
+	started := time.Now()
 	resp, err := h.client.GenAIGenerate(ctx, req)
 	if err != nil {
 		status, code, msg, details := parseUpstreamError(err)
 		_ = WriteError(w, status, code, msg, details)
 		return
 	}
+	// Emit telemetry (best-effort)
+	go func() {
+		if auth := GetAuthInfo(r.Context()); auth != nil {
+			_ = persistGenAITelemetry(r.Context(), auth.TenantID, map[string]any{
+				"kind":      "genAI_telemetry",
+				"mode":      "single",
+				"model":     resp.Model,
+				"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+				"elapsedMs": time.Since(started).Milliseconds(),
+				"usage":     resp.Usage,
+				"params": map[string]any{
+					"temperature":        req.Temperature,
+					"maxOutputTokens":    req.MaxOutputTokens,
+					"webSearchEnabled":   req.WebSearchEnabled,
+					"toolCallingEnabled": req.ToolCallingEnabled,
+					"strictJSONEnabled":  req.StrictJSONEnabled,
+				},
+			})
+		}
+	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -248,6 +270,7 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
+	started := time.Now()
 	_ = h.publisher.PublishJSON(ctx, "genai.stream.start", auth.TenantID, map[string]any{"ts": time.Now().UnixMilli()})
 	// Optionally enrich system instruction with provided messages (conversation context)
 	if len(req.Messages) > 0 {
@@ -301,6 +324,22 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			if len(e.Sources) > 0 {
 				payload["sources"] = e.Sources
 			}
+			// Fire telemetry (best-effort)
+			go func() {
+				_ = persistGenAITelemetry(r.Context(), auth.TenantID, map[string]any{
+					"kind":      "genAI_telemetry",
+					"mode":      "stream",
+					"model":     e.Model,
+					"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+					"elapsedMs": time.Since(started).Milliseconds(),
+					"usage":     e.Usage,
+					"params": map[string]any{
+						"temperature":      req.Options.Temperature,
+						"maxOutputTokens":  req.Options.MaxOutputTokens,
+						"webSearchEnabled": req.Options.GroundingEnabled,
+					},
+				})
+			}()
 			return h.publisher.PublishJSON(ctx, "genai.stream.done", auth.TenantID, payload)
 		case "start":
 			return nil
@@ -344,4 +383,28 @@ func parseUpstreamError(err error) (int, string, string, interface{}) {
 		return status, code, s, details
 	}
 	return http.StatusBadGateway, "GENAI_ERROR", s, map[string]any{"raw": s}
+}
+
+// persistGenAITelemetry stores a single telemetry record into core_telemetry collection
+func persistGenAITelemetry(ctx context.Context, tenantID string, data map[string]any) error {
+	if tenantID == "" {
+		return nil
+	}
+	// Best-effort new client per call; for higher perf wire a shared client via handler state
+	projectID := os.Getenv("GCP_PROJECT_ID")
+	if projectID == "" {
+		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+	}
+	if projectID == "" {
+		return nil
+	}
+	c, err := firestore.NewClient(ctx, projectID)
+	if err != nil {
+		return nil
+	}
+	defer c.Close()
+	data["tenantId"] = tenantID
+	data["createdAt"] = time.Now().UTC()
+	_, _, _ = c.Collection("core_telemetry").Add(ctx, data)
+	return nil
 }

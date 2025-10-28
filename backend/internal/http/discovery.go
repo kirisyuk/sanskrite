@@ -769,6 +769,14 @@ func (h *DiscoveryHandler) ListProjectInteractions(w http.ResponseWriter, r *htt
 	}
 	items, err := h.interactionsRepo.ListByProject(r.Context(), projectID)
 	if err != nil {
+		// If Firestore index not ready or other transient failures, return empty list instead of 500 to avoid UX flash
+		// Common Firestore error for missing composite index: FailedPrecondition
+		// We cannot import status package here; fallback to string check
+		em := strings.ToLower(err.Error())
+		if strings.Contains(em, "failedprecondition") || strings.Contains(em, "index") || strings.Contains(em, "unavailable") {
+			WriteJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+			return
+		}
 		WriteInternalError(w, "Failed to list interactions")
 		return
 	}
@@ -837,18 +845,122 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		CoreDocIDs        []string `json:"coreDocIds,omitempty"`
 		SearchQueries     []string `json:"searchQueries,omitempty"`
 		Sources           []string `json:"sources,omitempty"`
+		// Sections (optional client-provided for future-proofing; server derives when missing)
+		SectionID *string `json:"sectionId,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Content) == "" {
-		WriteBadRequest(w, "INVALID_JSON", "kind and content are required")
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse body")
 		return
 	}
 	// normalize kind
 	k := strings.ToLower(strings.TrimSpace(body.Kind))
 	switch k {
-	case "user", "assistant", "system", "note":
+	case "user", "assistant", "system", "note", "section_start", "section_end":
 	default:
 		k = "note"
 	}
+	// validate content presence only for non-section kinds
+	if k != "section_start" && k != "section_end" {
+		if strings.TrimSpace(body.Content) == "" {
+			WriteBadRequest(w, "INVALID_JSON", "kind and content are required")
+			return
+		}
+	}
+	// Helper: compute currently open sectionId (last start not yet ended)
+	resolveOpenSection := func(ctx context.Context) (string, error) {
+		items, err := h.interactionsRepo.ListByProject(ctx, projectID)
+		if err != nil {
+			return "", err
+		}
+		current := ""
+		for _, it := range items {
+			if it == nil {
+				continue
+			}
+			if strings.EqualFold(it.Kind, "section_start") {
+				current = it.ID
+			} else if strings.EqualFold(it.Kind, "section_end") {
+				// end applies to explicit sectionId if present, else close current
+				sid := ""
+				if it.SectionID != nil {
+					sid = strings.TrimSpace(*it.SectionID)
+				}
+				if sid == "" || sid == current {
+					current = ""
+				}
+			}
+		}
+		return current, nil
+	}
+
+	// Special handling for sections
+	if k == "section_start" {
+		// Auto-close previous open section if exists
+		if openID, err := resolveOpenSection(r.Context()); err == nil && strings.TrimSpace(openID) != "" {
+			// Insert section_end referencing the open section
+			_, _ = h.interactionsRepo.Create(r.Context(), &repo.Interaction{
+				TenantID:  authInfo.TenantID,
+				ProjectID: projectID,
+				Kind:      "section_end",
+				Content:   "",
+				SectionID: &openID,
+			})
+		}
+		// Create the new section_start (title in Content)
+		startID, err := h.interactionsRepo.Create(r.Context(), &repo.Interaction{
+			TenantID:  authInfo.TenantID,
+			ProjectID: projectID,
+			Kind:      "section_start",
+			Content:   body.Content,
+		})
+		if err != nil {
+			WriteInternalError(w, "Failed to create interaction")
+			return
+		}
+		// Update its sectionId to self for easier grouping
+		_ = h.interactionsRepo.Update(r.Context(), startID, map[string]interface{}{"sectionId": startID})
+		WriteJSON(w, http.StatusCreated, map[string]any{"id": startID})
+		return
+	}
+	if k == "section_end" {
+		// Close current section if any
+		openID, _ := resolveOpenSection(r.Context())
+		if body.SectionID != nil && strings.TrimSpace(*body.SectionID) != "" {
+			openID = strings.TrimSpace(*body.SectionID)
+		}
+		var sidPtr *string
+		if strings.TrimSpace(openID) != "" {
+			sid := openID
+			sidPtr = &sid
+		}
+		endID, err := h.interactionsRepo.Create(r.Context(), &repo.Interaction{
+			TenantID:  authInfo.TenantID,
+			ProjectID: projectID,
+			Kind:      "section_end",
+			Content:   "",
+			SectionID: sidPtr,
+		})
+		if err != nil {
+			WriteInternalError(w, "Failed to create interaction")
+			return
+		}
+		WriteJSON(w, http.StatusCreated, map[string]any{"id": endID})
+		return
+	}
+
+	// For normal interactions, attach current sectionId if any
+	var sectionPtr *string
+	if strings.TrimSpace(k) != "section_start" && strings.TrimSpace(k) != "section_end" {
+		// Prefer client-provided sectionId, else resolve
+		if body.SectionID != nil && strings.TrimSpace(*body.SectionID) != "" {
+			sid := strings.TrimSpace(*body.SectionID)
+			sectionPtr = &sid
+		} else if openID, err := resolveOpenSection(r.Context()); err == nil && strings.TrimSpace(openID) != "" {
+			sid := openID
+			sectionPtr = &sid
+		}
+	}
+
 	id, err := h.interactionsRepo.Create(r.Context(), &repo.Interaction{
 		TenantID:                 authInfo.TenantID,
 		ProjectID:                projectID,
@@ -874,6 +986,7 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		CoreDocIDs:               body.CoreDocIDs,
 		SearchQueries:            body.SearchQueries,
 		Sources:                  body.Sources,
+		SectionID:                sectionPtr,
 	})
 	if err != nil {
 		WriteInternalError(w, "Failed to create interaction")

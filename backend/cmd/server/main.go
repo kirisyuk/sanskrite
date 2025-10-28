@@ -13,6 +13,7 @@ import (
 	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/services"
 	"google.golang.org/api/option"
 
 	// orchestrator deps
@@ -21,6 +22,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
+	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
 )
@@ -80,6 +83,13 @@ func main() {
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	chunksRepo := repo.NewChunksRepository(fsClient.Client())
 
+	// Artifact templates repo/service/handler (will be wired with AITaskExecutor later)
+	artifactTemplatesRepo := repo.NewArtifactTemplatesRepository(fsClient.Client())
+	coreDocsRepo := repo.NewCoreDocsRepo(fsClient.Client())
+	var artifactTemplateService *services.ArtifactTemplateService
+	var artifactTemplatesHandler *httphandlers.ArtifactTemplatesHandler
+	var artifactGenerationHandler *httphandlers.ArtifactGenerationHandler
+
 	// Handlers
 	s.usersHandler = httphandlers.NewUsersHandler(s.users, logger)
 	s.projectsHandler = httphandlers.NewProjectsHandler(s.projs, logger).WithDataSources(s.dsrcs)
@@ -99,22 +109,22 @@ func main() {
 	modelManager := ai.NewAIModelManager()
 	// For brevity, only Vertex provider is wired here; additional providers can be added
 	{
-		services := []ai.AIService{}
+		aiServices := []ai.AIService{}
 
 		if v := os.Getenv("VERTEX_API_KEY"); v != "" {
-			services = append(services, ai.NewVertexAIService(v, modelManager))
+			aiServices = append(aiServices, ai.NewVertexAIService(v, modelManager))
 		}
 		if k := os.Getenv("OPENAI_API_KEY"); k != "" {
-			services = append(services, ai.NewOpenAIService(k, modelManager))
+			aiServices = append(aiServices, ai.NewOpenAIService(k, modelManager))
 		}
 		if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
-			services = append(services, ai.NewClaudeService(k, modelManager))
+			aiServices = append(aiServices, ai.NewClaudeService(k, modelManager))
 		}
 		if k := os.Getenv("GROK_API_KEY"); k != "" {
-			services = append(services, ai.NewGrokService(k, modelManager))
+			aiServices = append(aiServices, ai.NewGrokService(k, modelManager))
 		}
 
-		exec := ai.NewAITaskExecutor(services, modelManager)
+		exec := ai.NewAITaskExecutor(aiServices, modelManager)
 		aiExecHandler = httphandlers.NewAIExecHandler(exec)
 		wc := crawler.NewWebCrawler()
 		tgBase := os.Getenv("TELEGRAM_SERVICE_URL")
@@ -124,6 +134,33 @@ func main() {
 		if err != nil {
 			log.Printf("WARNING: PubSub publisher init failed: %v (realtime updates disabled)", err)
 		}
+
+		// Wire artifact services with exec and pub
+		artifactTemplateService = services.NewArtifactTemplateService(artifactTemplatesRepo, coreDocsRepo, exec)
+		artifactTemplatesHandler = httphandlers.NewArtifactTemplatesHandler(artifactTemplateService)
+
+		// Artifact generation services
+		interactionsRepo := repo.NewInteractionsRepository(fsClient.Client())
+		artifactContextService := services.NewArtifactContextService(interactionsRepo, coreDocsRepo, chunksRepo)
+
+		// Create genaiClient for artifact executor (using combined client)
+		// Import gen_combined and gen_gemini packages at top of file
+		vertexAPIKey := os.Getenv("VERTEX_API_KEY")
+		vertexLocation := os.Getenv("VERTEX_LOCATION")
+		if vertexLocation == "" {
+			vertexLocation = "us-central1"
+		}
+		fastModel := os.Getenv("GENAI_FAST_MODEL")
+		qualityModel := os.Getenv("GENAI_QUALITY_MODEL")
+		geminiClient := gen_gemini.NewClient(vertexAPIKey, projectID, vertexLocation, fastModel, qualityModel)
+		openaiAPIKey := os.Getenv("OPENAI_API_KEY")
+		genaiClient := gen_combined.NewClient(geminiClient, openaiAPIKey)
+
+		artifactExecutorService := services.NewArtifactExecutorService(genaiClient, artifactContextService, pub)
+
+		generationSessionsRepo := repo.NewGenerationSessionsRepository(fsClient.Client())
+		artifactOrchestratorService := services.NewArtifactOrchestratorService(generationSessionsRepo, coreDocsRepo, artifactExecutorService, artifactContextService)
+		artifactGenerationHandler = httphandlers.NewArtifactGenerationHandler(artifactOrchestratorService)
 		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger).WithProfiles(s.sprofs).WithSourceProjects(sourceProjectsRepo)
 		// Provider registry
 		reg := prov.NewRegistry()
@@ -197,7 +234,7 @@ func main() {
 		if bucket == "" {
 			bucket = projectID + "-core-docs"
 		}
-		s.projectsHandler = s.projectsHandler.WithCoreDocs(coreDocsRepo).WithStorage(gcsClient, bucket)
+		s.projectsHandler = s.projectsHandler.WithCoreDocs(coreDocsRepo).WithStorage(gcsClient, bucket).WithAIExecutor(exec)
 		// Wire cascade repos to projects handler
 		s.projectsHandler = s.projectsHandler.WithCascade(s.sprofs, interactions)
 		s.discoveryHandler = s.discoveryHandler.WithOrchestrator(orchestrator).WithInteractions(interactions).WithProfiles(s.sprofs)
@@ -281,6 +318,10 @@ func main() {
 					string(realtime.EventDiscoveryProfile),
 					string(realtime.EventDiscoveryAnswer),
 					string(realtime.EventDiscoveryProject),
+					// Core document processing updates (entities/facts/events/metrics/decisions)
+					string(realtime.EventDocProcess),
+					// Unified analysis status updates
+					string(realtime.EventAnalysisStatus),
 					// Subscribe WS hub to GenAI streaming topics
 					string(realtime.EventGenAIStreamStart),
 					string(realtime.EventGenAIStreamChunk),
@@ -288,6 +329,16 @@ func main() {
 					string(realtime.EventGenAIStreamToolRes),
 					string(realtime.EventGenAIStreamDone),
 					string(realtime.EventGenAIStreamError),
+					// Subscribe WS hub to Artifact generation topics
+					string(realtime.EventArtifactGenerationStarted),
+					string(realtime.EventArtifactSectionGenerating),
+					string(realtime.EventArtifactSectionChunk),
+					string(realtime.EventArtifactSectionCompleted),
+					string(realtime.EventArtifactAssemblyStarted),
+					string(realtime.EventArtifactAssemblyChunk),
+					string(realtime.EventArtifactAssemblyCompleted),
+					string(realtime.EventArtifactGenerationCompleted),
+					string(realtime.EventArtifactGenerationError),
 				)
 			} else {
 				log.Printf("ws subscriber: pubsub client init error: %v", err)
@@ -345,6 +396,31 @@ func main() {
 			s.discoveryHandler.IngestProject(w, r)
 			return
 		}
+		// Entities analyze: /projects/{id}/analyze/entities
+		if strings.HasSuffix(r.URL.Path, "/analyze/entities") && r.Method == http.MethodPost {
+			s.projectsHandler.AnalyzeEntities(w, r)
+			return
+		}
+		// Facts analyze
+		if strings.HasSuffix(r.URL.Path, "/analyze/facts") && r.Method == http.MethodPost {
+			s.projectsHandler.AnalyzeFacts(w, r)
+			return
+		}
+		// Events analyze
+		if strings.HasSuffix(r.URL.Path, "/analyze/events") && r.Method == http.MethodPost {
+			s.projectsHandler.AnalyzeEvents(w, r)
+			return
+		}
+		// Metrics analyze
+		if strings.HasSuffix(r.URL.Path, "/analyze/metrics") && r.Method == http.MethodPost {
+			s.projectsHandler.AnalyzeMetrics(w, r)
+			return
+		}
+		// Decisions analyze
+		if strings.HasSuffix(r.URL.Path, "/analyze/decisions") && r.Method == http.MethodPost {
+			s.projectsHandler.AnalyzeDecisions(w, r)
+			return
+		}
 		// Core docs: /projects/{id}/docs and /projects/{id}/docs/upload
 		if strings.HasSuffix(r.URL.Path, "/docs") {
 			switch r.Method {
@@ -358,6 +434,14 @@ func main() {
 		}
 		if strings.HasSuffix(r.URL.Path, "/docs/upload") && r.Method == http.MethodPost {
 			s.projectsHandler.UploadProjectDoc(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/docs/from-text") && r.Method == http.MethodPost {
+			s.projectsHandler.CreateProjectDocFromText(w, r)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodPatch {
+			s.projectsHandler.UpdateProjectDoc(w, r)
 			return
 		}
 		// Meta analysis endpoints
@@ -411,6 +495,34 @@ func main() {
 			s.discoveryHandler.DeleteProjectInteraction(w, r)
 			return
 		}
+		// Artifacts CRUD: /projects/{id}/artifacts
+		if strings.HasSuffix(r.URL.Path, "/artifacts") {
+			ah := httphandlers.NewArtifactsHandler(coreDocsRepo)
+			switch r.Method {
+			case http.MethodGet:
+				ah.ListArtifacts(w, r)
+				return
+			case http.MethodPost:
+				ah.CreateArtifact(w, r)
+				return
+			}
+		}
+		if strings.Contains(r.URL.Path, "/artifacts/") {
+			ah := httphandlers.NewArtifactsHandler(coreDocsRepo)
+			if r.Method == http.MethodGet {
+				ah.GetArtifact(w, r)
+				return
+			}
+			if r.Method == http.MethodPatch {
+				ah.UpdateArtifact(w, r)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				ah.DeleteArtifact(w, r)
+				return
+			}
+		}
+
 		// fallback to default project by id handler
 		s.routeProjectsByID(w, r)
 	})))
@@ -460,6 +572,103 @@ func main() {
 	// Temporary FE testing endpoint
 	mux.Handle("/api/v1/genai/adhoc-json", authMiddleware(http.HandlerFunc(genaiHandler.AdhocJSON)))
 	// Note: /api/v1/projects/{id}/datasources is handled by projectsByID pattern
+
+	// Artifact Templates routes
+	mux.Handle("/api/v1/artifact-templates", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			artifactTemplatesHandler.ListTemplates(w, r)
+		case http.MethodPost:
+			artifactTemplatesHandler.CreateTemplate(w, r)
+		default:
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		}
+	})))
+	mux.Handle("/api/v1/artifact-templates/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.Trim(r.URL.Path, "/")
+		if strings.HasSuffix(path, "/generate-structure") && r.Method == http.MethodPost {
+			artifactTemplatesHandler.GenerateStructure(w, r)
+			return
+		}
+		if strings.HasSuffix(path, "/from-artifact") && r.Method == http.MethodPost {
+			artifactTemplatesHandler.CreateFromArtifact(w, r)
+			return
+		}
+		if strings.HasSuffix(path, "/publish") && r.Method == http.MethodPost {
+			artifactTemplatesHandler.PublishTemplate(w, r)
+			return
+		}
+		// /api/v1/artifact-templates/{id}
+		switch r.Method {
+		case http.MethodGet:
+			artifactTemplatesHandler.GetTemplate(w, r)
+		case http.MethodPut:
+			artifactTemplatesHandler.UpdateTemplate(w, r)
+		case http.MethodDelete:
+			artifactTemplatesHandler.DeleteTemplate(w, r)
+		default:
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		}
+	})))
+
+	// Artifact Generation routes
+	mux.Handle("/api/v1/artifacts/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.Trim(r.URL.Path, "/")
+		parts := strings.Split(path, "/")
+		// parts: [api v1 artifacts {id} ...]
+		// /api/v1/artifacts/{id}/generate
+		if len(parts) >= 5 && parts[4] == "generate" && r.Method == http.MethodPost {
+			artifactGenerationHandler.StartGeneration(w, r)
+			return
+		}
+		// /api/v1/artifacts/{id}/sections/{sectionId}/generate
+		if len(parts) >= 7 && parts[4] == "sections" && parts[6] == "generate" && r.Method == http.MethodPost {
+			artifactGenerationHandler.GenerateSection(w, r)
+			return
+		}
+		// /api/v1/artifacts/{id}/sections/{sectionId}/regenerate
+		if len(parts) >= 7 && parts[4] == "sections" && parts[6] == "regenerate" && r.Method == http.MethodPost {
+			artifactGenerationHandler.RegenerateSection(w, r)
+			return
+		}
+		// /api/v1/artifacts/{id}/assemble
+		if len(parts) >= 5 && parts[4] == "assemble" && r.Method == http.MethodPost {
+			artifactGenerationHandler.AssembleDocument(w, r)
+			return
+		}
+		// /api/v1/artifacts/{id}/versions
+		if len(parts) >= 5 && parts[4] == "versions" && r.Method == http.MethodPost {
+			artifactGenerationHandler.SaveVersion(w, r)
+			return
+		}
+		// /api/v1/artifacts/{id}/versions/{versionId}/restore
+		if len(parts) >= 7 && parts[4] == "versions" && parts[6] == "restore" && r.Method == http.MethodPost {
+			artifactGenerationHandler.RestoreVersion(w, r)
+			return
+		}
+
+		httphandlers.WriteError(w, http.StatusNotFound, "NOT_FOUND", "Route not found", nil)
+	})))
+
+	// Generation Sessions routes
+	mux.Handle("/api/v1/generation-sessions/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.Trim(r.URL.Path, "/")
+		parts := strings.Split(path, "/")
+
+		// /api/v1/generation-sessions/{sessionId}
+		if len(parts) >= 3 && r.Method == http.MethodGet {
+			artifactGenerationHandler.GetSession(w, r)
+			return
+		}
+
+		// /api/v1/generation-sessions/{sessionId}/cancel
+		if len(parts) >= 4 && parts[3] == "cancel" && r.Method == http.MethodPost {
+			artifactGenerationHandler.CancelGeneration(w, r)
+			return
+		}
+
+		httphandlers.WriteError(w, http.StatusNotFound, "NOT_FOUND", "Route not found", nil)
+	})))
 
 	// Legacy routes (to be migrated)
 	// mux.Handle("/v1/whoami", authMiddleware(http.HandlerFunc(s.whoAmI)))

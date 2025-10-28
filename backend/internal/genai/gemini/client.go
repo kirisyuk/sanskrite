@@ -568,6 +568,7 @@ type StreamEvent struct {
 	Attributions  []Attribution `json:"attributions,omitempty"`
 	SearchQueries []string      `json:"searchQueries,omitempty"`
 	Sources       []string      `json:"sources,omitempty"`
+	Model         string        `json:"model,omitempty"`
 	Error         string        `json:"error,omitempty"`
 }
 
@@ -646,6 +647,7 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 	var accUsage Usage
 	var accAtts []Attribution
 	var accSources []string
+	var accQueries []string
 	flushEvent := func() {
 		payload := strings.TrimSpace(eventBuf.String())
 		eventBuf.Reset()
@@ -681,6 +683,28 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 						}
 					}
 					if gm, ok := cand["groundingMetadata"].(map[string]interface{}); ok {
+						// collect webSearchQueries
+						if qs, ok := gm["webSearchQueries"].([]interface{}); ok {
+							for _, q := range qs {
+								if s, ok := q.(string); ok {
+									s = strings.TrimSpace(s)
+									if s == "" {
+										continue
+									}
+									// append unique
+									exists := false
+									for _, ex := range accQueries {
+										if ex == s {
+											exists = true
+											break
+										}
+									}
+									if !exists {
+										accQueries = append(accQueries, s)
+									}
+								}
+							}
+						}
 						// collect sources from groundingChunks.web.uri, filtering vertex redirect hosts
 						if chs, ok := gm["groundingChunks"].([]interface{}); ok {
 							for _, ch := range chs {
@@ -818,7 +842,7 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 		return err
 	}
 	if onEvent != nil {
-		_ = onEvent(StreamEvent{Type: "done", Usage: accUsage, Attributions: accAtts, Sources: accSources})
+		_ = onEvent(StreamEvent{Type: "done", Usage: accUsage, Attributions: accAtts, SearchQueries: accQueries, Sources: accSources, Model: model})
 	}
 	return nil
 }

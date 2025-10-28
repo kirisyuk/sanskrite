@@ -23,7 +23,7 @@ export interface StartStreamArgs {
   suppressUserEcho?: boolean;
 }
 
-type InteractionKind = 'user' | 'assistant' | 'system' | 'note';
+type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end';
 export interface LocalInteraction {
   id: string;
   projectId: string; // temporary local id binding
@@ -654,22 +654,40 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 }
               } catch {}
             }
-            // Build last 20 refs
-            const refs: AnalyzeInteractionRef[] = [];
-            const take = Math.min(20, inters.length);
-            for (let i = Math.max(0, inters.length - take); i < inters.length; i++) {
-              const it = inters[i] as any;
-              if (!it || !it.content) continue;
-              const isServerBacked = it.id && typeof it.id === 'string' && !it.id.endsWith('-iu') && !it.id.endsWith('-ia') && it.id.indexOf('-eval-') === -1 && it.id.indexOf('eval-bias-auto') === -1;
-              if (isServerBacked) {
-                refs.push({ refId: it.id });
-              } else {
+            // Decide mode: periodic full recompute every ~12 exchanges
+            const messagesSinceLastFull = (agg?.lastAnalyzedMessageCount as number) || 0;
+            const doFull = (inters.length - messagesSinceLastFull) >= 12 || !agg;
+            let req: AnalyzeRequest;
+            if (doFull) {
+              // Full recompute: last up to 20 refs
+              const refs: AnalyzeInteractionRef[] = [];
+              const take = Math.min(20, inters.length);
+              for (let i = Math.max(0, inters.length - take); i < inters.length; i++) {
+                const it = inters[i] as any;
+                if (!it || !it.content) continue;
+                const isServerBacked = it.id && typeof it.id === 'string' && !it.id.endsWith('-iu') && !it.id.endsWith('-ia') && it.id.indexOf('-eval-') === -1 && it.id.indexOf('eval-bias-auto') === -1;
+                if (isServerBacked) refs.push({ refId: it.id });
+                else {
+                  const role = (it.kind === 'assistant') ? 'assistant' : (it.kind === 'system' ? 'system' : 'user');
+                  refs.push({ inline: { role, text: String(it.content), timestamp: it.createdAt } });
+                }
+              }
+              req = { analyzers: ['thinking','biases','decisions','comm','learning'], interactions: refs } as any;
+              console.log('[Meta] Full recompute', { count: refs.length });
+            } else {
+              // Incremental: previous aggregate + last pair (user, assistant)
+              const prev = (agg?.lastResults || agg?.result || agg) as any;
+              const refs: AnalyzeInteractionRef[] = [];
+              const take = Math.min(2, inters.length);
+              for (let i = Math.max(0, inters.length - take); i < inters.length; i++) {
+                const it = inters[i] as any;
+                if (!it || !it.content) continue;
                 const role = (it.kind === 'assistant') ? 'assistant' : (it.kind === 'system' ? 'system' : 'user');
                 refs.push({ inline: { role, text: String(it.content), timestamp: it.createdAt } });
               }
+              req = { analyzers: ['thinking','biases','decisions','comm','learning'], interactions: refs, previousAggregate: prev } as any;
+              console.log('[Meta] Incremental update', { pair: refs.length });
             }
-            const req: AnalyzeRequest = { analyzers: ['thinking','biases','decisions','comm','learning'], interactions: refs } as any;
-            console.log('[Meta] Analyzing recent window', { count: refs.length });
             await api.metaAnalyze(projectId, req as any);
             await get().loadStanceAggregate();
           } catch (e) {

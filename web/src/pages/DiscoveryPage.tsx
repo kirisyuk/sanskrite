@@ -23,6 +23,127 @@ import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Legend, Tooltip } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { AGENT_PRESETS } from '../lib/agentPresets';
+import DocumentViewer from '../components/DocumentViewer';
+
+const ArtifactsAnalysisStatus: React.FC = () => {
+  const status = useDiscoveryStore((s: any) => (s as any).lastAnalysisStatus);
+  if (!status) return null;
+  const color = status.status === 'started' ? 'var(--text-secondary-strong)' : (status.status === 'done' ? 'var(--green-50)' : 'var(--error-50)');
+  const label = `${status.kind}: ${status.status}` + (status.count != null ? ` (${status.count})` : '') + (status.elapsedMs != null && status.status !== 'started' ? ` · ${status.elapsedMs}ms` : '');
+  return (
+    <div className="text-xs" style={{ color }}>
+      {label}
+    </div>
+  );
+};
+
+// Lightweight Entities list component
+const EntitiesList: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [items, setItems] = React.useState<Array<{ id?: string; name: string; type: string; description?: string; excluded?: boolean }>>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [open, setOpen] = React.useState<boolean>(false);
+  const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
+  const reload = React.useCallback(async () => {
+    if (!projectId || projectId === 'local-unfold') return;
+    setLoading(true); setError(null);
+    try {
+      const docs = await api.docsList(projectId);
+      const ents = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'entities.json');
+      if (!ents?.id) { setItems([]); setLoading(false); return; }
+      const blob = await api.docsDownload(projectId, ents.id);
+      const text = await new Response(blob).text();
+      const json = JSON.parse(text || '{}');
+      const arr = Array.isArray(json?.entities) ? json.entities : [];
+      setItems(arr.filter((e: any) => !e?.excluded));
+    } catch (e: any) {
+      setError('Failed to load entities');
+      setItems([]);
+    } finally { setLoading(false); }
+  }, [projectId]);
+  React.useEffect(() => { reload(); }, [reload]);
+
+  const count = items.length;
+
+  const typeIcon = (t: string) => {
+    const stroke = 'currentColor';
+    switch (t) {
+      case 'person':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><circle cx="12" cy="8" r="3"/><path d="M4 20c0-3.314 3.134-6 7-6s7 2.686 7 6"/></svg>);
+      case 'organization_or_platform':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><circle cx="12" cy="7" r="1"/><path d="M7.5 10l2.5 1.45v2.9L7.5 16.5"/><path d="M16.5 10L14 11.45v2.9l2.5 1.45"/><path d="M16.5 16.5l-2.5-1.45v-2.9l2.5-1.45"/></svg>);
+      case 'project_or_product':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>);
+      case 'classifier_or_standard':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 10h3M7 14h3M7 7h6"/><circle cx="15.5" cy="12.5" r="2.5"/></svg>);
+      case 'classification_code':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M8 9h8M8 12h8M8 15h4"/></svg>);
+      case 'regulatory_document':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M7 3h10l5 5v13H7z"/><path d="M7 3v7h7"/><path d="M9 13h6M9 17h6"/></svg>);
+      case 'government_agency':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><rect x="4" y="3" width="16" height="16" rx="1"/><path d="M4 7h16M8 11h8M8 15h6"/><path d="M8 3v4M16 3v4"/></svg>);
+      case 'contract_document':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M6 2h12v20H6z"/><path d="M9 7h6M9 11h6M9 15h4"/><path d="M6 2l3 6-3 6M18 2l-3 6 3 6"/></svg>);
+      case 'location':
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>);
+      default:
+        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><circle cx="12" cy="12" r="9"/></svg>);
+    }
+  };
+
+  const header = (
+    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
+      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="5" width="16" height="4" rx="1"/><rect x="4" y="11" width="16" height="4" rx="1"/><rect x="4" y="17" width="16" height="2" rx="1"/></svg>
+        <span className="text-[11px] font-medium">Entities ({count})</span>
+      </div>
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+  );
+
+  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
+  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
+  if (items.length === 0) return (
+    <div className="space-y-1">
+      {header}
+      {open && (<div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No entities yet. Run "analyze entities".</div>)}
+    </div>
+  );
+
+  return (
+    <div className="space-y-1">
+      {header}
+      {open && (
+        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
+          {items.map((e, i) => {
+            const key = `${e.name}-${e.type}-${i}`;
+            const isExp = !!expanded[key];
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setExpanded((s) => ({ ...s, [key]: !isExp }))}
+                className="p-2 rounded text-left w-full"
+                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}
+              >
+                <div className="flex items-center gap-2 justify-between">
+                  <div className="flex items-center gap-2">
+                    <span style={{ color: 'var(--text-secondary-strong)' }}>{typeIcon(e.type)}</span>
+                    <span className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{e.name}</span>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{e.type}</span>
+                </div>
+                {isExp && e.description && (
+                  <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{e.description}</div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 import { ThemeContext } from '../components/ThemeProvider';
 import { toggleInteractionPin, isInteractionPinned } from '../lib/interactionHelpers';
 import { highlightNotes, clearHighlights, findFirstRange, applyGlobalHighlight, clearGlobalHighlight } from '../lib/textHighlight';
@@ -165,6 +286,8 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
   const askRef = React.useRef<HTMLDivElement | null>(null);
   const [paletteAskOpen, setPaletteAskOpen] = React.useState(false);
   const [paletteBringOpen, setPaletteBringOpen] = React.useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
+  const exportRef = React.useRef<HTMLDivElement | null>(null);
   const interForMessage = React.useMemo(() => {
     try { return genaiChat.interactions.find((x) => x.id === messageId); } catch { return undefined as any; }
   }, [genaiChat.interactions, messageId]);
@@ -205,6 +328,29 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
     document.addEventListener('mousedown', onDocClick, { capture: true });
     return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
   }, [showAsk]);
+  React.useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!exportMenuOpen) return;
+      const el = exportRef.current;
+      if (el && !el.contains(e.target as Node)) setExportMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick, { capture: true });
+    return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
+  }, [exportMenuOpen]);
+
+  const exportMarkdown = React.useCallback(async () => {
+    try {
+      const projectId = (genaiChat as any)?.projectId as string | undefined;
+      if (!projectId || projectId === 'local-unfold') return;
+      const text = (content || '').toString();
+      const baseUnsafe = (derivedHeaderText ? `${derivedHeaderText}-contribution` : 'assistant-answer');
+      const base = baseUnsafe.toLowerCase().replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'assistant-answer';
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `${base}-${ts}.md`;
+      const { api } = await import('../lib/api');
+      await api.docsCreateFromText(projectId, { filename, contentType: 'text/markdown', text });
+    } catch {}
+  }, [content, genaiChat, derivedHeaderText]);
   if (!isAssistant || !content || !content.trim()) return null;
   return (
     <div className="mt-1" style={{ width: '100%', position: 'relative' }}>
@@ -487,13 +633,46 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
               <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </button>
+          <div ref={exportRef} style={{ position: 'relative' }}>
+            <button
+              type="button"
+              aria-label="Export answer"
+              title="Export answer"
+              className="rounded-lg"
+              style={{ width: 24, height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => setExportMenuOpen((v) => !v)}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M10 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" strokeWidth="2" strokeLinecap="round" />
+                <polyline points="16 3 21 3 21 8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <line x1="21" y1="3" x2="13" y2="11" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </button>
+            {exportMenuOpen && (
+              <div className="rounded-lg" style={{ position: 'absolute', right: 0, top: 28, zIndex: 60, background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', minWidth: 220, boxShadow: '0 4px 14px rgba(0,0,0,0.2)' }}>
+                <div className="p-1">
+                  <button
+                    type="button"
+                    className="w-full text-left rounded px-2 py-1 text-[12px]"
+                    style={{ color: 'var(--text-secondary-strong)' }}
+                    onClick={async () => { setExportMenuOpen(false); await exportMarkdown(); }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                  >
+                    Static · Markdown (.md)
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           {/* Refine button moved earlier (before Bring In) */}
         </div>
       </div>
     </div>
   );
 };
-
 // Component to analyze user's position based on their interactions
 const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRiskUpdate?: (r: { level: string; score: number; rationale?: string } | null) => void; hideTitle?: boolean }> = ({ onFirstResult, onRiskUpdate, hideTitle = false }) => {
   const [position, setPosition] = React.useState<string | null>(null);
@@ -619,14 +798,11 @@ High risk auto-triggers (must set level to High ONLY if the user seeks PERSONAL,
 - Право/иммиграция/налоги/личные финансы/инвестиции/страхование — только персональные советы, инвестиционные рекомендации, налоговое/юридическое планирование; НЕ включает макроэкономику, монетарную/бюджетную политику, институциональные финансы, общие обзоры рынков/экономики.
 - Отношения/абьюз/дети/уязвимые группы — только персональные ситуации и советы; НЕ включает абстрактные рассуждения, социологию/культуру без личного контекста.
 - Безопасность/экстренные ситуации — персональные инструкции/советы по действиям в ЧС.
-
 General note: classify as High only when guidance could materially impact an individual's health, safety, legal or personal financial outcomes; otherwise lower level.
-
 RISK LEVEL RULES:
 - High: score in [0.7, 1]
 - Medium: score in [0.3, 0.7)
 - Low: score in [0, 0.3)
-
 Use triggerCategories strictly from DICTIONARY (English tokens only):
 ${categoriesText}
 
@@ -1091,7 +1267,6 @@ ${prevBlock}`;
     </div>
   );
 };
-
 // Component to evaluate quality/style/biases of assistant answers and suggest system prompt improvements
 const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult }) => {
   const [review, setReview] = React.useState<string | null>(null);
@@ -1168,18 +1343,14 @@ const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult
         const prompt = `User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are an expert LLM output reviewer.
 Current date/time (trustworthy, real-time): ${nowISO}.
 The ASSISTANT model that produced these replies had access to up-to-date information via search grounding (web search).
-
 Evaluate the following ASSISTANT responses (most recent last). Provide:
 1) Brief quality assessment (strengths/weaknesses)
 2) Style characteristics (tone, structure, clarity)
 3) Potential biases/safety concerns
 4) 3-5 concrete improvements to the SYSTEM INSTRUCTION to improve future answers
-
 Important: Do not critique formatting or output length; formatting/verbosity are enforced elsewhere.
-
 Assistant responses:
 ${transcript}
-
 Respond concisely in the specified language (${lang}). Use short bullet points where appropriate. Return plain text only (no JSON/markdown). If unsure, write 'No issues found'.`;
 
         // Kick off async structured eval of the latest assistant message (strict JSON)
@@ -1447,7 +1618,7 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                       } as any));
                       
                       // Persist to server
-                      if (projectId && projectId !== 'local-unfold') {
+                      if (projectId && projectId !== 'local-unfold' && lastAssistant?.id) {
                         (async () => {
                           try {
                             const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
@@ -1517,7 +1688,6 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
         } catch (e) {
           console.warn('[LLMEvaluation] Failed to check existing eval.review', e);
         }
-
         const settingsState2 = useGenAISettings.getState();
         const modelAlias = (settingsState2.stanceModel && settingsState2.stanceModel.trim()) ? settingsState2.stanceModel : 'gemini_fast';
         const response = await api.genaiGenerate({
@@ -1725,7 +1895,6 @@ const DiscussionFlow: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResul
     </div>
   );
 };
-
 // Inline lightweight component to fetch and display title suggestions
 const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvailableChange?: (available: boolean) => void }> = ({ visible, onClose, onAvailableChange }) => {
   const [titles, setTitles] = React.useState<string[] | null>(null);
@@ -1855,7 +2024,6 @@ const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvai
       })();
     } catch {}
   }, [titles && titles[0], currentProject?.id]);
-
   // Do not render content until we have assistant answer and titles available
   if (!hasAssistant) return null;
   if (loading && (!titles || titles.length === 0)) return null;
@@ -1929,6 +2097,7 @@ const DiscoveryPage: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const [genaiThinkingSeconds, setGenaiThinkingSeconds] = useState(0);
+  const [entitiesAnalyzing, setEntitiesAnalyzing] = useState(false);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
   const genaiThinkingIntervalRef = useRef<number | null>(null);
@@ -1942,12 +2111,44 @@ const DiscoveryPage: React.FC = () => {
   const [showAddSourceMenu, setShowAddSourceMenu] = useState(false);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
   const [showAddTelegramModal, setShowAddTelegramModal] = useState(false);
+  const lastDocEvent = useDiscoveryStore((s: any) => (s as any).lastDocEvent);
+  React.useEffect(() => {
+    try {
+      if (!lastDocEvent) return;
+      const did = String((lastDocEvent as any).docId || '');
+      const fname = String((lastDocEvent as any).filename || '');
+      const isEntities = did === 'entities.json' || /entities\.json$/i.test(fname);
+      
+      console.log('[Entities] Doc event received:', { docId: did, filename: fname, isEntities, status: (lastDocEvent as any).status, fullEvent: lastDocEvent });
+      
+      if (!isEntities) return;
+      const st = String((lastDocEvent as any).status || '');
+      
+      console.log('[Entities] Status update:', st, '-> entitiesAnalyzing:', st === 'parsing' || st === 'uploaded');
+      
+      if (st === 'parsing' || st === 'uploaded') setEntitiesAnalyzing(true);
+      if (st === 'parsed' || st === 'failed' || st === 'deleted') setEntitiesAnalyzing(false);
+      if (st === 'parsed') {
+        try {
+          const btn = document.getElementById('btn-artifacts');
+          if (btn) {
+            btn.classList.add('etg-glow');
+            window.setTimeout(() => btn.classList.remove('etg-glow'), 1400);
+          }
+        } catch {}
+      }
+    } catch (err) {
+      console.error('[Entities] Error handling doc event:', err);
+    }
+  }, [lastDocEvent]);
   const [tgInput, setTgInput] = useState('');
   const [tgSubmitting, setTgSubmitting] = useState(false);
   const [tgError, setTgError] = useState<string | null>(null);
   // GenAI chat state (for Unfold view)
   const genaiChat = useGenaiChatStore();
   const genaiSettings = useGenAISettings();
+  // Collapsible sections state: sectionId -> collapsed
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   // Toggles for collapsible analysis sections
   const [showUserAnalysis, setShowUserAnalysis] = useState(false);
   const [showLLMReview, setShowLLMReview] = useState(false);
@@ -1966,12 +2167,18 @@ const DiscoveryPage: React.FC = () => {
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [rightContextOpen, setRightContextOpen] = useState(false);
   const [rightArtifactsOpen, setRightArtifactsOpen] = useState(false);
+  // Active document viewer state
+  const [activeDoc, setActiveDoc] = useState<null | { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string }>(null);
   const hasPinned = React.useMemo(() => {
     try {
       return useGenaiChatStore.getState().interactions.some((it: any) => !!it?.metadata?.pinned);
     } catch { return false; }
   }, [genaiChat.interactions, rightContextOpen, rightPanelOpen]);
-  React.useEffect(() => { if (!hasPinned) setRightContextOpen(false); }, [hasPinned]);
+  const sectionStarts = React.useMemo(() => {
+    try { return (genaiChat.interactions || []).filter((it: any) => it?.kind === 'section_start'); } catch { return []; }
+  }, [genaiChat.interactions]);
+  const hasSections = sectionStarts.length > 0;
+  React.useEffect(() => { if (!hasPinned && !hasSections) setRightContextOpen(false); }, [hasPinned, hasSections]);
   // Ensure interactions are loaded on chat load to detect pinned items
   React.useEffect(() => {
     try {
@@ -2173,7 +2380,6 @@ const DiscoveryPage: React.FC = () => {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }
   }, [interactions.length, running, genaiChat.messages]);
-
   // Track text selection within assistant markdown and position a floating action button
   useEffect(() => {
     const container = messagesRef.current;
@@ -2498,7 +2704,6 @@ const DiscoveryPage: React.FC = () => {
         }
         return b;
       };
-
       const editBtn = mkBtn('Ask to edit selected', 'edit');
       const notesBtn = mkBtn('Add to Notes', 'note');
       // Wire Add to Notes: pin if needed + append selected text to metadata.notes
@@ -2538,7 +2743,20 @@ const DiscoveryPage: React.FC = () => {
       selectionMenuRef.current = menu;
     }
 
+    // Throttle selection handling to avoid work during fast typing/caret moves
+    let selectionThrottle = 0 as any;
     function handleSelectionChange() {
+      // Skip if typing in inputs/textareas/contenteditable to reduce background work
+      const ae = (document.activeElement as HTMLElement | null);
+      if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable)) {
+        if (selectionBtnRef.current) selectionBtnRef.current.style.display = 'none';
+        if (selectionMenuRef.current) selectionMenuRef.current.style.display = 'none';
+        return;
+      }
+      // Basic throttle (~60fps max)
+      const now = performance.now();
+      if (selectionThrottle && now - selectionThrottle < 16) return;
+      selectionThrottle = now;
       if (isSelectingRef.current) {
         // Do not show the button while user is dragging to select text
         return;
@@ -2797,7 +3015,6 @@ const DiscoveryPage: React.FC = () => {
     if (bare && bare[1]) return '@' + bare[1];
     return null;
   };
-
   const addTelegramSource = async () => {
     setTgError(null);
     const handle = normalizeTelegramInput(tgInput);
@@ -2831,7 +3048,6 @@ const DiscoveryPage: React.FC = () => {
       setTgSubmitting(false);
     }
   };
-
   const handleDeleteChat = async (projectId: string, projectName: string) => {
     if (!confirm(`Delete "${projectName}"?`)) return;
     
@@ -3111,7 +3327,6 @@ const DiscoveryPage: React.FC = () => {
     window.addEventListener('ui.openPage', handler as any);
     return () => window.removeEventListener('ui.openPage', handler as any);
   }, []);
-
   return (
     <div className="flex h-full" style={{ padding: '16px 0' }}>
       {/* Side panel (hidden by default) - LEFT */}
@@ -3174,7 +3389,6 @@ const DiscoveryPage: React.FC = () => {
                 <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>New Chat</span>
               </button>
             </div>
-
             {/* Chats section */}
             <div className="mb-4">
               <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
@@ -3482,6 +3696,7 @@ const DiscoveryPage: React.FC = () => {
 
       {/* Workspace Artifacts button (pastel green) shown on right edge */}
       <button
+        id="btn-artifacts"
         type="button"
         aria-label="Workspace Artifacts"
         title="Workspace Artifacts"
@@ -3512,7 +3727,6 @@ const DiscoveryPage: React.FC = () => {
           <path d="M2 12l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-
       {/* Floating Settings button (visible only when sidebar is hidden) */}
       {!sideOpen && !showSettings && (
         <button
@@ -3923,6 +4137,14 @@ const DiscoveryPage: React.FC = () => {
           </div>
         ) : viewMode === 'unfold' ? (
           <div className="w-full px-4 flex-1 flex flex-col min-h-0 pb-2" style={{ position: 'relative' }}>
+            {/* Document viewer overlay - replaces chat area when open */}
+            {activeDoc && genaiChat.projectId && genaiChat.projectId !== 'local-unfold' && (
+              <DocumentViewer
+                projectId={genaiChat.projectId}
+                doc={activeDoc}
+                onClose={() => setActiveDoc(null)}
+              />
+            )}
             {/* Metric overlay - replaces chat area when open */}
             {(() => {
               const openKey = genaiChat.metricOverlayOpenKey || null;
@@ -3971,7 +4193,7 @@ const DiscoveryPage: React.FC = () => {
               );
             })()}
             {/* GenAI chat history */}
-            <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]">
+            <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px' }}>
               <div className="space-y-2">
                 {(() => {
                   // Merge messages and interactions, sort by timestamp to ensure correct order
@@ -3992,9 +4214,9 @@ const DiscoveryPage: React.FC = () => {
                     });
                   }
 
-                  // Add interactions (user & assistant only)
+                  // Add interactions (user, assistant, and section markers)
                   genaiChat.interactions
-                    .filter((it) => it.kind === 'user' || it.kind === 'assistant')
+                    .filter((it) => it.kind === 'user' || it.kind === 'assistant' || it.kind === 'section_start' || it.kind === 'section_end')
                     .forEach((it) => {
                       const ts = (it as any).createdAt?.seconds * 1000 || 0;
                       merged.push({ type: 'interaction', data: it, timestamp: ts });
@@ -4143,7 +4365,57 @@ const DiscoveryPage: React.FC = () => {
                       );
                     } else { // item.type === 'interaction'
                       const it = item.data;
+                      // Render section markers
+                      if (it.kind === 'section_start' || it.kind === 'section_end') {
+                        const sid = (it.sectionId || it.id) as string;
+                        if (it.kind === 'section_start') {
+                          const collapsed = !!collapsedSections[sid];
+                          return (
+                            <div
+                              key={it.id}
+                              data-interaction-id={it.id}
+                              className="my-2 sticky top-0 z-10"
+                              style={{
+                                background: 'var(--surface-700)',
+                                border: '1px dashed var(--accent-research)',
+                                borderRadius: 10,
+                                padding: '6px 8px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between'
+                              }}
+                            >
+                              <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>
+                                {it.content || 'Section'}
+                              </div>
+                              <button
+                                type="button"
+                                className="px-2 py-1 rounded text-11"
+                                style={{ background: 'transparent', color: 'var(--text-secondary-strong)' }}
+                                onClick={() => setCollapsedSections((s) => ({ ...s, [sid]: !collapsed }))}
+                                aria-label={collapsed ? 'Expand section' : 'Collapse section'}
+                                title={collapsed ? 'Expand section' : 'Collapse section'}
+                              >
+                                {collapsed ? 'Expand' : 'Collapse'}
+                              </button>
+                            </div>
+                          );
+                        }
+                        // section_end divider
+                        return (
+                          <div key={it.id} className="my-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div style={{ height: 1, background: 'var(--overlay-line-90)', flex: 1 }} />
+                            <div className="text-[10px]" style={{ color: 'var(--accent-research)' }}>end of section</div>
+                            <div style={{ height: 1, background: 'var(--overlay-line-90)', flex: 1 }} />
+                          </div>
+                        );
+                      }
                       const isUser = it.kind === 'user';
+                      // Skip rendering if inside a collapsed section
+                      try {
+                        const sid = (it as any).sectionId as string | undefined;
+                        if (sid && collapsedSections[sid]) return null;
+                      } catch {}
                       const meta = genaiChat.messageMeta[it.id];
                       const header = !isUser ? (meta?.headerText || it.author?.displayName || (it.agentProfile ? 'agent' : 'assistant')) : undefined;
                       const leftAccent = !isUser ? (meta?.leftAccent ?? !!it.agentProfile) : false;
@@ -4187,7 +4459,7 @@ const DiscoveryPage: React.FC = () => {
                               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
                             >
                               {isPinned ? (
-                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" style={{ color: 'var(--text-secondary-strong)' }}>
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" style={{ color: 'var(--accent-research)' }}>
                                   <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
                                 </svg>
                               ) : (
@@ -4498,16 +4770,60 @@ const DiscoveryPage: React.FC = () => {
                 </div>
               );
             })()}
-
+            {/* Analysis status banner above input */}
+            {(() => {
+              const s: any = (useDiscoveryStore as any).getState?.().lastAnalysisStatus;
+              if (!s) return null;
+              const color = s.status === 'started' ? 'var(--text-secondary-strong)' : (s.status === 'done' ? 'var(--green-50)' : 'var(--error-50)');
+              const text = `${s.kind}: ${s.status}` + (s.count != null ? ` (${s.count})` : '') + (s.elapsedMs != null && s.status !== 'started' ? ` · ${s.elapsedMs}ms` : '');
+              return (
+                <div className="mb-2 px-2 py-1 rounded" style={{ border: '1px solid var(--overlay-line-90)', color, background: 'var(--bg-elevated)' }}>
+                  <span className="text-xs">{text}</span>
+                </div>
+              );
+            })()}
             {/* Input */}
             <UnfoldRequest
-              value={queryText}
-              onChange={setQueryText}
               dangerTint={isHighRisk}
               showHighRiskTag={isHighRisk}
               onHighRiskTagClick={() => setRiskBanner((prev) => ({ visible: true, level: 'High', rationale: prev?.rationale || '' }))}
-              onSubmit={async () => {
-                if (genaiChat.streaming || !queryText.trim()) return;
+              onSubmit={async (text) => {
+                // Text comes directly from UnfoldRequest, already trimmed and validated
+                if (genaiChat.streaming || !text.trim()) return;
+                // Slash commands: /section <title> and /end
+                const raw = text.trim();
+                const isSection = /^\s*\/section\b/i.test(raw);
+                const isEnd = /^\s*\/end\b/i.test(raw);
+                const isAnalyzeEntities = /^\s*\/analyze\s+entities\b/i.test(raw) || /^\s*\/analyze\s+entities\s*$/i.test(raw);
+                if (isSection || isEnd) {
+                  try {
+                    const pid = await genaiChat.ensureProject();
+                    if (isSection) {
+                      const title = raw.replace(/^\s*\/section\b\s*/i, '').trim();
+                      await api.createProjectInteraction(pid, { kind: 'section_start', content: title || '' });
+                    } else {
+                      await api.createProjectInteraction(pid, { kind: 'section_end', content: '' });
+                    }
+                    // UnfoldRequest clears itself after submit
+                    await genaiChat.hydrateInteractions();
+                  } catch (e) {
+                    console.error('[SlashCommand] failed', e);
+                  }
+                  return;
+                }
+                if (isAnalyzeEntities) {
+                  try {
+                    setEntitiesAnalyzing(true); // show status immediately
+                    const pid = await genaiChat.ensureProject();
+                  const prompt = raw.replace(/^\s*\/analyze\s+entities\b\s*/i, '') + "\n\nConstraints:\n- Only include concrete, named entities (no abstract categories).\n- Allowed types: person | group_of_persons | organization_or_platform | project_or_product | classifier_or_standard | classification_code | regulatory_document | government_agency | contract_document | location | other.\n- Reject generic words like 'technical regulation', 'open databases', 'contracts' without identifiers.";
+                    await api.analyzeEntities(pid, prompt);
+                    // UnfoldRequest clears itself after submit; WS will flip analyzing=false on parsed/failed
+                  } catch (e) {
+                    console.error('[AnalyzeEntities] failed', e);
+                    setEntitiesAnalyzing(false);
+                  }
+                  return;
+                }
                 const tools = genaiSettings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
                 // Map UI model to backend aliases
                 const model = genaiSettings.model;
@@ -4531,7 +4847,7 @@ const DiscoveryPage: React.FC = () => {
                   maxOutputTokens: genaiSettings.maxOutputTokens,
                   systemInstruction: combinedSystemInstruction,
                 };
-              const prompt = queryText;
+              const prompt = text;
               // Capture previous assistant reply (if any) BEFORE starting stream
               const stBefore = useGenaiChatStore.getState();
               let prevAssistantText: string | null = null;
@@ -4545,7 +4861,7 @@ const DiscoveryPage: React.FC = () => {
                   if (priorMsgs.length > 0) prevAssistantText = priorMsgs[priorMsgs.length - 1].content;
                 }
               } catch {}
-                setQueryText('');
+                // UnfoldRequest clears itself after submit
                 const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
                 await genaiChat.startStream({ prompt, tools, options: { ...options, __lang: preferredLang } });
               // Fire-and-forget: structured bias evaluation for the USER message we just sent
@@ -4682,7 +4998,7 @@ const DiscoveryPage: React.FC = () => {
         /* Interactions + input container with internal scroll */
         <div className="w-full px-4 flex-1 flex flex-col min-h-0 pb-2">
           {/* Interactions history (LLM answers etc.) */}
-          <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]">
+          <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px' }}>
             <div className="space-y-2">
               {interactions
                 .filter((it) => it.kind === 'discovery.query' || it.kind === 'discovery.answer')
@@ -4707,11 +5023,15 @@ const DiscoveryPage: React.FC = () => {
           </div>
 
           {/* Status indicator */}
-          {running && (
+          {(running || entitiesAnalyzing) && (
             <div className="px-1 pb-2">
               <div className="text-xs flex items-center gap-2" style={{ textAlign: 'left', color: 'var(--text-secondary-strong)' }}>
                 <span className="animate-pulse" style={{ width: '8px', height: '8px', borderRadius: '9999px', backgroundColor: 'var(--text-secondary-strong)' }} />
-                <span>Thinking... {thinkingSeconds}s</span>
+                {running ? (
+                  <span>Thinking... {thinkingSeconds}s</span>
+                ) : (
+                  <span>Analyzing entities…</span>
+                )}
               </div>
             </div>
           )}
@@ -4826,7 +5146,6 @@ const DiscoveryPage: React.FC = () => {
         </>
         )}
         </div>
-
         {/* Right column: container for contextual panels (transparent, no border) */}
         {viewMode !== 'graph' && (
           <div className="min-h-0 h-full" style={{ background: 'transparent', display: 'flex', flexDirection: 'column', marginRight: 48 }}>
@@ -4864,27 +5183,65 @@ const DiscoveryPage: React.FC = () => {
                 <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
                   {rightArtifactsOpen ? (
                     <div className="space-y-3">
-                      {/* Placeholder for Workspace Artifacts */}
-                      <div className="text-center py-8">
-                        <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>
-                          Workspace Artifacts
+                      {/* Entities artifact */}
+                      <div className="p-2 rounded" style={{ background: 'var(--white-06)', border: '1px solid var(--overlay-line-90)' }}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-12" style={{ color: 'var(--text-heading)' }}>Entities</div>
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded text-11"
+                            style={{ background: 'transparent', color: 'var(--text-secondary-strong)' }}
+                            onClick={async () => {
+                              try {
+                                const pid = await useGenaiChatStore.getState().ensureProject();
+                                await api.analyzeEntities(pid, '');
+                              } catch {}
+                            }}
+                          >
+                            Refresh
+                          </button>
                         </div>
-                        <div className="text-11 mt-2" style={{ color: 'var(--text-tertiary-weak)' }}>
-                          Create dynamic documents from conversation sections
-                        </div>
-                        <button
-                          type="button"
-                          className="mt-4 px-3 py-2 rounded-lg text-11 transition-colors"
-                          style={{ backgroundColor: 'hsl(140, 40%, 70%)', color: 'hsl(140, 50%, 20%)' }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'hsl(140, 45%, 65%)'; }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'hsl(140, 40%, 70%)'; }}
-                        >
-                          + Create Artifact
-                        </button>
+                        <EntitiesList projectId={genaiChat.projectId} />
                       </div>
                     </div>
                   ) : rightContextOpen ? (
                     <div className="space-y-2">
+                      {/* Sections list */}
+                      {sectionStarts.length > 0 && (
+                        <div className="mb-2">
+                          <div className="text-[11px] mb-1 flex items-center gap-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                              <rect x="4" y="5" width="16" height="4" rx="1" strokeWidth="2" />
+                              <rect x="4" y="11" width="16" height="4" rx="1" strokeWidth="2" />
+                              <rect x="4" y="17" width="16" height="2" rx="1" strokeWidth="2" />
+                            </svg>
+                            <span>Sections</span>
+                          </div>
+                          <div className="space-y-1">
+                            {sectionStarts.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                className="w-full text-left p-2 rounded transition-colors"
+                                style={{ background: 'var(--white-06)', border: '1px solid var(--overlay-line-90)', color: 'var(--text-heading)' }}
+                                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-12)'; }}
+                                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-06)'; }}
+                                onClick={() => scrollToInteraction(s.id)}
+                              >
+                                <div className="text-12 truncate">{(s as any).content || 'Section'}</div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Pinned messages */}
+                      <div className="text-[11px] mb-1 mt-3 flex items-center gap-1" style={{ color: 'var(--text-tertiary-weak)' }}>
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" style={{ color: 'var(--accent-research)' }}>
+                          <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                        </svg>
+                        <span>Pinned messages</span>
+                      </div>
                       {pinnedInteractions.length === 0 ? (
                         <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>No pinned messages yet.</div>
                       ) : (
@@ -4969,9 +5326,168 @@ const DiscoveryPage: React.FC = () => {
                         console.log('[DiscoveryPage] Document deleted', { docId });
                         // Optionally refresh interactions or handle cleanup
                       }}
+                      onOpenDocument={(doc: any) => setActiveDoc(doc)}
                     />
                   )}
                 </div>
+                
+                {/* Workspace Artifacts toolbar (bottom) */}
+                {rightArtifactsOpen && (
+                  <div className="mt-2 px-3" style={{ borderTop: '1px solid var(--overlay-line-90)', paddingTop: 8 }}>
+                    {/* Inline analysis status indicator */}
+                    <ArtifactsAnalysisStatus />
+                    <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 6, marginTop: 6 }}>
+                    <button
+                      type="button"
+                      aria-label="Analyze entities"
+                      title="Analyze entities"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                      onClick={async () => {
+                        try {
+                          const pid = await genaiChat.ensureProject();
+                          await (await import('../lib/api')).api.analyzeEntities(pid, '');
+                        } catch {}
+                      }}
+                    >
+                      {/* New entities icon: network nodes */}
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="5" cy="12" r="2" strokeWidth="2" />
+                        <circle cx="19" cy="7" r="2" strokeWidth="2" />
+                        <circle cx="19" cy="17" r="2" strokeWidth="2" />
+                        <path d="M7 12h8M17 8l-4 4 4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    {/* Facts */}
+                    <button
+                      type="button"
+                      aria-label="Analyze facts"
+                      title="Analyze facts"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); await (await import('../lib/api')).api.analyzeFacts(pid, ''); } catch {} }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M3 4h18v4H3zM3 10h18v10H3z" strokeWidth="2" />
+                        <path d="M6 13h6M6 17h10" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                    {/* Events */}
+                    <button
+                      type="button"
+                      aria-label="Analyze events"
+                      title="Analyze events"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); await (await import('../lib/api')).api.analyzeEvents(pid, ''); } catch {} }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth="2" />
+                        <path d="M3 8h18M7 2v4M17 2v4M8 12h4" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                    {/* Metrics */}
+                    <button
+                      type="button"
+                      aria-label="Analyze metrics"
+                      title="Analyze metrics"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); await (await import('../lib/api')).api.analyzeMetrics(pid, ''); } catch {} }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M4 20V10M10 20V4M16 20v-8M22 20H2" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                    {/* Decisions */}
+                    <button
+                      type="button"
+                      aria-label="Analyze decisions"
+                      title="Analyze decisions"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); await (await import('../lib/api')).api.analyzeDecisions(pid, ''); } catch {} }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M4 12h8M12 12l4-4M12 12l4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        <circle cx="4" cy="12" r="2" strokeWidth="2" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Create artifact"
+                      title="Create artifact"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                      onClick={() => { /* no-op for now */ }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M6 2h7l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" strokeWidth="2" />
+                        <path d="M13 2v6h6" strokeWidth="2" />
+                        <path d="M12 10v6M9 13h6" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Documents & Sources toolbar (bottom) */}
+                {rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && (
+                  <div className="mt-2 px-3" style={{ borderTop: '1px solid var(--overlay-line-90)', paddingTop: 8, display: 'flex', justifyContent: 'flex-start', gap: 6 }}>
+                    <button
+                      type="button"
+                      aria-label="Add document"
+                      title="Add document"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                      onClick={() => { document.getElementById('doc-upload-input')?.click(); }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" strokeWidth="2" />
+                        <path d="M14 2v6h6M12 11v6M9 14h6" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Add RSS source"
+                      title="Add RSS source (coming soon)"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-tertiary-weak)', cursor: 'not-allowed', opacity: 0.5 }}
+                      disabled
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16" strokeWidth="2" strokeLinecap="round" />
+                        <circle cx="5" cy="19" r="1" fill="currentColor" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Add Telegram source"
+                      title="Add Telegram source (coming soon)"
+                      className="p-2 rounded"
+                      style={{ background: 'transparent', color: 'var(--text-tertiary-weak)', cursor: 'not-allowed', opacity: 0.5 }}
+                      disabled
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M21 5L2 12.5l7 1M21 5l-2.5 15L9 13M21 5L9 13m0 0l1 6l2-3" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -4985,4 +5501,3 @@ const DiscoveryPage: React.FC = () => {
 };
 
 export default DiscoveryPage;
-

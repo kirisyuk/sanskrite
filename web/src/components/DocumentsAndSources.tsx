@@ -21,12 +21,14 @@ interface DocumentsAndSourcesProps {
   projectId: string | null;
   onDocumentDelete?: (docId: string) => void;
   onSourceDelete?: (sourceId: string) => void;
+  onOpenDocument?: (doc: Document) => void;
 }
 
 const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({ 
   projectId, 
   onDocumentDelete,
-  onSourceDelete 
+  onSourceDelete,
+  onOpenDocument,
 }) => {
   const [documents, setDocuments] = React.useState<Document[]>([]);
   const [sources, setSources] = React.useState<Source[]>([]);
@@ -136,7 +138,8 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   };
 
-  const handleDocumentDelete = async (doc: Document) => {
+  const handleDocumentDelete = async (doc: Document, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     if (!projectId || projectId === 'local-unfold') return;
     
     try {
@@ -153,6 +156,14 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
     // TODO: Implement source deletion when API is ready
     console.log('[DocumentsAndSources] Source delete requested', { sourceId: source.id });
     onSourceDelete?.(source.id);
+  };
+
+  const getDocumentDisplayName = (filename: string) => {
+    try {
+      return (filename || '').toLowerCase() === 'entities.json' ? 'Entities container' : filename;
+    } catch {
+      return filename;
+    }
   };
 
   if (!projectId || projectId === 'local-unfold') {
@@ -197,7 +208,8 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
             {documents.map((doc) => (
               <div
                 key={doc.id}
-                className="flex items-center gap-2 px-2 py-1.5 rounded group hover:bg-white/5 transition-colors"
+                className="flex items-center gap-2 px-2 py-1.5 rounded group hover:bg-white/5 transition-colors cursor-pointer"
+                onClick={() => onOpenDocument?.(doc)}
               >
                 {/* Icon */}
                 <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
@@ -207,7 +219,7 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
                 {/* File info */}
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium truncate" style={{ color: 'var(--text-heading)' }} title={doc.filename}>
-                    {doc.filename}
+                    {getDocumentDisplayName(doc.filename)}
                   </div>
                   <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
                     {formatSize(doc.sizeBytes)}
@@ -218,7 +230,7 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
                 {/* Delete button */}
                 <button
                   type="button"
-                  onClick={() => handleDocumentDelete(doc)}
+                  onClick={(e) => handleDocumentDelete(doc, e)}
                   className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-all"
                   style={{ color: 'var(--text-secondary)' }}
                   aria-label="Delete document"

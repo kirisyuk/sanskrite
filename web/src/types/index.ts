@@ -7,13 +7,12 @@ export type JSONSchema = Record<string, unknown>;
 export { default as UserSchema } from "../types/schemas/User.schema.json";
 export { default as ProjectSchema } from "../types/schemas/Project.schema.json";
 export { default as DataSourceSchema } from "../types/schemas/DataSource.schema.json";
+export { default as CoreDocSchema } from "../types/schemas/CoreDoc.schema.json";
 
 // Auto-generated TypeScript types
-export type {
-  User,
-  Project,
-  DataSource,
-} from './generated';
+// Note: We intentionally do not re-export all generated types here to avoid
+// linter/tooling issues with type-only re-exports. Import them directly from './generated' when needed.
+export type { User, Project, DataSource } from './generated';
 
 // === Manually maintained types ===
 // These types are manually maintained because they come from backend/internal/repo
@@ -29,3 +28,23 @@ export type {
   GenerationParams,
   HighRisk,
 } from './interaction';
+
+// Artifact-specific types and utilities
+export type {
+  Artifact,
+  StaticDoc,
+  VersionComparison,
+  ContextChangeMetrics,
+} from './artifact';
+
+export {
+  isArtifact,
+  isStaticDoc,
+  ArtifactFormatLabels,
+  ArtifactFocusLabels,
+  getQualityColor,
+  getQualityLabel,
+  calculateSectionQuality,
+  shouldTriggerAutoUpdate,
+  shouldRetainVersion,
+} from './artifact';

@@ -28,6 +28,18 @@ const (
 	EventGenAIStreamToolRes EventType = "genai.stream.tool_result"
 	EventGenAIStreamDone    EventType = "genai.stream.done"
 	EventGenAIStreamError   EventType = "genai.stream.error"
+	// Artifact generation events
+	EventArtifactGenerationStarted   EventType = "artifact.generation.started"
+	EventArtifactSectionGenerating   EventType = "artifact.section.generating"
+	EventArtifactSectionChunk        EventType = "artifact.section.chunk"
+	EventArtifactSectionCompleted    EventType = "artifact.section.completed"
+	EventArtifactAssemblyStarted     EventType = "artifact.assembly.started"
+	EventArtifactAssemblyChunk       EventType = "artifact.assembly.chunk"
+	EventArtifactAssemblyCompleted   EventType = "artifact.assembly.completed"
+	EventArtifactGenerationCompleted EventType = "artifact.generation.completed"
+	EventArtifactGenerationError     EventType = "artifact.generation.error"
+	// Unified analysis status (entities/facts/events/metrics/decisions)
+	EventAnalysisStatus EventType = "analysis.status"
 )
 
 type Publisher struct {
@@ -59,6 +71,17 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 		EventGenAIStreamToolRes,
 		EventGenAIStreamDone,
 		EventGenAIStreamError,
+		// Artifact generation topics
+		EventArtifactGenerationStarted,
+		EventArtifactSectionGenerating,
+		EventArtifactSectionChunk,
+		EventArtifactSectionCompleted,
+		EventArtifactAssemblyStarted,
+		EventArtifactAssemblyChunk,
+		EventArtifactAssemblyCompleted,
+		EventArtifactGenerationCompleted,
+		EventArtifactGenerationError,
+		EventAnalysisStatus,
 	} {
 		name := string(et)
 		t := client.Topic(name)
