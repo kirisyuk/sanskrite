@@ -6,6 +6,7 @@ import type { AnalyzeInteractionRef, AnalyzeRequest } from '../types/stance';
 import type { GenaiToolCall } from './genaiStore';
 import { useGenAISettings } from './genaiSettingsStore';
 import { useProjectsStore } from './projectsStore';
+import { useWsStore } from './wsStore';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -23,7 +24,7 @@ export interface StartStreamArgs {
   suppressUserEcho?: boolean;
 }
 
-type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end';
+type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action';
 export interface LocalInteraction {
   id: string;
   projectId: string; // temporary local id binding
@@ -63,6 +64,9 @@ interface GenaiChatState {
   sources: string[];
   // Per-message structured evaluations
   evaluations: Record<string, { biasLevel: number; thoughtfulness: number; biases: string[]; biasTypes?: string[] }>;
+  // Pre-stance preliminary call results (per user message)
+  preStanceLatency: Record<string, number>;
+  preStanceExtract: Record<string, { user_request: string }>;
   // Per-message UI meta (e.g., custom header for agent messages)
   messageMeta: Record<string, { headerText?: string; title?: string; leftAccent?: boolean; bgOverride?: string; refineEnabled?: boolean; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } }>;
   usage?: { promptTokens: number; outputTokens: number; totalTokens: number };
@@ -98,6 +102,7 @@ interface GenaiChatState {
   onToolResult: (calls: GenaiToolCall[]) => void;
   onDoneMeta: (meta: { usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; attributions?: Array<{ title?: string; url?: string }>; searchQueries?: string[]; sources?: string[] }) => void;
   setEvaluation: (messageId: string, ev: { biasLevel: number; thoughtfulness: number; biases: string[]; biasTypes?: string[] }) => void;
+  setPreStanceResult: (messageId: string, latencyMs: number, extract?: { user_request: string }) => void;
 
   // helpers to manage local interactions
   setProjectId: (id: string) => void;
@@ -122,6 +127,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   searchQueries: [],
   sources: [],
   evaluations: {},
+  preStanceLatency: {},
+  preStanceExtract: {},
   messageMeta: {},
   projectId: 'local-unfold',
   interactions: [],
@@ -402,6 +409,27 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     if (get().streaming) return;
     // ensure we have a real project id (create Draft on demand)
     try { await get().ensureProject(); } catch {}
+    // Ensure WS subscription is active before starting stream to avoid missing early chunks
+    try {
+      const pid = get().projectId;
+      if ((window as any).wsSubscribeProject && pid) {
+        (window as any).wsSubscribeProject(pid);
+        // Wait for ws.subscribed ACK (best-effort, short timeout)
+        const waitForWsSubscribed = async (projectId: string, timeoutMs = 1500) => {
+          const start = Date.now();
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            try {
+              const ws = useWsStore.getState();
+              if (ws.connected && ws.subscribedProjectId === projectId) return;
+            } catch {}
+            if (Date.now() - start > timeoutMs) return;
+            await new Promise((r) => setTimeout(r, 60));
+          }
+        };
+        await waitForWsSubscribed(pid);
+      }
+    } catch {}
     try { console.log('[Chat] startStream: project id', { projectId: get().projectId }); } catch {}
     const now = Date.now().toString();
     const projectId = get().projectId;
@@ -436,6 +464,202 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         ...(suppressUserEcho ? [] : [{ id: now + '-iu', projectId, kind: 'user' as InteractionKind, content: prompt, createdAt, originalMessageId: now + '-u' } as LocalInteraction]),
       ],
     }) as any;});
+    
+    // Preliminary stance structured call (extract user_request) - after UI update, before server sync
+    if (!suppressUserEcho) {
+      try {
+        const stanceModel = useGenAISettings.getState().stanceModel;
+        const evalModel = (stanceModel && stanceModel.trim()) ? stanceModel : 'gemini_fast';
+        const schemaUr = {
+          type: 'object',
+          additionalProperties: false,
+          properties: { 
+            run: { type: 'string' },
+            command: { type: 'string' },
+            params: { type: 'string' }
+          },
+          required: ['run', 'command']
+        } as any;
+        const availableCommands = 'Available commands: /analyze entities, /analyze facts, /analyze events, /analyze metrics, /analyze decisions, /section <title>, /end';
+        const promptUr = `You are performing a preliminary assessment of the user's request before execution. In the normal case, this is a regular LLM chat and command execution is not required, but in rare cases the user may request execution of system commands in natural language.\n\n${availableCommands}\n\nDetermine if the user's request is a demand to execute a system command from the list above. If it is - select the single most appropriate command. If command execution is not required - return empty string in the 'run' field.\n\nReturn STRICTLY JSON with this exact shape: { "run": string, "command": string, "params": string } (no prose, no markdown, no code fences).\n- "run": the extracted user request text if command execution is required, OR empty string "" if it's a regular chat request\n- "command": the matched command (e.g., "/analyze entities", "/section") if found, OR empty string "" if no command is required\n- "params": the remaining text/arguments for the command (e.g., section title or analyze context); empty string "" if not applicable\n\nUSER_MESSAGE:\n${prompt}`;
+        const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const urRes = await api.genaiGenerate({
+          model: evalModel,
+          prompt: promptUr,
+          strictJSONEnabled: true,
+          jsonSchema: schemaUr,
+          maxOutputTokens: 2048,
+          webSearchEnabled: false,
+        });
+        const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const preLatency = Math.max(0, Math.floor(t1 - t0));
+        let preExtract: { user_request: string } | undefined = undefined;
+        let detectedCommand: string | undefined = undefined;
+        let detectedParams: string | undefined = undefined;
+        try {
+          let parsedUr: any = null;
+          if (typeof (urRes as any)?.rawJSON === 'string' && (urRes as any).rawJSON.trim()) {
+            try { parsedUr = JSON.parse((urRes as any).rawJSON); } catch {}
+          }
+          if (!parsedUr && typeof urRes?.content === 'string') {
+            const s = urRes.content.trim();
+            if ((s.startsWith('{') || s.startsWith('['))) parsedUr = JSON.parse(s);
+          }
+          if (parsedUr && typeof parsedUr.run === 'string') {
+            // If run is not empty, it contains the user request (command scenario)
+            // If run is empty, use original prompt (normal chat scenario)
+            const extracted = parsedUr.run.trim();
+            preExtract = { user_request: extracted || prompt.trim() };
+          } else {
+            // Fallback: use the original user prompt
+            if (prompt && typeof prompt === 'string' && prompt.trim()) {
+              preExtract = { user_request: prompt.trim() };
+            }
+          }
+          
+          // Check if a command was detected
+          if (parsedUr && typeof parsedUr.command === 'string') {
+            const command = parsedUr.command.trim();
+            if (command) {
+              detectedCommand = command;
+            }
+          }
+          // Capture params if provided
+          if (parsedUr && typeof parsedUr.params === 'string') {
+            const p = parsedUr.params.trim();
+            if (p) detectedParams = p;
+          }
+        } catch {}
+        
+        // Store preStance result for this user message
+        if (preLatency > 0) {
+          try {
+            if (detectedCommand) {
+              console.log('[PreStance] detected command', { command: detectedCommand, params: detectedParams, latencyMs: preLatency });
+            }
+            console.log('[PreStance] measured', { latencyMs: preLatency, user_request: preExtract?.user_request, command: detectedCommand, params: detectedParams });
+            get().setPreStanceResult(now + '-u', preLatency, preExtract);
+          } catch {}
+        }
+
+        // If command detected, execute it instead of running GenAI
+        if (detectedCommand) {
+          try {
+            // Remove assistant placeholder
+            set((s) => {
+              const messages = [...s.messages];
+              if (messages.length > 0 && messages[messages.length - 1].role === 'assistant' && !messages[messages.length - 1].content) {
+                messages.pop(); // Remove placeholder
+              }
+              return { messages, streaming: false } as any;
+            });
+
+            // Ensure USER interaction is persisted before creating ACTION
+            if (!suppressUserEcho) {
+              try {
+                const userLocalId = now + '-iu';
+                const meta = agentMeta as any;
+                const payload: any = { kind: 'user', content: prompt, originalMessageId: now + '-u' };
+                if (meta?.subkind) payload.subkind = meta.subkind;
+                if (meta?.replyTo) {
+                  const map = (get() as any).persistedByLocalId || {};
+                  const serverReply = map[meta.replyTo] || map[String(meta.replyTo)];
+                  if (serverReply) payload.replyTo = serverReply;
+                }
+                if (meta?.agentProfile) payload.agentProfile = meta.agentProfile;
+                // Attach document IDs if any
+                const attachedDocIds = get().pendingAttachedDocIds;
+                if (attachedDocIds && attachedDocIds.length > 0) {
+                  payload.coreDocIds = attachedDocIds;
+                  try { console.log('[Chat] Attaching documents to interaction', { docIds: attachedDocIds }); } catch {}
+                }
+                const resUser = await api.createProjectInteraction(projectId, payload);
+                // Clear attached docs after creating interaction
+                set({ pendingAttachedDocIds: [] });
+                set((st) => {
+                  const items = [...st.interactions];
+                  const idx = items.findIndex((it) => it.id === userLocalId);
+                  if (idx >= 0) { (items[idx] as any).id = resUser.id; }
+                  const map2 = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                  map2[userLocalId] = resUser.id;
+                  map2[now + '-u'] = resUser.id;
+                  return { interactions: items, persistedByLocalId: map2 } as any;
+                });
+              } catch (e) {
+                console.warn('[persist user-before-action] failed', e);
+              }
+            }
+
+            // Create action interaction (to show intent in chat)
+            try {
+              const actionId = Date.now().toString() + '-ac';
+              const createdAt = new Date().toISOString();
+              const actionText = detectedCommand + (detectedParams ? (' ' + detectedParams) : '');
+              const actionInter: LocalInteraction = {
+                id: actionId,
+                projectId,
+                kind: 'action',
+                content: actionText,
+                createdAt,
+                originalMessageId: now + '-u',
+              };
+              set((s) => ({ interactions: [...s.interactions, actionInter] }));
+              // Persist action (best-effort)
+              (async () => {
+                try {
+                  const res = await api.createProjectInteraction(projectId, { kind: 'action', content: actionText, originalMessageId: now + '-u' });
+                  set((s) => {
+                    const map = { ...(s.persistedByLocalId || {}) } as Record<string, string>;
+                    map[actionId] = res.id;
+                    const items = [...s.interactions];
+                    const idx = items.findIndex((it) => it.id === actionId);
+                    if (idx >= 0) { (items[idx] as any).id = res.id; }
+                    return { interactions: items, persistedByLocalId: map } as any;
+                  });
+                } catch (e) {
+                  console.warn('[Action] persist failed', e);
+                }
+              })();
+            } catch {}
+
+            // Execute command
+            const cmd = detectedCommand.toLowerCase();
+            const params = (detectedParams || '').trim();
+            try {
+              if (cmd === '/end') {
+                await api.createProjectInteraction(projectId, { kind: 'section_end', content: '' });
+                await get().hydrateInteractions();
+                return;
+              }
+              if (cmd.startsWith('/section')) {
+                // Use params as title
+                await api.createProjectInteraction(projectId, { kind: 'section_start', content: params });
+                await get().hydrateInteractions();
+                return;
+              }
+              if (cmd === '/analyze entities') { await api.analyzeEntities(projectId, params); return; }
+              if (cmd === '/analyze facts') { await api.analyzeFacts(projectId, params); return; }
+              if (cmd === '/analyze events') { await api.analyzeEvents(projectId, params); return; }
+              if (cmd === '/analyze metrics') { await api.analyzeMetrics(projectId, params); return; }
+              if (cmd === '/analyze decisions') { await api.analyzeDecisions(projectId, params); return; }
+              // Unknown command pattern: do nothing (already persisted user); simply stop streaming
+              return;
+            } catch (e) {
+              console.error('[CommandExecute] failed', e);
+              return;
+            }
+
+            // Exit early, don't run GenAI
+            return;
+          } catch (e) {
+            console.error('[Action] failed', e);
+          }
+        }
+      } catch {
+        // PreStance is non-blocking, continue even if it fails
+      }
+    }
+    
     // Persist user interaction on server (only if not suppressed)
     if (!suppressUserEcho) {
       try {
@@ -497,7 +721,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           lang: options?.__lang,
         });
       } catch {}
-      await api.genaiStream({ prompt, tools, options, messages });
+      // Generate per-stream UUID for FE-side filtering
+      const streamId = (crypto && 'randomUUID' in crypto) ? (crypto as any).randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+      await api.genaiStream({ prompt, tools, options, messages, projectId, streamId });
     } catch (e: any) {
       set({ streaming: false, error: e?.message || 'Stream start failed' });
     }
@@ -808,6 +1034,30 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       api.createProjectInteraction(s.projectId, payload).catch(() => {});
     } catch {}
     return { evaluations: next, interactions } as any;
+  }),
+  setPreStanceResult: (messageId, latencyMs, extract) => set((s) => {
+    const nextLatency = { ...(s.preStanceLatency || {}) } as Record<string, number>;
+    const nextExtract = { ...(s.preStanceExtract || {}) } as Record<string, { user_request: string }>;
+    nextLatency[messageId] = Math.max(0, Math.floor(Number(latencyMs) || 0));
+    if (extract && typeof extract.user_request === 'string') {
+      nextExtract[messageId] = { user_request: extract.user_request };
+    }
+    try {
+      console.log('[PreStance] state', { messageId, latencyMs: nextLatency[messageId], user_request: nextExtract[messageId]?.user_request });
+    } catch {}
+    // Also persist as a system interaction for traceability (best-effort)
+    try {
+      const projectId = s.projectId;
+      const map = (s as any).persistedByLocalId || {};
+      const serverReplyTo = map[messageId];
+      const payload: any = { kind: 'system', subkind: 'eval.user_request', content: JSON.stringify({ latencyMs: nextLatency[messageId], ...(nextExtract[messageId] || {}) }) };
+      if (serverReplyTo) {
+        payload.replyTo = serverReplyTo;
+        payload.relations = [{ type: 'evaluates', targetId: serverReplyTo }];
+      }
+      api.createProjectInteraction(projectId, payload).catch(() => {});
+    } catch {}
+    return { preStanceLatency: nextLatency, preStanceExtract: nextExtract } as any;
   }),
 }));
 

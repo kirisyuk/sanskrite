@@ -86,5 +86,5 @@ export interface Interaction {
   createdAt: string;
 }
 
-export type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end';
+export type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action';
 

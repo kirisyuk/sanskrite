@@ -1,26 +1,22 @@
-# Exclude unnecessary files from Docker build context
-.git/
-.gitignore
-node_modules/
-**/node_modules/
-bin/
-build/
-coverage/
-*.log
-*.tmp
-*.cache
+# Ignore build artifacts
+server
+ws-broker
+*.exe
+*.dll
+*.dylib
+*.test
+*.out
+
+# Ignore vendor if exists
+vendor/
+
+# Ignore IDE files
+.vscode/
+.idea/
 *.swp
+*.swo
+*~
 
-# Local env and secrets
-.env
-*.env
-*.local
-*.json
-
-# Keep Go sources and configs
-!go.mod
-!go.sum
-!cmd/**
-!internal/**
-!firestore.rules
-!firestore.indexes.json
+# Ignore temp files
+tmp/
+temp/

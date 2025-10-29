@@ -101,6 +101,7 @@ type GenerateSectionRequest struct {
 	PromptOverride *string
 	ModelOverride  *string
 	StreamCallback func(chunk string) error
+	StreamID       string
 }
 
 // GenerateSection generates a specific section
@@ -167,6 +168,9 @@ func (s *ArtifactOrchestratorService) GenerateSection(
 		StreamCallback:     req.StreamCallback,
 		SessionID:          req.SessionID,
 		ArtifactID:         session.ArtifactID,
+		TenantID:           req.TenantID,
+		ProjectID:          req.ProjectID,
+		StreamID:           req.StreamID,
 	}
 
 	var genResult *SectionGenerationResult

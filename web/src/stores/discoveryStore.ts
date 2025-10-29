@@ -196,8 +196,13 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
         const token = await user.getIdToken(true);
 
         const base = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8080';
+        const broker = (import.meta as any).env?.VITE_WS_BROKER_URL as string | undefined;
         const toWs = (u: string) => u.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-        const wsUrl = url || `${toWs(base)}/ws?token=${encodeURIComponent(token)}`;
+        const wsUrl = (() => {
+          if (broker && broker.trim()) return `${toWs(broker.replace(/\/$/, ''))}/ws?token=${encodeURIComponent(token)}`;
+          if (url && typeof url === 'string') return url;
+          return `${toWs(base)}/ws?token=${encodeURIComponent(token)}`;
+        })();
 
         // Close previous if any
         if (wsRef) {
@@ -210,6 +215,10 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
         }
 
         wsRef = new WebSocket(wsUrl);
+        import('./wsStore').then(({ useWsStore }) => {
+          useWsStore.getState().setConnecting(wsUrl, tenantId);
+          useWsStore.getState().setReadyState(wsRef?.readyState ?? 0);
+        }).catch(() => {});
         isManuallyClosed = false;
 
         wsRef.onopen = () => {
@@ -217,15 +226,26 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
           clearReconnectTimer();
           reconnectAttempts = 0;
           import('./wsStore').then(({ useWsStore }) => {
-            useWsStore.getState().setConnected(true);
+            useWsStore.getState().setOpen(wsRef?.readyState);
           }).catch(() => {});
+          // Subscribe to current project for server-side routing (best-effort)
+          try {
+            import('./projectsStore').then(({ useProjectsStore }) => {
+              const current = useProjectsStore.getState().currentProject as any;
+              const pid = current?.id;
+              if (pid && wsRef && wsRef.readyState === WebSocket.OPEN) {
+                wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid }));
+                import('./wsStore').then(({ useWsStore }) => { useWsStore.getState().setSubscribed(pid); }).catch(() => {});
+              }
+            }).catch(() => {});
+          } catch {}
         };
 
         const scheduleReconnect = () => {
           isConnecting = false;
           if (isManuallyClosed) return;
           import('./wsStore').then(({ useWsStore }) => {
-            useWsStore.getState().setConnected(false);
+            useWsStore.getState().setClosed(undefined, wsRef?.readyState);
           }).catch(() => {});
           reconnectAttempts += 1;
           const delay = computeBackoffDelay(reconnectAttempts);
@@ -239,199 +259,201 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
         wsRef.onerror = scheduleReconnect;
 
         wsRef.onmessage = (evt) => {
-        try {
-          const msg = JSON.parse(evt.data);
-          console.log('[WS] Message received:', msg);
-          // GenAI streaming events
-          if (typeof msg?.type === 'string' && msg.type.startsWith('genai.stream.')) {
-            import('./genaiStore').then(({ useGenaiStore }) => {
-              const s = useGenaiStore.getState();
-              switch (msg.type) {
-                case 'genai.stream.start':
-                  s.reset();
-                  break;
-                case 'genai.stream.chunk':
-                  if (msg.data?.text) useGenaiStore.setState((st) => ({ chunks: [...st.chunks, { text: msg.data.text }] }));
-                  break;
-                case 'genai.stream.tool_call':
-                  if (Array.isArray(msg.data?.toolCalls)) useGenaiStore.setState({ toolCalls: msg.data.toolCalls });
-                  break;
-                case 'genai.stream.tool_result':
-                  // optional: could merge with toolCalls list
-                  break;
-                case 'genai.stream.done':
-                  // First set metadata, then finalize (unused path for Unfold)
-                  useGenaiStore.setState({ streaming: false });
-                  break;
-                case 'genai.stream.error':
-                  useGenaiStore.setState({ streaming: false, error: msg.data?.error || 'Stream error' });
-                  break;
-              }
+          try {
+            const msg = JSON.parse(evt.data);
+            console.log('[WS] Message received:', msg);
+            import('./wsStore').then(({ useWsStore }) => {
+              try { useWsStore.getState().noteMessage(msg?.type, msg?.data); } catch {}
             }).catch(() => {});
-          }
-          
-          if (msg?.type === 'discovery.profile' && msg.data?.profile) {
-            set((state) => {
-              const idx = state.sources.findIndex((s) => s.id === msg.data.sourceId);
-              if (idx >= 0) {
-                // Update existing source
-                const updated = [...state.sources];
-                updated[idx] = { ...updated[idx], profile: msg.data.profile, status: 'completed' } as any;
-                return { sources: updated } as any;
-              } else {
-                // Add new source if not exists (fetch from API to get full DataSource)
-                console.log('[WS] Source not found locally, fetching from API:', msg.data.sourceId);
-                if (msg.data.projectId) {
-                  api.getProjectSources(msg.data.projectId).then((sources) => {
-                    const source = sources.find((s) => s.id === msg.data.sourceId);
-                    if (source) {
-                      set((s) => ({
-                        sources: [...s.sources.filter((src) => src.id !== source.id), { ...source, profile: msg.data.profile, status: 'completed' }]
-                      }));
-                    }
-                  }).catch((e) => console.error('Failed to fetch source:', e));
+
+            // Handle subscription ack to reflect connId and ts in diagnostics
+            if (msg?.type === 'ws.subscribed' && msg?.data?.projectId) {
+              import('./wsStore').then(({ useWsStore }) => {
+                useWsStore.getState().setSubscribed(msg.data.projectId, msg.data.connId, msg.data.ts);
+              }).catch(() => {});
+            }
+
+            if (msg?.type === 'discovery.profile' && msg.data?.profile) {
+              set((state) => {
+                const idx = state.sources.findIndex((s) => s.id === msg.data.sourceId);
+                if (idx >= 0) {
+                  // Update existing source
+                  const updated = [...state.sources];
+                  updated[idx] = { ...updated[idx], profile: msg.data.profile, status: 'completed' } as any;
+                  return { sources: updated } as any;
+                } else {
+                  // Add new source if not exists (fetch from API to get full DataSource)
+                  console.log('[WS] Source not found locally, fetching from API:', msg.data.sourceId);
+                  if (msg.data.projectId) {
+                    api.getProjectSources(msg.data.projectId).then((sources) => {
+                      const source = sources.find((s) => s.id === msg.data.sourceId);
+                      if (source) {
+                        set((s) => ({
+                          sources: [...s.sources.filter((src) => src.id !== source.id), { ...source, profile: msg.data.profile, status: 'completed' }]
+                        }));
+                      }
+                    }).catch((e) => console.error('Failed to fetch source:', e));
+                  }
+                  return state as any;
+                }
+              });
+              // Refresh interactions to include new context/profile snippets
+              if (msg?.data?.projectId) {
+                api.getProjectInteractions(msg.data.projectId)
+                  .then((items) => set({ interactions: items }))
+                  .catch((e) => console.error('Failed to refresh interactions:', e));
+              }
+            }
+            
+            if (msg?.type === 'discovery.status' && msg.data?.sourceId) {
+              set((state) => {
+                const idx = state.sources.findIndex((s) => s.id === msg.data.sourceId);
+                if (idx >= 0) {
+                  const updated = [...state.sources];
+                  updated[idx] = { ...updated[idx], status: msg.data.status, __hint: msg.data?.hint, __firstProfile: !!msg.data?.firstProfile } as any;
+                  return { sources: updated } as any;
+                } else if (msg.data.status === 'fetching' && msg.data.projectId) {
+                  // Add placeholder source for visual feedback; drop any skeleton by matching displayName
+                  const displayName: string | undefined = msg.data.displayName;
+                  const filtered = displayName
+                    ? state.sources.filter((s) => s.displayName !== displayName && s.id !== displayName)
+                    : state.sources;
+                  const placeholder = {
+                    id: msg.data.sourceId,
+                    displayName: displayName || msg.data.sourceId,
+                    status: msg.data.status,
+                    kind: msg.data.kind || 'unknown',
+                    __hint: msg.data?.hint,
+                    __firstProfile: !!msg.data?.firstProfile,
+                  } as any;
+                  return { sources: [...filtered, placeholder] } as any;
                 }
                 return state as any;
-              }
-            });
-            // Refresh interactions to include new context/profile snippets
-            if (msg?.data?.projectId) {
-              api.getProjectInteractions(msg.data.projectId)
-                .then((items) => set({ interactions: items }))
-                .catch((e) => console.error('Failed to refresh interactions:', e));
+              });
             }
-          }
-          
-          if (msg?.type === 'discovery.status' && msg.data?.sourceId) {
-            set((state) => {
-              const idx = state.sources.findIndex((s) => s.id === msg.data.sourceId);
-              if (idx >= 0) {
-                const updated = [...state.sources];
-                updated[idx] = { ...updated[idx], status: msg.data.status, __hint: msg.data?.hint, __firstProfile: !!msg.data?.firstProfile } as any;
-                return { sources: updated } as any;
-              } else if (msg.data.status === 'fetching' && msg.data.projectId) {
-                // Add placeholder source for visual feedback; drop any skeleton by matching displayName
-                const displayName: string | undefined = msg.data.displayName;
-                const filtered = displayName
-                  ? state.sources.filter((s) => s.displayName !== displayName && s.id !== displayName)
-                  : state.sources;
-                const placeholder = {
-                  id: msg.data.sourceId,
-                  displayName: displayName || msg.data.sourceId,
-                  status: msg.data.status,
-                  kind: msg.data.kind || 'unknown',
-                  __hint: msg.data?.hint,
-                  __firstProfile: !!msg.data?.firstProfile,
-                } as any;
-                return { sources: [...filtered, placeholder] } as any;
-              }
-              return state as any;
-            });
-          }
-          
-          if (msg?.type === 'discovery.answer' && typeof msg.data?.answer === 'string') {
-            set((state) => {
-              const items = [...state.interactions];
-              // Prefer replacing any existing Thinking... placeholder instead of appending (prevents duplicates for chat path)
-              const idx = [...items].reverse().findIndex((it) => it.kind === 'discovery.answer' && it.content === 'Thinking...');
-              if (idx >= 0) {
-                const realIdx = items.length - 1 - idx;
-                items[realIdx] = { ...items[realIdx], content: msg.data.answer } as any;
-              } else {
-                const createdAt = new Date().toISOString();
-                items.push({ id: createdAt, kind: 'discovery.answer', content: msg.data.answer, createdAt } as any);
-              }
-              return { answer: msg.data.answer, interactions: items } as any;
-            });
-          }
-
-          // Route GenAI streaming events to chat store
-          if (typeof msg?.type === 'string' && msg.type.startsWith('genai.stream.')) {
-            import('./genaiChatStore').then(({ useGenaiChatStore }) => {
-              const st = useGenaiChatStore.getState();
-              switch (msg.type) {
-                case 'genai.stream.start':
-                  st.onStart();
-                  break;
-                case 'genai.stream.chunk':
-                  if (msg.data?.text) st.onChunk(msg.data.text);
-                  break;
-                case 'genai.stream.tool_call':
-                  if (Array.isArray(msg.data?.toolCalls)) st.onToolCall(msg.data.toolCalls);
-                  break;
-                case 'genai.stream.tool_result':
-                  if (Array.isArray(msg.data?.toolCalls)) st.onToolResult(msg.data.toolCalls);
-                  break;
-                case 'genai.stream.done':
-                  // CRITICAL: onDoneMeta must run BEFORE onDone so that usage/searchQueries/sources are in state when creating Interaction
-                  st.onDoneMeta({ 
-                    usage: msg.data?.usage, 
-                    attributions: msg.data?.attributions,
-                    searchQueries: msg.data?.searchQueries,
-                    sources: msg.data?.sources
-                  });
-                  st.onDone();
-                  break;
-                case 'genai.stream.error':
-                  st.onError(msg.data?.error || 'Stream error');
-                  break;
-                default:
-                  break;
-              }
-            }).catch(() => {});
-          }
-
-          // Document process streaming: uploaded/parsing/parsed/deleted
-          if (msg?.type === 'document.process') {
-            const ev = msg.data || {};
-            console.log('[WS] document.process event received:', ev);
-            // expose minimal bus: lastDocEvent for UI
-            set((state) => ({ ...state, lastDocEvent: ev } as any));
-          }
-
-          // Unified analysis status: analysis.status
-          if (msg?.type === 'analysis.status') {
-            const ev = msg.data || {};
-            console.log('[WS] analysis.status event received:', ev);
-            if (ev && typeof ev.projectId === 'string' && typeof ev.kind === 'string' && typeof ev.status === 'string') {
-              set({ lastAnalysisStatus: ev });
+            
+            if (msg?.type === 'discovery.answer' && typeof msg.data?.answer === 'string') {
+              set((state) => {
+                const items = [...state.interactions];
+                // Prefer replacing any existing Thinking... placeholder instead of appending (prevents duplicates for chat path)
+                const idx = [...items].reverse().findIndex((it) => it.kind === 'discovery.answer' && it.content === 'Thinking...');
+                if (idx >= 0) {
+                  const realIdx = items.length - 1 - idx;
+                  items[realIdx] = { ...items[realIdx], content: msg.data.answer } as any;
+                } else {
+                  const createdAt = new Date().toISOString();
+                  items.push({ id: createdAt, kind: 'discovery.answer', content: msg.data.answer, createdAt } as any);
+                }
+                return { answer: msg.data.answer, interactions: items } as any;
+              });
             }
-          }
-          
-          if (msg?.type === 'discovery.project' || msg?.type === 'discoveryProject') {
-            console.log('[WS] New project event:', msg.data);
-            // New project created - add directly to projects store
-            import('./projectsStore').then(({ useProjectsStore }) => {
-              const store = useProjectsStore.getState();
-              const projectData = msg.data;
-              
-              // Check if project already exists
-              const exists = store.projects.find((p) => p.id === projectData.projectId);
-              if (!exists && projectData.projectId && projectData.title) {
-                // Add new project to the list
-                const newProject = {
-                  id: projectData.projectId,
-                  displayName: projectData.title,
-                  view: 'discovery',
-                  status: 'active',
-                  createdAt: projectData.createdAt || new Date().toISOString(),
-                  updatedAt: projectData.createdAt || new Date().toISOString(),
-                } as any;
+  
+            // Route GenAI streaming events to chat store (filter by project/stream if present)
+            if (typeof msg?.type === 'string' && msg.type.startsWith('genai.stream.')) {
+              import('./genaiChatStore').then(({ useGenaiChatStore }) => {
+                const st = useGenaiChatStore.getState();
+                // Filter: must match current project if provided
+                try {
+                  const currentPid = st.projectId;
+                  if (msg?.data?.projectId && currentPid && msg.data.projectId !== currentPid) return;
+                } catch {}
+                switch (msg.type) {
+                  case 'genai.stream.start':
+                    st.onStart();
+                    break;
+                  case 'genai.stream.chunk':
+                    console.log('[WS] chunk received, data:', msg.data, 'text:', msg.data?.text);
+                    if (msg.data?.text) st.onChunk(msg.data.text);
+                    break;
+                  case 'genai.stream.tool_call':
+                    if (Array.isArray(msg.data?.toolCalls)) st.onToolCall(msg.data.toolCalls);
+                    break;
+                  case 'genai.stream.tool_result':
+                    if (Array.isArray(msg.data?.toolCalls)) st.onToolResult(msg.data.toolCalls);
+                    break;
+                  case 'genai.stream.done':
+                    // CRITICAL: onDoneMeta must run BEFORE onDone so that usage/searchQueries/sources are in state when creating Interaction
+                    st.onDoneMeta({ 
+                      usage: msg.data?.usage, 
+                      attributions: msg.data?.attributions,
+                      searchQueries: msg.data?.searchQueries,
+                      sources: msg.data?.sources
+                    });
+                    st.onDone();
+                    break;
+                  case 'genai.stream.error':
+                    st.onError(msg.data?.error || 'Stream error');
+                    break;
+                  default:
+                    break;
+                }
+              }).catch(() => {});
+            }
+  
+            // Route artifact generation events (filter by project if present)
+            if (typeof msg?.type === 'string' && msg.type.startsWith('artifact.')) {
+              import('./artifactStore').then(({ useArtifactStore }) => {
+                try {
+                  import('./genaiChatStore').then(({ useGenaiChatStore }) => {
+                    const pid = useGenaiChatStore.getState().projectId;
+                    if (msg?.data?.projectId && pid && msg.data.projectId !== pid) return;
+                    useArtifactStore.getState().handleEvent(msg);
+                  }).catch(() => { useArtifactStore.getState().handleEvent(msg); });
+                } catch { useArtifactStore.getState().handleEvent(msg); }
+              }).catch(() => {});
+            }
+  
+            // Document process streaming: uploaded/parsing/parsed/deleted
+            if (msg?.type === 'document.process') {
+              const ev = msg.data || {};
+              console.log('[WS] document.process event received:', ev);
+              // expose minimal bus: lastDocEvent for UI
+              set((state) => ({ ...state, lastDocEvent: ev } as any));
+            }
+  
+            // Unified analysis status: analysis.status
+            if (msg?.type === 'analysis.status') {
+              const ev = msg.data || {};
+              console.log('[WS] analysis.status event received:', ev);
+              if (ev && typeof ev.projectId === 'string' && typeof ev.kind === 'string' && typeof ev.status === 'string') {
+                set({ lastAnalysisStatus: ev });
+              }
+            }
+            
+            if (msg?.type === 'discovery.project' || msg?.type === 'discoveryProject') {
+              console.log('[WS] New project event:', msg.data);
+              // New project created - add directly to projects store
+              import('./projectsStore').then(({ useProjectsStore }) => {
+                const store = useProjectsStore.getState();
+                const projectData = msg.data;
                 
-                console.log('[WS] Adding new project to store:', newProject);
-                useProjectsStore.setState((state) => ({
-                  projects: [newProject, ...state.projects],
-                  currentProject: newProject, // Auto-select new project
-                }));
-              }
-            }).catch((e) => {
-              console.error('Failed to load projectsStore:', e);
-            });
+                // Check if project already exists
+                const exists = store.projects.find((p) => p.id === projectData.projectId);
+                if (!exists && projectData.projectId && projectData.title) {
+                  // Add new project to the list
+                  const newProject = {
+                    id: projectData.projectId,
+                    displayName: projectData.title,
+                    view: 'discovery',
+                    status: 'active',
+                    createdAt: projectData.createdAt || new Date().toISOString(),
+                    updatedAt: projectData.createdAt || new Date().toISOString(),
+                  } as any;
+                  
+                  console.log('[WS] Adding new project to store:', newProject);
+                  useProjectsStore.setState((state) => ({
+                    projects: [newProject, ...state.projects],
+                    currentProject: newProject, // Auto-select new project
+                  }));
+                }
+              }).catch((e) => {
+                console.error('Failed to load projectsStore:', e);
+              });
+            }
+          } catch (err) {
+            console.error('[WS] Error parsing message:', err);
           }
-        } catch (err) {
-          console.error('[WS] Error parsing message:', err);
-        }
-      };
+        };
       } catch (e) {
         // Immediate retry plan if startup failed
         isConnecting = false;
@@ -462,6 +484,33 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
 
     // Initial connect
     openSocket();
+
+    // Subscribe on project changes (in case currentProject isn't ready at ws onopen)
+    try {
+      import('./projectsStore').then(({ useProjectsStore }) => {
+        let lastPid: string | undefined;
+        useProjectsStore.subscribe((st) => {
+          const pid = (st as any)?.currentProject?.id as string | undefined;
+          if (!pid || pid === lastPid) return;
+          lastPid = pid;
+          if (wsRef && wsRef.readyState === WebSocket.OPEN) {
+            try { wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid })); } catch {}
+            import('./wsStore').then(({ useWsStore }) => { useWsStore.getState().setSubscribed(pid); }).catch(() => {});
+          }
+        });
+      }).catch(() => {});
+    } catch {}
+
+    // Expose a minimal helper for on-demand subscription (used by chat store before stream)
+    try {
+      (window as any).wsSubscribeProject = (pid: string) => {
+        try {
+          if (wsRef && wsRef.readyState === WebSocket.OPEN && pid) {
+            wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid }));
+            import('./wsStore').then(({ useWsStore }) => { useWsStore.getState().setSubscribed(pid); }).catch(() => {});
+          }
+        } catch {}
+      };
+    } catch {}
   },
 }));
-

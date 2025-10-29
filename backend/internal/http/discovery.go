@@ -855,7 +855,7 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 	// normalize kind
 	k := strings.ToLower(strings.TrimSpace(body.Kind))
 	switch k {
-	case "user", "assistant", "system", "note", "section_start", "section_end":
+	case "user", "assistant", "system", "note", "section_start", "section_end", "action":
 	default:
 		k = "note"
 	}

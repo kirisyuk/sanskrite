@@ -1321,6 +1321,12 @@ func (h *ProjectsHandler) AnalyzeEvents(w http.ResponseWriter, r *http.Request) 
 		defer cancel()
 		started := time.Now()
 		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "events",
+				"status":    "started",
+				"ts":        time.Now().UnixMilli(),
+			})
 			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "events.json", "status": "parsing", "ts": time.Now().UnixMilli()})
 		}
 		items, _ := h.interactions.ListByProject(ctx, pid)
@@ -1484,6 +1490,12 @@ func (h *ProjectsHandler) AnalyzeMetrics(w http.ResponseWriter, r *http.Request)
 		defer cancel()
 		started := time.Now()
 		if h.pub != nil {
+			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
+				"projectId": pid,
+				"kind":      "metrics",
+				"status":    "started",
+				"ts":        time.Now().UnixMilli(),
+			})
 			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "metrics.json", "status": "parsing", "ts": time.Now().UnixMilli()})
 		}
 		items, _ := h.interactions.ListByProject(ctx, pid)
@@ -1675,7 +1687,9 @@ func (h *ProjectsHandler) AnalyzeDecisions(w http.ResponseWriter, r *http.Reques
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		started := time.Now()
+		log.Printf("[AnalyzeDecisions] Starting analysis for project=%s, tenantId=%s", pid, tenantID)
 		if h.pub != nil {
+			log.Printf("[AnalyzeDecisions] Publishing started status...")
 			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
 				"projectId": pid,
 				"kind":      "decisions",
@@ -1810,6 +1824,7 @@ Return STRICT JSON: { "decisions": [ {
 			_ = h.coreDocs.Upsert(ctx, doc)
 		}
 		if h.pub != nil {
+			log.Printf("[AnalyzeDecisions] Analysis complete, publishing done status (count=%d, elapsed=%dms)", len(merged), time.Since(started).Milliseconds())
 			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "decisions.json", "filename": "decisions.json", "status": "parsed", "ts": time.Now().UnixMilli()})
 			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
 				"projectId": pid,

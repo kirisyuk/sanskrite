@@ -154,7 +154,7 @@ class ApiClient {
     return response.data.items;
   }
 
-  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'; content: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean } }): Promise<{ id: string }> {
+  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'|'action'; content: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean } }): Promise<{ id: string }> {
     const response = await this.client.post<{ id: string }>(`/api/v1/projects/${projectId}/interactions`, data);
     return response.data;
   }
@@ -168,7 +168,7 @@ class ApiClient {
     projectId: string,
     interactionId: string,
     data: Partial<{
-      kind: 'user'|'assistant'|'system'|'note';
+      kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'|'action';
       content: string;
       summary?: string;
       model?: string;
@@ -216,6 +216,15 @@ class ApiClient {
   }
 
   // GenAI
+  async aiStructured(params: { prompt: string; minCapabilityScore?: number; maxOutputSize?: number }): Promise<{ ok: boolean; result: any }>{
+    const res = await this.client.post<{ ok: boolean; result: any }>(`/api/v1/ai/structured`, {
+      prompt: params.prompt,
+      minCapabilityScore: params.minCapabilityScore ?? 8,
+      maxOutputSize: params.maxOutputSize ?? 8192,
+    });
+    return res.data;
+  }
+
   async genaiGenerate(data: {
     model: string;
     prompt: string;
@@ -320,6 +329,8 @@ class ApiClient {
     tools?: Array<{ name: string; description?: string; parameters: any }>;
     options?: any;
     messages?: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>;
+    projectId?: string;
+    streamId?: string;
   }) {
     // Fire-and-forget HTTP 200 triggers Pub/Sub/WS stream events
     const response = await this.client.post(`/api/v1/genai/stream`, data);

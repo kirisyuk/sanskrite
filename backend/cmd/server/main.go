@@ -262,7 +262,7 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
-	// WS hub and Pub/Sub subscriber
+	// WS hub and Pub/Sub subscriber (disabled when WS is brokered externally)
 	hub := realtime.NewHub(logger)
 	// ws endpoint: /ws (Authorization: Bearer <FirebaseIDToken> or ?token=<FirebaseIDToken>)
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +307,7 @@ func main() {
 	// moved below after authMiddleware is defined
 
 	// Start WS subscriber using the same project Pub/Sub client
-	{
+	if os.Getenv("ENABLE_INTERNAL_WS_SUBSCRIBER") == "1" {
 		projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
 		if projectID != "" {
 			psClient, err := pubsub.NewClient(ctx, projectID)
@@ -323,12 +323,7 @@ func main() {
 					// Unified analysis status updates
 					string(realtime.EventAnalysisStatus),
 					// Subscribe WS hub to GenAI streaming topics
-					string(realtime.EventGenAIStreamStart),
-					string(realtime.EventGenAIStreamChunk),
-					string(realtime.EventGenAIStreamTool),
-					string(realtime.EventGenAIStreamToolRes),
-					string(realtime.EventGenAIStreamDone),
-					string(realtime.EventGenAIStreamError),
+					string(realtime.EventGenAIStream),
 					// Subscribe WS hub to Artifact generation topics
 					string(realtime.EventArtifactGenerationStarted),
 					string(realtime.EventArtifactSectionGenerating),

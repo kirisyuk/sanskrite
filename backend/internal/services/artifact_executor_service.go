@@ -41,6 +41,9 @@ type SectionGenerationRequest struct {
 	StreamCallback     func(chunk string) error
 	SessionID          string // For WebSocket routing
 	ArtifactID         string // For WebSocket routing
+	TenantID           string // For WebSocket routing
+	ProjectID          string // For WebSocket routing
+	StreamID           string // For ordering and FE filtering
 }
 
 // SectionGenerationResult contains the result of section generation
@@ -111,11 +114,13 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 
 	// Publish section generation started event
 	if s.publisher != nil && req.SessionID != "" {
-		_ = s.publisher.PublishJSON(ctx, realtime.EventArtifactSectionGenerating, req.SessionID, map[string]interface{}{
+		_ = s.publisher.PublishJSON(ctx, realtime.EventArtifactSectionGenerating, req.TenantID, map[string]interface{}{
 			"sessionId":    req.SessionID,
 			"artifactId":   req.ArtifactID,
 			"sectionId":    req.Section.ID,
 			"sectionTitle": req.Section.Title,
+			"projectId":    req.ProjectID,
+			"streamId":     req.StreamID,
 		})
 	}
 
@@ -141,11 +146,13 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 
 			// Publish chunk event
 			if s.publisher != nil && req.SessionID != "" {
-				_ = s.publisher.PublishJSON(ctx, realtime.EventArtifactSectionChunk, req.SessionID, map[string]interface{}{
+				_ = s.publisher.PublishJSON(ctx, realtime.EventArtifactSectionChunk, req.TenantID, map[string]interface{}{
 					"sessionId":  req.SessionID,
 					"artifactId": req.ArtifactID,
 					"sectionId":  req.Section.ID,
 					"chunk":      evt.Text,
+					"projectId":  req.ProjectID,
+					"streamId":   req.StreamID,
 				})
 			}
 
@@ -164,11 +171,13 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 	if err != nil {
 		// Publish error event
 		if s.publisher != nil && req.SessionID != "" {
-			_ = s.publisher.PublishJSON(ctx, realtime.EventArtifactGenerationError, req.SessionID, map[string]interface{}{
+			_ = s.publisher.PublishJSON(ctx, realtime.EventArtifactGenerationError, req.TenantID, map[string]interface{}{
 				"sessionId":  req.SessionID,
 				"artifactId": req.ArtifactID,
 				"sectionId":  req.Section.ID,
 				"error":      err.Error(),
+				"projectId":  req.ProjectID,
+				"streamId":   req.StreamID,
 			})
 		}
 		return nil, fmt.Errorf("streaming generation failed: %w", err)
@@ -193,13 +202,15 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 
 	// Publish section completed event
 	if s.publisher != nil && req.SessionID != "" {
-		_ = s.publisher.PublishJSON(ctx, realtime.EventArtifactSectionCompleted, req.SessionID, map[string]interface{}{
+		_ = s.publisher.PublishJSON(ctx, realtime.EventArtifactSectionCompleted, req.TenantID, map[string]interface{}{
 			"sessionId":  req.SessionID,
 			"artifactId": req.ArtifactID,
 			"sectionId":  req.Section.ID,
 			"tokensUsed": totalTokens,
 			"durationMs": duration.Milliseconds(),
 			"quality":    quality,
+			"projectId":  req.ProjectID,
+			"streamId":   req.StreamID,
 		})
 	}
 
@@ -215,7 +226,7 @@ func (s *ArtifactExecutorService) buildSectionPrompt(
 	var builder strings.Builder
 
 	// Section instructions
-	builder.WriteString(fmt.Sprintf("Generate content for the following section:\n\n"))
+	builder.WriteString("Generate content for the following section:\n\n")
 	builder.WriteString(fmt.Sprintf("**Section Title:** %s\n\n", section.Title))
 
 	if section.Description != nil && *section.Description != "" {
@@ -293,21 +304,21 @@ func (s *ArtifactExecutorService) evaluateQuality(
 	// Build evaluation prompt
 	evalPrompt := fmt.Sprintf(`Evaluate the quality of the following generated content on three dimensions:
 
-1. **Coherence** (0-1): How well-structured and logically organized is the text?
-2. **Completeness** (0-1): How thoroughly does it address the requirements?
-3. **Relevance** (0-1): How relevant is it to the provided context and instructions?
+		1. **Coherence** (0-1): How well-structured and logically organized is the text?
+		2. **Completeness** (0-1): How thoroughly does it address the requirements?
+		3. **Relevance** (0-1): How relevant is it to the provided context and instructions?
 
-**Original Instructions:**
-%s
+		**Original Instructions:**
+		%s
 
-**Generated Content:**
-%s
+		**Generated Content:**
+		%s
 
-Return a JSON object with scores:
-{
-  "coherence": 0.0-1.0,
-  "completeness": 0.0-1.0,
-  "relevance": 0.0-1.0
+		Return a JSON object with scores:
+		{
+		"coherence": 0.0-1.0,
+		"completeness": 0.0-1.0,
+		"relevance": 0.0-1.0
 }`, originalPrompt, content)
 
 	// Use gemini_fast for quick evaluation

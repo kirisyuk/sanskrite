@@ -160,7 +160,13 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
 
   const getDocumentDisplayName = (filename: string) => {
     try {
-      return (filename || '').toLowerCase() === 'entities.json' ? 'Entities container' : filename;
+      const f = (filename || '').toLowerCase();
+      if (f === 'entities.json') return 'Entities container';
+      if (f === 'facts.json') return 'Facts container';
+      if (f === 'events.json') return 'Events container';
+      if (f === 'metrics.json') return 'Metrics container';
+      if (f === 'decisions.json') return 'Decisions container';
+      return filename;
     } catch {
       return filename;
     }

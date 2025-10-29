@@ -39,6 +39,27 @@ type Tool struct {
 	Parameters  map[string]interface{} `json:"parameters"` // JSON Schema
 }
 
+// sanitizeSchema removes fields unsupported by Gemini's function_declarations schema
+// such as additionalProperties, recursively.
+func sanitizeSchema(v interface{}) interface{} {
+	switch m := v.(type) {
+	case map[string]interface{}:
+		// Drop unsupported key
+		delete(m, "additionalProperties")
+		for k, val := range m {
+			m[k] = sanitizeSchema(val)
+		}
+		return m
+	case []interface{}:
+		for i, el := range m {
+			m[i] = sanitizeSchema(el)
+		}
+		return m
+	default:
+		return v
+	}
+}
+
 // ToolCall returned by the model
 type ToolCall struct {
 	Name string `json:"name"`
@@ -358,7 +379,7 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 			fdecls = append(fdecls, map[string]interface{}{
 				"name":        t.Name,
 				"description": t.Description,
-				"parameters":  t.Parameters,
+				"parameters":  sanitizeSchema(t.Parameters),
 			})
 		}
 		toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
@@ -440,7 +461,7 @@ func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []
 		fdecls = append(fdecls, map[string]interface{}{
 			"name":        t.Name,
 			"description": t.Description,
-			"parameters":  params,
+			"parameters":  sanitizeSchema(params),
 		})
 	}
 	// If no tool was provided, create a default return_structured
@@ -451,7 +472,7 @@ func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []
 		fdecls = append(fdecls, map[string]interface{}{
 			"name":        "return_structured",
 			"description": "Return strictly by schema",
-			"parameters":  jsonSchema,
+			"parameters":  sanitizeSchema(jsonSchema),
 		})
 	}
 	reqBody["tools"] = []map[string]interface{}{{"function_declarations": fdecls}}

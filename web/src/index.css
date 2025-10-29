@@ -27,6 +27,17 @@
   100% { box-shadow: 0 0 0 0 rgba(56, 161, 105, 0); }
 }
 
+/* Persistent blue glow for analysis completion (dismissed on user action) */
+.etg-glow-blue {
+  box-shadow: 0 0 0 0 var(--brand-30);
+  animation: etg-pulse-blue 2.2s ease-out infinite;
+}
+@keyframes etg-pulse-blue {
+  0% { box-shadow: 0 0 0 0 var(--brand-30); }
+  70% { box-shadow: 0 0 0 12px rgba(59, 130, 246, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+
 /* Theme variables */
 [data-theme="dark"], :root {
   /* Base backgrounds */

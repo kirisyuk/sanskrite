@@ -3,6 +3,8 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -10,7 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"bytes"
+
 	"cloud.google.com/go/firestore"
+	"github.com/google/uuid"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -51,11 +56,15 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req gen_combined.GenAIRequest
+	bodyBytes, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Restore the body for decoding
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("GenAIGenerate: INVALID_JSON. Body: %s, Error: %v", string(bodyBytes), err)
 		_ = WriteBadRequest(w, "INVALID_JSON", "Invalid JSON body")
 		return
 	}
 	if strings.TrimSpace(req.Model) == "" || strings.TrimSpace(req.Prompt) == "" {
+		log.Printf("GenAIGenerate: INVALID_PARAMS. Model: '%s', Prompt: '%s'", req.Model, req.Prompt)
 		_ = WriteBadRequest(w, "INVALID_PARAMS", "model and prompt are required")
 		return
 	}
@@ -64,6 +73,8 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	resp, err := h.client.GenAIGenerate(ctx, req)
 	if err != nil {
+		// Log upstream error body for diagnostics (e.g., Gemini 400 with details)
+		log.Printf("GenAIGenerate upstream error: %v", err)
 		status, code, msg, details := parseUpstreamError(err)
 		_ = WriteError(w, status, code, msg, details)
 		return
@@ -100,6 +111,9 @@ type genaiCompleteRequest struct {
 		Role string `json:"role"`
 		Text string `json:"text"`
 	} `json:"messages,omitempty"`
+	// Streaming context
+	ProjectID string `json:"projectId,omitempty"`
+	StreamID  string `json:"streamId,omitempty"`
 }
 
 func (h *GenAIHandler) Complete(w http.ResponseWriter, r *http.Request) {
@@ -238,14 +252,18 @@ func (h *GenAIHandler) WithPublisher(p *realtime.Publisher) *GenAIHandler {
 type rtPublisherAdapter struct{ p *realtime.Publisher }
 
 func (a rtPublisherAdapter) PublishJSON(ctx context.Context, et interface{}, tenantID string, payload interface{}) error {
+	var eventType realtime.EventType
 	switch v := et.(type) {
 	case string:
-		return a.p.PublishJSON(ctx, realtime.EventType(v), tenantID, payload)
+		eventType = realtime.EventType(v)
 	case realtime.EventType:
-		return a.p.PublishJSON(ctx, v, tenantID, payload)
+		eventType = v
 	default:
-		return a.p.PublishJSON(ctx, realtime.EventGenAIStreamChunk, tenantID, payload)
+		// This should not happen. Log an error and return.
+		log.Printf("rtPublisherAdapter: unexpected event type %T", et)
+		return nil
 	}
+	return a.p.PublishJSON(ctx, eventType, tenantID, payload)
 }
 
 // Stream publishes incremental events to Pub/Sub for the tenant; front receives via WS
@@ -268,10 +286,24 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		_ = WriteBadRequest(w, "INVALID_JSON", "Invalid JSON body")
 		return
 	}
+
+	// Determine routing context
+	projectID := strings.TrimSpace(req.ProjectID)
+	streamID := strings.TrimSpace(req.StreamID)
+	if streamID == "" {
+		streamID = uuid.NewString()
+	}
+
+	// DEBUG: log planned stream start with routing context before publishing
+	log.Printf("genai.stream: preparing start tenantId=%s projectId=%s streamId=%s", auth.TenantID, projectID, streamID)
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
 	started := time.Now()
-	_ = h.publisher.PublishJSON(ctx, "genai.stream.start", auth.TenantID, map[string]any{"ts": time.Now().UnixMilli()})
+	_ = h.publisher.PublishJSON(ctx, "genai.stream.start", auth.TenantID, map[string]any{
+		"ts":        time.Now().UnixMilli(),
+		"projectId": projectID,
+		"streamId":  streamID,
+	})
 	// Optionally enrich system instruction with provided messages (conversation context)
 	if len(req.Messages) > 0 {
 		// Build compact transcript using provided summaries/texts
@@ -299,19 +331,43 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Track per-stream chunk count for diagnostics
+	chunks := 0
 	onEvt := func(e gen_gemini.StreamEvent) error {
 		switch e.Type {
 		case "chunk":
-			return h.publisher.PublishJSON(ctx, "genai.stream.chunk", auth.TenantID, map[string]any{"text": e.Text})
+			// increment local chunk counter
+			chunks++
+			return h.publisher.PublishJSON(ctx, "genai.stream.chunk", auth.TenantID, map[string]any{
+				"projectId": projectID,
+				"streamId":  streamID,
+				"text":      e.Text,
+			})
 		case "tool_call":
-			return h.publisher.PublishJSON(ctx, "genai.stream.tool_call", auth.TenantID, map[string]any{"toolCalls": e.ToolCalls})
+			return h.publisher.PublishJSON(ctx, "genai.stream.tool_call", auth.TenantID, map[string]any{
+				"projectId": projectID,
+				"streamId":  streamID,
+				"toolCalls": e.ToolCalls,
+			})
 		case "tool_result":
-			return h.publisher.PublishJSON(ctx, "genai.stream.tool_result", auth.TenantID, map[string]any{"toolCalls": e.ToolCalls})
+			return h.publisher.PublishJSON(ctx, "genai.stream.tool_result", auth.TenantID, map[string]any{
+				"projectId": projectID,
+				"streamId":  streamID,
+				"toolCalls": e.ToolCalls,
+			})
 		case "error":
-			return h.publisher.PublishJSON(ctx, "genai.stream.error", auth.TenantID, map[string]any{"error": e.Error})
+			return h.publisher.PublishJSON(ctx, "genai.stream.error", auth.TenantID, map[string]any{
+				"projectId": projectID,
+				"streamId":  streamID,
+				"error":     e.Error,
+			})
 		case "done":
 			// include usage/attributions/searchQueries/sources if accumulated
-			payload := map[string]any{"ts": time.Now().UnixMilli()}
+			payload := map[string]any{
+				"ts":        time.Now().UnixMilli(),
+				"projectId": projectID,
+				"streamId":  streamID,
+			}
 			if e.Usage.TotalTokens > 0 {
 				payload["usage"] = e.Usage
 			}
@@ -324,6 +380,8 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			if len(e.Sources) > 0 {
 				payload["sources"] = e.Sources
 			}
+			// Log per-stream diagnostics: chunks and latency
+			log.Printf("genai.stream: completed tenantId=%s projectId=%s streamId=%s chunks=%d elapsedMs=%d", auth.TenantID, projectID, streamID, chunks, time.Since(started).Milliseconds())
 			// Fire telemetry (best-effort)
 			go func() {
 				_ = persistGenAITelemetry(r.Context(), auth.TenantID, map[string]any{

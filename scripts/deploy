@@ -14,6 +14,7 @@ API_DIR="$ROOT_DIR/backend"
 
 TARGET_WEB=1
 TARGET_API=1
+TARGET_WS=0
 
 REGION=${REGION:-us-central1}
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null || true)
@@ -26,16 +27,17 @@ fi
 SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py]"
-  echo "If none specified, deploy all. REGION env var supported (default: us-central1)."
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws]"
+  echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
 }
 
-TARGET_PY=1
+TARGET_PY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --web) TARGET_API=0 ;;
     --api) TARGET_WEB=0 ;;
     --py) TARGET_WEB=0; TARGET_API=0 ;;
+    --ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
   esac
@@ -77,7 +79,19 @@ enable_api cloudresourcemanager.googleapis.com
 deploy_web() {
   echo -e "${BLUE}[web] Building Vite app...${NC}"
   require firebase
-  (cd "$WEB_DIR" && npm ci && npm run build)
+  # Try to resolve ws-broker URL for Vite env
+  local WS_URL="${WS_URL:-}"
+  if [[ -z "$WS_URL" ]]; then
+    if gcloud run services describe sanskrite-ws --region "$REGION" >/dev/null 2>&1; then
+      WS_URL=$(gcloud run services describe sanskrite-ws --region "$REGION" --format='value(status.url)')
+    fi
+  fi
+  if [[ -n "$WS_URL" ]]; then
+    echo -e "${BLUE}[web] Using ws-broker URL for build:${NC} $WS_URL"
+    (cd "$WEB_DIR" && VITE_WS_BROKER_URL="$WS_URL" npm ci && VITE_WS_BROKER_URL="$WS_URL" npm run build)
+  else
+    (cd "$WEB_DIR" && npm ci && npm run build)
+  fi
 
   echo -e "${BLUE}[web] Deploying to Firebase Hosting...${NC}"
   local FB_ARGS=("--only" "hosting" "--project" "$PROJECT_ID" "--non-interactive" "--force")
@@ -150,43 +164,45 @@ setup_infrastructure() {
     fi
   done
 
-  # 5. Ensure Cloud Scheduler job for due polling (HTTP fallback optional)
-  echo -e "${BLUE}[infra] Ensuring Cloud Scheduler job (optional)...${NC}"
-  if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
-    JOB_NAME="sanskrite-source-poller"
-    SVC_URL=$(gcloud run services describe sanskrite-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
-    # Ensure admin token env on API (if not set, generate ephemeral weak token for dev; recommend overriding in CI/prod)
-    ADMIN_TOKEN=${ADMIN_JOB_TOKEN:-}
-    if [[ -z "$ADMIN_TOKEN" ]]; then
-      ADMIN_TOKEN=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
-      gcloud run services update sanskrite-api --region "$REGION" --update-env-vars "ADMIN_JOB_TOKEN=$ADMIN_TOKEN" --quiet || true
-    fi
-    if [[ -n "$SVC_URL" ]]; then
-      # Create or update a job that calls admin publish-due with header X-Job-Token
-      if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
-        gcloud scheduler jobs update http "$JOB_NAME" \
-          --location="$REGION" \
-          --schedule="*/5 * * * *" \
-          --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
-          --http-method=POST \
-          --update-headers="X-Job-Token=$ADMIN_TOKEN" \
-          --attempt-deadline=60s \
-          --quiet || true
+  # 5. Ensure Cloud Scheduler job only when deploying API
+  if [[ "$TARGET_API" -eq 1 ]]; then
+    echo -e "${BLUE}[infra] Ensuring Cloud Scheduler job (optional)...${NC}"
+    if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
+      JOB_NAME="sanskrite-source-poller"
+      SVC_URL=$(gcloud run services describe sanskrite-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+      # Ensure admin token env on API (if not set, generate ephemeral weak token for dev; recommend overriding in CI/prod)
+      ADMIN_TOKEN=${ADMIN_JOB_TOKEN:-}
+      if [[ -z "$ADMIN_TOKEN" ]]; then
+        ADMIN_TOKEN=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
+        gcloud run services update sanskrite-api --region "$REGION" --update-env-vars "ADMIN_JOB_TOKEN=$ADMIN_TOKEN" --quiet || true
+      fi
+      if [[ -n "$SVC_URL" ]]; then
+        # Create or update a job that calls admin publish-due with header X-Job-Token
+        if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
+          gcloud scheduler jobs update http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="*/5 * * * *" \
+            --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
+            --http-method=POST \
+            --update-headers="X-Job-Token=$ADMIN_TOKEN" \
+            --attempt-deadline=60s \
+            --quiet || true
+        else
+          gcloud scheduler jobs create http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="*/5 * * * *" \
+            --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
+            --http-method=POST \
+            --headers="X-Job-Token=$ADMIN_TOKEN" \
+            --attempt-deadline=60s \
+            --quiet || true
+        fi
       else
-        gcloud scheduler jobs create http "$JOB_NAME" \
-          --location="$REGION" \
-          --schedule="*/5 * * * *" \
-          --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
-          --http-method=POST \
-          --headers="X-Job-Token=$ADMIN_TOKEN" \
-          --attempt-deadline=60s \
-          --quiet || true
+        echo -e "${YELLOW}[infra] Skipping scheduler job (api url not resolved).${NC}"
       fi
     else
-      echo -e "${YELLOW}[infra] Skipping scheduler job (api url not resolved).${NC}"
+      echo -e "${YELLOW}[infra] Cloud Scheduler API not enabled or not available; skipping job creation.${NC}"
     fi
-  else
-    echo -e "${YELLOW}[infra] Cloud Scheduler API not enabled or not available; skipping job creation.${NC}"
   fi
 }
 
@@ -214,7 +230,7 @@ deploy_api() {
     --max-instances=3 \
     --cpu=1 \
     --memory=512Mi \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs" \
+    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,ENABLE_INTERNAL_WS_SUBSCRIBER=0" \
     --set-secrets "VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,GROK_API_KEY=grok_api_key:latest" \
     --project "$PROJECT_ID" \
     --quiet
@@ -232,6 +248,48 @@ deploy_api() {
   API_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[api] Deployed successfully${NC}"
   echo -e "${BLUE}[api] URL:${NC} $API_URL"
+}
+
+deploy_ws() {
+  echo -e "${BLUE}[ws] Pre-deployment: validating Go build...${NC}"
+  (cd "$API_DIR" && go build -o /dev/null ./cmd/ws-broker) || {
+    echo -e "${RED}[ws] Go build failed! Fix errors before deploying.${NC}"
+    exit 1
+  }
+  echo -e "${GREEN}[ws] Go build successful locally${NC}"
+
+  echo -e "${BLUE}[ws] Building ws-broker image...${NC}"
+  local service="sanskrite-ws"
+  # Must match cloudbuild.ws.yaml output image
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/sanskrite/sanskrite-ws:latest"
+
+  # Build using cloudbuild with explicit Dockerfile
+  gcloud builds submit "$API_DIR" \
+    --config="$API_DIR/cloudbuild.ws.yaml" \
+    --project "$PROJECT_ID" \
+    --quiet
+
+  echo -e "${BLUE}[ws] Deploying ws-broker to Cloud Run...${NC}"
+  gcloud run deploy "$service" \
+    --image "$image" \
+    --region "$REGION" \
+    --allow-unauthenticated \
+    --service-account "$SA_BACKEND" \
+    --min-instances=1 \
+    --max-instances=2 \
+    --cpu=1 \
+    --memory=256Mi \
+    --timeout=3600s \
+    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
+    --project "$PROJECT_ID" \
+    --quiet
+
+  # Route traffic to latest revision
+  gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet
+
+  WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${GREEN}[ws] Deployed successfully${NC}"
+  echo -e "${BLUE}[ws] URL:${NC} $WS_URL"
 }
 
 deploy_py() {
@@ -388,6 +446,10 @@ if [[ "$TARGET_API" -eq 1 ]]; then
   deploy_api
 fi
 
+if [[ "$TARGET_WS" -eq 1 ]]; then
+  deploy_ws
+fi
+
 if [[ "$TARGET_PY" -eq 1 ]]; then
   deploy_py
 fi
@@ -405,6 +467,9 @@ echo -e "${GREEN}═════════════════════
 # Summary
 if [[ "$TARGET_API" -eq 1 ]] && [[ -n "${API_URL:-}" ]]; then
   echo -e "${BLUE}Backend API:${NC} $API_URL"
+fi
+if [[ "$TARGET_WS" -eq 1 ]] && [[ -n "${WS_URL:-}" ]]; then
+  echo -e "${BLUE}WS Broker:${NC} $WS_URL"
 fi
 if [[ "$TARGET_PY" -eq 1 ]] && [[ -n "${TG_URL:-}" ]]; then
   echo -e "${BLUE}Telegram Service:${NC} $TG_URL"

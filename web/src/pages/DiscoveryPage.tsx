@@ -15,6 +15,7 @@ import { useUIStore } from '../stores/uiStore';
 import DiscoveryRequest from '../components/DiscoveryRequest';
 import UnfoldRequest from '../components/UnfoldRequest';
 import ChatMessage from '../components/ChatMessage';
+import PerspectivesPanel from '../components/PerspectivesPanel';
 import AgentPalette from '../components/AgentPalette';
 import DocumentsAndSources from '../components/DocumentsAndSources';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
@@ -24,18 +25,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Lege
 import { useTranslation } from 'react-i18next';
 import { AGENT_PRESETS } from '../lib/agentPresets';
 import DocumentViewer from '../components/DocumentViewer';
-
-const ArtifactsAnalysisStatus: React.FC = () => {
-  const status = useDiscoveryStore((s: any) => (s as any).lastAnalysisStatus);
-  if (!status) return null;
-  const color = status.status === 'started' ? 'var(--text-secondary-strong)' : (status.status === 'done' ? 'var(--green-50)' : 'var(--error-50)');
-  const label = `${status.kind}: ${status.status}` + (status.count != null ? ` (${status.count})` : '') + (status.elapsedMs != null && status.status !== 'started' ? ` · ${status.elapsedMs}ms` : '');
-  return (
-    <div className="text-xs" style={{ color }}>
-      {label}
-    </div>
-  );
-};
+import FindingsPanel from '../components/FindingsPanel';
 
 // Lightweight Entities list component
 const EntitiesList: React.FC<{ projectId: string }> = ({ projectId }) => {
@@ -139,6 +129,245 @@ const EntitiesList: React.FC<{ projectId: string }> = ({ projectId }) => {
               </button>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Lightweight Facts list component
+const FactsList: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [items, setItems] = React.useState<Array<{ statement: string; confidence?: number; evidence?: string[] }>>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [open, setOpen] = React.useState<boolean>(false);
+  const reload = React.useCallback(async () => {
+    if (!projectId || projectId === 'local-unfold') return;
+    setLoading(true); setError(null);
+    try {
+      const docs = await api.docsList(projectId);
+      const fdoc = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'facts.json');
+      if (!fdoc?.id) { setItems([]); setLoading(false); return; }
+      const blob = await api.docsDownload(projectId, fdoc.id);
+      const text = await new Response(blob).text();
+      const json = JSON.parse(text || '{}');
+      const arr = Array.isArray(json?.facts) ? json.facts : [];
+      setItems(arr);
+    } catch (e: any) {
+      setError('Failed to load facts');
+      setItems([]);
+    } finally { setLoading(false); }
+  }, [projectId]);
+  React.useEffect(() => { reload(); }, [reload]);
+  const count = items.length;
+  const header = (
+    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
+      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 4h18v4H3zM3 10h18v10H3z"/><path d="M6 13h6M6 17h10" strokeLinecap="round"/></svg>
+        <span className="text-[11px] font-medium">Facts ({count})</span>
+      </div>
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+  );
+  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
+  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
+  return (
+    <div className="space-y-1">
+      {header}
+      {open && (
+        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
+          {items.length === 0 && (
+            <div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No facts yet. Run "analyze facts".</div>
+          )}
+          {items.map((f, i) => (
+            <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-12" style={{ color: 'var(--text-heading)' }}>{f.statement}</div>
+                {typeof f.confidence === 'number' && (
+                  <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{Math.round(Math.max(0, Math.min(1, f.confidence))*100)}%</span>
+                )}
+              </div>
+              {Array.isArray(f.evidence) && f.evidence.length > 0 && (
+                <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>Evidence: {f.evidence.join('; ')}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Lightweight Events list component
+const EventsList: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [items, setItems] = React.useState<Array<{ ts: string; title: string; summary?: string }>>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [open, setOpen] = React.useState<boolean>(false);
+  const reload = React.useCallback(async () => {
+    if (!projectId || projectId === 'local-unfold') return;
+    setLoading(true); setError(null);
+    try {
+      const docs = await api.docsList(projectId);
+      const edoc = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'events.json');
+      if (!edoc?.id) { setItems([]); setLoading(false); return; }
+      const blob = await api.docsDownload(projectId, edoc.id);
+      const text = await new Response(blob).text();
+      const json = JSON.parse(text || '{}');
+      const arr = Array.isArray(json?.events) ? json.events : [];
+      setItems(arr);
+    } catch (e: any) {
+      setError('Failed to load events');
+      setItems([]);
+    } finally { setLoading(false); }
+  }, [projectId]);
+  React.useEffect(() => { reload(); }, [reload]);
+  const count = items.length;
+  const header = (
+    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
+      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M7 2v4M17 2v4"/></svg>
+        <span className="text-[11px] font-medium">Events ({count})</span>
+      </div>
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+  );
+  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
+  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
+  return (
+    <div className="space-y-1">
+      {header}
+      {open && (
+        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
+          {items.length === 0 && (
+            <div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No events yet. Run "analyze events".</div>
+          )}
+          {items.map((e, i) => (
+            <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+              <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{e.title}</div>
+              <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{e.ts}</div>
+              {e.summary && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{e.summary}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Lightweight Metrics list component
+const MetricsList: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [items, setItems] = React.useState<Array<{ key: string; label: string; value: any; unit?: string }>>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [open, setOpen] = React.useState<boolean>(false);
+  const reload = React.useCallback(async () => {
+    if (!projectId || projectId === 'local-unfold') return;
+    setLoading(true); setError(null);
+    try {
+      const docs = await api.docsList(projectId);
+      const mdoc = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'metrics.json');
+      if (!mdoc?.id) { setItems([]); setLoading(false); return; }
+      const blob = await api.docsDownload(projectId, mdoc.id);
+      const text = await new Response(blob).text();
+      const json = JSON.parse(text || '{}');
+      const arr = Array.isArray(json?.metrics) ? json.metrics : [];
+      setItems(arr);
+    } catch (e: any) {
+      setError('Failed to load metrics');
+      setItems([]);
+    } finally { setLoading(false); }
+  }, [projectId]);
+  React.useEffect(() => { reload(); }, [reload]);
+  const count = items.length;
+  const header = (
+    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
+      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 20V4M9 20V8M15 20v-6M21 20H2"/></svg>
+        <span className="text-[11px] font-medium">Metrics ({count})</span>
+      </div>
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+  );
+  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
+  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
+  return (
+    <div className="space-y-1">
+      {header}
+      {open && (
+        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
+          {items.length === 0 && (
+            <div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No metrics yet. Run "analyze metrics".</div>
+          )}
+          {items.map((m, i) => (
+            <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{m.label || m.key}</div>
+                <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{String(m.value)}{m.unit ? ` ${m.unit}` : ''}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Lightweight Decisions list component
+const DecisionsList: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [items, setItems] = React.useState<Array<{ title: string; selected?: string; rationale?: string }>>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [open, setOpen] = React.useState<boolean>(false);
+  const reload = React.useCallback(async () => {
+    if (!projectId || projectId === 'local-unfold') return;
+    setLoading(true); setError(null);
+    try {
+      const docs = await api.docsList(projectId);
+      const ddoc = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'decisions.json');
+      if (!ddoc?.id) { setItems([]); setLoading(false); return; }
+      const blob = await api.docsDownload(projectId, ddoc.id);
+      const text = await new Response(blob).text();
+      const json = JSON.parse(text || '{}');
+      const arr = Array.isArray(json?.decisions) ? json.decisions : [];
+      setItems(arr);
+    } catch (e: any) {
+      setError('Failed to load decisions');
+      setItems([]);
+    } finally { setLoading(false); }
+  }, [projectId]);
+  React.useEffect(() => { reload(); }, [reload]);
+  const count = items.length;
+  const header = (
+    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
+      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 12h8M12 12l4-4M12 12l4 4" strokeLinecap="round" strokeLinejoin="round"/><circle cx="4" cy="12" r="2"/></svg>
+        <span className="text-[11px] font-medium">Decisions ({count})</span>
+      </div>
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+  );
+  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
+  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
+  return (
+    <div className="space-y-1">
+      {header}
+      {open && (
+        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
+          {items.length === 0 && (
+            <div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No decisions yet. Run "analyze decisions".</div>
+          )}
+          {items.map((d, i) => (
+            <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{d.title}</div>
+                {d.selected && (
+                  <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{d.selected}</span>
+                )}
+              </div>
+              {d.rationale && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{d.rationale}</div>}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -1292,6 +1521,14 @@ const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult
       // Trigger only AFTER streaming completes and a new assistant message is available
       if (genaiChat.streaming) return;
       if (!lastAssistant) return;
+      // Skip evaluations for assistant summaries generated without LLM
+      try {
+        const sk = String((lastAssistant as any).subkind || '').toLowerCase();
+        if (sk === 'prestance.summary' || sk === 'analysis.summary') {
+          lastReviewedId.current = lastAssistant.id;
+          return;
+        }
+      } catch {}
       if (lastReviewedId.current === lastAssistant.id) return;
       
       // Check if eval.bias already exists for this assistant message
@@ -2098,6 +2335,7 @@ const DiscoveryPage: React.FC = () => {
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const [genaiThinkingSeconds, setGenaiThinkingSeconds] = useState(0);
   const [entitiesAnalyzing, setEntitiesAnalyzing] = useState(false);
+  const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives'>('chat');
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
   const genaiThinkingIntervalRef = useRef<number | null>(null);
@@ -2147,6 +2385,56 @@ const DiscoveryPage: React.FC = () => {
   // GenAI chat state (for Unfold view)
   const genaiChat = useGenaiChatStore();
   const genaiSettings = useGenAISettings();
+  const lastAnalysisStatus = useDiscoveryStore((s: any) => (s as any).lastAnalysisStatus);
+  const notifiedAnalysesRef = React.useRef<Set<string>>(new Set());
+
+  // Auto-switch to Chat tab when switching chats/New Chat
+  React.useEffect(() => {
+    try {
+      setUnfoldSubView('chat');
+    } catch {}
+  }, [genaiChat.projectId]);
+
+  React.useEffect(() => {
+    const ints = Array.isArray(genaiChat.interactions) ? genaiChat.interactions.length : 0;
+    const msgs = Array.isArray(genaiChat.messages) ? genaiChat.messages.length : 0;
+    if (ints === 0 && msgs === 0) {
+      try { setUnfoldSubView('chat'); } catch {}
+    }
+  }, [genaiChat.interactions, genaiChat.messages]);
+
+  React.useEffect(() => {
+    try {
+      const st = lastAnalysisStatus;
+      if (!st) return;
+      const kind = String(st.kind || '').toLowerCase();
+      const status = String(st.status || '').toLowerCase();
+      if (!kind || status !== 'done') return;
+      // Only for the currently open chat project
+      const currentPid = String(genaiChat.projectId || '');
+      const eventPid = String(st.projectId || '');
+      if (!currentPid || !eventPid || eventPid !== currentPid) return;
+      const key = `${eventPid}:${kind}:${st.ts || st.elapsedMs || st.count || Date.now()}`;
+      if (notifiedAnalysesRef.current.has(key)) return;
+      notifiedAnalysesRef.current.add(key);
+      (async () => {
+        try {
+          const pid = eventPid;
+          if (!pid) return;
+          const n = typeof st.count === 'number' ? st.count : 0;
+          const ms = typeof st.elapsedMs === 'number' ? st.elapsedMs : undefined;
+          const t = (ms && ms >= 0) ? (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms/1000).toFixed(1)}s`) : '';
+          const unitOne = kind === 'entities' ? 'entity' : kind === 'facts' ? 'fact' : kind === 'events' ? 'event' : kind === 'metrics' ? 'metric' : kind === 'decisions' ? 'decision' : kind;
+          const unitMany = kind === 'entities' ? 'entities' : kind === 'facts' ? 'facts' : kind === 'events' ? 'events' : kind === 'metrics' ? 'metrics' : kind === 'decisions' ? 'decisions' : kind;
+          const summary = n === 0 ? `Found no ${unitMany}` : (n === 1 ? `Found 1 ${unitOne}` : `Found ${n} ${unitMany}`);
+          const content = t ? `${summary} (${t})` : summary;
+          const { api } = await import('../lib/api');
+          await api.createProjectInteraction(pid, { kind: 'assistant', subkind: 'analysis.summary', content });
+          await genaiChat.hydrateInteractions();
+        } catch {}
+      })();
+    } catch {}
+  }, [lastAnalysisStatus, genaiChat]);
   // Collapsible sections state: sectionId -> collapsed
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   // Toggles for collapsible analysis sections
@@ -3363,7 +3651,7 @@ const DiscoveryPage: React.FC = () => {
                 onClick={() => {
                   // Clear right side: sources, status, input, current chat, interactions
                   clearSources();
-                  setCurrentProject(null);
+                  // Start a fresh draft for the next message
                   setQueryText('');
                   // Reset high-risk state
                   setIsHighRisk(false);
@@ -3371,7 +3659,6 @@ const DiscoveryPage: React.FC = () => {
                   // Reset Unfold chat state and analysis artifacts
                   try {
                     useGenaiChatStore.getState().reset();
-                    // Force new Draft creation on next message
                     useGenaiChatStore.getState().setProjectId('local-unfold');
                     try { console.log('[NewChat] reset -> projectId set to local-unfold'); } catch {}
                   } catch {}
@@ -3379,6 +3666,8 @@ const DiscoveryPage: React.FC = () => {
                   setShowLLMReview(false);
                 setShowDiscussionFlow(false);
                 setShowArtifacts(false);
+                // Clear analysis summary dedupe cache
+                try { notifiedAnalysesRef.current = new Set(); } catch {}
                 }}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -3554,7 +3843,7 @@ const DiscoveryPage: React.FC = () => {
             onClick={() => {
               // Perform the same actions as the "New Chat" button in the sidebar
               clearSources();
-              setCurrentProject(null);
+              // Start a fresh draft for the next message
               setQueryText('');
                 // Reset high-risk state
                 setIsHighRisk(false);
@@ -3569,6 +3858,8 @@ const DiscoveryPage: React.FC = () => {
                 setShowDiscussionFlow(false);
                 setShowArtifacts(false);
               setLeftPanel(null);
+              // Clear analysis summary dedupe cache
+              try { notifiedAnalysesRef.current = new Set(); } catch {}
             }}
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
             style={{ backgroundColor: 'var(--newchat-bg)', color: 'var(--text-heading)', marginTop: '8px' }}
@@ -3694,7 +3985,7 @@ const DiscoveryPage: React.FC = () => {
         </button>
       )}
 
-      {/* Workspace Artifacts button (pastel green) shown on right edge */}
+      {/* Workspace Artifacts button (styled like Context Navigation) shown on right edge */}
       <button
         id="btn-artifacts"
         type="button"
@@ -3705,6 +3996,10 @@ const DiscoveryPage: React.FC = () => {
           setRightPanelOpen(false);
           setRightContextOpen(false);
           setRightArtifactsOpen((v) => !v);
+          try {
+            const btn = document.getElementById('btn-artifacts');
+            if (btn) btn.classList.remove('etg-glow-blue');
+          } catch {}
         }}
         className="rounded-lg flex items-center justify-center transition-all duration-300"
         style={{
@@ -3713,12 +4008,12 @@ const DiscoveryPage: React.FC = () => {
           top: hasPinned ? 156 : 116,
           width: 32,
           height: 32,
-          backgroundColor: rightArtifactsOpen ? 'hsl(140, 45%, 65%)' : 'hsl(140, 40%, 70%)',
-          color: 'hsl(140, 50%, 20%)',
+          backgroundColor: 'var(--newchat-bg)',
+          color: 'var(--text-heading)',
           zIndex: 40,
         }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'hsl(140, 45%, 65%)'; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = rightArtifactsOpen ? 'hsl(140, 45%, 65%)' : 'hsl(140, 40%, 70%)'; }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)'; }}
       >
         {/* Icon: layers/stack for artifacts */}
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -4192,8 +4487,43 @@ const DiscoveryPage: React.FC = () => {
                 </div>
               );
             })()}
+            {/* Unfold subview toggle */}
+            <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label="Unfold view">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={unfoldSubView === 'chat'}
+                aria-controls="unfold-chat-panel"
+                onClick={() => setUnfoldSubView('chat')}
+                className="px-2 py-1 text-12 rounded"
+                style={{
+                  background: unfoldSubView === 'chat' ? 'var(--white-10)' : 'transparent',
+                  color: 'var(--text-heading)'
+                }}
+              >
+                Chat
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={unfoldSubView === 'perspectives'}
+                aria-controls="unfold-perspectives-panel"
+                onClick={() => setUnfoldSubView('perspectives')}
+                className="px-2 py-1 text-12 rounded"
+                style={{
+                  background: unfoldSubView === 'perspectives' ? 'var(--white-10)' : 'transparent',
+                  color: 'var(--text-heading)'
+                }}
+              >
+                Perspectives
+              </button>
+            </div>
+            {/* Perspectives content (full column) */}
+            {unfoldSubView === 'perspectives' && (
+              <PerspectivesPanel />
+            )}
             {/* GenAI chat history */}
-            <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px' }}>
+            <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px', display: unfoldSubView === 'perspectives' ? 'none' : undefined }}>
               <div className="space-y-2">
                 {(() => {
                   // Merge messages and interactions, sort by timestamp to ensure correct order
@@ -4216,14 +4546,41 @@ const DiscoveryPage: React.FC = () => {
 
                   // Add interactions (user, assistant, and section markers)
                   genaiChat.interactions
-                    .filter((it) => it.kind === 'user' || it.kind === 'assistant' || it.kind === 'section_start' || it.kind === 'section_end')
+                    .filter((it) => it.kind === 'user' || it.kind === 'assistant' || it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end')
                     .forEach((it) => {
-                      const ts = (it as any).createdAt?.seconds * 1000 || 0;
+                      let ts = 0;
+                      try {
+                        const ca: any = (it as any).createdAt;
+                        if (ca && typeof ca.seconds === 'number') {
+                          ts = ca.seconds * 1000;
+                        } else if (typeof ca === 'string') {
+                          const d = Date.parse(ca);
+                          if (!Number.isNaN(d)) ts = d;
+                        } else if (typeof ca === 'number') {
+                          ts = ca;
+                        }
+                      } catch {}
                       merged.push({ type: 'interaction', data: it, timestamp: ts });
                     });
 
-                  // Sort by timestamp
-                  merged.sort((a, b) => a.timestamp - b.timestamp);
+                  // Sort by timestamp; on ties, ensure user appears before assistant/other
+                  const priority = (item: MergedItem) => {
+                    try {
+                      if (item.type === 'interaction') {
+                        const k = String(item.data?.kind || '').toLowerCase();
+                        if (k === 'user') return 1;
+                        if (k === 'assistant') return 3;
+                        return 2; // section markers, action
+                      } else {
+                        const r = String(item.data?.role || '').toLowerCase();
+                        return r === 'user' ? 1 : 3;
+                      }
+                    } catch { return 2; }
+                  };
+                  merged.sort((a, b) => {
+                    if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+                    return priority(a) - priority(b);
+                  });
 
                   return merged.map((item) => {
                     if (item.type === 'message') {
@@ -4244,7 +4601,11 @@ const DiscoveryPage: React.FC = () => {
                       isError={isAssistantError}
                         headerText={!isUser ? (genaiChat.messageMeta?.[m.id]?.headerText || 'assistant') : undefined}
                         leftAccent={!isUser ? !!genaiChat.messageMeta?.[m.id]?.leftAccent : false}
-                      footer={undefined}
+                      footer={isUser && genaiChat.preStanceLatency && genaiChat.preStanceLatency[m.id] ? (
+                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                          stance: {(genaiChat.preStanceLatency[m.id] / 1000).toFixed(2)}s
+                        </span>
+                      ) : undefined}
                     >
                       {isAssistantPlaceholder ? (
                         <div className="space-y-1">
@@ -4410,6 +4771,25 @@ const DiscoveryPage: React.FC = () => {
                           </div>
                         );
                       }
+                      
+                      // Special rendering for action interactions
+                      if (it.kind === 'action') {
+                        // Respect collapsed sections
+                        try {
+                          const sid = (it as any).sectionId as string | undefined;
+                          if (sid && collapsedSections[sid]) return null;
+                        } catch {}
+                        return (
+                          <div key={it.id} className="my-2 p-3 rounded" style={{ 
+                            background: 'var(--accent-research-10)', 
+                            color: 'var(--accent-research)' 
+                          }}>
+                            <div className="text-12 font-medium">Executing command:</div>
+                            <div className="text-12 font-mono mt-1">{it.content}</div>
+                          </div>
+                        );
+                      }
+                      
                       const isUser = it.kind === 'user';
                       // Skip rendering if inside a collapsed section
                       try {
@@ -4727,13 +5107,41 @@ const DiscoveryPage: React.FC = () => {
             )}
             {/* Thinking indicator moved inside assistant bubble during streaming */}
             {/* Usage and attributions after completion */}
-            {!genaiChat.streaming && (genaiChat.usage || genaiChat.attributions.length > 0) && (
+            {!genaiChat.streaming && ((genaiChat.usage || genaiChat.attributions.length > 0) || (() => {
+              try {
+                const map = (genaiChat as any).preStanceLatency || {} as Record<string, number>;
+                const msgs = (genaiChat as any).messages || [];
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                  const id = msgs[i]?.id;
+                  const ms = map[id];
+                  if (typeof ms === 'number' && ms > 0) return true;
+                }
+              } catch {}
+              return false;
+            })()) && (
               <div className="px-1 pb-2 space-y-1">
-                {genaiChat.usage && (
-                  <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                    Tokens: prompt {genaiChat.usage.promptTokens}, output {genaiChat.usage.outputTokens}, total {genaiChat.usage.totalTokens}
-                  </div>
-                )}
+                {(() => {
+                  try {
+                    const map = (genaiChat as any).preStanceLatency || {} as Record<string, number>;
+                    const msgs = (genaiChat as any).messages || [];
+                    let stanceMs = 0;
+                    for (let i = msgs.length - 1; i >= 0; i--) {
+                      const id = msgs[i]?.id;
+                      const ms = map[id];
+                      if (typeof ms === 'number' && ms > 0) { stanceMs = ms; break; }
+                    }
+                    const u = (genaiChat as any).usage;
+                    const hasUsage = !!u;
+                    if (!hasUsage && stanceMs <= 0) return null;
+                    const usageText = hasUsage ? `Tokens: prompt ${u?.promptTokens ?? 0}, output ${u?.outputTokens ?? 0}, total ${u?.totalTokens ?? 0}` : '';
+                    const stanceText = stanceMs > 0 ? `${hasUsage ? ' · ' : ''}stance: ${(stanceMs / 1000).toFixed(2)}s` : '';
+                    return (
+                      <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                        {usageText}{stanceText}
+                      </div>
+                    );
+                  } catch { return null; }
+                })()}
                 {genaiChat.attributions.length > 0 && (
                   <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
                     Sources:
@@ -4770,19 +5178,9 @@ const DiscoveryPage: React.FC = () => {
                 </div>
               );
             })()}
-            {/* Analysis status banner above input */}
-            {(() => {
-              const s: any = (useDiscoveryStore as any).getState?.().lastAnalysisStatus;
-              if (!s) return null;
-              const color = s.status === 'started' ? 'var(--text-secondary-strong)' : (s.status === 'done' ? 'var(--green-50)' : 'var(--error-50)');
-              const text = `${s.kind}: ${s.status}` + (s.count != null ? ` (${s.count})` : '') + (s.elapsedMs != null && s.status !== 'started' ? ` · ${s.elapsedMs}ms` : '');
-              return (
-                <div className="mb-2 px-2 py-1 rounded" style={{ border: '1px solid var(--overlay-line-90)', color, background: 'var(--bg-elevated)' }}>
-                  <span className="text-xs">{text}</span>
-                </div>
-              );
-            })()}
+            {/* Analysis status banner unified in UnfoldRequest; duplicate removed here */}
             {/* Input */}
+            {unfoldSubView !== 'perspectives' && (
             <UnfoldRequest
               dangerTint={isHighRisk}
               showHighRiskTag={isHighRisk}
@@ -4815,8 +5213,27 @@ const DiscoveryPage: React.FC = () => {
                   try {
                     setEntitiesAnalyzing(true); // show status immediately
                     const pid = await genaiChat.ensureProject();
-                  const prompt = raw.replace(/^\s*\/analyze\s+entities\b\s*/i, '') + "\n\nConstraints:\n- Only include concrete, named entities (no abstract categories).\n- Allowed types: person | group_of_persons | organization_or_platform | project_or_product | classifier_or_standard | classification_code | regulatory_document | government_agency | contract_document | location | other.\n- Reject generic words like 'technical regulation', 'open databases', 'contracts' without identifiers.";
-                    await api.analyzeEntities(pid, prompt);
+                    try {
+                      if ((window as any).wsSubscribeProject && pid) {
+                        (window as any).wsSubscribeProject(pid);
+                        const waitForWsSubscribed = async (projectId: string, timeoutMs = 1500) => {
+                          const start = Date.now();
+                          // eslint-disable-next-line no-constant-condition
+                          while (true) {
+                            try {
+                              const ws = (await import('../stores/wsStore')).useWsStore.getState();
+                              if (ws.connected && ws.subscribedProjectId === projectId) break;
+                            } catch {}
+                            if (Date.now() - start > timeoutMs) break;
+                            await new Promise((r) => setTimeout(r, 60));
+                          }
+                        };
+                        await waitForWsSubscribed(pid);
+                      }
+                    } catch {}
+                    const prompt = raw.replace(/^\s*\/analyze\s+entities\b\s*/i, '') + "\n\nConstraints:\n- Only include concrete, named entities (no abstract categories).\n- Allowed types: person | group_of_persons | organization_or_platform | project_or_product | classifier_or_standard | classification_code | regulatory_document | government_agency | contract_document | location | other.\n- Reject generic words like 'technical regulation', 'open databases', 'contracts' without identifiers.";
+                    const res = await api.analyzeEntities(pid, prompt);
+                    try { console.log('[AnalyzeEntities] queued:', res); } catch {}
                     // UnfoldRequest clears itself after submit; WS will flip analyzing=false on parsed/failed
                   } catch (e) {
                     console.error('[AnalyzeEntities] failed', e);
@@ -4971,6 +5388,7 @@ const DiscoveryPage: React.FC = () => {
               }}
               disabled={genaiChat.streaming || !queryText.trim()}
             />
+            )}
             {/* Resizer handle at right edge of center column */}
             <div
               className="chat-resizer"
@@ -5182,28 +5600,7 @@ const DiscoveryPage: React.FC = () => {
                 {/* Panel content */}
                 <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
                   {rightArtifactsOpen ? (
-                    <div className="space-y-3">
-                      {/* Entities artifact */}
-                      <div className="p-2 rounded" style={{ background: 'var(--white-06)', border: '1px solid var(--overlay-line-90)' }}>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="text-12" style={{ color: 'var(--text-heading)' }}>Entities</div>
-                          <button
-                            type="button"
-                            className="px-2 py-1 rounded text-11"
-                            style={{ background: 'transparent', color: 'var(--text-secondary-strong)' }}
-                            onClick={async () => {
-                              try {
-                                const pid = await useGenaiChatStore.getState().ensureProject();
-                                await api.analyzeEntities(pid, '');
-                              } catch {}
-                            }}
-                          >
-                            Refresh
-                          </button>
-                        </div>
-                        <EntitiesList projectId={genaiChat.projectId} />
-                      </div>
-                    </div>
+                    <FindingsPanel projectId={genaiChat.projectId} />
                   ) : rightContextOpen ? (
                     <div className="space-y-2">
                       {/* Sections list */}
@@ -5334,9 +5731,7 @@ const DiscoveryPage: React.FC = () => {
                 {/* Workspace Artifacts toolbar (bottom) */}
                 {rightArtifactsOpen && (
                   <div className="mt-2 px-3" style={{ borderTop: '1px solid var(--overlay-line-90)', paddingTop: 8 }}>
-                    {/* Inline analysis status indicator */}
-                    <ArtifactsAnalysisStatus />
-                    <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 6, marginTop: 6 }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 6 }}>
                     <button
                       type="button"
                       aria-label="Analyze entities"
@@ -5348,7 +5743,26 @@ const DiscoveryPage: React.FC = () => {
                       onClick={async () => {
                         try {
                           const pid = await genaiChat.ensureProject();
-                          await (await import('../lib/api')).api.analyzeEntities(pid, '');
+                          try {
+                            if ((window as any).wsSubscribeProject && pid) {
+                              (window as any).wsSubscribeProject(pid);
+                              const waitForWsSubscribed = async (projectId: string, timeoutMs = 1500) => {
+                                const start = Date.now();
+                                // eslint-disable-next-line no-constant-condition
+                                while (true) {
+                                  try {
+                                    const ws = (await import('../stores/wsStore')).useWsStore.getState();
+                                    if (ws.connected && ws.subscribedProjectId === projectId) break;
+                                  } catch {}
+                                  if (Date.now() - start > timeoutMs) break;
+                                  await new Promise((r) => setTimeout(r, 60));
+                                }
+                              };
+                              await waitForWsSubscribed(pid);
+                            }
+                          } catch {}
+                          const res = await (await import('../lib/api')).api.analyzeEntities(pid, '');
+                          try { console.log('[AnalyzeEntities] queued:', res); } catch {}
                         } catch {}
                       }}
                     >
@@ -5369,7 +5783,7 @@ const DiscoveryPage: React.FC = () => {
                       style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); await (await import('../lib/api')).api.analyzeFacts(pid, ''); } catch {} }}
+                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeFacts(pid, ''); try { console.log('[AnalyzeFacts] queued:', res); } catch {} } catch {} }}
                     >
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                         <path d="M3 4h18v4H3zM3 10h18v10H3z" strokeWidth="2" />
@@ -5385,7 +5799,7 @@ const DiscoveryPage: React.FC = () => {
                       style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); await (await import('../lib/api')).api.analyzeEvents(pid, ''); } catch {} }}
+                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeEvents(pid, ''); try { console.log('[AnalyzeEvents] queued:', res); } catch {} } catch {} }}
                     >
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                         <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth="2" />
@@ -5401,7 +5815,7 @@ const DiscoveryPage: React.FC = () => {
                       style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); await (await import('../lib/api')).api.analyzeMetrics(pid, ''); } catch {} }}
+                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeMetrics(pid, ''); try { console.log('[AnalyzeMetrics] queued:', res); } catch {} } catch {} }}
                     >
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                         <path d="M4 20V10M10 20V4M16 20v-8M22 20H2" strokeWidth="2" strokeLinecap="round" />
@@ -5416,7 +5830,7 @@ const DiscoveryPage: React.FC = () => {
                       style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); await (await import('../lib/api')).api.analyzeDecisions(pid, ''); } catch {} }}
+                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeDecisions(pid, ''); try { console.log('[AnalyzeDecisions] queued:', res); } catch {} } catch {} }}
                     >
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                         <path d="M4 12h8M12 12l4-4M12 12l4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />

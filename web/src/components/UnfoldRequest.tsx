@@ -42,8 +42,29 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   const { t } = useTranslation();
   const [attachedDocs, setAttachedDocs] = React.useState<AttachedDoc[]>([]);
   const lastDocEvent = useDiscoveryStore((s: any) => s.lastDocEvent);
+  const lastAnalysisStatus = useDiscoveryStore((s: any) => s.lastAnalysisStatus);
+  const currentProjectId = useGenaiChatStore((s) => s.projectId);
   const [isDragging, setIsDragging] = React.useState(false);
   const [statusMessages, setStatusMessages] = React.useState<StatusMessage[]>([]);
+  const [analysisDismissTs, setAnalysisDismissTs] = React.useState<number | null>(null);
+  // Reset dismissed status indicator when chat is cleared
+  const chatIsEmpty = useGenaiChatStore((s) => (s.messages.length === 0 && s.interactions.length === 0));
+  React.useEffect(() => {
+    setAnalysisDismissTs(null);
+  }, [chatIsEmpty]);
+  // Add/remove blue glow on artifacts button when analysis completes
+  React.useEffect(() => {
+    try {
+      const st = String((lastAnalysisStatus as any)?.status || '').toLowerCase();
+      const pid = (lastAnalysisStatus as any)?.projectId;
+      if (pid && currentProjectId && pid !== currentProjectId) return;
+      const btn = document.getElementById('btn-artifacts');
+      if (!btn) return;
+      if (st === 'done') {
+        btn.classList.add('etg-glow-blue');
+      }
+    } catch {}
+  }, [lastAnalysisStatus, currentProjectId]);
   
   // Now fully uncontrolled - manage our own state
   const [value, setValue] = React.useState('');
@@ -155,6 +176,15 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       onClear?.();
     }
   }, [isSlashInput, slashItems, showSlashMenu, slashActiveIdx, value, onSubmit, onClear]);
+
+  // Click submit handler (same behavior as Ctrl/Cmd+Enter)
+  const handleClickSubmit = React.useCallback(() => {
+    if (!value.trim()) return;
+    onSubmit(value);
+    setValue('');
+    setAttachedDocs([]);
+    onClear?.();
+  }, [value, onSubmit, onClear]);
 
   // Hide slash menu on outside click or Escape is already handled in onKeyDown
   React.useEffect(() => {
@@ -417,6 +447,96 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
           ))}
         </div>
       )}
+      {/* Unified analysis status line (from WS analysis.status + document.process) */}
+      {(() => {
+        try {
+          const status = lastAnalysisStatus && lastAnalysisStatus.projectId === currentProjectId ? lastAnalysisStatus : null;
+          const lastDoc = lastDocEvent && lastDocEvent.projectId === currentProjectId ? lastDocEvent : null;
+          if (!status && !lastDoc) return null;
+
+          const toKind = (k?: string) => {
+            const v = (k || '').toLowerCase();
+            if (v) return v;
+            // infer from doc filename
+            const f = String(lastDoc?.filename || lastDoc?.docId || '').toLowerCase();
+            if (f.includes('entities')) return 'entities';
+            if (f.includes('facts')) return 'facts';
+            if (f.includes('events')) return 'events';
+            if (f.includes('metrics')) return 'metrics';
+            if (f.includes('decisions')) return 'decisions';
+            return 'analysis';
+          };
+
+          const kind = toKind((status as any)?.kind);
+          const st = String((status as any)?.status || '').toLowerCase();
+          const count = typeof (status as any)?.count === 'number' ? ((status as any).count as number) : undefined;
+          const elapsedMs = typeof (status as any)?.elapsedMs === 'number' ? ((status as any).elapsedMs as number) : undefined;
+          const err = (status as any)?.error ? String((status as any).error) : undefined;
+          const docParsing = String((lastDoc as any)?.status || '').toLowerCase() === 'parsing';
+          const tsVal = (typeof (status as any)?.ts === 'number' ? (status as any).ts : undefined) || (typeof (lastDoc as any)?.ts === 'number' ? (lastDoc as any).ts : undefined) || null;
+
+          // Respect dismissal until a newer event arrives
+          if (analysisDismissTs != null && tsVal != null && tsVal <= analysisDismissTs) return null;
+
+          const fmtTime = (ms?: number) => {
+            if (typeof ms !== 'number' || ms < 0) return '';
+            if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
+            const s = ms / 1000;
+            return `${s.toFixed(1)}s`;
+          };
+          const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+
+          let text = '';
+          if (st === 'started') {
+            text = `Analyzing ${kind}…`;
+          } else if (docParsing && (!status || st !== 'done')) {
+            text = `Parsing ${kind}…`;
+          } else if (st === 'done') {
+            const n = typeof count === 'number' ? count : 0;
+            const t = fmtTime(elapsedMs);
+            const unitOne = kind === 'entities' ? 'entity' : kind === 'facts' ? 'fact' : kind === 'events' ? 'event' : kind === 'metrics' ? 'metric' : kind === 'decisions' ? 'decision' : kind;
+            const unitMany = kind === 'entities' ? 'entities' : kind === 'facts' ? 'facts' : kind === 'events' ? 'events' : kind === 'metrics' ? 'metrics' : kind === 'decisions' ? 'decisions' : kind;
+            if (n === 0) {
+              text = `Found no ${unitMany}${t ? ` in ${t}` : ''}`;
+            } else if (n === 1) {
+              text = `Found 1 ${unitOne}${t ? ` in ${t}` : ''}`;
+            } else {
+              text = `Found ${n} ${unitMany}${t ? ` in ${t}` : ''}`;
+            }
+          } else if (st === 'failed' || st === 'error') {
+            const reason = err ? `: ${err}` : '';
+            text = `${kind.charAt(0).toUpperCase() + kind.slice(1)} analysis failed${reason}`;
+          } else if (st) {
+            text = `${kind}: ${st}`;
+          }
+          if (!text) return null;
+
+          return (
+            <div className="mb-2 rounded-lg px-3 py-2 flex items-center gap-2"
+                 style={{ backgroundColor: 'rgba(96, 165, 250, 0.08)', border: '1px solid rgba(96, 165, 250, 0.3)' }}>
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: '#60a5fa' }}>
+                <circle cx="12" cy="12" r="10" strokeWidth="2" />
+                <path d="M12 16v-4M12 8h.01" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <div className="text-xs" style={{ color: '#60a5fa' }}>{text}</div>
+              <div style={{ flex: 1 }} />
+              <button
+                type="button"
+                aria-label="Dismiss status"
+                title="Dismiss"
+                onClick={() => { setAnalysisDismissTs(tsVal || Date.now()); try { const btn = document.getElementById('btn-artifacts'); if (btn) btn.classList.remove('etg-glow-blue'); } catch {} }}
+                className="rounded"
+                style={{ background: 'transparent', color: '#60a5fa' }}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M6 6l12 12M18 6L6 18" strokeWidth="2" />
+                </svg>
+              </button>
+            </div>
+          );
+        } catch { return null; }
+      })()}
+      
       
       {/* Attached documents list (shown above input) */}
       <AttachedDocuments docs={attachedDocs} onRemove={handleRemoveDoc} />
@@ -643,20 +763,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               type="button"
               aria-label={t('unfold.request.send')}
               className="flex items-center justify-center rounded-full"
-              onClick={() => { 
-                if (!disabled && value.trim()) {
-                  // Submit with current value
-                  onSubmit(value);
-                  
-                  // Clear input and attached docs
-                  setValue('');
-                  setAttachedDocs([]);
-                  
-                  // Notify parent if needed
-                  onClear?.();
-                }
-              }}
-              disabled={disabled}
+              onClick={handleClickSubmit}
               style={{
                 width: '32px',
                 height: '32px',
