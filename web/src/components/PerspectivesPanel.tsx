@@ -4,12 +4,14 @@ import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useTranslation } from 'react-i18next';
 
 interface PerspectivesPanelProps {
   // Placeholder for future filters/sections
 }
 
 const PerspectivesPanel: React.FC<PerspectivesPanelProps> = () => {
+  const { t } = useTranslation();
   const [preset, setPreset] = React.useState<string>('');
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -268,7 +270,7 @@ Constraints:
     if (!instruction) return;
     const transcript = buildTranscript();
     if (!transcript) {
-      setError('Нет контекста для анализа');
+      setError(t('unfold.perspectives.status.noContext'));
       return;
     }
     // Build markdown-oriented prompt
@@ -309,7 +311,7 @@ Constraints:
       const text = (res && typeof res.content === 'string') ? res.content : '';
       setMdText(text);
     } catch (e: any) {
-      setError('Ошибка анализа');
+      setError(t('unfold.perspectives.status.analysisFailed'));
     } finally {
       setLoading(false);
       try {
@@ -320,12 +322,12 @@ Constraints:
 
   // Run only manually on selection (no auto reruns on chat updates)
 
-  // Preset items with icons and short English descriptions
+  // Preset items with icons and i18n-powered descriptions
   const presetItems = [
     {
       id: 'themes',
-      title: 'Themes',
-      descr: 'Cluster all discussed topics with detailed descriptions, trend and share.',
+      title: t('unfold.selector.options.themes', { defaultValue: 'Themes' }),
+      descr: t('unfold.perspectives.selector.options.themes', { defaultValue: 'Themes — Cluster all discussed topics; trend and share' }),
       icon: (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M4 7h16M4 12h16M4 17h16" strokeWidth="2" strokeLinecap="round" />
@@ -334,8 +336,8 @@ Constraints:
     },
     {
       id: 'consulting',
-      title: 'Strategic Consulting Lens',
-      descr: 'Senior consultant view: framing, gaps, alt angles, next questions.',
+      title: t('unfold.selector.options.consulting', { defaultValue: 'Strategic Consulting Lens' }),
+      descr: t('unfold.perspectives.selector.options.consulting', { defaultValue: 'Strategic Consulting Lens — Framing, gaps, angles, next questions' }),
       icon: (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <rect x="3" y="5" width="18" height="12" rx="2" strokeWidth="2" />
@@ -346,8 +348,8 @@ Constraints:
     },
     {
       id: 'discussion',
-      title: 'Discussion Analysis',
-      descr: 'Flow, roles (humans/AI), techniques quality, recommendations.',
+      title: t('unfold.selector.options.discussion', { defaultValue: 'Discussion Analysis' }),
+      descr: t('unfold.perspectives.selector.options.discussion', { defaultValue: 'Discussion Analysis — Flow, roles, techniques, recommendations' }),
       icon: (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M4 6h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H9l-5 3V8a2 2 0 0 1 2-2z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -356,8 +358,8 @@ Constraints:
     },
     {
       id: 'tasks',
-      title: 'Tasks',
-      descr: 'Action items, assignees, statuses and deadlines derived from discussion.',
+      title: t('unfold.selector.options.tasks', { defaultValue: 'Tasks' }),
+      descr: t('unfold.perspectives.selector.options.tasks', { defaultValue: 'Tasks — Action items, assignees, statuses, deadlines' }),
       icon: (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <rect x="4" y="4" width="6" height="6" rx="1" strokeWidth="2" />
@@ -368,8 +370,8 @@ Constraints:
     },
     {
       id: 'sources',
-      title: 'Sources',
-      descr: 'Referenced sources and their contribution to outcomes.',
+      title: t('unfold.selector.options.sources', { defaultValue: 'Sources' }),
+      descr: t('unfold.perspectives.selector.options.sources', { defaultValue: 'Sources — Referenced sources and contributions' }),
       icon: (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M10.5 7.5l1.5-1.5a4.5 4.5 0 1 1 6.4 6.4l-1.5 1.5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -379,8 +381,8 @@ Constraints:
     },
     {
       id: 'timeline',
-      title: 'Timeline',
-      descr: 'Key milestones, topic shifts and decisions over time.',
+      title: t('unfold.selector.options.timeline', { defaultValue: 'Timeline' }),
+      descr: t('unfold.perspectives.selector.options.timeline', { defaultValue: 'Timeline — Milestones, topic shifts, decisions' }),
       icon: (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <circle cx="12" cy="12" r="9" strokeWidth="2" />
@@ -390,8 +392,8 @@ Constraints:
     },
     {
       id: 'entities',
-      title: 'Entities',
-      descr: 'Named entities and relations discussed.',
+      title: t('unfold.selector.options.entities', { defaultValue: 'Entities' }),
+      descr: t('unfold.perspectives.selector.options.entities', { defaultValue: 'Entities — Named entities and relations' }),
       icon: (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <circle cx="6" cy="12" r="2" strokeWidth="2" />
@@ -403,8 +405,8 @@ Constraints:
     },
     {
       id: 'risks_decisions',
-      title: 'Risks & Decisions',
-      descr: 'Decisions and risk points explicitly present in the transcript.',
+      title: t('unfold.selector.options.risksDecisions', { defaultValue: 'Risks & Decisions' }),
+      descr: t('unfold.perspectives.selector.options.risksDecisions', { defaultValue: 'Risks & Decisions — Decisions and risk points' }),
       icon: (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M12 4l8 14H4l8-14z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -445,9 +447,9 @@ Constraints:
         {/* Header: title + language + actions */}
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
-            <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Choose perspective</div>
-            <span className="text-11 px-1.5 py-0.5 rounded" title="Preferred language for answers" style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{prefLangCode}</span>
-            <span className="text-11 px-1.5 py-0.5 rounded" title="Selected preset id" style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{preset || '—'}</span>
+            <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.perspectives.header.choose')}</div>
+            <span className="text-11 px-1.5 py-0.5 rounded" title={t('unfold.perspectives.header.langTitle')} style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{prefLangCode}</span>
+            <span className="text-11 px-1.5 py-0.5 rounded" title={t('unfold.perspectives.header.presetTitle')} style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{preset || '—'}</span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -467,7 +469,7 @@ Constraints:
         </div>
         {/* Description */}
         <div className="text-12 mb-2" style={{ color: 'var(--text-secondary-strong)' }}>
-          View the discussion from different analytical angles: clustered themes, tasks, sources, timeline, entities, and risks/decisions. Choose one to generate an academic, structured summary in your preferred language.
+          {t('unfold.perspectives.header.desc')}
         </div>
         {/* Compact dropdown selector with strict icon and Run on the right */}
         <div className="flex items-center gap-2">
@@ -479,7 +481,7 @@ Constraints:
               </svg>
             )}
           </div>
-          <label htmlFor="perspective-select" className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Select</label>
+          <label htmlFor="perspective-select" className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.perspectives.selector.label')}</label>
           <select
             id="perspective-select"
             ref={selectRef}
@@ -488,24 +490,24 @@ Constraints:
             className="text-12 px-2 py-1 rounded"
             style={{ background: 'var(--bg-elevated)', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', width: '33%', minWidth: 220, maxWidth: 360 }}
           >
-            <option value="" disabled>— Choose an analytical view —</option>
-            <option value="consulting">Strategic Consulting Lens — Framing, gaps, angles, next questions</option>
-            <option value="discussion">Discussion Analysis — Flow, roles, techniques, recommendations</option>
-            <option value="themes">Themes — Cluster all discussed topics; trend and share</option>
-            <option value="tasks">Tasks — Action items, assignees, statuses, deadlines</option>
-            <option value="sources">Sources — Referenced sources and contributions</option>
-            <option value="timeline">Timeline — Milestones, topic shifts, decisions</option>
-            <option value="entities">Entities — Named entities and relations</option>
-            <option value="risks_decisions">Risks & Decisions — Decisions and risk points</option>
+            <option value="" disabled>{t('unfold.perspectives.selector.placeholder')}</option>
+            <option value="consulting">{t('unfold.perspectives.selector.options.consulting')}</option>
+            <option value="discussion">{t('unfold.perspectives.selector.options.discussion')}</option>
+            <option value="themes">{t('unfold.perspectives.selector.options.themes')}</option>
+            <option value="tasks">{t('unfold.perspectives.selector.options.tasks')}</option>
+            <option value="sources">{t('unfold.perspectives.selector.options.sources')}</option>
+            <option value="timeline">{t('unfold.perspectives.selector.options.timeline')}</option>
+            <option value="entities">{t('unfold.perspectives.selector.options.entities')}</option>
+            <option value="risks_decisions">{t('unfold.perspectives.selector.options.risksDecisions')}</option>
           </select>
-          <button
+            <button
             type="button"
             className="text-12 px-2 py-1 rounded"
             onClick={() => { const val = selectRef.current?.value || preset; if (val) void handleRun(val); }}
             disabled={!preset || loading}
             style={{ background: 'var(--white-10)', color: 'var(--text-heading)', opacity: (!preset || loading) ? 0.6 : 1 }}
           >
-            Run
+            {t('unfold.perspectives.actions.run')}
           </button>
         </div>
         {error && (
@@ -520,7 +522,7 @@ Constraints:
             <circle cx="12" cy="12" r="9" strokeWidth="2" opacity="0.25" />
             <path d="M21 12a9 9 0 0 0-9-9" strokeWidth="2" strokeLinecap="round" />
           </svg>
-          <span>Running… {runSeconds}s</span>
+          <span>{t('unfold.perspectives.status.running', { seconds: runSeconds })}</span>
         </div>
       )}
 
@@ -528,8 +530,8 @@ Constraints:
       {showToTop && (
         <button
           type="button"
-          aria-label="Scroll to top"
-          title="Scroll to top"
+          aria-label={t('unfold.perspectives.status.scrollTop')}
+          title={t('unfold.perspectives.status.scrollTop')}
           onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ top: 0, behavior: 'smooth' }); }}
           className="p-1 rounded"
           style={{ position: 'sticky', top: 6, float: 'right', background: 'transparent', color: 'var(--text-secondary-strong)' }}
@@ -568,8 +570,8 @@ Constraints:
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                aria-label="Copy"
-                title="Copy"
+                aria-label={t('unfold.perspectives.actions.copy')}
+                title={t('unfold.perspectives.actions.copy')}
                 onClick={async () => {
                   try {
                     if (!mdText) return;
@@ -597,13 +599,13 @@ Constraints:
               </button>
               {savedAt && (
                 <span className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>
-                  Saved {savedAt}
+                  {t('unfold.perspectives.actions.savedAt', { time: savedAt })}
                 </span>
               )}
               <button
                 type="button"
-                aria-label="Save"
-                title="Save"
+                aria-label={t('unfold.perspectives.actions.save')}
+                title={t('unfold.perspectives.actions.save')}
                 onClick={async () => {
                   try {
                     if (!mdText) return;
@@ -684,7 +686,7 @@ Constraints:
                   <path d="M8 7l4-4 4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                   <rect x="4" y="13" width="16" height="7" rx="2" strokeWidth="2" />
                 </svg>
-                Save to documents
+                {t('unfold.perspectives.actions.saveToDocs')}
               </span>
             </button>
           </div>
@@ -698,8 +700,8 @@ Constraints:
       {showToBottom && (
         <button
           type="button"
-          aria-label="Scroll to bottom"
-          title="Scroll to bottom"
+          aria-label={t('unfold.perspectives.status.scrollBottom')}
+          title={t('unfold.perspectives.status.scrollBottom')}
           onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); }}
           className="p-1 rounded"
           style={{ position: 'sticky', bottom: 6, float: 'right', background: 'transparent', color: 'var(--text-secondary-strong)', marginTop: 6 }}

@@ -414,7 +414,11 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		status, code, msg, details := parseUpstreamError(err)
-		_ = h.publisher.PublishJSON(ctx, "genai.stream.error", auth.TenantID, map[string]any{"error": msg})
+		_ = h.publisher.PublishJSON(ctx, "genai.stream.error", auth.TenantID, map[string]any{
+			"projectId": projectID,
+			"streamId":  streamID,
+			"error":     msg,
+		})
 		_ = WriteError(w, status, code, msg, details)
 		return
 	}

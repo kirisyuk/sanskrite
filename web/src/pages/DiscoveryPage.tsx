@@ -428,21 +428,41 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
     } catch { return null; }
   }, [genaiChat.interactions, (genaiChat as any).persistedByLocalId, messageId]);
   const [open, setOpen] = React.useState(false);
+  const [selectedTag, setSelectedTag] = React.useState<string | null>(null);
   const msg = React.useMemo(() => genaiChat.messages.find((m) => m.id === messageId), [genaiChat.messages, messageId]);
   const { theme } = React.useContext(ThemeContext);
   if (!ev) return null;
   const level = Math.max(0, Math.min(1, Number(ev.biasLevel || 0)));
-  const pct = Math.round(level * 100);
   const hue = Math.round(120 * (1 - level));
   const fill = `hsl(${hue}, 60%, 70%)`;
   const labelLevel = Math.round(level * 10) / 10;
-  const bucketLabel = (level <= 0.1) ? 'Neutral' : (level <= 0.4) ? 'Mild tilt' : (level <= 0.7) ? 'Biased' : 'Strong bias';
+  
+  // 5 градаций: 0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
+  const bucketLabel = level <= 0.2 
+    ? t('unfold.bias.neutral')
+    : level <= 0.4
+    ? t('unfold.bias.balanced')
+    : level <= 0.6
+    ? t('unfold.bias.subjective')
+    : level <= 0.8
+    ? t('unfold.bias.oneSided')
+    : t('unfold.bias.biased');
 
   const tLevel = Math.max(0, Math.min(1, Number(ev.thoughtfulness || 0)));
-  const tPct = Math.round(tLevel * 100);
   const tHue = Math.round(120 * (tLevel));
   const tFill = `hsl(${tHue}, 60%, 70%)`;
-  const tLabel = tLevel <= 0.2 ? 'Shallow' : tLevel <= 0.5 ? 'Basic' : tLevel <= 0.8 ? 'Nuanced' : 'Deep';
+  const tLabelLevel = Math.round(tLevel * 10) / 10;
+  
+  // 5 градаций: 0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
+  const tLabel = tLevel <= 0.2
+    ? t('unfold.thoughtfulness.shallow')
+    : tLevel <= 0.4
+    ? t('unfold.thoughtfulness.basic')
+    : tLevel <= 0.6
+    ? t('unfold.thoughtfulness.moderate')
+    : tLevel <= 0.8
+    ? t('unfold.thoughtfulness.deep')
+    : t('unfold.thoughtfulness.comprehensive');
 
   return (
     <div className="mt-1" style={{ width: '100%', position: 'relative' }}>
@@ -452,8 +472,8 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
         onClick={() => setOpen(!open)}
         style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}
       >
-        <div style={{ width: 120, height: 6, backgroundColor: (theme === 'dark' && msg?.role === 'user') ? 'var(--white-20)' : 'var(--overlay-line-90)', borderRadius: 4, overflow: 'hidden' }}>
-          <div style={{ width: pct + '%', height: '100%', backgroundColor: fill }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: fill }} />
         </div>
         <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{labelLevel.toFixed(1)} {bucketLabel}</div>
       </button>
@@ -467,17 +487,51 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
             </div>
           )}
           {Array.isArray(ev.biasTypes) && ev.biasTypes.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {ev.biasTypes.map((t: string, i: number) => (
-                <span key={i} className="px-2 py-0.5 rounded-full text-[10px]" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{t}</span>
-              ))}
-            </div>
+            <>
+              <div className="flex flex-wrap gap-1">
+                {ev.biasTypes.map((code: string, i: number) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setSelectedTag(selectedTag === code ? null : code)}
+                    className="px-2 py-0.5 rounded-full text-[10px] transition-colors cursor-pointer"
+                    style={{ 
+                      backgroundColor: selectedTag === code ? 'var(--white-20)' : 'var(--white-10)', 
+                      color: 'var(--text-secondary-strong)',
+                      border: 'none',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedTag !== code) {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-15)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (selectedTag !== code) {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                      }
+                    }}
+                  >
+                    {t(`unfold.bias.tags.${code}`, { defaultValue: code })}
+                  </button>
+                ))}
+              </div>
+              {selectedTag && (
+                <div className="mt-2 p-3 rounded-lg" style={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+                  <div className="text-[12px]" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5' }}>
+                    {t(`unfold.bias.descriptions.${selectedTag}`, { defaultValue: '' })}
+                  </div>
+                </div>
+              )}
+            </>
           )}
-          <div className="flex items-center gap-2">
-            <div style={{ width: 120, height: 6, backgroundColor: 'var(--overlay-line-90)', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ width: tPct + '%', height: '100%', backgroundColor: tFill }} />
+          <div className="space-y-1">
+            <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{t('unfold.thoughtfulness.label')}</div>
+            <div className="flex items-center gap-2">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: tFill }} />
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{tLabelLevel.toFixed(1)} {tLabel}</div>
             </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{(Math.round(tLevel*10)/10).toFixed(1)} {tLabel}</div>
           </div>
         </div>
       )}
@@ -2257,73 +2311,22 @@ const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvai
             } as any;
           });
           appliedProjectRef.current = activePid;
+          // Finalize: suppress future suggestions and hide component permanently
+          try { if (typeof window !== 'undefined') window.localStorage.setItem(`chatTitleFinal:${activePid}`, '1'); } catch {}
+          finalizedRef.current = true;
+          try { onAvailableChange && onAvailableChange(false); } catch {}
+          try { onClose && onClose(); } catch {}
+          setTitles(null);
         } catch {}
       })();
     } catch {}
   }, [titles && titles[0], currentProject?.id]);
-  // Do not render content until we have assistant answer and titles available
-  if (!hasAssistant) return null;
-  if (loading && (!titles || titles.length === 0)) return null;
-  if (!titles || titles.length === 0) return null;
-  return (
-    <div className="mt-3 p-3 fade-in" style={{ display: visible ? 'block' as const : 'none' }}>
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-13" style={{ color: 'var(--text-tertiary-weak)' }}>How would you name this topic?</div>
-        <button
-          type="button"
-          aria-label="Hide title suggestions"
-          title="Hide title suggestions"
-          className="rounded-lg"
-          onClick={onClose}
-          style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-        >
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 6l12 12M18 6L6 18" strokeWidth="2"/></svg>
-        </button>
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {titles.slice(0, 5).map((t, i) => (
-          <button
-            key={i}
-            type="button"
-            className="chip"
-            title={t}
-            onClick={async () => {
-              try {
-                // Resolve active chat project id
-                const activePid = useGenaiChatStore.getState().projectId;
-                if (!activePid || activePid === 'local-unfold') return;
-                // Persist selection
-                await api.updateProject(activePid, { displayName: t, view: 'discovery' } as any);
-              console.log('[Titles] clicked, applied to project', { projectId: activePid, name: t });
-                useProjectsStore.setState((prev) => {
-                  const exists = prev.projects.some((p) => p.id === activePid);
-                  const updated = { ...(prev.currentProject || {}), id: activePid, displayName: t, view: 'discovery' } as any;
-                  return {
-                    projects: exists
-                      ? prev.projects.map((p) => (p.id === activePid ? { ...p, displayName: t, view: 'discovery' } : p))
-                      : [{ id: activePid, displayName: t, view: 'discovery' } as any, ...prev.projects],
-                    currentProject: updated,
-                  } as any;
-                });
-                // Mark finalized to suppress future suggestions and hide component
-                try { if (typeof window !== 'undefined') window.localStorage.setItem(`chatTitleFinal:${activePid}`, '1'); } catch {}
-                finalizedRef.current = true;
-                setTitles(null);
-                onClose();
-              } catch {}
-            }}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+  // Never render UI; only background auto-apply logic is kept
+  return null;
 };
 
 const DiscoveryPage: React.FC = () => {
+  const { t } = useTranslation();
   const { currentUser } = useAuth();
   const { projects, currentProject, fetchProjects, deleteProject, setCurrentProject } = useProjectsStore();
   const { sources, loading, executeDiscovery, fetchProjectSources, fetchProjectInteractions, clearSources, connectWs, answer, correlationId, interactions, sendChatMessage } = useDiscoveryStore();
@@ -3625,7 +3628,7 @@ const DiscoveryPage: React.FC = () => {
         >
           <div className="p-6 h-full flex flex-col">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Navigation</h3>
+              <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.navigation')}</h3>
               <button
                 onClick={() => setSideOpen(false)}
                 className="p-2 rounded-lg transition-colors"
@@ -3643,7 +3646,7 @@ const DiscoveryPage: React.FC = () => {
             <div className="mb-3">
               <button
                 type="button"
-                aria-label="New Chat"
+                aria-label={t('unfold.sections.newChat')}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
                 style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
@@ -3675,17 +3678,17 @@ const DiscoveryPage: React.FC = () => {
                   <rect x="3.5" y="3.5" width="17" height="17" rx="3" strokeWidth={2} />
                   <path strokeLinecap="round" strokeWidth={2} d="M12 8v8M8 12h8" />
                 </svg>
-                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>New Chat</span>
+                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.newChat')}</span>
               </button>
             </div>
             {/* Chats section */}
             <div className="mb-4">
               <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
-                Chats
+                {t('unfold.sections.chats')}
               </div>
 
               {projects.length === 0 ? (
-                <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>No chats yet</div>
+                <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.sections.noChatsYet')}</div>
               ) : (
                 <div className="space-y-1">
                   {projects.map((project) => (
@@ -3705,7 +3708,7 @@ const DiscoveryPage: React.FC = () => {
                       </span>
                       <button
                         className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
-                        title="Delete chat"
+                        title={t('unfold.sections.deleteChat')}
                         style={{ backgroundColor: 'transparent' }}
                         onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
@@ -3728,7 +3731,7 @@ const DiscoveryPage: React.FC = () => {
             {(availUserAnalysis || availDiscussionFlow || availArtifacts) && (
             <div className="mb-4 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
               <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
-                Analysis
+                {t('unfold.sections.analysis')}
               </div>
               {availUserAnalysis && (
               <button
@@ -3743,7 +3746,7 @@ const DiscoveryPage: React.FC = () => {
                   <circle cx="12" cy="8" r="3.5" strokeWidth={2} />
                   <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth={2} strokeLinecap="round" />
                 </svg>
-                <span className="text-12">How you engage</span>
+                <span className="text-12">{t('unfold.sections.howYouEngage')}</span>
               </button>
               )}
               {availDiscussionFlow && (
@@ -3761,7 +3764,7 @@ const DiscoveryPage: React.FC = () => {
                   <path d="M13 17h6" strokeWidth={2} strokeLinecap="round" />
                   <path d="M8 11v2c0 2.209 1.791 4 4 4h1" strokeWidth={2} strokeLinecap="round" />
                 </svg>
-                <span className="text-12">Discussion Flow</span>
+                <span className="text-12">{t('unfold.sections.discussionFlow')}</span>
               </button>
               )}
               {availArtifacts && (
@@ -3777,7 +3780,7 @@ const DiscoveryPage: React.FC = () => {
                   <rect x="5" y="5" width="14" height="6" rx="1.5" strokeWidth={2} />
                   <rect x="5" y="13" width="14" height="6" rx="1.5" strokeWidth={2} />
                 </svg>
-                <span className="text-12">Artifacts</span>
+                <span className="text-12">{t('unfold.sections.artifacts')}</span>
               </button>
               )}
             </div>
@@ -3786,9 +3789,9 @@ const DiscoveryPage: React.FC = () => {
             {/* Bottom settings button */}
             <div className="mt-auto pt-4">
               {isAdmin && (
-                <button
+                  <button
                   type="button"
-                  aria-label="Admin access"
+                  aria-label={t('unfold.sections.adminAccess')}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
                   style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
@@ -3800,12 +3803,12 @@ const DiscoveryPage: React.FC = () => {
                     <path d="M12 3l7 3v6c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6l7-3z" strokeWidth={2} />
                     <path d="M9.5 12.5l1.8 1.8 3.2-3.3" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
-                  <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Admin access</span>
+                  <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.adminAccess')}</span>
                 </button>
               )}
               <button
                 type="button"
-                aria-label="Settings"
+                aria-label={t('unfold.sections.settings')}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
                 style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
@@ -3817,7 +3820,7 @@ const DiscoveryPage: React.FC = () => {
                   <circle cx="12" cy="12" r="4.5" strokeWidth={2} />
                   <path strokeLinecap="round" strokeWidth={2} d="M12 3v2M12 19v2M3 12h2M19 12h2M5.636 5.636l1.414 1.414M16.95 7.05l1.414-1.414M18.364 18.364l-1.414-1.414M7.05 16.95l-1.414 1.414" />
                 </svg>
-                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Settings</span>
+                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.settings')}</span>
               </button>
             </div>
           </div>
@@ -3863,8 +3866,8 @@ const DiscoveryPage: React.FC = () => {
             }}
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
             style={{ backgroundColor: 'var(--newchat-bg)', color: 'var(--text-heading)', marginTop: '8px' }}
-            aria-label="New Chat"
-            title="New Chat"
+            aria-label={t('unfold.sections.newChat')}
+            title={t('unfold.sections.newChat')}
             onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)'; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)'; }}
           >
@@ -3897,8 +3900,8 @@ const DiscoveryPage: React.FC = () => {
               onClick={() => { setLeftPanel((p) => (p === 'flow' ? null : 'flow')); }}
               className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
               style={{ backgroundColor: leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)', color: leftPanel === 'flow' ? 'white' : 'var(--text-heading)', marginTop: '8px' }}
-              aria-label="Discussion Flow"
-              title="Discussion Flow"
+              aria-label={t('unfold.sections.discussionFlow')}
+              title={t('unfold.sections.discussionFlow')}
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg-hover)'; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)'; }}
             >
@@ -3917,8 +3920,8 @@ const DiscoveryPage: React.FC = () => {
               onClick={() => { setLeftPanel((p) => (p === 'artifacts' ? null : 'artifacts')); }}
               className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
               style={{ backgroundColor: leftPanel === 'artifacts' ? '#669999' : 'var(--newchat-bg)', color: leftPanel === 'artifacts' ? 'white' : 'var(--text-heading)', marginTop: '8px' }}
-              aria-label="Artifacts"
-              title="Artifacts"
+              aria-label={t('unfold.sections.artifacts')}
+              title={t('unfold.sections.artifacts')}
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'artifacts' ? '#669999' : 'var(--newchat-bg-hover)'; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'artifacts' ? '#669999' : 'var(--newchat-bg)'; }}
             >
@@ -4026,7 +4029,7 @@ const DiscoveryPage: React.FC = () => {
       {!sideOpen && !showSettings && (
         <button
           type="button"
-          aria-label="Settings"
+          aria-label={t('unfold.sections.settings')}
           onClick={() => setShowSettings(true)}
           className="rounded-lg transition-colors flex items-center justify-center"
           style={{
@@ -4202,35 +4205,12 @@ const DiscoveryPage: React.FC = () => {
             </div>
           )}
 
-          {/* Bottom slot: topic title suggestions (reserved area, fixed at column bottom) */}
+            {/* Bottom slot: topic title suggestions now run headless (no UI) */}
           <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight, position: 'relative' }}>
-            {/* Floating reopen button (left rail), appears only when suggestions exist and panel is hidden */}
-            {!titlesVisible && titlesAvailable && !sideOpen && (
-              <button
-                type="button"
-                aria-label="Show title suggestions"
-                title="Show title suggestions"
-                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300 ${titlesGlow ? 'animate-pulse' : ''}`}
-                style={{ position: 'fixed', left: 8, bottom: Math.max(56, titleSlotMinHeight) + 12, backgroundColor: 'var(--newchat-bg)', color: 'var(--text-heading)', boxShadow: titlesGlow ? '0 0 0 3px rgba(0, 200, 200, 0.28), 0 0 16px rgba(0, 200, 200, 0.60), 0 0 28px rgba(0, 180, 180, 0.45)' : 'none' }}
-                onClick={() => { setTitlesVisible(true); setTitlesGlow(false); }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)'; }}
-              >
-                {/* Label/tag icon */}
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ filter: titlesGlow ? 'drop-shadow(0 0 6px rgba(0, 200, 200, 0.65))' : 'none' }}>
-                  <path d="M3 12l7-7h4l7 7-7 7h-4z" strokeWidth="2" />
-                  <circle cx="10" cy="10" r="1.5" fill="currentColor" />
-                </svg>
-              </button>
-            )}
             <TitleSuggestions
-              visible={titlesVisible}
-              onClose={() => {
-                setTitlesVisible(false);
-                setTitlesGlow(true);
-                window.setTimeout(() => setTitlesGlow(false), 1600);
-              }}
-              onAvailableChange={setTitlesAvailable}
+              visible={false}
+              onClose={() => {}}
+              onAvailableChange={() => {}}
             />
           </div>
 
@@ -4501,7 +4481,7 @@ const DiscoveryPage: React.FC = () => {
                   color: 'var(--text-heading)'
                 }}
               >
-                Chat
+                {t('unfold.sections.chat')}
               </button>
               <button
                 type="button"
@@ -4515,7 +4495,7 @@ const DiscoveryPage: React.FC = () => {
                   color: 'var(--text-heading)'
                 }}
               >
-                Perspectives
+                {t('unfold.sections.perspectives')}
               </button>
             </div>
             {/* Perspectives content (full column) */}
