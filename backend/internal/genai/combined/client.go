@@ -9,6 +9,8 @@ import (
 	g "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	gr "github.com/igorkirisyuk/sanskrite/internal/genai/grok"
 	oa "github.com/igorkirisyuk/sanskrite/internal/genai/openai"
+    cl "github.com/igorkirisyuk/sanskrite/internal/genai/claude"
+    ds "github.com/igorkirisyuk/sanskrite/internal/genai/deepseek"
 )
 
 // Re-export types so HTTP layer can remain unchanged
@@ -40,6 +42,8 @@ type Client struct {
 	gem *g.Client
 	oa  *oa.Client
 	gr  *gr.Client
+    cl  *cl.Client
+    ds  *ds.Client
 }
 
 // getenv wraps os.Getenv for consistency
@@ -58,7 +62,21 @@ func NewClient(geminiClient *g.Client, openaiKey string) *Client {
 	} else if k := strings.Trim(strings.TrimSpace(getenv("GROK_API_KEY_TEST")), "\"'"); k != "" {
 		grc = gr.NewClient(k)
 	}
-	return &Client{gem: geminiClient, oa: oac, gr: grc}
+    // Claude key
+    var clc *cl.Client
+    if k := strings.Trim(strings.TrimSpace(getenv("ANTHROPIC_API_KEY")), "\"'"); k != "" {
+        clc = cl.NewClient(k)
+    } else if k := strings.Trim(strings.TrimSpace(getenv("ANTHROPIC_API_KEY_TEST")), "\"'"); k != "" {
+        clc = cl.NewClient(k)
+    }
+    // DeepSeek key
+    var dsc *ds.Client
+    if k := strings.Trim(strings.TrimSpace(getenv("DEEPSEEK_API_KEY")), "\"'"); k != "" {
+        dsc = ds.NewClient(k)
+    } else if k := strings.Trim(strings.TrimSpace(getenv("DEEPSEEK_API_KEY_TEST")), "\"'"); k != "" {
+        dsc = ds.NewClient(k)
+    }
+    return &Client{gem: geminiClient, oa: oac, gr: grc, cl: clc, ds: dsc}
 }
 
 // route decides provider by model alias (gpt_* -> openai; gemini_* -> gemini; default gemini)
@@ -102,6 +120,12 @@ func route(opts Options) string {
 	if strings.HasPrefix(ml, "grok_") || strings.HasPrefix(ml, "grok4") {
 		return "grok"
 	}
+    if strings.HasPrefix(ml, "claude_") {
+        return "claude"
+    }
+    if strings.HasPrefix(ml, "deepseek_") {
+        return "deepseek"
+    }
 	return "gemini"
 }
 
@@ -151,6 +175,33 @@ func (c *Client) normalizeOptionsForGrok(opts Options) gr.Options {
 	}
 }
 
+func (c *Client) normalizeOptionsForClaude(opts Options) cl.Options {
+    return cl.Options{
+        ModelOverride: map[string]string{
+            "claude_fast":     "claude-haiku-4-5-20251001",
+            "claude_balanced": "claude-sonnet-4-5-20250929",
+            "claude_quality":  "claude-opus-4-1-20250805",
+        }[canonicalizeAlias(opts.ModelOverride)],
+        Temperature:       opts.Temperature,
+        MaxOutputTokens:   opts.MaxOutputTokens,
+        GroundingEnabled:  opts.GroundingEnabled,
+        SystemInstruction: opts.SystemInstruction,
+    }
+}
+
+func (c *Client) normalizeOptionsForDeepSeek(opts Options) ds.Options {
+    return ds.Options{
+        ModelOverride: map[string]string{
+            "deepseek_fast":    "deepseek-chat",
+            "deepseek_quality": "deepseek-reasoner",
+        }[canonicalizeAlias(opts.ModelOverride)],
+        Temperature:       opts.Temperature,
+        MaxOutputTokens:   opts.MaxOutputTokens,
+        GroundingEnabled:  opts.GroundingEnabled,
+        SystemInstruction: opts.SystemInstruction,
+    }
+}
+
 func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts Options) (*GenerateResponse, error) {
 	switch route(opts) {
 	case "openai":
@@ -177,6 +228,16 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 			return nil, err
 		}
 		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromGrok(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromGrok(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+    case "claude":
+        if c.cl == nil { return nil, errors.New("claude not configured") }
+        r, err := c.cl.Generate(ctx, prompt, toClaudeTools(tools), c.normalizeOptionsForClaude(opts))
+        if err != nil { return nil, err }
+        return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+    case "deepseek":
+        if c.ds == nil { return nil, errors.New("deepseek not configured") }
+        r, err := c.ds.Generate(ctx, prompt, toDeepSeekTools(tools), c.normalizeOptionsForDeepSeek(opts))
+        if err != nil { return nil, err }
+        return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
 	default:
 		goOpts := c.normalizeOptionsForGemini(opts)
 		return c.gem.Generate(ctx, prompt, tools, goOpts)
@@ -184,7 +245,7 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 }
 
 func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, jsonSchema map[string]interface{}, opts Options) (*GenerateResponse, error) {
-	if route(opts) == "openai" {
+    if route(opts) == "openai" {
 		// Responses API: enforce JSON by setting max tokens + instruction; simplest is to request plain text JSON.
 		if c.oa == nil {
 			return nil, errors.New("openai not configured")
@@ -204,8 +265,39 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 		gr.SearchQueries = oar.SearchQueries
 		gr.Sources = oar.Sources
 		return gr, nil
-	}
-	return c.gem.GenerateJSON(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
+    }
+    if route(opts) == "claude" {
+        if c.cl == nil { return nil, errors.New("claude not configured") }
+        // Best-effort: enforce JSON via instruction and function tool with schema
+        o := c.normalizeOptionsForClaude(opts)
+        if !strings.Contains(strings.ToLower(o.SystemInstruction), "json") {
+            o.SystemInstruction = strings.TrimSpace(o.SystemInstruction + "\nRespond strictly in JSON.")
+        }
+        t := tools
+        if len(jsonSchema) > 0 {
+            t = append([]Tool{}, tools...)
+            t = append(t, Tool{Name: "return_structured", Description: "Return strictly by schema", Parameters: jsonSchema})
+        }
+        r, err := c.cl.Generate(ctx, prompt, toClaudeTools(t), o)
+        if err != nil { return nil, err }
+        return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+    }
+    if route(opts) == "deepseek" {
+        if c.ds == nil { return nil, errors.New("deepseek not configured") }
+        o := c.normalizeOptionsForDeepSeek(opts)
+        if !strings.Contains(strings.ToLower(o.SystemInstruction), "json") {
+            o.SystemInstruction = strings.TrimSpace(o.SystemInstruction + "\nRespond strictly in JSON.")
+        }
+        t := tools
+        if len(jsonSchema) > 0 {
+            t = append([]Tool{}, tools...)
+            t = append(t, Tool{Name: "return_structured", Description: "Return strictly by schema", Parameters: jsonSchema})
+        }
+        r, err := c.ds.Generate(ctx, prompt, toDeepSeekTools(t), o)
+        if err != nil { return nil, err }
+        return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+    }
+    return c.gem.GenerateJSON(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
 }
 
 // GenerateJSONStrict enforces structured output using provider-native strict schema when supported.
@@ -214,7 +306,7 @@ func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []
 	case "openai":
 		// Fallback: reuse JSON mode; OpenAI strictness handled via system instruction or tool defs.
 		return c.GenerateJSON(ctx, prompt, tools, jsonSchema, opts)
-	case "grok":
+    case "grok":
 		if c.gr == nil {
 			return nil, errors.New("grok not configured")
 		}
@@ -224,6 +316,39 @@ func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []
 			return nil, err
 		}
 		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromGrok(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromGrok(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+    case "claude":
+        if c.cl == nil { return nil, errors.New("claude not configured") }
+        // Use function tool with strict schema and required tool choice via instruction
+        t := append([]Tool{}, tools...)
+        // Deduplicate return_structured if already present
+        hasReturn := false
+        for _, tt := range t { if strings.EqualFold(strings.TrimSpace(tt.Name), "return_structured") { hasReturn = true; break } }
+        if !hasReturn {
+            t = append(t, Tool{Name: "return_structured", Description: "Return strictly by schema", Parameters: jsonSchema})
+        }
+        o := c.normalizeOptionsForClaude(opts)
+        if !strings.Contains(strings.ToLower(o.SystemInstruction), "only by calling the function") {
+            o.SystemInstruction = strings.TrimSpace(o.SystemInstruction + "\nReturn the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.")
+        }
+        r, err := c.cl.Generate(ctx, prompt, toClaudeTools(t), o)
+        if err != nil { return nil, err }
+        return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+    case "deepseek":
+        if c.ds == nil { return nil, errors.New("deepseek not configured") }
+        t := append([]Tool{}, tools...)
+        // Deduplicate return_structured if already present
+        hasReturn := false
+        for _, tt := range t { if strings.EqualFold(strings.TrimSpace(tt.Name), "return_structured") { hasReturn = true; break } }
+        if !hasReturn {
+            t = append(t, Tool{Name: "return_structured", Description: "Return strictly by schema", Parameters: jsonSchema})
+        }
+        o := c.normalizeOptionsForDeepSeek(opts)
+        if !strings.Contains(strings.ToLower(o.SystemInstruction), "only by calling the function") {
+            o.SystemInstruction = strings.TrimSpace(o.SystemInstruction + "\nReturn the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.")
+        }
+        r, err := c.ds.Generate(ctx, prompt, toDeepSeekTools(t), o)
+        if err != nil { return nil, err }
+        return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
 	default:
 		return c.gem.GenerateJSONStrict(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
 	}
@@ -269,42 +394,73 @@ func (c *Client) ExecuteWithTools(ctx context.Context, prompt string, tools []To
 // Stream: for OpenAI emit one chunk + done (placeholder streaming)
 func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts Options, onEvent func(StreamEvent) error) error {
 	switch route(opts) {
-	case "openai":
-		if c.oa == nil {
-			return errors.New("openai not configured")
-		}
-		_ = onEvent(StreamEvent{Type: "start"})
-		// TEMP: Disable SSE streaming for GPT; return a single final chunk
-		r, err := c.oa.Generate(ctx, prompt, toOATools(tools), c.normalizeOptionsForOpenAI(opts))
-		if err != nil {
-			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
-			return err
-		}
-		if r.Content != "" {
-			_ = onEvent(StreamEvent{Type: "chunk", Text: r.Content})
-		}
-		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources, Model: r.Model})
-		return nil
-	case "grok":
-		if c.gr == nil {
-			return errors.New("grok not configured")
-		}
-		_ = onEvent(StreamEvent{Type: "start"})
-		r, err := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
-		if err != nil {
-			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
-			return err
-		}
-		// Single-chunk placeholder streaming similar to OpenAI path
-		if r.Content != "" {
-			_ = onEvent(StreamEvent{Type: "chunk", Text: r.Content})
-		}
-		// If tool calls present, emit them (no follow-up execution in non-tools stream path)
-		if len(r.ToolCalls) > 0 {
-			_ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(r.ToolCalls)})
-		}
-		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources, Model: r.Model})
-		return nil
+    case "openai":
+        if c.oa == nil { return errors.New("openai not configured") }
+        _ = onEvent(StreamEvent{Type: "start"})
+        u, qs, srcs, err := c.oa.StreamWithExtras(ctx, prompt, toOATools(tools), c.normalizeOptionsForOpenAI(opts), func(delta string) error {
+            return onEvent(StreamEvent{Type: "chunk", Text: delta})
+        })
+        if err != nil {
+            _ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+            return err
+        }
+        return onEvent(StreamEvent{Type: "done", Usage: toGemUsage(u), SearchQueries: qs, Sources: srcs})
+    case "grok":
+        if c.gr == nil { return errors.New("grok not configured") }
+        return c.gr.Stream(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts), func(ev gr.StreamEvent) error {
+            switch ev.Type {
+            case "start":
+                return onEvent(StreamEvent{Type: "start"})
+            case "chunk":
+                return onEvent(StreamEvent{Type: "chunk", Text: ev.Text})
+            case "tool_call":
+                return onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(ev.ToolCalls)})
+            case "done":
+                return onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(ev.Usage), Model: ev.Model, SearchQueries: ev.SearchQueries, Sources: ev.Sources})
+            case "error":
+                return onEvent(StreamEvent{Type: "error", Error: ev.Error})
+            default:
+                return nil
+            }
+        })
+    case "claude":
+        if c.cl == nil { return errors.New("claude not configured") }
+        o := c.normalizeOptionsForClaude(opts)
+        return c.cl.Stream(ctx, prompt, toClaudeTools(tools), o, func(ev cl.StreamEvent) error {
+            switch ev.Type {
+            case "start":
+                return onEvent(StreamEvent{Type: "start"})
+            case "chunk":
+                return onEvent(StreamEvent{Type: "chunk", Text: ev.Text})
+            case "tool_call":
+                return onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromClaude(ev.ToolCalls)})
+            case "done":
+                return onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromClaude(ev.Usage), Model: ev.Model})
+            case "error":
+                return onEvent(StreamEvent{Type: "error", Error: ev.Error})
+            default:
+                return nil
+            }
+        })
+    case "deepseek":
+        if c.ds == nil { return errors.New("deepseek not configured") }
+        o := c.normalizeOptionsForDeepSeek(opts)
+        return c.ds.Stream(ctx, prompt, toDeepSeekTools(tools), o, func(ev ds.StreamEvent) error {
+            switch ev.Type {
+            case "start":
+                return onEvent(StreamEvent{Type: "start"})
+            case "chunk":
+                return onEvent(StreamEvent{Type: "chunk", Text: ev.Text})
+            case "tool_call":
+                return onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromDeepSeek(ev.ToolCalls)})
+            case "done":
+                return onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromDeepSeek(ev.Usage), Model: ev.Model})
+            case "error":
+                return onEvent(StreamEvent{Type: "error", Error: ev.Error})
+            default:
+                return nil
+            }
+        })
 	default:
 		return c.gem.Stream(ctx, prompt, tools, c.normalizeOptionsForGemini(opts), onEvent)
 	}
@@ -370,7 +526,7 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 		mergedSources := mergeUniqueStrings(r.Sources, r2.Sources)
 		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r2.Usage), SearchQueries: mergedQueries, Sources: mergedSources})
 		return nil
-	case "grok":
+    case "grok":
 		if c.gr == nil {
 			return errors.New("grok not configured")
 		}
@@ -392,6 +548,46 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 		_ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(r.ToolCalls)})
 		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r.Usage)})
 		return nil
+    case "claude":
+        if c.cl == nil { return errors.New("claude not configured") }
+        // For now, emit tool_call events but do not perform follow-up tool execution in streaming mode
+        o := c.normalizeOptionsForClaude(opts)
+        return c.cl.Stream(ctx, prompt, toClaudeTools(tools), o, func(ev cl.StreamEvent) error {
+            switch ev.Type {
+            case "start":
+                return onEvent(StreamEvent{Type: "start"})
+            case "chunk":
+                return onEvent(StreamEvent{Type: "chunk", Text: ev.Text})
+            case "tool_call":
+                return onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromClaude(ev.ToolCalls)})
+            case "done":
+                return onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromClaude(ev.Usage), Model: ev.Model})
+            case "error":
+                return onEvent(StreamEvent{Type: "error", Error: ev.Error})
+            default:
+                return nil
+            }
+        })
+    case "deepseek":
+        if c.ds == nil { return errors.New("deepseek not configured") }
+        o := c.normalizeOptionsForDeepSeek(opts)
+        // Emit tool_call events; no follow-up execution in streaming path
+        return c.ds.Stream(ctx, prompt, toDeepSeekTools(tools), o, func(ev ds.StreamEvent) error {
+            switch ev.Type {
+            case "start":
+                return onEvent(StreamEvent{Type: "start"})
+            case "chunk":
+                return onEvent(StreamEvent{Type: "chunk", Text: ev.Text})
+            case "tool_call":
+                return onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromDeepSeek(ev.ToolCalls)})
+            case "done":
+                return onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromDeepSeek(ev.Usage), Model: ev.Model})
+            case "error":
+                return onEvent(StreamEvent{Type: "error", Error: ev.Error})
+            default:
+                return nil
+            }
+        })
 	default:
 		return c.gem.StreamWithTools(ctx, prompt, tools, reg, c.normalizeOptionsForGemini(opts), onEvent)
 	}
@@ -430,6 +626,30 @@ func toGemCalls(cs []oa.ToolCall) []g.ToolCall {
 func toGemUsage(u oa.Usage) g.Usage {
 	return g.Usage{PromptTokens: u.PromptTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens, ReasoningTokens: u.ReasoningTokens, ToolUsePromptTokens: u.ToolUsePromptTokens}
 }
+
+func toClaudeTools(ts []Tool) []cl.Tool {
+    out := make([]cl.Tool, 0, len(ts))
+    for _, t := range ts { out = append(out, cl.Tool{Name: t.Name, Description: t.Description, Parameters: t.Parameters}) }
+    return out
+}
+func toGemToolsFromClaude(cs []cl.ToolCall) []g.ToolCall {
+    out := make([]g.ToolCall, 0, len(cs))
+    for _, c := range cs { out = append(out, g.ToolCall{Name: c.Name, Arguments: c.Arguments, CallID: c.CallID}) }
+    return out
+}
+func toGemUsageFromClaude(u cl.Usage) g.Usage { return g.Usage{PromptTokens: u.PromptTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens} }
+
+func toDeepSeekTools(ts []Tool) []ds.Tool {
+    out := make([]ds.Tool, 0, len(ts))
+    for _, t := range ts { out = append(out, ds.Tool{Name: t.Name, Description: t.Description, Parameters: t.Parameters}) }
+    return out
+}
+func toGemToolsFromDeepSeek(cs []ds.ToolCall) []g.ToolCall {
+    out := make([]g.ToolCall, 0, len(cs))
+    for _, c := range cs { out = append(out, g.ToolCall{Name: c.Name, Arguments: c.Arguments, CallID: c.CallID}) }
+    return out
+}
+func toGemUsageFromDeepSeek(u ds.Usage) g.Usage { return g.Usage{PromptTokens: u.PromptTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens} }
 
 func toGrokTools(ts []Tool) []gr.Tool {
 	out := make([]gr.Tool, 0, len(ts))

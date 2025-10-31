@@ -61,3 +61,5 @@ docs/**/*.pdf
 docs/**/*.docx
 docs/**/.DS_Store
 
+# Local secrets docs
+TEST_KEYS.md

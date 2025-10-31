@@ -472,6 +472,10 @@ func main() {
 			s.projectsHandler.DownloadProjectDoc(w, r)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/export") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodPost {
+			s.projectsHandler.ExportDocToDocx(w, r)
+			return
+		}
 		// delete core doc
 		if strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodDelete {
 			s.projectsHandler.DeleteProjectDoc(w, r)

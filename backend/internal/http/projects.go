@@ -1,12 +1,15 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -872,6 +875,135 @@ func (h *ProjectsHandler) DownloadProjectDoc(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", sanitizeFilename(cd.Filename)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// ExportDocToDocx handles POST /api/v1/projects/{id}/docs/{docId}/export?format=docx
+// Converts markdown content to DOCX using Pandoc
+func (h *ProjectsHandler) ExportDocToDocx(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.coreDocs == nil {
+		WriteInternalError(w, "Core docs not configured")
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	
+	// Parse path: /api/v1/projects/{id}/docs/{docId}/export
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 7 {
+		WriteBadRequest(w, "INVALID_PATH", "Project and document ID are required")
+		return
+	}
+	projectID, docID := parts[3], parts[5]
+	
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	
+	// Get the document
+	cd, err := h.coreDocs.Get(r.Context(), docID)
+	if err != nil || cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
+		WriteNotFound(w, "Document not found")
+		return
+	}
+	
+	// Get markdown content
+	var markdownContent string
+	if cd.ExtractedText != nil && *cd.ExtractedText != "" {
+		markdownContent = *cd.ExtractedText
+	} else if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") {
+		// Try to read from storage
+		bucket, object := splitGsPath(*cd.StoragePath)
+		data, err := h.storage.ReadObject(r.Context(), bucket, object)
+		if err != nil {
+			WriteInternalError(w, "Failed to read document content")
+			return
+		}
+		markdownContent = string(data)
+	} else {
+		WriteBadRequest(w, "NO_CONTENT", "Document has no readable content")
+		return
+	}
+	
+	// Convert markdown to DOCX using Pandoc
+	docxData, err := convertMarkdownToDocx(markdownContent)
+	if err != nil {
+		h.logger.Printf("Failed to convert markdown to DOCX: %v", err)
+		WriteInternalError(w, "Failed to convert document to DOCX")
+		return
+	}
+	
+	// Determine output filename
+	baseName := strings.TrimSuffix(cd.Filename, filepath.Ext(cd.Filename))
+	if baseName == "" {
+		baseName = "exported"
+	}
+	outputFilename := baseName + ".docx"
+	
+	// Set response headers
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", sanitizeFilename(outputFilename)))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(docxData)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(docxData)
+}
+
+// convertMarkdownToDocx converts markdown content to DOCX using Pandoc
+func convertMarkdownToDocx(markdown string) ([]byte, error) {
+	// Create temporary files for input and output
+	tmpMD, err := os.CreateTemp("", "export-*.md")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp markdown file: %w", err)
+	}
+	defer os.Remove(tmpMD.Name())
+	defer tmpMD.Close()
+	
+	tmpDOCX, err := os.CreateTemp("", "export-*.docx")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp docx file: %w", err)
+	}
+	defer os.Remove(tmpDOCX.Name())
+	
+	// Write markdown to temp file
+	if _, err := tmpMD.WriteString(markdown); err != nil {
+		return nil, fmt.Errorf("failed to write markdown: %w", err)
+	}
+	if err := tmpMD.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close markdown file: %w", err)
+	}
+	
+	// Run Pandoc to convert markdown to DOCX
+	// Using --wrap=none to preserve line breaks, --standalone for proper document structure
+	cmd := exec.Command("pandoc",
+		tmpMD.Name(),
+		"-o", tmpDOCX.Name(),
+		"--wrap=none",
+		"--standalone",
+		"--from=markdown",
+		"--to=docx")
+	
+	var out bytes.Buffer
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("pandoc execution failed: %w, stderr: %s", err, out.String())
+	}
+	
+	// Read the generated DOCX file
+	docxData, err := os.ReadFile(tmpDOCX.Name())
+	if err != nil {
+		return nil, fmt.Errorf("failed to read generated DOCX: %w", err)
+	}
+	
+	return docxData, nil
 }
 
 // ---- Entities analysis ----

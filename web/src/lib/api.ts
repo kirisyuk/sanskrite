@@ -395,6 +395,11 @@ class ApiClient {
     }
   }
 
+  async docsExportToDocx(projectId: string, docId: string): Promise<Blob> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/docs/${docId}/export`, {}, { responseType: 'blob' });
+    return res.data as Blob;
+  }
+
   async suggestChatTitles(messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>, language?: string): Promise<string[]> {
     const transcript = messages.map(m => `- ${m.role}: ${m.text}`).join('\n');
     const lang = (language || (localStorage.getItem('preferredLanguage') || 'EN')).toLowerCase();

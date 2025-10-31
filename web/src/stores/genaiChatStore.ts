@@ -50,6 +50,10 @@ export interface LocalInteraction {
   evaluations?: Record<string, any>;
   coreDocIds?: string[];
   metadata?: { pinned?: boolean; notes?: string[] };
+  graphData?: { chartTitle: string; table: any[][]; sources: string[] };
+  // Anchored stream meta (per assistant message)
+  searchQueries?: string[];
+  sources?: string[];
   createdAt: string;
 }
 
@@ -209,13 +213,17 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         
         // Restore searchQueries and sources from last assistant interaction
         const lastAssistant = [...merged].reverse().find((it: any) => it.kind === 'assistant');
-        const restoredQueries = lastAssistant?.searchQueries || [];
-        const restoredSources = lastAssistant?.sources || [];
+        const restoredQueries = Array.isArray(lastAssistant?.searchQueries) ? (lastAssistant as any).searchQueries.filter(Boolean) : [];
+        const restoredSources = Array.isArray(lastAssistant?.sources) ? (lastAssistant as any).sources.filter(Boolean) : [];
+        const prevQueries = Array.isArray(s.searchQueries) ? s.searchQueries.filter(Boolean) : [];
+        const prevSources = Array.isArray(s.sources) ? s.sources.filter(Boolean) : [];
+        const nextQueries = (restoredQueries.length > 0) ? Array.from(new Set([...(prevQueries || []), ...restoredQueries])) : prevQueries;
+        const nextSources = (restoredSources.length > 0) ? Array.from(new Set([...(prevSources || []), ...restoredSources])) : prevSources;
         
         // Merge restored sources into attributions with dedup
-        const allAttributions = [...s.attributions];
+        const allAttributions = [...(s.attributions || [])];
         const seenUrls = new Set(allAttributions.map(a => a.url).filter(Boolean));
-        for (const url of restoredSources) {
+        for (const url of nextSources) {
           if (url && !seenUrls.has(url)) {
             allAttributions.push({ url });
             seenUrls.add(url);
@@ -224,8 +232,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         
         return { 
           interactions: merged,
-          searchQueries: restoredQueries,
-          sources: restoredSources,
+          searchQueries: nextQueries,
+          sources: nextSources,
           attributions: allAttributions
         } as any;
       });
@@ -789,7 +797,42 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         }
         // Parse hidden @sx with minimal validation and sanitize content centrally
         const { sanitized, instructions: sx } = parseSxInstructionsFromContent(lastAssistant.content);
-        const base = { id, projectId, kind: 'assistant' as InteractionKind, subkind: (s.pendingAssistantMeta as any)?.subkind, content: lastAssistant.content, contentSanitized: sanitized, sxInstructions: sx, createdAt, author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined, agentProfile: meta?.agentProfile, systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined, language: opts?.__lang, generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled }, originalMessageId: lastAssistant.id } as LocalInteraction;
+
+        // Try to parse graph-format response (chartTitle, table, sources)
+        let parsedGraph: any = null;
+        let detectedGraphData: { chartTitle: string; table: any[][]; sources: string[] } | undefined = undefined;
+        try {
+          let content = (lastAssistant.content || '').toString().trim();
+          // Strip code fences
+          content = content.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim();
+          // Try direct JSON parse
+          if ((content.startsWith('{') || content.startsWith('['))) {
+            parsedGraph = JSON.parse(content);
+          } else {
+            // Try to find JSON within content
+            const match = content.match(/\{[\s\S]*\}/);
+            if (match && match[0]) parsedGraph = JSON.parse(match[0]);
+          }
+          // Validate graph structure
+          if (
+            parsedGraph &&
+            typeof parsedGraph === 'object' &&
+            typeof parsedGraph.chartTitle === 'string' &&
+            Array.isArray(parsedGraph.table) &&
+            Array.isArray(parsedGraph.sources)
+          ) {
+            detectedGraphData = {
+              chartTitle: parsedGraph.chartTitle,
+              table: parsedGraph.table,
+              sources: parsedGraph.sources,
+            };
+            console.log('[Graph] Detected valid graph response', { chartTitle: detectedGraphData.chartTitle, tableRows: detectedGraphData.table.length, sources: detectedGraphData.sources.length });
+          }
+        } catch (e) {
+          // Not a graph response, continue with normal flow
+        }
+
+        const base = { id, projectId, kind: 'assistant' as InteractionKind, subkind: detectedGraphData ? 'graph' : (s.pendingAssistantMeta as any)?.subkind, content: lastAssistant.content, contentSanitized: sanitized, sxInstructions: sx, graphData: detectedGraphData, createdAt, author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined, agentProfile: meta?.agentProfile, systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined, language: opts?.__lang, generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled }, originalMessageId: lastAssistant.id, searchQueries: (s.searchQueries || []).filter(Boolean), sources: (s.sources || []).filter(Boolean) } as LocalInteraction;
         const replyTo = (s.pendingAssistantMeta as any)?.replyTo as string | undefined;
         if (replyTo) {
           (base as any).replyTo = replyTo;
@@ -822,7 +865,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             const payload: any = {
               kind: 'assistant',
               content: lastAssistant.content,
-              subkind: (meta as any)?.subkind,
+              subkind: detectedGraphData ? 'graph' : (meta as any)?.subkind,
               contentSanitized: sanitized,
               author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined,
               agentProfile: meta?.agentProfile,
@@ -833,6 +876,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               usage: s.usage,
               searchQueries: s.searchQueries,
               sources: s.sources,
+              graphData: detectedGraphData,
             };
             const map = (get() as any).persistedByLocalId || {};
             const replyToMsg = (s.pendingAssistantMeta as any)?.replyTo as string | undefined;
@@ -986,21 +1030,29 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   onToolCall: (calls) => set({ toolCalls: calls || [] }),
   onToolResult: (calls) => set((s) => ({ toolResults: [...s.toolResults, ...(calls || [])] })),
   onDoneMeta: (meta) => set((s) => {
-    // Merge sources into attributions with dedup by url
-    const allAttributions = [...(meta.attributions || [])];
-    const seenUrls = new Set(allAttributions.map(a => a.url).filter(Boolean));
-    for (const url of (meta.sources || [])) {
-      if (url && !seenUrls.has(url)) {
+    // Merge sources/queries non-destructively and fold into attributions
+    const prevQueries = Array.isArray(s.searchQueries) ? s.searchQueries.filter(Boolean) : [];
+    const prevSources = Array.isArray(s.sources) ? s.sources.filter(Boolean) : [];
+    const incomingQueries = Array.isArray(meta.searchQueries) ? meta.searchQueries.filter(Boolean) : [];
+    const incomingSources = Array.isArray(meta.sources) ? meta.sources.filter(Boolean) : [];
+    const nextQueries = incomingQueries.length > 0 ? Array.from(new Set([...(prevQueries || []), ...incomingQueries])) : prevQueries;
+    const nextSources = incomingSources.length > 0 ? Array.from(new Set([...(prevSources || []), ...incomingSources])) : prevSources;
+
+    // Merge attributions: keep existing + incoming attributions + nextSources as URLs
+    const allAttributions = [...(s.attributions || []), ...((meta.attributions || []) as any[])];
+    const seen = new Set(allAttributions.map((a) => a.url).filter(Boolean));
+    for (const url of nextSources) {
+      if (url && !seen.has(url)) {
         allAttributions.push({ url });
-        seenUrls.add(url);
+        seen.add(url);
       }
     }
     
     return { 
       usage: meta.usage, 
       attributions: allAttributions, 
-      searchQueries: meta.searchQueries || [], 
-      sources: meta.sources || [] 
+      searchQueries: nextQueries, 
+      sources: nextSources 
     } as any;
   }),
   setEvaluation: (messageId, ev) => set((s) => {

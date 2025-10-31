@@ -68,7 +68,7 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		_ = WriteBadRequest(w, "INVALID_PARAMS", "model and prompt are required")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+    ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
 	defer cancel()
 	started := time.Now()
 	resp, err := h.client.GenAIGenerate(ctx, req)
@@ -290,6 +290,8 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	// Determine routing context
 	projectID := strings.TrimSpace(req.ProjectID)
 	streamID := strings.TrimSpace(req.StreamID)
+	// Diagnostics: log model override and key options to verify routing
+	log.Printf("genai.stream: options modelOverride=%q grounding=%v temp=%.2f maxTok=%d", strings.TrimSpace(req.Options.ModelOverride), req.Options.GroundingEnabled, req.Options.Temperature, req.Options.MaxOutputTokens)
 	if streamID == "" {
 		streamID = uuid.NewString()
 	}
@@ -368,6 +370,8 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 				"projectId": projectID,
 				"streamId":  streamID,
 			}
+			// Diagnostics: log grounded counts for visibility
+			log.Printf("genai.stream: grounded counts queries=%d sources=%d", len(e.SearchQueries), len(e.Sources))
 			if e.Usage.TotalTokens > 0 {
 				payload["usage"] = e.Usage
 			}
@@ -379,6 +383,27 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 			if len(e.Sources) > 0 {
 				payload["sources"] = e.Sources
+			}
+			// Best-effort fallback: if Gemini with grounding requested returned no sources, do a quick grounded pass to fetch sources
+			if (len(e.Sources) == 0) && req.Options.GroundingEnabled {
+				mo := strings.ToLower(strings.TrimSpace(req.Options.ModelOverride))
+				if strings.HasPrefix(mo, "gemini_") {
+					go func(prompt string, model string) {
+						defer func() { recover() }()
+						gopts := gen_gemini.Options{ModelOverride: model, GroundingEnabled: true, MaxOutputTokens: 64}
+						if gr, gerr := h.client.Generate(ctx, prompt, nil, gopts); gerr == nil {
+							if len(gr.Sources) > 0 {
+								// Publish an extra meta event with discovered sources
+								_ = h.publisher.PublishJSON(ctx, "genai.stream.done", auth.TenantID, map[string]any{
+									"ts":        time.Now().UnixMilli(),
+									"projectId": projectID,
+									"streamId":  streamID,
+									"sources":   gr.Sources,
+								})
+							}
+						}
+					}(req.Prompt, req.Options.ModelOverride)
+				}
 			}
 			// Log per-stream diagnostics: chunks and latency
 			log.Printf("genai.stream: completed tenantId=%s projectId=%s streamId=%s chunks=%d elapsedMs=%d", auth.TenantID, projectID, streamID, chunks, time.Since(started).Milliseconds())

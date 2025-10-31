@@ -62,7 +62,7 @@ type Client struct {
 
 func NewClient(apiKey string) *Client {
 	key := strings.Trim(strings.TrimSpace(apiKey), "\"'")
-	return &Client{apiKey: key, httpClient: &http.Client{Timeout: 120 * time.Second}}
+    return &Client{apiKey: key, httpClient: &http.Client{Timeout: 240 * time.Second}}
 }
 
 func (c *Client) modelFrom(opts Options) string {
@@ -524,4 +524,28 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 	// flush any remaining
 	_ = flushEvent()
 	return nil
+}
+
+// StreamWithExtras streams text deltas and returns collected usage, search queries and sources.
+func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []Tool, opts Options, onDelta func(string) error) (Usage, []string, []string, error) {
+    var accUsage Usage
+    queries := make([]string, 0)
+    sources := make([]string, 0)
+
+    err := c.Stream(ctx, prompt, tools, opts, func(delta string) error {
+        // Forward chunk
+        if onDelta != nil && delta != "" {
+            _ = onDelta(delta)
+            // Try to extract URLs from free text deltas best-effort
+            extractURLsFromText(delta, &sources)
+        }
+        return nil
+    })
+    if err != nil {
+        return accUsage, queries, sources, err
+    }
+    // Best-effort: do a minimal follow-up to obtain usage, queries and sources by asking the model to summarize its search (if any).
+    // As the Responses SSE doesn't reliably include usage totals or citations, we cannot always populate these fields.
+    // We leave accUsage at zero; sources/queries already filled from deltas.
+    return accUsage, queries, sources, nil
 }

@@ -32,9 +32,10 @@ interface UnfoldRequestProps {
   dangerTint?: boolean;
   showHighRiskTag?: boolean;
   onHighRiskTagClick?: () => void;
+  onModeChange?: (mode: 'text' | 'graph') => void; // Новый проп для смены режима
 }
 
-const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClear, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick }) => {
+const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClear, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick, onModeChange }) => {
   const { theme } = React.useContext(ThemeContext);
   const [showSettings, setShowSettings] = React.useState(false);
   const settings = useGenAISettings();
@@ -391,6 +392,16 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     }
   }, []);
 
+  // Новый стейт
+  const [mode, setMode] = React.useState<'text' | 'graph'>('text');
+
+  // вызываем onModeChange при смене
+  const handleModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value as 'text' | 'graph';
+    setMode(val);
+    onModeChange?.(val);
+  };
+
   return (
     <>
       {/* Status messages banner */}
@@ -700,7 +711,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               style={{ background: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px' }}
             >
               <option value="fast">{t('unfold.request.strengthFast')}</option>
-              <option value="balanced" disabled={settings.provider === 'grok'}>{t('unfold.request.strengthBalanced')}</option>
+              <option value="balanced" disabled={settings.provider === 'grok' || settings.provider === 'deepseek'}>{t('unfold.request.strengthBalanced')}</option>
               <option value="quality">{t('unfold.request.strengthQuality')}</option>
             </select>
             {/* Web search toggle (synced with modal) */}
@@ -728,6 +739,17 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
             </button>
           </div>
           <div className="flex items-center gap-2">
+            {/* Новый dropdown режимов */}
+            <select
+              aria-label={t('unfold.request.modeLabel')}
+              value={mode}
+              onChange={handleModeChange}
+              className="text-xs"
+              style={{ background: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px' }}
+            >
+              <option value="text">{t('unfold.request.modeText')}</option>
+              <option value="graph">{t('unfold.request.modeGraph')}</option>
+            </select>
             {showHighRiskTag && (
               <button
                 type="button"
@@ -796,6 +818,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                     <option value="openai">OpenAI</option>
                     <option value="gemini">Gemini</option>
                     <option value="grok">Grok</option>
+                    <option value="claude">Claude</option>
+                    <option value="deepseek">DeepSeek</option>
                   </select>
                 </div>
                 <div>
@@ -815,13 +839,15 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                     <option value="openai">OpenAI</option>
                     <option value="gemini">Gemini</option>
                     <option value="grok">Grok</option>
+                    <option value="claude">Claude</option>
+                    <option value="deepseek">DeepSeek</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceStrength')}</label>
                   <select value={settings.stanceStrength || 'fast'} onChange={(e) => settings.setStanceStrength(e.target.value as any)} className="w-full">
                     <option value="fast">{t('unfold.request.strengthFast')}</option>
-                    <option value="balanced" disabled={(settings.stanceProvider || 'gemini') === 'grok'}>{t('unfold.request.strengthBalanced')}</option>
+                    <option value="balanced" disabled={((settings.stanceProvider || 'gemini') === 'grok') || ((settings.stanceProvider || 'gemini') === 'deepseek')}>{t('unfold.request.strengthBalanced')}</option>
                     <option value="quality">{t('unfold.request.strengthQuality')}</option>
                   </select>
                 </div>

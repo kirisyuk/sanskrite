@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { AGENT_PRESETS } from '../lib/agentPresets';
 import DocumentViewer from '../components/DocumentViewer';
 import FindingsPanel from '../components/FindingsPanel';
+import ChatGraphMessage from '../components/ChatGraphMessage';
 
 // Lightweight Entities list component
 const EntitiesList: React.FC<{ projectId: string }> = ({ projectId }) => {
@@ -407,7 +408,7 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genaiChat.projectId]);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ev = React.useMemo(() => {
     try {
       const map = (genaiChat as any).persistedByLocalId || {};
@@ -448,7 +449,12 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
     ? t('unfold.bias.oneSided')
     : t('unfold.bias.biased');
 
-  const tLevel = Math.max(0, Math.min(1, Number(ev.thoughtfulness || 0)));
+  const tLevel = (() => {
+    try {
+      const v = (typeof (ev as any).thoughtfulnessLevel === 'number') ? (ev as any).thoughtfulnessLevel : (ev as any).thoughtfulness;
+      return Math.max(0, Math.min(1, Number(v || 0)));
+    } catch { return 0; }
+  })();
   const tHue = Math.round(120 * (tLevel));
   const tFill = `hsl(${tHue}, 60%, 70%)`;
   const tLabelLevel = Math.round(tLevel * 10) / 10;
@@ -479,17 +485,12 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
       </button>
       {open && (
         <div className="mt-2 space-y-2">
-          {Array.isArray(ev.biases) && ev.biases.length > 0 && (
-            <div className="text-[12px]" style={{ color: 'var(--text-secondary-strong)' }}>
-              {ev.biases.map((b: string, i: number) => (
-                <div key={i} className="mb-1">• {b}</div>
-              ))}
-            </div>
-          )}
-          {Array.isArray(ev.biasTypes) && ev.biasTypes.length > 0 && (
+          {Array.isArray((ev as any).categories) && (ev as any).categories.length > 0 && (
             <>
               <div className="flex flex-wrap gap-1">
-                {ev.biasTypes.map((code: string, i: number) => (
+                {(ev as any).categories.map((c: any, i: number) => {
+                  const code = String(c?.code || '');
+                  return (
                   <button
                     key={i}
                     type="button"
@@ -513,15 +514,19 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
                   >
                     {t(`unfold.bias.tags.${code}`, { defaultValue: code })}
                   </button>
-                ))}
+                );})}
               </div>
-              {selectedTag && (
-                <div className="mt-2 p-3 rounded-lg" style={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
-                  <div className="text-[12px]" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5' }}>
-                    {t(`unfold.bias.descriptions.${selectedTag}`, { defaultValue: '' })}
+              {selectedTag && (() => {
+                const found = ((ev as any).categories || []).find((c: any) => String(c?.code || '') === selectedTag);
+                const expl = typeof found?.explanation === 'string' ? found.explanation : t(`unfold.bias.descriptions.${selectedTag}`, { defaultValue: '' });
+                return (
+                  <div className="mt-2 p-3 rounded-lg" style={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+                    <div className="text-[12px]" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5' }}>
+                      {expl}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </>
           )}
           <div className="space-y-1">
@@ -532,13 +537,13 @@ const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{tLabelLevel.toFixed(1)} {tLabel}</div>
             </div>
+            {/* Detailed dimension rows hidden per request */}
           </div>
         </div>
       )}
     </div>
   );
 };
-
 // Action row under assistant messages: shows bias details when available,
 // otherwise shows action buttons (Bring In, Copy) immediately after message
 const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: string }> = ({ messageId, isAssistant, content }) => {
@@ -634,6 +639,38 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
       await api.docsCreateFromText(projectId, { filename, contentType: 'text/markdown', text });
     } catch {}
   }, [content, genaiChat, derivedHeaderText]);
+
+  const exportToDocx = React.useCallback(async () => {
+    try {
+      const projectId = (genaiChat as any)?.projectId as string | undefined;
+      if (!projectId || projectId === 'local-unfold') return;
+      
+      // First, save as markdown document
+      const text = (content || '').toString();
+      const baseUnsafe = (derivedHeaderText ? `${derivedHeaderText}-contribution` : 'assistant-answer');
+      const base = baseUnsafe.toLowerCase().replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'assistant-answer';
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `${base}-${ts}.md`;
+      
+      const { api } = await import('../lib/api');
+      const doc = await api.docsCreateFromText(projectId, { filename, contentType: 'text/markdown', text });
+      
+      // Then export to DOCX
+      const blob = await api.docsExportToDocx(projectId, doc.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${base}-${ts}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 0);
+    } catch (error) {
+      console.error('Failed to export to DOCX:', error);
+    }
+  }, [content, genaiChat, derivedHeaderText]);
   if (!isAssistant || !content || !content.trim()) return null;
   return (
     <div className="mt-1" style={{ width: '100%', position: 'relative' }}>
@@ -724,9 +761,19 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                       const assistantInter = ints.find((it) => it.id === messageId);
                       const agentAnswer = (assistantInter?.contentSanitized || assistantInter?.content || '').toString();
                       const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                      
+                      const langName = (() => {
+                        switch (preferredLang) {
+                          case 'ru': return 'Russian';
+                          case 'en': return 'English';
+                          case 'kk':
+                          case 'kz': return 'Kazakh';
+                          default: return 'Russian';
+                        }
+                      })();
                       const agentName = displayName || 'agent';
                       const prof = derivedAgentProfile;
-                      const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. The user has a follow-up question to your previous answer.\n\nOriginal user question (context):\n${origUser || '(not found)'}\n\nYour previous answer:\n${agentAnswer}\n\nUser follow-up (address this directly):\n${question}`;
+                      const prompt = `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. The user has a follow-up question to your previous answer.\n\nOriginal user question (context):\n${origUser || '(not found)'}\n\nYour previous answer:\n${agentAnswer}\n\nUser follow-up (address this directly):\n${question}`;
                       const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
                       const useModel = prof?.model || settings.model;
                       const sxSystemInstruction = (
@@ -736,7 +783,7 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                         `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
                         `- Examples: <!-- @sx:{\\\"v\\\":\\\"1\\\",\\\"type\\\":\\\"entity_mark\\\",\\\"id\\\":\\\"ent-001\\\",\\\"kind\\\":\\\"person\\\",\\\"name\\\":\\\"…\\\",\\\"description\\\":\\\"…\\\"} -->`
                       );
-                      const combinedSystemInstruction = [settings.systemInstruction || '', sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
+                      const combinedSystemInstruction = [settings.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
                       const options: any = {
                         profile: /_quality$/i.test(useModel || '') ? 'quality' : 'fast',
                         modelOverride: useModel,
@@ -782,8 +829,17 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                     }
                     if (!prevPrimary) return;
                     const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                    const langName = (() => {
+                      switch (preferredLang) {
+                        case 'ru': return 'Russian';
+                        case 'en': return 'English';
+                        case 'kk':
+                        case 'kz': return 'Kazakh';
+                        default: return 'Russian';
+                      }
+                    })();
                     const contribution = msgs.find((m) => m.id === messageId)?.content || '';
-                    const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
+                    const prompt = `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
                     const gs = useGenAISettings.getState();
                     const res = await (await import('../lib/api')).api.genaiGenerate({ model: gs.model, prompt, strictJSONEnabled: false, maxOutputTokens: Math.max(1024, gs.maxOutputTokens || 2048), webSearchEnabled: false, systemInstruction: gs.systemInstruction || undefined });
                     const stripFences = (s: string) => { let t = (s || '').toString().trim(); t = t.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim(); t = t.replace(/^```[\s\S]*?```$/m, (m) => m.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')).trim(); if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) t = t.slice(1, -1); return t.trim(); };
@@ -847,7 +903,7 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                   `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
                   `- Examples: <!-- @sx:{\\\"v\\\":\\\"1\\\",\\\"type\\\":\\\"entity_mark\\\",\\\"id\\\":\\\"ent-001\\\",\\\"kind\\\":\\\"person\\\",\\\"name\\\":\\\"…\\\",\\\"description\\\":\\\"…\\\"} -->`
                 );
-                const combinedSystemInstruction = [settings.systemInstruction || '', p.params?.systemInstruction || '', sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
+                const combinedSystemInstruction = [settings.systemInstruction || '', p.params?.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
                       const options: any = {
                         profile: /_quality$/i.test(model) ? 'quality' : 'fast',
                         modelOverride: model,
@@ -857,6 +913,15 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                   systemInstruction: combinedSystemInstruction,
                       };
                       const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                      const langName = (() => {
+                        switch (preferredLang) {
+                          case 'ru': return 'Russian';
+                          case 'en': return 'English';
+                          case 'kk':
+                          case 'kz': return 'Kazakh';
+                          default: return 'Russian';
+                        }
+                      })();
                       const st = useGenaiChatStore.getState();
                       // Find the specific message that triggered Bring In and the previous user message
                       const msgs = st.messages.filter((m) => m.content && m.content.trim());
@@ -892,11 +957,19 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                           );
                           if (!evalNode) return '';
                           const ev = JSON.parse((evalNode as any).content || '{}');
-                          const obj = { biasLevel: ev.biasLevel, thoughtfulness: ev.thoughtfulness, biases: ev.biases, biasTypes: ev.biasTypes };
+                          const thLevel = (typeof ev.thoughtfulnessLevel === 'number' ? ev.thoughtfulnessLevel : ev.thoughtfulness);
+                          const obj = {
+                            biasLevel: ev.biasLevel,
+                            thoughtfulness: thLevel,
+                            thoughtfulnessLevel: thLevel,
+                            thoughtfulnessDimensions: ev.thoughtfulnessDimensions,
+                            biases: ev.biases,
+                            biasTypes: ev.biasTypes,
+                          };
                           return `\n\nAutomatic bias analysis (for your awareness; do not echo):\n${JSON.stringify(obj, null, 2)}`;
                         } catch { return ''; }
                       })();
-                      const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${p.displayName}, an invited AI participant analyzing an AI assistant's response to a user query.\n\nYour task: Evaluate the ASSISTANT's answer and provide an alternative perspective or counterpoint. If the ASSISTANT's response has limitations, biases, or missing viewpoints, articulate them constructively. Present a well-reasoned contribution that adds value through critical analysis or an alternative angle.\n\nDo not ask clarifying questions or request additional input; rely only on the provided context.\nDo not restate the prompt or context; respond directly with your perspective.\n\nContext:\n${transcript}${biasBlock}\n\nYour perspective:`;
+                      const prompt = `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${p.displayName}, an invited AI participant analyzing an AI assistant's response to a user query.\n\nYour task: Evaluate the ASSISTANT's answer and provide an alternative perspective or counterpoint. If the ASSISTANT's response has limitations, biases, or missing viewpoints, articulate them constructively. Present a well-reasoned contribution that adds value through critical analysis or an alternative angle.\n\nDo not ask clarifying questions or request additional input; rely only on the provided context.\nDo not restate the prompt or context; respond directly with your perspective.\n\nContext:\n${transcript}${biasBlock}\n\nYour perspective:`;
                 await useGenaiChatStore.getState().startStream({ prompt, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: p.displayName, agentProfile: { provider: p.provider, model: model, capabilities: { tools: !!p.capabilities?.tools, webSearch: !!p.capabilities?.webSearch, reasoning: !!p.capabilities?.reasoning, refinePrevious: !!p.capabilities?.refinePrevious }, params: p.params }, subkind: 'agent.bring_in', replyTo: messageId }, suppressUserEcho: true });
                     } catch {}
             }}
@@ -945,6 +1018,16 @@ const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: s
                     onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
                   >
                     Static · Markdown (.md)
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left rounded px-2 py-1 text-[12px]"
+                    style={{ color: 'var(--text-secondary-strong)' }}
+                    onClick={async () => { setExportMenuOpen(false); await exportToDocx(); }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                  >
+                    Microsoft Word (.docx)
                   </button>
                 </div>
               </div>
@@ -1074,7 +1157,6 @@ All natural-language fields (stance, riskProfile.rationale) must be written stri
 Task: From the user queries below, neutrally extract:
 - stance: 1–2 concise sentences (<=100 words) written DIRECTLY to the user in SECOND PERSON ("you"). Do NOT describe the user in the third person. State what you seem to be pursuing, your perspective and deep intent, avoiding moral judgement and unsupported assumptions.
 - riskProfile: EU AI Act risk assessment with score 0..1 and derived level. If you need to reference the user in rationale, also use SECOND PERSON ("you").
-
 High risk auto-triggers (must set level to High ONLY if the user seeks PERSONAL, ACTIONABLE advice in these areas; general or educational discussion does NOT trigger High):
 - Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов — только персональные рекомендации/советы по здоровью, диагнозам, схемам/дозировкам/отмене; НЕ включает общие сведения, новости фарма/здравполитики, обсуждение индустрии или науки без личных указаний.
 - Самоповреждение/суицид/угрозы жизни и безопасности — всегда High при признаках просьбы о помощи/инструкциях.
@@ -1088,7 +1170,6 @@ RISK LEVEL RULES:
 - Low: score in [0, 0.3)
 Use triggerCategories strictly from DICTIONARY (English tokens only):
 ${categoriesText}
-
 The JSON MUST conform EXACTLY to this schema (no additional keys, types must match):
 ${schemaText}
 
@@ -1558,6 +1639,7 @@ const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult
   const [error, setError] = React.useState<string | null>(null);
   const genaiChat = useGenaiChatStore();
   const { currentUser } = useAuth();
+  const { i18n: i18nCore } = useTranslation();
   const hasAssistant = React.useMemo(() =>
     genaiChat.messages.some((m) => m.role === 'assistant' && m.content && m.content.trim().length > 0),
     [genaiChat.messages]
@@ -1629,7 +1711,7 @@ const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult
           return;
         }
         const transcript = texts.join('\n\n---\n\n');
-        const lang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+        const lang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'RU') : 'RU').toLowerCase();
         const nowISO = new Date().toISOString();
         const prompt = `User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are an expert LLM output reviewer.
 Current date/time (trustworthy, real-time): ${nowISO}.
@@ -1639,6 +1721,7 @@ Evaluate the following ASSISTANT responses (most recent last). Provide:
 2) Style characteristics (tone, structure, clarity)
 3) Potential biases/safety concerns
 4) 3-5 concrete improvements to the SYSTEM INSTRUCTION to improve future answers
+5) A short note referencing the five-dimension thoughtfulness rubric used for the structured score (do not include numbers here)
 Important: Do not critique formatting or output length; formatting/verbosity are enforced elsewhere.
 Assistant responses:
 ${transcript}
@@ -1652,7 +1735,16 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
           if (textToEvaluate) {
             (async () => {
               try {
-                const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN');
+                const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                const langName = (() => {
+                  switch (preferredLang) {
+                    case 'ru': return 'Russian';
+                    case 'en': return 'English';
+                    case 'kk':
+                    case 'kz': return 'Kazakh';
+                    default: return 'Russian';
+                  }
+                })();
                 const biasDict = [
                   'confirmation_bias',
                   'selection_bias',
@@ -1672,11 +1764,44 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                   additionalProperties: false,
                   properties: {
                     biasLevel: { type: 'number', minimum: 0, maximum: 1 },
-                    thoughtfulness: { type: 'number', minimum: 0, maximum: 1 },
+                    categories: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: 2,
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          code: { type: 'string', enum: biasDict },
+                          explanation: { type: 'string', minLength: 10, maxLength: 600 }
+                        },
+                        required: ['code', 'explanation']
+                      }
+                    },
+                    // Thoughtfulness rubric
+                    thoughtfulnessLevel: { type: 'number', minimum: 0, maximum: 1 },
+                    thoughtfulnessDimensions: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        analyticalDepth: { type: 'number', minimum: 0, maximum: 1 },
+                        epistemicHumility: { type: 'number', minimum: 0, maximum: 1 },
+                        alternativeConsideration: { type: 'number', minimum: 0, maximum: 1 },
+                        evidenceReasoningQuality: { type: 'number', minimum: 0, maximum: 1 },
+                        practicalGrounding: { type: 'number', minimum: 0, maximum: 1 },
+                      },
+                      required: [
+                        'analyticalDepth',
+                        'epistemicHumility',
+                        'alternativeConsideration',
+                        'evidenceReasoningQuality',
+                        'practicalGrounding'
+                      ]
+                    },
                     biases: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 5 },
                     biasTypes: { type: 'array', items: { type: 'string', enum: biasDict }, minItems: 0 }
                   },
-                  required: ['biasLevel', 'thoughtfulness', 'biases', 'biasTypes']
+                  required: ['biasLevel', 'categories']
                 } as any;
                 const schemaText = JSON.stringify(schema, null, 2);
                 const dictText = JSON.stringify(biasDict);
@@ -1698,7 +1823,8 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                   ? `USER_MESSAGE (context, do NOT evaluate this text):\n${prevUserText}\n\n`
                   : '';
                 const targetBlock = `ASSISTANT_REPLY (to evaluate):\n${textToEvaluate}`;
-                const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\nField names must be exactly: biasLevel, thoughtfulness, biases, biasTypes.\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counterfacts; categorical claims.\n\nThoughtfulness (0..1):\n- Low: shallow, binary conclusions, no uncertainty handling, no citations.\n- Medium: some analysis, limited trade-offs.\n- High: nuanced, considers uncertainty, alternatives and trade-offs, sober tone.\n\nBiases array (3–5 items): short natural-language notes explaining concrete bias manifestations in PreferredLanguage (not field names).\n\nBiasTypes array: choose zero or more labels STRICTLY from DICTIONARY (English tokens only):\n${dictText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\n${ctxBlock}${targetBlock}\n\nEvaluate ONLY the ASSISTANT_REPLY both standalone and IN RELATION to USER_MESSAGE (if provided). Do NOT assess the user's content. Return only the JSON.`;
+                const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nField names (exact):\n- Required: biasLevel, categories, thoughtfulnessLevel, thoughtfulnessDimensions\n- categories: array of 1–2 objects, each with 'code' (from DICTIONARY) and 'explanation' (how this bias manifests in the evaluated text; 1–3 sentences).\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counterfacts; categorical claims.\n\nTHOUGHTFULNESS SCALE (0.0–1.0): Evaluate across FIVE dimensions. Each dimension must be scored in 0.1 increments. The overall thoughtfulnessLevel MUST be the MEAN of the five dimensions, rounded to one decimal (0.1).\n\nDIMENSION 1: Analytical Depth\n0.0–0.3: Surface-level; restates question; binary conclusions; no causal reasoning\n0.4–0.6: Identifies 1–2 factors; basic causality; limited mechanism explanation\n0.7–0.8: Multi-factor analysis; explores mechanisms; shows interactions between factors\n0.9–1.0: Systems-level thinking; second-order effects; identifies non-obvious dependencies\n\nDIMENSION 2: Epistemic Humility\n0.0–0.3: Presents all claims as certainties; no acknowledgment of limits\n0.4–0.6: Single hedge ("this might" / "generally") without explaining uncertainty sources\n0.7–0.8: Multiple explicit uncertainty markers; names what is unknown; discusses confidence levels\n0.9–1.0: Distinguishes knowns/unknowns/unknowables; explains why confidence varies; identifies what would change assessment\n\nDIMENSION 3: Alternative Consideration\n0.0–0.3: Single path; no alternatives mentioned\n0.4–0.6: Mentions alternatives but doesn't explore trade-offs\n0.7–0.8: Explores 2+ alternatives with explicit trade-offs for each\n0.9–1.0: Compares alternatives on multiple dimensions; discusses context-dependency of choice; identifies decision criteria\n\nDIMENSION 4: Evidence & Reasoning Quality\n0.0–0.3: Assertions without support; anecdotal reasoning; logical fallacies present\n0.4–0.6: Some supporting reasoning but gaps/leaps present; informal logic\n0.7–0.8: Structured argument; reasoning explicit; minimal logical gaps\n0.9–1.0: Rigorous reasoning chain; anticipates objections; cites evidence types (even if not specific sources); distinguishes correlation/causation\n\nDIMENSION 5: Practical Grounding\n0.0–0.3: Abstract theory only; no real-world constraints; ignores implementation\n0.4–0.6: Mentions constraints but doesn't integrate them; generic recommendations\n0.7–0.8: Discusses real constraints (resources, time, politics); context-specific guidance\n0.9–1.0: Anticipates implementation challenges; discusses failure modes; provides decision heuristics for ambiguous cases\n\nSCORING INSTRUCTIONS:\n1) Score each dimension independently (0.0–1.0 in 0.1 increments)\n2) thoughtfulnessLevel = mean(dimensions), rounded to 0.1\n3) A response can score high on depth but low on humility → the average must reflect all\n4) Generic LLM responses typically score 0.4–0.6 (not 0.9)\n5) Reserve 0.8+ for genuinely exceptional reasoning\n\nEXAMPLES:\nLow (0.2): "Just do X. It's the best approach."\n→ Depth: 0.1, Humility: 0.0, Alternatives: 0.0, Evidence: 0.2, Grounding: 0.3 = 0.12\n\nMedium (0.5): "X is generally better because [reason]. However, Y might work in some cases."\n→ Depth: 0.4, Humility: 0.5, Alternatives: 0.5, Evidence: 0.5, Grounding: 0.6 = 0.5\n\nHigh (0.8): "X offers [trade-off 1] while Y provides [trade-off 2]. Choice depends on [factors]. Uncertainty exists around [specific aspect] because [reason]. In [context A], prefer X; in [context B], Y may be better. Implementation risks include [failure modes]."\n→ Depth: 0.8, Humility: 0.8, Alternatives: 0.9, Evidence: 0.8, Grounding: 0.8 = 0.82\n\nDICTIONARY for categories.code (English tokens only):\n${dictText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\n${ctxBlock}${targetBlock}\n\nEvaluate ONLY the ASSISTANT_REPLY both standalone and IN RELATION to USER_MESSAGE (if provided). Do NOT assess the user's content. Return only the JSON.`;
+                const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
                 console.log('[StanceEval] sending structured eval', { model: evalModel, promptChars: promptEval.length });
                 const res = await api.genaiGenerate({
                   model: evalModel,
@@ -1707,6 +1833,7 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                   jsonSchema: schema,
                   maxOutputTokens: 4096,
                   webSearchEnabled: false,
+                  systemInstruction: langDirective,
                 });
                 // Debug raw model response for evaluation
                 try {
@@ -1742,12 +1869,39 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                   return;
                 }
                 const clamp01 = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
+                const dimsObj = (() => {
+                  try {
+                    const d = parsed?.thoughtfulnessDimensions || {};
+                    if (!d || typeof d !== 'object') return undefined;
+                    return {
+                      analyticalDepth: clamp01(d.analyticalDepth),
+                      epistemicHumility: clamp01(d.epistemicHumility),
+                      alternativeConsideration: clamp01(d.alternativeConsideration),
+                      evidenceReasoningQuality: clamp01(d.evidenceReasoningQuality),
+                      practicalGrounding: clamp01(d.practicalGrounding),
+                    };
+                  } catch { return undefined; }
+                })();
+                const thLevel = (() => {
+                  if (typeof parsed?.thoughtfulnessLevel === 'number') return clamp01(parsed.thoughtfulnessLevel);
+                  if (dimsObj && Object.values(dimsObj).every((v) => typeof v === 'number')) {
+                    const vals = Object.values(dimsObj) as number[];
+                    return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+                  }
+                  return clamp01(parsed?.thoughtfulness);
+                })();
                 const ev = {
                   biasLevel: clamp01(parsed?.biasLevel),
-                  thoughtfulness: clamp01(parsed?.thoughtfulness),
-                  biases: Array.isArray(parsed?.biases) ? parsed.biases.filter((x: any) => typeof x === 'string').slice(0, 5) : [],
-                  biasTypes: Array.isArray(parsed?.biasTypes) ? parsed.biasTypes.filter((x: any) => typeof x === 'string').slice(0, 12) : [],
-                };
+                  thoughtfulnessLevel: thLevel,
+                  thoughtfulness: thLevel,
+                  thoughtfulnessDimensions: dimsObj,
+                  categories: Array.isArray(parsed?.categories)
+                    ? parsed.categories
+                        .filter((c: any) => c && typeof c.code === 'string')
+                        .slice(0, 2)
+                        .map((c: any) => ({ code: String(c.code), explanation: typeof c.explanation === 'string' ? c.explanation : '' }))
+                    : []
+                } as any;
                 console.log('[StanceEval] structured eval result', { model: evalModel, ev });
                 useGenaiChatStore.getState().setEvaluation(lastAssistant.id, ev);
                 // Create eval.bias for assistant and persist to server
@@ -1865,7 +2019,7 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
                     } as any;
                     const schemaText = JSON.stringify(schemaSt, null, 2);
                     const categoriesText = JSON.stringify(riskCategories);
-                    const requiredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                    const requiredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'RU') : 'RU').toLowerCase();
                     const promptSt = `In this request, you act as an external expert and must return your assessment STRICTLY following the provided JSON schema. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${requiredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\nAll natural-language fields (stance, riskProfile.rationale) must be written strictly in the required language.\n\nTask: From the assistant's reply below, neutrally extract:\n- stance: 1–2 concise sentences (<=100 words) that state what the assistant seems to be asserting/pursuing, avoiding moral judgement and unsupported assumptions.\n- riskProfile: EU AI Act risk assessment with score 0..1 and derived level.\n\nHigh risk auto-triggers (must set level to High ONLY if the content provides PERSONAL, ACTIONABLE guidance in these areas; general/educational discussion does NOT trigger High):\n- Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов (только персональные рекомендации)\n- Самоповреждение/суицид/угрозы жизни и безопасности (всегда High при инструкциях)\n- Право/иммиграция/налоги/личные финансы/инвестиции/страхование (только персональные советы)\n- Отношения/абьюз/дети/уязвимые группы (только персональные ситуации и советы)\n- Безопасность/экстренные ситуации (персональные инструкции)\n\nRISK LEVEL RULES:\n- High: score in [0.7, 1]\n- Medium: score in [0.3, 0.7)\n- Low: score in [0, 0.3)\n\nUse triggerCategories strictly from DICTIONARY (English tokens only):\n${categoriesText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\nASSISTANT REPLY:\n${textToEvaluate}`;
                     const stRes = await api.genaiGenerate({ model: evalModel, prompt: promptSt, strictJSONEnabled: true, jsonSchema: schemaSt, maxOutputTokens: 2048, webSearchEnabled: false });
                     let parsedSt: any = null;
@@ -2325,6 +2479,15 @@ const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvai
   return null;
 };
 
+// Fixed system instructions for the cognitive environment (brand-neutral)
+const HATL_ONE_INSTRUCTIONS = (
+  `You operate inside a cognitive environment. Do not mention the environment name, providers, or model names unless the user asks directly or it is strictly relevant (e.g., legal or brand questions).\n\n` +
+  `Do not start responses with meta phrases such as "I am …" or "As …"; go straight to the substance of the user's task.\n\n` +
+  `If the user asks who you are, reply exactly: "I am an artificial intelligence inside a cognitive environment." Then immediately continue with the task.\n\n` +
+  `If the user asks about models: you may answer that the environment can autonomously select models depending on the task; if your current system instructions explicitly require disclosure, you may disclose. The user can also choose a preferred model in the environment settings.\n\n` +
+  `You currently cannot create or analyze images unless a dedicated tool is provided. When web search is enabled, you may cite sources; otherwise do not claim real-time access.`
+);
+
 const DiscoveryPage: React.FC = () => {
   const { t } = useTranslation();
   const { currentUser } = useAuth();
@@ -2339,6 +2502,7 @@ const DiscoveryPage: React.FC = () => {
   const [genaiThinkingSeconds, setGenaiThinkingSeconds] = useState(0);
   const [entitiesAnalyzing, setEntitiesAnalyzing] = useState(false);
   const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives'>('chat');
+  const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph'>('text');
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
   const genaiThinkingIntervalRef = useRef<number | null>(null);
@@ -2636,10 +2800,16 @@ const DiscoveryPage: React.FC = () => {
   }, [currentUser?.email, connectWs]);
 
   useEffect(() => {
-    if (currentProject) {
-      try { useGenaiChatStore.getState().setProjectId(currentProject.id); } catch {}
-      fetchProjectSources(currentProject.id);
-      fetchProjectInteractions(currentProject.id);
+    const pid = currentProject?.id;
+    if (pid) {
+      try {
+        const st = useGenaiChatStore.getState();
+        if (st.projectId !== pid) {
+          st.setProjectId(pid);
+        }
+      } catch {}
+      fetchProjectSources(pid);
+      fetchProjectInteractions(pid);
       try {
         const st = useGenaiChatStore.getState();
         st.hydrateInteractions();
@@ -2648,7 +2818,7 @@ const DiscoveryPage: React.FC = () => {
     } else {
       clearSources();
     }
-  }, [currentProject]);
+  }, [currentProject?.id]);
 
   // Timer for chat "Thinking..." state
   useEffect(() => {
@@ -2826,7 +2996,7 @@ const DiscoveryPage: React.FC = () => {
                   groundingEnabled: settings.groundingEnabled,
                   temperature: settings.temperature,
                   maxOutputTokens: Math.max(512, settings.maxOutputTokens || 1024),
-                  systemInstruction: [settings.systemInstruction || '', sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined,
+                  systemInstruction: [settings.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined,
                 };
                 try {
                   const started = performance.now();
@@ -3681,8 +3851,8 @@ const DiscoveryPage: React.FC = () => {
                 <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.newChat')}</span>
               </button>
             </div>
-            {/* Chats section */}
-            <div className="mb-4">
+            {/* Scrollable Chats section */}
+            <div className="mb-4 flex-1 min-h-0 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
               <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
                 {t('unfold.sections.chats')}
               </div>
@@ -4672,32 +4842,42 @@ const DiscoveryPage: React.FC = () => {
                           {isUser && genaiChat.evaluations[m.id] && (
                             <EvaluationDetails messageId={m.id} />
                           )}
-                          {/* Tags row: show searchQueries and sources as chips */}
-                          {genaiChat.searchQueries.length > 0 || genaiChat.attributions.length > 0 ? (
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {genaiChat.searchQueries.slice(0, 4).map((q, i) => {
-                                const words = q.trim().split(/\s+/);
-                                const short = words.length > 3 ? words.slice(0, 3).join(' ') + '…' : q;
-                                return (
-                                  <span key={`q-${i}`} className="px-2 py-0.5 rounded-full text-[10px]" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>
-                                    {short}
-                                  </span>
-                                );
-                              })}
-                              {genaiChat.attributions.slice(0, 4).map((a, i) => {
-                                const url = (a.url || '').replace(/^https?:\/\//i, '');
-                                const parts = url.split('/');
-                                const host = parts[0] || '';
-                                const tail = parts[1] ? `/${parts[1]}` : '';
-                                const label = (host + tail) || (a.title || 'link');
-                                return (
-                                  <a key={`src-${i}`} href={a.url} target="_blank" rel="noreferrer" className="px-2 py-0.5 rounded-full text-[10px] underline" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>
-                                    {label}
-                                  </a>
-                                );
-                              })}
-                            </div>
-                          ) : null}
+                          {/* Tags row: per-message chips (stable by messageId) with global fallback */}
+                          {(() => {
+                            try {
+                              const inter = useGenaiChatStore.getState().interactions.find((it) => it.kind === 'assistant' && (it as any).originalMessageId === m.id) as any;
+                              const perQ = Array.isArray(inter?.searchQueries) ? inter.searchQueries.filter(Boolean) : [];
+                              const perS = Array.isArray(inter?.sources) ? inter.sources.filter(Boolean) : [];
+                              const qs = (perQ.length > 0 ? perQ : genaiChat.searchQueries).slice(0, 4);
+                              const attrs = (perS.length > 0 ? perS.map((url: string) => ({ url })) : genaiChat.attributions).slice(0, 4);
+                              if (qs.length === 0 && attrs.length === 0) return null;
+                              return (
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  {qs.map((q: string, i: number) => {
+                                    const words = String(q || '').trim().split(/\s+/);
+                                    const short = words.length > 3 ? words.slice(0, 3).join(' ') + '…' : String(q || '');
+                                    return (
+                                      <span key={`q-${i}`} className="px-2 py-0.5 rounded-full text-[10px]" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>
+                                        {short}
+                                      </span>
+                                    );
+                                  })}
+                                  {attrs.map((a: any, i: number) => {
+                                    const raw = String((a as any).url || '').replace(/^https?:\/\//i, '');
+                                    const parts = raw.split('/');
+                                    const host = parts[0] || '';
+                                    const tail = parts[1] ? `/${parts[1]}` : '';
+                                    const label = (host + tail) || (a as any).title || 'link';
+                                    return (
+                                      <a key={`src-${i}`} href={(a as any).url} target="_blank" rel="noreferrer" className="px-2 py-0.5 rounded-full text-[10px] underline" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>
+                                        {label}
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            } catch { return null; }
+                          })()}
                         </>
                       )}
                     </ChatMessage>
@@ -4872,6 +5052,36 @@ const DiscoveryPage: React.FC = () => {
                               })()}
                             </>
                           ) : (
+                            <>
+                              {/* Graph message rendering */}
+                              {(() => {
+                                let gd = it.graphData as undefined | { chartTitle: string; table: (string | number)[][]; sources: string[] };
+                                if (!gd && it.subkind === 'graph') {
+                                  try {
+                                    let content = String(it.contentSanitized || it.content || '').trim();
+                                    content = content.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim();
+                                    let parsed: any = null;
+                                    if (content.startsWith('{') || content.startsWith('[')) {
+                                      parsed = JSON.parse(content);
+                                    } else {
+                                      const m = content.match(/\{[\s\S]*\}/);
+                                      if (m && m[0]) parsed = JSON.parse(m[0]);
+                                    }
+                                    if (parsed && typeof parsed === 'object' && typeof parsed.chartTitle === 'string' && Array.isArray(parsed.table) && Array.isArray(parsed.sources)) {
+                                      gd = { chartTitle: parsed.chartTitle, table: parsed.table, sources: parsed.sources };
+                                    }
+                                  } catch {}
+                                }
+                                if (gd) {
+                                  return (
+                                    <ChatGraphMessage
+                                      chartTitle={gd.chartTitle}
+                                      table={gd.table}
+                                      sources={gd.sources}
+                                    />
+                                  );
+                                }
+                                return (
                             <div className="text-13 markdown" data-interaction-id={it.id} style={{ color: 'var(--text-heading)', position: 'relative', opacity: frozenEdits[it.id] ? 0.6 : 1, pointerEvents: frozenEdits[it.id] ? 'none' as any : 'auto' }}>
                               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{
                                 p: (props: React.DetailedHTMLProps<React.HTMLAttributes<HTMLParagraphElement>, HTMLParagraphElement>) => (<div {...props} className="md-p" />),
@@ -4942,7 +5152,7 @@ const DiscoveryPage: React.FC = () => {
                                               groundingEnabled: settings.groundingEnabled,
                                               temperature: settings.temperature,
                                               maxOutputTokens: Math.max(512, settings.maxOutputTokens || 1024),
-                                              systemInstruction: [settings.systemInstruction || '', sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined,
+                                              systemInstruction: [settings.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined,
                                             };
                                             const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. We provide the full assistant answer (FULL_ANSWER) and a specific fragment (SELECTED_FRAGMENT) the user wants to modify. The user request is (USER_REQUEST).\n\nReturn ONLY the updated fragment. Preserve the fragment's existing formatting and structure where possible, and use Markdown appropriately (headings ###, lists, emphasis, blank lines) if it helps readability and does not contradict the request. Do not add any preface, labels, or explanations. Do not wrap the result in code fences. Do NOT return JSON.\n\nFULL_ANSWER:\n${full}\n\nSELECTED_FRAGMENT:\n${selText}\n\nUSER_REQUEST:\n${req}\n`;
                                             setFrozenEdits((s) => ({ ...s, [it.id]: true }));
@@ -4997,9 +5207,12 @@ const DiscoveryPage: React.FC = () => {
                                 </div>
                               )}
                             </div>
-                          )}
-                          {!isUser && (
-                            <ActionRow messageId={it.id} isAssistant={!isUser} content={(it.contentSanitized || it.content)} />
+                              ); })()}
+                              {/* End of graph/markdown conditional rendering */}
+                              {!isUser && (
+                                <ActionRow messageId={it.id} isAssistant={!isUser} content={(it.contentSanitized || it.content)} />
+                              )}
+                            </>
                           )}
                         </ChatMessage>
                         </div>
@@ -5165,11 +5378,12 @@ const DiscoveryPage: React.FC = () => {
               dangerTint={isHighRisk}
               showHighRiskTag={isHighRisk}
               onHighRiskTagClick={() => setRiskBanner((prev) => ({ visible: true, level: 'High', rationale: prev?.rationale || '' }))}
+              onModeChange={setUnfoldMode}
               onSubmit={async (text) => {
-                // Text comes directly from UnfoldRequest, already trimmed and validated
                 if (genaiChat.streaming || !text.trim()) return;
+                let prompt = text.trim();
                 // Slash commands: /section <title> and /end
-                const raw = text.trim();
+                const raw = prompt;
                 const isSection = /^\s*\/section\b/i.test(raw);
                 const isEnd = /^\s*\/end\b/i.test(raw);
                 const isAnalyzeEntities = /^\s*\/analyze\s+entities\b/i.test(raw) || /^\s*\/analyze\s+entities\s*$/i.test(raw);
@@ -5224,15 +5438,36 @@ const DiscoveryPage: React.FC = () => {
                 const tools = genaiSettings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
                 // Map UI model to backend aliases
                 const model = genaiSettings.model;
+                // Chat language preference (used in hidden system instructions)
+                const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                const langNameForPrompt = (() => {
+                  switch (preferredLang) {
+                    case 'ru': return 'Russian';
+                    case 'en': return 'English';
+                    case 'kk':
+                    case 'kz': return 'Kazakh';
+                    default: return 'English';
+                  }
+                })();
                 const sxSystemInstruction = (
                   `Hidden-instructions protocol (do not show to users):\n` +
                   `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
                   `- JSON must be valid and match v: "1" with one of types: entity_mark, monitor_metric, watchlist_add, link_reference.\n` +
                   `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
                   `- Examples: <!-- @sx:{"v":"1","type":"entity_mark","id":"ent-001","kind":"person","name":"…","description":"…"} -->`);
+                const graphSystemInstruction = unfoldMode === 'graph'
+                  ? (
+                    `Graph output protocol (hidden; do not show to users):\n` +
+                    `- Chat language: ${langNameForPrompt}. If text labels are needed (e.g., chartTitle), use this language.\n` +
+                    `- You MUST return ONLY a valid bare JSON object with fields: chartTitle (string), table (2D array — first row are time indicators/categories, first column is label, remaining cells are int/double), sources (array of strings with source URLs).\n` +
+                    `- No markdown, no explanations, no code fences, no surrounding prose. Only JSON.`
+                  )
+                  : '';
                 const combinedSystemInstruction = [
                   genaiSettings.systemInstruction || '',
+                  HATL_ONE_INSTRUCTIONS,
                   sxSystemInstruction,
+                  graphSystemInstruction,
                 ].filter(Boolean).join('\n\n').trim() || undefined;
 
                 const options: any = {
@@ -5244,7 +5479,6 @@ const DiscoveryPage: React.FC = () => {
                   maxOutputTokens: genaiSettings.maxOutputTokens,
                   systemInstruction: combinedSystemInstruction,
                 };
-              const prompt = text;
               // Capture previous assistant reply (if any) BEFORE starting stream
               const stBefore = useGenaiChatStore.getState();
               let prevAssistantText: string | null = null;
@@ -5259,7 +5493,6 @@ const DiscoveryPage: React.FC = () => {
                 }
               } catch {}
                 // UnfoldRequest clears itself after submit
-                const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
                 await genaiChat.startStream({ prompt, tools, options: { ...options, __lang: preferredLang } });
               // Fire-and-forget: structured bias evaluation for the USER message we just sent
               try {
@@ -5272,7 +5505,7 @@ const DiscoveryPage: React.FC = () => {
                     try {
                       const settingsStateEval = useGenAISettings.getState();
                       const evalModel = (settingsStateEval.stanceModel && settingsStateEval.stanceModel.trim()) ? settingsStateEval.stanceModel : 'gemini_fast';
-                      const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN');
+                      const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
                       const biasDict = [
                         'confirmation_bias',
                         'selection_bias',
@@ -5292,18 +5525,50 @@ const DiscoveryPage: React.FC = () => {
                         additionalProperties: false,
                         properties: {
                           biasLevel: { type: 'number', minimum: 0, maximum: 1 },
+                          // Back-compat flat score (optional if thoughtfulnessLevel provided)
                           thoughtfulness: { type: 'number', minimum: 0, maximum: 1 },
+                          // New five-dimension rubric
+                          thoughtfulnessLevel: { type: 'number', minimum: 0, maximum: 1 },
+                          thoughtfulnessDimensions: {
+                            type: 'object',
+                            additionalProperties: false,
+                            properties: {
+                              analyticalDepth: { type: 'number', minimum: 0, maximum: 1 },
+                              epistemicHumility: { type: 'number', minimum: 0, maximum: 1 },
+                              alternativeConsideration: { type: 'number', minimum: 0, maximum: 1 },
+                              evidenceReasoningQuality: { type: 'number', minimum: 0, maximum: 1 },
+                              practicalGrounding: { type: 'number', minimum: 0, maximum: 1 },
+                            },
+                            required: [
+                              'analyticalDepth',
+                              'epistemicHumility',
+                              'alternativeConsideration',
+                              'evidenceReasoningQuality',
+                              'practicalGrounding'
+                            ]
+                          },
                           biases: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 5 },
                           biasTypes: { type: 'array', items: { type: 'string', enum: biasDict }, minItems: 0 }
                         },
-                        required: ['biasLevel', 'thoughtfulness', 'biases', 'biasTypes']
+                        // Backward compatibility: either (thoughtfulness) OR (thoughtfulnessLevel + thoughtfulnessDimensions) must be present
+                        required: ['biasLevel', 'biases', 'biasTypes']
                       } as any;
                       const schemaText = JSON.stringify(schema, null, 2);
                       const dictText = JSON.stringify(biasDict);
                       const ctxBlock = prevAssistantText && prevAssistantText.trim().length > 0
                         ? `ASSISTANT_REPLY (context, do NOT evaluate this text):\n${prevAssistantText}\n\n`
                         : '';
-                      const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\nField names must be exactly: biasLevel, thoughtfulness, biases, biasTypes.\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counterfacts; categorical claims.\n\nThoughtfulness (0..1):\n- Low: shallow, binary conclusions, no uncertainty handling, no citations.\n- Medium: some analysis, limited trade-offs.\n- High: nuanced, considers uncertainty, alternatives and trade-offs, sober tone.\n\nBiases array (3–5 items): short natural-language notes explaining concrete bias manifestations in PreferredLanguage (not field names).\n\nBiasTypes array: choose zero or more labels STRICTLY from DICTIONARY (English tokens only):\n${dictText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\n${ctxBlock}USER_MESSAGE (to evaluate):\n${textToEvaluate}\n\nEvaluate ONLY the USER_MESSAGE both standalone and in relation to ASSISTANT_REPLY (if provided). Do NOT assess the assistant's content. Return only the JSON.`;
+                      const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${preferredLang === 'ru' ? 'Russian' : preferredLang === 'en' ? 'English' : ((preferredLang === 'kk' || preferredLang === 'kz') ? 'Kazakh' : 'Russian')} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nField names (exact):\n- Required: biasLevel, biases, biasTypes\n- Thoughtfulness (compatibility): either provide legacy flat 'thoughtfulness' (0..1) OR the new fields: 'thoughtfulnessLevel' (0..1) AND 'thoughtfulnessDimensions' with five sub-scores.\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counte`;
+                      const langName = (() => {
+                        switch (preferredLang) {
+                          case 'ru': return 'Russian';
+                          case 'en': return 'English';
+                          case 'kk':
+                          case 'kz': return 'Kazakh';
+                          default: return 'Russian';
+                        }
+                      })();
+                      const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
                       const res = await api.genaiGenerate({
                         model: evalModel,
                         prompt: promptEval,
@@ -5311,6 +5576,7 @@ const DiscoveryPage: React.FC = () => {
                         jsonSchema: schema,
                         maxOutputTokens: 4096,
                         webSearchEnabled: false,
+                        systemInstruction: langDirective,
                       });
                       let parsed: any = null;
                       try {
@@ -5332,12 +5598,39 @@ const DiscoveryPage: React.FC = () => {
                       } catch {}
                       if (!parsed || typeof parsed !== 'object') return;
                       const clamp01 = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
+                      const dimsObj = (() => {
+                        try {
+                          const d = parsed?.thoughtfulnessDimensions || {};
+                          if (!d || typeof d !== 'object') return undefined;
+                          return {
+                            analyticalDepth: clamp01(d.analyticalDepth),
+                            epistemicHumility: clamp01(d.epistemicHumility),
+                            alternativeConsideration: clamp01(d.alternativeConsideration),
+                            evidenceReasoningQuality: clamp01(d.evidenceReasoningQuality),
+                            practicalGrounding: clamp01(d.practicalGrounding),
+                          };
+                        } catch { return undefined; }
+                      })();
+                      const thLevel = (() => {
+                        if (typeof parsed?.thoughtfulnessLevel === 'number') return clamp01(parsed.thoughtfulnessLevel);
+                        if (dimsObj && Object.values(dimsObj).every((v) => typeof v === 'number')) {
+                          const vals = Object.values(dimsObj) as number[];
+                          return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+                        }
+                        return clamp01(parsed?.thoughtfulness);
+                      })();
                       const ev = {
                         biasLevel: clamp01(parsed?.biasLevel),
-                        thoughtfulness: clamp01(parsed?.thoughtfulness),
-                        biases: Array.isArray(parsed?.biases) ? parsed.biases.filter((x: any) => typeof x === 'string').slice(0, 5) : [],
-                        biasTypes: Array.isArray(parsed?.biasTypes) ? parsed.biasTypes.filter((x: any) => typeof x === 'string').slice(0, 12) : [],
-                      };
+                        thoughtfulness: thLevel,
+                        thoughtfulnessLevel: thLevel,
+                        thoughtfulnessDimensions: dimsObj,
+                        categories: Array.isArray(parsed?.categories)
+                          ? parsed.categories
+                              .filter((c: any) => c && typeof c.code === 'string')
+                              .slice(0, 2)
+                              .map((c: any) => ({ code: String(c.code), explanation: typeof c.explanation === 'string' ? c.explanation : '' }))
+                          : []
+                      } as any;
                       useGenaiChatStore.getState().setEvaluation(lastUser.id, ev);
                       // Create eval.bias for user
                       try {
@@ -5686,7 +5979,7 @@ const DiscoveryPage: React.FC = () => {
                                       onMouseEnter={(ev) => { (ev.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-12)'; }}
                                       onMouseLeave={(ev) => { (ev.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
                                     >
-                                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18"/></svg>
+                                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                                     </button>
                                   </div>
                                 ))}

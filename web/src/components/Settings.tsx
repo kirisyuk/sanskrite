@@ -2,6 +2,8 @@ import React from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { ThemeContext } from './ThemeProvider';
+import { useUIStore } from '../stores/uiStore';
+import { useTranslation } from 'react-i18next';
 
 type TabKey = 'personal' | 'corporate';
 
@@ -57,6 +59,9 @@ export const Settings: React.FC = () => {
   const [department, setDepartment] = React.useState('');
   const { currentUser } = useAuth();
   const countryInputRef = React.useRef<HTMLInputElement>(null);
+  const { i18n } = useTranslation();
+  const uiLanguage = useUIStore((s) => s.uiLanguage);
+  const setUiLanguage = useUIStore((s) => s.setUiLanguage);
 
   React.useEffect(() => {
     const storedLang = localStorage.getItem('preferredLanguage');
@@ -100,6 +105,14 @@ export const Settings: React.FC = () => {
     } catch (e) {
       console.error('Failed to save country:', e);
     }
+  };
+
+  const handleUiLanguageChange = (code: string) => {
+    const raw = (code || 'en').toLowerCase();
+    const mapped = raw === 'kz' ? 'kk' : raw;
+    setUiLanguage(mapped);
+    try { document.documentElement.setAttribute('lang', mapped); } catch {}
+    try { i18n.changeLanguage(mapped); } catch {}
   };
 
   const applyTheme = (t: 'dark' | 'light') => {
@@ -176,11 +189,25 @@ export const Settings: React.FC = () => {
                   onChange={e => setFullName(e.target.value)}
                   placeholder="Your name"
                   className="w-full"
-                  style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0' }}
+                  style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0', transition: 'all 120ms ease' }}
+                  onMouseEnter={(e) => {
+                    const el = e.currentTarget as HTMLInputElement;
+                    el.style.backgroundColor = 'var(--white-06)';
+                    el.style.border = 'none';
+                    el.style.borderRadius = '6px';
+                    el.style.padding = '8px 8px';
+                  }}
+                  onMouseLeave={(e) => {
+                    const el = e.currentTarget as HTMLInputElement;
+                    el.style.backgroundColor = 'transparent';
+                    el.style.border = 'none';
+                    el.style.borderRadius = '0';
+                    el.style.padding = '8px 0';
+                  }}
                 />
               </div>
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Language</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Language (for chat and documents)</label>
                 <select
                   value={language}
                   onChange={(e) => { const code = e.target.value; setLanguage(code); saveLanguage(code); }}
@@ -192,6 +219,27 @@ export const Settings: React.FC = () => {
                   <option value="DE">DE — Deutsch</option>
                   <option value="RU">RU — Русский</option>
                 </select>
+                <div className="text-12 mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  This setting controls your preferred language of interaction and exported documents.
+                </div>
+              </div>
+              <div>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Interface language</label>
+                <select
+                  value={uiLanguage === 'kk' ? 'kz' : (uiLanguage || 'en')}
+                  onChange={(e) => handleUiLanguageChange(e.target.value)}
+                  className="lang-select"
+                  style={{ padding: '8px 12px', width: '33%' }}
+                >
+                  <option value="en">EN — English</option>
+                  <option value="es">ES — Español</option>
+                  <option value="de">DE — Deutsch</option>
+                  <option value="ru">RU — Русский</option>
+                  <option value="kz">KZ — Қазақ</option>
+                </select>
+                <div className="text-12 mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  This setting controls the application interface language only (menus, labels, messages).
+                </div>
               </div>
               <div>
                 <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Country of Residence</label>

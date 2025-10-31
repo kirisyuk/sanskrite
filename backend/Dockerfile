@@ -18,8 +18,8 @@ FROM alpine:latest
 
 WORKDIR /app
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates for HTTPS requests and Pandoc for markdown to docx conversion
+RUN apk --no-cache add ca-certificates pandoc
 
 # Copy binary from builder
 COPY --from=builder /server /app/server

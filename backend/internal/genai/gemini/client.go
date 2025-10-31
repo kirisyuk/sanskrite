@@ -124,7 +124,7 @@ func NewClient(apiKey, projectID, location string, fastModel, qualityModel strin
 	}
 	return &Client{
 		apiKey:       key,
-		httpClient:   &http.Client{Timeout: 120 * time.Second},
+		httpClient:   &http.Client{Timeout: 240 * time.Second},
 		streamClient: &http.Client{},
 		projectID:    projectID,
 		location:     location,
@@ -622,16 +622,18 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 		}
 	}
 	toolsPayload := make([]map[string]interface{}, 0)
-	if len(tools) > 0 {
-		fdecls := make([]map[string]interface{}, 0, len(tools))
-		for _, t := range tools {
-			fdecls = append(fdecls, map[string]interface{}{"name": t.Name, "description": t.Description, "parameters": t.Parameters})
-		}
-		toolsPayload = append(toolsPayload, map[string]interface{}{"functionDeclarations": fdecls})
-	}
-	if opts.GroundingEnabled || opts.Profile == ProfileQuality {
-		toolsPayload = append(toolsPayload, map[string]interface{}{"googleSearch": map[string]interface{}{}})
-	}
+    if len(tools) > 0 {
+        fdecls := make([]map[string]interface{}, 0, len(tools))
+        for _, t := range tools {
+            fdecls = append(fdecls, map[string]interface{}{"name": t.Name, "description": t.Description, "parameters": t.Parameters})
+        }
+        // v1beta expects snake_case function_declarations
+        toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
+    }
+    if opts.GroundingEnabled || opts.Profile == ProfileQuality {
+        // v1beta expects snake_case google_search tool name
+        toolsPayload = append(toolsPayload, map[string]interface{}{"google_search": map[string]interface{}{}})
+    }
 	if len(toolsPayload) > 0 {
 		reqBody["tools"] = toolsPayload
 	}

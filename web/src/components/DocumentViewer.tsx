@@ -1,4 +1,6 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { api } from '../lib/api';
 
 export interface CoreDocMeta {
@@ -21,6 +23,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
   const [jsonObject, setJsonObject] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [exporting, setExporting] = React.useState(false);
 
   const isEntities = (doc.filename || '').toLowerCase() === 'entities.json';
 
@@ -61,6 +64,8 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
   }, [projectId, doc.id]);
 
   const headerTitle = isEntities ? 'Entities container' : (doc.filename || 'document');
+  const fileExt = (doc.filename.split('.').pop() || '').toLowerCase();
+  const isMarkdown = fileExt === 'md' || (doc.contentType || '').includes('markdown');
 
   const download = async () => {
     try {
@@ -72,6 +77,23 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
       a.click();
       setTimeout(() => { try { URL.revokeObjectURL(a.href); document.body.removeChild(a); } catch {} }, 0);
     } catch {}
+  };
+
+  const exportToDocx = async () => {
+    try {
+      setExporting(true);
+      const blob = await api.docsExportToDocx(projectId, doc.id);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = doc.filename.replace(/\.(md|txt)$/i, '.docx') || 'export.docx';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { try { URL.revokeObjectURL(a.href); document.body.removeChild(a); } catch {} }, 0);
+    } catch (error) {
+      console.error('Failed to export to DOCX:', error);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const renderEntities = () => {
@@ -107,6 +129,16 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
         </pre>
       );
     }
+    // Render markdown with formatting
+    if (isMarkdown && textContent) {
+      return (
+        <div className="p-3 markdown text-13" style={{ color: 'var(--text-heading)' }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {textContent}
+          </ReactMarkdown>
+        </div>
+      );
+    }
     return (
       <pre className="p-3 text-12" style={{ color: 'var(--text-heading)', background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, overflow: 'auto' }}>
         {textContent || ''}
@@ -114,12 +146,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
     );
   };
 
-  const ext = (doc.filename.split('.').pop() || '').toLowerCase();
   const ct = (doc.contentType || '').toLowerCase();
-  const isImage = /^(png|jpg|jpeg|gif|webp|bmp|svg)$/.test(ext) || ct.startsWith('image/');
-  const isPdf = ext === 'pdf' || ct.includes('pdf');
-  const isMarkdown = ext === 'md' || ct.includes('markdown');
-  const isTextLike = isMarkdown || ct.startsWith('text/') || /(json|csv|tsv)/.test(ct) || /(md|txt|csv|tsv|json)$/i.test(ext);
+  const isImage = /^(png|jpg|jpeg|gif|webp|bmp|svg)$/.test(fileExt) || ct.startsWith('image/');
+  const isPdf = fileExt === 'pdf' || ct.includes('pdf');
+  const isTextLike = isMarkdown || ct.startsWith('text/') || /(json|csv|tsv)/.test(ct) || /(md|txt|csv|tsv|json)$/i.test(fileExt);
 
   const renderBody = () => {
     if (isEntities) return renderEntities();
@@ -142,6 +172,21 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
       <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>
         <div className="text-13" style={{ color: 'var(--text-heading)' }} title={doc.filename}>{headerTitle}</div>
         <div className="flex items-center gap-2">
+          {isMarkdown && (
+            <button 
+              type="button" 
+              className="px-2 py-1 rounded text-11" 
+              onClick={exportToDocx} 
+              disabled={exporting}
+              title="Export to Word" 
+              aria-label="Export to Word" 
+              style={{ background: 'transparent', color: 'var(--text-secondary-strong)', opacity: exporting ? 0.6 : 1 }} 
+              onMouseEnter={(e) => { if (!exporting) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} 
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+            >
+              {exporting ? 'Exporting...' : 'Export to Word'}
+            </button>
+          )}
           <button type="button" className="px-2 py-1 rounded text-11" onClick={download} title="Download" aria-label="Download" style={{ background: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}>
             Download
           </button>

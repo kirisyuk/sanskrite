@@ -1,6 +1,7 @@
 package grok
 
 import (
+    "bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -63,6 +64,19 @@ type GenerateResponse struct {
 	RawJSON       string                   `json:"-"`
 	SearchQueries []string                 `json:"searchQueries,omitempty"`
 	Sources       []string                 `json:"sources,omitempty"`
+}
+
+// StreamEvent represents incremental streaming callbacks
+type StreamEvent struct {
+    Type      string     `json:"type"` // start|chunk|tool_call|done|error
+    Text      string     `json:"text,omitempty"`
+    ToolCalls []ToolCall `json:"toolCalls,omitempty"`
+    Usage     Usage      `json:"usage,omitempty"`
+    Model     string     `json:"model,omitempty"`
+    Error     string     `json:"error,omitempty"`
+    // Best-effort extras
+    SearchQueries []string `json:"searchQueries,omitempty"`
+    Sources       []string `json:"sources,omitempty"`
 }
 
 type Options struct {
@@ -196,6 +210,109 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 	}
 	out.IsToolStep = len(out.ToolCalls) > 0 && out.Content == ""
 	return out, nil
+}
+
+// Stream against xAI Chat Completions SSE (OpenAI-compatible)
+func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts Options, onEvent func(StreamEvent) error) error {
+    model := c.modelFrom(opts)
+    msgs := make([]map[string]interface{}, 0, 2)
+    if opts.SystemInstruction != "" {
+        msgs = append(msgs, map[string]interface{}{"role": "system", "content": opts.SystemInstruction})
+    }
+    msgs = append(msgs, map[string]interface{}{"role": "user", "content": prompt})
+    p := map[string]interface{}{
+        "model":    model,
+        "messages": msgs,
+        "stream":   true,
+    }
+    if opts.GroundingEnabled {
+        p["search"] = map[string]interface{}{
+            "enable":  true,
+            "sources": []map[string]string{{"type": "web"}},
+        }
+    }
+    if opts.MaxOutputTokens > 0 { p["max_tokens"] = opts.MaxOutputTokens }
+    if opts.Temperature > 0 { p["temperature"] = opts.Temperature }
+    if len(tools) > 0 {
+        toolDefs := make([]map[string]interface{}, 0, len(tools))
+        for _, t := range tools {
+            toolDefs = append(toolDefs, map[string]interface{}{
+                "type": "function",
+                "function": map[string]interface{}{
+                    "name":        t.Name,
+                    "description": t.Description,
+                    "parameters":  t.Parameters,
+                },
+            })
+        }
+        p["tools"] = toolDefs
+        p["tool_choice"] = "auto"
+    }
+    body, _ := json.Marshal(p)
+    req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.x.ai/v1/chat/completions", bytes.NewReader(body))
+    req.Header.Set("Authorization", "Bearer "+c.apiKey)
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Accept", "text/event-stream")
+    resp, err := c.httpClient.Do(req)
+    if err != nil { return err }
+    defer resp.Body.Close()
+    if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+        rb, _ := io.ReadAll(resp.Body)
+        return fmt.Errorf("grok stream error %d: %s", resp.StatusCode, string(rb))
+    }
+    if onEvent != nil { _ = onEvent(StreamEvent{Type: "start", Model: model}) }
+    reader := bufio.NewReader(resp.Body)
+    var acc Usage
+    srcs := make([]string, 0)
+    queries := make([]string, 0)
+    for {
+        line, err := reader.ReadString('\n')
+        if err != nil {
+            if err == io.EOF { break }
+            return err
+        }
+        l := strings.TrimRight(line, "\r\n")
+        if !strings.HasPrefix(l, "data:") { continue }
+        payload := strings.TrimSpace(strings.TrimPrefix(l, "data:"))
+        if payload == "[DONE]" { break }
+        var m map[string]interface{}
+        if err := json.Unmarshal([]byte(payload), &m); err != nil { continue }
+        // choices[0].delta.content
+        if chs, ok := m["choices"].([]interface{}); ok && len(chs) > 0 {
+            if ch, ok := chs[0].(map[string]interface{}); ok {
+                if d, ok := ch["delta"].(map[string]interface{}); ok {
+                    if txt, _ := d["content"].(string); txt != "" {
+                        // accumulate URLs from free text
+                        extractURLsFromText(txt, &srcs)
+                        if onEvent != nil { _ = onEvent(StreamEvent{Type: "chunk", Text: txt}) }
+                    }
+                    if tcs, ok := d["tool_calls"].([]interface{}); ok {
+                        for _, tc := range tcs {
+                            if tm, ok := tc.(map[string]interface{}); ok {
+                                if f, ok := tm["function"].(map[string]interface{}); ok {
+                                    name, _ := f["name"].(string)
+                                    args := ""
+                                    if s, ok := f["arguments"].(string); ok { args = s; extractURLsFromText(s, &srcs) }
+                                    if onEvent != nil { _ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: []ToolCall{{Name: name, Arguments: args}}}) }
+                                }
+                            }
+                        }
+                    }
+                }
+                if fr, _ := ch["finish_reason"].(string); fr == "stop" {
+                    // emit done at natural stop; usage may come in same payload
+                }
+            }
+        }
+        if u, ok := m["usage"].(map[string]interface{}); ok {
+            if v, ok := u["prompt_tokens"].(float64); ok { acc.PromptTokens = int(v) }
+            if v, ok := u["completion_tokens"].(float64); ok { acc.OutputTokens = int(v) }
+            if v, ok := u["total_tokens"].(float64); ok { acc.TotalTokens = int(v) }
+            if v, ok := u["reasoning_tokens"].(float64); ok { acc.ReasoningTokens = int(v) }
+        }
+    }
+    if onEvent != nil { _ = onEvent(StreamEvent{Type: "done", Usage: acc, Model: model, Sources: srcs, SearchQueries: queries}) }
+    return nil
 }
 
 // Helpers for extracting URLs into Sources

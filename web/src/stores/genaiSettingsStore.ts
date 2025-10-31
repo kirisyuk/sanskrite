@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type GenAIProvider = 'gemini' | 'openai' | 'grok';
+export type GenAIProvider = 'gemini' | 'openai' | 'grok' | 'claude' | 'deepseek';
 export type GenAIStrength = 'fast' | 'balanced' | 'quality';
 
 // Backward-compat alias type (kept for minimal refactor use sites)
@@ -12,7 +12,12 @@ export type GenAIModel =
   | 'gpt_balanced'   // gpt-5-mini
   | 'gpt_fast'       // gpt-5-nano
   | 'grok_quality'   // grok-4-0709
-  | 'grok_fast';     // grok-4-fast-reasoning
+  | 'grok_fast'      // grok-4-fast-reasoning
+  | 'claude_quality' // claude-opus-4-1-20250805
+  | 'claude_balanced'// claude-sonnet-4-5-20250929
+  | 'claude_fast'    // claude-haiku-4-5-20251001
+  | 'deepseek_quality' // deepseek-reasoner
+  | 'deepseek_fast'; // deepseek-chat
 
 export interface GenAICapabilities {
   grounding: boolean;
@@ -23,6 +28,8 @@ export const providerCapabilities: Record<GenAIProvider, GenAICapabilities> = {
   gemini: { grounding: true, tools: true },
   openai: { grounding: true, tools: true },
   grok:   { grounding: true, tools: true },
+  claude: { grounding: false, tools: true },
+  deepseek: { grounding: false, tools: true },
 };
 
 export function mapProviderStrengthToModel(provider: GenAIProvider, strength: GenAIStrength): GenAIModel {
@@ -39,6 +46,14 @@ export function mapProviderStrengthToModel(provider: GenAIProvider, strength: Ge
       if (strength === 'quality') return 'grok_quality';
       // Grok не имеет balanced; map to fast
       return 'grok_fast';
+    case 'claude':
+      if (strength === 'fast') return 'claude_fast';
+      if (strength === 'balanced') return 'claude_balanced';
+      return 'claude_quality';
+    case 'deepseek':
+      if (strength === 'quality') return 'deepseek_quality';
+      // DeepSeek не имеет balanced; map to fast
+      return 'deepseek_fast';
   }
 }
 
