@@ -38,7 +38,7 @@ export interface UsageMeta {
 }
 
 export interface InteractionRelation {
-  type: 'answers' | 'refines' | 'evaluates';
+  type: 'answers' | 'refines' | 'evaluates' | 'expands';
   targetId: string;
 }
 
@@ -53,6 +53,16 @@ export interface HighRisk {
   score: number;
   rationale?: string;
   triggers?: string[];
+}
+
+export interface DiscussionFacts {
+  dependencies?: string;      // What the decision/action depends on
+  prerequisites?: string;     // What must happen first
+  participants?: string;      // Who is involved (user, family, colleagues, clients)
+  participantRoles?: string;  // Roles and relationships between participants
+  availableResources?: string; // Not only constraints, but what is available
+  previousAttempts?: string;  // Previous attempts or experience
+  resultFormat?: string;      // Format of desired result
 }
 
 export interface Interaction {
@@ -79,6 +89,7 @@ export interface Interaction {
   systemInstructionApplied?: string;
   generationParams?: GenerationParams;
   highRisk?: HighRisk;
+  discussionFacts?: DiscussionFacts;
   originalMessageId?: string;
   coreDocIds?: string[];
   searchQueries?: string[];

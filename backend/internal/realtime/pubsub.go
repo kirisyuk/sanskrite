@@ -35,6 +35,8 @@ const (
 	EventArtifactGenerationError     EventType = "artifact.generation.error"
 	// Unified analysis status (entities/facts/events/metrics/decisions)
 	EventAnalysisStatus EventType = "analysis.status"
+	// Agent execution updates
+	EventAgentUpdate EventType = "agent.update"
 )
 
 var genaiStreamEventTypes = map[EventType]bool{
@@ -81,6 +83,7 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 		EventArtifactGenerationCompleted,
 		EventArtifactGenerationError,
 		EventAnalysisStatus,
+		EventAgentUpdate,
 	} {
 		name := string(et)
 		t := client.Topic(name)

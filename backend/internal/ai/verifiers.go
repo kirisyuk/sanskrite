@@ -92,9 +92,10 @@ func (v *BaseVerifier) CleanAndFixJSON(rawJSON string) (string, error) {
 				esc = false
 				continue
 			}
-			if ch == '\\' {
+			switch ch {
+			case '\\':
 				esc = true
-			} else if ch == '"' {
+			case '"':
 				inStr = false
 			}
 			continue

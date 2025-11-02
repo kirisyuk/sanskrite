@@ -91,7 +91,7 @@ export const AgentPalette: React.FC<AgentPaletteProps> = ({ mode, visible, title
           <div className="p-4 space-y-3">
             {mode === 'bring_in' && (
               <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <div className="rounded-lg" style={{ maxHeight: 360, overflowY: 'auto' }}>
+                <div className="rounded-lg" style={{ height: 360, overflowY: 'auto' }}>
                   {(presets || []).map((p) => (
                     <button key={p.id} type="button" className="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2" style={{ background: hovered?.id === p.id ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
                       onMouseEnter={() => setHovered(p)}
@@ -105,16 +105,16 @@ export const AgentPalette: React.FC<AgentPaletteProps> = ({ mode, visible, title
                     </button>
                   ))}
                 </div>
-                <div className="rounded-lg" style={{ maxHeight: 360, overflowY: 'auto', border: '1px solid var(--overlay-line-90)', padding: 12 }}>
+                <div className="rounded-lg" style={{ height: 360, overflowY: 'auto', border: '1px solid var(--overlay-line-90)', padding: 12, display: 'flex', flexDirection: 'column' }}>
                   {hovered ? (
-                    <div className="text-[12px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                      <div className="font-medium mb-1" style={{ color: 'var(--text-heading)' }}>{hovered.displayName}</div>
-                      <div className="mb-1">{hovered.description || 'No description provided.'}</div>
+                    <div className="text-[12px]" style={{ color: 'var(--text-secondary-strong)', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
+                      <div className="font-medium" style={{ color: 'var(--text-heading)' }}>{hovered.displayName}</div>
+                      <div style={{ maxHeight: '80px', overflowY: 'auto', minHeight: 0 }}>{hovered.description || 'No description provided.'}</div>
                       {hovered.expectedOutcome && (
-                        <div className="mb-1"><span style={{ color: 'var(--text-tertiary-weak)' }}>Expected result: </span>{hovered.expectedOutcome}</div>
+                        <div style={{ maxHeight: '60px', overflowY: 'auto', minHeight: 0 }}><span style={{ color: 'var(--text-tertiary-weak)' }}>Expected result: </span>{hovered.expectedOutcome}</div>
                       )}
                       {Array.isArray(hovered.useCases) && hovered.useCases.length > 0 && (
-                        <div>
+                        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
                           <div style={{ color: 'var(--text-tertiary-weak)' }}>Typical use‑cases:</div>
                           <ul className="list-disc ml-4">
                             {hovered.useCases.slice(0, 6).map((u, i) => (<li key={i}>{u}</li>))}
@@ -123,7 +123,7 @@ export const AgentPalette: React.FC<AgentPaletteProps> = ({ mode, visible, title
                       )}
                     </div>
                   ) : (
-                    <div className="text-[12px]" style={{ color: 'var(--text-tertiary-weak)' }}>Hover an agent on the left to see details</div>
+                    <div className="text-[12px]" style={{ color: 'var(--text-tertiary-weak)', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>Hover an agent on the left to see details</div>
                   )}
                 </div>
               </div>

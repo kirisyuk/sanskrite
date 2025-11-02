@@ -17,14 +17,14 @@ interface Source {
   status?: string;
 }
 
-interface DocumentsAndSourcesProps {
+interface WorkspaceLibraryProps {
   projectId: string | null;
   onDocumentDelete?: (docId: string) => void;
   onSourceDelete?: (sourceId: string) => void;
   onOpenDocument?: (doc: Document) => void;
 }
 
-const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({ 
+const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({ 
   projectId, 
   onDocumentDelete,
   onSourceDelete,
@@ -44,7 +44,7 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
         const docs = await api.docsList(projectId);
         setDocuments(docs || []);
       } catch (err) {
-        console.error('[DocumentsAndSources] Failed to load documents', err);
+        console.error('[WorkspaceLibrary] Failed to load documents', err);
       } finally {
         setLoading(false);
       }
@@ -146,15 +146,15 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
       await api.docsDelete(projectId, doc.id);
       setDocuments(prev => prev.filter(d => d.id !== doc.id));
       onDocumentDelete?.(doc.id);
-      console.log('[DocumentsAndSources] Document deleted', { docId: doc.id });
+      console.log('[WorkspaceLibrary] Document deleted', { docId: doc.id });
     } catch (err) {
-      console.error('[DocumentsAndSources] Failed to delete document', err);
+      console.error('[WorkspaceLibrary] Failed to delete document', err);
     }
   };
 
   const handleSourceDelete = async (source: Source) => {
     // TODO: Implement source deletion when API is ready
-    console.log('[DocumentsAndSources] Source delete requested', { sourceId: source.id });
+    console.log('[WorkspaceLibrary] Source delete requested', { sourceId: source.id });
     onSourceDelete?.(source.id);
   };
 
@@ -197,7 +197,7 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className="text-xs text-center">No documents or sources yet</span>
+        <span className="text-xs text-center">Your workspace library is empty</span>
       </div>
     );
   }
@@ -302,5 +302,5 @@ const DocumentsAndSources: React.FC<DocumentsAndSourcesProps> = ({
   );
 };
 
-export default DocumentsAndSources;
+export default WorkspaceLibrary;
 

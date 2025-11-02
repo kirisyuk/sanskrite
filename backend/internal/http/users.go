@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -9,12 +10,14 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/services"
 )
 
 // UsersHandler handles user-related HTTP requests
 type UsersHandler struct {
-	repo   *repo.UsersRepository
-	logger *log.Logger
+	repo               *repo.UsersRepository
+	subscriptionService *services.SubscriptionService
+	logger             *log.Logger
 }
 
 // NewUsersHandler creates a new UsersHandler
@@ -23,6 +26,12 @@ func NewUsersHandler(repo *repo.UsersRepository, logger *log.Logger) *UsersHandl
 		repo:   repo,
 		logger: logger,
 	}
+}
+
+// WithSubscriptionService sets the subscription service (optional, for auto-creating subscriptions)
+func (h *UsersHandler) WithSubscriptionService(service *services.SubscriptionService) *UsersHandler {
+	h.subscriptionService = service
+	return h
 }
 
 // CreateUserRequest represents the request body for creating a user
@@ -154,6 +163,17 @@ func (h *UsersHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Printf("Successfully created user %s in tenant %s", user.ID, user.TenantID)
+
+	// Create free subscription for new user (async, best-effort)
+	if h.subscriptionService != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := h.subscriptionService.GetOrCreateSubscription(ctx, user.TenantID, user.ID); err != nil {
+				h.logger.Printf("Failed to create subscription for user %s: %v", user.ID, err)
+			}
+		}()
+	}
 
 	response := CreateUserResponse{
 		User:    user,

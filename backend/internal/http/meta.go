@@ -149,7 +149,7 @@ func (h *MetaHandler) Analyze(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1) Dialog control classification (common)
-	who, leadIdx, focus, structure, err := h.classifyDialogControl(r.Context(), window)
+	who, leadIdx, focus, structure, err := h.classifyDialogControl(r.Context(), window, auth.TenantID, auth.UID, projectID)
 	if err != nil {
 		if h.logger != nil {
 			h.logger.Printf("meta: classify dialog error: %v (windowChars=%d)", err, len(window))
@@ -161,7 +161,7 @@ func (h *MetaHandler) Analyze(w http.ResponseWriter, r *http.Request) {
 	// 2) Run requested analyzers
 	results := make([]AnalyzeResult, 0, len(req.Analyzers))
 	for _, a := range req.Analyzers {
-		resMap, runErr := h.runAnalyzer(r.Context(), a, window)
+		resMap, runErr := h.runAnalyzer(r.Context(), a, window, auth.TenantID, auth.UID, projectID)
 		if runErr != nil {
 			if h.logger != nil {
 				// Common place to catch JSON decode/validation mismatches
@@ -264,7 +264,7 @@ type dialogControlJSON struct {
 	StructureScore  float64 `json:"structureScore"`
 }
 
-func (h *MetaHandler) classifyDialogControl(ctx context.Context, window string) (string, float64, float64, float64, error) {
+func (h *MetaHandler) classifyDialogControl(_ context.Context, window, tenantID, userID, projectID string) (string, float64, float64, float64, error) {
 	// Create a context with timeout for AI task execution
 	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -276,6 +276,9 @@ func (h *MetaHandler) classifyDialogControl(ctx context.Context, window string) 
 		InputContent:   prompt,
 		AIRequirements: ai.AIRequirements{MinContextWindow: intMax(4096, len(prompt)/4), TextGenerationCapability: true, MinCapabilityScore: 6},
 		Verifier:       ai.NewGenericVerifier(func(dc dialogControlJSON) error { return nil }),
+		TenantID:       tenantID,
+		UserID:         userID,
+		Project:        projectID,
 	}
 	if h.logger != nil {
 		h.logger.Printf("meta: classifyDialogControl starting (windowChars=%d, promptChars=%d, tokensEst=%d)",
@@ -292,24 +295,24 @@ func (h *MetaHandler) classifyDialogControl(ctx context.Context, window string) 
 	return dc.WhoLeads, dc.LeadershipIndex, dc.FocusRetention, dc.StructureScore, nil
 }
 
-func (h *MetaHandler) runAnalyzer(ctx context.Context, analyzer string, window string) (map[string]any, error) {
+func (h *MetaHandler) runAnalyzer(ctx context.Context, analyzer string, window, tenantID, userID, projectID string) (map[string]any, error) {
 	switch analyzer {
 	case string(models.MetaAnalyzerThinking):
-		return h.runThinking(ctx, window)
+		return h.runThinking(ctx, window, tenantID, userID, projectID)
 	case string(models.MetaAnalyzerBiases):
-		return h.runBiases(ctx, window)
+		return h.runBiases(ctx, window, tenantID, userID, projectID)
 	case string(models.MetaAnalyzerDecisions):
-		return h.runDecisions(ctx, window)
+		return h.runDecisions(ctx, window, tenantID, userID, projectID)
 	case string(models.MetaAnalyzerComm):
-		return h.runComm(ctx, window)
+		return h.runComm(ctx, window, tenantID, userID, projectID)
 	case string(models.MetaAnalyzerLearning):
-		return h.runLearning(ctx, window)
+		return h.runLearning(ctx, window, tenantID, userID, projectID)
 	default:
 		return nil, fmt.Errorf("unknown analyzer: %s", analyzer)
 	}
 }
 
-func (h *MetaHandler) runThinking(ctx context.Context, window string) (map[string]any, error) {
+func (h *MetaHandler) runThinking(_ context.Context, window, tenantID, userID, projectID string) (map[string]any, error) {
 	// Enum dictionaries
 	depth := []string{"Surface", "Analytical", "Systemic"}
 	uncertainty := []string{"Avoids", "Acknowledges", "WorksWithIt"}
@@ -329,7 +332,15 @@ func (h *MetaHandler) runThinking(ctx context.Context, window string) (map[strin
 	schemaJSON, _ := json.Marshal(schema)
 	prompt := fmt.Sprintf("Analyze USER thinking patterns. Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous assessment based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using USER lines (ASSISTANT lines are context only).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.ThinkingPatternsResult) error { return nil })
-	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
+	task := &ai.AITask{
+		TaskType:       ai.TaskTypeTextProcessing,
+		InputContent:   prompt,
+		AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6},
+		Verifier:       verifier,
+		TenantID:       tenantID,
+		UserID:         userID,
+		Project:        projectID,
+	}
 
 	// Create a context with timeout for AI task execution
 	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -349,7 +360,7 @@ func (h *MetaHandler) runThinking(ctx context.Context, window string) (map[strin
 	return toMap(res)
 }
 
-func (h *MetaHandler) runBiases(ctx context.Context, window string) (map[string]any, error) {
+func (h *MetaHandler) runBiases(_ context.Context, window, tenantID, userID, projectID string) (map[string]any, error) {
 	// Keep open list but require label + intensity
 	schema := map[string]any{
 		"type": "object", "additionalProperties": false,
@@ -362,7 +373,15 @@ func (h *MetaHandler) runBiases(ctx context.Context, window string) (map[string]
 	schemaJSON, _ := json.Marshal(schema)
 	prompt := fmt.Sprintf("Detect cognitive biases in USER messages. Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous biases based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using lines starting with 'USER:' (treat 'ASSISTANT:' as context).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.CognitiveBiasesResult) error { return nil })
-	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
+	task := &ai.AITask{
+		TaskType:       ai.TaskTypeTextProcessing,
+		InputContent:   prompt,
+		AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6},
+		Verifier:       verifier,
+		TenantID:       tenantID,
+		UserID:         userID,
+		Project:        projectID,
+	}
 
 	// Create a context with timeout for AI task execution
 	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -382,7 +401,7 @@ func (h *MetaHandler) runBiases(ctx context.Context, window string) (map[string]
 	return toMap(res)
 }
 
-func (h *MetaHandler) runDecisions(ctx context.Context, window string) (map[string]any, error) {
+func (h *MetaHandler) runDecisions(_ context.Context, window, tenantID, userID, projectID string) (map[string]any, error) {
 	proc := []string{"Intuitive", "Analytical", "Consensus"}
 	risk := []string{"RiskAverse", "RiskNeutral", "RiskSeeking"}
 	crit := []string{"Mono", "Multi", "Adaptive"}
@@ -400,7 +419,15 @@ func (h *MetaHandler) runDecisions(ctx context.Context, window string) (map[stri
 	schemaJSON, _ := json.Marshal(schema)
 	prompt := fmt.Sprintf("Classify USER decision-making style. Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous assessment based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using 'USER:' lines (use 'ASSISTANT:' as context).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.DecisionMakingResult) error { return nil })
-	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
+	task := &ai.AITask{
+		TaskType:       ai.TaskTypeTextProcessing,
+		InputContent:   prompt,
+		AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6},
+		Verifier:       verifier,
+		TenantID:       tenantID,
+		UserID:         userID,
+		Project:        projectID,
+	}
 
 	// Create a context with timeout for AI task execution
 	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -420,7 +447,7 @@ func (h *MetaHandler) runDecisions(ctx context.Context, window string) (map[stri
 	return toMap(res)
 }
 
-func (h *MetaHandler) runComm(ctx context.Context, window string) (map[string]any, error) {
+func (h *MetaHandler) runComm(_ context.Context, window, tenantID, userID, projectID string) (map[string]any, error) {
 	clarity := []string{"Clear", "Vague", "Contradictory"}
 	abstraction := []string{"Concrete", "General", "Conceptual"}
 	ctxc := []string{"Provided", "Assumed", "Missing"}
@@ -438,7 +465,15 @@ func (h *MetaHandler) runComm(ctx context.Context, window string) (map[string]an
 	schemaJSON, _ := json.Marshal(schema)
 	prompt := fmt.Sprintf("Classify USER communication patterns (clarity, abstraction, context, feedback). Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous assessment based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using 'USER:' lines ('ASSISTANT:' is context only).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.CommunicationPatternsResult) error { return nil })
-	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
+	task := &ai.AITask{
+		TaskType:       ai.TaskTypeTextProcessing,
+		InputContent:   prompt,
+		AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6},
+		Verifier:       verifier,
+		TenantID:       tenantID,
+		UserID:         userID,
+		Project:        projectID,
+	}
 
 	// Create a context with timeout for AI task execution
 	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -458,7 +493,7 @@ func (h *MetaHandler) runComm(ctx context.Context, window string) (map[string]an
 	return toMap(res)
 }
 
-func (h *MetaHandler) runLearning(ctx context.Context, window string) (map[string]any, error) {
+func (h *MetaHandler) runLearning(_ context.Context, window, tenantID, userID, projectID string) (map[string]any, error) {
 	dyn := []string{"Linear", "Deepening", "Jumping"}
 	integ := []string{"Isolated", "Connected", "Synthetic"}
 	meta := []string{"None", "Partial", "Full"}
@@ -474,7 +509,15 @@ func (h *MetaHandler) runLearning(ctx context.Context, window string) (map[strin
 	schemaJSON, _ := json.Marshal(schema)
 	prompt := fmt.Sprintf("Classify USER learning trajectory (dynamics, integration, meta-awareness). Return ONLY JSON strictly matching the schema.\nIf a PREVIOUS_AGGREGATE block is present, update the previous assessment based ONLY on the NEW_EXCHANGE; otherwise compute from scratch using 'USER:' lines ('ASSISTANT:' as context).\n\nSchema:%s\n\nWINDOW:\n%s", string(schemaJSON), window)
 	verifier := ai.NewGenericVerifier(func(v models.LearningTrajectoryResult) error { return nil })
-	task := &ai.AITask{TaskType: ai.TaskTypeTextProcessing, InputContent: prompt, AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6}, Verifier: verifier}
+	task := &ai.AITask{
+		TaskType:       ai.TaskTypeTextProcessing,
+		InputContent:   prompt,
+		AIRequirements: ai.AIRequirements{MinContextWindow: len(prompt) / 4, TextGenerationCapability: true, MinCapabilityScore: 6},
+		Verifier:       verifier,
+		TenantID:       tenantID,
+		UserID:         userID,
+		Project:        projectID,
+	}
 
 	// Create a context with timeout for AI task execution
 	taskCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

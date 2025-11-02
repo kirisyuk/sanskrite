@@ -154,8 +154,12 @@ setup_infrastructure() {
   for topic in \
     discovery.status discovery.profile discovery.answer discovery.project \
     document.process ground.refresh source.poll source.poll.due \
-    genai.stream.start genai.stream.chunk genai.stream.tool_call genai.stream.tool_result genai.stream.done genai.stream.error \
-    analysis.status; do
+    genai.stream \
+    artifact.generation.started artifact.section.generating artifact.section.chunk artifact.section.completed \
+    artifact.assembly.started artifact.assembly.chunk artifact.assembly.completed \
+    artifact.generation.completed artifact.generation.error \
+    analysis.status \
+    agent.update; do
     if ! gcloud pubsub topics describe "$topic" >/dev/null 2>&1; then
       gcloud pubsub topics create "$topic" --quiet
       echo -e "${GREEN}  ✓${NC} Created topic: $topic"
@@ -220,6 +224,15 @@ deploy_api() {
   echo -e "${BLUE}[api] Deploying to Cloud Run from source...${NC}"
   local service="sanskrite-api"
 
+  # PayPal secrets (optional - PayPal integration will be disabled if not set)
+  local paypal_secrets="VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest"
+  if gcloud secrets describe paypal_client_id >/dev/null 2>&1 && gcloud secrets describe paypal_secret >/dev/null 2>&1; then
+    paypal_secrets="$paypal_secrets,PAYPAL_CLIENT_ID=paypal_client_id:latest,PAYPAL_SECRET=paypal_secret:latest"
+    if gcloud secrets describe paypal_webhook_id >/dev/null 2>&1; then
+      paypal_secrets="$paypal_secrets,PAYPAL_WEBHOOK_ID=paypal_webhook_id:latest"
+    fi
+  fi
+
   gcloud run deploy "$service" \
     --source "$API_DIR" \
     --region "$REGION" \
@@ -230,8 +243,8 @@ deploy_api() {
     --max-instances=3 \
     --cpu=1 \
     --memory=512Mi \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,ENABLE_INTERNAL_WS_SUBSCRIBER=0" \
-    --set-secrets "VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest" \
+    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false" \
+    --set-secrets "$paypal_secrets" \
     --project "$PROJECT_ID" \
     --quiet
 
@@ -399,6 +412,21 @@ create_indexes() {
     --collection-group=meta_analyses \
     --field-config field-path=tenantId,order=ASCENDING \
     --field-config field-path=userId,order=ASCENDING \
+    --field-config field-path=createdAt,order=DESCENDING \
+    --quiet || true
+
+  # Subscriptions: status + currentPeriodEnd for billing queries
+  gcloud firestore indexes composite create \
+    --collection-group=subscriptions \
+    --field-config field-path=status,order=ASCENDING \
+    --field-config field-path=currentPeriodEnd,order=ASCENDING \
+    --quiet || true
+
+  # Vouchers: tier + isActive + createdAt for admin filtering
+  gcloud firestore indexes composite create \
+    --collection-group=vouchers \
+    --field-config field-path=tier,order=ASCENDING \
+    --field-config field-path=isActive,order=ASCENDING \
     --field-config field-path=createdAt,order=DESCENDING \
     --quiet || true
 

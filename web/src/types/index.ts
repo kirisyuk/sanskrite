@@ -48,3 +48,20 @@ export {
   shouldTriggerAutoUpdate,
   shouldRetainVersion,
 } from './artifact';
+
+// Agent types
+export type {
+  AgentContext,
+  TaskMetadata,
+  AgentUpdate,
+  AgentInfo,
+  DataAgentTask,
+  DataAgentResult,
+  EntityInput,
+  EntitiesAgentTask,
+  EntitiesAgentResult,
+  AgentTask,
+  AgentResult,
+  AgentExecutionResponse,
+  AgentsListResponse,
+} from './agents';

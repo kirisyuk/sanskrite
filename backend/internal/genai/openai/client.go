@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -528,24 +529,182 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 
 // StreamWithExtras streams text deltas and returns collected usage, search queries and sources.
 func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []Tool, opts Options, onDelta func(string) error) (Usage, []string, []string, error) {
-    var accUsage Usage
-    queries := make([]string, 0)
-    sources := make([]string, 0)
+	var accUsage Usage
+	queries := make([]string, 0)
+	sources := make([]string, 0)
 
-    err := c.Stream(ctx, prompt, tools, opts, func(delta string) error {
-        // Forward chunk
-        if onDelta != nil && delta != "" {
-            _ = onDelta(delta)
-            // Try to extract URLs from free text deltas best-effort
-            extractURLsFromText(delta, &sources)
-        }
-        return nil
-    })
-    if err != nil {
-        return accUsage, queries, sources, err
-    }
-    // Best-effort: do a minimal follow-up to obtain usage, queries and sources by asking the model to summarize its search (if any).
-    // As the Responses SSE doesn't reliably include usage totals or citations, we cannot always populate these fields.
-    // We leave accUsage at zero; sources/queries already filled from deltas.
-    return accUsage, queries, sources, nil
+	model := c.modelFrom(opts)
+	input := []map[string]interface{}{}
+	if opts.SystemInstruction != "" {
+		input = append(input, map[string]interface{}{"role": "system", "content": opts.SystemInstruction})
+	}
+	input = append(input, map[string]interface{}{"role": "user", "content": prompt})
+	req := map[string]interface{}{
+		"model":  model,
+		"input":  input,
+		"stream": true,
+	}
+	if opts.SystemInstruction != "" {
+		req["instructions"] = opts.SystemInstruction
+	}
+	if opts.MaxOutputTokens > 0 {
+		req["max_output_tokens"] = opts.MaxOutputTokens
+	}
+	if len(tools) > 0 {
+		tdefs := make([]map[string]interface{}, 0, len(tools))
+		for _, t := range tools {
+			tdefs = append(tdefs, map[string]interface{}{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters, "strict": true})
+		}
+		if opts.GroundingEnabled {
+			tdefs = append(tdefs, map[string]interface{}{"type": "web_search"})
+		}
+		req["tools"] = tdefs
+		req["parallel_tool_calls"] = false
+	}
+	b, _ := json.Marshal(req)
+	httpReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/responses", bytes.NewReader(b))
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return accUsage, queries, sources, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		rb, _ := io.ReadAll(resp.Body)
+		return accUsage, queries, sources, fmt.Errorf("openai stream error %d: %s", resp.StatusCode, string(rb))
+	}
+	reader := bufio.NewReader(resp.Body)
+	var dataBuf strings.Builder
+	flushEvent := func() error {
+		payload := strings.TrimSpace(dataBuf.String())
+		dataBuf.Reset()
+		if payload == "" {
+			return nil
+		}
+		if payload == "[DONE]" {
+			return io.EOF
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			// best-effort: ignore non-JSON
+			return nil
+		}
+		
+		// Parse usage from any event that contains it (especially response.completed)
+		if u, ok := m["usage"].(map[string]interface{}); ok {
+			if v, ok := u["input_tokens"].(float64); ok {
+				accUsage.PromptTokens = int(v)
+			}
+			if v, ok := u["output_tokens"].(float64); ok {
+				accUsage.OutputTokens = int(v)
+			}
+			if v, ok := u["total_tokens"].(float64); ok {
+				accUsage.TotalTokens = int(v)
+			}
+			if d, ok := u["output_tokens_details"].(map[string]interface{}); ok {
+				if v, ok := d["reasoning_tokens"].(float64); ok {
+					accUsage.ReasoningTokens = int(v)
+				}
+			}
+			// Log when usage is found for debugging
+			log.Printf("[OpenAI Stream] Found usage in event: promptTokens=%d outputTokens=%d totalTokens=%d", accUsage.PromptTokens, accUsage.OutputTokens, accUsage.TotalTokens)
+		}
+		// Also check for usage at top level (some API versions)
+		if typ, _ := m["type"].(string); typ != "" {
+			if strings.Contains(strings.ToLower(typ), "response.completed") {
+				// Log event type for debugging
+				log.Printf("[OpenAI Stream] Received response.completed event")
+			}
+		}
+		
+		// Heuristics for Responses SSE: prefer output_text.delta
+		if typ, _ := m["type"].(string); typ != "" {
+			lt := strings.ToLower(typ)
+			if strings.Contains(lt, "output_text.delta") {
+				if d, _ := m["delta"].(string); d != "" {
+					if onDelta != nil {
+						_ = onDelta(d)
+					}
+					extractURLsFromText(d, &sources)
+				}
+			}
+			if strings.Contains(lt, "response.completed") {
+				return io.EOF
+			}
+		}
+		if d, _ := m["delta"].(string); d != "" {
+			if onDelta != nil {
+				_ = onDelta(d)
+			}
+			extractURLsFromText(d, &sources)
+		}
+		if txt, _ := m["output_text"].(string); txt != "" {
+			if onDelta != nil {
+				_ = onDelta(txt)
+			}
+			extractURLsFromText(txt, &sources)
+		}
+		if content, ok := m["content"].([]interface{}); ok {
+			var sb strings.Builder
+			for _, c := range content {
+				if cm, ok := c.(map[string]interface{}); ok {
+					if t, _ := cm["text"].(string); t != "" {
+						sb.WriteString(t)
+					}
+				}
+			}
+			if sb.Len() > 0 {
+				text := sb.String()
+				if onDelta != nil {
+					_ = onDelta(text)
+				}
+				extractURLsFromText(text, &sources)
+			}
+		}
+		return nil
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return accUsage, queries, sources, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(line, "data:") {
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				break
+			}
+			if data != "" {
+				dataBuf.WriteString(data)
+			}
+		} else if line == "" { // end of event
+			if err := flushEvent(); err != nil {
+				if err == io.EOF {
+					break
+				}
+				return accUsage, queries, sources, err
+			}
+		}
+	}
+	// flush any remaining
+	_ = flushEvent()
+	
+	// Calculate TotalTokens if not set
+	if accUsage.TotalTokens == 0 && (accUsage.PromptTokens > 0 || accUsage.OutputTokens > 0) {
+		accUsage.TotalTokens = accUsage.PromptTokens + accUsage.OutputTokens
+	}
+	
+	// Log final usage for debugging
+	if accUsage.PromptTokens > 0 || accUsage.OutputTokens > 0 {
+		log.Printf("[OpenAI Stream] Final usage: promptTokens=%d outputTokens=%d totalTokens=%d", accUsage.PromptTokens, accUsage.OutputTokens, accUsage.TotalTokens)
+	} else {
+		log.Printf("[OpenAI Stream] Warning: No usage data found in stream (promptTokens=%d outputTokens=%d)", accUsage.PromptTokens, accUsage.OutputTokens)
+	}
+	
+	return accUsage, queries, sources, nil
 }

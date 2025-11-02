@@ -2,7 +2,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api';
-import { useGenAISettings, providerCapabilities } from '../stores/genaiSettingsStore';
+import { useGenAISettings, providerCapabilities, getModelContextWindow, mapProviderStrengthToModel } from '../stores/genaiSettingsStore';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
@@ -38,6 +38,7 @@ interface UnfoldRequestProps {
 const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClear, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick, onModeChange }) => {
   const { theme } = React.useContext(ThemeContext);
   const [showSettings, setShowSettings] = React.useState(false);
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
   const settings = useGenAISettings();
   const hasHistory = useGenaiChatStore((s) => (s.messages && s.messages.length > 0) || (s.interactions && s.interactions.length > 0));
   const { t } = useTranslation();
@@ -48,6 +49,68 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   const [isDragging, setIsDragging] = React.useState(false);
   const [statusMessages, setStatusMessages] = React.useState<StatusMessage[]>([]);
   const [analysisDismissTs, setAnalysisDismissTs] = React.useState<number | null>(null);
+  // Agent progress tracking
+  const agentsStore = React.useMemo(() => {
+    try {
+      const { useAgentsStore } = require('../stores/agentsStore');
+      return useAgentsStore.getState();
+    } catch {
+      return null;
+    }
+  }, []);
+  
+  // Track agent tasks and show progress
+  React.useEffect(() => {
+    if (!agentsStore || !currentProjectId) return;
+    
+    const activeTasks = agentsStore.activeTasks;
+    const taskEntries = Object.entries(activeTasks) as Array<[string, { status: string; progress: number; stage?: string; message?: string; agentName: string; error?: string }]>;
+    
+    // Filter tasks for current project
+    const projectTasks = taskEntries.filter(([_, task]) => {
+      // We don't have projectId in task state, so show all active tasks
+      return task.status === 'running';
+    });
+    
+    if (projectTasks.length === 0) return;
+    
+    // Show status for each active agent task
+    projectTasks.forEach(([taskId, task]) => {
+      const progress = Math.round(task.progress * 100);
+      const stage = task.stage || 'running';
+      const message = task.message || `${task.agentName} ${stage}...`;
+      
+      // Update or add status message
+      setStatusMessages(prev => {
+        const existing = prev.find(m => m.id === `agent-${taskId}`);
+        if (existing) {
+          // Update existing
+          return prev.map(m => 
+            m.id === `agent-${taskId}` 
+              ? { ...m, text: `${message} (${progress}%)` }
+              : m
+          );
+        } else {
+          // Add new
+          return [...prev, {
+            id: `agent-${taskId}`,
+            type: 'info' as const,
+            text: `${message} (${progress}%)`,
+            fadingOut: false,
+          }];
+        }
+      });
+    });
+    
+    // Remove completed/error tasks
+    const completedTasks = taskEntries.filter(([_, task]) => 
+      task.status === 'completed' || task.status === 'error'
+    );
+    completedTasks.forEach(([taskId]) => {
+      setStatusMessages(prev => prev.filter(m => m.id !== `agent-${taskId}`));
+    });
+  }, [agentsStore?.activeTasks, currentProjectId]);
+  
   // Reset dismissed status indicator when chat is cleared
   const chatIsEmpty = useGenaiChatStore((s) => (s.messages.length === 0 && s.interactions.length === 0));
   React.useEffect(() => {
@@ -82,6 +145,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     { key: '/section', title: 'Начать раздел', hint: 'Создать новый раздел', keyLower: '/section', titleLower: 'начать раздел' },
     { key: '/end', title: 'Закрыть раздел', hint: 'Завершить текущий раздел', keyLower: '/end', titleLower: 'закрыть раздел' },
     { key: '/analyze entities', title: 'Распознать сущности', hint: 'Извлечь entities из чата', keyLower: '/analyze entities', titleLower: 'распознать сущности' },
+    { key: '/agent data', title: 'Data Agent', hint: 'Собрать данные по запросу', keyLower: '/agent data', titleLower: 'data agent' },
+    { key: '/agent entity', title: 'Entities Agent', hint: 'Найти информацию о сущностях', keyLower: '/agent entity', titleLower: 'entities agent' },
   ], []);
   
   // Check if current value starts with slash
@@ -402,6 +467,93 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     onModeChange?.(val);
   };
 
+  // Context usage calculation
+  const interactions = useGenaiChatStore((s) => s.interactions);
+  const currentUsage = useGenaiChatStore((s) => s.usage);
+  
+  const contextUsage = React.useMemo(() => {
+    // Get current model and its context window
+    const modelAlias = mapProviderStrengthToModel(settings.provider, settings.strength);
+    const contextWindow = getModelContextWindow(modelAlias);
+    
+    if (!contextWindow) return null;
+    
+    // Calculate tokens used from interactions (prefer actual usage, fallback to char estimate)
+    let totalTokens = 0;
+    
+    // Sum up tokens from interactions that have usage data
+    for (const interaction of interactions) {
+      if (interaction.usage?.promptTokens) {
+        totalTokens += interaction.usage.promptTokens;
+      } else if (interaction.usage?.totalTokens) {
+        totalTokens += interaction.usage.totalTokens;
+      } else {
+        // Fallback: estimate from content (chars / 4)
+        const content = interaction.summary || interaction.content || '';
+        totalTokens += Math.ceil(content.length / 4);
+      }
+    }
+    
+    // Add current stream usage if available
+    if (currentUsage?.promptTokens) {
+      totalTokens += currentUsage.promptTokens;
+    } else if (currentUsage?.totalTokens) {
+      totalTokens += currentUsage.totalTokens;
+    }
+    
+    const percentage = Math.min(100, (totalTokens / contextWindow) * 100);
+    
+    return {
+      used: totalTokens,
+      total: contextWindow,
+      percentage,
+    };
+  }, [interactions, currentUsage, settings.provider, settings.strength]);
+
+  // Context usage ring component
+  const ContextUsageRing: React.FC<{ percentage: number; size?: number }> = ({ percentage, size = 24 }) => {
+    const radius = (size - 4) / 2;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (percentage / 100) * circumference;
+    const strokeWidth = 2.5;
+    
+    // Color based on usage level
+    const getColor = () => {
+      if (percentage >= 90) return '#ef4444'; // red
+      if (percentage >= 75) return '#f59e0b'; // amber
+      if (percentage >= 50) return '#eab308'; // yellow
+      return '#60a5fa'; // blue
+    };
+    
+    return (
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {/* Background circle */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="var(--overlay-line-90)"
+          strokeWidth={strokeWidth}
+        />
+        {/* Progress circle */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={getColor()}
+          strokeWidth={strokeWidth}
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          style={{ transition: 'stroke-dashoffset 0.3s ease, stroke 0.3s ease' }}
+        />
+      </svg>
+    );
+  };
+
   return (
     <>
       {/* Status messages banner */}
@@ -719,6 +871,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               type="button"
               aria-label={t('unfold.request.webSearch')}
               aria-pressed={settings.groundingEnabled}
+              title={t('unfold.request.webSearch')}
               disabled={!providerCapabilities[settings.provider].grounding}
               onClick={() => settings.setGrounding(!settings.groundingEnabled)}
               className="text-xs rounded flex items-center gap-1"
@@ -735,8 +888,18 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                 <path d="M3 12h18" strokeWidth={2} />
                 <path d="M12 3a15 15 0 010 18M12 3a15 15 0 000 18" strokeWidth={2} />
               </svg>
-              <span>{t('unfold.request.webSearch')}</span>
             </button>
+            {/* Context usage indicator */}
+            {contextUsage && (
+              <div
+                className="flex items-center justify-center rounded-full cursor-pointer"
+                style={{ width: 32, height: 32 }}
+                title={`Context usage: ${contextUsage.used.toLocaleString()} / ${contextUsage.total.toLocaleString()} tokens (${contextUsage.percentage.toFixed(1)}%)`}
+                aria-label={`Context usage: ${contextUsage.percentage.toFixed(1)}%`}
+              >
+                <ContextUsageRing percentage={contextUsage.percentage} size={19} />
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {/* Новый dropdown режимов */}
@@ -776,9 +939,9 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               onClick={() => setShowSettings(true)}
               style={{ width: '32px', height: '32px', backgroundColor: 'transparent' }}
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <circle cx="12" cy="12" r="4.5" strokeWidth={2} />
-                <path strokeLinecap="round" strokeWidth={2} d="M12 3v2M12 19v2M3 12h2M19 12h2M5.636 5.636l1.414 1.414M16.95 7.05l1.414-1.414M18.364 18.364l-1.414-1.414M7.05 16.95l-1.414 1.414" />
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                <circle cx="12" cy="12" r="3" />
               </svg>
             </button>
             <button
@@ -811,86 +974,122 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               </button>
             </div>
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.provider')}</label>
-                  <select value={settings.provider} onChange={(e) => settings.setProvider(e.target.value as any)} className="w-full">
-                    <option value="openai">OpenAI</option>
-                    <option value="gemini">Gemini</option>
-                    <option value="grok">Grok</option>
-                    <option value="claude">Claude</option>
-                    <option value="deepseek">DeepSeek</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.strength')}</label>
-                  <select value={settings.strength} onChange={(e) => settings.setStrength(e.target.value as any)} className="w-full">
-                    <option value="fast">{t('unfold.request.strengthFast')}</option>
-                    <option value="balanced">{t('unfold.request.strengthBalanced')}</option>
-                    <option value="quality">{t('unfold.request.strengthQuality')}</option>
-                  </select>
-                </div>
-              </div>
-              {/* Stance evaluation model */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceProvider')}</label>
-                  <select value={settings.stanceProvider || 'gemini'} onChange={(e) => settings.setStanceProvider(e.target.value as any)} className="w-full">
-                    <option value="openai">OpenAI</option>
-                    <option value="gemini">Gemini</option>
-                    <option value="grok">Grok</option>
-                    <option value="claude">Claude</option>
-                    <option value="deepseek">DeepSeek</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceStrength')}</label>
-                  <select value={settings.stanceStrength || 'fast'} onChange={(e) => settings.setStanceStrength(e.target.value as any)} className="w-full">
-                    <option value="fast">{t('unfold.request.strengthFast')}</option>
-                    <option value="balanced" disabled={((settings.stanceProvider || 'gemini') === 'grok') || ((settings.stanceProvider || 'gemini') === 'deepseek')}>{t('unfold.request.strengthBalanced')}</option>
-                    <option value="quality">{t('unfold.request.strengthQuality')}</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceModel')}</label>
-                <input value={settings.stanceModel || 'gemini_fast'} onChange={(e) => settings.setStanceModel(e.target.value as any)} className="w-full" />
-                <div className="text-[11px] mt-1" style={{ color: 'var(--text-secondary)' }}>{t('unfold.request.settingsModal.stanceModelHelp')}</div>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.groundingTitle')}</div>
-                  <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{t('unfold.request.settingsModal.groundingDesc')}</div>
-                </div>
-                <input type="checkbox" checked={settings.groundingEnabled} onChange={(e) => settings.setGrounding(e.target.checked)} disabled={!providerCapabilities[settings.provider].grounding} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.temperature')}</label>
-                  <input type="number" step={0.1} min={0} max={2} value={settings.temperature} onChange={(e) => settings.setTemperature(parseFloat(e.target.value))} className="w-full" />
-                </div>
-                <div>
-                  <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.maxTokens')}</label>
-                  <input type="number" min={16} max={8192} value={settings.maxOutputTokens} onChange={(e) => settings.setMaxOutputTokens(parseInt(e.target.value || '0', 10))} className="w-full" />
+              {/* Main settings section with highlighted background */}
+              <div className="rounded-lg p-3" style={{ backgroundColor: 'var(--white-06)' }}>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.provider')}</label>
+                      <select value={settings.provider} onChange={(e) => settings.setProvider(e.target.value as any)} className="w-full">
+                        <option value="openai">OpenAI</option>
+                        <option value="gemini">Gemini</option>
+                        <option value="grok">Grok</option>
+                        <option value="claude">Claude</option>
+                        <option value="deepseek">DeepSeek</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.strength')}</label>
+                      <select value={settings.strength} onChange={(e) => settings.setStrength(e.target.value as any)} className="w-full">
+                        <option value="fast">{t('unfold.request.strengthFast')}</option>
+                        <option value="balanced">{t('unfold.request.strengthBalanced')}</option>
+                        <option value="quality">{t('unfold.request.strengthQuality')}</option>
+                      </select>
+                    </div>
+                  </div>
+                  {/* Stance evaluation model */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceProvider')}</label>
+                      <select value={settings.stanceProvider || 'gemini'} onChange={(e) => settings.setStanceProvider(e.target.value as any)} className="w-full">
+                        <option value="openai">OpenAI</option>
+                        <option value="gemini">Gemini</option>
+                        <option value="grok">Grok</option>
+                        <option value="claude">Claude</option>
+                        <option value="deepseek">DeepSeek</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceStrength')}</label>
+                      <select value={settings.stanceStrength || 'fast'} onChange={(e) => settings.setStanceStrength(e.target.value as any)} className="w-full">
+                        <option value="fast">{t('unfold.request.strengthFast')}</option>
+                        <option value="balanced" disabled={((settings.stanceProvider || 'gemini') === 'grok') || ((settings.stanceProvider || 'gemini') === 'deepseek')}>{t('unfold.request.strengthBalanced')}</option>
+                        <option value="quality">{t('unfold.request.strengthQuality')}</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.groundingTitle')}</div>
+                      <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{t('unfold.request.settingsModal.groundingDesc')}</div>
+                    </div>
+                    <input type="checkbox" checked={settings.groundingEnabled} onChange={(e) => settings.setGrounding(e.target.checked)} disabled={!providerCapabilities[settings.provider].grounding} />
+                  </div>
                 </div>
               </div>
               <div>
                 <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.systemInstruction')}</label>
                 <textarea rows={3} value={settings.systemInstruction} onChange={(e) => settings.setSystemInstruction(e.target.value)} className="w-full" />
               </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.enableTelegramTool')}</div>
-                  <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{t('unfold.request.settingsModal.enableTelegramToolDesc')}</div>
-                </div>
-                <input type="checkbox" checked={settings.enableTelegramTool} onChange={(e) => settings.setEnableTelegramTool(e.target.checked)} disabled={!providerCapabilities[settings.provider].tools} />
+              {/* Advanced settings (collapsible) */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="w-full flex items-center justify-between py-2"
+                  style={{ color: 'var(--text-secondary-strong)' }}
+                >
+                  <span className="text-sm font-medium">{t('unfold.request.settingsModal.advanced')}</span>
+                  <svg
+                    className="w-4 h-4 transition-transform"
+                    style={{ transform: showAdvanced ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {showAdvanced && (
+                  <div className="space-y-3 mt-2 pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
+                    <div>
+                      <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceModel')}</label>
+                      <input value={settings.stanceModel || 'gemini_fast'} onChange={(e) => settings.setStanceModel(e.target.value as any)} className="w-full" />
+                      <div className="text-[11px] mt-1" style={{ color: 'var(--text-secondary)' }}>{t('unfold.request.settingsModal.stanceModelHelp')}</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.temperature')}</label>
+                        <input type="number" step={0.1} min={0} max={2} value={settings.temperature} onChange={(e) => settings.setTemperature(parseFloat(e.target.value))} className="w-full" />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.maxTokens')}</label>
+                        <input type="number" min={16} max={8192} value={settings.maxOutputTokens} onChange={(e) => settings.setMaxOutputTokens(parseInt(e.target.value || '0', 10))} className="w-full" />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.enableTelegramTool')}</div>
+                        <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{t('unfold.request.settingsModal.enableTelegramToolDesc')}</div>
+                      </div>
+                      <input type="checkbox" checked={settings.enableTelegramTool} onChange={(e) => settings.setEnableTelegramTool(e.target.checked)} disabled={!providerCapabilities[settings.provider].tools} />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <div className="mt-4 text-right">
               <button
-                className="px-3 py-2 rounded"
+                className="px-3 py-2 rounded transition-colors"
                 onClick={() => { settings.save(); setShowSettings(false); }}
-                style={{ background: 'var(--btn-primary-bg)', color: 'var(--btn-primary-fg)' }}
+                style={{ background: 'transparent', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { 
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                }}
+                onMouseLeave={(e) => { 
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                }}
               >
                 {t('unfold.request.settingsModal.done')}
               </button>

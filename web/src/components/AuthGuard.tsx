@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { AuthLoading } from './AuthLoading';
 import lightLogo from '../assets/hatl-light-theme.png';
 import darkLogo from '../assets/hatl-dark-theme.png';
 import { ThemeContext } from './ThemeProvider';
@@ -105,17 +106,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
 
   // Loading state with splash
   if (loading) {
-    return (
-      <div className="auth-container" style={{ backgroundColor: theme === 'dark' ? 'var(--bg-base)' : 'var(--bg-base)' }}>
-        <div className="flex flex-col items-center">
-          <img src={theme === 'dark' ? darkLogo : lightLogo} alt="HATL" className="h-8 w-auto mb-4" />
-          <div className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>Signing you in…</div>
-          <div className="w-48 h-1 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-elevated)' }}>
-            <div className="h-full w-2/5 animate-pulse" style={{ backgroundColor: 'var(--accent-brand)' }}></div>
-          </div>
-        </div>
-      </div>
-    );
+    return <AuthLoading />;
   }
 
   // Auth form

@@ -1043,7 +1043,7 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	// Fire-and-forget worker with bounded timeout
-	go func(tenantID, pid, userPrompt string) {
+	go func(tenantID, pid, userPrompt, userID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		started := time.Now()
@@ -1105,6 +1105,7 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
         `
 		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_ENTITIES_JSON:\n" + strings.TrimSpace(prevJSON)
 
+		authInfo := GetAuthInfo(r.Context())
 		task := &ai.AITask{
 			TaskType:     ai.TaskTypeContentAnalysis,
 			InputContent: composed,
@@ -1117,6 +1118,7 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 			Verifier:        ai.NewMapVerifier([]string{"entities"}, nil),
 			EnableTelemetry: true,
 			TenantID:        tenantID,
+			UserID:          func() string { if authInfo != nil { return authInfo.UID }; return "" }(),
 			Project:         pid,
 		}
 		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
@@ -1247,7 +1249,7 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 				"ts":        time.Now().UnixMilli(),
 			})
 		}
-	}(auth.TenantID, projectID, req.Prompt)
+	}(auth.TenantID, projectID, req.Prompt, auth.UID)
 
 	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
 }
@@ -1283,7 +1285,7 @@ func (h *ProjectsHandler) AnalyzeFacts(w http.ResponseWriter, r *http.Request) {
 	var req analyzeEntitiesRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	go func(tenantID, pid, userPrompt string) {
+	go func(tenantID, pid, userPrompt, userID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		started := time.Now()
@@ -1326,7 +1328,7 @@ Guidelines:
 - Prefer short, atomic statements; avoid duplicates.
 `
 		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_FACTS_JSON:\n" + strings.TrimSpace(prevJSON)
-		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"facts"}, nil), EnableTelemetry: true, TenantID: tenantID, Project: pid}
+		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"facts"}, nil), EnableTelemetry: true, TenantID: tenantID, UserID: userID, Project: pid}
 		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
 		if err != nil {
 			if h.pub != nil {
@@ -1416,7 +1418,7 @@ Guidelines:
 				"ts":        time.Now().UnixMilli(),
 			})
 		}
-	}(auth.TenantID, projectID, req.Prompt)
+	}(auth.TenantID, projectID, req.Prompt, auth.UID)
 	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
 }
 
@@ -1448,7 +1450,7 @@ func (h *ProjectsHandler) AnalyzeEvents(w http.ResponseWriter, r *http.Request) 
 	}
 	var req analyzeEntitiesRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	go func(tenantID, pid, userPrompt string) {
+	go func(tenantID, pid, userPrompt, userID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		started := time.Now()
@@ -1489,7 +1491,7 @@ Return STRICT JSON: { "events": [ { "ts": string(RFC3339), "title": string, "sum
 Rules: prefer precise timestamps if available; severity/confidence in 0..1.
 `
 		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_EVENTS_JSON:\n" + strings.TrimSpace(prevJSON)
-		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"events"}, nil), EnableTelemetry: true, TenantID: tenantID, Project: pid}
+		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"events"}, nil), EnableTelemetry: true, TenantID: tenantID, UserID: userID, Project: pid}
 		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
 		if err != nil {
 			if h.pub != nil {
@@ -1585,7 +1587,7 @@ Rules: prefer precise timestamps if available; severity/confidence in 0..1.
 				"ts":        time.Now().UnixMilli(),
 			})
 		}
-	}(auth.TenantID, projectID, req.Prompt)
+	}(auth.TenantID, projectID, req.Prompt, auth.UID)
 	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
 }
 
@@ -1617,7 +1619,7 @@ func (h *ProjectsHandler) AnalyzeMetrics(w http.ResponseWriter, r *http.Request)
 	}
 	var req analyzeEntitiesRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	go func(tenantID, pid, userPrompt string) {
+	go func(tenantID, pid, userPrompt, userID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		started := time.Now()
@@ -1666,7 +1668,7 @@ Return STRICT JSON: { "metrics": [ {
 Guidelines: keys stable and normalized; prefer domain-specific scope.
 `
 		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_METRICS_JSON:\n" + strings.TrimSpace(prevJSON)
-		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"metrics"}, nil), EnableTelemetry: true, TenantID: tenantID, Project: pid}
+		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"metrics"}, nil), EnableTelemetry: true, TenantID: tenantID, UserID: userID, Project: pid}
 		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
 		if err != nil {
 			if h.pub != nil {
@@ -1783,7 +1785,7 @@ Guidelines: keys stable and normalized; prefer domain-specific scope.
 				"ts":        time.Now().UnixMilli(),
 			})
 		}
-	}(auth.TenantID, projectID, req.Prompt)
+	}(auth.TenantID, projectID, req.Prompt, auth.UID)
 	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
 }
 
@@ -1815,7 +1817,7 @@ func (h *ProjectsHandler) AnalyzeDecisions(w http.ResponseWriter, r *http.Reques
 	}
 	var req analyzeEntitiesRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	go func(tenantID, pid, userPrompt string) {
+	go func(tenantID, pid, userPrompt, userID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		started := time.Now()
@@ -1861,7 +1863,7 @@ Return STRICT JSON: { "decisions": [ {
 } ] }.
 `
 		composed := instructions + "\nUSER_PROMPT:\n" + strings.TrimSpace(userPrompt) + "\nTRANSCRIPT:\n" + transcript + "\nPREVIOUS_DECISIONS_JSON:\n" + strings.TrimSpace(prevJSON)
-		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"decisions"}, nil), EnableTelemetry: true, TenantID: tenantID, Project: pid}
+		task := &ai.AITask{TaskType: ai.TaskTypeContentAnalysis, InputContent: composed, AIRequirements: ai.AIRequirements{MinContextWindow: 8000, MaxOutputSize: 4096, MinCapabilityScore: 6, TextGenerationCapability: true}, Verifier: ai.NewMapVerifier([]string{"decisions"}, nil), EnableTelemetry: true, TenantID: tenantID, UserID: userID, Project: pid}
 		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
 		if err != nil {
 			if h.pub != nil {
@@ -1967,7 +1969,7 @@ Return STRICT JSON: { "decisions": [ {
 				"ts":        time.Now().UnixMilli(),
 			})
 		}
-	}(auth.TenantID, projectID, req.Prompt)
+	}(auth.TenantID, projectID, req.Prompt, auth.UID)
 	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true})
 }
 func strPtr(s string) *string { return &s }

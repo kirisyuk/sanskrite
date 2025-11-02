@@ -14,9 +14,15 @@ import (
 
 // ArtifactExecutorService handles AI generation for artifact sections
 type ArtifactExecutorService struct {
-	genaiClient *gen_combined.Client
-	contextSvc  *ArtifactContextService
-	publisher   *realtime.Publisher
+	genaiClient      *gen_combined.Client
+	contextSvc       *ArtifactContextService
+	publisher        *realtime.Publisher
+	usageMetricsRepo interface {
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+	}
+	modelManager interface {
+		CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
+	}
 }
 
 // NewArtifactExecutorService creates a new executor service
@@ -32,6 +38,17 @@ func NewArtifactExecutorService(
 	}
 }
 
+// WithUsageMetrics sets the usage metrics repository and model manager
+func (s *ArtifactExecutorService) WithUsageMetrics(repo interface {
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+}, modelMgr interface {
+	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
+}) *ArtifactExecutorService {
+	s.usageMetricsRepo = repo
+	s.modelManager = modelMgr
+	return s
+}
+
 // SectionGenerationRequest contains parameters for generating a section
 type SectionGenerationRequest struct {
 	Section            models.ArtifactSection
@@ -43,6 +60,7 @@ type SectionGenerationRequest struct {
 	ArtifactID         string // For WebSocket routing
 	TenantID           string // For WebSocket routing
 	ProjectID          string // For WebSocket routing
+	UserID             string // For usage tracking
 	StreamID           string // For ordering and FE filtering
 }
 
@@ -87,6 +105,9 @@ func (s *ArtifactExecutorService) GenerateSection(
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate section: %w", err)
 	}
+
+	// Save usage metrics
+	s.saveUsageMetric(ctx, req.TenantID, req.ProjectID, req.UserID, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "artifact.generate")
 
 	duration := time.Since(startTime)
 
@@ -164,6 +185,19 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 		}
 		if evt.Type == "done" {
 			totalTokens = evt.Usage.TotalTokens
+			// Save usage metrics after streaming completes
+			inputToks := evt.Usage.PromptTokens
+			outputToks := evt.Usage.OutputTokens
+			if inputToks == 0 && outputToks == 0 {
+				// Estimate from content if usage not provided
+				inputToks = len(prompt) / 4
+				outputToks = len(fullContent.String()) / 4
+			}
+			modelName := evt.Model
+			if modelName == "" {
+				modelName = req.Model
+			}
+			s.saveUsageMetric(ctx, req.TenantID, req.ProjectID, req.UserID, modelName, inputToks, outputToks, "artifact.stream")
 		}
 		return nil
 	})
@@ -299,7 +333,7 @@ func (s *ArtifactExecutorService) evaluateQuality(
 	ctx context.Context,
 	content string,
 	originalPrompt string,
-	context *GatheredContext,
+	_ *GatheredContext, // context parameter (unused)
 ) (*SectionQuality, error) {
 	// Build evaluation prompt
 	evalPrompt := fmt.Sprintf(`Evaluate the quality of the following generated content on three dimensions:
@@ -343,6 +377,8 @@ func (s *ArtifactExecutorService) evaluateQuality(
 		// Quality evaluation is optional, don't fail the whole generation
 		return nil, err
 	}
+
+	// Skip saving metrics for quality evaluation (internal call without user context)
 
 	// Parse quality scores
 	var scores struct {
@@ -419,7 +455,71 @@ func (s *ArtifactExecutorService) AssembleDocument(
 		return "", fmt.Errorf("failed to assemble document: %w", err)
 	}
 
+	// Skip saving metrics for document assembly (internal call without user context)
+
 	return resp.Content, nil
+}
+
+// saveUsageMetric saves usage metrics if repository is available
+func (s *ArtifactExecutorService) saveUsageMetric(_ context.Context, tenantID, projectID, userID, modelName string, inputTokens, outputTokens int, taskType string) {
+	if s.usageMetricsRepo == nil || s.modelManager == nil {
+		return
+	}
+
+	// Skip if tenantID is empty (for internal calls like quality evaluation)
+	if tenantID == "" {
+		return
+	}
+
+	// Determine provider from model name (similar to genai.go)
+	provider := s.determineProvider(modelName)
+
+	// Calculate cost
+	cost, err := s.modelManager.CalculateProcessingCost(modelName, inputTokens, outputTokens)
+	if err != nil {
+		cost = 0
+	}
+
+	// Prepare taskType and projectID pointers
+	taskTypePtr := &taskType
+	var projectIDPtr *string
+	if projectID != "" {
+		projectIDPtr = &projectID
+	}
+
+	// Save asynchronously to avoid blocking
+	// Use a new context with timeout to avoid cancellation from parent context
+	go func() {
+		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := s.usageMetricsRepo.CreateMetric(metricCtx, tenantID, userID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr)
+		if err != nil {
+			// Log error silently to avoid blocking
+		}
+	}()
+}
+
+// determineProvider determines the provider from model name
+func (s *ArtifactExecutorService) determineProvider(modelName string) string {
+	modelLower := strings.ToLower(modelName)
+
+	if strings.Contains(modelLower, "gemini") {
+		return "gemini"
+	}
+	if strings.Contains(modelLower, "gpt") || strings.Contains(modelLower, "o1") || strings.Contains(modelLower, "o3") {
+		return "openai"
+	}
+	if strings.Contains(modelLower, "claude") {
+		return "anthropic"
+	}
+	if strings.Contains(modelLower, "grok") {
+		return "grok"
+	}
+	if strings.Contains(modelLower, "deepseek") {
+		return "deepseek"
+	}
+
+	return "unknown"
 }
 
 // Helper function to parse JSON

@@ -419,6 +419,17 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
                 set({ lastAnalysisStatus: ev });
               }
             }
+
+            // Agent updates: agent.update
+            if (msg?.type === 'agent.update') {
+              const update = msg.data as import('../types/agents').AgentUpdate;
+              if (update && update.taskId && update.agentId) {
+                console.log('[WS] agent.update event received:', update);
+                import('./agentsStore').then(({ useAgentsStore }) => {
+                  useAgentsStore.getState().handleUpdate(update);
+                }).catch((e) => console.error('[WS] Failed to handle agent.update:', e));
+              }
+            }
             
             if (msg?.type === 'discovery.project' || msg?.type === 'discoveryProject') {
               console.log('[WS] New project event:', msg.data);

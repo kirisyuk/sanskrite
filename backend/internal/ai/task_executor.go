@@ -16,8 +16,11 @@ import (
 // Выбирает подходящего провайдера и модель, обрабатывает ошибки,
 // управляет кэшированием и обеспечивает отказоустойчивость.
 type AITaskExecutor struct {
-	aiServices   map[AIProvider]AIService
-	modelManager *AIModelManager
+	aiServices       map[AIProvider]AIService
+	modelManager     *AIModelManager
+	usageMetricsRepo interface {
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+	} // Wrapper to avoid circular import
 }
 
 // NewAITaskExecutor создает новый экземпляр AITaskExecutor
@@ -36,9 +39,19 @@ func NewAITaskExecutor(aiServices []AIService, modelManager *AIModelManager) *AI
 	log.Printf("AITaskExecutor initialized successfully with %d AI services", len(servicesMap))
 
 	return &AITaskExecutor{
-		aiServices:   servicesMap,
-		modelManager: modelManager,
+		aiServices:       servicesMap,
+		modelManager:     modelManager,
+		usageMetricsRepo: nil,
 	}
+}
+
+// WithUsageMetrics sets the usage metrics repository for tracking AI usage
+// repo should be *repo.UsageMetricsRepository but we use interface to avoid circular import
+func (e *AITaskExecutor) WithUsageMetrics(repo interface {
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+}) *AITaskExecutor {
+	e.usageMetricsRepo = repo
+	return e
 }
 
 // ExecuteTask выполняет общую текстовую задачу с автоматическим выбором модели и отказоустойчивостью
@@ -92,6 +105,9 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 		cost, _ := e.modelManager.CalculateProcessingCost(currentModel, result.InputTokens, result.OutputTokens)
 		result.ProcessingCost = cost
 		result.ProcessingTime = time.Since(startedAt)
+
+		// Save usage metrics if repository is available
+		e.saveUsageMetric(ctx, task, currentModel, result.InputTokens, result.OutputTokens, cost)
 
 		return result, nil
 	}
@@ -174,6 +190,14 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 			log.Printf("WARNING: Failed to verify result with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
+		}
+
+		// Calculate and save usage metrics
+		if result != nil && result.Status == AITaskStatusCompleted {
+			inputToks := inputChars / 4
+			outputToks := len(result.Content) / 4
+			cost, _ := e.modelManager.CalculateProcessingCost(currentModel, inputToks, outputToks)
+			e.saveUsageMetric(ctx, task, currentModel, inputToks, outputToks, cost)
 		}
 
 		_ = startedAt // для телеметрии
@@ -567,4 +591,57 @@ func (e *AITaskExecutor) tryFixJSON(jsonStr string) string {
 	fixed = re.ReplaceAllString(fixed, "")
 
 	return fixed
+}
+
+// saveUsageMetric saves usage metrics if repository is available and task has required metadata
+// Note: We use interface{} to avoid circular import with repo package
+func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelName string, inputTokens, outputTokens int, cost float64) {
+	if e.usageMetricsRepo == nil {
+		return
+	}
+
+	// Only save if we have tenantID and userID
+	if task.TenantID == "" || task.UserID == "" {
+		return
+	}
+
+	// Get provider from model name via modelManager
+	provider := "unknown"
+	if caps, err := e.modelManager.GetModelCapabilities(modelName); err == nil {
+		switch caps.Provider {
+		case AIProviderGemini:
+			provider = "gemini"
+		case AIProviderOpenAI:
+			provider = "openai"
+		case AIProviderClaude:
+			provider = "anthropic"
+		case AIProviderGrok:
+			provider = "grok"
+		case AIProviderDeepSeek:
+			provider = "deepseek"
+		}
+	}
+
+	// Prepare taskType and projectID pointers
+	var taskTypePtr *string
+	taskTypeStr := string(task.TaskType)
+	if taskTypeStr != "" {
+		taskTypePtr = &taskTypeStr
+	}
+
+	var projectIDPtr *string
+	if task.Project != "" {
+		projectIDPtr = &task.Project
+	}
+
+	// Save asynchronously to avoid blocking
+	// Use a new context with timeout to avoid cancellation from parent context
+	go func() {
+		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := e.usageMetricsRepo.CreateMetric(metricCtx, task.TenantID, task.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr)
+		if err != nil {
+			log.Printf("[AITaskExecutor] Failed to save usage metric: %v", err)
+		}
+	}()
 }

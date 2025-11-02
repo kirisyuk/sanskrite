@@ -57,6 +57,7 @@ func (h *AIExecHandler) Structured(w http.ResponseWriter, r *http.Request) {
 	// Compose instruction to force JSON-only output
 	composed := req.Prompt + "\n\nReturn strictly JSON only. Do not include markdown code fences or extra text."
 
+	auth := GetAuthInfo(r.Context())
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentAnalysis,
 		InputContent: composed,
@@ -68,6 +69,8 @@ func (h *AIExecHandler) Structured(w http.ResponseWriter, r *http.Request) {
 		},
 		Verifier:        ai.NewSimpleJSONVerifier(),
 		EnableTelemetry: true,
+		TenantID:        func() string { if auth != nil { return auth.TenantID }; return "" }(),
+		UserID:          func() string { if auth != nil { return auth.UID }; return "" }(),
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)

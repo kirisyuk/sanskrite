@@ -70,6 +70,15 @@ type Interaction struct {
 		Rationale *string  `json:"rationale,omitempty" firestore:"rationale,omitempty"`
 		Triggers  []string `json:"triggers,omitempty" firestore:"triggers,omitempty"`
 	} `json:"highRisk,omitempty" firestore:"highRisk,omitempty"`
+	DiscussionFacts *struct {
+		Dependencies      *string `json:"dependencies,omitempty" firestore:"dependencies,omitempty"`           // What the decision/action depends on
+		Prerequisites     *string `json:"prerequisites,omitempty" firestore:"prerequisites,omitempty"`         // What must happen first
+		Participants      *string `json:"participants,omitempty" firestore:"participants,omitempty"`          // Who is involved (user, family, colleagues, clients)
+		ParticipantRoles  *string `json:"participantRoles,omitempty" firestore:"participantRoles,omitempty"`  // Roles and relationships between participants
+		AvailableResources *string `json:"availableResources,omitempty" firestore:"availableResources,omitempty"` // Not only constraints, but what is available
+		PreviousAttempts  *string `json:"previousAttempts,omitempty" firestore:"previousAttempts,omitempty"` // Previous attempts or experience
+		ResultFormat      *string `json:"resultFormat,omitempty" firestore:"resultFormat,omitempty"`         // Format of desired result
+	} `json:"discussionFacts,omitempty" firestore:"discussionFacts,omitempty"`
 	OriginalMessageID *string   `json:"originalMessageId,omitempty" firestore:"originalMessageId,omitempty"`
 	CoreDocIDs        []string  `json:"coreDocIds,omitempty" firestore:"coreDocIds,omitempty"`
 	SearchQueries     []string  `json:"searchQueries,omitempty" firestore:"searchQueries,omitempty"`

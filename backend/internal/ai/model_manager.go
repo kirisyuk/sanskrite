@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 )
 
 // AIModelManager управляет реестром доступных AI-моделей, их характеристиками и ценами.
@@ -36,6 +37,48 @@ func (mm *AIModelManager) initializeModels() {
 		MaxTokensPerDay:               1000000,
 		NearlyRealTime:                false,
 		CapabilityScore:               8,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       true,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolAnthropic,
+	}
+
+	mm.models["claude-sonnet-4-5-20250929"] = AIModelCapabilities{
+		Name:                          "claude-sonnet-4-5-20250929",
+		ContextWindow:                 200000,
+		OutputTokens:                  64000,
+		PricePerInputToken:            0.000003, // $3 / 1M
+		PricePerOutputToken:           0.000015, // $15 / 1M
+		Provider:                      AIProviderClaude,
+		MaxTokensPerMinute:            100000,
+		MaxTokensPerDay:               1000000,
+		NearlyRealTime:                false,
+		CapabilityScore:               8,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       true,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolAnthropic,
+	}
+
+	mm.models["claude-haiku-4-5-20251001"] = AIModelCapabilities{
+		Name:                          "claude-haiku-4-5-20251001",
+		ContextWindow:                 200000,
+		OutputTokens:                  64000,
+		PricePerInputToken:            0.00000025, // $0.25 / 1M
+		PricePerOutputToken:           0.00000125, // $1.25 / 1M
+		Provider:                      AIProviderClaude,
+		MaxTokensPerMinute:            100000,
+		MaxTokensPerDay:               1000000,
+		NearlyRealTime:                true,
+		CapabilityScore:               6,
 		ImageGenerationCapability:     false,
 		EmbeddingGenerationCapability: false,
 		TextGenerationCapability:      true,
@@ -153,6 +196,27 @@ func (mm *AIModelManager) initializeModels() {
 	}
 
 	// --------- Новые флагманские GPT-5 (без встроенного Search) ----------
+	mm.models["gpt-5"] = AIModelCapabilities{
+		Name:                          "gpt-5",
+		ContextWindow:                 400000,
+		OutputTokens:                  128000,
+		PricePerInputToken:            0.00000100, // $1.00 / 1M
+		PricePerOutputToken:           0.00000800, // $8.00 / 1M
+		Provider:                      AIProviderOpenAI,
+		MaxTokensPerMinute:            80000,
+		MaxTokensPerDay:               400000,
+		NearlyRealTime:                false,
+		CapabilityScore:               10,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       true,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolOpenAI,
+	}
+
 	mm.models["gpt-5-mini"] = AIModelCapabilities{
 		Name:                          "gpt-5-mini",
 		ContextWindow:                 400000,
@@ -320,8 +384,8 @@ func (mm *AIModelManager) initializeModels() {
 	// ------------------------- DeepSeek (без нативного Search) -------------------------
 	mm.models["deepseek-chat"] = AIModelCapabilities{
 		Name:                          "deepseek-chat",
-		ContextWindow:                 64000,
-		OutputTokens:                  64000,
+		ContextWindow:                 128000,
+		OutputTokens:                  128000,
 		PricePerInputToken:            0.00000027,
 		PricePerOutputToken:           0.00000110,
 		Provider:                      AIProviderDeepSeek,
@@ -329,6 +393,24 @@ func (mm *AIModelManager) initializeModels() {
 		MaxTokensPerDay:               200000,
 		NearlyRealTime:                true,
 		CapabilityScore:               5,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       false,
+		BuiltInSearchCapability:       false,
+	}
+
+	mm.models["deepseek-reasoner"] = AIModelCapabilities{
+		Name:                          "deepseek-reasoner",
+		ContextWindow:                 128000,
+		OutputTokens:                  128000,
+		PricePerInputToken:            0.00000027,
+		PricePerOutputToken:           0.00000110,
+		Provider:                      AIProviderDeepSeek,
+		MaxTokensPerMinute:            40000,
+		MaxTokensPerDay:               200000,
+		NearlyRealTime:                true,
+		CapabilityScore:               7,
 		ImageGenerationCapability:     false,
 		EmbeddingGenerationCapability: false,
 		TextGenerationCapability:      true,
@@ -670,11 +752,77 @@ func (mm *AIModelManager) SelectFallbackToolCallingModel(requirements AIRequirem
 // CalculateProcessingCost рассчитывает примерную стоимость выполнения задачи
 func (mm *AIModelManager) CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error) {
 	if capabilities, ok := mm.models[modelName]; ok {
+		// For Gemini models, apply tiered pricing based on token thresholds
+		if capabilities.Provider == AIProviderGemini {
+			return mm.calculateGeminiCost(modelName, inputTokens, outputTokens, capabilities)
+		}
 		inputCost := float64(inputTokens) * capabilities.PricePerInputToken
 		outputCost := float64(outputTokens) * capabilities.PricePerOutputToken
 		return inputCost + outputCost, nil
 	}
 	return 0, fmt.Errorf("model %s not found", modelName)
+}
+
+// calculateGeminiCost calculates cost for Gemini models with tiered pricing
+// Gemini pricing typically has tiers: first 128K tokens at one rate, after 128K at a different rate
+func (mm *AIModelManager) calculateGeminiCost(modelName string, inputTokens int, outputTokens int, capabilities AIModelCapabilities) (float64, error) {
+	const geminiTierThreshold = 128000 // 128K tokens threshold
+	
+	// Base prices (first tier, up to 128K tokens)
+	// Gemini pricing has tiers: first 128K tokens at full price, after 128K at 50% discount
+	// Prices from model_manager.go (these are max prices for first tier)
+	// For Gemini 2.5 Flash: $0.30/$2.50 per 1M tokens (input/output) for first 128K
+	// For Gemini 2.5 Flash Lite: $0.10/$0.41 per 1M tokens (input/output) for first 128K
+	// For Gemini 2.5 Pro: $2.50/$15.00 per 1M tokens (input/output) for first 128K
+	
+	// After 128K threshold: 50% discount
+	var inputPriceTier1, inputPriceTier2, outputPriceTier1, outputPriceTier2 float64
+	
+	// Check more specific models first (flash-lite before flash, pro before other)
+	switch {
+	case strings.Contains(modelName, "gemini-2.5-flash-lite"):
+		// Most specific: flash-lite (cheapest)
+		inputPriceTier1 = 0.00000010  // $0.10 / 1M (from model_manager.go)
+		inputPriceTier2 = 0.00000005  // $0.05 / 1M (50% discount after threshold)
+		outputPriceTier1 = 0.00000041 // $0.41 / 1M (from model_manager.go)
+		outputPriceTier2 = 0.000000205 // $0.205 / 1M (50% discount after threshold)
+	case strings.Contains(modelName, "gemini-2.5-pro"):
+		// Pro model (most expensive)
+		inputPriceTier1 = 0.00000250  // $2.50 / 1M (from model_manager.go)
+		inputPriceTier2 = 0.00000125  // $1.25 / 1M (50% discount after threshold)
+		outputPriceTier1 = 0.00001500 // $15.00 / 1M (from model_manager.go)
+		outputPriceTier2 = 0.00000750 // $7.50 / 1M (50% discount after threshold)
+	case strings.Contains(modelName, "gemini-2.5-flash"):
+		// Flash (default/middle tier)
+		inputPriceTier1 = 0.00000030  // $0.30 / 1M (from model_manager.go)
+		inputPriceTier2 = 0.00000015  // $0.15 / 1M (50% discount after threshold)
+		outputPriceTier1 = 0.00000250 // $2.50 / 1M (from model_manager.go)
+		outputPriceTier2 = 0.00000125 // $1.25 / 1M (50% discount after threshold)
+	default:
+		// Fallback to capabilities prices if model not specifically matched
+		inputPriceTier1 = capabilities.PricePerInputToken
+		inputPriceTier2 = capabilities.PricePerInputToken * 0.5
+		outputPriceTier1 = capabilities.PricePerOutputToken
+		outputPriceTier2 = capabilities.PricePerOutputToken * 0.5
+	}
+	
+	// Calculate input cost with tiered pricing
+	var inputCost float64
+	if inputTokens <= geminiTierThreshold {
+		inputCost = float64(inputTokens) * inputPriceTier1
+	} else {
+		inputCost = float64(geminiTierThreshold)*inputPriceTier1 + float64(inputTokens-geminiTierThreshold)*inputPriceTier2
+	}
+	
+	// Calculate output cost with tiered pricing
+	var outputCost float64
+	if outputTokens <= geminiTierThreshold {
+		outputCost = float64(outputTokens) * outputPriceTier1
+	} else {
+		outputCost = float64(geminiTierThreshold)*outputPriceTier1 + float64(outputTokens-geminiTierThreshold)*outputPriceTier2
+	}
+	
+	return inputCost + outputCost, nil
 }
 
 // GetModelCapabilities возвращает характеристики указанной модели

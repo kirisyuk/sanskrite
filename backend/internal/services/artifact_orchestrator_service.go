@@ -98,6 +98,7 @@ type GenerateSectionRequest struct {
 	SectionID      string
 	TenantID       string
 	ProjectID      string
+	UserID         string // For usage tracking
 	PromptOverride *string
 	ModelOverride  *string
 	StreamCallback func(chunk string) error
@@ -170,6 +171,7 @@ func (s *ArtifactOrchestratorService) GenerateSection(
 		ArtifactID:         session.ArtifactID,
 		TenantID:           req.TenantID,
 		ProjectID:          req.ProjectID,
+		UserID:             req.UserID,
 		StreamID:           req.StreamID,
 	}
 
@@ -439,6 +441,7 @@ func (s *ArtifactOrchestratorService) runAutoGeneration(ctx context.Context, ses
 			SectionID: section.ID,
 			TenantID:  tenantID,
 			ProjectID: projectID,
+			UserID:    "", // Auto-generation doesn't have user context
 		})
 
 		if err != nil {

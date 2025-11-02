@@ -7,6 +7,8 @@ import logoLightTheme from '../assets/hatl-light-theme.png';
 import { UserProfile } from './UserProfile';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../stores/uiStore';
+import { useGenaiChatStore } from '../stores/genaiChatStore';
+import { api } from '../lib/api';
 
 export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) => {
   const { theme, setTheme } = React.useContext(ThemeContext);
@@ -15,6 +17,12 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const { i18n } = useTranslation();
   const uiLanguage = useUIStore((s) => s.uiLanguage);
   const setUiLanguage = useUIStore((s) => s.setUiLanguage);
+  const genaiChat = useGenaiChatStore();
+  const [shareBusy, setShareBusy] = React.useState(false);
+  const [shareOpen, setShareOpen] = React.useState(false);
+  const [shareUrl, setShareUrl] = React.useState<string | null>(null);
+  const [copied, setCopied] = React.useState(false);
+  const shareRef = React.useRef<HTMLDivElement | null>(null);
   const isChat = React.useMemo(() => {
     try {
       const params = new URLSearchParams(location.search);
@@ -48,6 +56,46 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   }, [i18n, setUiLanguage]);
 
   const selectedUi = uiLanguage === 'kk' ? 'kz' : (uiLanguage || 'en');
+  const canShare = React.useMemo(() => {
+    try {
+      if (!currentUser) return false;
+      const pid = (genaiChat as any)?.projectId;
+      if (!pid || pid === 'local-unfold') return false;
+      const hasInts = Array.isArray((genaiChat as any).interactions) && (genaiChat as any).interactions.length > 0;
+      const hasMsgs = Array.isArray((genaiChat as any).messages) && (genaiChat as any).messages.length > 0;
+      return hasInts || hasMsgs;
+    } catch { return false; }
+  }, [currentUser, (genaiChat as any)?.projectId, (genaiChat as any)?.interactions, (genaiChat as any)?.messages]);
+
+  const createShare = React.useCallback(async () => {
+    try {
+      if (shareBusy) return;
+      setShareBusy(true);
+      const pid = (genaiChat as any)?.projectId as string;
+      if (!pid || pid === 'local-unfold') { setShareBusy(false); return; }
+      // default: 7 days from now
+      const exp = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const res = await api.shareCreate(pid, exp);
+      const rel = res?.shareToken ? `/shared/${res.shareToken}` : null;
+      setShareUrl(rel);
+      setShareOpen(true);
+    } catch {
+      setShareUrl(null);
+      setShareOpen(true);
+    } finally {
+      setShareBusy(false);
+    }
+  }, [genaiChat, shareBusy]);
+
+  React.useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!shareOpen) return;
+      const el = shareRef.current;
+      if (el && !el.contains(e.target as Node)) setShareOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick, { capture: true });
+    return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
+  }, [shareOpen]);
 
   return (
     <div className="topbar">
@@ -81,8 +129,57 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
       {/* Center - View mode toggle temporarily disabled */}
       <div />
 
-      {/* Right - Language switcher, Theme toggle and User profile */}
+      {/* Right - Share, Language switcher, Theme toggle and User profile */}
       <div className="flex items-center gap-3 px-2">
+        {/* Share (left of language), only when user is authenticated and chat is not new/empty) */}
+        {canShare && (
+          <div ref={shareRef} style={{ position: 'relative' }}>
+            <button
+              type="button"
+              className="rounded-lg text-12 px-2 py-1"
+              aria-label="Share project"
+              title="Share project"
+              onClick={() => { if (!shareUrl) { createShare(); } else { setShareOpen((v) => !v); } }}
+              disabled={shareBusy}
+              style={{ backgroundColor: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--white-10)' }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+            >
+              {shareBusy ? 'Sharing…' : 'Share'}
+            </button>
+            {shareOpen && (
+              <div className="rounded-lg p-2 mt-1" style={{ position: 'absolute', right: 0, top: '100%', zIndex: 60, minWidth: 280, background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', boxShadow: '0 4px 14px rgba(0,0,0,0.2)' }}>
+                {shareUrl ? (
+                  <div>
+                    <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>Public read‑only link</div>
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const origin = (typeof window !== 'undefined' ? window.location.origin : '');
+                        const abs = (shareUrl || '').startsWith('http') ? (shareUrl as string) : (origin + (shareUrl || ''));
+                        return (
+                          <>
+                            <input readOnly value={abs} className="text-12 flex-1" style={{ background: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 6, padding: '4px 6px' }} />
+                            <button
+                              className="text-12 px-2 py-1 rounded"
+                              style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-secondary-strong)' }}
+                              onClick={() => { try { navigator.clipboard.writeText(abs); setCopied(true); setTimeout(() => setCopied(false), 1200); } catch {} }}
+                            >{copied ? 'Copied' : 'Copy'}</button>
+                          </>
+                        );
+                      })()}
+                    </div>
+                    {copied && (
+                      <div className="text-[11px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>Copied to clipboard</div>
+                    )}
+                    <div className="text-[11px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>Default expiry: 7 days</div>
+                  </div>
+                ) : (
+                  <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Failed to create link. Try again.</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {/* Language switcher */}
         <select
           aria-label="Select language"

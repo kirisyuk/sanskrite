@@ -258,11 +258,22 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
                     if onEvent != nil { _ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: []ToolCall{{Name: name, Arguments: args}}}) }
                 }
             }
+        case "message_start":
+            // Input tokens are reported in message_start
+            if u, ok := m["message"].(map[string]interface{}); ok {
+                if usage, ok := u["usage"].(map[string]interface{}); ok {
+                    if v, ok := usage["input_tokens"].(float64); ok { accUsage.PromptTokens = int(v) }
+                }
+            }
         case "message_delta":
             if u, ok := m["usage"].(map[string]interface{}); ok {
+                // Some models may report input_tokens in message_delta as well
+                if v, ok := u["input_tokens"].(float64); ok { accUsage.PromptTokens = int(v) }
                 if v, ok := u["output_tokens"].(float64); ok { accUsage.OutputTokens = int(v) }
             }
         case "message_stop":
+            // Compute TotalTokens before sending done event
+            accUsage.TotalTokens = accUsage.PromptTokens + accUsage.OutputTokens
             if onEvent != nil { _ = onEvent(StreamEvent{Type: "done", Usage: accUsage, Model: model}) }
             return io.EOF
         case "error":

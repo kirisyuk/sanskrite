@@ -13,8 +13,7 @@ export type GenAIModel =
   | 'gpt_fast'       // gpt-5-nano
   | 'grok_quality'   // grok-4-0709
   | 'grok_fast'      // grok-4-fast-reasoning
-  | 'claude_quality' // claude-opus-4-1-20250805
-  | 'claude_balanced'// claude-sonnet-4-5-20250929
+  | 'claude_balanced'// claude-sonnet-4-5-20250929 (quality option disabled - too expensive)
   | 'claude_fast'    // claude-haiku-4-5-20251001
   | 'deepseek_quality' // deepseek-reasoner
   | 'deepseek_fast'; // deepseek-chat
@@ -48,13 +47,45 @@ export function mapProviderStrengthToModel(provider: GenAIProvider, strength: Ge
       return 'grok_fast';
     case 'claude':
       if (strength === 'fast') return 'claude_fast';
-      if (strength === 'balanced') return 'claude_balanced';
-      return 'claude_quality';
+      // Claude quality (Opus) disabled - too expensive, fallback to balanced
+      if (strength === 'quality') return 'claude_balanced';
+      return 'claude_balanced';
     case 'deepseek':
       if (strength === 'quality') return 'deepseek_quality';
       // DeepSeek не имеет balanced; map to fast
       return 'deepseek_fast';
   }
+}
+
+// Context window sizes (in tokens) for each model alias
+// These values must match the ContextWindow values in backend/internal/ai/model_manager.go
+export const MODEL_CONTEXT_WINDOWS: Record<GenAIModel, number> = {
+  // Gemini models
+  'gemini_fast': 1_000_000,      // gemini-2.5-flash-lite
+  'gemini_balanced': 1_000_000,  // gemini-2.5-flash
+  'gemini_quality': 2_000_000,   // gemini-2.5-pro
+  
+  // OpenAI models
+  'gpt_fast': 400_000,           // gpt-5-nano
+  'gpt_balanced': 400_000,       // gpt-5-mini
+  'gpt_quality': 400_000,        // gpt-5
+  
+  // Grok models
+  'grok_fast': 2_000_000,        // grok-4-fast-non-reasoning
+  'grok_quality': 256_000,       // grok-4-0709
+  
+  // Claude models
+  'claude_fast': 200_000,        // claude-haiku-4-5-20251001
+  'claude_balanced': 200_000,    // claude-sonnet-4-5-20250929
+  
+  // DeepSeek models
+  'deepseek_fast': 128_000,      // deepseek-chat
+  'deepseek_quality': 128_000,   // deepseek-reasoner
+};
+
+// Helper function to get context window size for a model alias
+export function getModelContextWindow(model: GenAIModel): number {
+  return MODEL_CONTEXT_WINDOWS[model] || 0;
 }
 
 export interface GenAISettingsState {
@@ -94,6 +125,16 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
       persisted = JSON.parse(raw);
     }
   } catch {}
+
+  // Migrate old claude_quality to claude_balanced
+  if (persisted && persisted.model === 'claude_quality' as any) {
+    persisted.model = 'claude_balanced';
+    persisted.strength = 'balanced';
+  }
+  if (persisted && persisted.stanceModel === 'claude_quality' as any) {
+    persisted.stanceModel = 'claude_balanced';
+    persisted.stanceStrength = 'balanced';
+  }
 
   const initial: Omit<GenAISettingsState, 'setProvider' | 'setStrength' | 'setStanceProvider' | 'setStanceStrength' | 'setStanceModel' | 'setGrounding' | 'setTemperature' | 'setMaxOutputTokens' | 'setSystemInstruction' | 'setEnableTelegramTool' | 'save'> = {
     provider: (persisted as any)?.provider || 'gemini',

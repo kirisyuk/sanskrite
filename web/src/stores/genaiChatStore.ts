@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import { api } from '../lib/api';
 import type { SxInstruction, SxEntityMark, SxMonitorMetric } from '../types/sx';
 import { parseSxInstructionsFromContent } from '../lib/sxUtils';
+import { persistArtifacts } from '../lib/artifactPersistence';
 import type { AnalyzeInteractionRef, AnalyzeRequest } from '../types/stance';
 import type { GenaiToolCall } from './genaiStore';
-import { useGenAISettings } from './genaiSettingsStore';
+import { useGenAISettings, mapProviderStrengthToModel, getModelContextWindow } from './genaiSettingsStore';
 import { useProjectsStore } from './projectsStore';
 import { useWsStore } from './wsStore';
 
@@ -50,7 +51,7 @@ export interface LocalInteraction {
   evaluations?: Record<string, any>;
   coreDocIds?: string[];
   metadata?: { pinned?: boolean; notes?: string[] };
-  graphData?: { chartTitle: string; table: any[][]; sources: string[] };
+  graphData?: { chartTitle: string; chartType?: string; table: any[][]; sources: string[] };
   // Anchored stream meta (per assistant message)
   searchQueries?: string[];
   sources?: string[];
@@ -66,8 +67,20 @@ interface GenaiChatState {
   attributions: Array<{ title?: string; url?: string }>;
   searchQueries: string[];
   sources: string[];
-  // Per-message structured evaluations
-  evaluations: Record<string, { biasLevel: number; thoughtfulness: number; biases: string[]; biasTypes?: string[] }>;
+  // Per-message structured evaluations (unified schema)
+  evaluations: Record<string, {
+    biasLevel: number;
+    thoughtfulness: number; // kept for backward compatibility (same as thoughtfulnessLevel)
+    thoughtfulnessLevel?: number;
+    thoughtfulnessDimensions?: {
+      analyticalDepth: number;
+      epistemicHumility: number;
+      alternativeConsideration: number;
+      evidenceReasoningQuality: number;
+      practicalGrounding: number;
+    };
+    categories: Array<{ code: string; explanation: string }>;
+  }>;
   // Pre-stance preliminary call results (per user message)
   preStanceLatency: Record<string, number>;
   preStanceExtract: Record<string, { user_request: string }>;
@@ -105,7 +118,19 @@ interface GenaiChatState {
   onToolCall: (calls: GenaiToolCall[]) => void;
   onToolResult: (calls: GenaiToolCall[]) => void;
   onDoneMeta: (meta: { usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; attributions?: Array<{ title?: string; url?: string }>; searchQueries?: string[]; sources?: string[] }) => void;
-  setEvaluation: (messageId: string, ev: { biasLevel: number; thoughtfulness: number; biases: string[]; biasTypes?: string[] }) => void;
+  setEvaluation: (messageId: string, ev: {
+    biasLevel: number;
+    thoughtfulness: number;
+    thoughtfulnessLevel?: number;
+    thoughtfulnessDimensions?: {
+      analyticalDepth: number;
+      epistemicHumility: number;
+      alternativeConsideration: number;
+      evidenceReasoningQuality: number;
+      practicalGrounding: number;
+    };
+    categories: Array<{ code: string; explanation: string }>;
+  }) => void;
   setPreStanceResult: (messageId: string, latencyMs: number, extract?: { user_request: string }) => void;
 
   // helpers to manage local interactions
@@ -113,6 +138,7 @@ interface GenaiChatState {
   ensureProject: () => Promise<string>;
   hydrateInteractions: () => Promise<void>;
   deleteInteraction: (interactionId: string) => Promise<void>;
+  createIndicatorMessage: (content: string, subkind: string, replyTo?: string, metadata?: Record<string, any>) => Promise<void>;
 
   // Your stance (meta aggregate) cache and actions
   stanceAggregate?: any;
@@ -149,24 +175,28 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   
   setPendingAttachedDocIds: (ids) => set({ pendingAttachedDocIds: ids }),
 
-  setProjectId: (id) => set({
-    projectId: id || 'local-unfold',
-    // clear chat-local state to avoid mixing between projects
-    messages: [],
-    interactions: [],
-    artifacts: { entities: [], metrics: [] },
-    persistedByLocalId: {},
-    evaluations: {},
-    messageMeta: {},
-    metricOverlayCache: {},
-    metricOverlayOpenKey: null,
-    metricOverlayLoading: false,
-    error: null,
-    streaming: false,
-    stanceAggregate: undefined,
-    stanceLoading: false,
-    pendingAttachedDocIds: [],
-  }),
+  setProjectId: (id) => {
+    const newProjectId = id || 'local-unfold';
+    
+    set({
+      projectId: newProjectId,
+      // clear chat-local state to avoid mixing between projects
+      messages: [],
+      interactions: [],
+      artifacts: { entities: [], metrics: [] },
+      persistedByLocalId: {},
+      evaluations: {},
+      messageMeta: {},
+      metricOverlayCache: {},
+      metricOverlayOpenKey: null,
+      metricOverlayLoading: false,
+      error: null,
+      streaming: false,
+      stanceAggregate: undefined,
+      stanceLoading: false,
+      pendingAttachedDocIds: [],
+    });
+  },
 
   ensureProject: async () => {
     let pid = get().projectId;
@@ -198,7 +228,13 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     if (!projectId || projectId === 'local-unfold') return;
     try {
       const serverItems = await api.getProjectInteractions(projectId);
+      // Check if projectId is still current before applying results (race condition guard)
       set((s) => {
+        // If project changed while request was in flight, ignore this response
+        if (s.projectId !== projectId) {
+          console.log('[hydrateInteractions] Project changed during request, ignoring stale response', { requestedProjectId: projectId, currentProjectId: s.projectId });
+          return s;
+        }
         const byServerId = new Set<string>((serverItems as any[]).map((it: any) => it.id));
         const map = (s as any).persistedByLocalId || {} as Record<string,string>;
         const keepLocals: any[] = [];
@@ -209,32 +245,141 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           if (mapped && byServerId.has(mapped)) continue;
           keepLocals.push(l);
         }
-        const merged = [...(serverItems as any[]), ...keepLocals];
+        // Обеспечиваем наличие contentSanitized для всех загруженных взаимодействий
+        // Если его нет, но есть content с @sx тегами - парсим и создаем
+        // Также обрабатываем graphData - добавляем chartType если отсутствует
+        const processedServerItems = (serverItems as any[]).map((it: any) => {
+          let updated = it;
+          
+          // Обработка contentSanitized
+          if (it.kind === 'assistant' && it.content && !it.contentSanitized) {
+            const { sanitized } = parseSxInstructionsFromContent(it.content);
+            updated = { ...updated, contentSanitized: sanitized };
+          }
+          
+          // Обработка graphData - добавляем chartType если отсутствует или невалиден
+          if (it.kind === 'assistant' && (it.subkind === 'graph' || it.graphData)) {
+            let graphData = it.graphData;
+            
+            // Если graphData отсутствует, но есть subkind === 'graph', пытаемся распарсить из content
+            if (!graphData && it.subkind === 'graph' && (it.contentSanitized || it.content)) {
+              try {
+                let content = String(it.contentSanitized || it.content || '').trim();
+                content = content.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim();
+                let parsed: any = null;
+                if (content.startsWith('{') || content.startsWith('[')) {
+                  parsed = JSON.parse(content);
+                } else {
+                  const m = content.match(/\{[\s\S]*\}/);
+                  if (m && m[0]) parsed = JSON.parse(m[0]);
+                }
+                if (parsed && typeof parsed === 'object' && typeof parsed.chartTitle === 'string' && Array.isArray(parsed.table) && Array.isArray(parsed.sources)) {
+                  const allowedTypes = ['line', 'bar', 'area', 'stackedBar', 'stackedArea', 'composed'];
+                  const chartType = typeof parsed.chartType === 'string' && allowedTypes.includes(parsed.chartType) ? parsed.chartType : 'line';
+                  graphData = { chartTitle: parsed.chartTitle, chartType: chartType, table: parsed.table, sources: parsed.sources };
+                }
+              } catch {}
+            }
+            
+            // Если graphData есть, но нет chartType или он невалиден - добавляем/исправляем
+            if (graphData && typeof graphData === 'object' && typeof graphData.chartTitle === 'string') {
+              const allowedTypes = ['line', 'bar', 'area', 'stackedBar', 'stackedArea', 'composed'];
+              const chartType = typeof graphData.chartType === 'string' && allowedTypes.includes(graphData.chartType)
+                ? graphData.chartType
+                : 'line';
+              updated = { ...updated, graphData: { ...graphData, chartType } };
+            }
+          }
+          
+          return updated;
+        });
+        const merged = [...processedServerItems, ...keepLocals];
         
-        // Restore searchQueries and sources from last assistant interaction
-        const lastAssistant = [...merged].reverse().find((it: any) => it.kind === 'assistant');
-        const restoredQueries = Array.isArray(lastAssistant?.searchQueries) ? (lastAssistant as any).searchQueries.filter(Boolean) : [];
-        const restoredSources = Array.isArray(lastAssistant?.sources) ? (lastAssistant as any).sources.filter(Boolean) : [];
-        const prevQueries = Array.isArray(s.searchQueries) ? s.searchQueries.filter(Boolean) : [];
-        const prevSources = Array.isArray(s.sources) ? s.sources.filter(Boolean) : [];
-        const nextQueries = (restoredQueries.length > 0) ? Array.from(new Set([...(prevQueries || []), ...restoredQueries])) : prevQueries;
-        const nextSources = (restoredSources.length > 0) ? Array.from(new Set([...(prevSources || []), ...restoredSources])) : prevSources;
+        // Clear global queries/sources on hydration - chips are now per-interaction only
+        // Global state is only temporary during streaming and should not persist
         
-        // Merge restored sources into attributions with dedup
-        const allAttributions = [...(s.attributions || [])];
-        const seenUrls = new Set(allAttributions.map(a => a.url).filter(Boolean));
-        for (const url of nextSources) {
-          if (url && !seenUrls.has(url)) {
-            allAttributions.push({ url });
-            seenUrls.add(url);
+        const restoredMeta = { ...s.messageMeta };
+        
+        // Generate frameExpansions for assistant interactions that don't have them yet
+        // Only for non-agent responses and if we have at least 2 assistant interactions
+        // Only generate for the last assistant interaction if it doesn't have an expansion interaction
+        const assistantInteractions = merged.filter((it: any) => 
+          it.kind === 'assistant' && !it.author?.displayName && it.content && it.content.trim()
+        );
+        if (assistantInteractions.length >= 2) {
+          // Generate expansions for the last assistant interaction if it doesn't have them
+          const lastAssistant = assistantInteractions[assistantInteractions.length - 1];
+          
+          // Check if expansion interaction already exists
+          const map = (s as any).persistedByLocalId || {};
+          const serverId = map[lastAssistant.id] || lastAssistant.id;
+          const reverseMap: Record<string, string[]> = {};
+          Object.entries(map).forEach(([local, server]) => {
+            if (!reverseMap[server as string]) reverseMap[server as string] = [];
+            reverseMap[server as string].push(local);
+          });
+          const localIds = reverseMap[lastAssistant.id] || [];
+          
+          const existingExpansion = merged.find((it: any) => 
+            it.subkind === 'eval.frame_expansions' && 
+            (it.replyTo === lastAssistant.id || it.replyTo === serverId || localIds.includes(it.replyTo || '') ||
+             (it.relations && it.relations.some((r) => r.targetId === lastAssistant.id || r.targetId === serverId)))
+          );
+          
+          if (!existingExpansion && lastAssistant.content) {
+            // Find the last 2 user messages that prompted this response
+            const userMessages: string[] = [];
+            const replyTo = (lastAssistant as any).replyTo;
+            if (replyTo) {
+              // Start from replyTo and collect up to 2 user messages
+              const replyToIdx = merged.findIndex((it: any) => 
+                it.id === replyTo || (it as any).originalMessageId === replyTo
+              );
+              if (replyToIdx >= 0) {
+                // Collect user messages before and including replyTo (up to 2 most recent)
+                for (let i = replyToIdx; i >= 0 && userMessages.length < 2; i--) {
+                  const item = merged[i];
+                  if (item.kind === 'user' && (item.content || (item as any).contentSanitized)) {
+                    const content = (item.content || (item as any).contentSanitized || '') as string;
+                    if (content.trim()) {
+                      userMessages.unshift(content); // Add to beginning to maintain chronological order
+                    }
+                  }
+                }
+              }
+            } else {
+              // If no explicit replyTo, find the last 2 user messages before this assistant message
+              const assistantIdx = merged.findIndex((it: any) => it.id === lastAssistant.id && it.kind === 'assistant');
+              if (assistantIdx > 0) {
+                for (let i = assistantIdx - 1; i >= 0 && userMessages.length < 2; i--) {
+                  const item = merged[i];
+                  if (item.kind === 'user' && (item.content || (item as any).contentSanitized)) {
+                    const content = (item.content || (item as any).contentSanitized || '') as string;
+                    if (content.trim()) {
+                      userMessages.unshift(content); // Add to beginning to maintain chronological order
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Generate asynchronously without blocking hydration
+            (async () => {
+              try {
+                const { generateFrameExpansions } = await import('../lib/frameExpansions');
+                await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+              } catch (e) {
+                console.warn('[hydrateInteractions] Failed to generate frameExpansions', e);
+              }
+            })();
           }
         }
         
         return { 
           interactions: merged,
-          searchQueries: nextQueries,
-          sources: nextSources,
-          attributions: allAttributions
+          searchQueries: [],
+          sources: [],
+          messageMeta: restoredMeta
         } as any;
       });
     } catch (e: any) {
@@ -254,7 +399,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     set({ stanceLoading: true });
     try {
       const agg = await api.metaGetAggregate(projectId);
-      set({ stanceAggregate: agg, stanceLoading: false });
+      // Check if projectId is still current before applying results (race condition guard)
+      set((s) => {
+        if (s.projectId !== projectId) {
+          console.log('[loadStanceAggregate] Project changed during request, ignoring stale response', { requestedProjectId: projectId, currentProjectId: s.projectId });
+          return { stanceLoading: false };
+        }
+        return { stanceAggregate: agg, stanceLoading: false };
+      });
     } catch (e: any) {
       // 404 is normal for projects without aggregate yet
       if (e?.response?.status === 404) {
@@ -370,6 +522,70 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     console.log('[deleteInteraction] Deleted interactions (cascade)', { idsToDelete });
   },
 
+  createIndicatorMessage: async (content: string, subkind: string, replyTo?: string, metadata?: Record<string, any>) => {
+    const projectId = get().projectId;
+    if (!projectId || projectId === 'local-unfold') return;
+    
+    const now = Date.now().toString();
+    const createdAt = new Date().toISOString();
+    const localId = now + '-indicator';
+    
+    try {
+      // Create local interaction first
+      const localInteraction: LocalInteraction = {
+        id: localId,
+        projectId,
+        kind: 'user',
+        subkind,
+        content,
+        createdAt,
+        replyTo,
+        ...(metadata || {}),
+      };
+      
+      set((st) => ({
+        interactions: [...st.interactions, localInteraction],
+      }));
+      
+      // Resolve replyTo to server ID if needed
+      let serverReplyTo: string | undefined = undefined;
+      if (replyTo) {
+        const map = (get() as any).persistedByLocalId || {};
+        serverReplyTo = map[replyTo] || map[String(replyTo)] || replyTo;
+      }
+      
+      // Persist on server
+      const payload: any = {
+        kind: 'user',
+        subkind,
+        content,
+        originalMessageId: now + '-u',
+      };
+      
+      if (serverReplyTo) payload.replyTo = serverReplyTo;
+      if (metadata) {
+        Object.assign(payload, metadata);
+      }
+      
+      const res = await api.createProjectInteraction(projectId, payload);
+      
+      // Update local interaction with server ID
+      set((st) => {
+        const items = [...st.interactions];
+        const idx = items.findIndex((it) => it.id === localId);
+        if (idx >= 0) {
+          items[idx] = { ...items[idx], id: res.id } as LocalInteraction;
+        }
+        const map = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+        map[localId] = res.id;
+        map[now + '-u'] = res.id;
+        return { interactions: items, persistedByLocalId: map } as any;
+      });
+    } catch (e) {
+      console.warn('[createIndicatorMessage] Failed to create indicator message', e);
+    }
+  },
+
   openMetricOverlay: async (metric: SxMonitorMetric) => {
     const key = String((metric as any).id || (metric as any).metricName || (metric as any).name || '').toLowerCase();
     if (!key) return;
@@ -474,6 +690,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     }) as any;});
     
     // Preliminary stance structured call (extract user_request) - after UI update, before server sync
+    // TEMPORARILY DISABLED: Prestance call adds ~2 seconds latency and is not critical
+    // TODO: Re-enable when needed or optimize to reduce latency
+    /*
     if (!suppressUserEcho) {
       try {
         const stanceModel = useGenAISettings.getState().stanceModel;
@@ -488,7 +707,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           },
           required: ['run', 'command']
         } as any;
-        const availableCommands = 'Available commands: /analyze entities, /analyze facts, /analyze events, /analyze metrics, /analyze decisions, /section <title>, /end';
+        const availableCommands = 'Available commands: /analyze entities, /analyze facts, /analyze events, /analyze metrics, /analyze decisions, /agent data, /agent entity, /section <title>, /end';
         const promptUr = `You are performing a preliminary assessment of the user's request before execution. In the normal case, this is a regular LLM chat and command execution is not required, but in rare cases the user may request execution of system commands in natural language.\n\n${availableCommands}\n\nDetermine if the user's request is a demand to execute a system command from the list above. If it is - select the single most appropriate command. If command execution is not required - return empty string in the 'run' field.\n\nReturn STRICTLY JSON with this exact shape: { "run": string, "command": string, "params": string } (no prose, no markdown, no code fences).\n- "run": the extracted user request text if command execution is required, OR empty string "" if it's a regular chat request\n- "command": the matched command (e.g., "/analyze entities", "/section") if found, OR empty string "" if no command is required\n- "params": the remaining text/arguments for the command (e.g., section title or analyze context); empty string "" if not applicable\n\nUSER_MESSAGE:\n${prompt}`;
         const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         const urRes = await api.genaiGenerate({
@@ -650,8 +869,124 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               if (cmd === '/analyze events') { await api.analyzeEvents(projectId, params); return; }
               if (cmd === '/analyze metrics') { await api.analyzeMetrics(projectId, params); return; }
               if (cmd === '/analyze decisions') { await api.analyzeDecisions(projectId, params); return; }
-              // Unknown command pattern: do nothing (already persisted user); simply stop streaming
-              return;
+              
+              // Agent commands: /agent data <query> and /agent entity <query>
+              if (cmd === '/agent data' || cmd === '/agent entity') {
+                const agentType = cmd === '/agent data' ? 'data' : 'entities';
+                const query = params || prompt.replace(/^\s*\/agent\s+(data|entity)\s+/i, '').trim();
+                
+                if (!query) {
+                  console.warn('[Agent] Empty query provided');
+                  return;
+                }
+                
+                try {
+                  // Import agents store
+                  const { useAgentsStore } = await import('./agentsStore');
+                  const agentsStore = useAgentsStore.getState();
+                  
+                  // Get current user context
+                  const { auth } = await import('../lib/firebase');
+                  const user = auth?.currentUser;
+                  if (!user) {
+                    console.error('[Agent] User not authenticated');
+                    return;
+                  }
+                  
+                  // Get tenant ID from user (assuming it's stored somewhere or we can get it from project)
+                  // For now, we'll use projectId as tenantId fallback
+                  const tenantId = user.uid; // This should be actual tenantId, but using uid as fallback
+                  
+                  // Create task based on agent type
+                  if (agentType === 'data') {
+                    // For Data Agent, we'll let the agent parse the query itself
+                    // The agent can understand natural language queries
+                    const task: import('../types/agents').DataAgentTask = {
+                      context: {
+                        tenantId,
+                        projectId,
+                        userId: user.uid,
+                      },
+                      query: query,
+                      granularity: 'monthly', // Default, agent can adjust if needed
+                      timeRange: {
+                        from: new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0], // Current year start
+                        to: new Date().toISOString().split('T')[0], // Today
+                      },
+                      metadata: {
+                        interactionId: userLocalId,
+                        messageId: now + '-u',
+                      },
+                    };
+                    
+                    // Execute agent via API and get result
+                    let response: import('../types/agents').AgentExecutionResponse;
+                    if (agentType === 'data') {
+                      response = await api.executeDataAgent(projectId, task);
+                    } else {
+                      response = await api.executeEntitiesAgent(projectId, task);
+                    }
+                    
+                    // Save result immediately
+                    await saveAgentResult(response.result, agentType, projectId, query, response.agentId, user.uid);
+                    
+                    // Track task via store for progress updates
+                    const taskId = await agentsStore.executeAgent(projectId, agentType, task);
+                    
+                    // Wait for completion status updates via WebSocket
+                    waitForAgentCompletion(taskId, agentType, projectId, query, user.uid);
+                  } else if (agentType === 'entities') {
+                    // For Entities Agent, parse entities from query
+                    // If entities array is empty, agent will parse from query string
+                    // We'll pass query as a special entity for agent to parse
+                    const task: import('../types/agents').EntitiesAgentTask = {
+                      context: {
+                        tenantId,
+                        projectId,
+                        userId: user.uid,
+                      },
+                      entities: query.trim() ? [{
+                        name: query,
+                        type: 'other', // Agent will determine proper type
+                      }] : [], // Empty array - agent will parse from query if needed
+                      maxDepth: 2,
+                      includeDetails: true,
+                      metadata: {
+                        interactionId: userLocalId,
+                        messageId: now + '-u',
+                        custom: {
+                          query: query, // Store query in metadata for agent reference
+                        },
+                      },
+                    };
+                    
+                    // Execute agent via API and get result
+                    let response: import('../types/agents').AgentExecutionResponse;
+                    response = await api.executeEntitiesAgent(projectId, task);
+                    
+                    // Save result immediately
+                    await saveAgentResult(response.result, agentType, projectId, query, response.agentId, user.uid);
+                    
+                    // Track task via store for progress updates
+                    const taskId = await agentsStore.executeAgent(projectId, agentType, task);
+                    
+                    // Wait for completion status updates via WebSocket
+                    waitForAgentCompletion(taskId, agentType, projectId, query, user.uid);
+                  }
+                } catch (e: any) {
+                  console.error('[Agent] Execution failed', e);
+                  // Show error status
+                  try {
+                    await api.createProjectInteraction(projectId, {
+                      kind: 'assistant',
+                      subkind: 'agent.error',
+                      content: `Agent execution failed: ${e.message || 'Unknown error'}`,
+                    });
+                    await get().hydrateInteractions();
+                  } catch {}
+                }
+                return;
+              }
             } catch (e) {
               console.error('[CommandExecute] failed', e);
               return;
@@ -667,6 +1002,131 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         // PreStance is non-blocking, continue even if it fails
       }
     }
+    */
+    
+    // Helper function to save agent result to CoreDoc
+    async function saveAgentResult(
+      result: any,
+      agentType: 'data' | 'entities',
+      projectId: string,
+      query: string,
+      taskId: string,
+      userId: string
+    ) {
+      try {
+        const docType = agentType === 'data' ? 'agent_data' : 'agent_entity';
+        const filename = `${agentType}_agent_${Date.now()}.json`;
+        const jsonContent = JSON.stringify({
+          agentId: agentType,
+          agentName: agentType === 'data' ? 'Data Collection' : 'Entity Research',
+          query: query,
+          taskId: taskId,
+          result: result,
+          metadata: {
+            confidence: result?.confidence,
+            sources: result?.sources || result?.metadata?.sources,
+            methods: result?.metadata?.methods,
+            assumptions: result?.metadata?.assumptions,
+            explanation: result?.explanation,
+          },
+          completedAt: new Date().toISOString(),
+        }, null, 2);
+        
+        // Save to CoreDoc
+        await api.docsCreateFromText(projectId, {
+          filename,
+          contentType: 'application/json',
+          text: jsonContent,
+          description: `${agentType === 'data' ? 'Data Agent' : 'Entities Agent'} result: ${query.substring(0, 100)}`,
+        });
+        
+        // Create interaction to show completion
+        await api.createProjectInteraction(projectId, {
+          kind: 'assistant',
+          subkind: `agent.${agentType}.completed`,
+          content: `${agentType === 'data' ? 'Data Agent' : 'Entities Agent'} completed. Result saved to Library.`,
+        });
+        
+        await get().hydrateInteractions();
+      } catch (e: any) {
+        console.error('[Agent] Failed to save result', e);
+        throw e;
+      }
+    }
+    
+    // Helper function to wait for agent completion and save result to CoreDoc
+    async function waitForAgentCompletion(
+      taskId: string,
+      agentType: 'data' | 'entities',
+      projectId: string,
+      query: string,
+      userId: string
+    ) {
+      const { useAgentsStore } = await import('./agentsStore');
+      const agentsStore = useAgentsStore.getState();
+      
+      // Poll for completion (max 5 minutes)
+      const maxAttempts = 300; // 5 minutes at 1 second intervals
+      let attempts = 0;
+      
+      const checkCompletion = async () => {
+        attempts++;
+        const taskState = agentsStore.getTaskState(taskId);
+        
+        if (!taskState) {
+          // Task not found, might have been cleared or not started properly
+          if (attempts < 10) {
+            // Retry a few times in case task is still initializing
+            setTimeout(checkCompletion, 1000);
+            return;
+          }
+          console.warn('[Agent] Task not found after multiple attempts');
+          return;
+        }
+        
+        if (taskState.status === 'completed') {
+          // Agent completed successfully - result already saved from HTTP response
+          try {
+            await api.createProjectInteraction(projectId, {
+              kind: 'assistant',
+              subkind: `agent.${agentType}.completed`,
+              content: `${agentType === 'data' ? 'Data Agent' : 'Entities Agent'} completed successfully.`,
+            });
+            await get().hydrateInteractions();
+            agentsStore.clearTask(taskId);
+          } catch {}
+        } else if (taskState.status === 'error') {
+          // Agent failed
+          try {
+            await api.createProjectInteraction(projectId, {
+              kind: 'assistant',
+              subkind: 'agent.error',
+              content: `${agentType === 'data' ? 'Data Agent' : 'Entities Agent'} failed: ${taskState.error || 'Unknown error'}`,
+            });
+            await get().hydrateInteractions();
+            agentsStore.clearTask(taskId);
+          } catch {}
+        } else if (taskState.status === 'running') {
+          // Still running, check again
+          if (attempts < maxAttempts) {
+            setTimeout(checkCompletion, 1000);
+          } else {
+            // Timeout
+            console.warn('[Agent] Task timeout after 5 minutes');
+            await api.createProjectInteraction(projectId, {
+              kind: 'assistant',
+              subkind: 'agent.error',
+              content: `${agentType === 'data' ? 'Data Agent' : 'Entities Agent'} timeout after 5 minutes`,
+            });
+            await get().hydrateInteractions();
+            agentsStore.clearTask(taskId);
+          }
+        }
+      };
+      
+      // Start checking after a short delay
+      setTimeout(checkCompletion, 1000);
+    }
     
     // Persist user interaction on server (only if not suppressed)
     if (!suppressUserEcho) {
@@ -677,7 +1137,16 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         if (meta?.subkind) payload.subkind = meta.subkind;
         if (meta?.replyTo) {
           const map = (get() as any).persistedByLocalId || {};
-          const serverReply = map[meta.replyTo] || map[String(meta.replyTo)];
+          const replyToValue = meta.replyTo;
+          // Try to find server ID in mapping (if replyTo is a local ID)
+          let serverReply = map[replyToValue] || map[String(replyToValue)];
+          // If not found in mapping, check if replyTo is already a server ID (exists in interactions)
+          if (!serverReply) {
+            const existsAsServerId = get().interactions.some((it) => it.id === replyToValue);
+            if (existsAsServerId) {
+              serverReply = replyToValue;
+            }
+          }
           if (serverReply) payload.replyTo = serverReply;
         }
         if (meta?.agentProfile) payload.agentProfile = meta.agentProfile;
@@ -706,12 +1175,134 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     try {
       // Build messages from local interactions (summary preferred, else content)
       const interactions = get().interactions;
-      const messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }> = interactions.map((it) => ({
-        role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
-        text: (it.summary && it.summary.trim()) ? it.summary : it.content,
-      }));
+      // Filter out evaluation messages, actions, and section markers - they shouldn't be in chat context
+      const chatInteractions = interactions.filter((it) => {
+        // Exclude eval.* system messages (bias, stance, user_request, review evaluations)
+        if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('eval.')) {
+          return false;
+        }
+        // Exclude action, section markers (these are UI markers, not chat content)
+        if (it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end') {
+          return false;
+        }
+        return true;
+      });
+      
+      // TODO: Implement automatic message compaction (autocompact) to intelligently summarize/truncate old messages
+      // when context window usage exceeds thresholds, preserving recent context and key information from older messages.
+      
+      // Limit context to 70% of model's maximum context window
+      const currentSettings = useGenAISettings.getState();
+      const modelAlias = mapProviderStrengthToModel(currentSettings.provider, currentSettings.strength);
+      const contextWindow = getModelContextWindow(modelAlias);
+      const maxContextTokens = contextWindow ? Math.floor(contextWindow * 0.7) : Infinity;
+      const maxPinnedTokens = contextWindow ? Math.floor(contextWindow * 0.9) : Infinity; // Pinned messages can use up to 90% of context
+      
+      // Separate pinned and regular interactions
+      const now = Date.now();
+      const twoDaysAgo = now - (2 * 24 * 60 * 60 * 1000); // 2 days in milliseconds
+      
+      const pinnedInteractions = chatInteractions.filter((it) => {
+        if (!it.metadata?.pinned) return false;
+        // Filter out pinned messages older than 2 days
+        const createdAt = it.createdAt ? new Date(it.createdAt).getTime() : 0;
+        return createdAt >= twoDaysAgo;
+      });
+      
+      const regularInteractions = chatInteractions.filter((it) => !it.metadata?.pinned);
+      
+      // Calculate tokens for each interaction and build messages array
+      const messagesWithTokens: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string; tokens: number }> = [];
+      let totalTokens = 0;
+      
+      // Process pinned interactions first (oldest to newest, but truncate oldest if needed)
+      // Sort pinned by creation date (oldest first) to truncate oldest ones if needed
+      const sortedPinned = [...pinnedInteractions].sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return aTime - bTime; // Oldest first
+      });
+      
+      let pinnedTokens = 0;
+      const pinnedMessages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string; tokens: number }> = [];
+      
+      for (const it of sortedPinned) {
+        const text = (it.summary && it.summary.trim()) ? it.summary : it.content;
+        const tokens = Math.ceil(text.length / 4); // Approximate: 1 token = 4 chars
+        
+        // If adding this pinned message would exceed 90% limit, truncate oldest pinned messages
+        if (pinnedTokens + tokens > maxPinnedTokens && pinnedMessages.length > 0) {
+          const remainingTokens = maxPinnedTokens - pinnedTokens;
+          if (remainingTokens > 100) { // Only add if we have meaningful space left
+            const maxChars = remainingTokens * 4;
+            const truncated = text.length > maxChars 
+              ? text.slice(0, maxChars - 50) + '\n... [truncated]'
+              : text;
+            pinnedMessages.push({
+              role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
+              text: truncated,
+              tokens: Math.ceil(truncated.length / 4),
+            });
+            pinnedTokens += Math.ceil(truncated.length / 4);
+          }
+          // Stop processing older pinned messages once we hit the limit
+          break;
+        }
+        
+        pinnedMessages.push({
+          role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
+          text: text,
+          tokens: tokens,
+        });
+        pinnedTokens += tokens;
+      }
+      
+      // Add pinned messages to the beginning of context
+      messagesWithTokens.push(...pinnedMessages);
+      totalTokens += pinnedTokens;
+      
+      // Process regular interactions from newest to oldest, keeping recent ones fully
+      for (let i = regularInteractions.length - 1; i >= 0; i--) {
+        const it = regularInteractions[i];
+        const text = (it.summary && it.summary.trim()) ? it.summary : it.content;
+        const tokens = Math.ceil(text.length / 4); // Approximate: 1 token = 4 chars
+        
+        // If adding this message would exceed remaining limit, truncate older messages
+        if (totalTokens + tokens > maxContextTokens && messagesWithTokens.length > pinnedMessages.length) {
+          // Truncate oldest messages to fit within limit
+          const remainingTokens = maxContextTokens - totalTokens;
+          if (remainingTokens > 100) { // Only add if we have meaningful space left
+            // Truncate this message to fit remaining space
+            const maxChars = remainingTokens * 4;
+            const truncated = text.length > maxChars 
+              ? text.slice(0, maxChars - 50) + '\n... [truncated]'
+              : text;
+            messagesWithTokens.push({
+              role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
+              text: truncated,
+              tokens: Math.ceil(truncated.length / 4),
+            });
+            totalTokens += Math.ceil(truncated.length / 4);
+          }
+          // Stop processing older messages once we hit the limit
+          break;
+        }
+        
+        messagesWithTokens.push({
+          role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
+          text: text,
+          tokens: tokens,
+        });
+        totalTokens += tokens;
+      }
+      
+      // Convert to final messages format (drop tokens field)
+      const messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }> = messagesWithTokens.map(({ tokens, ...msg }) => msg);
+      
       // Append current user prompt as the latest message
+      const promptTokens = Math.ceil(prompt.length / 4);
       messages.push({ role: 'user', text: prompt });
+      totalTokens += promptTokens;
       try {
         const modelOverride = options?.modelOverride;
         const provider = (agentMeta as any)?.agentProfile?.provider;
@@ -722,11 +1313,18 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           provider,
           model,
           promptChars: (prompt || '').length,
+          promptTokens,
+          contextMessagesCount: messages.length - 1, // Exclude the prompt itself
+          contextTokens: totalTokens - promptTokens,
+          totalTokens,
+          contextWindow,
+          maxContextTokens,
           hasTools: Array.isArray(tools) && tools.length > 0,
           groundingEnabled: !!options?.groundingEnabled,
           temperature: options?.temperature,
           maxOutputTokens: options?.maxOutputTokens,
           lang: options?.__lang,
+          replyTo: (agentMeta as any)?.replyTo,
         });
       } catch {}
       // Generate per-stream UUID for FE-side filtering
@@ -762,9 +1360,20 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     set((s) => {
       const msgs = [...s.messages];
       
-      // Find last assistant message
-      let found = false;
+      // Find the last assistant message that was created after the last user message
+      // This ensures we update the correct message during streaming, not an old one
+      let lastUserIndex = -1;
       for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'user') {
+          lastUserIndex = i;
+          break;
+        }
+      }
+      
+      // Find assistant message after the last user message (or the last assistant if no user found)
+      let found = false;
+      const searchStart = lastUserIndex >= 0 ? lastUserIndex + 1 : 0;
+      for (let i = msgs.length - 1; i >= searchStart; i--) {
         if (msgs[i].role === 'assistant') {
           msgs[i] = { ...msgs[i], content: msgs[i].content + text };
           found = true;
@@ -772,7 +1381,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         }
       }
       
-      // If no assistant message exists (e.g., after hot-reload), create one
+      // If no assistant message found after last user (e.g., after hot-reload), create one
       if (!found) {
         const id = Date.now().toString() + '-a';
         msgs.push({ id, role: 'assistant', content: text });
@@ -798,21 +1407,42 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         // Parse hidden @sx with minimal validation and sanitize content centrally
         const { sanitized, instructions: sx } = parseSxInstructionsFromContent(lastAssistant.content);
 
-        // Try to parse graph-format response (chartTitle, table, sources)
+        // Try to parse graph-format response (chartTitle, chartType, table, sources)
         let parsedGraph: any = null;
-        let detectedGraphData: { chartTitle: string; table: any[][]; sources: string[] } | undefined = undefined;
+        let detectedGraphData: { chartTitle: string; chartType?: string; table: any[][]; sources: string[] } | undefined = undefined;
+        const wasGraphMode = (opts?.systemInstruction || '').includes('GRAPH MODE');
         try {
           let content = (lastAssistant.content || '').toString().trim();
-          // Strip code fences
+          // Strip code fences (both markdown and plain)
           content = content.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim();
-          // Try direct JSON parse
-          if ((content.startsWith('{') || content.startsWith('['))) {
-            parsedGraph = JSON.parse(content);
-          } else {
-            // Try to find JSON within content
-            const match = content.match(/\{[\s\S]*\}/);
-            if (match && match[0]) parsedGraph = JSON.parse(match[0]);
+          content = content.replace(/^```\n([\s\S]*?)\n```$/m, '$1').trim();
+          
+          // In graph mode, prioritize finding JSON even if there's text before/after
+          if (wasGraphMode) {
+            // Try to find the first valid JSON object (look for { ... } structure)
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            if (jsonMatch && jsonMatch[0]) {
+              try {
+                parsedGraph = JSON.parse(jsonMatch[0]);
+              } catch {}
+            }
           }
+          
+          // If no JSON found yet, try direct parse
+          if (!parsedGraph) {
+            if ((content.startsWith('{') || content.startsWith('['))) {
+              parsedGraph = JSON.parse(content);
+            } else {
+              // Try to find JSON within content (non-greedy, find first complete object)
+              const match = content.match(/\{[\s\S]*?\}/);
+              if (match && match[0]) {
+                try {
+                  parsedGraph = JSON.parse(match[0]);
+                } catch {}
+              }
+            }
+          }
+          
           // Validate graph structure
           if (
             parsedGraph &&
@@ -821,18 +1451,32 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             Array.isArray(parsedGraph.table) &&
             Array.isArray(parsedGraph.sources)
           ) {
+            // Validate chartType is from allowed dictionary, fallback to 'line' if invalid/missing
+            const allowedTypes = ['line', 'bar', 'area', 'stackedBar', 'stackedArea', 'composed'];
+            const chartType = typeof parsedGraph.chartType === 'string' && allowedTypes.includes(parsedGraph.chartType)
+              ? parsedGraph.chartType
+              : 'line';
             detectedGraphData = {
               chartTitle: parsedGraph.chartTitle,
+              chartType: chartType,
               table: parsedGraph.table,
               sources: parsedGraph.sources,
             };
-            console.log('[Graph] Detected valid graph response', { chartTitle: detectedGraphData.chartTitle, tableRows: detectedGraphData.table.length, sources: detectedGraphData.sources.length });
+            console.log('[Graph] Detected valid graph response', { chartTitle: detectedGraphData.chartTitle, chartType: detectedGraphData.chartType, tableRows: detectedGraphData.table.length, sources: detectedGraphData.sources.length });
+          } else if (wasGraphMode && !detectedGraphData) {
+            // Graph mode was requested but response is not valid JSON graph format
+            console.warn('[Graph] Graph mode was requested but model returned non-JSON response. Content preview:', content.substring(0, 300));
+            console.warn('[Graph] Full content length:', content.length, 'Starts with:', content.substring(0, 50));
           }
         } catch (e) {
           // Not a graph response, continue with normal flow
+          if (wasGraphMode) {
+            console.warn('[Graph] Graph mode was requested but JSON parsing failed:', e);
+            console.warn('[Graph] Content that failed to parse:', (lastAssistant.content || '').toString().substring(0, 300));
+          }
         }
 
-        const base = { id, projectId, kind: 'assistant' as InteractionKind, subkind: detectedGraphData ? 'graph' : (s.pendingAssistantMeta as any)?.subkind, content: lastAssistant.content, contentSanitized: sanitized, sxInstructions: sx, graphData: detectedGraphData, createdAt, author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined, agentProfile: meta?.agentProfile, systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined, language: opts?.__lang, generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled }, originalMessageId: lastAssistant.id, searchQueries: (s.searchQueries || []).filter(Boolean), sources: (s.sources || []).filter(Boolean) } as LocalInteraction;
+        const base = { id, projectId, kind: 'assistant' as InteractionKind, subkind: detectedGraphData ? 'graph' : (s.pendingAssistantMeta as any)?.subkind, content: lastAssistant.content, contentSanitized: sanitized, sxInstructions: sx, graphData: detectedGraphData, createdAt, author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined, agentProfile: meta?.agentProfile, systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined, language: opts?.__lang, generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled }, originalMessageId: lastAssistant.id, searchQueries: (s.searchQueries || []).filter(Boolean), sources: (s.sources || []).filter(Boolean), usage: s.usage } as LocalInteraction;
         const replyTo = (s.pendingAssistantMeta as any)?.replyTo as string | undefined;
         if (replyTo) {
           (base as any).replyTo = replyTo;
@@ -848,16 +1492,32 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         const nextMetrics: SxMonitorMetric[] = [...currentArtifacts.metrics];
         const seenEntity = new Set(nextEntities.map((e) => `entity:${(e as any).kind || 'other'}:${String((e as any).name || (e as any).id || '').toLowerCase()}`));
         const seenMetric = new Set(nextMetrics.map((m) => `metric:${String((m as any).id || (m as any).metricName || (m as any).name || '').toLowerCase()}`));
+        const newEntities: SxEntityMark[] = [];
+        const newMetrics: SxMonitorMetric[] = [];
         for (const instr of sx) {
           if (instr.type === 'entity_mark') {
             const e = instr as SxEntityMark;
             const key = `entity:${(e as any).kind || 'other'}:${String((e as any).name || (e as any).id || '').toLowerCase()}`;
-            if (!seenEntity.has(key)) { seenEntity.add(key); nextEntities.push(e); }
+            if (!seenEntity.has(key)) { 
+              seenEntity.add(key); 
+              nextEntities.push(e);
+              newEntities.push(e);
+            }
           } else if (instr.type === 'monitor_metric') {
             const m = instr as SxMonitorMetric;
             const key = `metric:${String((m as any).id || (m as any).metricName || (m as any).name || '').toLowerCase()}`;
-            if (!seenMetric.has(key)) { seenMetric.add(key); nextMetrics.push(m); }
+            if (!seenMetric.has(key)) { 
+              seenMetric.add(key); 
+              nextMetrics.push(m);
+              newMetrics.push(m);
+            }
           }
+        }
+        // Сохраняем новые артефакты на сервер
+        if ((newEntities.length > 0 || newMetrics.length > 0) && projectId && projectId !== 'local-unfold') {
+          persistArtifacts(projectId, newEntities, newMetrics).catch((err) => {
+            console.error('[GenAIChat] Failed to persist artifacts', err);
+          });
         }
         const nextInteractions = [...s.interactions, base];
         (async () => {
@@ -895,6 +1555,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               const m = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
               m[id] = res.id;
               m[lastAssistant.id] = res.id;
+              
               return { interactions: items, persistedByLocalId: m } as any;
             });
           } catch (e) {
@@ -964,6 +1625,99 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             console.warn('[Meta] analysis failed', e);
           }
         })();
+
+        // Generate frame expansions for assistant responses (only after 2nd LLM response, not for agents)
+        (async () => {
+          try {
+            if (!projectId || projectId === 'local-unfold') return;
+            // Skip if this is an agent reply (has displayName)
+            if (meta?.displayName) return;
+            // Count assistant interactions (non-agent, LLM responses) to ensure we're at least on the 2nd response
+            // Count includes this one we're about to add, so we check if we'll have >= 2 after adding
+            const currentAssistants = get().interactions.filter((it) => 
+              it.kind === 'assistant' && !(it as any).author?.displayName
+            );
+            // After adding this interaction, we'll have currentAssistants.length + 1
+            if (currentAssistants.length + 1 < 2) {
+              console.log('[FrameExpansions] Skipping - need at least 2 LLM responses');
+              return;
+            }
+            // Generate expansions for the last assistant message
+            if (lastAssistant && lastAssistant.content && lastAssistant.content.trim()) {
+              // Check if expansion interaction already exists
+              const state = get();
+              const map = (state as any).persistedByLocalId || {};
+              const serverId = map[lastAssistant.id] || lastAssistant.id;
+              const reverseMap: Record<string, string[]> = {};
+              Object.entries(map).forEach(([local, server]) => {
+                if (!reverseMap[server as string]) reverseMap[server as string] = [];
+                reverseMap[server as string].push(local);
+              });
+              const localIds = reverseMap[lastAssistant.id] || [];
+              
+              const existingExpansion = state.interactions.find((it) => 
+                it.subkind === 'eval.frame_expansions' && 
+                (it.replyTo === lastAssistant.id || it.replyTo === serverId || localIds.includes(it.replyTo || '') ||
+                 (it.relations && it.relations.some((r) => r.targetId === lastAssistant.id || r.targetId === serverId)))
+              );
+              
+              if (existingExpansion) {
+                console.log('[FrameExpansions] Already exists, skipping regeneration', { messageId: lastAssistant.id, expansionId: existingExpansion.id });
+                return;
+              }
+              
+              // Find the last 2 user messages that prompted this response
+              const userMessages: string[] = [];
+              const replyTo = (meta as any)?.replyTo as string | undefined;
+              const allItems = [...get().messages, ...get().interactions];
+              
+              if (replyTo) {
+                // Start from replyTo and collect up to 2 user messages (most recent first)
+                const replyToIdx = allItems.findIndex((item: any) => 
+                  item.id === replyTo || (item as any).originalMessageId === replyTo
+                );
+                if (replyToIdx >= 0) {
+                  // Collect user messages backwards from replyTo (up to 2 most recent)
+                  for (let i = replyToIdx; i >= 0 && userMessages.length < 2; i--) {
+                    const item = allItems[i];
+                    const isUser = ('kind' in item && item.kind === 'user') || ('role' in item && item.role === 'user');
+                    if (isUser && (item.content || (item as any).contentSanitized)) {
+                      const content = (item.content || (item as any).contentSanitized || '') as string;
+                      if (content.trim()) {
+                        userMessages.unshift(content); // Add to beginning to maintain chronological order
+                      }
+                    }
+                  }
+                }
+              } else {
+                // If no explicit replyTo, find the last 2 user messages before this assistant message
+                const assistantIdx = allItems.findIndex((item: any) => {
+                  const isAssistant = ('kind' in item && item.kind === 'assistant') || ('role' in item && item.role === 'assistant');
+                  return (item.id === lastAssistant.id || (item as any).originalMessageId === lastAssistant.id) && isAssistant;
+                });
+                if (assistantIdx > 0) {
+                  // Collect backwards from assistant message (up to 2 most recent user messages)
+                  for (let i = assistantIdx - 1; i >= 0 && userMessages.length < 2; i--) {
+                    const item = allItems[i];
+                    const isUser = ('kind' in item && item.kind === 'user') || ('role' in item && item.role === 'user');
+                    if (isUser && (item.content || (item as any).contentSanitized)) {
+                      const content = (item.content || (item as any).contentSanitized || '') as string;
+                      if (content.trim()) {
+                        userMessages.unshift(content); // Add to beginning to maintain chronological order
+                      }
+                    }
+                  }
+                }
+              }
+              
+              const { generateFrameExpansions } = await import('../lib/frameExpansions');
+              await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+            }
+          } catch (e) {
+            console.warn('[FrameExpansions] generation failed', e);
+          }
+        })();
+
         return { streaming: false, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: nextInteractions, artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
       }
       // If we are here, assistant produced no chunks and content is empty.
@@ -1030,18 +1784,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   onToolCall: (calls) => set({ toolCalls: calls || [] }),
   onToolResult: (calls) => set((s) => ({ toolResults: [...s.toolResults, ...(calls || [])] })),
   onDoneMeta: (meta) => set((s) => {
-    // Merge sources/queries non-destructively and fold into attributions
-    const prevQueries = Array.isArray(s.searchQueries) ? s.searchQueries.filter(Boolean) : [];
-    const prevSources = Array.isArray(s.sources) ? s.sources.filter(Boolean) : [];
+    // Replace (not merge) queries/sources for current stream to avoid accumulation across messages
     const incomingQueries = Array.isArray(meta.searchQueries) ? meta.searchQueries.filter(Boolean) : [];
     const incomingSources = Array.isArray(meta.sources) ? meta.sources.filter(Boolean) : [];
-    const nextQueries = incomingQueries.length > 0 ? Array.from(new Set([...(prevQueries || []), ...incomingQueries])) : prevQueries;
-    const nextSources = incomingSources.length > 0 ? Array.from(new Set([...(prevSources || []), ...incomingSources])) : prevSources;
-
-    // Merge attributions: keep existing + incoming attributions + nextSources as URLs
+    
+    // Merge attributions: keep existing + incoming attributions + sources as URLs
     const allAttributions = [...(s.attributions || []), ...((meta.attributions || []) as any[])];
     const seen = new Set(allAttributions.map((a) => a.url).filter(Boolean));
-    for (const url of nextSources) {
+    for (const url of incomingSources) {
       if (url && !seen.has(url)) {
         allAttributions.push({ url });
         seen.add(url);
@@ -1051,41 +1801,15 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     return { 
       usage: meta.usage, 
       attributions: allAttributions, 
-      searchQueries: nextQueries, 
-      sources: nextSources 
+      searchQueries: incomingQueries, 
+      sources: incomingSources 
     } as any;
   }),
   setEvaluation: (messageId, ev) => set((s) => {
     const next = { ...s.evaluations, [messageId]: ev };
-    // Always anchor eval to messageId locally for stable UI
-    const replyToId = messageId;
-    const exists = s.interactions.find((it) => it.subkind === 'eval.bias' && it.replyTo === replyToId);
-    const interactions = exists ? s.interactions : [
-      ...s.interactions,
-      {
-        id: Date.now().toString() + '-eval-bias-auto',
-        projectId: s.projectId,
-        kind: 'system',
-        subkind: 'eval.bias',
-        content: JSON.stringify(ev),
-        contentSanitized: JSON.stringify(ev),
-        replyTo: replyToId,
-        relations: [{ type: 'evaluates', targetId: replyToId }],
-        createdAt: new Date().toISOString(),
-      } as any,
-    ];
-    // Best-effort persist eval interaction on server
-    try {
-      const map = (s as any).persistedByLocalId || {};
-      const serverReplyTo = map[replyToId];
-      const payload: any = { kind: 'system', subkind: 'eval.bias', content: JSON.stringify(ev) };
-      if (serverReplyTo) {
-        payload.replyTo = serverReplyTo;
-        payload.relations = [{ type: 'evaluates', targetId: serverReplyTo }];
-      }
-      api.createProjectInteraction(s.projectId, payload).catch(() => {});
-    } catch {}
-    return { evaluations: next, interactions } as any;
+    // Only update evaluation map; creation/persistence of eval.bias interactions
+    // is handled by the caller (e.g., unified evaluateBias in DiscoveryPage).
+    return { evaluations: next } as any;
   }),
   setPreStanceResult: (messageId, latencyMs, extract) => set((s) => {
     const nextLatency = { ...(s.preStanceLatency || {}) } as Record<string, number>;

@@ -1,0 +1,143 @@
+package agents
+
+import (
+	"context"
+	"log"
+	"sync"
+
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+)
+
+// Registry управляет регистрацией и выполнением агентов
+type Registry struct {
+	agents     map[string]Agent
+	mu         sync.RWMutex
+	executor   *ai.AITaskExecutor
+	genaiClient *gen_combined.Client
+	publisher  *realtime.Publisher
+}
+
+// NewRegistry создает новый реестр агентов
+func NewRegistry(executor *ai.AITaskExecutor, genaiClient *gen_combined.Client, publisher *realtime.Publisher, logger *log.Logger) *Registry {
+	r := &Registry{
+		agents:      make(map[string]Agent),
+		executor:    executor,
+		genaiClient: genaiClient,
+		publisher:   publisher,
+	}
+	
+	// Регистрируем внутренние агенты (usage metrics будут добавлены позже через WithUsageMetrics)
+	r.Register(NewEntitiesAgent(genaiClient, logger))
+	r.Register(NewDataAgent(genaiClient, logger))
+	
+	return r
+}
+
+// WithUsageMetrics sets usage metrics repository and model manager for all registered agents
+func (r *Registry) WithUsageMetrics(repo interface {
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+}, modelMgr interface {
+	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
+}) *Registry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	// Update all registered agents with usage metrics
+	for id, agent := range r.agents {
+		if entitiesAgent, ok := agent.(*EntitiesAgent); ok {
+			entitiesAgent.WithUsageMetrics(repo, modelMgr)
+		} else if dataAgent, ok := agent.(*DataAgent); ok {
+			dataAgent.WithUsageMetrics(repo, modelMgr)
+		}
+		_ = id // avoid unused variable
+	}
+	
+	return r
+}
+
+// Register регистрирует агента
+func (r *Registry) Register(agent Agent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.agents[agent.ID()] = agent
+}
+
+// Get возвращает агента по ID
+func (r *Registry) Get(id string) (Agent, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	agent, ok := r.agents[id]
+	return agent, ok
+}
+
+// List возвращает список всех зарегистрированных агентов
+func (r *Registry) List() []AgentInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	var list []AgentInfo
+	for _, agent := range r.agents {
+		list = append(list, AgentInfo{
+			ID:          agent.ID(),
+			Name:        agent.Name(),
+			DisplayName: agent.DisplayName(),
+			Description: agent.Description(),
+			Skills:      agent.Skills(),
+			Type:        agent.Type(),
+			IsExternal:  agent.IsExternal(),
+		})
+	}
+	return list
+}
+
+// ExecuteAgentWithStream выполняет агента со стримингом обновлений через WebSocket
+func (r *Registry) ExecuteAgentWithStream(
+	ctx context.Context,
+	agentID string,
+	taskJSON []byte,
+	tenantID string,
+	projectID string,
+) ([]byte, error) {
+	// Получаем агента
+	agent, ok := r.Get(agentID)
+	if !ok {
+		return nil, ErrAgentNotFound
+	}
+	
+	// Callback для отправки обновлений через WebSocket
+	onUpdate := func(update Update) {
+		if r.publisher != nil {
+			_ = r.publisher.PublishJSON(ctx, realtime.EventAgentUpdate, tenantID, map[string]interface{}{
+				"taskId":    update.TaskID,
+				"agentId":   update.AgentID,
+				"agentName": update.AgentName,
+				"projectId": projectID,
+				"stage":     update.Stage,
+				"progress":  update.Progress,
+				"message":   update.Message,
+				"data":      update.Data,
+				"timestamp": update.Timestamp.UnixMilli(),
+				"error":     update.Error,
+			})
+		}
+	}
+	
+	// Выполняем агента со стримингом
+	return agent.ExecuteWithStream(ctx, taskJSON, onUpdate)
+}
+
+// Errors
+var (
+	ErrAgentNotFound = &AgentError{Message: "agent not found"}
+)
+
+type AgentError struct {
+	Message string
+}
+
+func (e *AgentError) Error() string {
+	return e.Message
+}
+

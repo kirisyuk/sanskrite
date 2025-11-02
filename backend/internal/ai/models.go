@@ -204,10 +204,13 @@ type AITask struct {
 	// TenantID мультиарендность для телеметрии
 	TenantID string `json:"tenantId,omitempty"`
 
+	// UserID идентификатор пользователя для телеметрии и usage tracking
+	UserID string `json:"userId,omitempty"`
+
 	// Environment окружение для телеметрии
 	Environment string `json:"environment,omitempty"`
 
-	// Project проект для телеметрии
+	// Project проект для телеметрии и usage tracking
 	Project string `json:"project,omitempty"`
 
 	// SessionID идентификатор сессии для телеметрии

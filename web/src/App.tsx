@@ -4,10 +4,12 @@ import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from
 import { ThemeProvider } from './components/ThemeProvider';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import AuthGuard from './components/AuthGuard';
+import { AuthLoading } from './components/AuthLoading';
 import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
 import { ServerUnavailableBanner } from './components/ServerUnavailableBanner';
 import DiscoveryPage from './pages/DiscoveryPage';
+import ShareViewPage from './pages/ShareViewPage';
 import Homepage from './pages/homepage';
 import TermsOfUsage from './pages/TermsOfUsage';
 import PrivacyNotice from './pages/PrivacyNotice';
@@ -19,7 +21,7 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState<'terms' | 'privacy' | null>(null);
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
 
   // Check if we're on a legal page route
   const isLegalPage = location.pathname === '/terms' || location.pathname === '/privacy';
@@ -61,6 +63,11 @@ function AppContent() {
     }
   };
 
+  // Show loading state while checking authentication
+  if (loading) {
+    return <AuthLoading />;
+  }
+
   return (
     <div className="layout-main">
       <div className="main-content">
@@ -68,6 +75,7 @@ function AppContent() {
         <ServerUnavailableBanner />
         <div className="content-area">
           <Routes>
+            <Route path="/shared/:token" element={<ShareViewPage />} />
             <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
             <Route path="/terms" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
             <Route path="/privacy" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />

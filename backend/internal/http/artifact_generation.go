@@ -107,6 +107,7 @@ func (h *ArtifactGenerationHandler) GenerateSection(w http.ResponseWriter, r *ht
 		SectionID:      sectionID,
 		TenantID:       auth.TenantID,
 		ProjectID:      req.ProjectID,
+		UserID:         auth.UID,
 		PromptOverride: req.PromptOverride,
 		ModelOverride:  req.ModelOverride,
 	})
@@ -157,6 +158,7 @@ func (h *ArtifactGenerationHandler) RegenerateSection(w http.ResponseWriter, r *
 		SectionID:      sectionID,
 		TenantID:       auth.TenantID,
 		ProjectID:      req.ProjectID,
+		UserID:         auth.UID,
 		PromptOverride: &req.NewPrompt,
 		ModelOverride:  req.Model,
 	})

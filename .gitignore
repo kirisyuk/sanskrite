@@ -63,3 +63,4 @@ docs/**/.DS_Store
 
 # Local secrets docs
 TEST_KEYS.md
+paypal-credentials.md

@@ -1,8 +1,6 @@
 module github.com/igorkirisyuk/sanskrite
 
-go 1.24.1
-
-toolchain go1.24.5
+go 1.25.1
 
 require (
 	baliance.com/gooxml v1.0.1
@@ -10,13 +8,15 @@ require (
 	cloud.google.com/go/pubsub v1.44.0
 	cloud.google.com/go/storage v1.43.0
 	firebase.google.com/go/v4 v4.14.0
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.1
 	github.com/invopop/jsonschema v0.12.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
-	github.com/google/uuid v1.6.0
+	github.com/plutov/paypal/v4 v4.17.0
 	golang.org/x/net v0.46.0
 	golang.org/x/sync v0.17.0
 	google.golang.org/api v0.197.0
+	google.golang.org/grpc v1.66.2
 )
 
 require (
@@ -55,7 +55,6 @@ require (
 	google.golang.org/genproto v0.0.0-20240903143218-8af14fe29dc1 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240903143218-8af14fe29dc1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 // indirect
-	google.golang.org/grpc v1.66.2 // indirect
-	google.golang.org/protobuf v1.34.2 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

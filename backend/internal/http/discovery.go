@@ -841,6 +841,15 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 			Rationale *string  `json:"rationale,omitempty" firestore:"rationale,omitempty"`
 			Triggers  []string `json:"triggers,omitempty" firestore:"triggers,omitempty"`
 		} `json:"highRisk,omitempty"`
+		DiscussionFacts *struct {
+			Dependencies      *string `json:"dependencies,omitempty" firestore:"dependencies,omitempty"`
+			Prerequisites     *string `json:"prerequisites,omitempty" firestore:"prerequisites,omitempty"`
+			Participants      *string `json:"participants,omitempty" firestore:"participants,omitempty"`
+			ParticipantRoles  *string `json:"participantRoles,omitempty" firestore:"participantRoles,omitempty"`
+			AvailableResources *string `json:"availableResources,omitempty" firestore:"availableResources,omitempty"`
+			PreviousAttempts  *string `json:"previousAttempts,omitempty" firestore:"previousAttempts,omitempty"`
+			ResultFormat      *string `json:"resultFormat,omitempty" firestore:"resultFormat,omitempty"`
+		} `json:"discussionFacts,omitempty"`
 		OriginalMessageID *string  `json:"originalMessageId,omitempty"`
 		CoreDocIDs        []string `json:"coreDocIds,omitempty"`
 		SearchQueries     []string `json:"searchQueries,omitempty"`
@@ -982,6 +991,7 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		SystemInstructionApplied: body.SystemInstructionApplied,
 		GenerationParams:         body.GenerationParams,
 		HighRisk:                 body.HighRisk,
+		DiscussionFacts:          body.DiscussionFacts,
 		OriginalMessageID:        body.OriginalMessageID,
 		CoreDocIDs:               body.CoreDocIDs,
 		SearchQueries:            body.SearchQueries,

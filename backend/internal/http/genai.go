@@ -16,14 +16,18 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/google/uuid"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 type GenAIHandler struct {
-	client    *gen_combined.Client
-	publisher Publisher
+	client          *gen_combined.Client
+	publisher       Publisher
+	usageMetricsRepo *repo.UsageMetricsRepository
+	modelManager    *ai.AIModelManager
 }
 
 // Publisher is a small interface for realtime publisher used here
@@ -47,6 +51,18 @@ func NewGenAIHandler() *GenAIHandler {
 	oaiKey := os.Getenv("OPENAI_API_KEY")
 	comb := gen_combined.NewClient(gem, oaiKey)
 	return &GenAIHandler{client: comb}
+}
+
+// WithUsageMetrics wires usage metrics repository
+func (h *GenAIHandler) WithUsageMetrics(repo *repo.UsageMetricsRepository) *GenAIHandler {
+	h.usageMetricsRepo = repo
+	return h
+}
+
+// WithModelManager wires AI model manager for cost calculation
+func (h *GenAIHandler) WithModelManager(mm *ai.AIModelManager) *GenAIHandler {
+	h.modelManager = mm
+	return h
 }
 
 // GenAIGenerate: unified generation endpoint
@@ -97,6 +113,15 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 					"strictJSONEnabled":  req.StrictJSONEnabled,
 				},
 			})
+			
+			// Save usage metrics asynchronously with a new context
+			if h.usageMetricsRepo != nil && h.modelManager != nil {
+				go func() {
+					metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					_ = h.saveUsageMetric(metricCtx, auth, req, *resp, nil, nil)
+				}()
+			}
 		}
 	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
@@ -135,6 +160,20 @@ func (h *GenAIHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		_ = WriteError(w, status, code, msg, details)
 		return
 	}
+	// Save usage metrics
+	go func() {
+		if auth := GetAuthInfo(r.Context()); auth != nil && h.usageMetricsRepo != nil && h.modelManager != nil {
+			genaiResp := gen_combined.GenAIResponse(*resp)
+			genaiReq := gen_combined.GenAIRequest{Model: req.Options.ModelOverride}
+			var projID *string
+			if req.ProjectID != "" {
+				projID = &req.ProjectID
+			}
+			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+		}
+	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -159,6 +198,20 @@ func (h *GenAIHandler) CompleteWithTools(w http.ResponseWriter, r *http.Request)
 		_ = WriteError(w, status, code, msg, details)
 		return
 	}
+	// Save usage metrics
+	go func() {
+		if auth := GetAuthInfo(r.Context()); auth != nil && h.usageMetricsRepo != nil && h.modelManager != nil {
+			genaiResp := gen_combined.GenAIResponse(*resp)
+			genaiReq := gen_combined.GenAIRequest{Model: req.Options.ModelOverride}
+			var projID *string
+			if req.ProjectID != "" {
+				projID = &req.ProjectID
+			}
+			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+		}
+	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -181,6 +234,20 @@ func (h *GenAIHandler) CompleteJSON(w http.ResponseWriter, r *http.Request) {
 		_ = WriteError(w, status, code, msg, details)
 		return
 	}
+	// Save usage metrics
+	go func() {
+		if auth := GetAuthInfo(r.Context()); auth != nil && h.usageMetricsRepo != nil && h.modelManager != nil {
+			genaiResp := gen_combined.GenAIResponse(*resp)
+			genaiReq := gen_combined.GenAIRequest{Model: req.Options.ModelOverride}
+			var projID *string
+			if req.ProjectID != "" {
+				projID = &req.ProjectID
+			}
+			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+		}
+	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -203,6 +270,20 @@ func (h *GenAIHandler) CompleteJSONStrict(w http.ResponseWriter, r *http.Request
 		_ = WriteError(w, status, code, msg, details)
 		return
 	}
+	// Save usage metrics
+	go func() {
+		if auth := GetAuthInfo(r.Context()); auth != nil && h.usageMetricsRepo != nil && h.modelManager != nil {
+			genaiResp := gen_combined.GenAIResponse(*resp)
+			genaiReq := gen_combined.GenAIRequest{Model: req.Options.ModelOverride}
+			var projID *string
+			if req.ProjectID != "" {
+				projID = &req.ProjectID
+			}
+			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+		}
+	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -225,6 +306,20 @@ func (h *GenAIHandler) AdhocJSON(w http.ResponseWriter, r *http.Request) {
 		_ = WriteError(w, http.StatusBadGateway, "GENAI_ERROR", err.Error(), nil)
 		return
 	}
+	// Save usage metrics
+	go func() {
+		if auth := GetAuthInfo(r.Context()); auth != nil && h.usageMetricsRepo != nil && h.modelManager != nil {
+			genaiResp := gen_combined.GenAIResponse(*resp)
+			genaiReq := gen_combined.GenAIRequest{Model: req.Options.ModelOverride}
+			var projID *string
+			if req.ProjectID != "" {
+				projID = &req.ProjectID
+			}
+			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+		}
+	}()
 	var parsed interface{}
 	valid := true
 	if err := json.Unmarshal([]byte(resp.Content), &parsed); err != nil {
@@ -372,9 +467,10 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 			// Diagnostics: log grounded counts for visibility
 			log.Printf("genai.stream: grounded counts queries=%d sources=%d", len(e.SearchQueries), len(e.Sources))
-			if e.Usage.TotalTokens > 0 {
-				payload["usage"] = e.Usage
-			}
+			// Always include usage, even if zero (for tracking purposes)
+			// Log usage for debugging (especially for counterpoint agents)
+			log.Printf("genai.stream: usage model=%s promptTokens=%d outputTokens=%d totalTokens=%d", e.Model, e.Usage.PromptTokens, e.Usage.OutputTokens, e.Usage.TotalTokens)
+			payload["usage"] = e.Usage
 			if len(e.Attributions) > 0 {
 				payload["attributions"] = e.Attributions
 			}
@@ -422,6 +518,34 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 						"webSearchEnabled": req.Options.GroundingEnabled,
 					},
 				})
+				
+				// Save usage metrics asynchronously with a new context
+				// Always save metrics, even if usage is zero (for tracking purposes)
+				if h.usageMetricsRepo != nil && h.modelManager != nil {
+					// Convert StreamEvent Usage to GenerateResponse format
+					genaiResp := gen_combined.GenAIResponse(gen_gemini.GenerateResponse{
+						Model: e.Model,
+						Usage: e.Usage,
+					})
+					genaiReq := gen_combined.GenAIRequest{
+						Model: req.Options.ModelOverride,
+					}
+					var projID *string
+					if projectID != "" {
+						projID = &projectID
+					}
+					go func() {
+						metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+						if err := h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil); err != nil {
+							log.Printf("[GenAI Stream] Failed to save usage metric: %v (model=%s, promptTokens=%d, outputTokens=%d)", err, e.Model, e.Usage.PromptTokens, e.Usage.OutputTokens)
+						} else {
+							log.Printf("[GenAI Stream] Saved usage metric (model=%s, promptTokens=%d, outputTokens=%d, totalTokens=%d)", e.Model, e.Usage.PromptTokens, e.Usage.OutputTokens, e.Usage.TotalTokens)
+						}
+					}()
+				} else {
+					log.Printf("[GenAI Stream] Usage metrics not saved: repo=%v manager=%v", h.usageMetricsRepo != nil, h.modelManager != nil)
+				}
 			}()
 			return h.publisher.PublishJSON(ctx, "genai.stream.done", auth.TenantID, payload)
 		case "start":
@@ -470,6 +594,206 @@ func parseUpstreamError(err error) (int, string, string, interface{}) {
 		return status, code, s, details
 	}
 	return http.StatusBadGateway, "GENAI_ERROR", s, map[string]any{"raw": s}
+}
+
+// saveUsageMetric saves a usage metric record
+func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req gen_combined.GenAIRequest, resp gen_combined.GenAIResponse, projectID *string, interactionID *string) error {
+	if h.usageMetricsRepo == nil || h.modelManager == nil {
+		return nil
+	}
+	
+	// Determine provider from model name
+	provider := h.determineProvider(resp.Model)
+	
+	// Calculate cost using modelManager (which handles tiered pricing for Gemini)
+	cost, err := h.modelManager.CalculateProcessingCost(resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens)
+	if err != nil {
+		// If model not found in manager, fallback to simple calculation
+		log.Printf("[saveUsageMetric] Model %s not found in modelManager, using fallback pricing", resp.Model)
+		cost = h.calculateFallbackCost(provider, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens)
+	}
+	
+	// Determine model alias if available
+	modelAlias := &req.Model
+	if req.Model == "" {
+		modelAlias = nil
+	}
+	
+	metric := &repo.UsageMetric{
+		TenantID:      auth.TenantID,
+		UserID:        auth.UID,
+		ProjectID:     projectID,
+		InteractionID: interactionID,
+		Provider:      provider,
+		Model:         resp.Model,
+		ModelAlias:    modelAlias,
+		InputTokens:   resp.Usage.PromptTokens,
+		OutputTokens:  resp.Usage.OutputTokens,
+		TotalTokens:   resp.Usage.TotalTokens,
+		CostUSD:       cost,
+		TaskType:      nil, // Can be set from context if needed
+		Kind:          "included", // Default to included, can be changed based on plan
+	}
+	
+	_, err = h.usageMetricsRepo.Create(ctx, metric)
+	return err
+}
+
+// calculateFallbackCost calculates cost when model is not in modelManager
+// Uses approximate pricing based on provider
+func (h *GenAIHandler) calculateFallbackCost(provider, modelName string, inputTokens, outputTokens int) float64 {
+	modelLower := strings.ToLower(modelName)
+	
+	switch provider {
+	case "gemini":
+		// Gemini tiered pricing: first 128K at one rate, after at 50% discount
+		// Prices match model_manager.go (max prices for first tier)
+		const threshold = 128000
+		var inputPriceTier1, inputPriceTier2, outputPriceTier1, outputPriceTier2 float64
+		
+		// Check more specific models first (flash-lite before flash)
+		if strings.Contains(modelLower, "flash-lite") {
+			inputPriceTier1 = 0.00000010  // $0.10 / 1M (from model_manager.go)
+			inputPriceTier2 = 0.00000005  // $0.05 / 1M (50% discount after threshold)
+			outputPriceTier1 = 0.00000041 // $0.41 / 1M (from model_manager.go)
+			outputPriceTier2 = 0.000000205 // $0.205 / 1M (50% discount after threshold)
+		} else if strings.Contains(modelLower, "pro") {
+			inputPriceTier1 = 0.00000250  // $2.50 / 1M (from model_manager.go)
+			inputPriceTier2 = 0.00000125  // $1.25 / 1M (50% discount after threshold)
+			outputPriceTier1 = 0.00001500 // $15.00 / 1M (from model_manager.go)
+			outputPriceTier2 = 0.00000750 // $7.50 / 1M (50% discount after threshold)
+		} else { // flash (default)
+			inputPriceTier1 = 0.00000030  // $0.30 / 1M (from model_manager.go)
+			inputPriceTier2 = 0.00000015  // $0.15 / 1M (50% discount after threshold)
+			outputPriceTier1 = 0.00000250 // $2.50 / 1M (from model_manager.go)
+			outputPriceTier2 = 0.00000125 // $1.25 / 1M (50% discount after threshold)
+		}
+		
+		var inputCost float64
+		if inputTokens <= threshold {
+			inputCost = float64(inputTokens) * inputPriceTier1
+		} else {
+			inputCost = float64(threshold)*inputPriceTier1 + float64(inputTokens-threshold)*inputPriceTier2
+		}
+		
+		var outputCost float64
+		if outputTokens <= threshold {
+			outputCost = float64(outputTokens) * outputPriceTier1
+		} else {
+			outputCost = float64(threshold)*outputPriceTier1 + float64(outputTokens-threshold)*outputPriceTier2
+		}
+		
+		return inputCost + outputCost
+	case "openai":
+		// OpenAI pricing - check specific models first
+		var inputPrice, outputPrice float64
+		switch {
+		case strings.Contains(modelLower, "gpt-5-nano"):
+			inputPrice = 0.00000005  // $0.05 / 1M
+			outputPrice = 0.00000040 // $0.40 / 1M
+		case strings.Contains(modelLower, "gpt-5-mini"):
+			inputPrice = 0.00000025  // $0.25 / 1M
+			outputPrice = 0.00000200 // $2.00 / 1M
+		case strings.Contains(modelLower, "gpt-5"):
+			inputPrice = 0.00000100  // $1.00 / 1M
+			outputPrice = 0.00000800 // $8.00 / 1M
+		case strings.Contains(modelLower, "gpt-4.1-mini"):
+			inputPrice = 0.0000004  // $0.40 / 1M
+			outputPrice = 0.0000016 // $1.60 / 1M
+		case strings.Contains(modelLower, "gpt-4o-mini"):
+			inputPrice = 0.00000060  // $0.60 / 1M
+			outputPrice = 0.00000240 // $2.40 / 1M
+		case strings.Contains(modelLower, "gpt-4o-search"):
+			inputPrice = 0.0000050  // $5 / 1M
+			outputPrice = 0.0000200 // $20 / 1M
+		case strings.Contains(modelLower, "gpt-4"):
+			// Generic GPT-4 models (fallback for older models)
+			inputPrice = 0.00003  // $30 / 1M (approximate)
+			outputPrice = 0.00006 // $60 / 1M (approximate)
+		default:
+			// Default to gpt-5-nano pricing for unknown OpenAI models
+			inputPrice = 0.00000005
+			outputPrice = 0.00000040
+		}
+		return float64(inputTokens)*inputPrice + float64(outputTokens)*outputPrice
+	case "anthropic":
+		// Anthropic Claude pricing - check specific models first
+		var inputPrice, outputPrice float64
+		switch {
+		case strings.Contains(modelLower, "claude-opus"):
+			inputPrice = 0.000015  // $15 / 1M
+			outputPrice = 0.000075 // $75 / 1M
+		case strings.Contains(modelLower, "claude-haiku"):
+			inputPrice = 0.00000025  // $0.25 / 1M
+			outputPrice = 0.00000125 // $1.25 / 1M
+		case strings.Contains(modelLower, "claude-sonnet") || strings.Contains(modelLower, "claude"):
+			// Default Claude Sonnet pricing
+			inputPrice = 0.000003  // $3 / 1M
+			outputPrice = 0.000015 // $15 / 1M
+		default:
+			// Fallback to Sonnet pricing
+			inputPrice = 0.000003
+			outputPrice = 0.000015
+		}
+		return float64(inputTokens)*inputPrice + float64(outputTokens)*outputPrice
+	case "grok":
+		// Grok pricing - check specific models first
+		var inputPrice, outputPrice float64
+		switch {
+		case strings.Contains(modelLower, "grok-3-mini"):
+			inputPrice = 0.00000030  // $0.30 / 1M
+			outputPrice = 0.00000050 // $0.50 / 1M
+		case strings.Contains(modelLower, "grok-4-fast-non-reasoning"):
+			inputPrice = 0.00000020  // $0.20 / 1M
+			outputPrice = 0.00000050 // $0.50 / 1M
+		case strings.Contains(modelLower, "grok-4") || strings.Contains(modelLower, "grok-3"):
+			// Grok 4 and Grok 3 (premium models)
+			inputPrice = 0.000003  // $3 / 1M
+			outputPrice = 0.000015 // $15 / 1M
+		default:
+			// Default to fast model pricing
+			inputPrice = 0.00000020
+			outputPrice = 0.00000050
+		}
+		return float64(inputTokens)*inputPrice + float64(outputTokens)*outputPrice
+	case "deepseek":
+		// DeepSeek pricing - use chat/reasoner pricing
+		var inputPrice, outputPrice float64
+		if strings.Contains(modelLower, "reasoner") {
+			// Reasoner models might have different pricing, use chat pricing for now
+			inputPrice = 0.00000027  // $0.27 / 1M
+			outputPrice = 0.00000110 // $1.10 / 1M
+		} else {
+			// Default DeepSeek Chat pricing
+			inputPrice = 0.00000027  // $0.27 / 1M
+			outputPrice = 0.00000110 // $1.10 / 1M
+		}
+		return float64(inputTokens)*inputPrice + float64(outputTokens)*outputPrice
+	default:
+		// Very rough estimate: $1 per 1M tokens
+		return float64(inputTokens+outputTokens) * 0.000001
+	}
+}
+
+// determineProvider determines provider from model name
+func (h *GenAIHandler) determineProvider(modelName string) string {
+	modelLower := strings.ToLower(modelName)
+	if strings.HasPrefix(modelLower, "gpt-") || strings.HasPrefix(modelLower, "o1-") || strings.HasPrefix(modelLower, "o3-") {
+		return "openai"
+	}
+	if strings.HasPrefix(modelLower, "claude-") {
+		return "anthropic"
+	}
+	if strings.HasPrefix(modelLower, "grok-") {
+		return "grok"
+	}
+	if strings.HasPrefix(modelLower, "deepseek-") {
+		return "deepseek"
+	}
+	if strings.HasPrefix(modelLower, "gemini-") {
+		return "gemini"
+	}
+	return "unknown"
 }
 
 // persistGenAITelemetry stores a single telemetry record into core_telemetry collection

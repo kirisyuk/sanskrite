@@ -126,7 +126,7 @@ func (s *ArtifactContextService) GatherContext(
 // gatherConversation retrieves conversation messages in range
 func (s *ArtifactContextService) gatherConversation(
 	ctx context.Context,
-	tenantID string,
+	_ string, // tenantID
 	projectID string,
 	fromID string,
 	toID string,
@@ -205,10 +205,10 @@ func (s *ArtifactContextService) gatherDocuments(
 
 // gatherSearchResults performs vector search and returns results
 func (s *ArtifactContextService) gatherSearchResults(
-	ctx context.Context,
-	tenantID string,
-	projectID string,
-	query string,
+	_ context.Context,
+	_ string, // tenantID
+	_ string, // projectID
+	_ string, // query
 ) ([]SearchResult, error) {
 	// This is a placeholder - actual implementation would use vector search
 	// via chunksRepo and embedding service
@@ -221,8 +221,8 @@ func (s *ArtifactContextService) gatherSearchResults(
 // gatherPinnedMessages retrieves pinned message texts
 func (s *ArtifactContextService) gatherPinnedMessages(
 	ctx context.Context,
-	tenantID string,
-	projectID string,
+	_ string, // tenantID
+	_ string, // projectID
 	messageIDs []string,
 ) ([]string, error) {
 	texts := make([]string, 0, len(messageIDs))
