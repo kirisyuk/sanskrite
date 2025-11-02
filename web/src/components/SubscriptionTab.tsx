@@ -156,11 +156,12 @@ export const SubscriptionTab: React.FC = () => {
     });
   };
 
-  const getTierDisplayName = (tier: SubscriptionTier) => {
+  const getTierDisplayName = (tier: SubscriptionTier): string => {
     if (tier === 'free') return t('account.subscription.free');
     if (tier === 'pro') return t('account.subscription.pro');
     if (tier === 'max') return t('account.subscription.max');
-    return tier.charAt(0).toUpperCase() + tier.slice(1);
+    // This should never happen, but TypeScript requires a return
+    return String(tier).charAt(0).toUpperCase() + String(tier).slice(1);
   };
 
   const getTierPrice = (tier: SubscriptionTier) => {
@@ -361,7 +362,7 @@ export const SubscriptionTab: React.FC = () => {
               </div>
             )}
 
-            {subscription.tier !== 'max' && (
+            {(subscription.tier === 'free' || subscription.tier === 'pro') && (
               <div className="p-3 rounded" style={{ backgroundColor: 'var(--white-10)', border: '1px solid var(--overlay-line-90)' }}>
                 <div className="flex items-center justify-between mb-2">
                   <div>

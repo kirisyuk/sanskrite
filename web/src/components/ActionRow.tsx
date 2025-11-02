@@ -654,7 +654,7 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
               {t('unfold.actions.youMightConsider')}
             </div>
             <div className="space-y-1.5">
-              {frameExpansions.map((exp, idx) => (
+              {frameExpansions.map((exp: { question: string }, idx: number) => (
                 <div
                   key={idx}
                   className="text-[11px] cursor-pointer hover:opacity-80 transition-opacity"
