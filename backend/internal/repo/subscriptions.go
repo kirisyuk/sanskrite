@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 )
@@ -42,6 +44,10 @@ func (r *SubscriptionsRepository) Get(ctx context.Context, tenantID, userID stri
 	docID := tenantID + "_" + userID
 	snap, err := r.col.Doc(docID).Get(ctx)
 	if err != nil {
+		// Check if error is NotFound from Firestore
+		if status.Code(err) == codes.NotFound {
+			return nil, ErrSubscriptionNotFound
+		}
 		return nil, err
 	}
 	if !snap.Exists() {
