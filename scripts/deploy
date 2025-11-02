@@ -221,8 +221,9 @@ deploy_api() {
   echo -e "${BLUE}[api] Running migration: sourceProjects backfill...${NC}"
   (cd "$API_DIR" && GCP_PROJECT_ID="$PROJECT_ID" GOOGLE_CLOUD_PROJECT="$PROJECT_ID" go run ./cmd/migrate_sources) || echo -e "${YELLOW}[api] Migration skipped/failed (non-fatal).${NC}"
   
-  echo -e "${BLUE}[api] Deploying to Cloud Run from source...${NC}"
+  echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
   local service="sanskrite-api"
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
   local paypal_secrets="VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest"
@@ -233,12 +234,18 @@ deploy_api() {
     fi
   fi
 
+  # Build and push to Artifact Registry
+  gcloud builds submit "$API_DIR" \
+    --project "$PROJECT_ID" \
+    --tag "$image" \
+    --quiet
+
+  echo -e "${BLUE}[api] Deploying to Cloud Run from image...${NC}"
   gcloud run deploy "$service" \
-    --source "$API_DIR" \
+    --image "$image" \
     --region "$REGION" \
     --allow-unauthenticated \
     --service-account "$SA_BACKEND" \
-    --set-build-env-vars GOOGLE_BUILDABLE=./cmd/server \
     --min-instances=1 \
     --max-instances=3 \
     --cpu=1 \
