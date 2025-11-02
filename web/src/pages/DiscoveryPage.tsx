@@ -3,6 +3,7 @@ import ReactMarkdown, { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import Settings from '../components/Settings';
+import Account from '../components/Account';
 import AdminAccess from '../components/AdminAccess';
 import TermsOfUsage from './TermsOfUsage';
 import PrivacyNotice from './PrivacyNotice';
@@ -17,366 +18,29 @@ import UnfoldRequest from '../components/UnfoldRequest';
 import ChatMessage from '../components/ChatMessage';
 import PerspectivesPanel from '../components/PerspectivesPanel';
 import AgentPalette from '../components/AgentPalette';
-import DocumentsAndSources from '../components/DocumentsAndSources';
+import WorkspaceLibrary from '../components/WorkspaceLibrary';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Legend, Tooltip } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { AGENT_PRESETS } from '../lib/agentPresets';
+import { HATL_ONE_INSTRUCTIONS } from '../lib/hatlInstructions';
 import DocumentViewer from '../components/DocumentViewer';
 import FindingsPanel from '../components/FindingsPanel';
 import ChatGraphMessage from '../components/ChatGraphMessage';
-
-// Lightweight Entities list component
-const EntitiesList: React.FC<{ projectId: string }> = ({ projectId }) => {
-  const [items, setItems] = React.useState<Array<{ id?: string; name: string; type: string; description?: string; excluded?: boolean }>>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [open, setOpen] = React.useState<boolean>(false);
-  const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
-  const reload = React.useCallback(async () => {
-    if (!projectId || projectId === 'local-unfold') return;
-    setLoading(true); setError(null);
-    try {
-      const docs = await api.docsList(projectId);
-      const ents = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'entities.json');
-      if (!ents?.id) { setItems([]); setLoading(false); return; }
-      const blob = await api.docsDownload(projectId, ents.id);
-      const text = await new Response(blob).text();
-      const json = JSON.parse(text || '{}');
-      const arr = Array.isArray(json?.entities) ? json.entities : [];
-      setItems(arr.filter((e: any) => !e?.excluded));
-    } catch (e: any) {
-      setError('Failed to load entities');
-      setItems([]);
-    } finally { setLoading(false); }
-  }, [projectId]);
-  React.useEffect(() => { reload(); }, [reload]);
-
-  const count = items.length;
-
-  const typeIcon = (t: string) => {
-    const stroke = 'currentColor';
-    switch (t) {
-      case 'person':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><circle cx="12" cy="8" r="3"/><path d="M4 20c0-3.314 3.134-6 7-6s7 2.686 7 6"/></svg>);
-      case 'organization_or_platform':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><circle cx="12" cy="7" r="1"/><path d="M7.5 10l2.5 1.45v2.9L7.5 16.5"/><path d="M16.5 10L14 11.45v2.9l2.5 1.45"/><path d="M16.5 16.5l-2.5-1.45v-2.9l2.5-1.45"/></svg>);
-      case 'project_or_product':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>);
-      case 'classifier_or_standard':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 10h3M7 14h3M7 7h6"/><circle cx="15.5" cy="12.5" r="2.5"/></svg>);
-      case 'classification_code':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M8 9h8M8 12h8M8 15h4"/></svg>);
-      case 'regulatory_document':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M7 3h10l5 5v13H7z"/><path d="M7 3v7h7"/><path d="M9 13h6M9 17h6"/></svg>);
-      case 'government_agency':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><rect x="4" y="3" width="16" height="16" rx="1"/><path d="M4 7h16M8 11h8M8 15h6"/><path d="M8 3v4M16 3v4"/></svg>);
-      case 'contract_document':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M6 2h12v20H6z"/><path d="M9 7h6M9 11h6M9 15h4"/><path d="M6 2l3 6-3 6M18 2l-3 6 3 6"/></svg>);
-      case 'location':
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>);
-      default:
-        return (<svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke={stroke}><circle cx="12" cy="12" r="9"/></svg>);
-    }
-  };
-
-  const header = (
-    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
-      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="5" width="16" height="4" rx="1"/><rect x="4" y="11" width="16" height="4" rx="1"/><rect x="4" y="17" width="16" height="2" rx="1"/></svg>
-        <span className="text-[11px] font-medium">Entities ({count})</span>
-      </div>
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
-    </button>
-  );
-
-  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
-  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
-  if (items.length === 0) return (
-    <div className="space-y-1">
-      {header}
-      {open && (<div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No entities yet. Run "analyze entities".</div>)}
-    </div>
-  );
-
-  return (
-    <div className="space-y-1">
-      {header}
-      {open && (
-        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
-          {items.map((e, i) => {
-            const key = `${e.name}-${e.type}-${i}`;
-            const isExp = !!expanded[key];
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setExpanded((s) => ({ ...s, [key]: !isExp }))}
-                className="p-2 rounded text-left w-full"
-                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}
-              >
-                <div className="flex items-center gap-2 justify-between">
-                  <div className="flex items-center gap-2">
-                    <span style={{ color: 'var(--text-secondary-strong)' }}>{typeIcon(e.type)}</span>
-                    <span className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{e.name}</span>
-                  </div>
-                  <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{e.type}</span>
-                </div>
-                {isExp && e.description && (
-                  <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{e.description}</div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Lightweight Facts list component
-const FactsList: React.FC<{ projectId: string }> = ({ projectId }) => {
-  const [items, setItems] = React.useState<Array<{ statement: string; confidence?: number; evidence?: string[] }>>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [open, setOpen] = React.useState<boolean>(false);
-  const reload = React.useCallback(async () => {
-    if (!projectId || projectId === 'local-unfold') return;
-    setLoading(true); setError(null);
-    try {
-      const docs = await api.docsList(projectId);
-      const fdoc = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'facts.json');
-      if (!fdoc?.id) { setItems([]); setLoading(false); return; }
-      const blob = await api.docsDownload(projectId, fdoc.id);
-      const text = await new Response(blob).text();
-      const json = JSON.parse(text || '{}');
-      const arr = Array.isArray(json?.facts) ? json.facts : [];
-      setItems(arr);
-    } catch (e: any) {
-      setError('Failed to load facts');
-      setItems([]);
-    } finally { setLoading(false); }
-  }, [projectId]);
-  React.useEffect(() => { reload(); }, [reload]);
-  const count = items.length;
-  const header = (
-    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
-      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 4h18v4H3zM3 10h18v10H3z"/><path d="M6 13h6M6 17h10" strokeLinecap="round"/></svg>
-        <span className="text-[11px] font-medium">Facts ({count})</span>
-      </div>
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
-    </button>
-  );
-  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
-  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
-  return (
-    <div className="space-y-1">
-      {header}
-      {open && (
-        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
-          {items.length === 0 && (
-            <div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No facts yet. Run "analyze facts".</div>
-          )}
-          {items.map((f, i) => (
-            <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-12" style={{ color: 'var(--text-heading)' }}>{f.statement}</div>
-                {typeof f.confidence === 'number' && (
-                  <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{Math.round(Math.max(0, Math.min(1, f.confidence))*100)}%</span>
-                )}
-              </div>
-              {Array.isArray(f.evidence) && f.evidence.length > 0 && (
-                <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>Evidence: {f.evidence.join('; ')}</div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Lightweight Events list component
-const EventsList: React.FC<{ projectId: string }> = ({ projectId }) => {
-  const [items, setItems] = React.useState<Array<{ ts: string; title: string; summary?: string }>>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [open, setOpen] = React.useState<boolean>(false);
-  const reload = React.useCallback(async () => {
-    if (!projectId || projectId === 'local-unfold') return;
-    setLoading(true); setError(null);
-    try {
-      const docs = await api.docsList(projectId);
-      const edoc = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'events.json');
-      if (!edoc?.id) { setItems([]); setLoading(false); return; }
-      const blob = await api.docsDownload(projectId, edoc.id);
-      const text = await new Response(blob).text();
-      const json = JSON.parse(text || '{}');
-      const arr = Array.isArray(json?.events) ? json.events : [];
-      setItems(arr);
-    } catch (e: any) {
-      setError('Failed to load events');
-      setItems([]);
-    } finally { setLoading(false); }
-  }, [projectId]);
-  React.useEffect(() => { reload(); }, [reload]);
-  const count = items.length;
-  const header = (
-    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
-      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M7 2v4M17 2v4"/></svg>
-        <span className="text-[11px] font-medium">Events ({count})</span>
-      </div>
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
-    </button>
-  );
-  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
-  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
-  return (
-    <div className="space-y-1">
-      {header}
-      {open && (
-        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
-          {items.length === 0 && (
-            <div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No events yet. Run "analyze events".</div>
-          )}
-          {items.map((e, i) => (
-            <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
-              <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{e.title}</div>
-              <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{e.ts}</div>
-              {e.summary && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{e.summary}</div>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Lightweight Metrics list component
-const MetricsList: React.FC<{ projectId: string }> = ({ projectId }) => {
-  const [items, setItems] = React.useState<Array<{ key: string; label: string; value: any; unit?: string }>>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [open, setOpen] = React.useState<boolean>(false);
-  const reload = React.useCallback(async () => {
-    if (!projectId || projectId === 'local-unfold') return;
-    setLoading(true); setError(null);
-    try {
-      const docs = await api.docsList(projectId);
-      const mdoc = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'metrics.json');
-      if (!mdoc?.id) { setItems([]); setLoading(false); return; }
-      const blob = await api.docsDownload(projectId, mdoc.id);
-      const text = await new Response(blob).text();
-      const json = JSON.parse(text || '{}');
-      const arr = Array.isArray(json?.metrics) ? json.metrics : [];
-      setItems(arr);
-    } catch (e: any) {
-      setError('Failed to load metrics');
-      setItems([]);
-    } finally { setLoading(false); }
-  }, [projectId]);
-  React.useEffect(() => { reload(); }, [reload]);
-  const count = items.length;
-  const header = (
-    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
-      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 20V4M9 20V8M15 20v-6M21 20H2"/></svg>
-        <span className="text-[11px] font-medium">Metrics ({count})</span>
-      </div>
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
-    </button>
-  );
-  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
-  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
-  return (
-    <div className="space-y-1">
-      {header}
-      {open && (
-        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
-          {items.length === 0 && (
-            <div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No metrics yet. Run "analyze metrics".</div>
-          )}
-          {items.map((m, i) => (
-            <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{m.label || m.key}</div>
-                <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{String(m.value)}{m.unit ? ` ${m.unit}` : ''}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Lightweight Decisions list component
-const DecisionsList: React.FC<{ projectId: string }> = ({ projectId }) => {
-  const [items, setItems] = React.useState<Array<{ title: string; selected?: string; rationale?: string }>>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [open, setOpen] = React.useState<boolean>(false);
-  const reload = React.useCallback(async () => {
-    if (!projectId || projectId === 'local-unfold') return;
-    setLoading(true); setError(null);
-    try {
-      const docs = await api.docsList(projectId);
-      const ddoc = docs.find((d: any) => String(d.filename || '').toLowerCase() === 'decisions.json');
-      if (!ddoc?.id) { setItems([]); setLoading(false); return; }
-      const blob = await api.docsDownload(projectId, ddoc.id);
-      const text = await new Response(blob).text();
-      const json = JSON.parse(text || '{}');
-      const arr = Array.isArray(json?.decisions) ? json.decisions : [];
-      setItems(arr);
-    } catch (e: any) {
-      setError('Failed to load decisions');
-      setItems([]);
-    } finally { setLoading(false); }
-  }, [projectId]);
-  React.useEffect(() => { reload(); }, [reload]);
-  const count = items.length;
-  const header = (
-    <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-2 py-1" style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
-      <div className="flex items-center gap-2" style={{ color: 'var(--text-heading)' }}>
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 12h8M12 12l4-4M12 12l4 4" strokeLinecap="round" strokeLinejoin="round"/><circle cx="4" cy="12" r="2"/></svg>
-        <span className="text-[11px] font-medium">Decisions ({count})</span>
-      </div>
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}><path d="M9 6l6 6-6 6"/></svg>
-    </button>
-  );
-  if (loading) return <div className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
-  if (error) return <div className="text-11" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
-  return (
-    <div className="space-y-1">
-      {header}
-      {open && (
-        <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
-          {items.length === 0 && (
-            <div className="text-11 px-2" style={{ color: 'var(--text-secondary-strong)' }}>No decisions yet. Run "analyze decisions".</div>
-          )}
-          {items.map((d, i) => (
-            <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{d.title}</div>
-                {d.selected && (
-                  <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{d.selected}</span>
-                )}
-              </div>
-              {d.rationale && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{d.rationale}</div>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
+import { evaluateBias } from '../lib/biasEvaluation';
+import { EntitiesList, FactsList, EventsList, MetricsList, DecisionsList } from '../components/ArtifactLists';
 import { ThemeContext } from '../components/ThemeProvider';
+import { EvaluationDetails } from '../components/EvaluationDetails';
+import { ActionRow } from '../components/ActionRow';
+import { UserPositionAnalysis } from '../components/UserPositionAnalysis';
+import { LLMEvaluation } from '../components/LLMEvaluation';
+import { DiscussionFlow } from '../components/DiscussionFlow';
+import { TitleSuggestions } from '../components/TitleSuggestions';
 import { toggleInteractionPin, isInteractionPinned } from '../lib/interactionHelpers';
 import { highlightNotes, clearHighlights, findFirstRange, applyGlobalHighlight, clearGlobalHighlight } from '../lib/textHighlight';
+import { getPreferredLanguage, getLanguageName, getAnchorRect, getSxSystemInstructionShort, getSxSystemInstructionFull } from '../lib/uiUtils';
 import { 
   generateKeyInsights, 
   interpretThinkingDepth, 
@@ -394,2099 +58,6 @@ import {
   getMetricColor,
   formatPercent
 } from '../lib/metaInterpretations';
-
-// Inline evaluation details renderer (reads eval.bias interactions)
-const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
-  const genaiChat = useGenaiChatStore();
-  // Hydrate interactions when a concrete project is selected
-  React.useEffect(() => {
-    try {
-      if (genaiChat.projectId && genaiChat.projectId !== 'local-unfold') {
-        genaiChat.hydrateInteractions();
-        genaiChat.ensureStanceAggregate();
-      }
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genaiChat.projectId]);
-  const { t, i18n } = useTranslation();
-  const ev = React.useMemo(() => {
-    try {
-      const map = (genaiChat as any).persistedByLocalId || {};
-      const serverId = map[messageId];
-      // Build reverse map for bidirectional lookup
-      const reverseMap: Record<string, string[]> = {};
-      Object.entries(map).forEach(([local, server]) => {
-        if (!reverseMap[server as string]) reverseMap[server as string] = [];
-        reverseMap[server as string].push(local);
-      });
-      const localIds = reverseMap[messageId] || [];
-      const found = [...genaiChat.interactions].reverse().find((it: any) => 
-        it.subkind === 'eval.bias' && 
-        (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
-      );
-      if (!found) return null;
-      try { return JSON.parse((found as any).content || '{}'); } catch { try { return JSON.parse((found as any).contentSanitized || '{}'); } catch { return null; } }
-    } catch { return null; }
-  }, [genaiChat.interactions, (genaiChat as any).persistedByLocalId, messageId]);
-  const [open, setOpen] = React.useState(false);
-  const [selectedTag, setSelectedTag] = React.useState<string | null>(null);
-  const msg = React.useMemo(() => genaiChat.messages.find((m) => m.id === messageId), [genaiChat.messages, messageId]);
-  const { theme } = React.useContext(ThemeContext);
-  if (!ev) return null;
-  const level = Math.max(0, Math.min(1, Number(ev.biasLevel || 0)));
-  const hue = Math.round(120 * (1 - level));
-  const fill = `hsl(${hue}, 60%, 70%)`;
-  const labelLevel = Math.round(level * 10) / 10;
-  
-  // 5 градаций: 0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
-  const bucketLabel = level <= 0.2 
-    ? t('unfold.bias.neutral')
-    : level <= 0.4
-    ? t('unfold.bias.balanced')
-    : level <= 0.6
-    ? t('unfold.bias.subjective')
-    : level <= 0.8
-    ? t('unfold.bias.oneSided')
-    : t('unfold.bias.biased');
-
-  const tLevel = (() => {
-    try {
-      const v = (typeof (ev as any).thoughtfulnessLevel === 'number') ? (ev as any).thoughtfulnessLevel : (ev as any).thoughtfulness;
-      return Math.max(0, Math.min(1, Number(v || 0)));
-    } catch { return 0; }
-  })();
-  const tHue = Math.round(120 * (tLevel));
-  const tFill = `hsl(${tHue}, 60%, 70%)`;
-  const tLabelLevel = Math.round(tLevel * 10) / 10;
-  
-  // 5 градаций: 0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
-  const tLabel = tLevel <= 0.2
-    ? t('unfold.thoughtfulness.shallow')
-    : tLevel <= 0.4
-    ? t('unfold.thoughtfulness.basic')
-    : tLevel <= 0.6
-    ? t('unfold.thoughtfulness.moderate')
-    : tLevel <= 0.8
-    ? t('unfold.thoughtfulness.deep')
-    : t('unfold.thoughtfulness.comprehensive');
-
-  return (
-    <div className="mt-1" style={{ width: '100%', position: 'relative' }}>
-      <button
-        type="button"
-        className="flex items-center gap-2 w-full text-left"
-        onClick={() => setOpen(!open)}
-        style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
-          <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: fill }} />
-        </div>
-        <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{labelLevel.toFixed(1)} {bucketLabel}</div>
-      </button>
-      {open && (
-        <div className="mt-2 space-y-2">
-          {Array.isArray((ev as any).categories) && (ev as any).categories.length > 0 && (
-            <>
-              <div className="flex flex-wrap gap-1">
-                {(ev as any).categories.map((c: any, i: number) => {
-                  const code = String(c?.code || '');
-                  return (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setSelectedTag(selectedTag === code ? null : code)}
-                    className="px-2 py-0.5 rounded-full text-[10px] transition-colors cursor-pointer"
-                    style={{ 
-                      backgroundColor: selectedTag === code ? 'var(--white-20)' : 'var(--white-10)', 
-                      color: 'var(--text-secondary-strong)',
-                      border: 'none',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (selectedTag !== code) {
-                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-15)';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (selectedTag !== code) {
-                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
-                      }
-                    }}
-                  >
-                    {t(`unfold.bias.tags.${code}`, { defaultValue: code })}
-                  </button>
-                );})}
-              </div>
-              {selectedTag && (() => {
-                const found = ((ev as any).categories || []).find((c: any) => String(c?.code || '') === selectedTag);
-                const expl = typeof found?.explanation === 'string' ? found.explanation : t(`unfold.bias.descriptions.${selectedTag}`, { defaultValue: '' });
-                return (
-                  <div className="mt-2 p-3 rounded-lg" style={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
-                    <div className="text-[12px]" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5' }}>
-                      {expl}
-                    </div>
-                  </div>
-                );
-              })()}
-            </>
-          )}
-          <div className="space-y-1">
-            <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{t('unfold.thoughtfulness.label')}</div>
-            <div className="flex items-center gap-2">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: tFill }} />
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>{tLabelLevel.toFixed(1)} {tLabel}</div>
-            </div>
-            {/* Detailed dimension rows hidden per request */}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-// Action row under assistant messages: shows bias details when available,
-// otherwise shows action buttons (Bring In, Copy) immediately after message
-const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: string }> = ({ messageId, isAssistant, content }) => {
-  const genaiChat = useGenaiChatStore();
-  const { t } = useTranslation();
-  const hasEvalBias = React.useMemo(() => {
-    try {
-      const map = (genaiChat as any).persistedByLocalId || {};
-      const serverId = map[messageId];
-      // Build reverse map for bidirectional lookup
-      const reverseMap: Record<string, string[]> = {};
-      Object.entries(map).forEach(([local, server]) => {
-        if (!reverseMap[server as string]) reverseMap[server as string] = [];
-        reverseMap[server as string].push(local);
-      });
-      const localIds = reverseMap[messageId] || [];
-      return !![...genaiChat.interactions].reverse().find((it: any) => 
-        it.subkind === 'eval.bias' && 
-        (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
-      );
-    } catch { return false; }
-  }, [genaiChat.interactions, (genaiChat as any).persistedByLocalId, messageId]);
-  const settings = useGenAISettings();
-  const [showBringIn, setShowBringIn] = React.useState(false);
-  const [showAsk, setShowAsk] = React.useState(false);
-  const [askText, setAskText] = React.useState('');
-  const bringInRef = React.useRef<HTMLDivElement | null>(null);
-  const askRef = React.useRef<HTMLDivElement | null>(null);
-  const [paletteAskOpen, setPaletteAskOpen] = React.useState(false);
-  const [paletteBringOpen, setPaletteBringOpen] = React.useState(false);
-  const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
-  const exportRef = React.useRef<HTMLDivElement | null>(null);
-  const interForMessage = React.useMemo(() => {
-    try { return genaiChat.interactions.find((x) => x.id === messageId); } catch { return undefined as any; }
-  }, [genaiChat.interactions, messageId]);
-  const derivedHeaderText = React.useMemo(() => {
-    try {
-      const meta = genaiChat.messageMeta[messageId];
-      return meta?.headerText || interForMessage?.author?.displayName || (interForMessage?.agentProfile ? 'agent' : undefined);
-    } catch { return undefined; }
-  }, [genaiChat.messageMeta, interForMessage, messageId]);
-  const derivedAgentProfile = React.useMemo(() => {
-    try {
-      const meta = genaiChat.messageMeta[messageId];
-      return meta?.agentProfile || interForMessage?.agentProfile;
-    } catch { return undefined; }
-  }, [genaiChat.messageMeta, interForMessage, messageId]);
-  const derivedRefineEnabled = React.useMemo(() => {
-    try {
-      const meta = genaiChat.messageMeta[messageId];
-      if (typeof meta?.refineEnabled === 'boolean') return meta.refineEnabled;
-      return !!interForMessage?.agentProfile?.capabilities?.refinePrevious;
-    } catch { return false; }
-  }, [genaiChat.messageMeta, interForMessage, messageId]);
-  React.useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!showBringIn) return;
-      const el = bringInRef.current;
-      if (el && !el.contains(e.target as Node)) setShowBringIn(false);
-    };
-    document.addEventListener('mousedown', onDocClick, { capture: true });
-    return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
-  }, [showBringIn]);
-  React.useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!showAsk) return;
-      const el = askRef.current;
-      if (el && !el.contains(e.target as Node)) setShowAsk(false);
-    };
-    document.addEventListener('mousedown', onDocClick, { capture: true });
-    return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
-  }, [showAsk]);
-  React.useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!exportMenuOpen) return;
-      const el = exportRef.current;
-      if (el && !el.contains(e.target as Node)) setExportMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onDocClick, { capture: true });
-    return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
-  }, [exportMenuOpen]);
-
-  const exportMarkdown = React.useCallback(async () => {
-    try {
-      const projectId = (genaiChat as any)?.projectId as string | undefined;
-      if (!projectId || projectId === 'local-unfold') return;
-      const text = (content || '').toString();
-      const baseUnsafe = (derivedHeaderText ? `${derivedHeaderText}-contribution` : 'assistant-answer');
-      const base = baseUnsafe.toLowerCase().replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'assistant-answer';
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const filename = `${base}-${ts}.md`;
-      const { api } = await import('../lib/api');
-      await api.docsCreateFromText(projectId, { filename, contentType: 'text/markdown', text });
-    } catch {}
-  }, [content, genaiChat, derivedHeaderText]);
-
-  const exportToDocx = React.useCallback(async () => {
-    try {
-      const projectId = (genaiChat as any)?.projectId as string | undefined;
-      if (!projectId || projectId === 'local-unfold') return;
-      
-      // First, save as markdown document
-      const text = (content || '').toString();
-      const baseUnsafe = (derivedHeaderText ? `${derivedHeaderText}-contribution` : 'assistant-answer');
-      const base = baseUnsafe.toLowerCase().replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'assistant-answer';
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const filename = `${base}-${ts}.md`;
-      
-      const { api } = await import('../lib/api');
-      const doc = await api.docsCreateFromText(projectId, { filename, contentType: 'text/markdown', text });
-      
-      // Then export to DOCX
-      const blob = await api.docsExportToDocx(projectId, doc.id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${base}-${ts}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 0);
-    } catch (error) {
-      console.error('Failed to export to DOCX:', error);
-    }
-  }, [content, genaiChat, derivedHeaderText]);
-  if (!isAssistant || !content || !content.trim()) return null;
-  return (
-    <div className="mt-1" style={{ width: '100%', position: 'relative' }}>
-      <div className="flex items-center gap-2">
-        {hasEvalBias && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <EvaluationDetails messageId={messageId} />
-          </div>
-        )}
-        <div className="ml-auto flex items-center gap-1" style={{ position: 'relative' }}>
-          {/* Error block for failed agent reply (Ask/Bring In) with retry/switch */}
-          {(() => {
-            try {
-              const st = useGenaiChatStore.getState();
-              const errText = st.error;
-              const pMeta = st.pendingAssistantMeta;
-              const pOpts = st.pendingAssistantOptions;
-              const pPrompt = st.pendingAssistantPrompt;
-              if (!errText || !pOpts || !pPrompt) return null;
-              const label = pMeta?.displayName ? `агентом ${pMeta.displayName}` : 'агентом';
-              return (
-                <div className="flex items-center gap-2 px-2 py-1 rounded-lg" style={{ border: '1px solid var(--overlay-line-90)', background: 'var(--bg-elevated)' }}>
-                  <span className="text-[11px]" style={{ color: 'var(--accent-danger)' }}>Ошибка связи с {label}. Запрос не доставлен.</span>
-                  <button
-                    className="text-[11px] rounded px-2 py-0.5"
-                    style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-secondary-strong)' }}
-                    onClick={async () => {
-                      try {
-                        await useGenaiChatStore.getState().startStream({ prompt: pPrompt, tools: st.pendingAssistantTools, options: pOpts, agentMeta: pMeta, suppressUserEcho: true });
-                      } catch {}
-                    }}
-                  >{t('unfold.actions.retry')}</button>
-                  <button
-                    className="text-[11px] rounded px-2 py-0.5"
-                    style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-secondary-strong)' }}
-                    onClick={() => setShowBringIn((v) => !v)}
-                  >{t('unfold.actions.switchModel')}</button>
-                  <button
-                    className="text-[11px] rounded px-2 py-0.5"
-                    style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-secondary-strong)' }}
-                    onClick={() => { try { navigator.clipboard.writeText(pPrompt); } catch {} }}
-                  >{t('unfold.actions.copyRequest')}</button>
-                </div>
-              );
-            } catch { return null; }
-          })()}
-          {(() => {
-            const displayName = derivedHeaderText;
-            if (!displayName) return null;
-            return (
-              <>
-                <button
-                  type="button"
-                  aria-label="Ask this agent"
-                  title="Ask this agent"
-                  className="rounded-lg"
-                  style={{ height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', border: '1px solid var(--overlay-line-90)' }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  onClick={() => setPaletteAskOpen(true)}
-                >
-                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20l-3.5-3H6a4 4 0 01-4-4V7a4 4 0 014-4h12a4 4 0 014 4v6a4 4 0 01-4 4h-2.5L12 20z" strokeWidth="2"/></svg>
-                  <span className="text-[11px]">Ask this agent</span>
-                </button>
-                <AgentPalette
-                  mode="ask"
-                  visible={paletteAskOpen}
-                  title={`Ask: ${displayName}`}
-                  subtitle={`${derivedAgentProfile?.provider ?? ''} · ${derivedAgentProfile?.model ?? ''}`}
-                  initialAskText={''}
-                  anchorRect={(() => {
-                    try {
-                      const el = (document.querySelector('#unfold-request-container') || document.querySelector('#app') || document.body) as HTMLElement;
-                      const rect = el.getBoundingClientRect();
-                      return { top: rect.top - 8, left: rect.left, width: rect.width, height: rect.height };
-                    } catch { return null as any; }
-                  })()}
-                  onClose={() => setPaletteAskOpen(false)}
-                  onSubmitAsk={async (question) => {
-                    if (!question.trim()) { setPaletteAskOpen(false); return; }
-                    try {
-                      const ints = useGenaiChatStore.getState().interactions;
-                      const idx = ints.findIndex((it) => it.id === messageId);
-                      let origUser: string | null = null;
-                      for (let i = idx - 1; i >= 0; i--) {
-                        if (ints[i].kind === 'user' && ints[i].content && (ints[i].content as string).trim()) { origUser = ints[i].content as string; break; }
-                      }
-                      const assistantInter = ints.find((it) => it.id === messageId);
-                      const agentAnswer = (assistantInter?.contentSanitized || assistantInter?.content || '').toString();
-                      const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                      
-                      const langName = (() => {
-                        switch (preferredLang) {
-                          case 'ru': return 'Russian';
-                          case 'en': return 'English';
-                          case 'kk':
-                          case 'kz': return 'Kazakh';
-                          default: return 'Russian';
-                        }
-                      })();
-                      const agentName = displayName || 'agent';
-                      const prof = derivedAgentProfile;
-                      const prompt = `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. The user has a follow-up question to your previous answer.\n\nOriginal user question (context):\n${origUser || '(not found)'}\n\nYour previous answer:\n${agentAnswer}\n\nUser follow-up (address this directly):\n${question}`;
-                      const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
-                      const useModel = prof?.model || settings.model;
-                      const sxSystemInstruction = (
-                        `Hidden-instructions protocol (do not show to users):\n` +
-                        `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
-                        `- JSON must be valid and match v: \"1\" with one of types: entity_mark, monitor_metric, watchlist_add, link_reference.\n` +
-                        `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
-                        `- Examples: <!-- @sx:{\\\"v\\\":\\\"1\\\",\\\"type\\\":\\\"entity_mark\\\",\\\"id\\\":\\\"ent-001\\\",\\\"kind\\\":\\\"person\\\",\\\"name\\\":\\\"…\\\",\\\"description\\\":\\\"…\\\"} -->`
-                      );
-                      const combinedSystemInstruction = [settings.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
-                      const options: any = {
-                        profile: /_quality$/i.test(useModel || '') ? 'quality' : 'fast',
-                        modelOverride: useModel,
-                        groundingEnabled: settings.groundingEnabled,
-                        temperature: settings.temperature,
-                        maxOutputTokens: settings.maxOutputTokens,
-                        systemInstruction: combinedSystemInstruction,
-                      };
-                      const userEcho = `${question}`;
-                      setPaletteAskOpen(false);
-                      await useGenaiChatStore.getState().startStream({ prompt: userEcho, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: agentName, agentProfile: prof || undefined, subkind: 'agent.ask', replyTo: messageId } });
-                    } catch {}
-                  }}
-                />
-              </>
-            );
-          })()}
-          {/* Ask button is shown in EvaluationDetails near Refine; ActionRow keeps Bring In / Copy only */}
-          {/* Refine button should be left of Bring In */}
-          {(() => {
-            if (!derivedRefineEnabled) return null;
-            return (
-              <button
-                type="button"
-                aria-label="Refine the previous answer"
-                title="Refine the previous primary answer based on this contribution."
-                className="rounded-lg"
-                style={{ height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', border: '1px solid var(--overlay-line-90)' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={async () => {
-                  try {
-                    const msgs = useGenaiChatStore.getState().messages;
-                    const idx = msgs.findIndex((m) => m.id === messageId);
-                    let prevPrimary: string | null = null;
-                    let prevPrimaryId: string | null = null;
-                    for (let i = idx - 1; i >= 0; i--) {
-                      const mm = msgs[i];
-                      if (mm.role === 'assistant') {
-                        const mmeta = useGenaiChatStore.getState().messageMeta[mm.id];
-                        if (!mmeta?.headerText) { prevPrimary = mm.content; prevPrimaryId = mm.id; break; }
-                      }
-                    }
-                    if (!prevPrimary) return;
-                    const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                    const langName = (() => {
-                      switch (preferredLang) {
-                        case 'ru': return 'Russian';
-                        case 'en': return 'English';
-                        case 'kk':
-                        case 'kz': return 'Kazakh';
-                        default: return 'Russian';
-                      }
-                    })();
-                    const contribution = msgs.find((m) => m.id === messageId)?.content || '';
-                    const prompt = `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nAs an expert, you are participating in a multi-agent discussion. Your task is to refine your own previous answer by integrating the contribution from another agent.\n\nRequirements:\n- Rewrite the Original Answer by integrating the Agent Contribution into a single, improved answer.\n- Do not comment on the changes, the agent, or the process; no meta-remarks; do not ask questions.\n- Use the same language and tone as the Original Answer; keep or improve structure (headings, bullets).\n- Be concise; remove redundancies; keep key facts only.\n- Weave added counterpoints into their relevant sections rather than appending a separate critique.\n- Output only the refined answer with no preface, labels, or extra text.\n\nOriginal Answer:\n${prevPrimary}\n\nAgent Contribution:\n${contribution}\n\nRefined Answer:`;
-                    const gs = useGenAISettings.getState();
-                    const res = await (await import('../lib/api')).api.genaiGenerate({ model: gs.model, prompt, strictJSONEnabled: false, maxOutputTokens: Math.max(1024, gs.maxOutputTokens || 2048), webSearchEnabled: false, systemInstruction: gs.systemInstruction || undefined });
-                    const stripFences = (s: string) => { let t = (s || '').toString().trim(); t = t.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim(); t = t.replace(/^```[\s\S]*?```$/m, (m) => m.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')).trim(); if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) t = t.slice(1, -1); return t.trim(); };
-                    const refined = stripFences(res?.content || '');
-                    if (!refined || !prevPrimaryId) return;
-                    useGenaiChatStore.setState((s) => ({
-                      messages: s.messages.map((m) => m.id === prevPrimaryId ? { ...m, content: refined } : m),
-                      interactions: s.interactions.map((it: any) => it.id === prevPrimaryId ? ({ ...it, contentSanitized: refined, content: refined }) : it),
-                    } as any));
-                  } catch {}
-                }}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path d="M3 17v4h4" strokeWidth="2" strokeLinecap="round" />
-                  <path d="M7 17l5-5" strokeWidth="2" strokeLinecap="round" />
-                  <rect x="10" y="3" width="11" height="11" rx="2" strokeWidth="2" />
-                </svg>
-                <span className="text-[11px]">Refine the previous answer</span>
-              </button>
-            );
-          })()}
-
-          <button
-            type="button"
-            aria-label="Bring in another model"
-            title="Bring in another AI model to the discussion."
-            className="rounded-lg"
-            style={{ width: 24, height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-            onClick={() => setPaletteBringOpen(true)}
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path d="M12 7a3 3 0 1 1 0 6a3 3 0 0 1 0-6" strokeWidth="2" />
-              <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth="2" strokeLinecap="round" />
-              <path d="M18 7v4M16 9h4" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          </button>
-          <AgentPalette
-            mode="bring_in"
-            visible={paletteBringOpen}
-            title={'Bring in an agent'}
-            presets={AGENT_PRESETS}
-            anchorRect={(() => {
-              try {
-                const el = (document.querySelector('#unfold-request-container') || document.querySelector('#app') || document.body) as HTMLElement;
-                const rect = el.getBoundingClientRect();
-                return { top: rect.top - 8, left: rect.left, width: rect.width, height: rect.height };
-              } catch { return null as any; }
-            })()}
-            onClose={() => setPaletteBringOpen(false)}
-            onSelectPreset={async (p: any) => {
-              setPaletteBringOpen(false);
-                    try {
-                      const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
-                      const model = p.modelAlias;
-                const sxSystemInstruction = (
-                  `Hidden-instructions protocol (do not show to users):\n` +
-                  `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
-                  `- JSON must be valid and match v: \"1\" with one of types: entity_mark, monitor_metric, watchlist_add, link_reference.\n` +
-                  `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
-                  `- Examples: <!-- @sx:{\\\"v\\\":\\\"1\\\",\\\"type\\\":\\\"entity_mark\\\",\\\"id\\\":\\\"ent-001\\\",\\\"kind\\\":\\\"person\\\",\\\"name\\\":\\\"…\\\",\\\"description\\\":\\\"…\\\"} -->`
-                );
-                const combinedSystemInstruction = [settings.systemInstruction || '', p.params?.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
-                      const options: any = {
-                        profile: /_quality$/i.test(model) ? 'quality' : 'fast',
-                        modelOverride: model,
-                        groundingEnabled: p.capabilities?.webSearch ?? settings.groundingEnabled,
-                        temperature: typeof p.params?.temperature === 'number' ? p.params?.temperature : settings.temperature,
-                        maxOutputTokens: settings.maxOutputTokens,
-                  systemInstruction: combinedSystemInstruction,
-                      };
-                      const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                      const langName = (() => {
-                        switch (preferredLang) {
-                          case 'ru': return 'Russian';
-                          case 'en': return 'English';
-                          case 'kk':
-                          case 'kz': return 'Kazakh';
-                          default: return 'Russian';
-                        }
-                      })();
-                      const st = useGenaiChatStore.getState();
-                      // Find the specific message that triggered Bring In and the previous user message
-                      const msgs = st.messages.filter((m) => m.content && m.content.trim());
-                      const targetIdx = msgs.findIndex((m) => m.id === messageId);
-                      const targetMsg = targetIdx >= 0 ? msgs[targetIdx] : null;
-                      let prevUserMsg: typeof msgs[0] | null = null;
-                      if (targetIdx >= 0) {
-                        for (let i = targetIdx - 1; i >= 0; i--) {
-                          if (msgs[i].role === 'user') {
-                            prevUserMsg = msgs[i];
-                            break;
-                          }
-                        }
-                      }
-                      const transcript = [
-                        prevUserMsg ? `USER: ${prevUserMsg.content}` : null,
-                        targetMsg ? `ASSISTANT: ${targetMsg.content}` : null,
-                      ].filter(Boolean).join('\n');
-                      // Include bias evaluation of this answer to help the agent calibrate its stance
-                      const biasBlock = (() => {
-                        try {
-                          const map = (genaiChat as any).persistedByLocalId || {};
-                          const serverId = map[messageId];
-                          const reverseMap: Record<string, string[]> = {};
-                          Object.entries(map).forEach(([local, server]) => {
-                            if (!reverseMap[server as string]) reverseMap[server as string] = [];
-                            reverseMap[server as string].push(local);
-                          });
-                          const localIds = reverseMap[messageId] || [];
-                          const evalNode = [...genaiChat.interactions].reverse().find((it: any) => 
-                            it.subkind === 'eval.bias' && 
-                            (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
-                          );
-                          if (!evalNode) return '';
-                          const ev = JSON.parse((evalNode as any).content || '{}');
-                          const thLevel = (typeof ev.thoughtfulnessLevel === 'number' ? ev.thoughtfulnessLevel : ev.thoughtfulness);
-                          const obj = {
-                            biasLevel: ev.biasLevel,
-                            thoughtfulness: thLevel,
-                            thoughtfulnessLevel: thLevel,
-                            thoughtfulnessDimensions: ev.thoughtfulnessDimensions,
-                            biases: ev.biases,
-                            biasTypes: ev.biasTypes,
-                          };
-                          return `\n\nAutomatic bias analysis (for your awareness; do not echo):\n${JSON.stringify(obj, null, 2)}`;
-                        } catch { return ''; }
-                      })();
-                      const prompt = `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${p.displayName}, an invited AI participant analyzing an AI assistant's response to a user query.\n\nYour task: Evaluate the ASSISTANT's answer and provide an alternative perspective or counterpoint. If the ASSISTANT's response has limitations, biases, or missing viewpoints, articulate them constructively. Present a well-reasoned contribution that adds value through critical analysis or an alternative angle.\n\nDo not ask clarifying questions or request additional input; rely only on the provided context.\nDo not restate the prompt or context; respond directly with your perspective.\n\nContext:\n${transcript}${biasBlock}\n\nYour perspective:`;
-                await useGenaiChatStore.getState().startStream({ prompt, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: p.displayName, agentProfile: { provider: p.provider, model: model, capabilities: { tools: !!p.capabilities?.tools, webSearch: !!p.capabilities?.webSearch, reasoning: !!p.capabilities?.reasoning, refinePrevious: !!p.capabilities?.refinePrevious }, params: p.params }, subkind: 'agent.bring_in', replyTo: messageId }, suppressUserEcho: true });
-                    } catch {}
-            }}
-          />
-          <button
-            type="button"
-            aria-label="Copy answer"
-            title="Copy answer"
-            className="rounded-lg"
-            style={{ width: 24, height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            onClick={() => { try { navigator.clipboard.writeText(content); } catch {} }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <rect x="9" y="9" width="11" height="11" rx="2" strokeWidth="2" />
-              <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          </button>
-          <div ref={exportRef} style={{ position: 'relative' }}>
-            <button
-              type="button"
-              aria-label="Export answer"
-              title="Export answer"
-              className="rounded-lg"
-              style={{ width: 24, height: 24, backgroundColor: 'transparent', color: 'var(--text-secondary-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              onClick={() => setExportMenuOpen((v) => !v)}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path d="M10 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" strokeWidth="2" strokeLinecap="round" />
-                <polyline points="16 3 21 3 21 8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <line x1="21" y1="3" x2="13" y2="11" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            </button>
-            {exportMenuOpen && (
-              <div className="rounded-lg" style={{ position: 'absolute', right: 0, top: 28, zIndex: 60, background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', minWidth: 220, boxShadow: '0 4px 14px rgba(0,0,0,0.2)' }}>
-                <div className="p-1">
-                  <button
-                    type="button"
-                    className="w-full text-left rounded px-2 py-1 text-[12px]"
-                    style={{ color: 'var(--text-secondary-strong)' }}
-                    onClick={async () => { setExportMenuOpen(false); await exportMarkdown(); }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  >
-                    Static · Markdown (.md)
-                  </button>
-                  <button
-                    type="button"
-                    className="w-full text-left rounded px-2 py-1 text-[12px]"
-                    style={{ color: 'var(--text-secondary-strong)' }}
-                    onClick={async () => { setExportMenuOpen(false); await exportToDocx(); }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  >
-                    Microsoft Word (.docx)
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-          {/* Refine button moved earlier (before Bring In) */}
-        </div>
-      </div>
-    </div>
-  );
-};
-// Component to analyze user's position based on their interactions
-const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRiskUpdate?: (r: { level: string; score: number; rationale?: string } | null) => void; hideTitle?: boolean }> = ({ onFirstResult, onRiskUpdate, hideTitle = false }) => {
-  const [position, setPosition] = React.useState<string | null>(null);
-  const [risk, setRisk] = React.useState<{ level: string; score: number; rationale?: string } | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const [durationMs, setDurationMs] = React.useState<number | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [showMetaDetails, setShowMetaDetails] = React.useState(false);
-  const [showTechnicalDetails, setShowTechnicalDetails] = React.useState(false);
-  const genaiChat = useGenaiChatStore();
-  const { currentUser } = useAuth();
-  const hasAssistant = React.useMemo(
-    () => genaiChat.interactions.some((it) => it.kind === 'assistant' && (it.contentSanitized || it.content)),
-    [genaiChat.interactions]
-  );
-  // Latest user interaction and whether it already has eval.stance
-  const lastUserInter = React.useMemo(() => {
-    const ints = [...useGenaiChatStore.getState().interactions].filter((it) => it.kind === 'user');
-    return ints.length > 0 ? ints[ints.length - 1] : null;
-  }, [genaiChat.interactions.length]);
-  const hasEvalForLatestUser = React.useMemo(() => {
-    try {
-      if (!lastUserInter) return false;
-      return !![...useGenaiChatStore.getState().interactions].reverse()
-        .find((it) => it.subkind === 'eval.stance' && it.replyTo === lastUserInter.id);
-    } catch { return false; }
-  }, [genaiChat.interactions.length, lastUserInter?.id]);
-  // Most recent previous stance text (not tied to the current last user)
-  const previousStanceText = React.useMemo(() => {
-    try {
-      const ints = [...useGenaiChatStore.getState().interactions].reverse();
-      for (const it of ints) {
-        if (it.subkind === 'eval.stance' && (!lastUserInter || it.replyTo !== lastUserInter.id)) {
-          return (it.contentSanitized || it.content) as string;
-        }
-      }
-      return null as any;
-    } catch { return null as any; }
-  }, [genaiChat.interactions.length, lastUserInter?.id]);
-  const notifiedRef = React.useRef(false);
-  // Read the latest stored stance for the latest USER message (source of truth)
-  const stanceForLatestUser = React.useMemo(() => {
-    try {
-      if (!lastUserInter?.id) return null as any;
-      const ints = [...useGenaiChatStore.getState().interactions].reverse();
-      const hit = ints.find((it) => it.subkind === 'eval.stance' && it.replyTo === lastUserInter.id);
-      return hit || null;
-    } catch { return null as any; }
-  }, [genaiChat.interactions.length, lastUserInter?.id]);
-
-  React.useEffect(() => {
-    // Skip if stance for the latest USER message already exists
-    if (hasEvalForLatestUser) return;
-    let cancelled = false;
-    const run = async () => {
-      // Require authenticated user and at least one USER message
-      if (!currentUser?.uid) return;
-      if (!lastUserInter?.id) return;
-      setLoading(true);
-      setError(null);
-      try {
-        const started = performance.now();
-        const st = useGenaiChatStore.getState();
-        // Get all user interactions
-        const userInteractions = st.interactions.filter((it) => it.kind === 'user');
-        if (userInteractions.length === 0) {
-          setError('No user queries to analyze yet.');
-          return;
-        }
-        // Build transcript of user messages
-        const transcript = userInteractions.map((it) => 
-          (it.summary && it.summary.trim()) ? it.summary : it.content
-        ).join('\n');
-
-        // Determine preferred language (fallback to EN)
-        const lang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-
-        // Strict JSON schema for stance with risk profile
-        const riskCategories = [
-          'medical_or_mental_health',
-          'self_harm_or_life_threats',
-          'law_immigration_tax_finance_investments_insurance',
-          'relationships_abuse_children_vulnerable_groups',
-          'safety_emergency',
-        ];
-        const schema = {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            stance: { type: 'string', minLength: 1, maxLength: 600 },
-            riskProfile: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                score: { type: 'number', minimum: 0, maximum: 1 },
-                level: { type: 'string', enum: ['High', 'Medium', 'Low'] },
-                rationale: { type: 'string', minLength: 1, maxLength: 600 },
-                triggerCategories: { type: 'array', items: { type: 'string', enum: riskCategories }, minItems: 0 },
-              },
-              required: ['score', 'level', 'rationale', 'triggerCategories'],
-            },
-          },
-          required: ['stance', 'riskProfile'],
-        } as any;
-        const schemaText = JSON.stringify(schema, null, 2);
-        const categoriesText = JSON.stringify(riskCategories);
-
-        const prevBlock = previousStanceText && previousStanceText.trim().length > 0
-          ? `\n\nPREVIOUS_STANCE (for reference, refine if intent shifted):\n${previousStanceText}\n`
-          : '';
-        const prompt = `In this request, you act as an external expert and must return your assessment STRICTLY following the provided JSON schema. Return ONLY JSON (no prose, no markdown, no code fences).
-
-User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
-All natural-language fields (stance, riskProfile.rationale) must be written strictly in the required language.
-
-Task: From the user queries below, neutrally extract:
-- stance: 1–2 concise sentences (<=100 words) written DIRECTLY to the user in SECOND PERSON ("you"). Do NOT describe the user in the third person. State what you seem to be pursuing, your perspective and deep intent, avoiding moral judgement and unsupported assumptions.
-- riskProfile: EU AI Act risk assessment with score 0..1 and derived level. If you need to reference the user in rationale, also use SECOND PERSON ("you").
-High risk auto-triggers (must set level to High ONLY if the user seeks PERSONAL, ACTIONABLE advice in these areas; general or educational discussion does NOT trigger High):
-- Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов — только персональные рекомендации/советы по здоровью, диагнозам, схемам/дозировкам/отмене; НЕ включает общие сведения, новости фарма/здравполитики, обсуждение индустрии или науки без личных указаний.
-- Самоповреждение/суицид/угрозы жизни и безопасности — всегда High при признаках просьбы о помощи/инструкциях.
-- Право/иммиграция/налоги/личные финансы/инвестиции/страхование — только персональные советы, инвестиционные рекомендации, налоговое/юридическое планирование; НЕ включает макроэкономику, монетарную/бюджетную политику, институциональные финансы, общие обзоры рынков/экономики.
-- Отношения/абьюз/дети/уязвимые группы — только персональные ситуации и советы; НЕ включает абстрактные рассуждения, социологию/культуру без личного контекста.
-- Безопасность/экстренные ситуации — персональные инструкции/советы по действиям в ЧС.
-General note: classify as High only when guidance could materially impact an individual's health, safety, legal or personal financial outcomes; otherwise lower level.
-RISK LEVEL RULES:
-- High: score in [0.7, 1]
-- Medium: score in [0.3, 0.7)
-- Low: score in [0, 0.3)
-Use triggerCategories strictly from DICTIONARY (English tokens only):
-${categoriesText}
-The JSON MUST conform EXACTLY to this schema (no additional keys, types must match):
-${schemaText}
-
-USER QUERIES:
-${transcript}
-${prevBlock}`;
-
-        const settingsState = useGenAISettings.getState();
-        const modelAlias = (settingsState.stanceModel && settingsState.stanceModel.trim()) ? settingsState.stanceModel : 'gemini_fast';
-        console.log('[UserPositionAnalysis] sending structured stance', { model: modelAlias, promptChars: prompt.length });
-        const response = await api.genaiGenerate({
-          model: modelAlias,
-          prompt,
-          strictJSONEnabled: true,
-          jsonSchema: schema,
-          maxOutputTokens: Math.max(2048, 4096),
-          webSearchEnabled: true,
-          toolCallingEnabled: false,
-          temperature: 0.2,
-        });
-        const finished = performance.now();
-
-        if (!cancelled) {
-          try {
-            const rawJSON = (response as any)?.rawJSON;
-            if (typeof rawJSON === 'string' && rawJSON.trim().length > 0) {
-              console.log('[UserPositionAnalysis] raw model JSON', { model: modelAlias, rawJSON });
-            } else {
-              console.log('[UserPositionAnalysis] raw model content', { model: modelAlias, content: response?.content });
-            }
-          } catch {}
-
-          let parsed: any = null;
-          try {
-            if (typeof response?.content === 'string') {
-              const s = response.content.trim();
-              if (s.startsWith('{') || s.startsWith('[')) parsed = JSON.parse(s);
-            }
-            const rawJSON = (response as any)?.rawJSON;
-            if (!parsed && typeof rawJSON === 'string') {
-              const s2 = rawJSON.trim();
-              if (s2.startsWith('{') || s2.startsWith('[')) parsed = JSON.parse(s2);
-            }
-            if (!parsed && typeof response?.content === 'string') {
-              const m = response.content.match(/\{[\s\S]*\}/);
-              if (m && m[0]) parsed = JSON.parse(m[0]);
-            }
-          } catch {}
-
-          const stanceText = (parsed && typeof parsed === 'object' && typeof parsed.stance === 'string') ? parsed.stance.trim() : '';
-          // Extract temporary risk info for display
-          const clamp01 = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
-          const rp = (parsed && typeof parsed === 'object') ? (parsed as any).riskProfile : null;
-          const riskLevel = rp && typeof rp.level === 'string' ? rp.level : null;
-          const riskScore = rp && typeof rp.score !== 'undefined' ? clamp01(rp.score) : null;
-          const riskRationale = rp && typeof rp.rationale === 'string' ? rp.rationale : null;
-
-          if (stanceText) {
-            setPosition(stanceText);
-            if (riskLevel && typeof riskScore === 'number') {
-              setRisk({ level: riskLevel, score: riskScore, rationale: riskRationale || undefined });
-              try { onRiskUpdate && onRiskUpdate({ level: riskLevel, score: riskScore, rationale: riskRationale || undefined }); } catch {}
-            } else {
-              setRisk(null);
-              try { onRiskUpdate && onRiskUpdate(null); } catch {}
-            }
-            // Create eval.stance interaction linked to the latest USER interaction and persist to server
-            try {
-              const stAll = useGenaiChatStore.getState();
-              const evalId = Date.now().toString() + '-eval-stance-u';
-              const projectId = stAll.projectId;
-              const risk = (riskLevel && typeof riskScore === 'number') ? { level: riskLevel as any, score: riskScore, rationale: riskRationale || undefined } : undefined;
-              
-              // Add to local state
-              useGenaiChatStore.setState((s) => ({
-                interactions: [
-                  ...s.interactions,
-                  {
-                    id: evalId,
-                    projectId: s.projectId,
-                    kind: 'system',
-                    subkind: 'eval.stance',
-                    content: stanceText,
-                    contentSanitized: stanceText,
-                    replyTo: lastUserInter ? lastUserInter.id : undefined,
-                    relations: lastUserInter ? [{ type: 'evaluates', targetId: lastUserInter.id }] : undefined,
-                    highRisk: risk,
-                    language: lang,
-                    createdAt: new Date().toISOString(),
-                  } as any,
-                ],
-              } as any));
-              
-              // Persist to server
-              if (projectId && projectId !== 'local-unfold' && lastUserInter) {
-                (async () => {
-                  try {
-                    const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
-                    const serverReplyTo = map[lastUserInter.id] || lastUserInter.id;
-                    
-                    const payload: any = {
-                      kind: 'system',
-                      subkind: 'eval.stance',
-                      content: stanceText,
-                      replyTo: serverReplyTo,
-                      relations: [{ type: 'evaluates', targetId: serverReplyTo }],
-                      language: lang,
-                    };
-                    if (risk) payload.highRisk = risk;
-                    
-                    const res = await api.createProjectInteraction(projectId, payload);
-                    
-                    // Update local interaction with server ID
-                    useGenaiChatStore.setState((st) => {
-                      const items = [...st.interactions];
-                      const idx = items.findIndex((it) => it.id === evalId);
-                      if (idx >= 0) { (items[idx] as any).id = res.id; }
-                      
-                      const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
-                      newMap[evalId] = res.id;
-                      
-                      return { interactions: items, persistedByLocalId: newMap } as any;
-                    });
-                    
-                    console.log('[UserPositionAnalysis] eval.stance persisted to server', { evalId, serverId: res.id });
-                  } catch (e) {
-                    console.warn('[UserPositionAnalysis] Failed to persist eval.stance to server', e);
-                  }
-                })();
-              }
-            } catch (e) {
-              console.warn('[UserPositionAnalysis] Failed to create eval.stance', e);
-            }
-            setDurationMs(Math.max(1, Math.round(finished - started)));
-            setError(null);
-            if (!notifiedRef.current) {
-              notifiedRef.current = true;
-              onFirstResult && onFirstResult();
-            }
-          } else {
-            setError('The model returned an empty result.');
-            setRisk(null);
-            try { onRiskUpdate && onRiskUpdate(null); } catch {}
-          }
-        }
-      } catch (err: any) {
-        console.error('[UserPositionAnalysis] Error:', err);
-        if (!cancelled) setError(err?.message || 'Failed to analyze position.');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    run();
-    return () => { cancelled = true; };
-  }, [genaiChat.interactions, currentUser?.uid, hasEvalForLatestUser, lastUserInter?.id]);
-
-  // Do not render until есть хотя бы одно сообщение пользователя
-  if (!lastUserInter) return null;
-  const sanitizeSx = (s: string) => {
-    try { return (s || '').replace(/<!--\s*@sx:[\s\S]*?-->/g, '').trim(); } catch { return s; }
-  };
-  const agg = genaiChat.stanceAggregate;
-
-  // Display content: prefer stanceForLatestUser, fallback to position, then previousStanceText
-  const displayContent = stanceForLatestUser 
-    ? (stanceForLatestUser.contentSanitized || stanceForLatestUser.content)
-    : position 
-      ? position 
-      : previousStanceText;
-  
-  // Display risk: prefer from stanceForLatestUser, fallback to local risk state
-  const displayRisk = stanceForLatestUser?.highRisk || risk;
-
-  return (
-    <div className="mt-3 p-3">
-      {!hideTitle && (<div className="text-13 mb-2" style={{ color: '#669999' }}>How you engage</div>)}
-      {error ? (
-        <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{error}</div>
-      ) : displayContent ? (
-        <>
-          <div className="text-12 fade-in" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5', opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
-            {sanitizeSx(displayContent as string)}
-          </div>
-          {displayRisk && (
-            <div className="mt-2 mb-2">
-              {(() => {
-                const hr = displayRisk;
-                if (!hr) return null as any;
-                
-                const level = hr.level || 'Low';
-                
-                // Determine badge text and colors based on risk level
-                let badgeText = 'This discussion is safe';
-                let bgColor = 'rgba(34, 197, 94, 0.1)'; // green
-                let borderColor = 'rgba(34, 197, 94, 0.3)';
-                let textColor = 'rgb(34, 197, 94)';
-                
-                if (level === 'High') {
-                  badgeText = 'High risk detected';
-                  bgColor = 'rgba(239, 68, 68, 0.1)'; // red
-                  borderColor = 'rgba(239, 68, 68, 0.3)';
-                  textColor = 'rgb(239, 68, 68)';
-                } else if (level === 'Medium') {
-                  badgeText = 'Moderate risk detected';
-                  bgColor = 'rgba(251, 191, 36, 0.1)'; // yellow/orange
-                  borderColor = 'rgba(251, 191, 36, 0.3)';
-                  textColor = 'rgb(251, 191, 36)';
-                }
-                
-                return (
-                  <span 
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium"
-                    style={{ 
-                      backgroundColor: bgColor,
-                      border: `1px solid ${borderColor}`,
-                      color: textColor
-                    }}
-                  >
-                    {badgeText}
-                  </span>
-                );
-              })()}
-            </div>
-          )}
-          {displayRisk?.rationale && (
-            <div className="text-[11px] mt-1" style={{ color: 'var(--text-secondary-strong)' }}>
-              {displayRisk.rationale}
-            </div>
-          )}
-          {typeof durationMs === 'number' && !stanceForLatestUser && (
-            <div className="text-[11px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-              Time: {durationMs} ms
-            </div>
-          )}
-          {agg && typeof agg === 'object' && (
-            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                  {(() => {
-                    const messagesAnalyzed = (agg as any)?.lastAnalyzedMessageCount;
-                    const samples = (agg as any)?.samples;
-                    const label = typeof messagesAnalyzed === 'number' && messagesAnalyzed > 0
-                      ? `Conversation insights (${messagesAnalyzed} messages)`
-                      : (typeof samples === 'number' && samples > 0 ? `Conversation insights (${samples} update${samples > 1 ? 's' : ''})` : 'Conversation insights');
-                    return label;
-                  })()}
-                </div>
-                <button
-                  type="button"
-                  className="text-[10px] underline"
-                  style={{ color: 'var(--text-secondary-strong)' }}
-                  onClick={() => setShowMetaDetails(!showMetaDetails)}
-                >
-                  {showMetaDetails ? 'Hide' : 'Show'}
-                </button>
-              </div>
-              
-              {/* Who Leads - Always visible */}
-              {typeof agg.whoLeads === 'string' && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>
-                      {agg.whoLeads === 'User' ? 'You lead' : agg.whoLeads === 'AI' ? 'AI leads' : 'Mixed control'}
-                    </span>
-                  </div>
-                  <div className="text-[10px] mt-1" style={{ color: 'var(--text-secondary-strong)' }}>
-                    {agg.whoLeads === 'User' 
-                      ? 'You drive the discussion by asking clear questions, setting direction, and making decisions'
-                      : agg.whoLeads === 'AI' 
-                      ? 'The AI is steering the conversation by suggesting topics and next steps - you can take more control by being more directive'
-                      : 'You and the AI take turns driving the conversation, sharing initiative'}
-                  </div>
-                </div>
-              )}
-              
-              {showMetaDetails && (
-                <>
-                  {/* Key Insights */}
-                  {(() => {
-                    try {
-                      const insights = generateKeyInsights(agg);
-                      if (insights.length === 0) return null;
-                      return (
-                        <div className="space-y-2 mb-3">
-                          {insights.map((insight, idx) => {
-                            const iconColor = insight.sentiment === 'positive' ? 'hsl(120, 50%, 50%)' : insight.sentiment === 'negative' ? 'hsl(0, 50%, 50%)' : 'hsl(45, 70%, 55%)';
-                            return (
-                              <div key={idx} className="flex items-start gap-2">
-                                <div className="w-1 h-1 rounded-full mt-1.5" style={{ backgroundColor: iconColor, flexShrink: 0 }} />
-                                <div className="flex-1">
-                                  <div className="text-[11px]" style={{ color: 'var(--text-heading)' }}>{insight.title}</div>
-                                  <div className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{insight.description}</div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    } catch (e) {
-                      console.error('[Meta] Failed to generate insights:', e);
-                      return null;
-                    }
-                  })()}
-
-                  {/* Technical Details Toggle */}
-                  <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Technical details</span>
-                    <button
-                      type="button"
-                      className="text-[9px] underline"
-                      style={{ color: 'var(--text-secondary-strong)' }}
-                      onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
-                    >
-                      {showTechnicalDetails ? 'Hide' : 'Show'}
-                    </button>
-                  </div>
-
-                  {showTechnicalDetails && (
-                    <div className="space-y-2 mt-2">
-                      {typeof agg.whoLeads === 'string' && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Dialog control:</span>
-                          <span className="text-[10px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>{agg.whoLeads}</span>
-                        </div>
-                      )}
-                      {typeof agg.effectiveness === 'number' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Effectiveness:</span>
-                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.effectiveness)}</span>
-                          </div>
-                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: formatPercent(agg.effectiveness), height: '100%', backgroundColor: getMetricColor(agg.effectiveness), transition: 'width 0.3s ease' }} />
-                          </div>
-                        </div>
-                      )}
-                      {typeof agg.leadershipIndex === 'number' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Leadership:</span>
-                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.leadershipIndex)}</span>
-                          </div>
-                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: formatPercent(agg.leadershipIndex), height: '100%', backgroundColor: getMetricColor(agg.leadershipIndex) }} />
-                          </div>
-                        </div>
-                      )}
-                      {typeof agg.focusRetention === 'number' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Focus retention:</span>
-                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.focusRetention)}</span>
-                          </div>
-                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: formatPercent(agg.focusRetention), height: '100%', backgroundColor: getMetricColor(agg.focusRetention) }} />
-                          </div>
-                        </div>
-                      )}
-                      {typeof agg.structureScore === 'number' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Structure:</span>
-                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.structureScore)}</span>
-                          </div>
-                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: formatPercent(agg.structureScore), height: '100%', backgroundColor: getMetricColor(agg.structureScore) }} />
-                          </div>
-                        </div>
-                      )}
-                      {agg.lastResults && typeof agg.lastResults === 'object' && (() => {
-                        try {
-                          const res = agg.lastResults as any;
-                          const results = Array.isArray(res.results) ? res.results : [];
-                          if (results.length === 0) return null;
-                          
-                          const analyzerDetails = results.map((r: any) => {
-                            const name = r.analyzer || r.Analyzer || 'unknown';
-                            const resultData = r.result || r.Result || {};
-                            return { name, data: resultData };
-                          });
-
-                          return (
-                            <div className="mt-2 pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-                              <div className="text-[9px] mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
-                                Detailed patterns ({analyzerDetails.length} analyzers):
-                              </div>
-                              <div className="space-y-3">
-                                {analyzerDetails.map((a: any, i: number) => {
-                                  const data: any = a.data || {};
-                                  const interpretations: string[] = [];
-                                  
-                                  try {
-                                    if (a.name === 'thinking') {
-                                      if (data.depth?.label) interpretations.push(interpretThinkingDepth(data.depth.label));
-                                      if (Array.isArray(data.timeHorizon) && data.timeHorizon.length > 0) {
-                                        data.timeHorizon.slice(0, 2).forEach((h: any) => {
-                                          if (h?.label) interpretations.push(interpretTimeHorizon(h.label));
-                                        });
-                                      }
-                                      if (data.uncertainty?.label) interpretations.push(interpretUncertainty(data.uncertainty.label));
-                                    } else if (a.name === 'decisions') {
-                                      if (data.process?.label) interpretations.push(interpretDecisionProcess(data.process.label));
-                                      if (data.riskAttitude?.label) interpretations.push(interpretRiskAttitude(data.riskAttitude.label));
-                                      if (data.criteriaStyle?.label) interpretations.push(interpretCriteriaStyle(data.criteriaStyle.label));
-                                    } else if (a.name === 'comm' || a.name === 'communication' || a.name === 'communicationPatterns') {
-                                      if (data.clarity?.label) interpretations.push(interpretClarity(data.clarity.label));
-                                      if (data.abstraction?.label) interpretations.push(interpretAbstraction(data.abstraction.label));
-                                      if (data.contextCompleteness?.label) interpretations.push(interpretContextCompleteness(data.contextCompleteness.label));
-                                    } else if (a.name === 'learning') {
-                                      if (data.metaAwareness?.label) interpretations.push(interpretMetaAwareness(data.metaAwareness.label));
-                                      if (data.dynamics?.label) interpretations.push(interpretLearningDynamics(data.dynamics.label));
-                                      if (data.integration?.label) interpretations.push(interpretIntegration(data.integration.label));
-                                    } else if (a.name === 'biases') {
-                                      if (Array.isArray(data.biases) && data.biases.length > 0) {
-                                        data.biases.slice(0, 3).forEach((b: any) => {
-                                          if (b?.label) interpretations.push(`${b.label}${b.intensity ? ` (${formatPercent(b.intensity)})` : ''}`);
-                                        });
-                                      }
-                                    }
-                                  } catch {}
-                                  
-                                  if (interpretations.length === 0) return null;
-                                  
-                                  const analyzerLabel = a.name === 'thinking' ? 'Thinking' : a.name === 'decisions' ? 'Decision-making' : a.name === 'comm' || a.name === 'communication' ? 'Communication' : a.name === 'learning' ? 'Learning' : a.name === 'biases' ? 'Cognitive biases' : a.name;
-                                  
-                                  return (
-                                    <div key={i}>
-                                      <div className="text-[9px] mb-1" style={{ color: 'var(--text-heading)' }}>
-                                        {analyzerLabel}
-                                      </div>
-                                      <div className="space-y-0.5">
-                                        {interpretations.map((interp, idx) => (
-                                          <div key={idx} className="text-[9px] pl-2" style={{ color: 'var(--text-secondary-strong)' }}>
-                                            • {interp}
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          );
-                        } catch (e) { 
-                          console.error('[Meta] Failed to parse lastResults:', e, agg.lastResults);
-                          return null; 
-                        }
-                      })()}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="text-12" style={{ color: 'var(--text-secondary)' }}>No clear position identified.</div>
-      )}
-    </div>
-  );
-};
-// Component to evaluate quality/style/biases of assistant answers and suggest system prompt improvements
-const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult }) => {
-  const [review, setReview] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const [durationMs, setDurationMs] = React.useState<number | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const genaiChat = useGenaiChatStore();
-  const { currentUser } = useAuth();
-  const { i18n: i18nCore } = useTranslation();
-  const hasAssistant = React.useMemo(() =>
-    genaiChat.messages.some((m) => m.role === 'assistant' && m.content && m.content.trim().length > 0),
-    [genaiChat.messages]
-  );
-  const lastAssistant = React.useMemo(() => {
-    const ints = useGenaiChatStore.getState().interactions.filter((it) => it.kind === 'assistant' && (it.contentSanitized || it.content));
-    return ints.length > 0 ? ints[ints.length - 1] : null;
-  }, [genaiChat.interactions.length]);
-  const lastReviewedId = React.useRef<string | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      if (!currentUser?.uid) return;
-      // Trigger only AFTER streaming completes and a new assistant message is available
-      if (genaiChat.streaming) return;
-      if (!lastAssistant) return;
-      // Skip evaluations for assistant summaries generated without LLM
-      try {
-        const sk = String((lastAssistant as any).subkind || '').toLowerCase();
-        if (sk === 'prestance.summary' || sk === 'analysis.summary') {
-          lastReviewedId.current = lastAssistant.id;
-          return;
-        }
-      } catch {}
-      if (lastReviewedId.current === lastAssistant.id) return;
-      
-      // Check if eval.bias already exists for this assistant message
-      try {
-        const map = (genaiChat as any).persistedByLocalId || {};
-        const serverId = map[lastAssistant.id];
-        const reverseMap: Record<string, string[]> = {};
-        Object.entries(map).forEach(([local, server]) => {
-          if (!reverseMap[server as string]) reverseMap[server as string] = [];
-          reverseMap[server as string].push(local);
-        });
-        const localIds = reverseMap[lastAssistant.id] || [];
-        const existingEvalBias = [...genaiChat.interactions].reverse().find((it: any) => 
-          it.subkind === 'eval.bias' && 
-          (it.replyTo === lastAssistant.id || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
-        );
-        if (existingEvalBias) {
-          console.log('[LLMEvaluation] eval.bias already exists for message', lastAssistant.id, '- skipping recalculation');
-          lastReviewedId.current = lastAssistant.id;
-          return; // Skip evaluation if it already exists
-        }
-      } catch (e) {
-        console.warn('[LLMEvaluation] Failed to check existing eval.bias', e);
-      }
-      
-      setLoading(true);
-      setError(null);
-      try {
-        const started = performance.now();
-        // Prefer local interactions (assistant), fallback to chat messages
-        const st = useGenaiChatStore.getState();
-        const assistantInteractions = st.interactions.filter((it: any) => it.kind === 'assistant');
-        let texts: string[] = [];
-        if (assistantInteractions.length > 0) {
-          const last = assistantInteractions.slice(Math.max(0, assistantInteractions.length - 5));
-          texts = last.map((it: any) => (it.summary && it.summary.trim()) ? it.summary : it.content);
-        } else {
-          const all = genaiChat.messages.filter((m) => m.role === 'assistant' && m.content && m.content.trim());
-          const last = all.slice(Math.max(0, all.length - 5));
-          texts = last.map((m) => m.content);
-        }
-        if (texts.length === 0) {
-          setError('No assistant replies to evaluate yet.');
-          return;
-        }
-        const transcript = texts.join('\n\n---\n\n');
-        const lang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'RU') : 'RU').toLowerCase();
-        const nowISO = new Date().toISOString();
-        const prompt = `User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are an expert LLM output reviewer.
-Current date/time (trustworthy, real-time): ${nowISO}.
-The ASSISTANT model that produced these replies had access to up-to-date information via search grounding (web search).
-Evaluate the following ASSISTANT responses (most recent last). Provide:
-1) Brief quality assessment (strengths/weaknesses)
-2) Style characteristics (tone, structure, clarity)
-3) Potential biases/safety concerns
-4) 3-5 concrete improvements to the SYSTEM INSTRUCTION to improve future answers
-5) A short note referencing the five-dimension thoughtfulness rubric used for the structured score (do not include numbers here)
-Important: Do not critique formatting or output length; formatting/verbosity are enforced elsewhere.
-Assistant responses:
-${transcript}
-Respond concisely in the specified language (${lang}). Use short bullet points where appropriate. Return plain text only (no JSON/markdown). If unsure, write 'No issues found'.`;
-
-        // Kick off async structured eval of the latest assistant message (strict JSON)
-        {
-          const settingsStateEval = useGenAISettings.getState();
-          const evalModel = (settingsStateEval.stanceModel && settingsStateEval.stanceModel.trim()) ? settingsStateEval.stanceModel : 'gemini_fast';
-        const textToEvaluate = ((lastAssistant as any)?.contentSanitized || (lastAssistant as any)?.content || '').trim();
-          if (textToEvaluate) {
-            (async () => {
-              try {
-                const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                const langName = (() => {
-                  switch (preferredLang) {
-                    case 'ru': return 'Russian';
-                    case 'en': return 'English';
-                    case 'kk':
-                    case 'kz': return 'Kazakh';
-                    default: return 'Russian';
-                  }
-                })();
-                const biasDict = [
-                  'confirmation_bias',
-                  'selection_bias',
-                  'framing_bias',
-                  'recency_bias',
-                  'availability_bias',
-                  'cultural_bias',
-                  'geo_linguistic_bias',
-                  'authority_bias',
-                  'safety_over_caution_skew',
-                  'overclaiming',
-                  'overgeneralization',
-                  'loaded_language'
-                ];
-                const schema = {
-                  type: 'object',
-                  additionalProperties: false,
-                  properties: {
-                    biasLevel: { type: 'number', minimum: 0, maximum: 1 },
-                    categories: {
-                      type: 'array',
-                      minItems: 1,
-                      maxItems: 2,
-                      items: {
-                        type: 'object',
-                        additionalProperties: false,
-                        properties: {
-                          code: { type: 'string', enum: biasDict },
-                          explanation: { type: 'string', minLength: 10, maxLength: 600 }
-                        },
-                        required: ['code', 'explanation']
-                      }
-                    },
-                    // Thoughtfulness rubric
-                    thoughtfulnessLevel: { type: 'number', minimum: 0, maximum: 1 },
-                    thoughtfulnessDimensions: {
-                      type: 'object',
-                      additionalProperties: false,
-                      properties: {
-                        analyticalDepth: { type: 'number', minimum: 0, maximum: 1 },
-                        epistemicHumility: { type: 'number', minimum: 0, maximum: 1 },
-                        alternativeConsideration: { type: 'number', minimum: 0, maximum: 1 },
-                        evidenceReasoningQuality: { type: 'number', minimum: 0, maximum: 1 },
-                        practicalGrounding: { type: 'number', minimum: 0, maximum: 1 },
-                      },
-                      required: [
-                        'analyticalDepth',
-                        'epistemicHumility',
-                        'alternativeConsideration',
-                        'evidenceReasoningQuality',
-                        'practicalGrounding'
-                      ]
-                    },
-                    biases: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 5 },
-                    biasTypes: { type: 'array', items: { type: 'string', enum: biasDict }, minItems: 0 }
-                  },
-                  required: ['biasLevel', 'categories']
-                } as any;
-                const schemaText = JSON.stringify(schema, null, 2);
-                const dictText = JSON.stringify(biasDict);
-                // Find the most recent USER message before the evaluated assistant reply
-                let prevUserText: string | null = null;
-                try {
-                  const allInts = useGenaiChatStore.getState().interactions;
-                  const idx = allInts.findIndex((it) => it.id === (lastAssistant as any)?.id);
-                  if (idx > 0) {
-                    for (let i = idx - 1; i >= 0; i--) {
-                      if (allInts[i].kind === 'user' && allInts[i].content && (allInts[i].content as string).trim()) {
-                        prevUserText = allInts[i].content as string;
-                        break;
-                      }
-                    }
-                  }
-                } catch {}
-                const ctxBlock = prevUserText && prevUserText.trim().length > 0
-                  ? `USER_MESSAGE (context, do NOT evaluate this text):\n${prevUserText}\n\n`
-                  : '';
-                const targetBlock = `ASSISTANT_REPLY (to evaluate):\n${textToEvaluate}`;
-                const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nField names (exact):\n- Required: biasLevel, categories, thoughtfulnessLevel, thoughtfulnessDimensions\n- categories: array of 1–2 objects, each with 'code' (from DICTIONARY) and 'explanation' (how this bias manifests in the evaluated text; 1–3 sentences).\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counterfacts; categorical claims.\n\nTHOUGHTFULNESS SCALE (0.0–1.0): Evaluate across FIVE dimensions. Each dimension must be scored in 0.1 increments. The overall thoughtfulnessLevel MUST be the MEAN of the five dimensions, rounded to one decimal (0.1).\n\nDIMENSION 1: Analytical Depth\n0.0–0.3: Surface-level; restates question; binary conclusions; no causal reasoning\n0.4–0.6: Identifies 1–2 factors; basic causality; limited mechanism explanation\n0.7–0.8: Multi-factor analysis; explores mechanisms; shows interactions between factors\n0.9–1.0: Systems-level thinking; second-order effects; identifies non-obvious dependencies\n\nDIMENSION 2: Epistemic Humility\n0.0–0.3: Presents all claims as certainties; no acknowledgment of limits\n0.4–0.6: Single hedge ("this might" / "generally") without explaining uncertainty sources\n0.7–0.8: Multiple explicit uncertainty markers; names what is unknown; discusses confidence levels\n0.9–1.0: Distinguishes knowns/unknowns/unknowables; explains why confidence varies; identifies what would change assessment\n\nDIMENSION 3: Alternative Consideration\n0.0–0.3: Single path; no alternatives mentioned\n0.4–0.6: Mentions alternatives but doesn't explore trade-offs\n0.7–0.8: Explores 2+ alternatives with explicit trade-offs for each\n0.9–1.0: Compares alternatives on multiple dimensions; discusses context-dependency of choice; identifies decision criteria\n\nDIMENSION 4: Evidence & Reasoning Quality\n0.0–0.3: Assertions without support; anecdotal reasoning; logical fallacies present\n0.4–0.6: Some supporting reasoning but gaps/leaps present; informal logic\n0.7–0.8: Structured argument; reasoning explicit; minimal logical gaps\n0.9–1.0: Rigorous reasoning chain; anticipates objections; cites evidence types (even if not specific sources); distinguishes correlation/causation\n\nDIMENSION 5: Practical Grounding\n0.0–0.3: Abstract theory only; no real-world constraints; ignores implementation\n0.4–0.6: Mentions constraints but doesn't integrate them; generic recommendations\n0.7–0.8: Discusses real constraints (resources, time, politics); context-specific guidance\n0.9–1.0: Anticipates implementation challenges; discusses failure modes; provides decision heuristics for ambiguous cases\n\nSCORING INSTRUCTIONS:\n1) Score each dimension independently (0.0–1.0 in 0.1 increments)\n2) thoughtfulnessLevel = mean(dimensions), rounded to 0.1\n3) A response can score high on depth but low on humility → the average must reflect all\n4) Generic LLM responses typically score 0.4–0.6 (not 0.9)\n5) Reserve 0.8+ for genuinely exceptional reasoning\n\nEXAMPLES:\nLow (0.2): "Just do X. It's the best approach."\n→ Depth: 0.1, Humility: 0.0, Alternatives: 0.0, Evidence: 0.2, Grounding: 0.3 = 0.12\n\nMedium (0.5): "X is generally better because [reason]. However, Y might work in some cases."\n→ Depth: 0.4, Humility: 0.5, Alternatives: 0.5, Evidence: 0.5, Grounding: 0.6 = 0.5\n\nHigh (0.8): "X offers [trade-off 1] while Y provides [trade-off 2]. Choice depends on [factors]. Uncertainty exists around [specific aspect] because [reason]. In [context A], prefer X; in [context B], Y may be better. Implementation risks include [failure modes]."\n→ Depth: 0.8, Humility: 0.8, Alternatives: 0.9, Evidence: 0.8, Grounding: 0.8 = 0.82\n\nDICTIONARY for categories.code (English tokens only):\n${dictText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\n${ctxBlock}${targetBlock}\n\nEvaluate ONLY the ASSISTANT_REPLY both standalone and IN RELATION to USER_MESSAGE (if provided). Do NOT assess the user's content. Return only the JSON.`;
-                const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
-                console.log('[StanceEval] sending structured eval', { model: evalModel, promptChars: promptEval.length });
-                const res = await api.genaiGenerate({
-                  model: evalModel,
-                  prompt: promptEval,
-                  strictJSONEnabled: true,
-                  jsonSchema: schema,
-                  maxOutputTokens: 4096,
-                  webSearchEnabled: false,
-                  systemInstruction: langDirective,
-                });
-                // Debug raw model response for evaluation
-                try {
-                  const rawJSON = (res as any)?.rawJSON;
-                  if (typeof rawJSON === 'string' && rawJSON.trim().length > 0) {
-                    console.log('[StanceEval] raw model JSON', { model: evalModel, rawJSON });
-                  } else {
-                    console.log('[StanceEval] raw model content', { model: evalModel, content: res?.content });
-                  }
-                } catch {}
-                let parsed: any = null;
-                try {
-                  if (typeof res?.content === 'string') {
-                    const s = res.content.trim();
-                    if (s.startsWith('{') || s.startsWith('[')) parsed = JSON.parse(s);
-                  }
-                  const rawJSON = (res as any)?.rawJSON;
-                  if (!parsed && typeof rawJSON === 'string') {
-                    const s2 = rawJSON.trim();
-                    if (s2.startsWith('{') || s2.startsWith('[')) parsed = JSON.parse(s2);
-                  }
-                  if (!parsed && typeof res?.content === 'string') {
-                    const m = res.content.match(/\{[\s\S]*\}/);
-                    if (m && m[0]) {
-                      parsed = JSON.parse(m[0]);
-                    }
-                  }
-                } catch (pe) {
-                  console.warn('[StanceEval] parse failed', pe, { contentPreview: (res?.content || '').slice(0, 200) });
-                }
-                if (!parsed || typeof parsed !== 'object') {
-                  console.log('[StanceEval] no structured JSON parsed, skipping eval');
-                  return;
-                }
-                const clamp01 = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
-                const dimsObj = (() => {
-                  try {
-                    const d = parsed?.thoughtfulnessDimensions || {};
-                    if (!d || typeof d !== 'object') return undefined;
-                    return {
-                      analyticalDepth: clamp01(d.analyticalDepth),
-                      epistemicHumility: clamp01(d.epistemicHumility),
-                      alternativeConsideration: clamp01(d.alternativeConsideration),
-                      evidenceReasoningQuality: clamp01(d.evidenceReasoningQuality),
-                      practicalGrounding: clamp01(d.practicalGrounding),
-                    };
-                  } catch { return undefined; }
-                })();
-                const thLevel = (() => {
-                  if (typeof parsed?.thoughtfulnessLevel === 'number') return clamp01(parsed.thoughtfulnessLevel);
-                  if (dimsObj && Object.values(dimsObj).every((v) => typeof v === 'number')) {
-                    const vals = Object.values(dimsObj) as number[];
-                    return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
-                  }
-                  return clamp01(parsed?.thoughtfulness);
-                })();
-                const ev = {
-                  biasLevel: clamp01(parsed?.biasLevel),
-                  thoughtfulnessLevel: thLevel,
-                  thoughtfulness: thLevel,
-                  thoughtfulnessDimensions: dimsObj,
-                  categories: Array.isArray(parsed?.categories)
-                    ? parsed.categories
-                        .filter((c: any) => c && typeof c.code === 'string')
-                        .slice(0, 2)
-                        .map((c: any) => ({ code: String(c.code), explanation: typeof c.explanation === 'string' ? c.explanation : '' }))
-                    : []
-                } as any;
-                console.log('[StanceEval] structured eval result', { model: evalModel, ev });
-                useGenaiChatStore.getState().setEvaluation(lastAssistant.id, ev);
-                // Create eval.bias for assistant and persist to server
-                try {
-                  const evalId = Date.now().toString() + '-eval-bias-a';
-                  const projectId = useGenaiChatStore.getState().projectId;
-                  
-                  // Add to local state first
-                  useGenaiChatStore.setState((s) => ({
-                    interactions: [
-                      ...s.interactions,
-                      {
-                        id: evalId,
-                        projectId: s.projectId,
-                        kind: 'system',
-                        subkind: 'eval.bias',
-                        content: JSON.stringify(ev),
-                        contentSanitized: JSON.stringify(ev),
-                        replyTo: lastAssistant.id,
-                        relations: [{ type: 'evaluates', targetId: lastAssistant.id }],
-                        createdAt: new Date().toISOString(),
-                      } as any,
-                    ],
-                  } as any));
-                  
-                  // Persist to server (async, don't block UI)
-                  if (projectId && projectId !== 'local-unfold') {
-                    (async () => {
-                      try {
-                        const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
-                        const serverReplyTo = map[lastAssistant.id] || lastAssistant.id;
-                        
-                        const payload: any = {
-                          kind: 'system',
-                          subkind: 'eval.bias',
-                          content: JSON.stringify(ev),
-                          replyTo: serverReplyTo,
-                          relations: [{ type: 'evaluates', targetId: serverReplyTo }],
-                        };
-                        
-                        const res = await api.createProjectInteraction(projectId, payload);
-                        
-                        // Update local interaction with server ID
-                        useGenaiChatStore.setState((st) => {
-                          const items = [...st.interactions];
-                          const idx = items.findIndex((it) => it.id === evalId);
-                          if (idx >= 0) { (items[idx] as any).id = res.id; }
-                          
-                          const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
-                          newMap[evalId] = res.id;
-                          
-                          return { interactions: items, persistedByLocalId: newMap } as any;
-                        });
-                        
-                        console.log('[LLMEvaluation] eval.bias persisted to server', { evalId, serverId: res.id });
-                      } catch (e) {
-                        console.warn('[LLMEvaluation] Failed to persist eval.bias to server', e);
-                      }
-                    })();
-                  }
-                } catch (e) {
-                  console.warn('[LLMEvaluation] Failed to create eval.bias', e);
-                }
-
-                // Also derive assistant stance with risk (eval.stance for assistant)
-                try {
-                  (async () => {
-                    // Check if eval.stance already exists
-                    try {
-                      const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
-                      const serverId = map[lastAssistant.id];
-                      const reverseMap: Record<string, string[]> = {};
-                      Object.entries(map).forEach(([local, server]) => {
-                        if (!reverseMap[server as string]) reverseMap[server as string] = [];
-                        reverseMap[server as string].push(local);
-                      });
-                      const localIds = reverseMap[lastAssistant.id] || [];
-                      const existingStance = [...useGenaiChatStore.getState().interactions].reverse().find((it: any) => 
-                        it.subkind === 'eval.stance' && 
-                        (it.replyTo === lastAssistant.id || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
-                      );
-                      if (existingStance) {
-                        console.log('[StanceEval] eval.stance already exists for message', lastAssistant.id, '- skipping');
-                        return;
-                      }
-                    } catch (e) {
-                      console.warn('[StanceEval] Failed to check existing eval.stance', e);
-                    }
-                    
-                    const riskCategories = [
-                      'medical_or_mental_health',
-                      'self_harm_or_life_threats',
-                      'law_immigration_tax_finance_investments_insurance',
-                      'relationships_abuse_children_vulnerable_groups',
-                      'safety_emergency',
-                    ];
-                    const schemaSt = {
-                      type: 'object',
-                      additionalProperties: false,
-                      properties: {
-                        stance: { type: 'string', minLength: 1, maxLength: 600 },
-                        riskProfile: {
-                          type: 'object',
-                          additionalProperties: false,
-                          properties: {
-                            score: { type: 'number', minimum: 0, maximum: 1 },
-                            level: { type: 'string', enum: ['High', 'Medium', 'Low'] },
-                            rationale: { type: 'string', minLength: 1, maxLength: 600 },
-                            triggerCategories: { type: 'array', items: { type: 'string', enum: riskCategories }, minItems: 0 },
-                          },
-                          required: ['score', 'level', 'rationale', 'triggerCategories'],
-                        },
-                      },
-                      required: ['stance', 'riskProfile'],
-                    } as any;
-                    const schemaText = JSON.stringify(schemaSt, null, 2);
-                    const categoriesText = JSON.stringify(riskCategories);
-                    const requiredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'RU') : 'RU').toLowerCase();
-                    const promptSt = `In this request, you act as an external expert and must return your assessment STRICTLY following the provided JSON schema. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${requiredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\nAll natural-language fields (stance, riskProfile.rationale) must be written strictly in the required language.\n\nTask: From the assistant's reply below, neutrally extract:\n- stance: 1–2 concise sentences (<=100 words) that state what the assistant seems to be asserting/pursuing, avoiding moral judgement and unsupported assumptions.\n- riskProfile: EU AI Act risk assessment with score 0..1 and derived level.\n\nHigh risk auto-triggers (must set level to High ONLY if the content provides PERSONAL, ACTIONABLE guidance in these areas; general/educational discussion does NOT trigger High):\n- Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов (только персональные рекомендации)\n- Самоповреждение/суицид/угрозы жизни и безопасности (всегда High при инструкциях)\n- Право/иммиграция/налоги/личные финансы/инвестиции/страхование (только персональные советы)\n- Отношения/абьюз/дети/уязвимые группы (только персональные ситуации и советы)\n- Безопасность/экстренные ситуации (персональные инструкции)\n\nRISK LEVEL RULES:\n- High: score in [0.7, 1]\n- Medium: score in [0.3, 0.7)\n- Low: score in [0, 0.3)\n\nUse triggerCategories strictly from DICTIONARY (English tokens only):\n${categoriesText}\n\nThe JSON MUST conform EXACTLY to this schema (no additional keys, types must match):\n${schemaText}\n\nASSISTANT REPLY:\n${textToEvaluate}`;
-                    const stRes = await api.genaiGenerate({ model: evalModel, prompt: promptSt, strictJSONEnabled: true, jsonSchema: schemaSt, maxOutputTokens: 2048, webSearchEnabled: false });
-                    let parsedSt: any = null;
-                    try {
-                      if (typeof stRes?.content === 'string') {
-                        const s = stRes.content.trim();
-                        if (s.startsWith('{') || s.startsWith('[')) parsedSt = JSON.parse(s);
-                      }
-                      const rawJSON2 = (stRes as any)?.rawJSON;
-                      if (!parsedSt && typeof rawJSON2 === 'string') {
-                        const s2 = rawJSON2.trim();
-                        if (s2.startsWith('{') || s2.startsWith('[')) parsedSt = JSON.parse(s2);
-                      }
-                    } catch {}
-                    if (parsedSt && typeof parsedSt === 'object' && typeof parsedSt.stance === 'string') {
-                      const stanceText = parsedSt.stance.trim();
-                      const rp = parsedSt.riskProfile || {};
-                      const clamp01b = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
-                      const risk = (rp && typeof rp.level === 'string') ? { level: rp.level as any, score: clamp01b(rp.score), rationale: typeof rp.rationale === 'string' ? rp.rationale : undefined, triggers: Array.isArray(rp.triggerCategories) ? rp.triggerCategories : undefined } : undefined;
-                      const evalId2 = Date.now().toString() + '-eval-stance-a';
-                      const projectId = useGenaiChatStore.getState().projectId;
-                      
-                      // Add to local state
-                      useGenaiChatStore.setState((s) => ({
-                        interactions: [
-                          ...s.interactions,
-                          {
-                            id: evalId2,
-                            projectId: s.projectId,
-                            kind: 'system',
-                            subkind: 'eval.stance',
-                            content: stanceText,
-                            contentSanitized: stanceText,
-                            replyTo: lastAssistant.id,
-                            relations: [{ type: 'evaluates', targetId: lastAssistant.id }],
-                            highRisk: risk,
-                            language: requiredLang,
-                            createdAt: new Date().toISOString(),
-                          } as any,
-                        ],
-                      } as any));
-                      
-                      // Persist to server
-                      if (projectId && projectId !== 'local-unfold' && lastAssistant?.id) {
-                        (async () => {
-                          try {
-                            const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
-                            const serverReplyTo = map[lastAssistant.id] || lastAssistant.id;
-                            
-                            const payload: any = {
-                              kind: 'system',
-                              subkind: 'eval.stance',
-                              content: stanceText,
-                              replyTo: serverReplyTo,
-                              relations: [{ type: 'evaluates', targetId: serverReplyTo }],
-                              language: requiredLang,
-                            };
-                            if (risk) payload.highRisk = risk;
-                            
-                            const res = await api.createProjectInteraction(projectId, payload);
-                            
-                            // Update local interaction with server ID
-                            useGenaiChatStore.setState((st) => {
-                              const items = [...st.interactions];
-                              const idx = items.findIndex((it) => it.id === evalId2);
-                              if (idx >= 0) { (items[idx] as any).id = res.id; }
-                              
-                              const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
-                              newMap[evalId2] = res.id;
-                              
-                              return { interactions: items, persistedByLocalId: newMap } as any;
-                            });
-                            
-                            console.log('[LLMEvaluation] eval.stance persisted to server', { evalId: evalId2, serverId: res.id });
-                          } catch (e) {
-                            console.warn('[LLMEvaluation] Failed to persist eval.stance to server', e);
-                          }
-                        })();
-                      }
-                    }
-                  })();
-                } catch {}
-              } catch (e) {
-                console.warn('[StanceEval] evaluation failed', e);
-              }
-            })();
-          }
-        }
-
-        // Check if eval.review already exists for this assistant message
-        try {
-          const map = (genaiChat as any).persistedByLocalId || {};
-          const serverId = map[lastAssistant.id];
-          const reverseMap: Record<string, string[]> = {};
-          Object.entries(map).forEach(([local, server]) => {
-            if (!reverseMap[server as string]) reverseMap[server as string] = [];
-            reverseMap[server as string].push(local);
-          });
-          const localIds = reverseMap[lastAssistant.id] || [];
-          const existingReview = [...genaiChat.interactions].reverse().find((it: any) => 
-            it.subkind === 'eval.review' && 
-            (it.replyTo === lastAssistant.id || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
-          );
-          if (existingReview) {
-            console.log('[LLMEvaluation] eval.review already exists for message', lastAssistant.id, '- skipping');
-            lastReviewedId.current = lastAssistant.id;
-            setReview((existingReview as any).content || (existingReview as any).contentSanitized || '');
-            setLoading(false);
-            return;
-          }
-        } catch (e) {
-          console.warn('[LLMEvaluation] Failed to check existing eval.review', e);
-        }
-        const settingsState2 = useGenAISettings.getState();
-        const modelAlias = (settingsState2.stanceModel && settingsState2.stanceModel.trim()) ? settingsState2.stanceModel : 'gemini_fast';
-        const response = await api.genaiGenerate({
-          model: modelAlias,
-          prompt,
-          temperature: 0.2,
-          maxOutputTokens: 4096,
-          webSearchEnabled: true,
-          toolCallingEnabled: false,
-          strictJSONEnabled: false,
-          systemInstruction: 'You are an expert LLM output reviewer. Always return a non-empty plain text answer in the specified language with short bullet points where appropriate.'
-        });
-        const finished = performance.now();
-        if (!cancelled) {
-          const content = (response?.content || '').trim();
-          if (content) {
-            setReview(content);
-            setDurationMs(Math.max(1, Math.round(finished - started)));
-            setError(null);
-            if (lastReviewedId.current !== lastAssistant?.id) {
-              onFirstResult && onFirstResult();
-            }
-            lastReviewedId.current = lastAssistant?.id || null;
-            // Create eval.review interaction linked to the last assistant message
-            try {
-              const evalId = Date.now().toString() + '-eval-review-a';
-              const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-              const projectId = useGenaiChatStore.getState().projectId;
-              
-              // Add to local state
-              useGenaiChatStore.setState((s) => ({
-                interactions: [
-                  ...s.interactions,
-                  {
-                    id: evalId,
-                    projectId: s.projectId,
-                    kind: 'system',
-                    subkind: 'eval.review',
-                    content: content,
-                    contentSanitized: content,
-                    replyTo: lastAssistant?.id,
-                    relations: lastAssistant?.id ? [{ type: 'evaluates', targetId: lastAssistant.id }] : undefined,
-                    language: preferredLang,
-                    createdAt: new Date().toISOString(),
-                  } as any,
-                ],
-              } as any));
-              
-              // Persist to server
-              if (projectId && projectId !== 'local-unfold' && lastAssistant?.id) {
-                (async () => {
-                  try {
-                    const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
-                    const serverReplyTo = map[lastAssistant.id] || lastAssistant.id;
-                    
-                    const payload: any = {
-                      kind: 'system',
-                      subkind: 'eval.review',
-                      content: content,
-                      replyTo: serverReplyTo,
-                      relations: [{ type: 'evaluates', targetId: serverReplyTo }],
-                      language: preferredLang,
-                    };
-                    
-                    const res = await api.createProjectInteraction(projectId, payload);
-                    
-                    // Update local interaction with server ID
-                    useGenaiChatStore.setState((st) => {
-                      const items = [...st.interactions];
-                      const idx = items.findIndex((it) => it.id === evalId);
-                      if (idx >= 0) { (items[idx] as any).id = res.id; }
-                      
-                      const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
-                      newMap[evalId] = res.id;
-                      
-                      return { interactions: items, persistedByLocalId: newMap } as any;
-                    });
-                    
-                    console.log('[LLMEvaluation] eval.review persisted to server', { evalId, serverId: res.id });
-                  } catch (e) {
-                    console.warn('[LLMEvaluation] Failed to persist eval.review to server', e);
-                  }
-                })();
-              }
-            } catch (e) {
-              console.warn('[LLMEvaluation] Failed to create eval.review', e);
-            }
-          } else {
-            setError('The model returned an empty review.');
-          }
-        }
-      } catch (err: any) {
-        console.error('[LLMEvaluation] Error:', err);
-        if (!cancelled) setError(err?.message || 'Failed to evaluate answers.');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    run();
-    return () => { cancelled = true; };
-  }, [genaiChat.streaming, lastAssistant?.id, currentUser?.uid]);
-
-  if (!hasAssistant) return null;
-  const sanitizeSx = (s: string) => {
-    try { return (s || '').replace(/<!--\s*@sx:[\s\S]*?-->/g, '').trim(); } catch { return s; }
-  };
-
-  return (
-    <div className="mt-3 p-3">
-      <div className="text-13 mb-2" style={{ color: '#669999' }}>Assistant's stance:</div>
-      {error ? (
-        <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{error}</div>
-      ) : review ? (
-        <>
-          <div className="text-12 fade-in" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5' }}>
-            {sanitizeSx(review)}
-          </div>
-          {typeof durationMs === 'number' && (
-            <div className="text-[11px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-              Time: {durationMs} ms
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="text-12" style={{ color: 'var(--text-secondary)' }}>No review yet.</div>
-      )}
-    </div>
-  );
-};
-
-// Lightweight visualization of the discussion flow (recent turns)
-const DiscussionFlow: React.FC<{ onFirstResult?: () => void }> = ({ onFirstResult }) => {
-  const genaiChat = useGenaiChatStore();
-  const notifiedRef = React.useRef(false);
-
-  React.useEffect(() => {
-    // Notify availability once there are at least 2 turns
-    const hasFlow = genaiChat.messages.length >= 2;
-    if (hasFlow && !notifiedRef.current) {
-      notifiedRef.current = true;
-      onFirstResult && onFirstResult();
-    }
-  }, [genaiChat.messages.length, onFirstResult]);
-
-  if (genaiChat.messages.length === 0) return null;
-  const recent = genaiChat.messages.slice(-8);
-
-  const trim = (s: string, n: number) => {
-    const t = (s || '').trim();
-    return t.length > n ? t.slice(0, n - 1) + '…' : t;
-  };
-
-  return (
-    <div className="mt-3 p-3">
-      <div className="text-13 mb-2" style={{ color: '#669999' }}>Discussion Flow:</div>
-      <div className="space-y-1">
-        {recent.map((m, i) => {
-          const isUser = m.role === 'user';
-          return (
-            <div key={m.id} className="text-12 flex items-start gap-2" style={{ color: 'var(--text-secondary-strong)' }}>
-              <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>
-                {isUser ? 'you' : 'assistant'}
-              </span>
-              <span style={{ whiteSpace: 'pre-wrap' }}>{trim(m.content, 220)}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Parsed @sx list moved to Artifacts panel */}
-
-      {/* Bias levels chart (user vs assistant) via Recharts */}
-      {(() => {
-        const maxPoints = 10;
-        const windowMsgs = genaiChat.messages.slice(-maxPoints);
-        if (windowMsgs.length === 0) return null;
-        const clamp01 = (x: any) => Math.max(0, Math.min(1, Number(x) || 0));
-        const data = windowMsgs.map((m, idx) => {
-          const ev = genaiChat.evaluations[m.id];
-          return {
-            idx,
-            user: m.role === 'user' && ev ? clamp01(ev.biasLevel) : null,
-            assistant: m.role === 'assistant' && ev ? clamp01(ev.biasLevel) : null,
-          };
-        });
-        return (
-          <div className="mt-3" style={{ border: '1px solid var(--overlay-line-90)', borderRadius: 8, background: 'var(--bg-elevated)' }}>
-            <div className="text-[11px] mb-1 px-2 pt-2" style={{ color: 'var(--text-tertiary-weak)' }}>Bias (last messages)</div>
-            <div className="px-2 pb-2" style={{ width: '100%' }}>
-              <ResponsiveContainer width="100%" height={140}>
-                <LineChart data={data} margin={{ top: 6, right: 12, bottom: 6, left: 6 }}>
-                  <CartesianGrid stroke="var(--overlay-line-90)" strokeDasharray="3 3" />
-                  <XAxis dataKey="idx" tick={false} axisLine={false} tickLine={false} />
-                  <YAxis domain={[0, 1]} tickFormatter={(v: number | string) => `${Math.round(Number(v) * 100)}%`} width={28} stroke="var(--overlay-line-90)" />
-                  <Tooltip formatter={(v: any) => (typeof v === 'number' ? `${Math.round(v * 100)}%` : '')} labelFormatter={() => ''} contentStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }} />
-                  <Legend wrapperStyle={{ paddingTop: 0 }} />
-                  <Line type="monotone" dataKey="user" name="you" stroke="var(--brand-25)" dot={false} isAnimationActive={false} connectNulls={false} />
-                  <Line type="monotone" dataKey="assistant" name="assistant" stroke="var(--text-secondary-strong)" strokeDasharray="4 2" dot={false} isAnimationActive={false} connectNulls={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        );
-      })()}
-    </div>
-  );
-};
-// Inline lightweight component to fetch and display title suggestions
-const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvailableChange?: (available: boolean) => void }> = ({ visible, onClose, onAvailableChange }) => {
-  const [titles, setTitles] = React.useState<string[] | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const genaiChat = useGenaiChatStore();
-  const { currentUser } = useAuth();
-  const { currentProject } = useProjectsStore();
-  const appliedProjectRef = React.useRef<string | null>(null);
-  const finalizedRef = React.useRef(false);
-  const fetchedForProjectRef = React.useRef<string | null>(null);
-  const hasAssistant = React.useMemo(() =>
-    genaiChat.messages.some((m) => m.role === 'assistant' && m.content && m.content.trim().length > 0),
-    [genaiChat.messages]
-  );
-
-  React.useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      // Require authenticated user and at least first assistant answer
-      if (!currentUser?.uid) return;
-      if (!hasAssistant) return;
-      // Guard: operate only for the active chat project id
-      let pid: string | null = null;
-      try {
-        pid = useGenaiChatStore.getState().projectId;
-        const cpid = useProjectsStore.getState().currentProject?.id;
-        if (!pid || pid === 'local-unfold' || !cpid || pid !== cpid) return;
-      } catch {}
-      // If user has already finalized a title or project already named (not Draft), skip fetching
-      try {
-        const projectId = useGenaiChatStore.getState().projectId || currentProject?.id;
-        if (projectId && projectId !== 'local-unfold' && typeof window !== 'undefined') {
-          finalizedRef.current = window.localStorage.getItem(`chatTitleFinal:${projectId}`) === '1';
-        }
-        const name = (useProjectsStore.getState().currentProject?.displayName || '').trim();
-        if (finalizedRef.current || (name && name.toLowerCase() !== 'draft')) return;
-      } catch {}
-      // If we already fetched titles for this project, don't fetch again
-      if (fetchedForProjectRef.current === pid) return;
-      setLoading(true);
-      try {
-        // Build messages from local interactions for better signal (summary if available)
-        const st = useGenaiChatStore.getState();
-        // Take up to 5 latest USER interactions (oldest->newest)
-        const userInteractions = st.interactions.filter((it) => it.kind === 'user');
-        const last5 = userInteractions.slice(Math.max(0, userInteractions.length - 5));
-        const messages = last5.map((it) => ({
-          role: 'user' as const,
-          text: (it.summary && it.summary.trim()) ? it.summary : it.content,
-        }));
-        // If empty, fallback to chat messages
-        if (messages.length === 0) {
-          const fallbackAll = genaiChat.messages.filter((m) => m.role === 'user');
-          const fallbackLast5 = fallbackAll.slice(Math.max(0, fallbackAll.length - 5));
-          const fallback: Array<{ role: 'user'; text: string }> = fallbackLast5.map((m) => ({ role: 'user', text: m.content }));
-          fallback.forEach((mm) => messages.push(mm));
-        }
-        const res = await api.suggestChatTitles(messages as Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>);
-        if (!cancelled) {
-          setTitles(res);
-          // Mark this project as having titles fetched
-          if (pid) fetchedForProjectRef.current = pid;
-        }
-      } catch {
-        if (!cancelled) setTitles([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    run();
-    return () => { cancelled = true; };
-  }, [genaiChat.messages.length, currentUser?.uid, hasAssistant, currentProject?.id]);
-
-  React.useEffect(() => {
-    try { onAvailableChange && onAvailableChange(!!(titles && titles.length > 0)); } catch {}
-  }, [titles?.length]);
-
-  // When title suggestions appear, set the first suggestion as chat title, switch view to discovery and persist
-  React.useEffect(() => {
-    try {
-      if (!titles || titles.length === 0) return;
-      const first = (titles[0] || '').trim();
-      if (!first) return;
-      try {
-        const activePid = useGenaiChatStore.getState().projectId;
-        const sidePid = useProjectsStore.getState().currentProject?.id;
-        console.log('[Titles] apply candidate', { first, activePid, sidePid });
-      } catch {}
-      // Guard: only auto-apply for the exact active chat project id
-      const activePid = ((): string | null => { try { return useGenaiChatStore.getState().projectId || null; } catch { return null; } })();
-      if (!activePid || !currentProject?.id || activePid !== currentProject.id) return;
-      const proj = currentProject;
-      if (!proj?.id) {
-        // Hydrate currentProject from genaiChat if it was created via ensureProject()
-        (async () => {
-          try {
-            const pid = activePid;
-            if (pid && pid !== 'local-unfold') {
-              const p = await api.getProject(pid);
-              useProjectsStore.setState((prev) => ({
-                projects: [p as any, ...prev.projects.filter((x) => x.id !== (p as any).id)],
-                currentProject: p as any,
-              }));
-            }
-          } catch {}
-        })();
-        return;
-      }
-      if (appliedProjectRef.current === proj.id) return; // already applied for this project instance
-      if ((proj.displayName || '').trim() === first && (proj.view || '') === 'discovery') { appliedProjectRef.current = proj.id; return; }
-      (async () => {
-        try {
-          await api.updateProject(activePid, { displayName: first, view: 'discovery' } as any);
-          console.log('[Titles] auto-applied to project', { projectId: activePid, name: first });
-          useProjectsStore.setState((prev) => {
-            const exists = prev.projects.some((p) => p.id === activePid);
-            const updated = { ...(prev.currentProject || proj), id: activePid, displayName: first, view: 'discovery' } as any;
-            return {
-              projects: exists
-                ? prev.projects.map((p) => (p.id === activePid ? { ...p, displayName: first, view: 'discovery' } : p))
-                : [{ id: activePid, displayName: first, view: 'discovery' } as any, ...prev.projects],
-              currentProject: updated,
-            } as any;
-          });
-          appliedProjectRef.current = activePid;
-          // Finalize: suppress future suggestions and hide component permanently
-          try { if (typeof window !== 'undefined') window.localStorage.setItem(`chatTitleFinal:${activePid}`, '1'); } catch {}
-          finalizedRef.current = true;
-          try { onAvailableChange && onAvailableChange(false); } catch {}
-          try { onClose && onClose(); } catch {}
-          setTitles(null);
-        } catch {}
-      })();
-    } catch {}
-  }, [titles && titles[0], currentProject?.id]);
-  // Never render UI; only background auto-apply logic is kept
-  return null;
-};
-
-// Fixed system instructions for the cognitive environment (brand-neutral)
-const HATL_ONE_INSTRUCTIONS = (
-  `You operate inside a cognitive environment. Do not mention the environment name, providers, or model names unless the user asks directly or it is strictly relevant (e.g., legal or brand questions).\n\n` +
-  `Do not start responses with meta phrases such as "I am …" or "As …"; go straight to the substance of the user's task.\n\n` +
-  `If the user asks who you are, reply exactly: "I am an artificial intelligence inside a cognitive environment." Then immediately continue with the task.\n\n` +
-  `If the user asks about models: you may answer that the environment can autonomously select models depending on the task; if your current system instructions explicitly require disclosure, you may disclose. The user can also choose a preferred model in the environment settings.\n\n` +
-  `You currently cannot create or analyze images unless a dedicated tool is provided. When web search is enabled, you may cite sources; otherwise do not claim real-time access.`
-);
 
 const DiscoveryPage: React.FC = () => {
   const { t } = useTranslation();
@@ -2507,6 +78,7 @@ const DiscoveryPage: React.FC = () => {
   const discoveryTimeoutRef = useRef<number | null>(null);
   const genaiThinkingIntervalRef = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [staticPage, setStaticPage] = useState<null | 'privacy' | 'terms'>(null);
@@ -2604,16 +176,16 @@ const DiscoveryPage: React.FC = () => {
   }, [lastAnalysisStatus, genaiChat]);
   // Collapsible sections state: sectionId -> collapsed
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  // Expanded chip state: only one chip can be expanded at a time (messageId-type-index or interactionId-type-index)
+  const [expandedChip, setExpandedChip] = useState<string | null>(null);
   // Toggles for collapsible analysis sections
   const [showUserAnalysis, setShowUserAnalysis] = useState(false);
   const [showLLMReview, setShowLLMReview] = useState(false);
   const [showDiscussionFlow, setShowDiscussionFlow] = useState(false);
-  const [showArtifacts, setShowArtifacts] = useState(false);
-  const [leftPanel, setLeftPanel] = useState<'user' | 'flow' | 'artifacts' | null>(null);
+  const [leftPanel, setLeftPanel] = useState<'user' | 'flow' | null>(null);
   const [badgeUser, setBadgeUser] = useState(false);
   const [badgeLLM, setBadgeLLM] = useState(false);
   const [badgeFlow, setBadgeFlow] = useState(false);
-  const [badgeArtifacts, setBadgeArtifacts] = useState(false);
   // Bottom slot (TitleSuggestions) min height to align its top with chat input top
   const [titleSlotMinHeight, setTitleSlotMinHeight] = useState<number>(48);
   const [titlesVisible, setTitlesVisible] = useState(true);
@@ -2661,7 +233,14 @@ const DiscoveryPage: React.FC = () => {
   const scrollToInteraction = (id: string) => {
     try {
       const el = typeof document !== 'undefined' ? document.querySelector(`[data-interaction-id="${id}"]`) as HTMLElement | null : null;
-      if (el && typeof el.scrollIntoView === 'function') {
+      if (el && messagesRef.current) {
+        const rect = el.getBoundingClientRect();
+        const host = messagesRef.current;
+        const hostRect = host.getBoundingClientRect();
+        const offset = rect.top - hostRect.top + host.scrollTop - host.clientHeight / 2;
+        host.scrollTo({ top: Math.max(0, offset), behavior: 'smooth' });
+      } else if (el && typeof el.scrollIntoView === 'function') {
+        // Fallback if messagesRef is not available
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     } catch {}
@@ -2670,7 +249,6 @@ const DiscoveryPage: React.FC = () => {
   const [availUserAnalysis, setAvailUserAnalysis] = useState(false);
   const [availLLMReview, setAvailLLMReview] = useState(false);
   const [availDiscussionFlow, setAvailDiscussionFlow] = useState(false);
-  const [availArtifacts, setAvailArtifacts] = useState(false);
   const [riskBanner, setRiskBanner] = useState<null | { visible: boolean; level: 'High'|'Medium'|'Low'; rationale: string }>(null);
   const [isHighRisk, setIsHighRisk] = useState(false);
   const hasAssistant = React.useMemo(
@@ -2758,15 +336,6 @@ const DiscoveryPage: React.FC = () => {
     } catch {}
   }, [genaiChat.interactions.length]);
 
-  // Derive availability of Artifacts (entities/metrics) from centralized store
-  React.useEffect(() => {
-    try {
-      const arts = useGenaiChatStore.getState().artifacts;
-      const has = (arts.entities && arts.entities.length > 0) || (arts.metrics && arts.metrics.length > 0);
-      setAvailArtifacts(!!has);
-      if (has) setBadgeArtifacts(true);
-    } catch {}
-  }, [genaiChat.interactions.length]);
 
   // Background-load user preferred language (does not block UI). Do not change UI language or <html lang> here.
   useEffect(() => {
@@ -2799,12 +368,41 @@ const DiscoveryPage: React.FC = () => {
     }
   }, [currentUser?.email, connectWs]);
 
+  // Centralized function to reset chat state (used for New Chat, deleting current chat, and switching chats)
+  const resetChatState = React.useCallback((resetToLocal: boolean = true) => {
+    // Clear right side: sources, status, input, current chat, interactions
+    clearSources();
+    // Start a fresh draft for the next message
+    setQueryText('');
+    // Reset high-risk state
+    setIsHighRisk(false);
+    setRiskBanner(null);
+    // Reset Unfold chat state and analysis artifacts
+    try {
+      const st = useGenaiChatStore.getState();
+      if (resetToLocal) {
+        st.reset();
+        st.setProjectId('local-unfold');
+        try { console.log('[resetChatState] reset -> projectId set to local-unfold'); } catch {}
+      }
+    } catch {}
+    setShowUserAnalysis(false);
+    setShowLLMReview(false);
+    setShowDiscussionFlow(false);
+    // Clear analysis summary dedupe cache
+    try { notifiedAnalysesRef.current = new Set(); } catch {}
+  }, [clearSources]);
+
   useEffect(() => {
     const pid = currentProject?.id;
     if (pid) {
       try {
         const st = useGenaiChatStore.getState();
-        if (st.projectId !== pid) {
+        const wasDifferentProject = st.projectId !== pid;
+        if (wasDifferentProject) {
+          // Clear local UI states when switching to a different project
+          resetChatState(false);
+          // Set new project ID (this clears chat state in store)
           st.setProjectId(pid);
         }
       } catch {}
@@ -2818,7 +416,7 @@ const DiscoveryPage: React.FC = () => {
     } else {
       clearSources();
     }
-  }, [currentProject?.id]);
+  }, [currentProject?.id, resetChatState]);
 
   // Timer for chat "Thinking..." state
   useEffect(() => {
@@ -2967,15 +565,9 @@ const DiscoveryPage: React.FC = () => {
               const meta = useGenaiChatStore.getState().messageMeta[interId];
               const agentName = meta?.headerText || 'agent';
               const prof = meta?.agentProfile;
-              const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+              const preferredLang = getPreferredLanguage();
               // Open AgentPalette in edit mode anchored to input area
-              const anchor = (() => {
-                try {
-                  const el = (document.querySelector('#unfold-request-container') || document.querySelector('#app') || document.body) as HTMLElement;
-                  const rect = el.getBoundingClientRect();
-                  return { top: rect.top - 8, left: rect.left, width: rect.width, height: rect.height };
-                } catch { return null as any; }
-              })();
+              const anchor = getAnchorRect();
               const ctxNode = (
                 <div>
                   <div><b>Fragment:</b> {selectedText.slice(0, 200)}{selectedText.length > 200 ? '…' : ''}</div>
@@ -2989,7 +581,7 @@ const DiscoveryPage: React.FC = () => {
                 const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. We provide the full assistant answer (FULL_ANSWER) and a specific fragment (SELECTED_FRAGMENT) the user wants to modify. The user request is (USER_REQUEST).\n\nReturn ONLY the updated fragment. Preserve the fragment's existing formatting and structure where possible, and use Markdown appropriately (headings ###, lists, emphasis, blank lines) if it helps readability and does not contradict the request. Do not add any preface, labels, or explanations. Do not wrap the result in code fences. Do NOT return JSON.\n\nFULL_ANSWER:\n${full}\n\nSELECTED_FRAGMENT:\n${selectedText}\n\nUSER_REQUEST:\n${request}\n`;
                 const settings = useGenAISettings.getState();
                 const useModel = prof?.model || settings.model;
-                const sxSystemInstruction = `Hidden-instructions protocol (do not show to users):\n- When you need to output service instructions (entities, metrics, watchlist, relations), emit ONLY HTML comments <!-- @sx:{JSON} -->.`;
+                const sxSystemInstruction = getSxSystemInstructionShort();
                 const options: any = {
                   profile: /_quality$/i.test(useModel || '') ? 'quality' : 'fast',
                   modelOverride: useModel,
@@ -3173,17 +765,36 @@ const DiscoveryPage: React.FC = () => {
           e.preventDefault();
           try {
             const sel = window.getSelection?.()?.toString()?.trim() || '';
-            if (!sel) return;
+            if (!sel) {
+              console.warn('[AddToNotes] No selection found');
+              return;
+            }
             const range = document.getSelection()?.getRangeAt(0);
             const startEl = range ? (range.startContainer.nodeType === 3 ? (range.startContainer.parentElement) : (range.startContainer as Element)) as Element | null : null;
             const interId = startEl?.closest('.markdown')?.getAttribute('data-interaction-id') || '';
-            const it = interId ? useGenaiChatStore.getState().interactions.find((x: any) => x.id === interId) : undefined as any;
-            if (!it) return;
+            if (!interId) {
+              console.warn('[AddToNotes] No interaction ID found');
+              return;
+            }
+            const store = useGenaiChatStore.getState();
+            const it = store.interactions.find((x: any) => x.id === interId);
+            if (!it) {
+              console.warn('[AddToNotes] Interaction not found', { interId, availableIds: store.interactions.map((x: any) => x.id).slice(0, 5) });
+              return;
+            }
+            const projectId = store.projectId;
+            if (!projectId || projectId === 'local-unfold') {
+              console.warn('[AddToNotes] Invalid project ID', { projectId });
+              return;
+            }
+            // Resolve server ID if local ID is mapped
+            const map = (store as any).persistedByLocalId || {};
+            const serverId = map[it.id] || it.id;
             const meta = it.metadata || {};
             const notes = Array.isArray(meta.notes) ? [...meta.notes] : [];
             notes.push(sel);
-            await api.updateProjectInteraction(useGenaiChatStore.getState().projectId, it.id, { metadata: { pinned: true, notes } });
-            await useGenaiChatStore.getState().hydrateInteractions();
+            await api.updateProjectInteraction(projectId, serverId, { metadata: { pinned: true, notes } });
+            await store.hydrateInteractions();
             // Hide selection UI and clear selection after successful add
             if (selectionMenuRef.current) selectionMenuRef.current.style.display = 'none';
             if (selectionBtnRef.current) selectionBtnRef.current.style.display = 'none';
@@ -3460,10 +1071,6 @@ const DiscoveryPage: React.FC = () => {
     };
   }, [showAddSourceMenu]);
 
-  const getPreferredLanguage = () => {
-    const preferred = (localStorage.getItem('preferredLanguage') || 'EN').toLowerCase();
-    return preferred && preferred.length === 2 ? preferred : 'en';
-  };
 
   const normalizeTelegramInput = (value: string): string | null => {
     const v = (value || '').trim();
@@ -3513,7 +1120,15 @@ const DiscoveryPage: React.FC = () => {
     if (!confirm(`Delete "${projectName}"?`)) return;
     
     try {
+      // Check if the deleted chat is currently open
+      const isCurrentChat = currentProject?.id === projectId || genaiChat.projectId === projectId;
+      
       await deleteProject(projectId);
+      
+      // If we deleted the current chat, reset it like "New Chat"
+      if (isCurrentChat) {
+        resetChatState();
+      }
     } catch (error) {
       console.error('Failed to delete chat:', error);
     }
@@ -3589,8 +1204,7 @@ const DiscoveryPage: React.FC = () => {
       const projectId = currentProject?.id || '';
       
       console.log('[Discovery] Executing with projectId:', projectId);
-      const preferred = (localStorage.getItem('preferredLanguage') || 'EN').toLowerCase();
-      const lang = preferred && preferred.length === 2 ? preferred : 'en';
+      const lang = getPreferredLanguage();
       const result = await executeDiscovery({
         projectId,
         queryText,
@@ -3782,6 +1396,7 @@ const DiscoveryPage: React.FC = () => {
       const kind = e?.detail?.kind as 'privacy' | 'terms';
       if (kind === 'privacy' || kind === 'terms') {
         setShowSettings(false);
+        setShowAccount(false);
         setStaticPage(kind);
       }
     };
@@ -3822,25 +1437,7 @@ const DiscoveryPage: React.FC = () => {
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
                 onClick={() => {
-                  // Clear right side: sources, status, input, current chat, interactions
-                  clearSources();
-                  // Start a fresh draft for the next message
-                  setQueryText('');
-                  // Reset high-risk state
-                  setIsHighRisk(false);
-                  setRiskBanner(null);
-                  // Reset Unfold chat state and analysis artifacts
-                  try {
-                    useGenaiChatStore.getState().reset();
-                    useGenaiChatStore.getState().setProjectId('local-unfold');
-                    try { console.log('[NewChat] reset -> projectId set to local-unfold'); } catch {}
-                  } catch {}
-                  setShowUserAnalysis(false);
-                  setShowLLMReview(false);
-                setShowDiscussionFlow(false);
-                setShowArtifacts(false);
-                // Clear analysis summary dedupe cache
-                try { notifiedAnalysesRef.current = new Set(); } catch {}
+                  resetChatState();
                 }}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -3898,7 +1495,7 @@ const DiscoveryPage: React.FC = () => {
             </div>
 
             {/* Analysis shortcuts (duplicate of floating buttons when sidebar hidden) */}
-            {(availUserAnalysis || availDiscussionFlow || availArtifacts) && (
+            {(availUserAnalysis || availDiscussionFlow) && (
             <div className="mb-4 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
               <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
                 {t('unfold.sections.analysis')}
@@ -3937,22 +1534,6 @@ const DiscoveryPage: React.FC = () => {
                 <span className="text-12">{t('unfold.sections.discussionFlow')}</span>
               </button>
               )}
-              {availArtifacts && (
-              <button
-                type="button"
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
-                style={{ backgroundColor: leftPanel === 'artifacts' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
-                onMouseEnter={(e) => { if (leftPanel !== 'artifacts') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { if (leftPanel !== 'artifacts') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => setLeftPanel((p) => (p === 'artifacts' ? null : 'artifacts'))}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <rect x="5" y="5" width="14" height="6" rx="1.5" strokeWidth={2} />
-                  <rect x="5" y="13" width="14" height="6" rx="1.5" strokeWidth={2} />
-                </svg>
-                <span className="text-12">{t('unfold.sections.artifacts')}</span>
-              </button>
-              )}
             </div>
             )}
 
@@ -3966,7 +1547,7 @@ const DiscoveryPage: React.FC = () => {
                   style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  onClick={() => { setShowAdmin(true); setShowSettings(false); setStaticPage(null); }}
+                  onClick={() => { setShowAdmin(true); setShowSettings(false); setShowAccount(false); setStaticPage(null); }}
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                     {/* Shield icon to reflect admin access */}
@@ -3978,17 +1559,31 @@ const DiscoveryPage: React.FC = () => {
               )}
               <button
                 type="button"
+                aria-label="Account"
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
+                style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                onClick={() => { setShowAccount(true); setShowSettings(false); setShowAdmin(false); setStaticPage(null); }}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Account</span>
+              </button>
+              <button
+                type="button"
                 aria-label={t('unfold.sections.settings')}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
                 style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => setShowSettings(true)}
+                onClick={() => { setShowSettings(true); setShowAccount(false); setShowAdmin(false); setStaticPage(null); }}
               >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  {/* Outlined gear (non-filled), simple and monotone */}
-                  <circle cx="12" cy="12" r="4.5" strokeWidth={2} />
-                  <path strokeLinecap="round" strokeWidth={2} d="M12 3v2M12 19v2M3 12h2M19 12h2M5.636 5.636l1.414 1.414M16.95 7.05l1.414-1.414M18.364 18.364l-1.414-1.414M7.05 16.95l-1.414 1.414" />
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                  <circle cx="12" cy="12" r="3" />
                 </svg>
                 <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.settings')}</span>
               </button>
@@ -4014,25 +1609,8 @@ const DiscoveryPage: React.FC = () => {
 
           <button
             onClick={() => {
-              // Perform the same actions as the "New Chat" button in the sidebar
-              clearSources();
-              // Start a fresh draft for the next message
-              setQueryText('');
-                // Reset high-risk state
-                setIsHighRisk(false);
-                setRiskBanner(null);
-              try {
-                useGenaiChatStore.getState().reset();
-                useGenaiChatStore.getState().setProjectId('local-unfold');
-                try { console.log('[NewChat:compact] reset -> projectId set to local-unfold'); } catch {}
-              } catch {}
-              setShowUserAnalysis(false);
-              setShowLLMReview(false);
-                setShowDiscussionFlow(false);
-                setShowArtifacts(false);
+              resetChatState();
               setLeftPanel(null);
-              // Clear analysis summary dedupe cache
-              try { notifiedAnalysesRef.current = new Set(); } catch {}
             }}
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
             style={{ backgroundColor: 'var(--newchat-bg)', color: 'var(--text-heading)', marginTop: '8px' }}
@@ -4084,30 +1662,13 @@ const DiscoveryPage: React.FC = () => {
             </button>
           )}
 
-          {/* Artifacts button (visible only when artifacts are available) */}
-          {availArtifacts && (
-            <button
-              onClick={() => { setLeftPanel((p) => (p === 'artifacts' ? null : 'artifacts')); }}
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
-              style={{ backgroundColor: leftPanel === 'artifacts' ? '#669999' : 'var(--newchat-bg)', color: leftPanel === 'artifacts' ? 'white' : 'var(--text-heading)', marginTop: '8px' }}
-              aria-label={t('unfold.sections.artifacts')}
-              title={t('unfold.sections.artifacts')}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'artifacts' ? '#669999' : 'var(--newchat-bg-hover)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'artifacts' ? '#669999' : 'var(--newchat-bg)'; }}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <rect x="5" y="5" width="14" height="6" rx="1.5" strokeWidth={2} />
-                <rect x="5" y="13" width="14" height="6" rx="1.5" strokeWidth={2} />
-              </svg>
-            </button>
-          )}
         </div>
       )}
 
       {/* Mirror toggle button on the right edge (independent of sidebar) */}
       <button
         type="button"
-        aria-label="Toggle Right Panel"
+        aria-label="Toggle Workspace Library"
         className="mirror-doc-btn rounded-lg flex items-center justify-center transition-all duration-300"
         style={{ position: 'fixed', right: 8, top: 76, width: 32, height: 32, color: 'white', zIndex: 40 }}
         onClick={() => {
@@ -4119,8 +1680,9 @@ const DiscoveryPage: React.FC = () => {
         }}
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-          <path d="M6 3h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M13 3v5h5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M8 7h8M8 11h8M8 15h4" strokeWidth={2} strokeLinecap="round" />
         </svg>
       </button>
 
@@ -4196,11 +1758,11 @@ const DiscoveryPage: React.FC = () => {
         </svg>
       </button>
       {/* Floating Settings button (visible only when sidebar is hidden) */}
-      {!sideOpen && !showSettings && (
+      {!sideOpen && !showSettings && !showAccount && (
         <button
           type="button"
-          aria-label={t('unfold.sections.settings')}
-          onClick={() => setShowSettings(true)}
+          aria-label="Account"
+          onClick={() => setShowAccount(true)}
           className="rounded-lg transition-colors flex items-center justify-center"
           style={{
             position: 'fixed',
@@ -4216,9 +1778,9 @@ const DiscoveryPage: React.FC = () => {
           onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
         >
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <circle cx="12" cy="12" r="4.5" strokeWidth={2} />
-            <path strokeLinecap="round" strokeWidth={2} d="M12 3v2M12 19v2M3 12h2M19 12h2M5.636 5.636l1.414 1.414M16.95 7.05l1.414-1.414M18.364 18.364l-1.414-1.414M7.05 16.95l-1.414 1.414" />
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
           </svg>
         </button>
       )}
@@ -4281,7 +1843,7 @@ const DiscoveryPage: React.FC = () => {
               {/* Header: chosen section title + close */}
               {leftPanel && (
                 <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
-                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? 'How you engage' : (leftPanel === 'flow' ? 'Discussion flow' : 'Artifacts')}</h3>
+                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? 'How you engage' : 'Discussion flow'}</h3>
                   <button type="button" aria-label="Close" title="Close" className="p-2 rounded-lg transition-colors" style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }} onClick={() => setLeftPanel(null)}>
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
@@ -4305,68 +1867,6 @@ const DiscoveryPage: React.FC = () => {
                     )}
                     {leftPanel === 'flow' && (
                       <DiscussionFlow onFirstResult={() => { setBadgeFlow(true); setAvailDiscussionFlow(true); }} />
-                    )}
-                    {leftPanel === 'artifacts' && (
-                      <div className="p-1">
-                        {(() => {
-                          const arts = genaiChat.artifacts;
-                          const any = (arts.entities && arts.entities.length > 0) || (arts.metrics && arts.metrics.length > 0);
-                          if (!any) return <div className="text-12" style={{ color: 'var(--text-secondary)' }}>No artifacts yet.</div>;
-                          return (
-                            <div className="space-y-2">
-                              {arts.entities && arts.entities.length > 0 && (
-                                <div>
-                                  <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>Entities</div>
-                                  <ul className="text-12 space-y-1" style={{ color: 'var(--text-secondary-strong)' }}>
-                                    {arts.entities.map((e, idx) => (
-                                      <li key={`ent-${idx}`} className="flex items-start gap-2">
-                                        <span aria-hidden className="w-4 h-4 flex items-center justify-center" style={{ color: 'var(--text-secondary-strong)' }}>
-                                          {e.kind === 'person' ? (
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="3.5" strokeWidth={2}/><path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth={2} strokeLinecap="round"/></svg>
-                                          ) : e.kind === 'org' ? (
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"><rect x="4" y="8" width="16" height="10" rx="2" strokeWidth={2}/><path d="M8 8V6a4 4 0 014-4h0a4 4 0 014 4v2" strokeWidth={2}/></svg>
-                                          ) : e.kind === 'product' ? (
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"><path d="M3 7l9-4 9 4-9 4-9-4z" strokeWidth={2}/><path d="M3 7v10l9 4 9-4V7" strokeWidth={2}/></svg>
-                                          ) : e.kind === 'location' ? (
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"><path d="M12 22s7-6.582 7-12a7 7 0 10-14 0c0 5.418 7 12 7 12z" strokeWidth={2}/><circle cx="12" cy="10" r="2.5" strokeWidth={2}/></svg>
-                                          ) : e.kind === 'event' ? (
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"><rect x="3" y="5" width="18" height="16" rx="2" strokeWidth={2}/><path d="M8 3v4M16 3v4M3 11h18" strokeWidth={2}/></svg>
-                                          ) : (
-                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="4" strokeWidth={2}/></svg>
-                                          )}
-                                        </span>
-                                        <div className="flex-1">
-                                          <div className="leading-[1.3]" style={{ color: 'var(--text-secondary-strong)' }}>{e.name}</div>
-                                          {e.description && <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>{e.description}</div>}
-                                        </div>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                              {arts.metrics && arts.metrics.length > 0 && (
-                                <div>
-                                  <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>Metrics</div>
-                                  <ul className="text-12 space-y-1" style={{ color: 'var(--text-secondary-strong)' }}>
-                                    {arts.metrics.map((m, idx) => (
-                                      <li key={`met-${idx}`} className="flex items-start gap-2">
-                                        <span aria-hidden className="w-4 h-4 flex items-center justify-center" style={{ color: 'var(--text-secondary-strong)' }}>
-                                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"><path d="M4 18h16" strokeWidth={2} strokeLinecap="round"/><path d="M6 18V8M10 18v-5M14 18v-9M18 18v-3" strokeWidth={2} strokeLinecap="round"/></svg>
-                                        </span>
-                                        <button type="button" className="flex-1 text-left rounded-md" style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }} title="Open metric analysis" onClick={() => { try { genaiChat.openMetricOverlay(m as any); } catch {} }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}>
-                                          <div className="leading-[1.3]" style={{ color: 'var(--text-secondary-strong)' }}>{m.metricName || (m as any).name || m.id}</div>
-                                          {m.unit && <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>Unit: {m.unit}</div>}
-                                          {m.frequency && <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>Frequency: {m.frequency}</div>}
-                                        </button>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </div>
                     )}
                   </div>
                 </div>
@@ -4513,7 +2013,26 @@ const DiscoveryPage: React.FC = () => {
           className="min-h-0 flex flex-col"
           style={{ position: 'relative', gridColumn: viewMode === 'graph' ? '2 / 4' : '2 / 3' }}
         >
-        {showSettings ? (
+        {showAccount ? (
+          <div className="w-full px-4 mt-2 mb-2">
+            <div className="mb-2 flex items-center">
+              <button
+                onClick={() => setShowAccount(false)}
+                className="p-2 rounded-lg transition-colors"
+                style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                aria-label="Back"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <div className="ml-2 text-13" style={{ color: 'var(--text-heading)' }}>Account</div>
+            </div>
+            <Account />
+          </div>
+        ) : showSettings ? (
           <div className="w-full px-4 mt-2 mb-2">
             <div className="mb-2 flex items-center">
               <button
@@ -4680,7 +2199,42 @@ const DiscoveryPage: React.FC = () => {
                   type MergedItem = { type: 'message' | 'interaction'; data: any; timestamp: number; };
                   const merged: MergedItem[] = [];
 
+                  // Add interactions first (user, assistant, and section markers)
+                  // This ensures interactions are processed before messages during streaming
+                  genaiChat.interactions
+                    .filter((it) => it.kind === 'user' || it.kind === 'assistant' || it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end')
+                    .forEach((it) => {
+                      let ts = 0;
+                      // First, try to get timestamp from originalMessageId (for messages created during streaming)
+                      // This ensures user and assistant messages from the same stream have consistent timestamps
+                      try {
+                        const originalMsgId = (it as any).originalMessageId;
+                        if (originalMsgId && typeof originalMsgId === 'string') {
+                          const parsedTs = parseInt(originalMsgId.split('-')[0]);
+                          if (!Number.isNaN(parsedTs) && parsedTs > 0) {
+                            ts = parsedTs;
+                          }
+                        }
+                      } catch {}
+                      // Fallback to createdAt if originalMessageId timestamp not available
+                      if (ts === 0) {
+                        try {
+                          const ca: any = (it as any).createdAt;
+                          if (ca && typeof ca.seconds === 'number') {
+                            ts = ca.seconds * 1000;
+                          } else if (typeof ca === 'string') {
+                            const d = Date.parse(ca);
+                            if (!Number.isNaN(d)) ts = d;
+                          } else if (typeof ca === 'number') {
+                            ts = ca;
+                          }
+                        } catch {}
+                      }
+                      merged.push({ type: 'interaction', data: it, timestamp: ts });
+                    });
+
                   // Add filtered messages (only during streaming, and not already in interactions)
+                  // These are typically assistant messages that are being streamed
                   if (genaiChat.streaming) {
                     genaiChat.messages.forEach((m) => {
                       const hasInteraction = genaiChat.interactions.some((it) => 
@@ -4688,30 +2242,13 @@ const DiscoveryPage: React.FC = () => {
                       );
                       if (!hasInteraction) {
                         // Parse timestamp from id (format: "timestamp-role")
-                        const ts = parseInt(m.id.split('-')[0]) || 0;
+                        // Use Date.now() as fallback to ensure new messages appear at the end, not at the beginning
+                        const parsedTs = parseInt(m.id.split('-')[0]);
+                        const ts = (!Number.isNaN(parsedTs) && parsedTs > 0) ? parsedTs : Date.now();
                         merged.push({ type: 'message', data: m, timestamp: ts });
                       }
                     });
                   }
-
-                  // Add interactions (user, assistant, and section markers)
-                  genaiChat.interactions
-                    .filter((it) => it.kind === 'user' || it.kind === 'assistant' || it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end')
-                    .forEach((it) => {
-                      let ts = 0;
-                      try {
-                        const ca: any = (it as any).createdAt;
-                        if (ca && typeof ca.seconds === 'number') {
-                          ts = ca.seconds * 1000;
-                        } else if (typeof ca === 'string') {
-                          const d = Date.parse(ca);
-                          if (!Number.isNaN(d)) ts = d;
-                        } else if (typeof ca === 'number') {
-                          ts = ca;
-                        }
-                      } catch {}
-                      merged.push({ type: 'interaction', data: it, timestamp: ts });
-                    });
 
                   // Sort by timestamp; on ties, ensure user appears before assistant/other
                   const priority = (item: MergedItem) => {
@@ -4771,7 +2308,7 @@ const DiscoveryPage: React.FC = () => {
                             const threshold = genaiSettings.groundingEnabled ? 35 : 20;
                             if ((genaiThinkingSeconds || 0) < threshold) return null;
                             const msg = genaiSettings.groundingEnabled
-                              ? 'The complex‑reasoning model is updating its analysis with up‑to‑date information, which may take additional time.'
+                              ? 'The model is updating its analysis with up‑to‑date information from web search, which may take additional time.'
                               : 'This model is performing complex reasoning and may respond more slowly than usual.';
                             return (
                               <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
@@ -4845,32 +2382,64 @@ const DiscoveryPage: React.FC = () => {
                           {/* Tags row: per-message chips (stable by messageId) with global fallback */}
                           {(() => {
                             try {
-                              const inter = useGenaiChatStore.getState().interactions.find((it) => it.kind === 'assistant' && (it as any).originalMessageId === m.id) as any;
+                              const store = useGenaiChatStore.getState() as any;
+                              let inter = store.interactions.find((it: any) => it.kind === 'assistant' && (it as any).originalMessageId === m.id) as any;
+                              if (!inter) {
+                                const map: Record<string, string> = store.persistedByLocalId || {};
+                                const serverId = map[m.id];
+                                if (serverId) {
+                                  inter = store.interactions.find((it: any) => it.id === serverId);
+                                }
+                              }
                               const perQ = Array.isArray(inter?.searchQueries) ? inter.searchQueries.filter(Boolean) : [];
                               const perS = Array.isArray(inter?.sources) ? inter.sources.filter(Boolean) : [];
-                              const qs = (perQ.length > 0 ? perQ : genaiChat.searchQueries).slice(0, 4);
-                              const attrs = (perS.length > 0 ? perS.map((url: string) => ({ url })) : genaiChat.attributions).slice(0, 4);
+                              const qs = perQ.slice(0, 4);
+                              const attrs = perS.length > 0 ? perS.map((url: string) => ({ url })).slice(0, 4) : [];
                               if (qs.length === 0 && attrs.length === 0) return null;
                               return (
                                 <div className="mt-1 flex flex-wrap gap-1">
                                   {qs.map((q: string, i: number) => {
+                                    const chipId = `${m.id}-q-${i}`;
+                                    const isExpanded = expandedChip === chipId;
                                     const words = String(q || '').trim().split(/\s+/);
                                     const short = words.length > 3 ? words.slice(0, 3).join(' ') + '…' : String(q || '');
+                                    const needsExpand = words.length > 3;
                                     return (
-                                      <span key={`q-${i}`} className="px-2 py-0.5 rounded-full text-[10px]" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>
-                                        {short}
-                                      </span>
+                                      <button
+                                        key={`q-${i}`}
+                                        type="button"
+                                        className="px-2 py-0.5 rounded-full text-[10px] transition-colors"
+                                        style={{ backgroundColor: isExpanded ? 'var(--white-20)' : 'var(--white-10)', color: 'var(--text-secondary-strong)', border: 'none', cursor: needsExpand ? 'pointer' : 'default' }}
+                                        onClick={() => needsExpand && setExpandedChip(isExpanded ? null : chipId)}
+                                        onMouseEnter={(e) => { if (needsExpand) (e.currentTarget as HTMLButtonElement).style.backgroundColor = isExpanded ? 'var(--white-25)' : 'var(--white-15)'; }}
+                                        onMouseLeave={(e) => { if (needsExpand) (e.currentTarget as HTMLButtonElement).style.backgroundColor = isExpanded ? 'var(--white-20)' : 'var(--white-10)'; }}
+                                      >
+                                        {isExpanded ? String(q || '') : short}
+                                      </button>
                                     );
                                   })}
                                   {attrs.map((a: any, i: number) => {
+                                    const chipId = `${m.id}-src-${i}`;
+                                    const isExpanded = expandedChip === chipId;
                                     const raw = String((a as any).url || '').replace(/^https?:\/\//i, '');
                                     const parts = raw.split('/');
                                     const host = parts[0] || '';
                                     const tail = parts[1] ? `/${parts[1]}` : '';
                                     const label = (host + tail) || (a as any).title || 'link';
+                                    const needsExpand = raw.length > (host + tail).length;
                                     return (
-                                      <a key={`src-${i}`} href={(a as any).url} target="_blank" rel="noreferrer" className="px-2 py-0.5 rounded-full text-[10px] underline" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>
-                                        {label}
+                                      <a
+                                        key={`src-${i}`}
+                                        href={(a as any).url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="px-2 py-0.5 rounded-full text-[10px] underline transition-colors"
+                                        style={{ backgroundColor: isExpanded ? 'var(--white-20)' : 'var(--white-10)', color: 'var(--text-secondary-strong)' }}
+                                        onClick={(e) => { if (needsExpand) { e.preventDefault(); setExpandedChip(isExpanded ? null : chipId); } }}
+                                        onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = isExpanded ? 'var(--white-25)' : 'var(--white-15)'; }}
+                                        onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = isExpanded ? 'var(--white-20)' : 'var(--white-10)'; }}
+                                      >
+                                        {isExpanded ? raw : label}
                                       </a>
                                     );
                                   })}
@@ -4956,6 +2525,28 @@ const DiscoveryPage: React.FC = () => {
                         const sid = (it as any).sectionId as string | undefined;
                         if (sid && collapsedSections[sid]) return null;
                       } catch {}
+                      
+                      // Special rendering for action.bring_in indicator messages
+                      if (isUser && it.subkind === 'action.bring_in') {
+                        return (
+                          <div key={it.id} className="my-1.5 flex justify-end">
+                            <div className="px-3 py-1.5 rounded-lg text-[12px] inline-flex items-center gap-2" style={{ 
+                              background: 'var(--accent-research-10)', 
+                              color: 'var(--accent-research)',
+                              border: '1px solid var(--accent-research-20)',
+                              maxWidth: '80%'
+                            }}>
+                              <svg className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M12 7a3 3 0 1 1 0 6a3 3 0 0 1 0-6" strokeWidth="2" />
+                                <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth="2" strokeLinecap="round" />
+                                <path d="M18 7v4M16 9h4" strokeWidth="2" strokeLinecap="round" />
+                              </svg>
+                              <span>{it.content}</span>
+                            </div>
+                          </div>
+                        );
+                      }
+                      
                       const meta = genaiChat.messageMeta[it.id];
                       const header = !isUser ? (meta?.headerText || it.author?.displayName || (it.agentProfile ? 'agent' : 'assistant')) : undefined;
                       const leftAccent = !isUser ? (meta?.leftAccent ?? !!it.agentProfile) : false;
@@ -5055,7 +2646,7 @@ const DiscoveryPage: React.FC = () => {
                             <>
                               {/* Graph message rendering */}
                               {(() => {
-                                let gd = it.graphData as undefined | { chartTitle: string; table: (string | number)[][]; sources: string[] };
+                                let gd = it.graphData as undefined | { chartTitle: string; chartType?: string; table: (string | number)[][]; sources: string[] };
                                 if (!gd && it.subkind === 'graph') {
                                   try {
                                     let content = String(it.contentSanitized || it.content || '').trim();
@@ -5068,17 +2659,22 @@ const DiscoveryPage: React.FC = () => {
                                       if (m && m[0]) parsed = JSON.parse(m[0]);
                                     }
                                     if (parsed && typeof parsed === 'object' && typeof parsed.chartTitle === 'string' && Array.isArray(parsed.table) && Array.isArray(parsed.sources)) {
-                                      gd = { chartTitle: parsed.chartTitle, table: parsed.table, sources: parsed.sources };
+                                      const allowedTypes = ['line', 'bar', 'area', 'stackedBar', 'stackedArea', 'composed'];
+                                      const chartType = typeof parsed.chartType === 'string' && allowedTypes.includes(parsed.chartType) ? parsed.chartType : 'line';
+                                      gd = { chartTitle: parsed.chartTitle, chartType: chartType, table: parsed.table, sources: parsed.sources };
                                     }
                                   } catch {}
                                 }
                                 if (gd) {
                                   return (
-                                    <ChatGraphMessage
-                                      chartTitle={gd.chartTitle}
-                                      table={gd.table}
-                                      sources={gd.sources}
-                                    />
+                                    <div data-interaction-id={it.id}>
+                                      <ChatGraphMessage
+                                        chartTitle={gd.chartTitle}
+                                        chartType={gd.chartType || 'line'}
+                                        table={gd.table}
+                                        sources={gd.sources}
+                                      />
+                                    </div>
                                   );
                                 }
                                 return (
@@ -5142,10 +2738,10 @@ const DiscoveryPage: React.FC = () => {
                                             const meta = useGenaiChatStore.getState().messageMeta[it.id];
                                             const agentName = meta?.headerText || 'agent';
                                             const prof = meta?.agentProfile;
-                                            const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                                            const preferredLang = getPreferredLanguage();
                                             const settings = useGenAISettings.getState();
                                             const useModel = prof?.model || settings.model;
-                                            const sxSystemInstruction = `Hidden-instructions protocol (do not show to users):\n- When you need to output service instructions (entities, metrics, watchlist, relations), emit ONLY HTML comments <!-- @sx:{JSON} -->.`;
+                                            const sxSystemInstruction = getSxSystemInstructionShort();
                                             const options: any = {
                                               profile: /_quality$/i.test(useModel || '') ? 'quality' : 'fast',
                                               modelOverride: useModel,
@@ -5209,6 +2805,68 @@ const DiscoveryPage: React.FC = () => {
                             </div>
                               ); })()}
                               {/* End of graph/markdown conditional rendering */}
+                              {/* Tags row: per-interaction chips for assistant - BEFORE ActionRow/EvaluationDetails */}
+                              {!isUser && (() => {
+                                try {
+                                  const perQ = Array.isArray((it as any).searchQueries) ? (it as any).searchQueries.filter(Boolean) : [];
+                                  const perS = Array.isArray((it as any).sources) ? (it as any).sources.filter(Boolean) : [];
+                                  const qs = perQ.slice(0, 4);
+                                  const attrs = perS.length > 0 ? perS.map((url: string) => ({ url })).slice(0, 4) : [];
+                                  if (qs.length === 0 && attrs.length === 0) return null;
+                                  return (
+                                    <div className="mt-1">
+                                      <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>Sources:</div>
+                                      <div className="flex flex-wrap gap-1">
+                                      {qs.map((q: string, i: number) => {
+                                        const chipId = `${it.id}-q-${i}`;
+                                        const isExpanded = expandedChip === chipId;
+                                        const words = String(q || '').trim().split(/\s+/);
+                                        const short = words.length > 3 ? words.slice(0, 3).join(' ') + '…' : String(q || '');
+                                        const needsExpand = words.length > 3;
+                                        return (
+                                          <button
+                                            key={`q-${i}`}
+                                            type="button"
+                                            className="px-2 py-0.5 rounded-full text-[10px] transition-colors"
+                                            style={{ backgroundColor: isExpanded ? 'var(--white-20)' : 'var(--white-10)', color: 'var(--text-secondary-strong)', border: 'none', cursor: needsExpand ? 'pointer' : 'default' }}
+                                            onClick={() => needsExpand && setExpandedChip(isExpanded ? null : chipId)}
+                                            onMouseEnter={(e) => { if (needsExpand) (e.currentTarget as HTMLButtonElement).style.backgroundColor = isExpanded ? 'var(--white-25)' : 'var(--white-15)'; }}
+                                            onMouseLeave={(e) => { if (needsExpand) (e.currentTarget as HTMLButtonElement).style.backgroundColor = isExpanded ? 'var(--white-20)' : 'var(--white-10)'; }}
+                                          >
+                                            {isExpanded ? String(q || '') : short}
+                                          </button>
+                                        );
+                                      })}
+                                      {attrs.map((a: any, i: number) => {
+                                        const chipId = `${it.id}-src-${i}`;
+                                        const isExpanded = expandedChip === chipId;
+                                        const raw = String((a as any).url || '').replace(/^https?:\/\//i, '');
+                                        const parts = raw.split('/');
+                                        const host = parts[0] || '';
+                                        const tail = parts[1] ? `/${parts[1]}` : '';
+                                        const label = (host + tail) || (a as any).title || 'link';
+                                        const needsExpand = raw.length > (host + tail).length;
+                                        return (
+                                          <a
+                                            key={`src-${i}`}
+                                            href={(a as any).url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="px-2 py-0.5 rounded-full text-[10px] underline transition-colors"
+                                            style={{ backgroundColor: isExpanded ? 'var(--white-20)' : 'var(--white-10)', color: 'var(--text-secondary-strong)' }}
+                                            onClick={(e) => { if (needsExpand) { e.preventDefault(); setExpandedChip(isExpanded ? null : chipId); } }}
+                                            onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = isExpanded ? 'var(--white-25)' : 'var(--white-15)'; }}
+                                            onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = isExpanded ? 'var(--white-20)' : 'var(--white-10)'; }}
+                                          >
+                                            {isExpanded ? raw : label}
+                                          </a>
+                                        );
+                                      })}
+                                      </div>
+                                    </div>
+                                  );
+                                } catch { return null; }
+                              })()}
                               {!isUser && (
                                 <ActionRow messageId={it.id} isAssistant={!isUser} content={(it.contentSanitized || it.content)} />
                               )}
@@ -5223,14 +2881,28 @@ const DiscoveryPage: React.FC = () => {
                 {genaiChat.streaming && (() => {
                   try {
                     const m = genaiChat.messages[genaiChat.messages.length - 1];
-                    if (!m || m.role !== 'assistant' || m.content) return null;
+                    if (!m || m.role !== 'assistant') return null;
+                    // Don't show placeholder if message has content (streaming has started producing content)
+                    if (m.content && m.content.trim()) return null;
+                    // Don't show placeholder if this message is already in interactions (streaming completed)
+                    // Check by originalMessageId which is set when interaction is created from message
+                    const alreadyInInteractions = genaiChat.interactions.some((it) => 
+                      it.kind === 'assistant' && (
+                        it.id === m.id || 
+                        (it as any).originalMessageId === m.id
+                      )
+                    );
+                    if (alreadyInInteractions) {
+                      console.log('[ThinkingPlaceholder] Hiding placeholder - already in interactions', { messageId: m.id });
+                      return null;
+                    }
                     const header = (genaiChat.messageMeta?.[m.id]?.headerText || 'assistant');
                     const leftAccent = !!genaiChat.messageMeta?.[m.id]?.leftAccent;
                     const isQuality = genaiSettings.strength === 'quality' || /_quality$/.test(genaiSettings.model || '');
                     const threshold = genaiSettings.groundingEnabled ? 35 : 20;
                     const showInfo = (genaiThinkingSeconds || 0) >= threshold && isQuality;
                     const infoMsg = genaiSettings.groundingEnabled
-                      ? 'The complex‑reasoning model is updating its analysis with up‑to‑date information, which may take additional time.'
+                      ? 'The model is updating its analysis with up‑to‑date information from web search, which may take additional time.'
                       : 'This model is performing complex reasoning and may respond more slowly than usual.';
                     return (
                       <ChatMessage
@@ -5439,35 +3111,80 @@ const DiscoveryPage: React.FC = () => {
                 // Map UI model to backend aliases
                 const model = genaiSettings.model;
                 // Chat language preference (used in hidden system instructions)
-                const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                const langNameForPrompt = (() => {
-                  switch (preferredLang) {
-                    case 'ru': return 'Russian';
-                    case 'en': return 'English';
-                    case 'kk':
-                    case 'kz': return 'Kazakh';
-                    default: return 'English';
-                  }
-                })();
-                const sxSystemInstruction = (
-                  `Hidden-instructions protocol (do not show to users):\n` +
-                  `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
-                  `- JSON must be valid and match v: "1" with one of types: entity_mark, monitor_metric, watchlist_add, link_reference.\n` +
-                  `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
-                  `- Examples: <!-- @sx:{"v":"1","type":"entity_mark","id":"ent-001","kind":"person","name":"…","description":"…"} -->`);
+                const preferredLang = getPreferredLanguage();
+                const langNameForPrompt = getLanguageName(preferredLang);
+                const sxSystemInstruction = getSxSystemInstructionFull();
                 const graphSystemInstruction = unfoldMode === 'graph'
                   ? (
-                    `Graph output protocol (hidden; do not show to users):\n` +
-                    `- Chat language: ${langNameForPrompt}. If text labels are needed (e.g., chartTitle), use this language.\n` +
-                    `- You MUST return ONLY a valid bare JSON object with fields: chartTitle (string), table (2D array — first row are time indicators/categories, first column is label, remaining cells are int/double), sources (array of strings with source URLs).\n` +
-                    `- No markdown, no explanations, no code fences, no surrounding prose. Only JSON.`
+                    `=== GRAPH MODE ACTIVE ===\n` +
+                    `You MUST respond with ONLY a complete valid JSON object. Start with { and end with }. No text, no markdown, no explanations.\n` +
+                    `\n` +
+                    `Required JSON structure:\n` +
+                    `{\n` +
+                    `  "chartTitle": "string",\n` +
+                    `  "chartType": "line" | "bar" | "area" | "stackedBar" | "stackedArea" | "composed",\n` +
+                    `  "table": [\n` +
+                    `    ["", "Year1", "Year2", "Year3"],\n` +
+                    `    ["Label1", num1, num2, num3],\n` +
+                    `    ["Label2", num4, num5, num6]\n` +
+                    `  ],\n` +
+                    `  "sources": ["url1", "url2"]\n` +
+                    `}\n` +
+                    `\n` +
+                    `Chart type dictionary (chartType field):\n` +
+                    `- "line": Line chart - best for showing trends over time, comparing multiple series over continuous intervals\n` +
+                    `- "bar": Bar chart - best for comparing discrete categories, showing relative magnitudes\n` +
+                    `- "area": Area chart - best for showing cumulative values over time, emphasizing volume\n` +
+                    `- "stackedBar": Stacked bar chart - best for showing composition of totals across categories, part-to-whole relationships\n` +
+                    `- "stackedArea": Stacked area chart - best for showing cumulative contributions of multiple series over time\n` +
+                    `- "composed": Composed chart - best for combining different chart types (e.g., bars with lines) to show multiple perspectives\n` +
+                    `\n` +
+                    `Chart type selection:\n` +
+                    `- YOU MUST analyze the user's query and recommend the MOST APPROPRIATE chart type from the dictionary above\n` +
+                    `- Choose based on: what the user wants to show (trends vs comparisons vs compositions), data characteristics (time series vs categories), and visualization goals\n` +
+                    `- Default to "line" if uncertain, but prefer the most suitable type for the specific use case\n` +
+                    `- Set chartType to one of the dictionary values\n` +
+                    `\n` +
+                    `Table structure rules (depend on chartType):\n` +
+                    `- Common: table is a 2D array; table[0] is header row; first cell is empty string ""; other cells in header are X-axis labels;\n` +
+                    `- For chartType in ["line", "area", "stackedArea"]: X-axis MUST be a time axis (years/dates). Header cells after the first are time periods in ascending order.\n` +
+                    `- For chartType in ["bar", "stackedBar", "composed"]: X-axis MAY be time (as above) OR categorical (product/country/etc.) depending on the user request.\n` +
+                    `- Series rows (table[1..]) always: first cell is series label (country/entity/etc.), the rest are numeric values (int or double) for each X label.\n` +
+                    `- No text in numeric cells; use numbers only.\n` +
+                    `\n` +
+                    `Sources requirements:\n` +
+                    `- You MUST provide a list of sources (URLs) where the data comes from\n` +
+                    `- Include actual URLs of websites, databases, reports, or official sources you used or would reference\n` +
+                    `- If using web search, include the URLs from search results\n` +
+                    `- If specific data sources are known, include them (e.g., "https://data.worldbank.org/indicator/...", "https://ec.europa.eu/eurostat/...")\n` +
+                    `- sources must be a non-empty array of strings\n` +
+                    `\n` +
+                    `CRITICAL:\n` +
+                    `- Response MUST be a complete JSON object starting with { and ending with }\n` +
+                    `- MUST include all four fields: chartTitle, chartType, table, sources\n` +
+                    `- chartTitle: title in ${langNameForPrompt}\n` +
+                    `- chartType: MUST be one of the dictionary values: "line", "bar", "area", "stackedBar", "stackedArea", "composed"\n` +
+                    `- table: 2D array as described above\n` +
+                    `- sources: array of source URLs (REQUIRED - provide actual URLs)\n` +
+                    `- NO markdown code fences (no \`\`\`json)\n` +
+                    `- NO text before or after the JSON\n` +
+                    `\n` +
+                    `Example for R&D investments USA vs EU:\n` +
+                    `{"chartTitle":"R&D Investment Trends (% of GDP)","chartType":"line","table":[["","2013","2018","2023"],["USA",2.8,2.82,3.4],["EU",2.08,2.18,2.26]],"sources":["https://ec.europa.eu/eurostat/statistics-explained/index.php?title=R%26D_expenditure","https://data.worldbank.org/indicator/GB.XPD.RSDV.GD.ZS"]}`
                   )
                   : '';
-                const combinedSystemInstruction = [
+                // In graph mode, prioritize graph instruction by putting it first
+                const combinedSystemInstruction = unfoldMode === 'graph'
+                  ? [
+                      graphSystemInstruction,
                   genaiSettings.systemInstruction || '',
                   HATL_ONE_INSTRUCTIONS,
                   sxSystemInstruction,
-                  graphSystemInstruction,
+                    ].filter(Boolean).join('\n\n').trim() || undefined
+                  : [
+                      genaiSettings.systemInstruction || '',
+                      HATL_ONE_INSTRUCTIONS,
+                      sxSystemInstruction,
                 ].filter(Boolean).join('\n\n').trim() || undefined;
 
                 const options: any = {
@@ -5505,157 +3222,21 @@ const DiscoveryPage: React.FC = () => {
                     try {
                       const settingsStateEval = useGenAISettings.getState();
                       const evalModel = (settingsStateEval.stanceModel && settingsStateEval.stanceModel.trim()) ? settingsStateEval.stanceModel : 'gemini_fast';
-                      const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-                      const biasDict = [
-                        'confirmation_bias',
-                        'selection_bias',
-                        'framing_bias',
-                        'recency_bias',
-                        'availability_bias',
-                        'cultural_bias',
-                        'geo_linguistic_bias',
-                        'authority_bias',
-                        'safety_over_caution_skew',
-                        'overclaiming',
-                        'overgeneralization',
-                        'loaded_language'
-                      ];
-                      const schema = {
-                        type: 'object',
-                        additionalProperties: false,
-                        properties: {
-                          biasLevel: { type: 'number', minimum: 0, maximum: 1 },
-                          // Back-compat flat score (optional if thoughtfulnessLevel provided)
-                          thoughtfulness: { type: 'number', minimum: 0, maximum: 1 },
-                          // New five-dimension rubric
-                          thoughtfulnessLevel: { type: 'number', minimum: 0, maximum: 1 },
-                          thoughtfulnessDimensions: {
-                            type: 'object',
-                            additionalProperties: false,
-                            properties: {
-                              analyticalDepth: { type: 'number', minimum: 0, maximum: 1 },
-                              epistemicHumility: { type: 'number', minimum: 0, maximum: 1 },
-                              alternativeConsideration: { type: 'number', minimum: 0, maximum: 1 },
-                              evidenceReasoningQuality: { type: 'number', minimum: 0, maximum: 1 },
-                              practicalGrounding: { type: 'number', minimum: 0, maximum: 1 },
-                            },
-                            required: [
-                              'analyticalDepth',
-                              'epistemicHumility',
-                              'alternativeConsideration',
-                              'evidenceReasoningQuality',
-                              'practicalGrounding'
-                            ]
-                          },
-                          biases: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 5 },
-                          biasTypes: { type: 'array', items: { type: 'string', enum: biasDict }, minItems: 0 }
-                        },
-                        // Backward compatibility: either (thoughtfulness) OR (thoughtfulnessLevel + thoughtfulnessDimensions) must be present
-                        required: ['biasLevel', 'biases', 'biasTypes']
-                      } as any;
-                      const schemaText = JSON.stringify(schema, null, 2);
-                      const dictText = JSON.stringify(biasDict);
-                      const ctxBlock = prevAssistantText && prevAssistantText.trim().length > 0
-                        ? `ASSISTANT_REPLY (context, do NOT evaluate this text):\n${prevAssistantText}\n\n`
-                        : '';
-                      const promptEval = `In this request, you act as an external expert specializing in discussion evaluation, and you must return your assessment strictly following the provided schema in JSON format. Return ONLY JSON (no prose, no markdown, no code fences).\n\nUser requirement: you should create your answer in ${preferredLang === 'ru' ? 'Russian' : preferredLang === 'en' ? 'English' : ((preferredLang === 'kk' || preferredLang === 'kz') ? 'Kazakh' : 'Russian')} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nField names (exact):\n- Required: biasLevel, biases, biasTypes\n- Thoughtfulness (compatibility): either provide legacy flat 'thoughtfulness' (0..1) OR the new fields: 'thoughtfulnessLevel' (0..1) AND 'thoughtfulnessDimensions' with five sub-scores.\n\nBias scale (biasLevel 0..1):\n- 0.0–0.1: neutral; balanced alternatives; neutral language.\n- 0.2–0.4: mild tilt; some alternatives missing; occasional preference.\n- 0.5–0.7: pronounced tilt; one-sided argument; emotive language appears.\n- 0.8–1.0: strong advocacy; ignores counte`;
-                      const langName = (() => {
-                        switch (preferredLang) {
-                          case 'ru': return 'Russian';
-                          case 'en': return 'English';
-                          case 'kk':
-                          case 'kz': return 'Kazakh';
-                          default: return 'Russian';
-                        }
-                      })();
-                      const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
-                      const res = await api.genaiGenerate({
-                        model: evalModel,
-                        prompt: promptEval,
-                        strictJSONEnabled: true,
-                        jsonSchema: schema,
-                        maxOutputTokens: 4096,
-                        webSearchEnabled: false,
-                        systemInstruction: langDirective,
+                      const preferredLang = getPreferredLanguage();
+                      
+                      // Call unified evaluation function
+                      await evaluateBias({
+                        messageId: lastUser.id,
+                        messageRole: 'user',
+                        textToEvaluate,
+                        contextText: prevAssistantText || undefined,
+                        evalModel,
+                        preferredLang,
                       });
-                      let parsed: any = null;
-                      try {
-                        if (typeof res?.content === 'string') {
-                          const s = res.content.trim();
-                          if (s.startsWith('{') || s.startsWith('[')) parsed = JSON.parse(s);
-                        }
-                        const rawJSON = (res as any)?.rawJSON;
-                        if (!parsed && typeof rawJSON === 'string') {
-                          const s2 = rawJSON.trim();
-                          if (s2.startsWith('{') || s2.startsWith('[')) parsed = JSON.parse(s2);
-                        }
-                        if (!parsed && typeof res?.content === 'string') {
-                          const m = res.content.match(/\{[\s\S]*\}/);
-                          if (m && m[0]) {
-                            parsed = JSON.parse(m[0]);
-                          }
-                        }
-                      } catch {}
-                      if (!parsed || typeof parsed !== 'object') return;
-                      const clamp01 = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
-                      const dimsObj = (() => {
-                        try {
-                          const d = parsed?.thoughtfulnessDimensions || {};
-                          if (!d || typeof d !== 'object') return undefined;
-                          return {
-                            analyticalDepth: clamp01(d.analyticalDepth),
-                            epistemicHumility: clamp01(d.epistemicHumility),
-                            alternativeConsideration: clamp01(d.alternativeConsideration),
-                            evidenceReasoningQuality: clamp01(d.evidenceReasoningQuality),
-                            practicalGrounding: clamp01(d.practicalGrounding),
-                          };
-                        } catch { return undefined; }
-                      })();
-                      const thLevel = (() => {
-                        if (typeof parsed?.thoughtfulnessLevel === 'number') return clamp01(parsed.thoughtfulnessLevel);
-                        if (dimsObj && Object.values(dimsObj).every((v) => typeof v === 'number')) {
-                          const vals = Object.values(dimsObj) as number[];
-                          return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
-                        }
-                        return clamp01(parsed?.thoughtfulness);
-                      })();
-                      const ev = {
-                        biasLevel: clamp01(parsed?.biasLevel),
-                        thoughtfulness: thLevel,
-                        thoughtfulnessLevel: thLevel,
-                        thoughtfulnessDimensions: dimsObj,
-                        categories: Array.isArray(parsed?.categories)
-                          ? parsed.categories
-                              .filter((c: any) => c && typeof c.code === 'string')
-                              .slice(0, 2)
-                              .map((c: any) => ({ code: String(c.code), explanation: typeof c.explanation === 'string' ? c.explanation : '' }))
-                          : []
-                      } as any;
-                      useGenaiChatStore.getState().setEvaluation(lastUser.id, ev);
-                      // Create eval.bias for user
-                      try {
-                        const evalId = Date.now().toString() + '-eval-bias-u';
-                        useGenaiChatStore.setState((s) => ({
-                          interactions: [
-                            ...s.interactions,
-                            {
-                              id: evalId,
-                              projectId: s.projectId,
-                              kind: 'system',
-                              subkind: 'eval.bias',
-                              content: JSON.stringify(ev),
-                              contentSanitized: JSON.stringify(ev),
-                              replyTo: lastUser.id,
-                              relations: [{ type: 'evaluates', targetId: lastUser.id }],
-                              createdAt: new Date().toISOString(),
-                            } as any,
-                          ],
-                        } as any));
-                      } catch {}
                     } catch (e) {
-                      console.warn('[UserStanceEval] evaluation failed', e);
+                      console.warn('[UserStanceEval] User bias eval failed', e);
                     }
-                  })();
+                  })().catch(console.error);
                 }
               } catch {}
               }}
@@ -5735,8 +3316,7 @@ const DiscoveryPage: React.FC = () => {
             onSubmit={async () => {
               if (running || !queryText.trim()) return;
               if (currentProject?.id) {
-                const preferred = (localStorage.getItem('preferredLanguage') || 'EN').toLowerCase();
-                const lang = preferred && preferred.length === 2 ? preferred : 'en';
+                const lang = getPreferredLanguage();
                 setRunning(true);
                 try {
                   await sendChatMessage(currentProject.id, queryText, lang);
@@ -5855,7 +3435,7 @@ const DiscoveryPage: React.FC = () => {
               >
                 <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
                   <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>
-                    {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : 'Documents & Sources'}
+                    {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : 'Workspace Library'}
                   </h3>
                   <button
                     type="button"
@@ -5940,9 +3520,11 @@ const DiscoveryPage: React.FC = () => {
                                         e.stopPropagation();
                                         // Try to scroll to the first occurrence of this note within the message
                                         try {
-                                          const container = document.querySelector(`.markdown[data-interaction-id=\\"${it.id}\\"]`) as HTMLElement | null;
+                                          const container = document.querySelector(`.markdown[data-interaction-id="${it.id}"]`) as HTMLElement | null;
                                           if (container) {
-                                            const r = findFirstRange(container, String(note));
+                                            // Normalize note text (trim whitespace for better matching)
+                                            const noteText = String(note).trim();
+                                            const r = noteText ? findFirstRange(container, noteText) : null;
                                             if (r) {
                                               const rect = r.getBoundingClientRect();
                                               const host = messagesRef.current as HTMLElement | null;
@@ -5951,13 +3533,31 @@ const DiscoveryPage: React.FC = () => {
                                                 const offset = rect.top - hostRect.top + host.scrollTop - host.clientHeight / 2;
                                                 host.scrollTo({ top: Math.max(0, offset), behavior: 'smooth' });
                                               } else {
-                                                (container as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                container.scrollIntoView({ behavior: 'smooth', block: 'center' });
                                               }
                                             } else {
-                                              (container as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                              // Fallback: scroll to the message itself if note text not found
+                                              if (messagesRef.current) {
+                                                const rect = container.getBoundingClientRect();
+                                                const host = messagesRef.current;
+                                                const hostRect = host.getBoundingClientRect();
+                                                const offset = rect.top - hostRect.top + host.scrollTop - host.clientHeight / 2;
+                                                host.scrollTo({ top: Math.max(0, offset), behavior: 'smooth' });
+                                              } else {
+                                                container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                              }
                                             }
+                                          } else {
+                                            // If container not found, try using scrollToInteraction as fallback
+                                            scrollToInteraction(it.id);
                                           }
-                                        } catch {}
+                                        } catch (err) {
+                                          console.warn('[ScrollToNote] Failed', err);
+                                          // Fallback to scrolling to interaction
+                                          try {
+                                            scrollToInteraction(it.id);
+                                          } catch {}
+                                        }
                                       }}
                                     >
                                       <span className="text-[12px]">{note}</span>
@@ -5970,11 +3570,21 @@ const DiscoveryPage: React.FC = () => {
                                       onClick={async (ev) => {
                                         ev.stopPropagation();
                                         try {
+                                          const projectId = genaiChat.projectId;
+                                          if (!projectId || projectId === 'local-unfold') {
+                                            console.warn('[RemoveNote] Invalid project ID', { projectId });
+                                            return;
+                                          }
+                                          // Resolve server ID if local ID is mapped
+                                          const map = (genaiChat as any).persistedByLocalId || {};
+                                          const serverId = map[it.id] || it.id;
                                           const notes = (it.metadata?.notes || []).filter((_, i) => i !== idx);
                                           const pinned = it.metadata?.pinned === true || notes.length > 0; // keep pinned if still notes exist
-                                          await api.updateProjectInteraction(genaiChat.projectId, it.id, { metadata: { pinned, notes } });
+                                          await api.updateProjectInteraction(projectId, serverId, { metadata: { pinned, notes } });
                                           await genaiChat.hydrateInteractions();
-                                        } catch {}
+                                        } catch (err) {
+                                          console.warn('[RemoveNote] failed', err);
+                                        }
                                       }}
                                       onMouseEnter={(ev) => { (ev.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-12)'; }}
                                       onMouseLeave={(ev) => { (ev.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
@@ -5990,7 +3600,7 @@ const DiscoveryPage: React.FC = () => {
                       )}
                     </div>
                   ) : (
-                    <DocumentsAndSources 
+                    <WorkspaceLibrary 
                       projectId={genaiChat.projectId} 
                       onDocumentDelete={(docId: string) => {
                         console.log('[DiscoveryPage] Document deleted', { docId });
@@ -6130,7 +3740,7 @@ const DiscoveryPage: React.FC = () => {
                   </div>
                 )}
                 
-                {/* Documents & Sources toolbar (bottom) */}
+                {/* Workspace Library toolbar (bottom) */}
                 {rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && (
                   <div className="mt-2 px-3" style={{ borderTop: '1px solid var(--overlay-line-90)', paddingTop: 8, display: 'flex', justifyContent: 'flex-start', gap: 6 }}>
                     <button

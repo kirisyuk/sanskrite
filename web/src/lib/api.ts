@@ -300,6 +300,41 @@ class ApiClient {
     return response.data;
   }
 
+  // --- Share (public access) ---
+  async shareCreate(projectId: string, expiresAtISO?: string): Promise<{ shareToken: string; expiresAt: string; url: string }> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/share`, expiresAtISO ? { expiresAt: expiresAtISO } : {});
+    return res.data as any;
+  }
+
+  async shareRevoke(projectId: string, token: string): Promise<{ success: boolean }> {
+    const res = await this.client.delete(`/api/v1/projects/${projectId}/share/${token}`);
+    return res.data as any;
+  }
+
+  async shareGetPublic(token: string): Promise<{
+    v: '1';
+    share: { tokenId: string; isActive: boolean; expiresAt: string; createdAt: string };
+    project: { id: string; displayName: string; description?: string|null; createdAt?: string };
+    interactions: Array<{
+      id: string;
+      kind: 'user'|'assistant';
+      subkind?: string;
+      replyTo?: string;
+      content?: string;
+      contentSanitized?: string;
+      graphData?: { chartTitle: string; chartType?: 'line'|'bar'|'area'|'stackedBar'|'stackedArea'|'composed'; table: (string|number)[][]; sources: string[] };
+      searchQueries?: string[];
+      sources?: string[];
+      createdAt: string;
+      author?: { kind: 'human'|'ai'; displayName?: string };
+      metadata?: { pinned?: boolean; notes?: string[] };
+    }>;
+    paging?: { nextCursor?: string; limit?: number };
+  }> {
+    const res = await axios.get(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}`);
+    return res.data as any;
+  }
+
   // --- Analysis: Entities ---
   async analyzeEntities(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
     const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/entities`, { prompt: prompt || '' });
@@ -538,6 +573,276 @@ class ApiClient {
 
   async cancelGeneration(sessionId: string): Promise<{ success: boolean }> {
     const res = await this.client.post(`/api/v1/generation-sessions/${sessionId}/cancel`);
+    return res.data;
+  }
+
+  // --- Agents ---
+  /**
+   * List all available agents
+   */
+  async listAgents(): Promise<import('../types/agents').AgentsListResponse> {
+    const res = await this.client.get('/api/v1/agents');
+    return res.data;
+  }
+
+  /**
+   * Execute Data Agent
+   * @param projectId Project ID (required)
+   * @param task Data Agent task
+   */
+  async executeDataAgent(
+    projectId: string,
+    task: import('../types/agents').DataAgentTask
+  ): Promise<import('../types/agents').AgentExecutionResponse> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/data/execute`, task);
+    return res.data;
+  }
+
+  /**
+   * Execute Entities Agent
+   * @param projectId Project ID (required)
+   * @param task Entities Agent task
+   */
+  async executeEntitiesAgent(
+    projectId: string,
+    task: import('../types/agents').EntitiesAgentTask
+  ): Promise<import('../types/agents').AgentExecutionResponse> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/entities/execute`, task);
+    return res.data;
+  }
+
+  /**
+   * Execute any agent by ID (generic method)
+   * @param projectId Project ID (required)
+   * @param agentId Agent ID (e.g., 'data', 'entities')
+   * @param task Agent task (must match agent's TaskSchema)
+   */
+  async executeAgent(
+    projectId: string,
+    agentId: string,
+    task: import('../types/agents').AgentTask
+  ): Promise<import('../types/agents').AgentExecutionResponse> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/${agentId}/execute`, task);
+    return res.data;
+  }
+
+  // Usage metrics
+  async getUsage(params?: { startDate?: string; endDate?: string; granularity?: '1d' | '7d' | '30d' }): Promise<{
+    events: Array<{
+      id: string;
+      tenantId: string;
+      userId: string;
+      projectId?: string;
+      interactionId?: string;
+      provider: string;
+      model: string;
+      modelAlias?: string;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUSD: number;
+      taskType?: string;
+      kind: string;
+      createdAt: string;
+    }>;
+    byModel: Record<string, {
+      count: number;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUSD: number;
+    }>;
+    dailyTotals: Record<string, {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUSD: number;
+      count: number;
+    }>;
+    period: {
+      startDate: string;
+      endDate: string;
+    };
+  }> {
+    const res = await this.client.get(`/api/v1/usage`, { params });
+    return res.data;
+  }
+
+  // Vouchers (admin only)
+  async listVouchers(params?: { tier?: 'pro' | 'max'; isActive?: boolean }): Promise<Array<{
+    id: string;
+    code: string;
+    tier: 'pro' | 'max';
+    validFrom: string;
+    validTo?: string;
+    durationMonths: number;
+    maxUses?: number;
+    usedCount: number;
+    isActive: boolean;
+    createdBy: string;
+    note?: string;
+    createdAt: string;
+    updatedAt: string;
+  }>> {
+    const res = await this.client.get(`/api/v1/vouchers`, { params });
+    return res.data;
+  }
+
+  async getVoucher(voucherId: string): Promise<{
+    id: string;
+    code: string;
+    tier: 'pro' | 'max';
+    validFrom: string;
+    validTo?: string;
+    durationMonths: number;
+    maxUses?: number;
+    usedCount: number;
+    isActive: boolean;
+    createdBy: string;
+    note?: string;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await this.client.get(`/api/v1/vouchers/${voucherId}`);
+    return res.data;
+  }
+
+  async createVoucher(data: {
+    code: string;
+    tier: 'pro' | 'max';
+    validFrom: string;
+    validTo?: string;
+    durationMonths: number;
+    maxUses?: number;
+    isActive: boolean;
+    note?: string;
+  }): Promise<{
+    id: string;
+    code: string;
+    tier: 'pro' | 'max';
+    validFrom: string;
+    validTo?: string;
+    durationMonths: number;
+    maxUses?: number;
+    usedCount: number;
+    isActive: boolean;
+    createdBy: string;
+    note?: string;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await this.client.post(`/api/v1/vouchers`, data);
+    return res.data;
+  }
+
+  async updateVoucher(voucherId: string, data: {
+    tier?: 'pro' | 'max';
+    validFrom?: string;
+    validTo?: string;
+    durationMonths?: number;
+    maxUses?: number;
+    isActive?: boolean;
+    note?: string;
+  }): Promise<{
+    id: string;
+    code: string;
+    tier: 'pro' | 'max';
+    validFrom: string;
+    validTo?: string;
+    durationMonths: number;
+    maxUses?: number;
+    usedCount: number;
+    isActive: boolean;
+    createdBy: string;
+    note?: string;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await this.client.patch(`/api/v1/vouchers/${voucherId}`, data);
+    return res.data;
+  }
+
+  async deleteVoucher(voucherId: string): Promise<{ message: string }> {
+    const res = await this.client.delete(`/api/v1/vouchers/${voucherId}`);
+    return res.data;
+  }
+
+  // Subscriptions
+  async getSubscription(): Promise<{
+    id: string;
+    tenantId: string;
+    userId: string;
+    tier: 'free' | 'pro' | 'max';
+    status: 'active' | 'expired' | 'cancelled';
+    startedAt: string;
+    currentPeriodStart: string;
+    currentPeriodEnd: string;
+    nextBillingDate?: string;
+    voucherId?: string;
+    paymentProvider?: string;
+    paymentId?: string;
+    paypalPlanId?: string;
+    paypalAgreementId?: string;
+    paypalSubscriptionId?: string;
+    metadata?: Record<string, any>;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await this.client.get(`/api/v1/subscriptions/me`);
+    return res.data;
+  }
+
+  async applyVoucher(code: string): Promise<{
+    id: string;
+    tenantId: string;
+    userId: string;
+    tier: 'free' | 'pro' | 'max';
+    status: 'active' | 'expired' | 'cancelled';
+    startedAt: string;
+    currentPeriodStart: string;
+    currentPeriodEnd: string;
+    nextBillingDate?: string;
+    voucherId?: string;
+    paymentProvider?: string;
+    paymentId?: string;
+    paypalPlanId?: string;
+    paypalAgreementId?: string;
+    paypalSubscriptionId?: string;
+    metadata?: Record<string, any>;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await this.client.post(`/api/v1/subscriptions/voucher`, { code });
+    return res.data;
+  }
+
+  // PayPal
+  async createPayPalSubscription(tier: 'pro' | 'max'): Promise<{ approvalUrl: string; subscriptionId: string }> {
+    const res = await this.client.post(`/api/v1/paypal/subscription`, { tier });
+    return res.data;
+  }
+
+  async executePayPalSubscription(subscriptionId: string): Promise<{
+    id: string;
+    tenantId: string;
+    userId: string;
+    tier: 'free' | 'pro' | 'max';
+    status: 'active' | 'expired' | 'cancelled';
+    startedAt: string;
+    currentPeriodStart: string;
+    currentPeriodEnd: string;
+    nextBillingDate?: string;
+    voucherId?: string;
+    paymentProvider?: string;
+    paymentId?: string;
+    paypalPlanId?: string;
+    paypalAgreementId?: string;
+    paypalSubscriptionId?: string;
+    metadata?: Record<string, any>;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await this.client.post(`/api/v1/paypal/subscription/execute`, { subscriptionId });
     return res.data;
   }
 }

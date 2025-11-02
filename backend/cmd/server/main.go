@@ -12,6 +12,7 @@ import (
 	firebase "firebase.google.com/go/v4"
 	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/paypal"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/services"
 	"google.golang.org/api/option"
@@ -20,6 +21,7 @@ import (
 	"cloud.google.com/go/pubsub"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
+	"github.com/igorkirisyuk/sanskrite/internal/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
@@ -90,14 +92,20 @@ func main() {
 	var artifactTemplatesHandler *httphandlers.ArtifactTemplatesHandler
 	var artifactGenerationHandler *httphandlers.ArtifactGenerationHandler
 
+	// Subscription & Voucher repositories and service
+	subsRepo := repo.NewSubscriptionsRepository(fsClient.Client())
+	vouchersRepo := repo.NewVouchersRepository(fsClient.Client())
+	subscriptionService := services.NewSubscriptionService(subsRepo, vouchersRepo, s.users, logger)
+
 	// Handlers
-	s.usersHandler = httphandlers.NewUsersHandler(s.users, logger)
+	s.usersHandler = httphandlers.NewUsersHandler(s.users, logger).WithSubscriptionService(subscriptionService)
 	s.projectsHandler = httphandlers.NewProjectsHandler(s.projs, logger).WithDataSources(s.dsrcs)
 	s.discoveryHandler = httphandlers.NewDiscoveryHandler(s.projs, s.dsrcs, logger)
-	genaiHandler := httphandlers.NewGenAIHandler()
+	var genaiHandler *httphandlers.GenAIHandler
 	// aiExecHandler will be initialized after AITaskExecutor is created
 	var aiExecHandler *httphandlers.AIExecHandler
 	var metaHandler *httphandlers.MetaHandler
+	var agentsHandler *httphandlers.AgentsHandler
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger)
 	searchEventsRepo := repo.NewSearchEventsRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
@@ -105,8 +113,15 @@ func main() {
 	rulesHandler := httphandlers.NewRulesHandler(rulesRepo, logger)
 	webhooksHandler := httphandlers.NewWebhooksHandler(logger)
 
-	// Wire orchestrator (AITaskExecutor + ModelManager + Vertex service)
-	modelManager := ai.NewAIModelManager()
+		// Wire orchestrator (AITaskExecutor + ModelManager + Vertex service)
+		modelManager := ai.NewAIModelManager()
+		
+		// Initialize GenAI handler with usage metrics after modelManager is created
+		if genaiHandler == nil {
+			genaiHandler = httphandlers.NewGenAIHandler().
+				WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
+				WithModelManager(modelManager)
+		}
 	// For brevity, only Vertex provider is wired here; additional providers can be added
 	{
 		aiServices := []ai.AIService{}
@@ -124,7 +139,8 @@ func main() {
 			aiServices = append(aiServices, ai.NewGrokService(k, modelManager))
 		}
 
-		exec := ai.NewAITaskExecutor(aiServices, modelManager)
+		exec := ai.NewAITaskExecutor(aiServices, modelManager).
+			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()))
 		aiExecHandler = httphandlers.NewAIExecHandler(exec)
 		wc := crawler.NewWebCrawler()
 		tgBase := os.Getenv("TELEGRAM_SERVICE_URL")
@@ -156,7 +172,8 @@ func main() {
 		openaiAPIKey := os.Getenv("OPENAI_API_KEY")
 		genaiClient := gen_combined.NewClient(geminiClient, openaiAPIKey)
 
-		artifactExecutorService := services.NewArtifactExecutorService(genaiClient, artifactContextService, pub)
+		artifactExecutorService := services.NewArtifactExecutorService(genaiClient, artifactContextService, pub).
+			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()), modelManager)
 
 		generationSessionsRepo := repo.NewGenerationSessionsRepository(fsClient.Client())
 		artifactOrchestratorService := services.NewArtifactOrchestratorService(generationSessionsRepo, coreDocsRepo, artifactExecutorService, artifactContextService)
@@ -204,25 +221,75 @@ func main() {
 			}()
 
 			// Periodic publisher loop (fallback if Cloud Scheduler not used)
-			go func() {
-				ctxPP, cancelPP := context.WithCancel(ctx)
-				defer cancelPP()
-				t := time.NewTicker(1 * time.Minute)
-				defer t.Stop()
-				for {
-					select {
-					case <-ctxPP.Done():
-						return
-					case <-t.C:
-						_ = poller.PublishDue(ctxPP)
+			// Can be disabled via DISABLE_POLLER_TICKER=true when using Cloud Scheduler
+			if os.Getenv("DISABLE_POLLER_TICKER") != "true" {
+				go func() {
+					ctxPP, cancelPP := context.WithCancel(ctx)
+					defer cancelPP()
+					// Default interval: 1 hour to reduce CPU/billing load
+					// Cloud Scheduler should be preferred for production
+					// Can be overridden via POLLER_TICKER_INTERVAL env var (e.g., "5m", "30m", "1h")
+					interval := 1 * time.Hour
+					if customInterval := os.Getenv("POLLER_TICKER_INTERVAL"); customInterval != "" {
+						if parsed, err := time.ParseDuration(customInterval); err == nil && parsed >= 1*time.Minute {
+							interval = parsed
+						} else {
+							log.Printf("invalid POLLER_TICKER_INTERVAL: %s, using default 1h", customInterval)
+						}
 					}
-				}
-			}()
+					t := time.NewTicker(interval)
+					defer t.Stop()
+					for {
+						select {
+						case <-ctxPP.Done():
+							return
+						case <-t.C:
+							_ = poller.PublishDue(ctxPP)
+						}
+					}
+				}()
+			}
 
 			// Wire HTTP handler to allow Cloud Scheduler HTTP trigger
 			webhooksHandler = webhooksHandler.WithPoller(poller)
 			// Attach publisher to GenAI handler for streaming events via WithPublisher
 			genaiHandler = genaiHandler.WithPublisher(pub)
+		}
+
+		// Subscription billing cycle processor (runs daily)
+		// Can be disabled via DISABLE_SUBSCRIPTION_BILLING=true when using Cloud Scheduler
+		if os.Getenv("DISABLE_SUBSCRIPTION_BILLING") != "true" {
+			go func() {
+				ctxBilling, cancelBilling := context.WithCancel(ctx)
+				defer cancelBilling()
+				// Default interval: 24 hours (daily billing)
+				// Cloud Scheduler should be preferred for production
+				// Can be overridden via SUBSCRIPTION_BILLING_INTERVAL env var (e.g., "1h", "24h")
+				interval := 24 * time.Hour
+				if customInterval := os.Getenv("SUBSCRIPTION_BILLING_INTERVAL"); customInterval != "" {
+					if parsed, err := time.ParseDuration(customInterval); err == nil && parsed >= 1*time.Hour {
+						interval = parsed
+					} else {
+						log.Printf("invalid SUBSCRIPTION_BILLING_INTERVAL: %s, using default 24h", customInterval)
+					}
+				}
+				t := time.NewTicker(interval)
+				defer t.Stop()
+				// Run immediately on startup
+				if err := subscriptionService.ProcessBillingCycle(ctxBilling); err != nil {
+					log.Printf("subscription billing cycle failed: %v", err)
+				}
+				for {
+					select {
+					case <-ctxBilling.Done():
+						return
+					case <-t.C:
+						if err := subscriptionService.ProcessBillingCycle(ctxBilling); err != nil {
+							log.Printf("subscription billing cycle failed: %v", err)
+						}
+					}
+				}
+			}()
 		}
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
@@ -248,6 +315,11 @@ func main() {
 		metaHandler = httphandlers.NewMetaHandler(s.projs, interactions, metaEvents, metaAggProj, metaAggUser, exec, logger)
 		// Wire to projects handler for cascade delete
 		s.projectsHandler = s.projectsHandler.WithMeta(metaEvents, metaAggProj, metaAggUser)
+		
+		// Initialize Agent Registry
+		agentRegistry := agents.NewRegistry(exec, genaiClient, pub, logger).
+			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()), modelManager)
+		agentsHandler = httphandlers.NewAgentsHandler(agentRegistry, pub, logger)
 	}
 
 	// Get auth client for middleware
@@ -256,7 +328,7 @@ func main() {
 		log.Fatalf("auth client init: %v", err)
 	}
 
-	mux := http.NewServeMux()
+    mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -334,6 +406,7 @@ func main() {
 					string(realtime.EventArtifactAssemblyCompleted),
 					string(realtime.EventArtifactGenerationCompleted),
 					string(realtime.EventArtifactGenerationError),
+					string(realtime.EventAgentUpdate),
 				)
 			} else {
 				log.Printf("ws subscriber: pubsub client init error: %v", err)
@@ -342,9 +415,13 @@ func main() {
 	}
 
 	// Apply auth middleware to all /api/v1/* routes
-	// Compose middleware: attach repos, then auth
+	// Compose middleware: attach repos, then auth, then subscription service
 	authMiddleware := func(h http.Handler) http.Handler {
-		return httphandlers.WithUsersRepo(s.users)(httphandlers.AuthMiddleware(authClient)(h))
+		return httphandlers.WithUsersRepo(s.users)(
+			httphandlers.AuthMiddleware(authClient)(
+				httphandlers.WithSubscriptionService(subscriptionService)(h),
+			),
+		)
 	}
 
 	// Waitlist wiring
@@ -368,7 +445,63 @@ func main() {
 	mux.Handle("/api/v1/waitlist/approve", authMiddleware(http.HandlerFunc(wlHandler.Approve)))
 	mux.Handle("/api/v1/waitlist/list", authMiddleware(http.HandlerFunc(wlHandler.List)))
 
-	// Project routes and nested sub-routes
+	// Subscription routes
+	subscriptionsHandler := httphandlers.NewSubscriptionsHandler(subscriptionService, logger)
+	mux.Handle("/api/v1/subscriptions/me", authMiddleware(http.HandlerFunc(subscriptionsHandler.GetSubscription)))
+	mux.Handle("/api/v1/subscriptions/voucher", authMiddleware(http.HandlerFunc(subscriptionsHandler.ApplyVoucher)))
+
+	// PayPal routes
+	var paypalHandler *httphandlers.PayPalHandler
+	if paypalClient, err := paypal.NewClient(logger); err == nil {
+		paypalHandler = httphandlers.NewPayPalHandler(paypalClient, subscriptionService, subsRepo, logger)
+		mux.Handle("/api/v1/paypal/subscription", authMiddleware(http.HandlerFunc(paypalHandler.CreateSubscription)))
+		mux.Handle("/api/v1/paypal/subscription/execute", authMiddleware(http.HandlerFunc(paypalHandler.ExecuteSubscription)))
+		mux.Handle("/api/v1/paypal/webhook", http.HandlerFunc(paypalHandler.Webhook)) // No auth for webhook
+		logger.Printf("PayPal integration enabled")
+	} else {
+		logger.Printf("PayPal integration disabled: %v", err)
+	}
+
+	// Voucher routes (admin only)
+	vouchersHandler := httphandlers.NewVouchersHandler(vouchersRepo, s.users, logger)
+	mux.Handle("/api/v1/vouchers", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			vouchersHandler.CreateVoucher(w, r)
+		case http.MethodGet:
+			vouchersHandler.ListVouchers(w, r)
+		default:
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		}
+	})))
+	mux.Handle("/api/v1/vouchers/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(pathParts) < 4 {
+			httphandlers.WriteBadRequest(w, "INVALID_PATH", "Voucher ID is required")
+			return
+		}
+		voucherID := pathParts[3]
+		switch r.Method {
+		case http.MethodGet:
+			// Extract voucher ID and call GetVoucher
+			r.URL.Path = "/api/v1/vouchers/" + voucherID
+			vouchersHandler.GetVoucher(w, r)
+		case http.MethodPatch, http.MethodPut:
+			r.URL.Path = "/api/v1/vouchers/" + voucherID
+			vouchersHandler.UpdateVoucher(w, r)
+		case http.MethodDelete:
+			r.URL.Path = "/api/v1/vouchers/" + voucherID
+			vouchersHandler.DeleteVoucher(w, r)
+		default:
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		}
+	})))
+
+    // Share routes handler (initialized before project sub-routes)
+    shareRepo := repo.NewShareTokensRepository(fsClient.Client())
+    shareHandler := httphandlers.NewShareHandler(shareRepo, s.projs, repo.NewInteractionsRepository(fsClient.Client()), logger)
+
+    // Project routes and nested sub-routes
 	mux.Handle("/api/v1/projects", authMiddleware(http.HandlerFunc(s.routeProjects)))
 	mux.Handle("/api/v1/projects/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/sources") && r.Method == http.MethodPost {
@@ -481,6 +614,15 @@ func main() {
 			s.projectsHandler.DeleteProjectDoc(w, r)
 			return
 		}
+        // Share: create/revoke
+        if strings.HasSuffix(r.URL.Path, "/share") && r.Method == http.MethodPost {
+            shareHandler.CreateShare(w, r)
+            return
+        }
+        if strings.Contains(r.URL.Path, "/share/") && r.Method == http.MethodDelete {
+            shareHandler.RevokeShare(w, r)
+            return
+        }
 		// interactions create/delete
 		if strings.HasSuffix(r.URL.Path, "/interactions") && r.Method == http.MethodPost {
 			s.discoveryHandler.CreateProjectInteraction(w, r)
@@ -492,6 +634,15 @@ func main() {
 		}
 		if strings.Contains(r.URL.Path, "/interactions/") && r.Method == http.MethodDelete {
 			s.discoveryHandler.DeleteProjectInteraction(w, r)
+			return
+		}
+		// Agent routes: /projects/{id}/agents/{agentId}/execute
+		if strings.Contains(r.URL.Path, "/agents/") && strings.HasSuffix(r.URL.Path, "/execute") && r.Method == http.MethodPost {
+			if agentsHandler == nil {
+				httphandlers.WriteInternalError(w, "Agents not configured")
+				return
+			}
+			agentsHandler.ExecuteAgent(w, r)
 			return
 		}
 		// Artifacts CRUD: /projects/{id}/artifacts
@@ -552,11 +703,48 @@ func main() {
 	// Webhooks
 	mux.Handle("/api/v1/webhooks/", http.HandlerFunc(webhooksHandler.Handle))
 
+	// Subscription billing endpoint (for Cloud Scheduler)
+	// Accepts x-functions-key header or Cloud Scheduler requests (User-Agent: Google-Cloud-Scheduler)
+	mux.Handle("/api/v1/subscriptions/billing", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+			return
+		}
+		// Check for system call with function key or Cloud Scheduler
+		hasFunctionKey := r.Header.Get("x-functions-key") != ""
+		isCloudScheduler := r.Header.Get("User-Agent") == "Google-Cloud-Scheduler"
+		if !hasFunctionKey && !isCloudScheduler {
+			httphandlers.WriteUnauthorized(w, "System access required")
+			return
+		}
+		if err := subscriptionService.ProcessBillingCycle(r.Context()); err != nil {
+			logger.Printf("Subscription billing cycle failed: %v", err)
+			httphandlers.WriteInternalError(w, "Failed to process billing cycle")
+			return
+		}
+		httphandlers.WriteJSON(w, http.StatusOK, map[string]string{"message": "Billing cycle processed successfully"})
+	}))
+
+    // Public share endpoint (unauthenticated)
+    mux.Handle("/api/v1/public/share/", http.HandlerFunc(shareHandler.GetPublicShare))
+
 	// Admin: publish-due (handled below with jobAuth middleware for Cloud Scheduler)
 
 	// Discovery routes
 	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
 
+	// Agents routes
+	mux.Handle("/api/v1/agents", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if agentsHandler == nil {
+			httphandlers.WriteInternalError(w, "Agents not configured")
+			return
+		}
+		agentsHandler.ListAgents(w, r)
+	})))
+
+	// Usage metrics handler
+	usageHandler := httphandlers.NewUsageHandler(repo.NewUsageMetricsRepository(fsClient.Client()), logger)
+	
 	// GenAI routes (isolated Gemini client)
 	mux.Handle("/api/v1/genai/complete", authMiddleware(http.HandlerFunc(genaiHandler.Complete)))
 	mux.Handle("/api/v1/genai/complete-json", authMiddleware(http.HandlerFunc(genaiHandler.CompleteJSON)))
@@ -564,6 +752,9 @@ func main() {
 	mux.Handle("/api/v1/genai/generate", authMiddleware(http.HandlerFunc(genaiHandler.GenAIGenerate)))
 	mux.Handle("/api/v1/genai/complete-with-tools", authMiddleware(http.HandlerFunc(genaiHandler.CompleteWithTools)))
 	mux.Handle("/api/v1/genai/stream", authMiddleware(http.HandlerFunc(genaiHandler.Stream)))
+	
+	// Usage routes
+	mux.Handle("/api/v1/usage", authMiddleware(http.HandlerFunc(usageHandler.GetUsage)))
 	// Universal structured AI endpoint
 	if aiExecHandler != nil {
 		mux.Handle("/api/v1/ai/structured", authMiddleware(http.HandlerFunc(aiExecHandler.Structured)))

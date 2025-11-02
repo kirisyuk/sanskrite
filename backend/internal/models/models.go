@@ -865,3 +865,79 @@ type Decision struct {
 	Severity   float64  `json:"severity,omitempty" firestore:"severity,omitempty"`
 	Confidence float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
 }
+
+// --- Subscription & Billing ---
+
+// SubscriptionTier represents subscription tier levels
+type SubscriptionTier string
+
+const (
+	SubscriptionTierFree SubscriptionTier = "free"
+	SubscriptionTierPro SubscriptionTier = "pro"
+	SubscriptionTierMax SubscriptionTier = "max"
+)
+
+// Subscription represents a user's subscription
+type Subscription struct {
+	ID       string `json:"id" firestore:"id"`
+	TenantID string `json:"tenantId" firestore:"tenantId"`
+	UserID   string `json:"userId" firestore:"userId"`
+
+	// Subscription tier: free, pro, max
+	Tier SubscriptionTier `json:"tier" firestore:"tier"`
+
+	// Subscription status: active, expired, cancelled
+	Status string `json:"status" firestore:"status"` // active|expired|cancelled
+
+	// Billing cycle information
+	StartedAt       time.Time `json:"startedAt" firestore:"startedAt"`             // When subscription started
+	CurrentPeriodStart time.Time `json:"currentPeriodStart" firestore:"currentPeriodStart"` // Start of current billing period
+	CurrentPeriodEnd   time.Time `json:"currentPeriodEnd" firestore:"currentPeriodEnd"`   // End of current billing period
+	NextBillingDate    *time.Time `json:"nextBillingDate,omitempty" firestore:"nextBillingDate,omitempty"` // Next billing date (null for free tier)
+
+	// Voucher information (if subscription is based on a voucher)
+	VoucherID *string `json:"voucherId,omitempty" firestore:"voucherId,omitempty"`
+
+	// Payment information (for future payment integration)
+	PaymentProvider *string `json:"paymentProvider,omitempty" firestore:"paymentProvider,omitempty"` // stripe, paypal, voucher, admin
+	PaymentID       *string `json:"paymentId,omitempty" firestore:"paymentId,omitempty"`             // External payment subscription ID
+	
+	// PayPal-specific fields
+	PayPalPlanID      *string `json:"paypalPlanId,omitempty" firestore:"paypalPlanId,omitempty"`
+	PayPalAgreementID *string `json:"paypalAgreementId,omitempty" firestore:"paypalAgreementId,omitempty"`
+	PayPalSubscriptionID *string `json:"paypalSubscriptionId,omitempty" firestore:"paypalSubscriptionId,omitempty"`
+
+	// Metadata
+	Metadata map[string]any `json:"metadata,omitempty" firestore:"metadata,omitempty"`
+
+	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
+}
+
+// Voucher represents a promotional code/voucher for subscription
+type Voucher struct {
+	ID     string `json:"id" firestore:"id"`
+	Code   string `json:"code" firestore:"code"` // Unique voucher code (e.g., "PRO2024Q1")
+
+	// Voucher tier: pro, max (free tier doesn't need vouchers)
+	Tier SubscriptionTier `json:"tier" firestore:"tier"` // pro|max
+
+	// Validity period
+	ValidFrom time.Time  `json:"validFrom" firestore:"validFrom"`
+	ValidTo   *time.Time `json:"validTo,omitempty" firestore:"validTo,omitempty"` // nil = no expiration
+
+	// Duration: how many months the voucher grants
+	DurationMonths int `json:"durationMonths" firestore:"durationMonths"` // e.g., 1, 3, 6, 12
+
+	// Usage tracking
+	MaxUses      *int `json:"maxUses,omitempty" firestore:"maxUses,omitempty"`           // nil = unlimited
+	UsedCount    int  `json:"usedCount" firestore:"usedCount"`                           // Current usage count
+	IsActive     bool `json:"isActive" firestore:"isActive"`                             // Admin can deactivate without deleting
+
+	// Created by admin
+	CreatedBy string `json:"createdBy" firestore:"createdBy"` // Admin user ID
+	Note      *string `json:"note,omitempty" firestore:"note,omitempty"` // Admin note
+
+	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
+}
