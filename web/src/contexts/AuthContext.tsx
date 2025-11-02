@@ -11,10 +11,36 @@ import {
 import { auth } from '../lib/firebase';
 import { api } from '../lib/api';
 
+type SubscriptionTier = 'free' | 'pro' | 'max';
+
+interface Subscription {
+  id: string;
+  tenantId: string;
+  userId: string;
+  tier: SubscriptionTier;
+  status: 'active' | 'expired' | 'cancelled';
+  startedAt: string;
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+  nextBillingDate?: string;
+  voucherId?: string;
+  paymentProvider?: string;
+  paymentId?: string;
+  paypalPlanId?: string;
+  paypalAgreementId?: string;
+  paypalSubscriptionId?: string;
+  metadata?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface AuthContextType {
   user: User | null;
   currentUser: User | null;
   loading: boolean;
+  subscription: Subscription | null;
+  subscriptionLoading: boolean;
+  refreshSubscription: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, accountType: 'personal' | 'corporate', displayName?: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -34,6 +60,28 @@ export const useAuth = () => {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+
+  // Fetch subscription when user is authenticated
+  const fetchSubscription = async (firebaseUser: User | null) => {
+    if (!firebaseUser?.uid) {
+      setSubscription(null);
+      return;
+    }
+    
+    setSubscriptionLoading(true);
+    try {
+      const sub = await api.getSubscription();
+      setSubscription(sub);
+    } catch (error) {
+      console.error('[AuthContext] Failed to fetch subscription:', error);
+      // Don't set subscription to null on error - keep previous value
+      // This prevents clearing subscription if there's a temporary network issue
+    } finally {
+      setSubscriptionLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!auth) {
@@ -43,9 +91,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       setLoading(false);
+      
+      // Fetch subscription after authentication
+      if (firebaseUser) {
+        // Small delay to ensure token is available
+        setTimeout(() => {
+          fetchSubscription(firebaseUser);
+        }, 100);
+      } else {
+        setSubscription(null);
+      }
     });
     return unsubscribe;
   }, []);
+
+  // Refresh subscription manually (e.g., after applying voucher)
+  const refreshSubscription = async () => {
+    await fetchSubscription(user);
+  };
 
   const signIn = async (email: string, password: string) => {
     if (!auth) throw new Error('Auth is not initialized');
@@ -108,6 +171,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     user,
     currentUser: user,
     loading,
+    subscription,
+    subscriptionLoading,
+    refreshSubscription,
     signIn,
     signUp,
     resetPassword,

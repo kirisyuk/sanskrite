@@ -1,8 +1,10 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
 export const BillingTab: React.FC = () => {
+  const { t } = useTranslation();
   const { currentUser } = useAuth();
   const [loading, setLoading] = React.useState(true);
   const [subscription, setSubscription] = React.useState<any>(null);
@@ -44,7 +46,7 @@ export const BillingTab: React.FC = () => {
   if (loading) {
     return (
       <div className="flex items-center justify-center" style={{ minHeight: '400px' }}>
-        <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>Loading billing information...</div>
+        <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>{t('account.billing.loading')}</div>
       </div>
     );
   }
@@ -52,7 +54,7 @@ export const BillingTab: React.FC = () => {
   if (!subscription) {
     return (
       <div className="flex items-center justify-center" style={{ minHeight: '400px' }}>
-        <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>No billing information available</div>
+        <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>{t('account.billing.notFound')}</div>
       </div>
     );
   }
@@ -83,18 +85,18 @@ export const BillingTab: React.FC = () => {
       {/* Billing Summary */}
       {isPaidTier && (
         <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-          <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>Billing Summary</div>
+          <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>{t('account.billing.billingSummary')}</div>
           
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Current Plan:</span>
+              <span className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('account.billing.currentPlan')}:</span>
               <span className="text-13 font-semibold" style={{ color: 'var(--text-heading)' }}>
                 {subscription.tier.charAt(0).toUpperCase() + subscription.tier.slice(1)}
               </span>
             </div>
             
             <div className="flex items-center justify-between">
-              <span className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Monthly Cost:</span>
+              <span className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('account.billing.monthlyCost')}:</span>
               <span className="text-13 font-semibold" style={{ color: 'var(--text-heading)' }}>
                 {subscription.tier === 'pro' ? '$29.00' : '$99.00'}
               </span>
@@ -102,7 +104,7 @@ export const BillingTab: React.FC = () => {
 
             {subscription.nextBillingDate && (
               <div className="flex items-center justify-between">
-                <span className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Next Billing Date:</span>
+                <span className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('account.billing.nextBillingDate')}:</span>
                 <span className="text-13" style={{ color: 'var(--text-heading)' }}>
                   {formatDate(subscription.nextBillingDate)}
                 </span>
@@ -111,7 +113,7 @@ export const BillingTab: React.FC = () => {
 
             {subscription.paymentProvider && (
               <div className="flex items-center justify-between">
-                <span className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Payment Method:</span>
+                <span className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('account.billing.paymentMethod')}:</span>
                 <span className="text-13" style={{ color: 'var(--text-heading)' }}>
                   {subscription.paymentProvider.charAt(0).toUpperCase() + subscription.paymentProvider.slice(1)}
                 </span>
@@ -123,13 +125,13 @@ export const BillingTab: React.FC = () => {
 
       {/* Billing History */}
       <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-        <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>Billing History</div>
+        <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>{t('account.billing.billingHistory')}</div>
         
         {billingHistory.length === 0 ? (
           <div className="text-12" style={{ color: 'var(--text-secondary)' }}>
             {isPaidTier 
-              ? 'No billing history available yet. Your first invoice will appear here after your first billing cycle.'
-              : 'You are on a free plan. Upgrade to Pro or Max to see billing history.'}
+              ? t('account.billing.noHistoryPaid')
+              : t('account.billing.noHistoryFree')}
           </div>
         ) : (
           <div className="space-y-2">
@@ -157,7 +159,7 @@ export const BillingTab: React.FC = () => {
                       color: item.status === 'paid' ? 'rgb(34, 197, 94)' : 'rgb(251, 191, 36)',
                     }}
                   >
-                    {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+                    {item.status === 'paid' ? t('account.billing.paid') : t('account.billing.pending')}
                   </div>
                 </div>
               </div>
@@ -169,10 +171,9 @@ export const BillingTab: React.FC = () => {
       {/* Payment Information */}
       {isPaidTier && subscription.paymentProvider === 'paypal' && (
         <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-          <div className="text-13 mb-3" style={{ color: 'var(--text-heading)' }}>Payment Information</div>
+          <div className="text-13 mb-3" style={{ color: 'var(--text-heading)' }}>{t('account.billing.paymentInformation')}</div>
           <div className="text-12" style={{ color: 'var(--text-secondary)' }}>
-            Your subscription is managed through PayPal. To update your payment method or cancel your subscription, 
-            please visit your PayPal account or contact support.
+            {t('account.billing.paypalInfo')}
           </div>
         </div>
       )}

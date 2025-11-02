@@ -241,6 +241,19 @@ func (s *SubscriptionService) ProcessBillingCycle(ctx context.Context) error {
 	for _, sub := range activeSubs {
 		// Check if subscription period has expired
 		if now.After(sub.CurrentPeriodEnd) {
+			wasCancelledAtPeriodEnd := sub.CancelAtPeriodEnd
+			// If cancelled at period end, mark as cancelled first
+			if sub.CancelAtPeriodEnd {
+				sub.Status = "cancelled"
+				sub.CancelAtPeriodEnd = false
+				sub.UpdatedAt = now
+				if err := s.subsRepo.Upsert(ctx, sub); err != nil {
+					if s.logger != nil {
+						s.logger.Printf("Failed to mark cancelled subscription %s: %v", sub.ID, err)
+					}
+					continue
+				}
+			}
 			// Expired subscription - downgrade to free
 			if err := s.downgradeToFree(ctx, sub.TenantID, sub.UserID); err != nil {
 				if s.logger != nil {
@@ -250,13 +263,25 @@ func (s *SubscriptionService) ProcessBillingCycle(ctx context.Context) error {
 			}
 			expired++
 			if s.logger != nil {
-				s.logger.Printf("Downgraded expired subscription for user %s in tenant %s", sub.UserID, sub.TenantID)
+				if wasCancelledAtPeriodEnd {
+					s.logger.Printf("Cancelled and downgraded subscription for user %s in tenant %s (cancelled at period end)", sub.UserID, sub.TenantID)
+				} else {
+					s.logger.Printf("Downgraded expired subscription for user %s in tenant %s", sub.UserID, sub.TenantID)
+				}
 			}
 			continue
 		}
 
 		// Check if billing date has arrived (for paid tiers)
 		if sub.NextBillingDate != nil && !now.Before(*sub.NextBillingDate) {
+			// If cancelled at period end, don't renew - let it expire naturally
+			if sub.CancelAtPeriodEnd {
+				if s.logger != nil {
+					s.logger.Printf("Skipping renewal for subscription %s (cancelled at period end)", sub.ID)
+				}
+				continue
+			}
+			
 			// Renew billing period (for paid subscriptions)
 			// For now, if no payment is set up, we extend by another month
 			// In production, this would trigger payment processing
@@ -321,6 +346,7 @@ func (s *SubscriptionService) EnsureAdminMaxSubscription(ctx context.Context, te
 	sub.CurrentPeriodStart = now
 	sub.CurrentPeriodEnd = now.AddDate(100, 0, 0) // Effectively never expires
 	sub.NextBillingDate = nil
+	sub.CancelAtPeriodEnd = false // Reset cancellation flag
 	sub.UpdatedAt = now
 	
 	if err := s.subsRepo.Upsert(ctx, sub); err != nil {
@@ -332,5 +358,64 @@ func (s *SubscriptionService) EnsureAdminMaxSubscription(ctx context.Context, te
 	}
 	
 	return nil
+}
+
+// CancelSubscriptionAtPeriodEnd cancels subscription at the end of current billing period
+// Subscription remains active until CurrentPeriodEnd, then auto-renewal stops
+func (s *SubscriptionService) CancelSubscriptionAtPeriodEnd(ctx context.Context, tenantID, userID string) (*models.Subscription, error) {
+	sub, err := s.GetOrCreateSubscription(ctx, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Can only cancel paid subscriptions
+	if sub.Tier == models.SubscriptionTierFree {
+		return nil, fmt.Errorf("cannot cancel free subscription")
+	}
+
+	// Already cancelled?
+	if sub.CancelAtPeriodEnd {
+		return sub, nil
+	}
+
+	// Mark for cancellation at period end
+	now := time.Now().UTC()
+	sub.CancelAtPeriodEnd = true
+	sub.UpdatedAt = now
+
+	if err := s.subsRepo.Upsert(ctx, sub); err != nil {
+		return nil, fmt.Errorf("failed to cancel subscription: %w", err)
+	}
+
+	if s.logger != nil {
+		s.logger.Printf("Marked subscription for cancellation at period end (user %s, tenant %s, period ends %s)", 
+			userID, tenantID, sub.CurrentPeriodEnd.Format(time.RFC3339))
+	}
+
+	return sub, nil
+}
+
+// ResumeSubscription resumes a cancelled subscription (for PayPal subscriptions that were resumed)
+func (s *SubscriptionService) ResumeSubscription(ctx context.Context, tenantID, userID string) (*models.Subscription, error) {
+	sub, err := s.GetOrCreateSubscription(ctx, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reset cancellation flag
+	now := time.Now().UTC()
+	sub.CancelAtPeriodEnd = false
+	sub.Status = "active"
+	sub.UpdatedAt = now
+
+	if err := s.subsRepo.Upsert(ctx, sub); err != nil {
+		return nil, fmt.Errorf("failed to resume subscription: %w", err)
+	}
+
+	if s.logger != nil {
+		s.logger.Printf("Resumed subscription (user %s, tenant %s)", userID, tenantID)
+	}
+
+	return sub, nil
 }
 

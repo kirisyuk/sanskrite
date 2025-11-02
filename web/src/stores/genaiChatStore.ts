@@ -145,6 +145,9 @@ interface GenaiChatState {
   stanceLoading: boolean;
   loadStanceAggregate: () => Promise<void>;
   ensureStanceAggregate: () => Promise<void>;
+
+  // Hydration loading state
+  hydrating: boolean;
 }
 
 export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
@@ -170,6 +173,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   stanceAggregate: undefined,
   stanceLoading: false,
   pendingAttachedDocIds: [],
+  hydrating: false,
 
   reset: () => set({ messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [] }),
   
@@ -195,6 +199,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       stanceAggregate: undefined,
       stanceLoading: false,
       pendingAttachedDocIds: [],
+      hydrating: false,
     });
   },
 
@@ -226,6 +231,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   hydrateInteractions: async () => {
     const projectId = get().projectId;
     if (!projectId || projectId === 'local-unfold') return;
+    set({ hydrating: true });
     try {
       const serverItems = await api.getProjectInteractions(projectId);
       // Check if projectId is still current before applying results (race condition guard)
@@ -323,7 +329,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           const existingExpansion = merged.find((it: any) => 
             it.subkind === 'eval.frame_expansions' && 
             (it.replyTo === lastAssistant.id || it.replyTo === serverId || localIds.includes(it.replyTo || '') ||
-             (it.relations && it.relations.some((r) => r.targetId === lastAssistant.id || r.targetId === serverId)))
+             (it.relations && it.relations.some((r: { type: string; targetId: string }) => r.targetId === lastAssistant.id || r.targetId === serverId)))
           );
           
           if (!existingExpansion && lastAssistant.content) {
@@ -379,7 +385,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           interactions: merged,
           searchQueries: [],
           sources: [],
-          messageMeta: restoredMeta
+          messageMeta: restoredMeta,
+          hydrating: false
         } as any;
       });
     } catch (e: any) {
@@ -390,6 +397,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       } else {
         console.error('[hydrateInteractions] Failed to load interactions', { projectId, status, error: e });
       }
+      set({ hydrating: false });
     }
   },
 
@@ -475,7 +483,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     // Find dependent interactions (evaluations or system/note referencing target)
     for (const it of interactions) {
       const repliesToTarget = it.replyTo && idSet.has(it.replyTo);
-      const relatesToTarget = Array.isArray(it.relations) && it.relations.some((r) => r && idSet.has(r.targetId));
+      const relatesToTarget = Array.isArray(it.relations) && it.relations.some((r: { type: string; targetId: string }) => r && idSet.has(r.targetId));
       const isEval = typeof it.subkind === 'string' && it.subkind.startsWith('eval.');
       const isSystemOrNote = it.kind === 'system' || it.kind === 'note';
       if ((repliesToTarget || relatesToTarget) && (isEval || isSystemOrNote)) {
@@ -688,6 +696,342 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         ...(suppressUserEcho ? [] : [{ id: now + '-iu', projectId, kind: 'user' as InteractionKind, content: prompt, createdAt, originalMessageId: now + '-u' } as LocalInteraction]),
       ],
     }) as any;});
+    
+    // Direct command detection from prompt (before LLM call to avoid unnecessary latency)
+    // Check if prompt starts with a known command
+    let detectedCommand: string | undefined = undefined;
+    let detectedParams: string | undefined = undefined;
+    
+    if (prompt && typeof prompt === 'string') {
+      const trimmed = prompt.trim();
+      
+      // Check for exact command matches first
+      if (trimmed === '/end') {
+        detectedCommand = '/end';
+        detectedParams = '';
+      } else if (trimmed.startsWith('/section ')) {
+        detectedCommand = '/section';
+        detectedParams = trimmed.replace(/^\s*\/section\s+/i, '').trim();
+      } else if (trimmed.startsWith('/analyze entities')) {
+        detectedCommand = '/analyze entities';
+        detectedParams = trimmed.replace(/^\s*\/analyze\s+entities\s*/i, '').trim();
+      } else if (trimmed.startsWith('/analyze facts')) {
+        detectedCommand = '/analyze facts';
+        detectedParams = trimmed.replace(/^\s*\/analyze\s+facts\s*/i, '').trim();
+      } else if (trimmed.startsWith('/analyze events')) {
+        detectedCommand = '/analyze events';
+        detectedParams = trimmed.replace(/^\s*\/analyze\s+events\s*/i, '').trim();
+      } else if (trimmed.startsWith('/analyze metrics')) {
+        detectedCommand = '/analyze metrics';
+        detectedParams = trimmed.replace(/^\s*\/analyze\s+metrics\s*/i, '').trim();
+      } else if (trimmed.startsWith('/analyze decisions')) {
+        detectedCommand = '/analyze decisions';
+        detectedParams = trimmed.replace(/^\s*\/analyze\s+decisions\s*/i, '').trim();
+      } else if (trimmed.startsWith('/agent data')) {
+        detectedCommand = '/agent data';
+        detectedParams = trimmed.replace(/^\s*\/agent\s+data\s*/i, '').trim();
+      } else if (trimmed.startsWith('/agent entity')) {
+        detectedCommand = '/agent entity';
+        detectedParams = trimmed.replace(/^\s*\/agent\s+entity\s*/i, '').trim();
+      }
+      
+      // Debug logging
+      if (trimmed.startsWith('/')) {
+        console.log('[Command] Detection:', { trimmed, detectedCommand, detectedParams });
+      }
+    }
+    
+    // If command detected, execute it instead of running GenAI
+    if (detectedCommand) {
+      try {
+        // Remove assistant placeholder
+        set((s) => {
+          const messages = [...s.messages];
+          if (messages.length > 0 && messages[messages.length - 1].role === 'assistant' && !messages[messages.length - 1].content) {
+            messages.pop(); // Remove placeholder
+          }
+          return { messages, streaming: false } as any;
+        });
+
+        // Ensure USER interaction is persisted before creating ACTION
+        if (!suppressUserEcho) {
+          try {
+            const userLocalId = now + '-iu';
+            const meta = agentMeta as any;
+            const payload: any = { kind: 'user', content: prompt, originalMessageId: now + '-u' };
+            if (meta?.subkind) payload.subkind = meta.subkind;
+            if (meta?.replyTo) {
+              const map = (get() as any).persistedByLocalId || {};
+              const serverReply = map[meta.replyTo] || map[String(meta.replyTo)];
+              if (serverReply) payload.replyTo = serverReply;
+            }
+            if (meta?.agentProfile) payload.agentProfile = meta.agentProfile;
+            // Attach document IDs if any
+            const attachedDocIds = get().pendingAttachedDocIds;
+            if (attachedDocIds && attachedDocIds.length > 0) {
+              payload.coreDocIds = attachedDocIds;
+              try { console.log('[Chat] Attaching documents to interaction', { docIds: attachedDocIds }); } catch {}
+            }
+            const resUser = await api.createProjectInteraction(projectId, payload);
+            // Clear attached docs after creating interaction
+            set({ pendingAttachedDocIds: [] });
+            set((st) => {
+              const items = [...st.interactions];
+              const idx = items.findIndex((it) => it.id === userLocalId);
+              if (idx >= 0) { (items[idx] as any).id = resUser.id; }
+              const map2 = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+              map2[userLocalId] = resUser.id;
+              map2[now + '-u'] = resUser.id;
+              return { interactions: items, persistedByLocalId: map2 } as any;
+            });
+          } catch (e) {
+            console.warn('[persist user-before-action] failed', e);
+          }
+        }
+
+        // Create action interaction (to show intent in chat)
+        try {
+          const actionId = Date.now().toString() + '-ac';
+          const createdAt = new Date().toISOString();
+          const actionText = detectedCommand + (detectedParams ? (' ' + detectedParams) : '');
+          const actionInter: LocalInteraction = {
+            id: actionId,
+            projectId,
+            kind: 'action',
+            content: actionText,
+            createdAt,
+            originalMessageId: now + '-u',
+          };
+          set((s) => ({ interactions: [...s.interactions, actionInter] }));
+          // Persist action (best-effort)
+          (async () => {
+            try {
+              const res = await api.createProjectInteraction(projectId, { kind: 'action', content: actionText, originalMessageId: now + '-u' });
+              set((s) => {
+                const map = { ...(s.persistedByLocalId || {}) } as Record<string, string>;
+                map[actionId] = res.id;
+                const items = [...s.interactions];
+                const idx = items.findIndex((it) => it.id === actionId);
+                if (idx >= 0) { (items[idx] as any).id = res.id; }
+                return { interactions: items, persistedByLocalId: map } as any;
+              });
+            } catch (e) {
+              console.warn('[Action] persist failed', e);
+            }
+          })();
+        } catch {}
+
+        // Execute command
+        const cmd = detectedCommand.toLowerCase();
+        const params = (detectedParams || '').trim();
+        try {
+          if (cmd === '/end') {
+            await api.createProjectInteraction(projectId, { kind: 'section_end', content: '' });
+            await get().hydrateInteractions();
+            return;
+          }
+          if (cmd.startsWith('/section')) {
+            // Use params as title
+            await api.createProjectInteraction(projectId, { kind: 'section_start', content: params });
+            await get().hydrateInteractions();
+            return;
+          }
+          if (cmd === '/analyze entities') { await api.analyzeEntities(projectId, params); return; }
+          if (cmd === '/analyze facts') { await api.analyzeFacts(projectId, params); return; }
+          if (cmd === '/analyze events') { await api.analyzeEvents(projectId, params); return; }
+          if (cmd === '/analyze metrics') { await api.analyzeMetrics(projectId, params); return; }
+          if (cmd === '/analyze decisions') { await api.analyzeDecisions(projectId, params); return; }
+          
+          // Agent commands: /agent data <query> and /agent entity <query>
+          if (cmd === '/agent data' || cmd === '/agent entity') {
+            const agentType = cmd === '/agent data' ? 'data' : 'entities';
+            const query = params || prompt.replace(/^\s*\/agent\s+(data|entity)\s+/i, '').trim();
+            
+            console.log('[Agent] Executing agent command', { cmd, agentType, query, params, projectId });
+            
+            if (!query) {
+              console.warn('[Agent] Empty query provided');
+              return;
+            }
+            
+            try {
+              // Import agents store
+              const { useAgentsStore } = await import('./agentsStore');
+              const agentsStore = useAgentsStore.getState();
+              
+              // Get current user context
+              const { auth } = await import('../lib/firebase');
+              const user = auth?.currentUser;
+              if (!user) {
+                console.error('[Agent] User not authenticated');
+                return;
+              }
+              
+              console.log('[Agent] User authenticated', { userId: user.uid, email: user.email });
+              
+              // Get tenant ID from user (assuming it's stored somewhere or we can get it from project)
+              // For now, we'll use projectId as tenantId fallback
+              const tenantId = user.uid; // This should be actual tenantId, but using uid as fallback
+              
+              if (agentType === 'data') {
+                // For Data Agent, parse query as data collection request
+                const task: import('../types/agents').DataAgentTask = {
+                  context: {
+                    tenantId,
+                    projectId,
+                    userId: user.uid,
+                  },
+                  query: query,
+                  granularity: 'monthly',
+                  timeRange: {
+                    from: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 1 year ago
+                    to: new Date().toISOString().split('T')[0], // today
+                  },
+                  metadata: {
+                    interactionId: now + '-iu',
+                    messageId: now + '-u',
+                  },
+                };
+                
+                // Execute agent via API and get result
+                console.log('[Agent] Calling executeDataAgent', { projectId, task });
+                let response: import('../types/agents').AgentExecutionResponse;
+                try {
+                  if (agentType === 'data') {
+                    response = await api.executeDataAgent(projectId, task);
+                  } else {
+                    response = await api.executeEntitiesAgent(projectId, task as any);
+                  }
+                  console.log('[Agent] Received response', { agentId: response.agentId, agentName: response.agentName, resultKeys: Object.keys(response.result || {}) });
+                } catch (e: any) {
+                  console.error('[Agent] API call failed', e);
+                  if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) {
+                    console.error('[Agent] Request timeout - agent may still be running. Check WebSocket updates.');
+                    // Agent may still be running, but HTTP request timed out
+                    // WebSocket updates should still work
+                    await api.createProjectInteraction(projectId, {
+                      kind: 'assistant',
+                      subkind: 'agent.timeout',
+                      content: 'Agent execution is taking longer than expected. Progress updates will be sent via WebSocket.',
+                    });
+                    await get().hydrateInteractions();
+                  }
+                  throw e;
+                }
+                
+                // Save result immediately
+                await saveAgentResult(response.result, agentType, projectId, query, response.agentId, user.uid);
+                
+                // Track task via store for progress updates
+                const taskId = await agentsStore.executeAgent(projectId, agentType, task);
+                
+                // Wait for completion status updates via WebSocket
+                await waitForAgentCompletion(taskId, agentType, projectId, query, user.uid);
+              } else if (agentType === 'entities') {
+                // For Entities Agent, parse entities from query
+                // Split by commas or newlines to support multiple entities
+                const parseEntities = (text: string): Array<{ name: string; type: string }> => {
+                  if (!text.trim()) return [];
+                  
+                  // Split by commas or newlines, then trim each part
+                  const parts = text
+                    .split(/[,\n]/)
+                    .map(p => p.trim())
+                    .filter(p => p.length > 0);
+                  
+                  // If only one part or splitting didn't help, return as single entity
+                  if (parts.length === 0) return [];
+                  if (parts.length === 1) {
+                    return [{
+                      name: parts[0],
+                      type: 'other', // Agent will determine proper type
+                    }];
+                  }
+                  
+                  // Multiple entities found
+                  return parts.map(name => ({
+                    name,
+                    type: 'other', // Agent will determine proper type
+                  }));
+                };
+                
+                const entities = parseEntities(query);
+                
+                const task: import('../types/agents').EntitiesAgentTask = {
+                  context: {
+                    tenantId,
+                    projectId,
+                    userId: user.uid,
+                  },
+                  entities: entities.length > 0 ? entities : [{
+                    name: query,
+                    type: 'other', // Fallback: pass entire query as single entity
+                  }],
+                  maxDepth: 2,
+                  includeDetails: true,
+                  metadata: {
+                    interactionId: now + '-iu',
+                    messageId: now + '-u',
+                    custom: {
+                      query: query, // Store original query in metadata for agent reference
+                    },
+                  },
+                };
+                
+                // Execute agent via API and get result
+                console.log('[Agent] Calling executeEntitiesAgent', { projectId, task });
+                let response: import('../types/agents').AgentExecutionResponse;
+                try {
+                  response = await api.executeEntitiesAgent(projectId, task);
+                  console.log('[Agent] Received response', { agentId: response.agentId, agentName: response.agentName, resultKeys: Object.keys(response.result || {}) });
+                } catch (e: any) {
+                  console.error('[Agent] API call failed', e);
+                  if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) {
+                    console.error('[Agent] Request timeout - agent may still be running. Check WebSocket updates.');
+                    // Agent may still be running, but HTTP request timed out
+                    // WebSocket updates should still work
+                    await api.createProjectInteraction(projectId, {
+                      kind: 'assistant',
+                      subkind: 'agent.timeout',
+                      content: 'Agent execution is taking longer than expected. Progress updates will be sent via WebSocket.',
+                    });
+                    await get().hydrateInteractions();
+                  }
+                  throw e;
+                }
+                
+                // Save result immediately
+                await saveAgentResult(response.result, agentType, projectId, query, response.agentId, user.uid);
+                
+                // Track task via store for progress updates
+                const taskId = await agentsStore.executeAgent(projectId, agentType, task);
+                
+                // Wait for completion status updates via WebSocket
+                await waitForAgentCompletion(taskId, agentType, projectId, query, user.uid);
+              }
+            } catch (e: any) {
+              console.error('[Agent] Execution failed', e);
+              // Show error status
+              try {
+                await api.createProjectInteraction(projectId, {
+                  kind: 'assistant',
+                  subkind: 'agent.error',
+                  content: `Agent execution failed: ${e.message || 'Unknown error'}`,
+                });
+                await get().hydrateInteractions();
+              } catch {}
+            }
+            return;
+          }
+        } catch (e) {
+          console.error('[Command] Execution failed', e);
+        }
+        return;
+      } catch (e) {
+        console.error('[Command] Handler failed', e);
+        // Fall through to normal LLM flow
+      }
+    }
     
     // Preliminary stance structured call (extract user_request) - after UI update, before server sync
     // TEMPORARILY DISABLED: Prestance call adds ~2 seconds latency and is not critical
@@ -1658,7 +2002,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               const existingExpansion = state.interactions.find((it) => 
                 it.subkind === 'eval.frame_expansions' && 
                 (it.replyTo === lastAssistant.id || it.replyTo === serverId || localIds.includes(it.replyTo || '') ||
-                 (it.relations && it.relations.some((r) => r.targetId === lastAssistant.id || r.targetId === serverId)))
+                 (it.relations && it.relations.some((r: { type: string; targetId: string }) => r.targetId === lastAssistant.id || r.targetId === serverId)))
               );
               
               if (existingExpansion) {

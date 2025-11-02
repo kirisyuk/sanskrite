@@ -894,6 +894,9 @@ type Subscription struct {
 	CurrentPeriodStart time.Time `json:"currentPeriodStart" firestore:"currentPeriodStart"` // Start of current billing period
 	CurrentPeriodEnd   time.Time `json:"currentPeriodEnd" firestore:"currentPeriodEnd"`   // End of current billing period
 	NextBillingDate    *time.Time `json:"nextBillingDate,omitempty" firestore:"nextBillingDate,omitempty"` // Next billing date (null for free tier)
+	
+	// Cancellation: if true, subscription will be cancelled at period end (no auto-renewal)
+	CancelAtPeriodEnd bool `json:"cancelAtPeriodEnd" firestore:"cancelAtPeriodEnd"`
 
 	// Voucher information (if subscription is based on a voucher)
 	VoucherID *string `json:"voucherId,omitempty" firestore:"voucherId,omitempty"`

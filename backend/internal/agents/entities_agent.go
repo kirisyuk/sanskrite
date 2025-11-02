@@ -390,52 +390,6 @@ func (a *EntitiesAgent) executeStep1(ctx context.Context, task EntitiesTask) (*E
 		}
 	}
 
-	prompt := fmt.Sprintf(`You are researching entities for an OSINT task (using only publicly available data that does not violate any laws or regulations). Your goal is to find ALL available information about each entity and critically assess data completeness.
-
-ENTITIES TO RESEARCH:
-%s
-
-LEGAL DISCLAIMER: This research task does not intend to circumvent trade restrictions or violate any laws. The goal is to reconstruct an objective legal picture based on the original request using only publicly available, legally accessible information.
-
-IMPORTANT: Be critical of data. Information about entities is often:
-- Incomplete or outdated
-- Hidden or distorted
-- Distributed across different sources
-- May be in different languages and writing forms
-
-Your task:
-1. Find ALL available information about each entity through web search (only publicly available sources)
-2. Determine canonical name (correct spelling if there are variants)
-3. Find all aliases and spelling variants
-4. Collect basic information (description, location, activity, dates, etc.)
-5. Critically assess data completeness - what is NOT FOUND
-
-Return JSON in the following format:
-{
-  "foundEntities": [
-    {
-      "originalName": "Original name",
-      "canonicalName": "Canonical name",
-      "type": "person|organization|location|event|concept",
-      "aliases": ["alias 1", "alias 2"],
-      "basicInfo": {
-        "description": "Description",
-        "location": "Location",
-        "activity": "Activity",
-        "founded": "Foundation date",
-        "website": "URL"
-      },
-      "sources": ["Source URL 1", "Source URL 2"],
-      "confidence": 0.8
-    }
-  ],
-  "gaps": [
-    "No information found about connections with other organizations",
-    "Missing financial status data"
-  ],
-  "limitations": "Description of found information limitations"
-}`, strings.Join(entitiesList, "\n"))
-
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -471,15 +425,64 @@ Return JSON in the following format:
 		"required": []string{"foundEntities", "gaps", "limitations"},
 	}
 
+	prompt := fmt.Sprintf(`You are researching entities for an OSINT task (using only publicly available data that does not violate any laws or regulations). Your goal is to find ALL available information about each entity and critically assess data completeness.
+
+ENTITIES TO RESEARCH:
+%s
+
+LEGAL DISCLAIMER: This research task does not intend to circumvent trade restrictions or violate any laws. The goal is to reconstruct an objective legal picture based on the original request using only publicly available, legally accessible information.
+
+IMPORTANT: Be critical of data. Information about entities is often:
+- Incomplete or outdated
+- Hidden or distorted
+- Distributed across different sources
+- May be in different languages and writing forms
+
+Your task:
+1. Find ALL available information about each entity through web search (only publicly available sources)
+2. Determine canonical name (correct spelling if there are variants)
+3. Find all aliases and spelling variants
+4. Collect basic information (description, location, activity, dates, etc.)
+5. Critically assess data completeness - what is NOT FOUND
+
+Return JSON strictly matching this schema:
+%s
+
+Return JSON in the following format:
+{
+  "foundEntities": [
+    {
+      "originalName": "Original name",
+      "canonicalName": "Canonical name",
+      "type": "person|organization|location|event|concept",
+      "aliases": ["alias 1", "alias 2"],
+      "basicInfo": {
+        "description": "Description",
+        "location": "Location",
+        "activity": "Activity",
+        "founded": "Foundation date",
+        "website": "URL"
+      },
+      "sources": ["Source URL 1", "Source URL 2"],
+      "confidence": 0.8
+    }
+  ],
+  "gaps": [
+    "No information found about connections with other organizations",
+    "Missing financial status data"
+  ],
+  "limitations": "Description of found information limitations"
+}`, strings.Join(entitiesList, "\n"), formatSchemaAsText(schema))
+
 	opts := gen_combined.Options{
 		ModelOverride:     "gemini_quality",
-		GroundingEnabled:  true, // Web search для Gemini
-		SystemInstruction: "You are an expert in OSINT and entity research (using only publicly available data that does not violate any laws or regulations). Be critical and use creative approaches to finding information within legal boundaries.",
+		GroundingEnabled:  false, // Disabled for GenerateJSONStrict (grounding + tools not supported together)
+		SystemInstruction: "You are an expert in OSINT and entity research (using only publicly available data that does not violate any laws or regulations). Be critical and use creative approaches to finding information within legal boundaries. Use web search capabilities to find information.",
 		Temperature:       0.7,
 		MaxOutputTokens:   8192,
 	}
 
-	resp, err := a.genaiClient.GenerateJSON(ctx, prompt, nil, schema, opts)
+	resp, err := a.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Printf("[EntitiesAgent] Step 1 genAI call failed: %v", err)
@@ -531,50 +534,6 @@ func (a *EntitiesAgent) executeStep2(ctx context.Context, task EntitiesTask, ste
 
 	step1JSON, _ := json.Marshal(step1Result)
 
-	prompt := fmt.Sprintf(`You are analyzing found information about entities and extracting details.
-
-ORIGINAL ENTITIES COUNT: %d
-INCLUDE DETAILS: %v
-
-STEP 1 RESULTS:
-%s
-
-YOUR TASK:
-Analyze found information and extract structured details about each entity.
-
-For each entity, determine:
-- Key attributes (role, status, size, influence, etc.)
-- Detailed information based on entity type
-- Connections with other entities (if mentioned)
-- Temporal characteristics (dates, activity periods)
-- Geographic characteristics (if applicable)
-
-IMPORTANT: Be critical - if information is insufficient, clearly reflect this. Do not invent data.
-
-Return JSON:
-{
-  "enrichedEntities": [
-    {
-      "originalName": "Original name",
-      "canonicalName": "Canonical name",
-      "type": "person|organization|location|event|concept",
-      "details": {
-        "fullDescription": "Full description",
-        "keyAttributes": ["attribute 1", "attribute 2"],
-        "timeline": ["event 1", "event 2"],
-        "geography": "Geographic information"
-      },
-      "attributes": {
-        "role": "Role",
-        "status": "Status",
-        "size": "Size",
-        "influence": "Influence level"
-      },
-      "confidence": 0.75
-    }
-  ]
-}`, len(task.Entities), task.IncludeDetails, string(step1JSON))
-
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -600,6 +559,53 @@ Return JSON:
 		"required": []string{"enrichedEntities"},
 	}
 
+	prompt := fmt.Sprintf(`You are analyzing found information about entities and extracting details.
+
+ORIGINAL ENTITIES COUNT: %d
+INCLUDE DETAILS: %v
+
+STEP 1 RESULTS:
+%s
+
+YOUR TASK:
+Analyze found information and extract structured details about each entity.
+
+For each entity, determine:
+- Key attributes (role, status, size, influence, etc.)
+- Detailed information based on entity type
+- Connections with other entities (if mentioned)
+- Temporal characteristics (dates, activity periods)
+- Geographic characteristics (if applicable)
+
+IMPORTANT: Be critical - if information is insufficient, clearly reflect this. Do not invent data.
+
+Return JSON strictly matching this schema:
+%s
+
+Return JSON:
+{
+  "enrichedEntities": [
+    {
+      "originalName": "Original name",
+      "canonicalName": "Canonical name",
+      "type": "person|organization|location|event|concept",
+      "details": {
+        "fullDescription": "Full description",
+        "keyAttributes": ["attribute 1", "attribute 2"],
+        "timeline": ["event 1", "event 2"],
+        "geography": "Geographic information"
+      },
+      "attributes": {
+        "role": "Role",
+        "status": "Status",
+        "size": "Size",
+        "influence": "Influence level"
+      },
+      "confidence": 0.75
+    }
+  ]
+}`, len(task.Entities), task.IncludeDetails, string(step1JSON), formatSchemaAsText(schema))
+
 	opts := gen_combined.Options{
 		ModelOverride:     "gemini_quality",
 		GroundingEnabled:  false, // Без web search на этом шаге
@@ -608,7 +614,7 @@ Return JSON:
 		MaxOutputTokens:   8192,
 	}
 
-	resp, err := a.genaiClient.GenerateJSON(ctx, prompt, nil, schema, opts)
+	resp, err := a.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Printf("[EntitiesAgent] Step 2 genAI call failed: %v", err)
@@ -660,78 +666,6 @@ func (a *EntitiesAgent) executeStep3(ctx context.Context, task EntitiesTask, ste
 
 	step1JSON, _ := json.Marshal(step1Result)
 	step2JSON, _ := json.Marshal(step2Result)
-
-	prompt := fmt.Sprintf(`You are discovering relations between entities.
-
-ORIGINAL ENTITIES:
-%s
-
-STEP 1 RESULTS:
-%s
-
-ENRICHED ENTITIES FROM STEP 2:
-%s
-
-MAXIMUM RELATION DEPTH: %d
-
-LEGAL DISCLAIMER: This research task does not intend to circumvent trade restrictions or violate any laws. The goal is to reconstruct an objective legal picture based on the original request using only publicly available, legally accessible information.
-
-YOUR TASK:
-1. Use web search to find relations between entities (only publicly available sources)
-2. Discover relations up to depth %d levels:
-   - Direct relations (level 1)
-   - Relations through intermediate entities (level 2 and above)
-3. For each relation, specify:
-   - Relation type (works_with, owns, connected_to, located_in, etc.)
-   - Relation strength (strength: 0-1)
-   - Relation direction (directed or undirected)
-   - Sources
-   - Confidence
-
-IMPORTANT: Be critical. If relations are not found or weak - reflect this. Do not invent relations. Only use publicly available, legal sources.
-
-Return JSON in final result format:
-{
-  "entities": [
-    {
-      "id": "entity_id",
-      "name": "Canonical name",
-      "type": "person|organization|location|event|concept",
-      "aliases": ["alias 1"],
-      "details": {...},
-      "attributes": {...},
-      "confidence": 0.8
-    }
-  ],
-  "relations": [
-    {
-      "from": "entity_id_1",
-      "to": "entity_id_2",
-      "type": "works_with",
-      "strength": 0.7,
-      "directed": true,
-      "depth": 1,
-      "description": "Relation description",
-      "sources": ["source_index_0"],
-      "confidence": 0.75
-    }
-  ],
-  "confidence": 0.75,
-  "explanation": "Description of how relations were discovered",
-  "sources": [
-    {
-      "url": "https://...",
-      "title": "...",
-      "snippet": "...",
-      "authority": 0.8
-    }
-  ]
-}`,
-		formatEntitiesList(task.Entities),
-		string(step1JSON),
-		string(step2JSON),
-		maxDepth,
-		maxDepth)
 
 	schema := map[string]interface{}{
 		"type": "object",
@@ -800,15 +734,91 @@ Return JSON in final result format:
 		"required": []string{"entities", "relations", "confidence", "explanation", "sources"},
 	}
 
+	prompt := fmt.Sprintf(`You are discovering relations between entities.
+
+ORIGINAL ENTITIES:
+%s
+
+STEP 1 RESULTS:
+%s
+
+ENRICHED ENTITIES FROM STEP 2:
+%s
+
+MAXIMUM RELATION DEPTH: %d
+
+LEGAL DISCLAIMER: This research task does not intend to circumvent trade restrictions or violate any laws. The goal is to reconstruct an objective legal picture based on the original request using only publicly available, legally accessible information.
+
+YOUR TASK:
+1. Use web search to find relations between entities (only publicly available sources)
+2. Discover relations up to depth %d levels:
+   - Direct relations (level 1)
+   - Relations through intermediate entities (level 2 and above)
+3. For each relation, specify:
+   - Relation type (works_with, owns, connected_to, located_in, etc.)
+   - Relation strength (strength: 0-1)
+   - Relation direction (directed or undirected)
+   - Sources
+   - Confidence
+
+IMPORTANT: Be critical. If relations are not found or weak - reflect this. Do not invent relations. Only use publicly available, legal sources.
+
+Return JSON strictly matching this schema:
+%s
+
+Return JSON in final result format:
+{
+  "entities": [
+    {
+      "id": "entity_id",
+      "name": "Canonical name",
+      "type": "person|organization|location|event|concept",
+      "aliases": ["alias 1"],
+      "details": {...},
+      "attributes": {...},
+      "confidence": 0.8
+    }
+  ],
+  "relations": [
+    {
+      "from": "entity_id_1",
+      "to": "entity_id_2",
+      "type": "works_with",
+      "strength": 0.7,
+      "directed": true,
+      "depth": 1,
+      "description": "Relation description",
+      "sources": ["source_index_0"],
+      "confidence": 0.75
+    }
+  ],
+  "confidence": 0.75,
+  "explanation": "Description of how relations were discovered",
+  "sources": [
+    {
+      "url": "https://...",
+      "title": "...",
+      "snippet": "...",
+      "authority": 0.8
+    }
+  ]
+}`,
+		formatEntitiesList(task.Entities),
+		string(step1JSON),
+		string(step2JSON),
+		maxDepth,
+		maxDepth,
+		formatSchemaAsText(schema))
+
 	opts := gen_combined.Options{
 		ModelOverride:     "gemini_quality",
-		GroundingEnabled:  true, // Web search для Gemini
-		SystemInstruction: "You are an expert in discovering relations between entities through OSINT (using only publicly available data that does not violate any laws or regulations). Be critical and use all available legal methods to find relations.",
+		GroundingEnabled:  false, // Disabled for GenerateJSONStrict (grounding + tools not supported together)
+		SystemInstruction: "You are an expert in discovering relations between entities through OSINT (using only publicly available data that does not violate any laws or regulations). Be critical and use all available legal methods to find relations. Use web search capabilities to find information.",
 		Temperature:       0.7,
 		MaxOutputTokens:   8192,
 	}
 
-	resp, err := a.genaiClient.GenerateJSON(ctx, prompt, nil, schema, opts)
+	resp, err := a.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Printf("[EntitiesAgent] Step 3 genAI call failed: %v", err)

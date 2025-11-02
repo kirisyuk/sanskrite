@@ -455,6 +455,25 @@ func (mm *AIModelManager) initializeModels() {
 		BuiltInSearchCapability:       false,
 	}
 
+	mm.models["grok-4-fast-reasoning"] = AIModelCapabilities{
+		Name:                          "grok-4-fast-reasoning",
+		ContextWindow:                 2000000,
+		OutputTokens:                  2000000,
+		PricePerInputToken:            0.00000020, // $0.20 / 1M (<128K), $0.40 / 1M (>=128K)
+		PricePerOutputToken:           0.00000050, // $0.50 / 1M (<128K), $1.00 / 1M (>=128K)
+		Provider:                      AIProviderGrok,
+		MaxTokensPerMinute:            2000000,
+		MaxTokensPerDay:               0,
+		NearlyRealTime:                false,
+		CapabilityScore:               8, // Higher than non-reasoning due to reasoning capability
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       false,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+	}
+
 	mm.models["grok-3"] = AIModelCapabilities{
 		Name:                          "grok-3",
 		ContextWindow:                 131072,

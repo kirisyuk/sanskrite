@@ -620,48 +620,47 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 		}
 		
 		// Heuristics for Responses SSE: prefer output_text.delta
-		if typ, _ := m["type"].(string); typ != "" {
+		// CRITICAL: Only call onDelta once per event to avoid duplicate chunks
+		var textToSend string
+		typ, _ := m["type"].(string)
+		if typ != "" {
 			lt := strings.ToLower(typ)
-			if strings.Contains(lt, "output_text.delta") {
-				if d, _ := m["delta"].(string); d != "" {
-					if onDelta != nil {
-						_ = onDelta(d)
-					}
-					extractURLsFromText(d, &sources)
-				}
-			}
 			if strings.Contains(lt, "response.completed") {
 				return io.EOF
 			}
-		}
-		if d, _ := m["delta"].(string); d != "" {
-			if onDelta != nil {
-				_ = onDelta(d)
+			// Prefer output_text.delta for delta events
+			if strings.Contains(lt, "output_text.delta") {
+				if d, _ := m["delta"].(string); d != "" {
+					textToSend = d
+				}
 			}
-			extractURLsFromText(d, &sources)
 		}
-		if txt, _ := m["output_text"].(string); txt != "" {
-			if onDelta != nil {
-				_ = onDelta(txt)
-			}
-			extractURLsFromText(txt, &sources)
-		}
-		if content, ok := m["content"].([]interface{}); ok {
-			var sb strings.Builder
-			for _, c := range content {
-				if cm, ok := c.(map[string]interface{}); ok {
-					if t, _ := cm["text"].(string); t != "" {
-						sb.WriteString(t)
+		// Fallback to other fields if output_text.delta not found
+		if textToSend == "" {
+			if d, _ := m["delta"].(string); d != "" {
+				textToSend = d
+			} else if txt, _ := m["output_text"].(string); txt != "" {
+				textToSend = txt
+			} else if content, ok := m["content"].([]interface{}); ok {
+				var sb strings.Builder
+				for _, c := range content {
+					if cm, ok := c.(map[string]interface{}); ok {
+						if t, _ := cm["text"].(string); t != "" {
+							sb.WriteString(t)
+						}
 					}
 				}
-			}
-			if sb.Len() > 0 {
-				text := sb.String()
-				if onDelta != nil {
-					_ = onDelta(text)
+				if sb.Len() > 0 {
+					textToSend = sb.String()
 				}
-				extractURLsFromText(text, &sources)
 			}
+		}
+		// Send text only once
+		if textToSend != "" {
+			if onDelta != nil {
+				_ = onDelta(textToSend)
+			}
+			extractURLsFromText(textToSend, &sources)
 		}
 		return nil
 	}

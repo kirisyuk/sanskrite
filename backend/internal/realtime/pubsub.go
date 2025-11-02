@@ -158,6 +158,10 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 	if et == EventAnalysisStatus {
 		log.Printf("publisher: publishing %s for tenantId=%s, payload=%s", et, tenantID, string(b))
 	}
+	// DEBUG: log agent.update publications
+	if et == EventAgentUpdate {
+		log.Printf("publisher: publishing %s for tenantId=%s, payload=%s", et, tenantID, string(b))
+	}
 	// Determine whether to use ordering key for this topic (only for stream-like topics)
 	requireOrdering := (topicToUse == EventGenAIStream ||
 		topicToUse == EventArtifactGenerationStarted ||

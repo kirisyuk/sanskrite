@@ -12,7 +12,8 @@ export type GenAIModel =
   | 'gpt_balanced'   // gpt-5-mini
   | 'gpt_fast'       // gpt-5-nano
   | 'grok_quality'   // grok-4-0709
-  | 'grok_fast'      // grok-4-fast-reasoning
+  | 'grok_balanced'  // grok-4-fast-reasoning
+  | 'grok_fast'      // grok-4-fast-non-reasoning
   | 'claude_balanced'// claude-sonnet-4-5-20250929 (quality option disabled - too expensive)
   | 'claude_fast'    // claude-haiku-4-5-20251001
   | 'deepseek_quality' // deepseek-reasoner
@@ -43,7 +44,7 @@ export function mapProviderStrengthToModel(provider: GenAIProvider, strength: Ge
       return 'gpt_quality';
     case 'grok':
       if (strength === 'quality') return 'grok_quality';
-      // Grok не имеет balanced; map to fast
+      if (strength === 'balanced') return 'grok_balanced';
       return 'grok_fast';
     case 'claude':
       if (strength === 'fast') return 'claude_fast';
@@ -72,6 +73,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<GenAIModel, number> = {
   
   // Grok models
   'grok_fast': 2_000_000,        // grok-4-fast-non-reasoning
+  'grok_balanced': 2_000_000,    // grok-4-fast-reasoning
   'grok_quality': 256_000,       // grok-4-0709
   
   // Claude models

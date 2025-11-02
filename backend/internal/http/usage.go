@@ -82,11 +82,18 @@ func (h *UsageHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
 		dailyTotals = make(map[string]repo.DailyTotal)
 	}
 
+	tokenCategoryTotals, err := h.repo.GetTokenCategoryTotals(r.Context(), auth.TenantID, auth.UID, startTime, endTime)
+	if err != nil {
+		h.logger.Printf("Failed to get token category totals: %v", err)
+		tokenCategoryTotals = &repo.TokenCategoryTotals{}
+	}
+
 	// Format response
 	response := map[string]interface{}{
-		"events":      metrics,
-		"byModel":     byModel,
-		"dailyTotals": dailyTotals,
+		"events":          metrics,
+		"byModel":         byModel,
+		"dailyTotals":     dailyTotals,
+		"tokenCategories": tokenCategoryTotals,
 		"period": map[string]string{
 			"startDate": startDate,
 			"endDate":   endDate,

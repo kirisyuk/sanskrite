@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -167,16 +168,28 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 	if usage, ok := root["usage"].(map[string]interface{}); ok {
 		if v, ok := usage["prompt_tokens"].(float64); ok {
 			out.Usage.PromptTokens = int(v)
+			log.Printf("[Grok Generate] Received prompt_tokens: %d", out.Usage.PromptTokens)
 		}
 		if v, ok := usage["completion_tokens"].(float64); ok {
 			out.Usage.OutputTokens = int(v)
+			log.Printf("[Grok Generate] Received completion_tokens: %d", out.Usage.OutputTokens)
 		}
 		if v, ok := usage["total_tokens"].(float64); ok {
 			out.Usage.TotalTokens = int(v)
+			log.Printf("[Grok Generate] Received total_tokens: %d", out.Usage.TotalTokens)
 		}
 		if v, ok := usage["reasoning_tokens"].(float64); ok {
 			out.Usage.ReasoningTokens = int(v)
+			log.Printf("[Grok Generate] Received reasoning_tokens: %d", out.Usage.ReasoningTokens)
 		}
+		// If total_tokens wasn't provided, calculate it
+		if out.Usage.TotalTokens == 0 && (out.Usage.PromptTokens > 0 || out.Usage.OutputTokens > 0) {
+			out.Usage.TotalTokens = out.Usage.PromptTokens + out.Usage.OutputTokens
+			log.Printf("[Grok Generate] Calculated total_tokens: %d (prompt: %d + output: %d)", out.Usage.TotalTokens, out.Usage.PromptTokens, out.Usage.OutputTokens)
+		}
+		log.Printf("[Grok Generate] Final usage: prompt=%d, output=%d, total=%d, reasoning=%d", out.Usage.PromptTokens, out.Usage.OutputTokens, out.Usage.TotalTokens, out.Usage.ReasoningTokens)
+	} else {
+		log.Printf("[Grok Generate] WARNING: No usage field in response for model %s", model)
 	}
 	if choices, ok := root["choices"].([]interface{}); ok && len(choices) > 0 {
 		if ch, ok := choices[0].(map[string]interface{}); ok {
@@ -277,6 +290,27 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
         if payload == "[DONE]" { break }
         var m map[string]interface{}
         if err := json.Unmarshal([]byte(payload), &m); err != nil { continue }
+        
+        // Process usage first - it may come in a message without choices
+        if u, ok := m["usage"].(map[string]interface{}); ok {
+            if v, ok := u["prompt_tokens"].(float64); ok { 
+                acc.PromptTokens = int(v)
+                log.Printf("[Grok Stream] Received prompt_tokens: %d", acc.PromptTokens)
+            }
+            if v, ok := u["completion_tokens"].(float64); ok { 
+                acc.OutputTokens = int(v)
+                log.Printf("[Grok Stream] Received completion_tokens: %d", acc.OutputTokens)
+            }
+            if v, ok := u["total_tokens"].(float64); ok { 
+                acc.TotalTokens = int(v)
+                log.Printf("[Grok Stream] Received total_tokens: %d", acc.TotalTokens)
+            }
+            if v, ok := u["reasoning_tokens"].(float64); ok { 
+                acc.ReasoningTokens = int(v)
+                log.Printf("[Grok Stream] Received reasoning_tokens: %d", acc.ReasoningTokens)
+            }
+        }
+        
         // choices[0].delta.content
         if chs, ok := m["choices"].([]interface{}); ok && len(chs) > 0 {
             if ch, ok := chs[0].(map[string]interface{}); ok {
@@ -304,13 +338,13 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
                 }
             }
         }
-        if u, ok := m["usage"].(map[string]interface{}); ok {
-            if v, ok := u["prompt_tokens"].(float64); ok { acc.PromptTokens = int(v) }
-            if v, ok := u["completion_tokens"].(float64); ok { acc.OutputTokens = int(v) }
-            if v, ok := u["total_tokens"].(float64); ok { acc.TotalTokens = int(v) }
-            if v, ok := u["reasoning_tokens"].(float64); ok { acc.ReasoningTokens = int(v) }
-        }
     }
+    // If total_tokens wasn't provided, calculate it from prompt + output
+    if acc.TotalTokens == 0 && (acc.PromptTokens > 0 || acc.OutputTokens > 0) {
+        acc.TotalTokens = acc.PromptTokens + acc.OutputTokens
+        log.Printf("[Grok Stream] Calculated total_tokens: %d (prompt: %d + output: %d)", acc.TotalTokens, acc.PromptTokens, acc.OutputTokens)
+    }
+    log.Printf("[Grok Stream] Final usage: prompt=%d, output=%d, total=%d, reasoning=%d", acc.PromptTokens, acc.OutputTokens, acc.TotalTokens, acc.ReasoningTokens)
     if onEvent != nil { _ = onEvent(StreamEvent{Type: "done", Usage: acc, Model: model, Sources: srcs, SearchQueries: queries}) }
     return nil
 }

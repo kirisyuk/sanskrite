@@ -439,6 +439,19 @@ const DiscoveryPage: React.FC = () => {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }
   }, [interactions.length, running, genaiChat.messages]);
+
+  // Auto-scroll to bottom after hydration completes
+  useEffect(() => {
+    if (!genaiChat.hydrating && genaiChat.interactions.length > 0 && messagesRef.current) {
+      // Small delay to ensure DOM has updated
+      const timeoutId = setTimeout(() => {
+        if (messagesRef.current) {
+          messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+        }
+      }, 100);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [genaiChat.hydrating, genaiChat.interactions.length]);
   // Track text selection within assistant markdown and position a floating action button
   useEffect(() => {
     const container = messagesRef.current;
@@ -1757,32 +1770,60 @@ const DiscoveryPage: React.FC = () => {
           <path d="M2 12l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {/* Floating Settings button (visible only when sidebar is hidden) */}
+      {/* Floating Account and Settings buttons (visible only when sidebar is hidden) */}
       {!sideOpen && !showSettings && !showAccount && (
-        <button
-          type="button"
-          aria-label="Account"
-          onClick={() => setShowAccount(true)}
-          className="rounded-lg transition-colors flex items-center justify-center"
-          style={{
-            position: 'fixed',
-            left: 8,
-            bottom: 48,
-            width: 32,
-            height: 32,
-            backgroundColor: 'transparent',
-            color: 'var(--text-heading)',
-            border: 'none',
-            zIndex: 40,
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-        >
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
-        </button>
+        <>
+          {/* Account button */}
+          <button
+            type="button"
+            aria-label="Account"
+            onClick={() => { setShowAccount(true); setShowSettings(false); setShowAdmin(false); setStaticPage(null); }}
+            className="rounded-lg transition-colors flex items-center justify-center"
+            style={{
+              position: 'fixed',
+              left: 8,
+              bottom: 88,
+              width: 32,
+              height: 32,
+              backgroundColor: 'transparent',
+              color: 'var(--text-heading)',
+              border: 'none',
+              zIndex: 40,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+          </button>
+          {/* Settings button */}
+          <button
+            type="button"
+            aria-label="Settings"
+            onClick={() => { setShowSettings(true); setShowAccount(false); setShowAdmin(false); setStaticPage(null); }}
+            className="rounded-lg transition-colors flex items-center justify-center"
+            style={{
+              position: 'fixed',
+              left: 8,
+              bottom: 48,
+              width: 32,
+              height: 32,
+              backgroundColor: 'transparent',
+              color: 'var(--text-heading)',
+              border: 'none',
+              zIndex: 40,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+        </>
       )}
 
       {/* Grid wrapper to the right of the sidebar: Sources | Center | Right */}
@@ -2194,6 +2235,23 @@ const DiscoveryPage: React.FC = () => {
             {/* GenAI chat history */}
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px', display: unfoldSubView === 'perspectives' ? 'none' : undefined }}>
               <div className="space-y-2">
+                {/* Skeleton loading during hydration */}
+                {genaiChat.hydrating && genaiChat.interactions.length === 0 && (
+                  <div className="space-y-2 py-2">
+                    <div style={{ height: 14, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                    </div>
+                    <div style={{ height: 10, width: '90%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                    </div>
+                    <div style={{ height: 10, width: '80%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                    </div>
+                    <div style={{ height: 10, width: '70%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                    </div>
+                  </div>
+                )}
                 {(() => {
                   // Merge messages and interactions, sort by timestamp to ensure correct order
                   type MergedItem = { type: 'message' | 'interaction'; data: any; timestamp: number; };
@@ -3272,6 +3330,23 @@ const DiscoveryPage: React.FC = () => {
           {/* Interactions history (LLM answers etc.) */}
           <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px' }}>
             <div className="space-y-2">
+              {/* Skeleton loading during hydration */}
+              {genaiChat.hydrating && interactions.length === 0 && (
+                <div className="space-y-2 py-2">
+                  <div style={{ height: 14, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                  </div>
+                  <div style={{ height: 10, width: '90%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                  </div>
+                  <div style={{ height: 10, width: '80%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                  </div>
+                  <div style={{ height: 10, width: '70%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                  </div>
+                </div>
+              )}
               {interactions
                 .filter((it) => it.kind === 'discovery.query' || it.kind === 'discovery.answer')
                 .map((it) => {

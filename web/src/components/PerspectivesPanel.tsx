@@ -5,26 +5,30 @@ import { useGenAISettings } from '../stores/genaiSettingsStore';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useTranslation } from 'react-i18next';
+import { ThemeContext } from './ThemeProvider';
 
 interface PerspectivesPanelProps {
   // Placeholder for future filters/sections
 }
 
 const PerspectivesPanel: React.FC<PerspectivesPanelProps> = () => {
-  const { t } = useTranslation();
-  const [preset, setPreset] = React.useState<string>('');
+  const { t, i18n } = useTranslation();
+  const { theme } = React.useContext(ThemeContext);
+  const [preset, setPreset] = React.useState<string>('consulting');
+  const [customQuery, setCustomQuery] = React.useState<string>('');
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [mdText, setMdText] = React.useState<string>('');
   const [runSeconds, setRunSeconds] = React.useState<number>(0);
   const runTimerRef = React.useRef<number | null>(null);
-  const selectRef = React.useRef<HTMLSelectElement | null>(null);
   const [saving, setSaving] = React.useState<boolean>(false);
   const [savedAt, setSavedAt] = React.useState<string | null>(null);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const rafRef = React.useRef<number | null>(null);
-  const [showToTop, setShowToTop] = React.useState(false);
-  const [showToBottom, setShowToBottom] = React.useState(false);
+  const [dropdownOpen, setDropdownOpen] = React.useState(false);
+  const dropdownRef = React.useRef<HTMLDivElement | null>(null);
+  const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+  const [dropdownPosition, setDropdownPosition] = React.useState<{ top: number; left: number; width: number } | null>(null);
   const genaiChat = useGenaiChatStore();
   const genaiSettings = useGenAISettings();
 
@@ -233,7 +237,8 @@ Constraints:
     try {
       if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
     } catch {}
-    setPreset('');
+    setPreset('consulting');
+    setCustomQuery('');
     setMdText('');
     setError(null);
     setRunSeconds(0);
@@ -249,7 +254,8 @@ Constraints:
       try {
         if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
       } catch {}
-      setPreset('');
+      setPreset('consulting');
+      setCustomQuery('');
       setMdText('');
       setError(null);
       setRunSeconds(0);
@@ -258,7 +264,7 @@ Constraints:
     }
   }, [interactions, messages]);
 
-  const handleRun = React.useCallback(async (p: string) => {
+  const handleRun = React.useCallback(async (p: string, customInstruction?: string) => {
     setError(null);
     setMdText('');
     // Start elapsed timer
@@ -266,8 +272,90 @@ Constraints:
       if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
     } catch {}
     setRunSeconds(0);
-    const instruction = presetToInstruction(p);
-    if (!instruction) return;
+    
+    // For custom perspective, use custom instruction
+    let instruction: string;
+    if (p === 'custom' && customInstruction) {
+      instruction = `ROLE: Senior Strategy Consultant with 15+ years experience across industries (McKinsey/BCG/Bain caliber). You've seen hundreds of strategic discussions and can spot patterns, gaps, and misframed problems instantly.
+
+TASK: Analyze the preceding discussion from a professional consulting perspective, adopting the specific viewpoint requested by the user. Provide balanced, actionable feedback that combines validation with constructive challenge.
+
+USER'S REQUESTED PERSPECTIVE: ${customInstruction}
+
+CRITICAL: Your task is to examine the discussion through the lens of "${customInstruction}". Adopt this perspective fully and comprehensively analyze how the topic and discussion appear from this alternative viewpoint.
+
+ANALYSIS FRAMEWORK:
+
+1. PERSPECTIVE FRAMING
+   - Clearly articulate how "${customInstruction}" shapes the analysis
+   - Explain what this perspective emphasizes or de-emphasizes compared to conventional views
+   - Identify unique insights this perspective reveals
+
+2. ANALYSIS FROM THIS PERSPECTIVE
+   - How does the discussion look when viewed through "${customInstruction}"?
+   - What patterns, gaps, or opportunities become visible from this angle?
+   - What assumptions or framing decisions are revealed when adopting this viewpoint?
+
+3. WHAT'S STRONG FROM THIS PERSPECTIVE
+   - Specific strengths visible when viewed through "${customInstruction}"
+   - Aspects of the discussion that align well with this perspective
+   - Decisions or approaches that work particularly well from this angle
+
+4. CRITICAL GAPS REVEALED
+   - Missing considerations that become apparent from "${customInstruction}" viewpoint
+   - Unstated assumptions that should be tested when adopting this perspective
+   - Limitations or blind spots revealed by this alternative viewpoint
+
+5. ALTERNATIVE INSIGHTS
+   - What questions or considerations emerge specifically from "${customInstruction}"?
+   - How would this perspective suggest approaching the topic differently?
+   - What framework or lens does this perspective add?
+
+6. SPECIFIC RECOMMENDATIONS
+   - 3–5 concrete recommendations grounded in "${customInstruction}" perspective
+   - Prioritization: which insights from this perspective matter most?
+   - Actionable next steps informed by this viewpoint
+
+OUTPUT STRUCTURE (Markdown, no code fences):
+
+PERSPECTIVE FRAMING
+[Articulate how "${customInstruction}" shapes your analysis. Explain what this perspective emphasizes and reveals.]
+
+ANALYSIS FROM THIS VIEWPOINT
+[Comprehensive analysis of the discussion as seen through "${customInstruction}". What patterns, insights, and considerations emerge?]
+
+WHAT'S STRONG
+[2–3 specific validations visible from this perspective. Be genuine and specific.]
+
+WHERE TO DIG DEEPER
+[3–4 specific gaps or areas needing more thought revealed by this perspective. Concrete, not generic.]
+
+ALTERNATIVE INSIGHTS
+[What unique insights does "${customInstruction}" reveal? What are they not seeing through this lens?]
+
+KEY RECOMMENDATIONS
+[Specific, actionable recommendations informed by "${customInstruction}" perspective. Prioritized and concrete.]
+
+BOTTOM LINE
+[One paragraph: overall assessment from "${customInstruction}" perspective + single most important next step]
+
+TONE GUIDELINES:
+- Experienced consultant adopting the requested perspective
+- Direct but respectful
+- Specific examples > generic advice
+- "From the perspective of ${customInstruction}..." to ground insights
+- Balance: ~40% validation, ~60% constructive challenge
+- Avoid: buzzwords, platitudes, obvious statements
+- Embrace: perspective-driven insights, alternative viewpoints, tough questions
+
+Constraints:
+- Academic, neutral tone. Concise and precise. Evidence-grounded in the transcript.
+- Include ALL relevant points strictly supported by the transcript; avoid speculation.
+- Do not output JSON.`;
+    } else {
+      instruction = presetToInstruction(p);
+      if (!instruction) return;
+    }
     const transcript = buildTranscript();
     if (!transcript) {
       setError(t('unfold.perspectives.status.noContext'));
@@ -318,12 +406,12 @@ Constraints:
         if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
       } catch {}
     }
-  }, [buildTranscript, presetToInstruction, genaiSettings.model, genaiSettings.systemInstruction, genaiSettings.temperature, genaiSettings.maxOutputTokens, genaiSettings.groundingEnabled]);
+  }, [buildTranscript, presetToInstruction, genaiSettings.model, genaiSettings.systemInstruction, genaiSettings.temperature, genaiSettings.maxOutputTokens, genaiSettings.groundingEnabled, t, prefLangCode]);
 
   // Run only manually on selection (no auto reruns on chat updates)
 
-  // Preset items with icons and i18n-powered descriptions
-  const presetItems = [
+  // Preset items with icons and i18n-powered descriptions (memoized with language dependency)
+  const presetItems = React.useMemo(() => [
     {
       id: 'themes',
       title: t('unfold.selector.options.themes', { defaultValue: 'Themes' }),
@@ -415,306 +503,417 @@ Constraints:
         </svg>
       ),
     },
-  ] as Array<{ id: string; title: string; descr: string; icon: React.ReactNode }>;
+    {
+      id: 'custom',
+      title: t('unfold.selector.options.custom', { defaultValue: 'Your option' }),
+      descr: t('unfold.perspectives.selector.options.custom', { defaultValue: 'Your option — Custom analytical perspective' }),
+      icon: (
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      ),
+    },
+  ] as Array<{ id: string; title: string; descr: string; icon: React.ReactNode }>, [t, i18n.language]);
 
-  // Scroll listener to toggle top/bottom helpers
+  // Auto-scroll to bottom on new content (like chat)
   React.useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      rafRef.current = requestAnimationFrame(() => {
-        const top = el.scrollTop;
-        const bottomGap = el.scrollHeight - (el.scrollTop + el.clientHeight);
-        setShowToTop(top > 100);
-        setShowToBottom(bottomGap > 100);
-      });
+    if (scrollRef.current && (mdText || loading)) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [mdText, loading]);
+
+  // Calculate dropdown position and close when clicking outside
+  React.useEffect(() => {
+    if (!dropdownOpen || !buttonRef.current) return;
+    
+    const updatePosition = () => {
+      if (buttonRef.current) {
+        const rect = buttonRef.current.getBoundingClientRect();
+        setDropdownPosition({
+          top: rect.top - 1, // 1px gap
+          left: rect.left,
+          width: rect.width,
+        });
+      }
     };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    // Initialize state
-    onScroll();
+    
+    updatePosition();
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+    
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+          buttonRef.current && !buttonRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+        setDropdownPosition(null);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    
     return () => {
-      el.removeEventListener('scroll', onScroll as any);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+      document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [scrollRef]);
+  }, [dropdownOpen]);
+
+  const containerStyle: React.CSSProperties = React.useMemo(() => ({
+    borderColor: 'var(--overlay-line-90)',
+    backgroundColor: 'var(--bg-elevated)',
+    boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
+  }), [theme]);
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px', position: 'relative' }}>
-      {/* Selector component */}
-      <div className="w-full mb-2" style={{ position: 'sticky', top: 0, zIndex: 5, background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)', borderRadius: 12, padding: 12 }}>
-        {/* Header: title + language + actions */}
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <div className="flex items-center gap-2">
-            <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.perspectives.header.choose')}</div>
-            <span className="text-11 px-1.5 py-0.5 rounded" title={t('unfold.perspectives.header.langTitle')} style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{prefLangCode}</span>
-            <span className="text-11 px-1.5 py-0.5 rounded" title={t('unfold.perspectives.header.presetTitle')} style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{preset || '—'}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="p-1.5 rounded"
-              title="Refresh"
-              onClick={() => { const val = selectRef.current?.value || preset; if (val) void handleRun(val); }}
-              disabled={!preset || loading}
-              style={{ background: 'transparent', color: 'var(--text-secondary-strong)', opacity: (!preset || loading) ? 0.6 : 1 }}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path d="M20 7h-5M20 7v5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M20 12a8 8 0 1 1-2.343-5.657" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
+    <div className="flex flex-col flex-1" style={{ minHeight: 0 }}>
+      {/* Results area (scrollable, like chat) */}
+      <div 
+        ref={scrollRef} 
+        className="flex-1 overflow-y-auto px-1 min-h-[160px]" 
+        style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px' }}
+      >
+        <div className="space-y-2 py-2" style={{ minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+          {/* Empty state placeholder (when no document and no loading) */}
+          {!loading && !mdText && (
+            <div className="flex items-center justify-center" style={{ flex: 1, minHeight: '100%' }}>
+              <div 
+                className="max-w-md text-center px-6 py-8 rounded-xl"
+                style={{
+                  backgroundColor: 'var(--bg-elevated)',
+                  border: '1px solid var(--overlay-line-90)',
+                  boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
+                }}
+              >
+                <div className="text-13 mb-3" style={{ color: 'var(--text-heading)', lineHeight: '1.6' }}>
+                  {t('unfold.perspectives.emptyState.description')}
+                </div>
+                <div className="text-12" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5' }}>
+                  {t('unfold.perspectives.emptyState.note')}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Skeleton loading (appears above input component) */}
+          {loading && (
+            <div className="space-y-2" style={{ flex: 'none' }}>
+              <div style={{ height: 14, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              </div>
+              <div style={{ height: 10, width: '90%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              </div>
+              <div style={{ height: 10, width: '80%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              </div>
+              <div style={{ height: 10, width: '70%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              </div>
+            </div>
+          )}
+
+          {/* Render markdown result (appears from bottom, like chat messages) */}
+          {mdText && (
+            <div className="space-y-2" style={{ flex: 'none' }}>
+              {/* Article header with actions */}
+              <div className="flex items-center justify-between mb-1">
+                <div />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    aria-label={t('unfold.perspectives.actions.copy')}
+                    title={t('unfold.perspectives.actions.copy')}
+                    onClick={async () => {
+                      try {
+                        if (!mdText) return;
+                        if (navigator && 'clipboard' in navigator) {
+                          await (navigator as any).clipboard.writeText(mdText);
+                        } else {
+                          const ta = document.createElement('textarea');
+                          ta.value = mdText;
+                          document.body.appendChild(ta);
+                          ta.select();
+                          document.execCommand('copy');
+                          document.body.removeChild(ta);
+                        }
+                      } catch {}
+                    }}
+                    className="p-1 rounded"
+                    style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <rect x="9" y="9" width="11" height="11" rx="2" strokeWidth="2" />
+                      <rect x="4" y="4" width="11" height="11" rx="2" strokeWidth="2" />
+                    </svg>
+                  </button>
+                  {savedAt && (
+                    <span className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>
+                      {t('unfold.perspectives.actions.savedAt', { time: savedAt })}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={t('unfold.perspectives.actions.save')}
+                    title={t('unfold.perspectives.actions.save')}
+                    onClick={async () => {
+                      try {
+                        if (!mdText) return;
+                        setSaving(true); setSavedAt(null);
+                        let pid = useGenaiChatStore.getState().projectId;
+                        if (!pid || pid === 'local-unfold') {
+                          try { pid = await (useGenaiChatStore.getState() as any).ensureProject?.(); } catch {}
+                        }
+                        if (!pid || typeof pid !== 'string') throw new Error('No project');
+                        const fname = `perspective_${(preset || 'unknown')}.md`;
+                        try {
+                          const docs = await api.docsList(pid);
+                          const existing = Array.isArray(docs) ? docs.find((d: any) => (d && (d.filename === fname))) : null;
+                          if (existing && existing.id) {
+                            await api.docsDelete(pid, existing.id);
+                          }
+                        } catch {}
+                        await api.docsCreateFromText(pid, { filename: fname, contentType: 'text/markdown', text: mdText });
+                        const dt = new Date();
+                        setSavedAt(`${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`);
+                      } catch {
+                      } finally {
+                        setSaving(false);
+                      }
+                    }}
+                    className="p-1 rounded"
+                    style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: saving ? 'wait' : 'pointer' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                    disabled={saving}
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M12 3v10" strokeWidth="2" strokeLinecap="round" />
+                      <path d="M8 7l4-4 4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      <rect x="4" y="13" width="16" height="7" rx="2" strokeWidth="2" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div className="markdown text-13" style={{ color: 'var(--text-heading)' }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{mdText}</ReactMarkdown>
+              </div>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  className="text-12 px-2 py-1 rounded"
+                  onClick={async () => {
+                    try {
+                      if (!mdText) return;
+                      setSaving(true); setSavedAt(null);
+                      let pid = useGenaiChatStore.getState().projectId;
+                      if (!pid || pid === 'local-unfold') {
+                        try { pid = await (useGenaiChatStore.getState() as any).ensureProject?.(); } catch {}
+                      }
+                      if (!pid || typeof pid !== 'string') throw new Error('No project');
+                      const fname = `perspective_${(preset || 'unknown')}.md`;
+                      try {
+                        const docs = await api.docsList(pid);
+                        const existing = Array.isArray(docs) ? docs.find((d: any) => (d && (d.filename === fname))) : null;
+                        if (existing && existing.id) {
+                          await api.docsDelete(pid, existing.id);
+                        }
+                      } catch {}
+                      await api.docsCreateFromText(pid, { filename: fname, contentType: 'text/markdown', text: mdText });
+                      const dt = new Date();
+                      setSavedAt(`${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`);
+                    } catch {
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                  disabled={saving}
+                  style={{ background: 'var(--white-10)', color: 'var(--text-heading)', opacity: saving ? 0.6 : 1 }}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M12 3v10" strokeWidth="2" strokeLinecap="round" />
+                      <path d="M8 7l4-4 4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      <rect x="4" y="13" width="16" height="7" rx="2" strokeWidth="2" />
+                    </svg>
+                    {t('unfold.perspectives.actions.saveToDocs')}
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-        {/* Description */}
-        <div className="text-12 mb-2" style={{ color: 'var(--text-secondary-strong)' }}>
-          {t('unfold.perspectives.header.desc')}
-        </div>
-        {/* Compact dropdown selector with strict icon and Run on the right */}
-        <div className="flex items-center gap-2">
-          {/* Selected icon (strict stroke, no fill, no background) */}
-          <div className="p-1 rounded" style={{ color: 'var(--text-secondary-strong)' }}>
-            {(presetItems.find(p => p.id === preset)?.icon) || (
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <circle cx="12" cy="12" r="9" strokeWidth="2" />
-              </svg>
-            )}
-          </div>
-          <label htmlFor="perspective-select" className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.perspectives.selector.label')}</label>
-          <select
-            id="perspective-select"
-            ref={selectRef}
-            value={preset}
-            onChange={(e) => setPreset(e.target.value)}
-            className="text-12 px-2 py-1 rounded"
-            style={{ background: 'var(--bg-elevated)', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', width: '33%', minWidth: 220, maxWidth: 360 }}
-          >
-            <option value="" disabled>{t('unfold.perspectives.selector.placeholder')}</option>
-            <option value="consulting">{t('unfold.perspectives.selector.options.consulting')}</option>
-            <option value="discussion">{t('unfold.perspectives.selector.options.discussion')}</option>
-            <option value="themes">{t('unfold.perspectives.selector.options.themes')}</option>
-            <option value="tasks">{t('unfold.perspectives.selector.options.tasks')}</option>
-            <option value="sources">{t('unfold.perspectives.selector.options.sources')}</option>
-            <option value="timeline">{t('unfold.perspectives.selector.options.timeline')}</option>
-            <option value="entities">{t('unfold.perspectives.selector.options.entities')}</option>
-            <option value="risks_decisions">{t('unfold.perspectives.selector.options.risksDecisions')}</option>
-          </select>
-            <button
-            type="button"
-            className="text-12 px-2 py-1 rounded"
-            onClick={() => { const val = selectRef.current?.value || preset; if (val) void handleRun(val); }}
-            disabled={!preset || loading}
-            style={{ background: 'var(--white-10)', color: 'var(--text-heading)', opacity: (!preset || loading) ? 0.6 : 1 }}
-          >
-            {t('unfold.perspectives.actions.run')}
-          </button>
-        </div>
-        {error && (
-          <div className="text-12 mt-2" style={{ color: 'var(--danger-50)' }}>{error}</div>
-        )}
       </div>
 
-      {/* Running status below sticky selector */}
-      {loading && (
-        <div className="mt-2 flex items-center gap-2 text-12" style={{ color: 'var(--text-secondary-strong)' }}>
-          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <circle cx="12" cy="12" r="9" strokeWidth="2" opacity="0.25" />
-            <path d="M21 12a9 9 0 0 0-9-9" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-          <span>{t('unfold.perspectives.status.running', { seconds: runSeconds })}</span>
-        </div>
-      )}
-
-      {/* Scroll helpers */}
-      {showToTop && (
-        <button
-          type="button"
-          aria-label={t('unfold.perspectives.status.scrollTop')}
-          title={t('unfold.perspectives.status.scrollTop')}
-          onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ top: 0, behavior: 'smooth' }); }}
-          className="p-1 rounded"
-          style={{ position: 'sticky', top: 6, float: 'right', background: 'transparent', color: 'var(--text-secondary-strong)' }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-        >
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M12 5l-6 6M12 5l6 6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M12 5v14" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-        </button>
-      )}
-
-      {/* Render markdown result below the component */}
-      {loading && (
-        <div className="mt-2 space-y-2">
-          <div style={{ height: 14, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+      {/* Settings component at bottom (like UnfoldRequest) */}
+      <div 
+        className="rounded-xl border mt-2 relative" 
+        style={{
+          ...containerStyle,
+          transition: 'all 0.2s ease',
+          overflow: 'visible',
+        }}
+      >
+        <div className="p-3">
+          {/* Label above dropdown */}
+          <div className="text-12 mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+            {t('unfold.perspectives.header.analyticalPerspective')}
           </div>
-          <div style={{ height: 10, width: '90%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+          {/* Dropdown selector on first line */}
+          <div className="flex items-center gap-2 mb-2">
+            <div className="relative" style={{ width: '33%', minWidth: 220, maxWidth: 360 }}>
+              <button
+                ref={buttonRef}
+                id="perspective-select"
+                type="button"
+                onClick={() => setDropdownOpen(!dropdownOpen)}
+                className="text-12 px-2 py-1 rounded w-full text-left flex items-center justify-between"
+                style={{ background: 'var(--bg-elevated)', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)' }}
+              >
+                <span>{presetItems.find(p => p.id === preset)?.title || t('unfold.perspectives.selector.placeholder')}</span>
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                  <path d="M6 9l6 6 6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              {dropdownOpen && dropdownPosition && (
+                <div
+                  ref={dropdownRef}
+                  className="fixed rounded-lg border shadow-lg overflow-hidden"
+                  style={{
+                    backgroundColor: 'var(--bg-elevated)',
+                    borderColor: 'var(--overlay-line-90)',
+                    maxHeight: '300px',
+                    overflowY: 'auto',
+                    zIndex: 9999,
+                    top: `${dropdownPosition.top}px`,
+                    left: `${dropdownPosition.left}px`,
+                    width: `${dropdownPosition.width}px`,
+                    transform: 'translateY(-100%)',
+                    marginTop: '-4px',
+                  }}
+                >
+                  {presetItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => { 
+                        setPreset(item.id); 
+                        if (item.id !== 'custom') {
+                          setCustomQuery('');
+                        }
+                        setDropdownOpen(false); 
+                        setDropdownPosition(null); 
+                      }}
+                      className="w-full text-left px-3 py-2 text-12 transition-colors flex items-center gap-2"
+                      style={{
+                        color: item.id === preset ? 'var(--text-heading)' : 'var(--text-secondary-strong)',
+                        background: item.id === preset ? 'var(--white-10)' : 'transparent',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (item.id !== preset) {
+                          (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-06)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (item.id !== preset) {
+                          (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                        }
+                      }}
+                    >
+                      <div style={{ color: 'var(--text-secondary-strong)' }}>{item.icon}</div>
+                      <span>{item.title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              className="text-12 px-2 py-1 rounded"
+              onClick={() => { 
+                if (preset === 'custom') {
+                  if (customQuery.trim()) {
+                    void handleRun(preset, customQuery.trim());
+                  }
+                } else if (preset) {
+                  void handleRun(preset);
+                }
+              }}
+              disabled={!preset || loading || (preset === 'custom' && !customQuery.trim())}
+              style={{ background: 'var(--white-10)', color: 'var(--text-heading)', opacity: (!preset || loading || (preset === 'custom' && !customQuery.trim())) ? 0.6 : 1 }}
+            >
+              {t('unfold.perspectives.actions.run')}
+            </button>
           </div>
-          <div style={{ height: 10, width: '80%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
-          </div>
-          <div style={{ height: 10, width: '70%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
-          </div>
-        </div>
-      )}
-      {mdText && (
-        <>
-          {/* Article header with Save icon */}
-          <div className="flex items-center justify-between mb-1">
-            <div />
+          {/* Custom query input (shown when custom is selected) */}
+          {preset === 'custom' && (
+            <div className="mb-2">
+              <input
+                type="text"
+                value={customQuery}
+                onChange={(e) => setCustomQuery(e.target.value)}
+                placeholder={t('unfold.perspectives.custom.placeholder', { defaultValue: 'Enter your analytical perspective...' })}
+                className="text-12 px-2 py-1 rounded w-full"
+                style={{ 
+                  background: 'var(--bg-elevated)', 
+                  color: 'var(--text-heading)', 
+                  border: '1px solid var(--overlay-line-90)',
+                  outline: 'none'
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && customQuery.trim() && !loading) {
+                    e.preventDefault();
+                    void handleRun('custom', customQuery.trim());
+                  }
+                }}
+              />
+            </div>
+          )}
+          {/* Header: title + language + actions */}
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.perspectives.header.choose')}</div>
+              <span className="text-11 px-1.5 py-0.5 rounded" title={t('unfold.perspectives.header.langTitle')} style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{prefLangCode}</span>
+              <span className="text-11 px-1.5 py-0.5 rounded" title={t('unfold.perspectives.header.presetTitle')} style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{preset || '—'}</span>
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                aria-label={t('unfold.perspectives.actions.copy')}
-                title={t('unfold.perspectives.actions.copy')}
-                onClick={async () => {
-                  try {
-                    if (!mdText) return;
-                    if (navigator && 'clipboard' in navigator) {
-                      await (navigator as any).clipboard.writeText(mdText);
-                    } else {
-                      const ta = document.createElement('textarea');
-                      ta.value = mdText;
-                      document.body.appendChild(ta);
-                      ta.select();
-                      document.execCommand('copy');
-                      document.body.removeChild(ta);
-                    }
-                  } catch {}
-                }}
-                className="p-1 rounded"
-                style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <rect x="9" y="9" width="11" height="11" rx="2" strokeWidth="2" />
-                  <rect x="4" y="4" width="11" height="11" rx="2" strokeWidth="2" />
-                </svg>
-              </button>
-              {savedAt && (
-                <span className="text-11" style={{ color: 'var(--text-secondary-strong)' }}>
-                  {t('unfold.perspectives.actions.savedAt', { time: savedAt })}
-                </span>
-              )}
-              <button
-                type="button"
-                aria-label={t('unfold.perspectives.actions.save')}
-                title={t('unfold.perspectives.actions.save')}
-                onClick={async () => {
-                  try {
-                    if (!mdText) return;
-                    setSaving(true); setSavedAt(null);
-                    let pid = useGenaiChatStore.getState().projectId;
-                    if (!pid || pid === 'local-unfold') {
-                      try { pid = await (useGenaiChatStore.getState() as any).ensureProject?.(); } catch {}
-                    }
-                    if (!pid || typeof pid !== 'string') throw new Error('No project');
-                    const fname = `perspective_${(selectRef.current?.value || preset || 'unknown')}.md`;
-                    try {
-                      const docs = await api.docsList(pid);
-                      const existing = Array.isArray(docs) ? docs.find((d: any) => (d && (d.filename === fname))) : null;
-                      if (existing && existing.id) {
-                        await api.docsDelete(pid, existing.id);
-                      }
-                    } catch {}
-                    await api.docsCreateFromText(pid, { filename: fname, contentType: 'text/markdown', text: mdText });
-                    const dt = new Date();
-                    setSavedAt(`${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`);
-                  } catch {
-                  } finally {
-                    setSaving(false);
+                className="p-1.5 rounded"
+                title={t('unfold.perspectives.actions.refresh', { defaultValue: 'Refresh' })}
+                onClick={() => { 
+                  if (preset === 'custom' && customQuery.trim()) {
+                    void handleRun(preset, customQuery.trim());
+                  } else if (preset) {
+                    void handleRun(preset);
                   }
                 }}
-                className="p-1 rounded"
-                style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: saving ? 'wait' : 'pointer' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                disabled={saving}
+                disabled={!preset || loading || (preset === 'custom' && !customQuery.trim())}
+                style={{ background: 'transparent', color: 'var(--text-secondary-strong)', opacity: (!preset || loading || (preset === 'custom' && !customQuery.trim())) ? 0.6 : 1 }}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path d="M12 3v10" strokeWidth="2" strokeLinecap="round" />
-                  <path d="M8 7l4-4 4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  <rect x="4" y="13" width="16" height="7" rx="2" strokeWidth="2" />
+                  <path d="M20 7h-5M20 7v5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M20 12a8 8 0 1 1-2.343-5.657" strokeWidth="2" strokeLinecap="round" />
                 </svg>
               </button>
             </div>
           </div>
-          <div className="markdown text-13" style={{ color: 'var(--text-heading)' }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{mdText}</ReactMarkdown>
-          </div>
-          <div className="mt-3">
-            <button
-              type="button"
-              className="text-12 px-2 py-1 rounded"
-              onClick={async () => {
-                try {
-                  if (!mdText) return;
-                  setSaving(true); setSavedAt(null);
-                  let pid = useGenaiChatStore.getState().projectId;
-                  if (!pid || pid === 'local-unfold') {
-                    try { pid = await (useGenaiChatStore.getState() as any).ensureProject?.(); } catch {}
-                  }
-                  if (!pid || typeof pid !== 'string') throw new Error('No project');
-                  const fname = `perspective_${(selectRef.current?.value || preset || 'unknown')}.md`;
-                  try {
-                    const docs = await api.docsList(pid);
-                    const existing = Array.isArray(docs) ? docs.find((d: any) => (d && (d.filename === fname))) : null;
-                    if (existing && existing.id) {
-                      await api.docsDelete(pid, existing.id);
-                    }
-                  } catch {}
-                  await api.docsCreateFromText(pid, { filename: fname, contentType: 'text/markdown', text: mdText });
-                  const dt = new Date();
-                  setSavedAt(`${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`);
-                } catch {
-                } finally {
-                  setSaving(false);
-                }
-              }}
-              disabled={saving}
-              style={{ background: 'var(--white-10)', color: 'var(--text-heading)', opacity: saving ? 0.6 : 1 }}
-            >
-              <span className="inline-flex items-center gap-1">
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path d="M12 3v10" strokeWidth="2" strokeLinecap="round" />
-                  <path d="M8 7l4-4 4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  <rect x="4" y="13" width="16" height="7" rx="2" strokeWidth="2" />
-                </svg>
-                {t('unfold.perspectives.actions.saveToDocs')}
-              </span>
-            </button>
-          </div>
-        </>
-      )}
-
-      {showToBottom && (
-        <div style={{ height: 0 }} />
-      )}
-
-      {showToBottom && (
-        <button
-          type="button"
-          aria-label={t('unfold.perspectives.status.scrollBottom')}
-          title={t('unfold.perspectives.status.scrollBottom')}
-          onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); }}
-          className="p-1 rounded"
-          style={{ position: 'sticky', bottom: 6, float: 'right', background: 'transparent', color: 'var(--text-secondary-strong)', marginTop: 6 }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-        >
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M12 19l-6-6M12 19l6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M12 5v14" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-        </button>
-      )}
-      {!preset && !loading && !mdText && !error && null}
+          {error && (
+            <div className="text-12 mt-2" style={{ color: 'var(--danger-50)' }}>{error}</div>
+          )}
+          {loading && (
+            <div className="mt-2 flex items-center gap-2 text-12" style={{ color: 'var(--text-secondary-strong)' }}>
+              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="12" cy="12" r="9" strokeWidth="2" opacity="0.25" />
+                <path d="M21 12a9 9 0 0 0-9-9" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <span>{t('unfold.perspectives.status.running', { seconds: runSeconds })}</span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

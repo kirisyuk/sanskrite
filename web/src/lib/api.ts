@@ -594,7 +594,10 @@ class ApiClient {
     projectId: string,
     task: import('../types/agents').DataAgentTask
   ): Promise<import('../types/agents').AgentExecutionResponse> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/data/execute`, task);
+    // Agents can take a long time (several minutes), so set a long timeout
+    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/data/execute`, task, {
+      timeout: 600000, // 10 minutes
+    });
     return res.data;
   }
 
@@ -607,7 +610,10 @@ class ApiClient {
     projectId: string,
     task: import('../types/agents').EntitiesAgentTask
   ): Promise<import('../types/agents').AgentExecutionResponse> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/entities/execute`, task);
+    // Agents can take a long time (several minutes), so set a long timeout
+    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/entities/execute`, task, {
+      timeout: 600000, // 10 minutes
+    });
     return res.data;
   }
 
@@ -622,7 +628,10 @@ class ApiClient {
     agentId: string,
     task: import('../types/agents').AgentTask
   ): Promise<import('../types/agents').AgentExecutionResponse> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/${agentId}/execute`, task);
+    // Agents can take a long time (several minutes), so set a long timeout
+    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/${agentId}/execute`, task, {
+      timeout: 600000, // 10 minutes
+    });
     return res.data;
   }
 
@@ -778,6 +787,7 @@ class ApiClient {
     currentPeriodStart: string;
     currentPeriodEnd: string;
     nextBillingDate?: string;
+    cancelAtPeriodEnd?: boolean;
     voucherId?: string;
     paymentProvider?: string;
     paymentId?: string;
@@ -832,6 +842,7 @@ class ApiClient {
     currentPeriodStart: string;
     currentPeriodEnd: string;
     nextBillingDate?: string;
+    cancelAtPeriodEnd?: boolean;
     voucherId?: string;
     paymentProvider?: string;
     paymentId?: string;
@@ -843,6 +854,31 @@ class ApiClient {
     updatedAt: string;
   }> {
     const res = await this.client.post(`/api/v1/paypal/subscription/execute`, { subscriptionId });
+    return res.data;
+  }
+
+  async cancelPayPalSubscription(): Promise<{
+    id: string;
+    tenantId: string;
+    userId: string;
+    tier: 'free' | 'pro' | 'max';
+    status: 'active' | 'expired' | 'cancelled';
+    startedAt: string;
+    currentPeriodStart: string;
+    currentPeriodEnd: string;
+    nextBillingDate?: string;
+    cancelAtPeriodEnd: boolean;
+    voucherId?: string;
+    paymentProvider?: string;
+    paymentId?: string;
+    paypalPlanId?: string;
+    paypalAgreementId?: string;
+    paypalSubscriptionId?: string;
+    metadata?: Record<string, any>;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await this.client.post(`/api/v1/paypal/subscription/cancel`);
     return res.data;
   }
 }

@@ -12,11 +12,12 @@ import (
 
 // Registry управляет регистрацией и выполнением агентов
 type Registry struct {
-	agents     map[string]Agent
-	mu         sync.RWMutex
-	executor   *ai.AITaskExecutor
+	agents      map[string]Agent
+	mu          sync.RWMutex
+	executor    *ai.AITaskExecutor
 	genaiClient *gen_combined.Client
-	publisher  *realtime.Publisher
+	publisher   *realtime.Publisher
+	logger      *log.Logger
 }
 
 // NewRegistry создает новый реестр агентов
@@ -26,6 +27,7 @@ func NewRegistry(executor *ai.AITaskExecutor, genaiClient *gen_combined.Client, 
 		executor:    executor,
 		genaiClient: genaiClient,
 		publisher:   publisher,
+		logger:      logger,
 	}
 	
 	// Регистрируем внутренние агенты (usage metrics будут добавлены позже через WithUsageMetrics)
@@ -109,7 +111,7 @@ func (r *Registry) ExecuteAgentWithStream(
 	// Callback для отправки обновлений через WebSocket
 	onUpdate := func(update Update) {
 		if r.publisher != nil {
-			_ = r.publisher.PublishJSON(ctx, realtime.EventAgentUpdate, tenantID, map[string]interface{}{
+			err := r.publisher.PublishJSON(ctx, realtime.EventAgentUpdate, tenantID, map[string]interface{}{
 				"taskId":    update.TaskID,
 				"agentId":   update.AgentID,
 				"agentName": update.AgentName,
@@ -121,6 +123,15 @@ func (r *Registry) ExecuteAgentWithStream(
 				"timestamp": update.Timestamp.UnixMilli(),
 				"error":     update.Error,
 			})
+			if err != nil {
+				if r.logger != nil {
+					r.logger.Printf("[Registry] Failed to publish agent update: %v (taskId=%s, agentId=%s, stage=%s)", err, update.TaskID, update.AgentID, update.Stage)
+				}
+			} else if r.logger != nil {
+				r.logger.Printf("[Registry] Published agent update: taskId=%s, agentId=%s, stage=%s, progress=%.2f", update.TaskID, update.AgentID, update.Stage, update.Progress)
+			}
+		} else if r.logger != nil {
+			r.logger.Printf("[Registry] Publisher is nil, cannot send agent update (taskId=%s)", update.TaskID)
 		}
 	}
 	

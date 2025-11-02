@@ -377,55 +377,6 @@ func (a *DataAgent) executeStep1(ctx context.Context, task DataTask) (*Step1Resu
 		categoryStr = *task.Category
 	}
 
-	prompt := fmt.Sprintf(`You are researching data for an OSINT task (using only publicly available data that does not violate any laws or regulations). Your goal is to find ALL available data and critically assess its limitations.
-
-DATA REQUEST:
-%s
-
-REGION: %s
-CATEGORY: %s
-PERIOD: %s - %s
-
-LEGAL DISCLAIMER: This research task does not intend to circumvent trade restrictions or violate any laws. The goal is to reconstruct an objective legal picture based on the original request using only publicly available, legally accessible information.
-
-IMPORTANT: Be critical of data. Official sources are often incomplete, outdated, or conceal reality. 
-Direct data may be unavailable due to:
-- Trade secrets
-- Political restrictions
-- Lack of public statistics
-- Delays in data publication
-- Intentional information concealment
-
-Your task:
-1. Find ALL available data for the request through web search (only publicly available sources)
-2. Critically assess its completeness and reliability
-3. Clearly identify WHAT IS NOT FOUND - what data is missing, which periods are empty
-4. Propose a strategy for finding missing data through indirect methods (using only legal, publicly available information)
-
-Return JSON in the following format:
-{
-  "foundData": [
-    {
-      "period": "2025-01",
-      "value": 23.5,
-      "unit": "%%",
-      "source": "Source URL",
-      "confidence": 0.8,
-      "note": "Data description"
-    }
-  ],
-  "gaps": [
-    "Missing data for period 2025-02",
-    "No data for low-alcohol beverages category"
-  ],
-  "limitations": "Description of found data limitations",
-  "nextTask": {
-    "query": "What to search for in the next step",
-    "methods": ["proxy_indicator", "extrapolation"],
-    "hints": "Hints for the next step"
-  }
-}`, task.Query, regionStr, categoryStr, task.TimeRange.From, task.TimeRange.To)
-
 	// JSON схема для Step 1
 	schema := map[string]interface{}{
 		"type": "object",
@@ -464,15 +415,67 @@ Return JSON in the following format:
 		"required": []string{"foundData", "gaps", "limitations", "nextTask"},
 	}
 
+	prompt := fmt.Sprintf(`You are researching data for an OSINT task (using only publicly available data that does not violate any laws or regulations). Your goal is to find ALL available data and critically assess its limitations.
+
+DATA REQUEST:
+%s
+
+REGION: %s
+CATEGORY: %s
+PERIOD: %s - %s
+
+LEGAL DISCLAIMER: This research task does not intend to circumvent trade restrictions or violate any laws. The goal is to reconstruct an objective legal picture based on the original request using only publicly available, legally accessible information.
+
+IMPORTANT: Be critical of data. Official sources are often incomplete, outdated, or conceal reality. 
+Direct data may be unavailable due to:
+- Trade secrets
+- Political restrictions
+- Lack of public statistics
+- Delays in data publication
+- Intentional information concealment
+
+Your task:
+1. Find ALL available data for the request through web search (only publicly available sources)
+2. Critically assess its completeness and reliability
+3. Clearly identify WHAT IS NOT FOUND - what data is missing, which periods are empty
+4. Propose a strategy for finding missing data through indirect methods (using only legal, publicly available information)
+
+Return JSON strictly matching this schema:
+%s
+
+Return JSON in the following format:
+{
+  "foundData": [
+    {
+      "period": "2025-01",
+      "value": 23.5,
+      "unit": "%%",
+      "source": "Source URL",
+      "confidence": 0.8,
+      "note": "Data description"
+    }
+  ],
+  "gaps": [
+    "Missing data for period 2025-02",
+    "No data for low-alcohol beverages category"
+  ],
+  "limitations": "Description of found data limitations",
+  "nextTask": {
+    "query": "What to search for in the next step",
+    "methods": ["proxy_indicator", "extrapolation"],
+    "hints": "Hints for the next step"
+  }
+}`, task.Query, regionStr, categoryStr, task.TimeRange.From, task.TimeRange.To, formatSchemaAsText(schema))
+
 	opts := gen_combined.Options{
 		ModelOverride:     "gemini_quality",
-		GroundingEnabled:  true, // Web search для Gemini
-		SystemInstruction: "You are an expert in OSINT and data analysis (using only publicly available data that does not violate any laws or regulations). Be critical and use creative approaches to finding information within legal boundaries.",
+		GroundingEnabled:  false, // Disabled for GenerateJSONStrict (grounding + tools not supported together)
+		SystemInstruction: "You are an expert in OSINT and data analysis (using only publicly available data that does not violate any laws or regulations). Be critical and use creative approaches to finding information within legal boundaries. Use web search capabilities to find information.",
 		Temperature:       0.7,
 		MaxOutputTokens:   4096,
 	}
 
-	resp, err := a.genaiClient.GenerateJSON(ctx, prompt, nil, schema, opts)
+	resp, err := a.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Printf("[DataAgent] Step 1 genAI call failed: %v", err)
@@ -535,50 +538,6 @@ func (a *DataAgent) executeStep2(ctx context.Context, task DataTask, step1Result
 		categoryStr = *task.Category
 	}
 
-	prompt := fmt.Sprintf(`You are analyzing data gaps and planning methods to fill them.
-
-ORIGINAL REQUEST: %s
-REGION: %s
-CATEGORY: %s
-PERIOD: %s - %s
-
-STEP 1 RESULTS:
-%s
-
-YOUR TASK:
-Analyze gaps and limitations. Be CREATIVE and inventive.
-
-Official data is rarely complete. Use indirect methods:
-- Proxy indicators: if direct data is unavailable, search for related indicators
-- Extrapolation: use data from adjacent periods, regions, or categories
-- Approximation: calculate values based on related data
-- Indirect calculation: use mathematical methods to derive data
-
-For each method, determine:
-- What data to search for
-- What query to use for search
-- What assumptions will be required
-
-Return JSON:
-{
-  "methods": [
-    {
-      "name": "proxy_indicator",
-      "description": "Method description",
-      "dataTypes": ["data type 1", "data type 2"],
-      "query": "What to search in web search"
-    }
-  ],
-  "assumptions": [
-    {
-      "statement": "Assumption statement",
-      "impact": "high|medium|low",
-      "rationale": "Rationale"
-    }
-  ],
-  "extractionStrategy": "Data extraction strategy"
-}`, task.Query, regionStr, categoryStr, task.TimeRange.From, task.TimeRange.To, string(step1JSON))
-
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -613,6 +572,53 @@ Return JSON:
 		"required": []string{"methods", "assumptions", "extractionStrategy"},
 	}
 
+	prompt := fmt.Sprintf(`You are analyzing data gaps and planning methods to fill them.
+
+ORIGINAL REQUEST: %s
+REGION: %s
+CATEGORY: %s
+PERIOD: %s - %s
+
+STEP 1 RESULTS:
+%s
+
+YOUR TASK:
+Analyze gaps and limitations. Be CREATIVE and inventive.
+
+Official data is rarely complete. Use indirect methods:
+- Proxy indicators: if direct data is unavailable, search for related indicators
+- Extrapolation: use data from adjacent periods, regions, or categories
+- Approximation: calculate values based on related data
+- Indirect calculation: use mathematical methods to derive data
+
+For each method, determine:
+- What data to search for
+- What query to use for search
+- What assumptions will be required
+
+Return JSON strictly matching this schema:
+%s
+
+Return JSON:
+{
+  "methods": [
+    {
+      "name": "proxy_indicator",
+      "description": "Method description",
+      "dataTypes": ["data type 1", "data type 2"],
+      "query": "What to search in web search"
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "Assumption statement",
+      "impact": "high|medium|low",
+      "rationale": "Rationale"
+    }
+  ],
+  "extractionStrategy": "Data extraction strategy"
+}`, task.Query, regionStr, categoryStr, task.TimeRange.From, task.TimeRange.To, string(step1JSON), formatSchemaAsText(schema))
+
 	opts := gen_combined.Options{
 		ModelOverride:     "gemini_quality", // Можно использовать gpt_quality
 		GroundingEnabled:  false,            // Без web search на этом шаге
@@ -621,7 +627,7 @@ Return JSON:
 		MaxOutputTokens:   4096,
 	}
 
-	resp, err := a.genaiClient.GenerateJSON(ctx, prompt, nil, schema, opts)
+	resp, err := a.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Printf("[DataAgent] Step 2 genAI call failed: %v", err)
@@ -682,83 +688,6 @@ func (a *DataAgent) executeStep3(ctx context.Context, task DataTask, step1Result
 	if task.Category != nil {
 		categoryStr = *task.Category
 	}
-
-	prompt := fmt.Sprintf(`You are collecting data using methods from the previous step.
-
-ORIGINAL REQUEST: %s
-REGION: %s
-CATEGORY: %s
-PERIOD: %s - %s
-GRANULARITY: %s
-
-STEP 1 RESULTS:
-%s
-
-METHODS FROM STEP 2:
-%s
-
-LEGAL DISCLAIMER: This research task does not intend to circumvent trade restrictions or violate any laws. The goal is to reconstruct an objective legal picture based on the original request using only publicly available, legally accessible information.
-
-YOUR TASK:
-1. Use web search to find data according to methods from step 2 (only publicly available sources)
-2. Be CREATIVE - if direct data is unavailable, use indirect methods, approximations, extrapolations (within legal boundaries)
-3. Fill data gaps using methods from step 2
-4. For each value, specify:
-   - Which method was used
-   - Data sources
-   - Confidence for the value
-   - Assumptions if used
-
-IMPORTANT: Be critical. If data truly doesn't exist - use reasonable approximations based on available information. Only use publicly available, legal sources.
-
-Return JSON in final result format:
-{
-  "dataPoints": [
-    {
-      "period": "2025-01",
-      "value": 23.5,
-      "unit": "%%",
-      "confidence": 0.65,
-      "method": "indirect_calculation",
-      "sources": ["source_index_0", "source_index_1"]
-    }
-  ],
-  "metadata": {
-    "sources": [
-      {
-        "url": "https://...",
-        "title": "...",
-        "snippet": "...",
-        "authority": 0.8
-      }
-    ],
-    "methods": [
-      {
-        "name": "indirect_calculation",
-        "description": "Calculation through confiscation volumes",
-        "usedFor": ["2025-01"]
-      }
-    ],
-    "usedData": [
-      {
-        "type": "proxy",
-        "description": "Used confiscation data",
-        "source": "source_index_0",
-        "reason": "Direct data unavailable"
-      }
-    ],
-    "assumptions": [
-      {
-        "statement": "Trend is similar to strong alcohol trend",
-        "impact": "medium",
-        "affects": ["2025-02"],
-        "rationale": "Historical data shows correlation"
-      }
-    ]
-  },
-  "confidence": 0.65,
-  "explanation": "Description of how data was obtained"
-}`, task.Query, regionStr, categoryStr, task.TimeRange.From, task.TimeRange.To, granularity, string(step1JSON), string(step2JSON))
 
 	schema := map[string]interface{}{
 		"type": "object",
@@ -848,15 +777,95 @@ Return JSON in final result format:
 		"required": []string{"dataPoints", "metadata", "confidence", "explanation"},
 	}
 
+	prompt := fmt.Sprintf(`You are collecting data using methods from the previous step.
+
+ORIGINAL REQUEST: %s
+REGION: %s
+CATEGORY: %s
+PERIOD: %s - %s
+GRANULARITY: %s
+
+STEP 1 RESULTS:
+%s
+
+METHODS FROM STEP 2:
+%s
+
+LEGAL DISCLAIMER: This research task does not intend to circumvent trade restrictions or violate any laws. The goal is to reconstruct an objective legal picture based on the original request using only publicly available, legally accessible information.
+
+YOUR TASK:
+1. Use web search to find data according to methods from step 2 (only publicly available sources)
+2. Be CREATIVE - if direct data is unavailable, use indirect methods, approximations, extrapolations (within legal boundaries)
+3. Fill data gaps using methods from step 2
+4. For each value, specify:
+   - Which method was used
+   - Data sources
+   - Confidence for the value
+   - Assumptions if used
+
+IMPORTANT: Be critical. If data truly doesn't exist - use reasonable approximations based on available information. Only use publicly available, legal sources.
+
+Return JSON strictly matching this schema:
+%s
+
+Return JSON in final result format:
+{
+  "dataPoints": [
+    {
+      "period": "2025-01",
+      "value": 23.5,
+      "unit": "%%",
+      "confidence": 0.65,
+      "method": "indirect_calculation",
+      "sources": ["source_index_0", "source_index_1"]
+    }
+  ],
+  "metadata": {
+    "sources": [
+      {
+        "url": "https://...",
+        "title": "...",
+        "snippet": "...",
+        "authority": 0.8
+      }
+    ],
+    "methods": [
+      {
+        "name": "indirect_calculation",
+        "description": "Calculation through confiscation volumes",
+        "usedFor": ["2025-01"]
+      }
+    ],
+    "usedData": [
+      {
+        "type": "proxy",
+        "description": "Used confiscation data",
+        "source": "source_index_0",
+        "reason": "Direct data unavailable"
+      }
+    ],
+    "assumptions": [
+      {
+        "statement": "Trend is similar to strong alcohol trend",
+        "impact": "medium",
+        "affects": ["2025-02"],
+        "rationale": "Historical data shows correlation"
+      }
+    ]
+  },
+  "confidence": 0.65,
+  "explanation": "Description of how data was obtained"
+}`, task.Query, regionStr, categoryStr, task.TimeRange.From, task.TimeRange.To, granularity, string(step1JSON), string(step2JSON), formatSchemaAsText(schema))
+
 	opts := gen_combined.Options{
 		ModelOverride:     "gemini_quality",
-		GroundingEnabled:  true, // Web search для Gemini
-		SystemInstruction: "You are an expert in data collection through OSINT (using only publicly available data that does not violate any laws or regulations). Be critical, inventive, and use all available legal methods to obtain data.",
+		GroundingEnabled:  false, // Disabled for GenerateJSONStrict (grounding + tools not supported together)
+		SystemInstruction: "You are an expert in data collection through OSINT (using only publicly available data that does not violate any laws or regulations). Be critical, inventive, and use all available legal methods to obtain data. Use web search capabilities to find information.",
 		Temperature:       0.7,
 		MaxOutputTokens:   8192,
 	}
 
-	resp, err := a.genaiClient.GenerateJSON(ctx, prompt, nil, schema, opts)
+	resp, err := a.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Printf("[DataAgent] Step 3 genAI call failed: %v", err)
@@ -897,28 +906,7 @@ Return JSON in final result format:
 	return &finalResult, nil
 }
 
-// extractJSON извлекает JSON из текста (убирает markdown, лишний текст)
-func extractJSON(content string) string {
-	content = strings.TrimSpace(content)
-
-	// Убираем markdown code blocks
-	if strings.HasPrefix(content, "```json") {
-		content = strings.TrimPrefix(content, "```json")
-		content = strings.TrimSuffix(content, "```")
-	} else if strings.HasPrefix(content, "```") {
-		content = strings.TrimPrefix(content, "```")
-		content = strings.TrimSuffix(content, "```")
-	}
-
-	// Ищем первую { и последнюю }
-	start := strings.Index(content, "{")
-	end := strings.LastIndex(content, "}")
-	if start != -1 && end != -1 && end > start {
-		return content[start : end+1]
-	}
-
-	return content
-}
+// extractJSON теперь в agent.go (общая функция для всех агентов)
 
 // saveUsageMetric saves usage metrics if repository is available
 func (a *DataAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, modelName string, inputTokens, outputTokens int, taskType string) {

@@ -7,11 +7,6 @@ import { useTranslation } from 'react-i18next';
 
 type TabKey = 'personal' | 'corporate';
 
-const tabs: { key: TabKey; label: string }[] = [
-  { key: 'personal', label: 'Personal Data' },
-  { key: 'corporate', label: 'Corporate' },
-];
-
 // Popular countries with ISO 3166-1 alpha-2 codes
 const COUNTRIES = [
   { code: 'US', name: 'United States' },
@@ -59,9 +54,14 @@ export const Settings: React.FC = () => {
   const [department, setDepartment] = React.useState('');
   const { currentUser } = useAuth();
   const countryInputRef = React.useRef<HTMLInputElement>(null);
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
   const uiLanguage = useUIStore((s) => s.uiLanguage);
   const setUiLanguage = useUIStore((s) => s.setUiLanguage);
+
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: 'personal', label: t('settings.tabs.personal') },
+    { key: 'corporate', label: t('settings.tabs.corporate') },
+  ];
 
   React.useEffect(() => {
     const storedLang = localStorage.getItem('preferredLanguage');
@@ -183,11 +183,11 @@ export const Settings: React.FC = () => {
           {active === 'personal' && (
             <div className="space-y-4">
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Full name</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.personal.fullName')}</label>
                 <input
                   value={fullName}
                   onChange={e => setFullName(e.target.value)}
-                  placeholder="Your name"
+                  placeholder={t('settings.personal.fullNamePlaceholder')}
                   className="w-full"
                   style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0', transition: 'all 120ms ease' }}
                   onMouseEnter={(e) => {
@@ -207,7 +207,7 @@ export const Settings: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Language (for chat and documents)</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.personal.language')}</label>
                 <select
                   value={language}
                   onChange={(e) => { const code = e.target.value; setLanguage(code); saveLanguage(code); }}
@@ -220,11 +220,11 @@ export const Settings: React.FC = () => {
                   <option value="RU">RU — Русский</option>
                 </select>
                 <div className="text-12 mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  This setting controls your preferred language of interaction and exported documents.
+                  {t('settings.personal.languageDescription')}
                 </div>
               </div>
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Interface language</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.personal.interfaceLanguage')}</label>
                 <select
                   value={uiLanguage === 'kk' ? 'kz' : (uiLanguage || 'en')}
                   onChange={(e) => handleUiLanguageChange(e.target.value)}
@@ -238,17 +238,17 @@ export const Settings: React.FC = () => {
                   <option value="kz">KZ — Қазақ</option>
                 </select>
                 <div className="text-12 mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  This setting controls the application interface language only (menus, labels, messages).
+                  {t('settings.personal.interfaceLanguageDescription')}
                 </div>
               </div>
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Country of Residence</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.personal.countryOfResidence')}</label>
                 <div style={{ position: 'relative', width: '66%' }} ref={countryInputRef}>
                   <input
                     value={countryInput}
                     onChange={(e) => handleCountryInputChange(e.target.value)}
                     onFocus={() => setShowCountryDropdown(true)}
-                    placeholder="Select country"
+                    placeholder={t('settings.personal.selectCountry')}
                     className="w-full"
                     style={{ 
                       backgroundColor: 'transparent', 
@@ -294,32 +294,32 @@ export const Settings: React.FC = () => {
               </div>
               <div className="grid" style={{ gap: '16px', gridTemplateColumns: '1fr 1fr 1fr' }}>
                 <div>
-                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Parent user ID</label>
+                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.personal.parentUserId')}</label>
                   <input
                     value={parentUserId}
                     onChange={e => setParentUserId(e.target.value)}
-                    placeholder="UID of parent account"
+                    placeholder={t('settings.personal.parentUserIdPlaceholder')}
                     className="w-full"
                     style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0', borderBottom: '1px solid var(--overlay-line-90)' }}
                     onBlur={async () => { try { if (currentUser?.uid) await api.updateUser(currentUser.uid, { parentUserId: parentUserId || undefined }); } catch {} }}
                   />
                 </div>
                 <div>
-                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Gender</label>
+                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.personal.gender')}</label>
                   <select
                     value={gender}
                     onChange={async (e) => { const v = e.target.value; setGender(v); try { if (currentUser?.uid) await api.updateUser(currentUser.uid, { gender: v || undefined }); } catch {} }}
                     className="w-full"
                     style={{ padding: '8px 12px' }}
                   >
-                    <option value="">—</option>
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                    <option value="other">Other</option>
+                    <option value="">{t('settings.personal.genderOptions.empty')}</option>
+                    <option value="male">{t('settings.personal.genderOptions.male')}</option>
+                    <option value="female">{t('settings.personal.genderOptions.female')}</option>
+                    <option value="other">{t('settings.personal.genderOptions.other')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Age</label>
+                  <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.personal.age')}</label>
                   <input
                     type="number"
                     min={0}
@@ -331,25 +331,25 @@ export const Settings: React.FC = () => {
                       if (num === '' || (!Number.isNaN(num) && num >= 0 && num <= 120)) setAge(num as any);
                     }}
                     onBlur={async () => { try { if (currentUser?.uid) await api.updateUser(currentUser.uid, { age: typeof age === 'number' ? age : undefined }); } catch {} }}
-                    placeholder="Age"
+                    placeholder={t('settings.personal.agePlaceholder')}
                     className="w-full"
                     style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0', borderBottom: '1px solid var(--overlay-line-90)' }}
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Theme</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.personal.theme')}</label>
                 <div className="flex" style={{ gap: '8px' }}>
                   <button
                     className="text-13 rounded px-3 py-2 transition-colors"
                     style={{ backgroundColor: theme === 'dark' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
                     onClick={() => applyTheme('dark')}
-                  >Dark</button>
+                  >{t('settings.personal.dark')}</button>
                   <button
                     className="text-13 rounded px-3 py-2 transition-colors"
                     style={{ backgroundColor: theme === 'light' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
                     onClick={() => applyTheme('light')}
-                  >Light</button>
+                  >{t('settings.personal.light')}</button>
                 </div>
               </div>
             </div>
@@ -357,31 +357,31 @@ export const Settings: React.FC = () => {
           {active === 'corporate' && (
             <div className="space-y-4">
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Company</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.corporate.company')}</label>
                 <input
                   value={company}
                   onChange={e => setCompany(e.target.value)}
-                  placeholder="Company name"
+                  placeholder={t('settings.corporate.companyPlaceholder')}
                   className="w-full"
                   style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0' }}
                 />
               </div>
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Job title</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.corporate.jobTitle')}</label>
                 <input
                   value={jobTitle}
                   onChange={e => setJobTitle(e.target.value)}
-                  placeholder="Title"
+                  placeholder={t('settings.corporate.jobTitlePlaceholder')}
                   className="w-full"
                   style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0' }}
                 />
               </div>
               <div>
-                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>Department</label>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '6px' }}>{t('settings.corporate.department')}</label>
                 <input
                   value={department}
                   onChange={e => setDepartment(e.target.value)}
-                  placeholder="Department"
+                  placeholder={t('settings.corporate.departmentPlaceholder')}
                   className="w-full"
                   style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0' }}
                 />

@@ -456,6 +456,7 @@ func main() {
 		paypalHandler = httphandlers.NewPayPalHandler(paypalClient, subscriptionService, subsRepo, logger)
 		mux.Handle("/api/v1/paypal/subscription", authMiddleware(http.HandlerFunc(paypalHandler.CreateSubscription)))
 		mux.Handle("/api/v1/paypal/subscription/execute", authMiddleware(http.HandlerFunc(paypalHandler.ExecuteSubscription)))
+		mux.Handle("/api/v1/paypal/subscription/cancel", authMiddleware(http.HandlerFunc(paypalHandler.CancelSubscription)))
 		mux.Handle("/api/v1/paypal/webhook", http.HandlerFunc(paypalHandler.Webhook)) // No auth for webhook
 		logger.Printf("PayPal integration enabled")
 	} else {

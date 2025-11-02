@@ -38,6 +38,22 @@ export const UsageTab: React.FC = () => {
       costUSD: number;
       count: number;
     }>;
+    tokenCategories?: {
+      premiumTokens: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        costUSD: number;
+        count: number;
+      };
+      regularTokens: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        costUSD: number;
+        count: number;
+      };
+    };
     period: {
       startDate: string;
       endDate: string;
@@ -184,6 +200,82 @@ export const UsageTab: React.FC = () => {
     return { totalTokens, totalCost, totalCount };
   }, [usageData]);
 
+  // Calculate token category totals
+  const tokenCategories = React.useMemo(() => {
+    if (!usageData?.tokenCategories) return null;
+    return usageData.tokenCategories;
+  }, [usageData]);
+
+  // Group events by model and time proximity
+  const groupedEvents = React.useMemo(() => {
+    if (!usageData?.events) return [];
+    
+    const TIME_WINDOW_MS = 60000; // 60 seconds (1 minute) window for grouping
+    const sortedEvents = [...usageData.events].sort((a, b) => 
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    
+    const groups: Array<{
+      model: string;
+      modelAlias?: string;
+      kind: string;
+      events: typeof sortedEvents;
+      totalTokens: number;
+      totalCost: number;
+      startTime: Date;
+      endTime: Date;
+      count: number;
+    }> = [];
+    
+    for (const event of sortedEvents) {
+      const eventTime = new Date(event.createdAt).getTime();
+      const eventKey = `${event.model}:${event.modelAlias || ''}:${event.kind}`;
+      
+      // Try to find an existing group that matches model/alias/kind and is within time window
+      // Check if event is within time window from the expanded group time range
+      let foundGroup = groups.find(group => {
+        const groupKey = `${group.model}:${group.modelAlias || ''}:${group.kind}`;
+        if (groupKey !== eventKey) return false;
+        
+        const groupStartTime = group.startTime.getTime() - TIME_WINDOW_MS;
+        const groupEndTime = group.endTime.getTime() + TIME_WINDOW_MS;
+        // Check if event is within expanded time window
+        return eventTime >= groupStartTime && eventTime <= groupEndTime;
+      });
+      
+      if (foundGroup) {
+        // Add to existing group
+        foundGroup.events.push(event);
+        foundGroup.totalTokens += event.totalTokens || 0;
+        foundGroup.totalCost += event.costUSD || 0;
+        foundGroup.count++;
+        // Update time range
+        if (eventTime < foundGroup.startTime.getTime()) {
+          foundGroup.startTime = new Date(event.createdAt);
+        }
+        if (eventTime > foundGroup.endTime.getTime()) {
+          foundGroup.endTime = new Date(event.createdAt);
+        }
+      } else {
+        // Create new group
+        groups.push({
+          model: event.model,
+          modelAlias: event.modelAlias,
+          kind: event.kind,
+          events: [event],
+          totalTokens: event.totalTokens || 0,
+          totalCost: event.costUSD || 0,
+          startTime: new Date(event.createdAt),
+          endTime: new Date(event.createdAt),
+          count: 1,
+        });
+      }
+    }
+    
+    // Sort groups by start time (newest first)
+    return groups.sort((a, b) => b.startTime.getTime() - a.startTime.getTime());
+  }, [usageData?.events]);
+
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr + 'T00:00:00');
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -200,6 +292,30 @@ export const UsageTab: React.FC = () => {
     if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
     if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
     return tokens.toString();
+  };
+
+  const formatTimeRange = (startTime: Date, endTime: Date) => {
+    const start = startTime;
+    const end = endTime;
+    
+    // If same time, show single time
+    if (start.getTime() === end.getTime()) {
+      return start.toLocaleString();
+    }
+    
+    // Format dates
+    const startDateStr = start.toLocaleDateString();
+    const endDateStr = end.toLocaleDateString();
+    const startTimeStr = start.toLocaleTimeString();
+    const endTimeStr = end.toLocaleTimeString();
+    
+    // If same date, show date once with time range
+    if (startDateStr === endDateStr) {
+      return `${startDateStr}, ${startTimeStr} - ${endTimeStr}`;
+    }
+    
+    // Different dates, show full range
+    return `${start.toLocaleString()} - ${end.toLocaleString()}`;
   };
 
   const getProviderColor = (provider: string) => {
@@ -254,6 +370,40 @@ export const UsageTab: React.FC = () => {
           <div className="text-2xl font-semibold" style={{ color: 'var(--text-heading)' }}>{formatCost(totals.totalCost)}</div>
         </div>
       </div>
+
+      {/* Token Categories Breakdown */}
+      {tokenCategories && (
+        <div className="grid grid-cols-2 gap-4">
+          <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
+            <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
+              Старшие модели (GPT-5, Sonnet 4.5/Opus 4.1, Gemini 2.5 Pro)
+            </div>
+            <div className="text-xl font-semibold mb-2" style={{ color: 'var(--text-heading)' }}>
+              {formatTokens(tokenCategories.premiumTokens.totalTokens)}
+            </div>
+            <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+              {tokenCategories.premiumTokens.count.toLocaleString()} запросов • {formatCost(tokenCategories.premiumTokens.costUSD)}
+            </div>
+            <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
+              ({formatTokens(tokenCategories.premiumTokens.inputTokens)} вх / {formatTokens(tokenCategories.premiumTokens.outputTokens)} вых)
+            </div>
+          </div>
+          <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
+            <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
+              Остальные модели
+            </div>
+            <div className="text-xl font-semibold mb-2" style={{ color: 'var(--text-heading)' }}>
+              {formatTokens(tokenCategories.regularTokens.totalTokens)}
+            </div>
+            <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+              {tokenCategories.regularTokens.count.toLocaleString()} запросов • {formatCost(tokenCategories.regularTokens.costUSD)}
+            </div>
+            <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
+              ({formatTokens(tokenCategories.regularTokens.inputTokens)} вх / {formatTokens(tokenCategories.regularTokens.outputTokens)} вых)
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Date Range Controls */}
       <div className="flex items-center gap-4">
@@ -522,19 +672,26 @@ export const UsageTab: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {usageData.events
+                {groupedEvents
                   .slice((eventsPage - 1) * eventsPerPage, eventsPage * eventsPerPage)
-                  .map((event) => (
-                  <tr key={event.id} style={{ borderBottom: '1px solid var(--overlay-line-10)' }}>
+                  .map((group, index) => (
+                  <tr key={`group-${index}-${group.startTime.getTime()}`} style={{ borderBottom: '1px solid var(--overlay-line-10)' }}>
                     <td className="py-2 px-2" style={{ color: 'var(--text-secondary-strong)' }}>
-                      {new Date(event.createdAt).toLocaleString()}
+                      <div>
+                        {formatTimeRange(group.startTime, group.endTime)}
+                        {group.count > 1 && (
+                          <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                            {group.count} событий
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2 px-2" style={{ color: 'var(--text-secondary-strong)' }}>
                       <div>
-                        <div>{event.model}</div>
-                        {event.modelAlias && (
+                        <div>{group.model}</div>
+                        {group.modelAlias && (
                           <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                            {event.modelAlias}
+                            {group.modelAlias}
                           </div>
                         )}
                       </div>
@@ -543,27 +700,27 @@ export const UsageTab: React.FC = () => {
                       <span
                         className="px-2 py-0.5 rounded text-[10px]"
                         style={{
-                          backgroundColor: event.kind === 'included' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(251, 191, 36, 0.1)',
-                          color: event.kind === 'included' ? 'rgb(34, 197, 94)' : 'rgb(251, 191, 36)',
+                          backgroundColor: group.kind === 'included' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(251, 191, 36, 0.1)',
+                          color: group.kind === 'included' ? 'rgb(34, 197, 94)' : 'rgb(251, 191, 36)',
                         }}
                       >
-                        {event.kind}
+                        {group.kind}
                       </span>
                     </td>
                     <td className="text-right py-2 px-2" style={{ color: 'var(--text-secondary-strong)' }}>
-                      {formatTokens(event.totalTokens)}
+                      {formatTokens(group.totalTokens)}
                     </td>
                     <td className="text-right py-2 px-2" style={{ color: 'var(--text-secondary-strong)' }}>
-                      {formatCost(event.costUSD)}
+                      {formatCost(group.totalCost)}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {usageData.events.length > eventsPerPage && (
+            {groupedEvents.length > eventsPerPage && (
               <div className="flex items-center justify-between mt-4">
                 <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                  Showing {((eventsPage - 1) * eventsPerPage) + 1} - {Math.min(eventsPage * eventsPerPage, usageData.events.length)} of {usageData.events.length} events
+                  Показано {((eventsPage - 1) * eventsPerPage) + 1} - {Math.min(eventsPage * eventsPerPage, groupedEvents.length)} из {groupedEvents.length} групп ({usageData.events.length} событий)
                 </div>
                 <div className="flex gap-2">
                   <button

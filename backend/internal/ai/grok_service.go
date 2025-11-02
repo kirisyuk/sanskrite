@@ -98,9 +98,12 @@ func (s *GrokService) ExecuteSearch(ctx context.Context, query string, modelName
 	// Many Grok deployments expose OpenAI-compatible chat completions with live search
 	reqBody := map[string]interface{}{
 		"model": modelName,
-		// xAI Grok supports live search; request it explicitly if supported
-		"web_search_options": map[string]interface{}{},
-		"messages":           []map[string]string{{"role": "user", "content": query}},
+		// xAI Grok supports live search; request it explicitly using search parameter
+		"search": map[string]interface{}{
+			"enable":  true,
+			"sources": []map[string]string{{"type": "web"}},
+		},
+		"messages": []map[string]string{{"role": "user", "content": query}},
 	}
 	bodyJSON, err := json.Marshal(reqBody)
 	if err != nil {

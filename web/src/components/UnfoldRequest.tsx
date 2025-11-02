@@ -145,6 +145,10 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     { key: '/section', title: 'Начать раздел', hint: 'Создать новый раздел', keyLower: '/section', titleLower: 'начать раздел' },
     { key: '/end', title: 'Закрыть раздел', hint: 'Завершить текущий раздел', keyLower: '/end', titleLower: 'закрыть раздел' },
     { key: '/analyze entities', title: 'Распознать сущности', hint: 'Извлечь entities из чата', keyLower: '/analyze entities', titleLower: 'распознать сущности' },
+    { key: '/analyze facts', title: 'Извлечь факты', hint: 'Извлечь facts из чата', keyLower: '/analyze facts', titleLower: 'извлечь факты' },
+    { key: '/analyze events', title: 'Извлечь события', hint: 'Извлечь events из чата', keyLower: '/analyze events', titleLower: 'извлечь события' },
+    { key: '/analyze metrics', title: 'Извлечь метрики', hint: 'Извлечь metrics из чата', keyLower: '/analyze metrics', titleLower: 'извлечь метрики' },
+    { key: '/analyze decisions', title: 'Извлечь решения', hint: 'Извлечь decisions из чата', keyLower: '/analyze decisions', titleLower: 'извлечь решения' },
     { key: '/agent data', title: 'Data Agent', hint: 'Собрать данные по запросу', keyLower: '/agent data', titleLower: 'data agent' },
     { key: '/agent entity', title: 'Entities Agent', hint: 'Найти информацию о сущностях', keyLower: '/agent entity', titleLower: 'entities agent' },
   ], []);
@@ -812,7 +816,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
           {/* Lightweight hint above input when user typed only '/' */}
           {value === '/' && (
             <div className="mb-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
-              /section — Начать раздел · /end — Закрыть раздел · /analyze entities — Распознать сущности
+              /section — Начать раздел · /end — Закрыть раздел · /analyze entities — Сущности · /analyze facts — Факты · /analyze events — События · /analyze metrics — Метрики · /analyze decisions — Решения · /agent data — Data Agent · /agent entity — Entities Agent
             </div>
           )}
           <textarea
@@ -863,7 +867,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               style={{ background: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px' }}
             >
               <option value="fast">{t('unfold.request.strengthFast')}</option>
-              <option value="balanced" disabled={settings.provider === 'grok' || settings.provider === 'deepseek'}>{t('unfold.request.strengthBalanced')}</option>
+              <option value="balanced" disabled={settings.provider === 'deepseek'}>{t('unfold.request.strengthBalanced')}</option>
               <option value="quality">{t('unfold.request.strengthQuality')}</option>
             </select>
             {/* Web search toggle (synced with modal) */}
@@ -1013,7 +1017,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                       <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceStrength')}</label>
                       <select value={settings.stanceStrength || 'fast'} onChange={(e) => settings.setStanceStrength(e.target.value as any)} className="w-full">
                         <option value="fast">{t('unfold.request.strengthFast')}</option>
-                        <option value="balanced" disabled={((settings.stanceProvider || 'gemini') === 'grok') || ((settings.stanceProvider || 'gemini') === 'deepseek')}>{t('unfold.request.strengthBalanced')}</option>
+                        <option value="balanced" disabled={(settings.stanceProvider || 'gemini') === 'deepseek'}>{t('unfold.request.strengthBalanced')}</option>
                         <option value="quality">{t('unfold.request.strengthQuality')}</option>
                       </select>
                     </div>

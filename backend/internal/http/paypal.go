@@ -209,6 +209,7 @@ func (h *PayPalHandler) ExecuteSubscription(w http.ResponseWriter, r *http.Reque
 	sub.PaymentProvider = &provider
 	sub.PayPalPlanID = &plan.ID
 	sub.PayPalSubscriptionID = &subscription.ID
+	sub.CancelAtPeriodEnd = false // Reset cancellation flag when resuming
 
 	now := time.Now().UTC()
 	sub.CurrentPeriodStart = now
@@ -226,6 +227,59 @@ func (h *PayPalHandler) ExecuteSubscription(w http.ResponseWriter, r *http.Reque
 	h.logger.Printf("User %s subscribed to %s tier via PayPal (subscription: %s)", authInfo.UID, tier, subscription.ID)
 
 	WriteJSON(w, http.StatusOK, sub)
+}
+
+// CancelSubscription handles POST /api/v1/paypal/subscription/cancel
+// Cancels subscription at the end of current billing period
+func (h *PayPalHandler) CancelSubscription(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	// Get current subscription
+	sub, err := h.subscriptionService.GetOrCreateSubscription(r.Context(), authInfo.TenantID, authInfo.UID)
+	if err != nil {
+		h.logger.Printf("Failed to get subscription: %v", err)
+		WriteInternalError(w, "Failed to get subscription")
+		return
+	}
+
+	// Can only cancel paid subscriptions
+	if sub.Tier == models.SubscriptionTierFree {
+		WriteBadRequest(w, "INVALID_TIER", "Cannot cancel free subscription")
+		return
+	}
+
+	// If PayPal subscription exists, cancel it in PayPal
+	if sub.PayPalSubscriptionID != nil && *sub.PayPalSubscriptionID != "" {
+		// Cancel subscription in PayPal (at period end, not immediately)
+		// PayPal subscriptions are cancelled at period end by default when we call CancelSubscription
+		if err := h.paypalClient.CancelSubscription(r.Context(), *sub.PayPalSubscriptionID, "User requested cancellation"); err != nil {
+			h.logger.Printf("Failed to cancel PayPal subscription %s: %v", *sub.PayPalSubscriptionID, err)
+			// Continue anyway - we'll mark it for cancellation in our system
+		} else {
+			h.logger.Printf("Cancelled PayPal subscription %s", *sub.PayPalSubscriptionID)
+		}
+	}
+
+	// Mark subscription for cancellation at period end
+	cancelledSub, err := h.subscriptionService.CancelSubscriptionAtPeriodEnd(r.Context(), authInfo.TenantID, authInfo.UID)
+	if err != nil {
+		h.logger.Printf("Failed to cancel subscription: %v", err)
+		WriteInternalError(w, "Failed to cancel subscription")
+		return
+	}
+
+	h.logger.Printf("User %s cancelled subscription (will expire at %s)", authInfo.UID, cancelledSub.CurrentPeriodEnd.Format(time.RFC3339))
+
+	WriteJSON(w, http.StatusOK, cancelledSub)
 }
 
 // Webhook handles POST /api/v1/paypal/webhook
@@ -316,6 +370,15 @@ func (h *PayPalHandler) processWebhookEvent(ctx context.Context, eventType strin
 			return h.handleSubscriptionCancelled(ctx, subscription.ID)
 		}
 
+	case "BILLING.SUBSCRIPTION.REACTIVATED":
+		// Subscription reactivated (user resumed cancelled subscription)
+		var subscription struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(resource, &subscription); err == nil && subscription.ID != "" {
+			return h.handleSubscriptionReactivated(ctx, subscription.ID)
+		}
+
 	case "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
 		// Payment failed - mark subscription as past_due
 		var subscription struct {
@@ -340,6 +403,7 @@ func (h *PayPalHandler) handlePaymentCompleted(ctx context.Context, subscription
 	sub := subs[0]
 	now := time.Now().UTC()
 	sub.Status = "active"
+	sub.CancelAtPeriodEnd = false // Reset cancellation flag on successful payment (subscription resumed)
 	sub.CurrentPeriodStart = now
 	sub.CurrentPeriodEnd = now.AddDate(0, 1, 0)
 	nextBilling := now.AddDate(0, 1, 0)
@@ -371,6 +435,27 @@ func (h *PayPalHandler) handlePaymentFailed(ctx context.Context, subscriptionID 
 	sub := subs[0]
 	sub.Status = "past_due"
 	sub.UpdatedAt = time.Now().UTC()
+
+	return h.subsRepo.Upsert(ctx, sub)
+}
+
+func (h *PayPalHandler) handleSubscriptionReactivated(ctx context.Context, subscriptionID string) error {
+	subs, err := h.subsRepo.ListByPayPalSubscriptionID(ctx, subscriptionID)
+	if err != nil || len(subs) == 0 {
+		return nil
+	}
+
+	sub := subs[0]
+	// Resume subscription - reset cancellation flag
+	sub.Status = "active"
+	sub.CancelAtPeriodEnd = false
+	sub.UpdatedAt = time.Now().UTC()
+
+	// Also update via subscription service to ensure consistency
+	if _, err := h.subscriptionService.ResumeSubscription(ctx, sub.TenantID, sub.UserID); err != nil {
+		h.logger.Printf("Failed to resume subscription via service: %v", err)
+		// Continue with direct update
+	}
 
 	return h.subsRepo.Upsert(ctx, sub)
 }

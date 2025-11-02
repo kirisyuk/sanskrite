@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -141,6 +142,24 @@ type DailyTotal struct {
 	Count        int     `json:"count"`
 }
 
+// isPremiumModel determines if a model is considered "premium" (quality or balanced for Claude)
+// Premium models are: _quality for any provider, or _balanced for Claude only
+func isPremiumModel(provider string, modelAlias *string) bool {
+	if modelAlias == nil {
+		return false
+	}
+	alias := *modelAlias
+	// Check for _quality suffix (any provider)
+	if strings.HasSuffix(alias, "_quality") {
+		return true
+	}
+	// Check for _balanced suffix (Claude only)
+	if provider == "anthropic" && strings.HasSuffix(alias, "_balanced") {
+		return true
+	}
+	return false
+}
+
 // GetDailyTotals returns daily totals for a user
 func (r *UsageMetricsRepository) GetDailyTotals(ctx context.Context, tenantID, userID string, startTime, endTime time.Time) (map[string]DailyTotal, error) {
 	metrics, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime)
@@ -162,4 +181,50 @@ func (r *UsageMetricsRepository) GetDailyTotals(ctx context.Context, tenantID, u
 	}
 
 	return daily, nil
+}
+
+// TokenCategoryTotals represents token totals split by premium vs regular models
+type TokenCategoryTotals struct {
+	PremiumTokens TokenTotals `json:"premiumTokens"`
+	RegularTokens TokenTotals `json:"regularTokens"`
+}
+
+// TokenTotals represents token usage totals
+type TokenTotals struct {
+	InputTokens  int     `json:"inputTokens"`
+	OutputTokens int     `json:"outputTokens"`
+	TotalTokens  int     `json:"totalTokens"`
+	CostUSD      float64 `json:"costUSD"`
+	Count        int     `json:"count"`
+}
+
+// GetTokenCategoryTotals returns token totals split by premium vs regular models
+func (r *UsageMetricsRepository) GetTokenCategoryTotals(ctx context.Context, tenantID, userID string, startTime, endTime time.Time) (*TokenCategoryTotals, error) {
+	metrics, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+
+	var premium, regular TokenTotals
+
+	for _, m := range metrics {
+		if isPremiumModel(m.Provider, m.ModelAlias) {
+			premium.Count++
+			premium.InputTokens += m.InputTokens
+			premium.OutputTokens += m.OutputTokens
+			premium.TotalTokens += m.TotalTokens
+			premium.CostUSD += m.CostUSD
+		} else {
+			regular.Count++
+			regular.InputTokens += m.InputTokens
+			regular.OutputTokens += m.OutputTokens
+			regular.TotalTokens += m.TotalTokens
+			regular.CostUSD += m.CostUSD
+		}
+	}
+
+	return &TokenCategoryTotals{
+		PremiumTokens: premium,
+		RegularTokens: regular,
+	}, nil
 }

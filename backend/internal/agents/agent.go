@@ -2,7 +2,9 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -87,5 +89,155 @@ type AgentInfo struct {
 // generateTaskID генерирует уникальный ID задачи
 func generateTaskID() string {
 	return fmt.Sprintf("task_%d", time.Now().UnixNano())
+}
+
+// extractJSON извлекает JSON из текста (убирает markdown, лишний текст)
+// Улучшенная версия, которая правильно обрабатывает строки и экранирование
+func extractJSON(content string) string {
+	content = strings.TrimSpace(content)
+
+	// Убираем markdown code blocks
+	if strings.HasPrefix(content, "```json") {
+		content = strings.TrimPrefix(content, "```json")
+		content = strings.TrimSuffix(content, "```")
+	} else if strings.HasPrefix(content, "```") {
+		content = strings.TrimPrefix(content, "```")
+		content = strings.TrimSuffix(content, "```")
+	}
+	content = strings.TrimSpace(content)
+
+	// Найти начало JSON (первая { или [)
+	start := -1
+	for i := 0; i < len(content); i++ {
+		if content[i] == '{' || content[i] == '[' {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return content
+	}
+
+	// Найти конец JSON, правильно обрабатывая строки и экранирование
+	inStr := false
+	esc := false
+	depthObj := 0
+	depthArr := 0
+	end := start
+
+	for i := start; i < len(content); i++ {
+		ch := content[i]
+		
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if ch == '\\' {
+				esc = true
+				continue
+			}
+			if ch == '"' {
+				inStr = false
+			}
+			continue
+		}
+		
+		if ch == '"' {
+			inStr = true
+			continue
+		}
+		
+		switch ch {
+		case '{':
+			depthObj++
+		case '}':
+			if depthObj > 0 {
+				depthObj--
+				if depthObj == 0 && depthArr == 0 {
+					end = i
+					break
+				}
+			}
+		case '[':
+			depthArr++
+		case ']':
+			if depthArr > 0 {
+				depthArr--
+				if depthObj == 0 && depthArr == 0 {
+					end = i
+					break
+				}
+			}
+		}
+	}
+
+	if end > start {
+		jsonStr := content[start : end+1]
+		
+		// Исправляем неэкранированные переносы строк внутри строковых значений
+		// Это критично важно для корректного парсинга
+		result := make([]byte, 0, len(jsonStr))
+		inStr := false
+		esc := false
+		
+		for i := 0; i < len(jsonStr); i++ {
+			ch := jsonStr[i]
+			
+			if inStr {
+				if esc {
+					esc = false
+					result = append(result, ch)
+					continue
+				}
+				if ch == '\\' {
+					esc = true
+					result = append(result, ch)
+					continue
+				}
+				if ch == '"' {
+					inStr = false
+					result = append(result, ch)
+					continue
+				}
+				// Если внутри строки найден неэкранированный перенос строки - экранируем его
+				if ch == '\n' {
+					result = append(result, '\\', 'n')
+					continue
+				}
+				if ch == '\r' {
+					result = append(result, '\\', 'r')
+					continue
+				}
+				if ch == '\t' {
+					result = append(result, '\\', 't')
+					continue
+				}
+				result = append(result, ch)
+				continue
+			}
+			
+			if ch == '"' {
+				inStr = true
+			}
+			result = append(result, ch)
+		}
+		
+		return string(result)
+	}
+
+	return content
+}
+
+// formatSchemaAsText форматирует JSON Schema в читаемый текст для промпта
+func formatSchemaAsText(schema map[string]interface{}) string {
+	// Простое форматирование схемы для промпта
+	// Преобразуем схему в JSON и форматируем для читаемости
+	schemaJSON, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		// Если не удалось сериализовать, возвращаем базовое описание
+		return "JSON object matching the provided schema"
+	}
+	return string(schemaJSON)
 }
 
