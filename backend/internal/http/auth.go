@@ -2,11 +2,15 @@ package http
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"firebase.google.com/go/v4/auth"
+	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/services"
 )
 
 // AuthContextKey is the key for storing auth info in request context
@@ -118,6 +122,93 @@ func WithUsersRepo(users *repo.UsersRepository) func(http.Handler) http.Handler 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := context.WithValue(r.Context(), usersRepoKey{}, users)
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// subscriptionServiceKey is a private context key used to pass SubscriptionService into middleware
+type subscriptionServiceKey struct{}
+
+// WithSubscriptionService attaches SubscriptionService to request context
+func WithSubscriptionService(service *services.SubscriptionService) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), subscriptionServiceKey{}, service)
+			
+			// Auto-create Max subscription for admins on first request (async, best-effort)
+			// Use r.Context() to get authInfo from AuthMiddleware (which runs before this)
+			authInfo := GetAuthInfo(r.Context())
+			if authInfo != nil && !authInfo.IsSystem {
+				go func() {
+					defer func() { recover() }() // Don't let panics crash the server
+					
+					// Use background context with timeout for async operation
+					bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					
+					// Get user from database to check if admin
+					// Use r.Context() to get usersRepo from WithUsersRepo middleware (which runs before this)
+					if uraw := r.Context().Value(usersRepoKey{}); uraw != nil {
+						if usersRepo, ok := uraw.(*repo.UsersRepository); ok && usersRepo != nil {
+							user, err := usersRepo.GetByIDAndTenant(bgCtx, authInfo.UID, authInfo.TenantID)
+							if err == nil && user != nil && user.Role != nil && strings.ToLower(*user.Role) == "admin" {
+								// Ensure admin has Max subscription
+								_ = service.EnsureAdminMaxSubscription(bgCtx, authInfo.TenantID, authInfo.UID)
+								// Errors are logged inside EnsureAdminMaxSubscription, we don't fail the request
+							}
+						}
+					}
+				}()
+			}
+			
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// RequireSubscription creates middleware that requires a minimum subscription tier
+func RequireSubscription(requiredTier models.SubscriptionTier) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authInfo := GetAuthInfo(r.Context())
+			if authInfo == nil {
+				WriteUnauthorized(w, "Authentication required")
+				return
+			}
+
+			// System calls bypass subscription checks
+			if authInfo.IsSystem {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Get subscription service from context
+			serviceRaw := r.Context().Value(subscriptionServiceKey{})
+			if serviceRaw == nil {
+				WriteInternalError(w, "Subscription service not available")
+				return
+			}
+
+			service, ok := serviceRaw.(*services.SubscriptionService)
+			if !ok {
+				WriteInternalError(w, "Invalid subscription service")
+				return
+			}
+
+			// Check subscription
+			_, valid, err := service.CheckSubscription(r.Context(), authInfo.TenantID, authInfo.UID, requiredTier)
+			if err != nil {
+				WriteInternalError(w, "Failed to check subscription")
+				return
+			}
+
+			if !valid {
+				WriteError(w, http.StatusForbidden, "SUBSCRIPTION_REQUIRED", 
+					fmt.Sprintf("This feature requires %s subscription or higher", requiredTier), nil)
+				return
+			}
+
+			next.ServeHTTP(w, r)
 		})
 	}
 }
