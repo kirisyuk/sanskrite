@@ -26,7 +26,7 @@ func NewGrokService(apiKey string, modelManager *AIModelManager) *GrokService {
 	return &GrokService{
 		BaseAIService: NewBaseAIService(modelManager),
 		apiKey:        sanitizedKey,
-        httpClient:    &http.Client{Timeout: 180 * time.Second},
+		httpClient:    &http.Client{Timeout: 180 * time.Second},
 	}
 }
 

@@ -8,16 +8,21 @@ import { api } from '../lib/api';
 export const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void; onAvailableChange?: (available: boolean) => void }> = ({ visible, onClose, onAvailableChange }) => {
   const [titles, setTitles] = React.useState<string[] | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const genaiChat = useGenaiChatStore();
+  // PERFORMANCE FIX: Subscribe only to messages.length, not entire array
+  const messagesLength = useGenaiChatStore((s) => s.messages.length);
   const { currentUser } = useAuth();
   const { currentProject } = useProjectsStore();
   const appliedProjectRef = React.useRef<string | null>(null);
   const finalizedRef = React.useRef(false);
   const fetchedForProjectRef = React.useRef<string | null>(null);
-  const hasAssistant = React.useMemo(() =>
-    genaiChat.messages.some((m) => m.role === 'assistant' && m.content && m.content.trim().length > 0),
-    [genaiChat.messages]
-  );
+  
+  // Get messages only when needed via getState()
+  const getMessages = React.useCallback(() => useGenaiChatStore.getState().messages, []);
+  
+  const hasAssistant = React.useMemo(() => {
+    const messages = getMessages();
+    return messages.some((m) => m.role === 'assistant' && m.content && m.content.trim().length > 0);
+  }, [getMessages, messagesLength]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -56,7 +61,8 @@ export const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void;
         }));
         // If empty, fallback to chat messages
         if (messages.length === 0) {
-          const fallbackAll = genaiChat.messages.filter((m) => m.role === 'user');
+          const chatMessages = getMessages();
+          const fallbackAll = chatMessages.filter((m) => m.role === 'user');
           const fallbackLast5 = fallbackAll.slice(Math.max(0, fallbackAll.length - 5));
           const fallback: Array<{ role: 'user'; text: string }> = fallbackLast5.map((m) => ({ role: 'user', text: m.content }));
           fallback.forEach((mm) => messages.push(mm));
@@ -75,7 +81,7 @@ export const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void;
     };
     run();
     return () => { cancelled = true; };
-  }, [genaiChat.messages.length, currentUser?.uid, hasAssistant, currentProject?.id]);
+  }, [messagesLength, currentUser?.uid, hasAssistant, currentProject?.id, getMessages]);
 
   React.useEffect(() => {
     try { onAvailableChange && onAvailableChange(!!(titles && titles.length > 0)); } catch {}

@@ -12,11 +12,19 @@ import { getPreferredLanguage, getLanguageName, getAnchorRect, getSxSystemInstru
 // Action row under assistant messages: shows bias details when available,
 // otherwise shows action buttons (Bring In, Copy) immediately after message
 export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: string }> = ({ messageId, isAssistant, content }) => {
-  const genaiChat = useGenaiChatStore();
+  // PERFORMANCE FIX: Subscribe only to specific values, not entire arrays
+  const interactionsLength = useGenaiChatStore((s) => s.interactions.length);
+  const persistedByLocalId = useGenaiChatStore((s) => (s as any).persistedByLocalId);
+  const messageMeta = useGenaiChatStore((s) => s.messageMeta);
+  const projectId = useGenaiChatStore((s) => s.projectId);
+  
+  // Get interactions only when needed via getState()
+  const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
+  
   const { t } = useTranslation();
   const hasEvalBias = React.useMemo(() => {
     try {
-      const map = (genaiChat as any).persistedByLocalId || {};
+      const map = persistedByLocalId || {};
       const serverId = map[messageId];
       // Build reverse map for bidirectional lookup
       const reverseMap: Record<string, string[]> = {};
@@ -25,12 +33,13 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
         reverseMap[server as string].push(local);
       });
       const localIds = reverseMap[messageId] || [];
-      return !![...genaiChat.interactions].reverse().find((it: any) => 
+      const interactions = getInteractions();
+      return !![...interactions].reverse().find((it: any) => 
         it.subkind === 'eval.bias' && 
         (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
       );
     } catch { return false; }
-  }, [genaiChat.interactions, (genaiChat as any).persistedByLocalId, messageId]);
+  }, [getInteractions, interactionsLength, persistedByLocalId, messageId]);
   const settings = useGenAISettings();
   const [showBringIn, setShowBringIn] = React.useState(false);
   const [showAsk, setShowAsk] = React.useState(false);
@@ -43,22 +52,23 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
   const exportRef = React.useRef<HTMLDivElement | null>(null);
   const interForMessage = React.useMemo(() => {
     try {
+      const interactions = getInteractions();
       // First try direct match
-      let found = genaiChat.interactions.find((x) => x.id === messageId);
+      let found = interactions.find((x) => x.id === messageId);
       if (found) return found;
       
       // If not found, check mapping and originalMessageId
-      const map = (genaiChat as any).persistedByLocalId || {};
+      const map = persistedByLocalId || {};
       const serverId = map[messageId] || messageId;
       
       // Try server ID
       if (serverId !== messageId) {
-        found = genaiChat.interactions.find((x) => x.id === serverId);
+        found = interactions.find((x) => x.id === serverId);
         if (found) return found;
       }
       
       // Try by originalMessageId
-      found = genaiChat.interactions.find((x) => (x as any).originalMessageId === messageId);
+      found = interactions.find((x) => (x as any).originalMessageId === messageId);
       if (found) return found;
       
       // Try reverse mapping: if messageId is a server ID, find interactions with local IDs that map to it
@@ -69,32 +79,32 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
       });
       const localIds = reverseMap[messageId] || [];
       for (const localId of localIds) {
-        found = genaiChat.interactions.find((x) => x.id === localId);
+        found = interactions.find((x) => x.id === localId);
         if (found) return found;
       }
       
       return undefined as any;
     } catch { return undefined as any; }
-  }, [genaiChat.interactions, messageId, (genaiChat as any).persistedByLocalId]);
+  }, [getInteractions, interactionsLength, messageId, persistedByLocalId]);
   const derivedHeaderText = React.useMemo(() => {
     try {
-      const meta = genaiChat.messageMeta[messageId];
+      const meta = messageMeta[messageId];
       return meta?.headerText || interForMessage?.author?.displayName || (interForMessage?.agentProfile ? 'agent' : undefined);
     } catch { return undefined; }
-  }, [genaiChat.messageMeta, interForMessage, messageId]);
+  }, [messageMeta, interForMessage, messageId]);
   const derivedAgentProfile = React.useMemo(() => {
     try {
-      const meta = genaiChat.messageMeta[messageId];
+      const meta = messageMeta[messageId];
       return meta?.agentProfile || interForMessage?.agentProfile;
     } catch { return undefined; }
-  }, [genaiChat.messageMeta, interForMessage, messageId]);
+  }, [messageMeta, interForMessage, messageId]);
   const derivedRefineEnabled = React.useMemo(() => {
     try {
-      const meta = genaiChat.messageMeta[messageId];
+      const meta = messageMeta[messageId];
       if (typeof meta?.refineEnabled === 'boolean') return meta.refineEnabled;
       return !!interForMessage?.agentProfile?.capabilities?.refinePrevious;
     } catch { return false; }
-  }, [genaiChat.messageMeta, interForMessage, messageId]);
+  }, [messageMeta, interForMessage, messageId]);
   React.useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       if (!showBringIn) return;
@@ -125,22 +135,22 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
 
   const exportMarkdown = React.useCallback(async () => {
     try {
-      const projectId = (genaiChat as any)?.projectId as string | undefined;
-      if (!projectId || projectId === 'local-unfold') return;
+      const currentProjectId = projectId as string | undefined;
+      if (!currentProjectId || currentProjectId === 'local-unfold') return;
       const text = (content || '').toString();
       const baseUnsafe = (derivedHeaderText ? `${derivedHeaderText}-contribution` : 'assistant-answer');
       const base = baseUnsafe.toLowerCase().replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'assistant-answer';
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const filename = `${base}-${ts}.md`;
       const { api } = await import('../lib/api');
-      await api.docsCreateFromText(projectId, { filename, contentType: 'text/markdown', text });
+      await api.docsCreateFromText(currentProjectId, { filename, contentType: 'text/markdown', text });
     } catch {}
-  }, [content, genaiChat, derivedHeaderText]);
+  }, [content, projectId, derivedHeaderText]);
 
   const exportToDocx = React.useCallback(async () => {
     try {
-      const projectId = (genaiChat as any)?.projectId as string | undefined;
-      if (!projectId || projectId === 'local-unfold') return;
+      const currentProjectId = projectId as string | undefined;
+      if (!currentProjectId || currentProjectId === 'local-unfold') return;
       
       // First, save as markdown document
       const text = (content || '').toString();
@@ -150,10 +160,10 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
       const filename = `${base}-${ts}.md`;
       
       const { api } = await import('../lib/api');
-      const doc = await api.docsCreateFromText(projectId, { filename, contentType: 'text/markdown', text });
+      const doc = await api.docsCreateFromText(currentProjectId, { filename, contentType: 'text/markdown', text });
       
       // Then export to DOCX
-      const blob = await api.docsExportToDocx(projectId, doc.id);
+      const blob = await api.docsExportToDocx(currentProjectId, doc.id);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -167,13 +177,13 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
     } catch (error) {
       console.error('Failed to export to DOCX:', error);
     }
-  }, [content, genaiChat, derivedHeaderText]);
+  }, [content, projectId, derivedHeaderText]);
   if (!isAssistant || !content || !content.trim()) return null;
   
   // Get frame expansions from interactions with subkind 'eval.frame_expansions'
   const frameExpansions = React.useMemo(() => {
     try {
-      const map = (genaiChat as any).persistedByLocalId || {};
+      const map = persistedByLocalId || {};
       const serverId = map[messageId] || messageId;
       
       // Build reverse map for bidirectional lookup
@@ -185,7 +195,8 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
       const localIds = reverseMap[messageId] || [];
       
       // Find expansion interaction linked to this message
-      const expansionInteraction = genaiChat.interactions.find((it) => 
+      const interactions = getInteractions();
+      const expansionInteraction = interactions.find((it) => 
         it.subkind === 'eval.frame_expansions' && 
         (it.replyTo === messageId || it.replyTo === serverId || localIds.includes(it.replyTo || '') ||
          (it.relations && it.relations.some((r) => r.targetId === messageId || r.targetId === serverId)))
@@ -207,7 +218,7 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
       // Silently fail - no need to log every time
       return undefined; 
     }
-  }, [genaiChat.interactions, messageId, (genaiChat as any).persistedByLocalId]);
+  }, [getInteractions, interactionsLength, messageId, persistedByLocalId]);
   
   return (
     <div className="mt-1" style={{ width: '100%', position: 'relative' }}>
@@ -507,7 +518,8 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
                   try {
                     const serverId = map[messageId];
                     const localIds = reverseMap[messageId] || [];
-                    const evalNode = [...genaiChat.interactions].reverse().find((it: any) => 
+                    const interactions = getInteractions();
+                    const evalNode = [...interactions].reverse().find((it: any) => 
                       it.subkind === 'eval.bias' && 
                       (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
                     );

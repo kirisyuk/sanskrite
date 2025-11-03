@@ -13,10 +13,10 @@ import (
 
 // SubscriptionService handles subscription business logic
 type SubscriptionService struct {
-	subsRepo   *repo.SubscriptionsRepository
+	subsRepo     *repo.SubscriptionsRepository
 	vouchersRepo *repo.VouchersRepository
-	usersRepo  *repo.UsersRepository
-	logger     *log.Logger
+	usersRepo    *repo.UsersRepository
+	logger       *log.Logger
 }
 
 // NewSubscriptionService creates a new subscription service
@@ -64,14 +64,14 @@ func (s *SubscriptionService) GetOrCreateSubscription(ctx context.Context, tenan
 	}
 
 	sub = &models.Subscription{
-		TenantID:          tenantID,
-		UserID:            userID,
-		Tier:              tier,
+		TenantID:           tenantID,
+		UserID:             userID,
+		Tier:               tier,
 		Status:             "active",
 		StartedAt:          now,
 		CurrentPeriodStart: now,
 		CurrentPeriodEnd:   periodEnd,
-		NextBillingDate:   nil, // No billing for free or admin Max tier
+		NextBillingDate:    nil, // No billing for free or admin Max tier
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
@@ -157,9 +157,9 @@ func (s *SubscriptionService) CheckSubscription(ctx context.Context, tenantID, u
 		// Admin bypass - return a mock subscription
 		now := time.Now().UTC()
 		adminSub := &models.Subscription{
-			TenantID:          tenantID,
-			UserID:            userID,
-			Tier:              models.SubscriptionTierMax, // Admins get max tier
+			TenantID:           tenantID,
+			UserID:             userID,
+			Tier:               models.SubscriptionTierMax, // Admins get max tier
 			Status:             "active",
 			CurrentPeriodStart: now,
 			CurrentPeriodEnd:   now.AddDate(100, 0, 0),
@@ -191,8 +191,8 @@ func (s *SubscriptionService) CheckSubscription(ctx context.Context, tenantID, u
 	// Check tier hierarchy: free < pro < max
 	tierLevel := map[models.SubscriptionTier]int{
 		models.SubscriptionTierFree: 0,
-		models.SubscriptionTierPro: 1,
-		models.SubscriptionTierMax: 2,
+		models.SubscriptionTierPro:  1,
+		models.SubscriptionTierMax:  2,
 	}
 
 	userLevel := tierLevel[sub.Tier]
@@ -207,14 +207,14 @@ func (s *SubscriptionService) downgradeToFree(ctx context.Context, tenantID, use
 	periodEnd := now.AddDate(100, 0, 0) // 100 years
 
 	sub := &models.Subscription{
-		TenantID:          tenantID,
-		UserID:            userID,
-		Tier:              models.SubscriptionTierFree,
+		TenantID:           tenantID,
+		UserID:             userID,
+		Tier:               models.SubscriptionTierFree,
 		Status:             "active",
 		CurrentPeriodStart: now,
 		CurrentPeriodEnd:   periodEnd,
-		NextBillingDate:   nil,
-		UpdatedAt:         now,
+		NextBillingDate:    nil,
+		UpdatedAt:          now,
 	}
 
 	return s.subsRepo.Upsert(ctx, sub)
@@ -281,7 +281,7 @@ func (s *SubscriptionService) ProcessBillingCycle(ctx context.Context) error {
 				}
 				continue
 			}
-			
+
 			// Renew billing period (for paid subscriptions)
 			// For now, if no payment is set up, we extend by another month
 			// In production, this would trigger payment processing
@@ -333,12 +333,12 @@ func (s *SubscriptionService) EnsureAdminMaxSubscription(ctx context.Context, te
 	if err != nil {
 		return err
 	}
-	
+
 	// If already Max tier, nothing to do
 	if sub.Tier == models.SubscriptionTierMax {
 		return nil
 	}
-	
+
 	// Upgrade to Max tier
 	now := time.Now().UTC()
 	sub.Tier = models.SubscriptionTierMax
@@ -348,15 +348,15 @@ func (s *SubscriptionService) EnsureAdminMaxSubscription(ctx context.Context, te
 	sub.NextBillingDate = nil
 	sub.CancelAtPeriodEnd = false // Reset cancellation flag
 	sub.UpdatedAt = now
-	
+
 	if err := s.subsRepo.Upsert(ctx, sub); err != nil {
 		return fmt.Errorf("failed to upgrade admin subscription: %w", err)
 	}
-	
+
 	if s.logger != nil {
 		s.logger.Printf("Auto-upgraded admin %s to Max subscription", userID)
 	}
-	
+
 	return nil
 }
 
@@ -388,7 +388,7 @@ func (s *SubscriptionService) CancelSubscriptionAtPeriodEnd(ctx context.Context,
 	}
 
 	if s.logger != nil {
-		s.logger.Printf("Marked subscription for cancellation at period end (user %s, tenant %s, period ends %s)", 
+		s.logger.Printf("Marked subscription for cancellation at period end (user %s, tenant %s, period ends %s)",
 			userID, tenantID, sub.CurrentPeriodEnd.Format(time.RFC3339))
 	}
 
@@ -418,4 +418,3 @@ func (s *SubscriptionService) ResumeSubscription(ctx context.Context, tenantID, 
 
 	return sub, nil
 }
-

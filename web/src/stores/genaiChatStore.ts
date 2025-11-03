@@ -91,6 +91,8 @@ interface GenaiChatState {
   // local-only interactions cache for Unfold
   projectId: string; // temporary project id (frontend-owned)
   interactions: LocalInteraction[];
+  // Extracted perspectives cache (keyed by preset: 'consulting', 'themes', etc.)
+  perspectives: Record<string, { id: string; content: string; preset: string; createdAt: string }>;
   // Centralized artifacts extracted from @sx instructions (deduplicated)
   artifacts: { entities: SxEntityMark[]; metrics: SxMonitorMetric[] };
   // Metric overlay (full-screen over chat) state and cache
@@ -165,6 +167,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   messageMeta: {},
   projectId: 'local-unfold',
   interactions: [],
+  perspectives: {},
   artifacts: { entities: [], metrics: [] },
   metricOverlayOpenKey: null,
   metricOverlayLoading: false,
@@ -175,7 +178,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   pendingAttachedDocIds: [],
   hydrating: false,
 
-  reset: () => set({ messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [] }),
+  reset: () => set({ messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [] }),
   
   setPendingAttachedDocIds: (ids) => set({ pendingAttachedDocIds: ids }),
 
@@ -187,6 +190,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       // clear chat-local state to avoid mixing between projects
       messages: [],
       interactions: [],
+      perspectives: {},
       artifacts: { entities: [], metrics: [] },
       persistedByLocalId: {},
       evaluations: {},
@@ -381,14 +385,88 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         }
         
+        // Extract perspectives from interactions and build perspectives cache
+        // Preserve existing perspectives and only update/add from merged interactions
+        const perspectivesMap: Record<string, { id: string; content: string; preset: string; createdAt: string }> = { ...s.perspectives };
+        merged.forEach((it: any) => {
+          if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+            const preset = it.subkind.replace(/^perspective\./, '');
+            if (preset && it.content) {
+              // Keep the latest perspective for each preset
+              const existing = perspectivesMap[preset];
+              if (!existing || (it.createdAt && existing.createdAt && it.createdAt > existing.createdAt)) {
+                perspectivesMap[preset] = {
+                  id: it.id,
+                  content: it.content,
+                  preset,
+                  createdAt: it.createdAt || new Date().toISOString(),
+                };
+              }
+            }
+          }
+        });
+        
+        // Remove perspectives that are no longer in merged interactions
+        // Only remove if the perspective ID doesn't exist in merged at all
+        Object.keys(perspectivesMap).forEach((preset) => {
+          const perspectiveId = perspectivesMap[preset].id;
+          const stillExists = merged.some((it: any) => it.id === perspectiveId);
+          if (!stillExists) {
+            delete perspectivesMap[preset];
+          }
+        });
+        
         return { 
           interactions: merged,
+          perspectives: perspectivesMap,
           searchQueries: [],
           sources: [],
           messageMeta: restoredMeta,
           hydrating: false
         } as any;
       });
+      
+      // Check if discussion flow analysis exists, generate if missing
+      (async () => {
+        try {
+          if (!projectId || projectId === 'local-unfold') return;
+          
+          // Wait a bit for state to settle, then check
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          const state = get();
+          
+          // Check if analysis already exists
+          const existingAnalysisInteraction = state.interactions.find((it) => 
+            it.subkind === 'discussion.flow.analysis' && it.projectId === projectId
+          );
+          
+          if (existingAnalysisInteraction) {
+            console.log('[hydrateInteractions] Discussion flow analysis already exists');
+            return;
+          }
+          
+          // Get all chat messages (user, assistant) from current state
+          const chatMessages = state.interactions
+            .filter((it) => it.kind === 'user' || it.kind === 'assistant')
+            .map((it) => ({
+              role: it.kind === 'user' ? 'user' : 'assistant',
+              content: it.content || '',
+            }));
+          
+          // Only generate if we have at least 2 messages (user + assistant)
+          if (chatMessages.length < 2) {
+            console.log('[hydrateInteractions] Not enough messages for discussion flow analysis', { count: chatMessages.length });
+            return;
+          }
+          
+          const { generateDiscussionFlowAnalysis } = await import('../lib/discussionFlowAnalysis');
+          await generateDiscussionFlowAnalysis(projectId, chatMessages, null, undefined);
+          console.log('[hydrateInteractions] Generated discussion flow analysis after hydration');
+        } catch (e) {
+          console.warn('[hydrateInteractions] Failed to generate discussion flow analysis', e);
+        }
+      })();
     } catch (e: any) {
       // Log with status code for debugging
       const status = e?.response?.status;
@@ -524,7 +602,17 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           delete nextMap[k];
         }
       }
-      return { interactions: nextInteractions, messages: nextMessages, persistedByLocalId: nextMap } as any;
+      // Update perspectives cache: remove deleted perspectives
+      const nextPerspectives = { ...s.perspectives };
+      for (const it of s.interactions) {
+        if (toDelete.has(it.id) && it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+          const preset = it.subkind.replace(/^perspective\./, '');
+          if (preset && nextPerspectives[preset]?.id === it.id) {
+            delete nextPerspectives[preset];
+          }
+        }
+      }
+      return { interactions: nextInteractions, messages: nextMessages, persistedByLocalId: nextMap, perspectives: nextPerspectives } as any;
     });
 
     console.log('[deleteInteraction] Deleted interactions (cascade)', { idsToDelete });
@@ -1519,8 +1607,16 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     try {
       // Build messages from local interactions (summary preferred, else content)
       const interactions = get().interactions;
-      // Filter out evaluation messages, actions, and section markers - they shouldn't be in chat context
+      // Filter out evaluation messages, actions, section markers, and perspectives - they shouldn't be in chat context
       const chatInteractions = interactions.filter((it) => {
+        // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+          return false;
+        }
+        // Exclude perspective analysis interactions (kind='system' with subkind starting with 'perspective.' and ending with '.analysis')
+        if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
+          return false;
+        }
         // Exclude eval.* system messages (bias, stance, user_request, review evaluations)
         if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('eval.')) {
           return false;
@@ -1967,6 +2063,73 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             await get().loadStanceAggregate();
           } catch (e) {
             console.warn('[Meta] analysis failed', e);
+          }
+        })();
+
+        // Generate discussion flow analysis (blind spots, recommendations, frame, confidence)
+        (async () => {
+          try {
+            if (!projectId || projectId === 'local-unfold') return;
+            const { generateDiscussionFlowAnalysis } = await import('../lib/discussionFlowAnalysis');
+            const interactions = get().interactions;
+            const messages = get().messages;
+            
+            // Get all chat messages (user, assistant, agent)
+            let chatMessages: Array<{ role: string; content: string }> = interactions
+              .filter((it) => 
+                it.kind === 'user' || it.kind === 'assistant'
+              )
+              .map((it) => ({
+                role: it.kind === 'user' ? 'user' : 'assistant',
+                content: it.content || '',
+                ...((it as any).agentProfile ? { agentProfile: (it as any).agentProfile } : {}),
+              }));
+            
+            // If no messages from interactions, fallback to messages array
+            if (chatMessages.length === 0 && messages.length > 0) {
+              chatMessages = messages.map((m) => ({
+                role: m.role,
+                content: m.content || '',
+              }));
+            }
+            
+            if (chatMessages.length === 0) return;
+            
+            // Check if analysis already exists
+            const existingAnalysisInteraction = interactions.find((it) => 
+              it.subkind === 'discussion.flow.analysis' && it.projectId === projectId
+            );
+            
+            let existingAnalysis: any = null;
+            if (existingAnalysisInteraction && existingAnalysisInteraction.content) {
+              try {
+                existingAnalysis = JSON.parse(existingAnalysisInteraction.content || existingAnalysisInteraction.contentSanitized || '{}');
+              } catch {}
+            }
+            
+            // Get last pair for incremental update
+            let lastPair: Array<{ role: string; content: string }> | undefined = undefined;
+            if (existingAnalysis && lastAssistant && lastAssistant.content.trim()) {
+              // Find last user message before this assistant response
+              const lastUserInteraction = interactions
+                .filter((it) => it.kind === 'user')
+                .reverse()[0];
+              if (lastUserInteraction && lastUserInteraction.content) {
+                lastPair = [
+                  { role: 'user', content: lastUserInteraction.content },
+                  { role: 'assistant', content: lastAssistant.content }
+                ];
+              }
+            }
+            
+            await generateDiscussionFlowAnalysis(
+              projectId,
+              chatMessages,
+              existingAnalysis,
+              lastPair
+            );
+          } catch (e) {
+            console.warn('[DiscussionFlowAnalysis] generation failed', e);
           }
         })();
 

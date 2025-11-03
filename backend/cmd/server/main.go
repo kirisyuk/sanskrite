@@ -19,9 +19,9 @@ import (
 
 	// orchestrator deps
 	"cloud.google.com/go/pubsub"
+	"github.com/igorkirisyuk/sanskrite/internal/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
-	"github.com/igorkirisyuk/sanskrite/internal/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
@@ -113,15 +113,13 @@ func main() {
 	rulesHandler := httphandlers.NewRulesHandler(rulesRepo, logger)
 	webhooksHandler := httphandlers.NewWebhooksHandler(logger)
 
-		// Wire orchestrator (AITaskExecutor + ModelManager + Vertex service)
-		modelManager := ai.NewAIModelManager()
-		
-		// Initialize GenAI handler with usage metrics after modelManager is created
-		if genaiHandler == nil {
-			genaiHandler = httphandlers.NewGenAIHandler().
-				WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
-				WithModelManager(modelManager)
-		}
+	// Wire orchestrator (AITaskExecutor + ModelManager + Vertex service)
+	modelManager := ai.NewAIModelManager()
+
+	// Initialize GenAI handler with usage metrics after modelManager is created
+	genaiHandler = httphandlers.NewGenAIHandler().
+		WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
+		WithModelManager(modelManager)
 	// For brevity, only Vertex provider is wired here; additional providers can be added
 	{
 		aiServices := []ai.AIService{}
@@ -315,7 +313,7 @@ func main() {
 		metaHandler = httphandlers.NewMetaHandler(s.projs, interactions, metaEvents, metaAggProj, metaAggUser, exec, logger)
 		// Wire to projects handler for cascade delete
 		s.projectsHandler = s.projectsHandler.WithMeta(metaEvents, metaAggProj, metaAggUser)
-		
+
 		// Initialize Agent Registry
 		agentRegistry := agents.NewRegistry(exec, genaiClient, pub, logger).
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()), modelManager)
@@ -328,7 +326,7 @@ func main() {
 		log.Fatalf("auth client init: %v", err)
 	}
 
-    mux := http.NewServeMux()
+	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -498,11 +496,11 @@ func main() {
 		}
 	})))
 
-    // Share routes handler (initialized before project sub-routes)
-    shareRepo := repo.NewShareTokensRepository(fsClient.Client())
-    shareHandler := httphandlers.NewShareHandler(shareRepo, s.projs, repo.NewInteractionsRepository(fsClient.Client()), logger)
+	// Share routes handler (initialized before project sub-routes)
+	shareRepo := repo.NewShareTokensRepository(fsClient.Client())
+	shareHandler := httphandlers.NewShareHandler(shareRepo, s.projs, repo.NewInteractionsRepository(fsClient.Client()), logger)
 
-    // Project routes and nested sub-routes
+	// Project routes and nested sub-routes
 	mux.Handle("/api/v1/projects", authMiddleware(http.HandlerFunc(s.routeProjects)))
 	mux.Handle("/api/v1/projects/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/sources") && r.Method == http.MethodPost {
@@ -615,15 +613,15 @@ func main() {
 			s.projectsHandler.DeleteProjectDoc(w, r)
 			return
 		}
-        // Share: create/revoke
-        if strings.HasSuffix(r.URL.Path, "/share") && r.Method == http.MethodPost {
-            shareHandler.CreateShare(w, r)
-            return
-        }
-        if strings.Contains(r.URL.Path, "/share/") && r.Method == http.MethodDelete {
-            shareHandler.RevokeShare(w, r)
-            return
-        }
+		// Share: create/revoke
+		if strings.HasSuffix(r.URL.Path, "/share") && r.Method == http.MethodPost {
+			shareHandler.CreateShare(w, r)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/share/") && r.Method == http.MethodDelete {
+			shareHandler.RevokeShare(w, r)
+			return
+		}
 		// interactions create/delete
 		if strings.HasSuffix(r.URL.Path, "/interactions") && r.Method == http.MethodPost {
 			s.discoveryHandler.CreateProjectInteraction(w, r)
@@ -726,8 +724,8 @@ func main() {
 		httphandlers.WriteJSON(w, http.StatusOK, map[string]string{"message": "Billing cycle processed successfully"})
 	}))
 
-    // Public share endpoint (unauthenticated)
-    mux.Handle("/api/v1/public/share/", http.HandlerFunc(shareHandler.GetPublicShare))
+	// Public share endpoint (unauthenticated)
+	mux.Handle("/api/v1/public/share/", http.HandlerFunc(shareHandler.GetPublicShare))
 
 	// Admin: publish-due (handled below with jobAuth middleware for Cloud Scheduler)
 
@@ -745,7 +743,7 @@ func main() {
 
 	// Usage metrics handler
 	usageHandler := httphandlers.NewUsageHandler(repo.NewUsageMetricsRepository(fsClient.Client()), logger)
-	
+
 	// GenAI routes (isolated Gemini client)
 	mux.Handle("/api/v1/genai/complete", authMiddleware(http.HandlerFunc(genaiHandler.Complete)))
 	mux.Handle("/api/v1/genai/complete-json", authMiddleware(http.HandlerFunc(genaiHandler.CompleteJSON)))
@@ -753,9 +751,10 @@ func main() {
 	mux.Handle("/api/v1/genai/generate", authMiddleware(http.HandlerFunc(genaiHandler.GenAIGenerate)))
 	mux.Handle("/api/v1/genai/complete-with-tools", authMiddleware(http.HandlerFunc(genaiHandler.CompleteWithTools)))
 	mux.Handle("/api/v1/genai/stream", authMiddleware(http.HandlerFunc(genaiHandler.Stream)))
-	
+
 	// Usage routes
 	mux.Handle("/api/v1/usage", authMiddleware(http.HandlerFunc(usageHandler.GetUsage)))
+	mux.Handle("/api/v1/usage/avg-timing", authMiddleware(http.HandlerFunc(usageHandler.GetAverageTiming)))
 	// Universal structured AI endpoint
 	if aiExecHandler != nil {
 		mux.Handle("/api/v1/ai/structured", authMiddleware(http.HandlerFunc(aiExecHandler.Structured)))

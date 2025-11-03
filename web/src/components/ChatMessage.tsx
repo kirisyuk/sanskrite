@@ -11,6 +11,7 @@ interface ChatMessageProps {
   isError?: boolean;
   bgOverride?: string;
   leftAccent?: boolean;
+  averageTimingSeconds?: number | null; // Average response time estimate in seconds
 }
 
 const ChatMessage: React.FC<ChatMessageProps> = ({
@@ -24,6 +25,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   isError,
   bgOverride,
   leftAccent,
+  averageTimingSeconds,
 }) => {
   const header = headerText || (role === 'user' ? 'you' : 'assistant');
   const containerStyle: React.CSSProperties = {
@@ -34,11 +36,21 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     border: 'none',
     borderLeft: leftAccent ? '2px solid var(--overlay-line-90)' : 'none',
   };
+  
+  // Build header text with timing info
+  let headerTextContent = header;
+  if (isThinking && role === 'assistant') {
+    headerTextContent = `${header} (thinking ${thinkingSeconds ?? 0} sec)`;
+    if (averageTimingSeconds !== null && averageTimingSeconds !== undefined) {
+      headerTextContent += ` • в среднем ответ занимает ${averageTimingSeconds} с`;
+    }
+  }
+  
   // Transparent, no borders; color handled by parent theme
   return (
     <div className={`rounded-2xl px-4 py-3 ${align === 'right' ? 'ml-auto' : ''}`} style={containerStyle}>
       <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-        {isThinking && role === 'assistant' ? `${header} (thinking ${thinkingSeconds ?? 0} sec)` : header}
+        {headerTextContent}
       </div>
       <div className="text-13" style={{ color: 'var(--text-heading)' }}>
         {isError ? (

@@ -873,8 +873,8 @@ type SubscriptionTier string
 
 const (
 	SubscriptionTierFree SubscriptionTier = "free"
-	SubscriptionTierPro SubscriptionTier = "pro"
-	SubscriptionTierMax SubscriptionTier = "max"
+	SubscriptionTierPro  SubscriptionTier = "pro"
+	SubscriptionTierMax  SubscriptionTier = "max"
 )
 
 // Subscription represents a user's subscription
@@ -890,11 +890,11 @@ type Subscription struct {
 	Status string `json:"status" firestore:"status"` // active|expired|cancelled
 
 	// Billing cycle information
-	StartedAt       time.Time `json:"startedAt" firestore:"startedAt"`             // When subscription started
-	CurrentPeriodStart time.Time `json:"currentPeriodStart" firestore:"currentPeriodStart"` // Start of current billing period
-	CurrentPeriodEnd   time.Time `json:"currentPeriodEnd" firestore:"currentPeriodEnd"`   // End of current billing period
+	StartedAt          time.Time  `json:"startedAt" firestore:"startedAt"`                                 // When subscription started
+	CurrentPeriodStart time.Time  `json:"currentPeriodStart" firestore:"currentPeriodStart"`               // Start of current billing period
+	CurrentPeriodEnd   time.Time  `json:"currentPeriodEnd" firestore:"currentPeriodEnd"`                   // End of current billing period
 	NextBillingDate    *time.Time `json:"nextBillingDate,omitempty" firestore:"nextBillingDate,omitempty"` // Next billing date (null for free tier)
-	
+
 	// Cancellation: if true, subscription will be cancelled at period end (no auto-renewal)
 	CancelAtPeriodEnd bool `json:"cancelAtPeriodEnd" firestore:"cancelAtPeriodEnd"`
 
@@ -904,10 +904,10 @@ type Subscription struct {
 	// Payment information (for future payment integration)
 	PaymentProvider *string `json:"paymentProvider,omitempty" firestore:"paymentProvider,omitempty"` // stripe, paypal, voucher, admin
 	PaymentID       *string `json:"paymentId,omitempty" firestore:"paymentId,omitempty"`             // External payment subscription ID
-	
+
 	// PayPal-specific fields
-	PayPalPlanID      *string `json:"paypalPlanId,omitempty" firestore:"paypalPlanId,omitempty"`
-	PayPalAgreementID *string `json:"paypalAgreementId,omitempty" firestore:"paypalAgreementId,omitempty"`
+	PayPalPlanID         *string `json:"paypalPlanId,omitempty" firestore:"paypalPlanId,omitempty"`
+	PayPalAgreementID    *string `json:"paypalAgreementId,omitempty" firestore:"paypalAgreementId,omitempty"`
 	PayPalSubscriptionID *string `json:"paypalSubscriptionId,omitempty" firestore:"paypalSubscriptionId,omitempty"`
 
 	// Metadata
@@ -919,8 +919,8 @@ type Subscription struct {
 
 // Voucher represents a promotional code/voucher for subscription
 type Voucher struct {
-	ID     string `json:"id" firestore:"id"`
-	Code   string `json:"code" firestore:"code"` // Unique voucher code (e.g., "PRO2024Q1")
+	ID   string `json:"id" firestore:"id"`
+	Code string `json:"code" firestore:"code"` // Unique voucher code (e.g., "PRO2024Q1")
 
 	// Voucher tier: pro, max (free tier doesn't need vouchers)
 	Tier SubscriptionTier `json:"tier" firestore:"tier"` // pro|max
@@ -933,12 +933,12 @@ type Voucher struct {
 	DurationMonths int `json:"durationMonths" firestore:"durationMonths"` // e.g., 1, 3, 6, 12
 
 	// Usage tracking
-	MaxUses      *int `json:"maxUses,omitempty" firestore:"maxUses,omitempty"`           // nil = unlimited
-	UsedCount    int  `json:"usedCount" firestore:"usedCount"`                           // Current usage count
-	IsActive     bool `json:"isActive" firestore:"isActive"`                             // Admin can deactivate without deleting
+	MaxUses   *int `json:"maxUses,omitempty" firestore:"maxUses,omitempty"` // nil = unlimited
+	UsedCount int  `json:"usedCount" firestore:"usedCount"`                 // Current usage count
+	IsActive  bool `json:"isActive" firestore:"isActive"`                   // Admin can deactivate without deleting
 
 	// Created by admin
-	CreatedBy string `json:"createdBy" firestore:"createdBy"` // Admin user ID
+	CreatedBy string  `json:"createdBy" firestore:"createdBy"`           // Admin user ID
 	Note      *string `json:"note,omitempty" firestore:"note,omitempty"` // Admin note
 
 	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`

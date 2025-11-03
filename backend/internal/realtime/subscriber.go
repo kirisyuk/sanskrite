@@ -92,7 +92,7 @@ func (s *Subscriber) run(ctx context.Context, sub *pubsub.Subscription) {
 		if et == "analysis.status" && s.logger != nil {
 			s.logger.Printf("subscriber: received analysis.status for tenantId=%s, payload=%s", tenant, string(m.Data))
 		}
-		
+
 		// DEBUG: log agent.update events
 		if et == "agent.update" && s.logger != nil {
 			connCount := 0

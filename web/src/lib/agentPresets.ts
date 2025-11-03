@@ -4,8 +4,8 @@ export type AgentPreset = {
   description: string;
   expectedOutcome?: string;
   useCases?: string[];
-  provider: 'gemini' | 'openai' | 'grok';
-  modelAlias: 'gemini_quality' | 'gemini_balanced' | 'gemini_fast' | 'gpt_quality' | 'gpt_balanced' | 'gpt_fast' | 'grok_quality' | 'grok_balanced' | 'grok_fast';
+  provider: 'gemini' | 'openai' | 'grok' | 'claude';
+  modelAlias: 'gemini_quality' | 'gemini_balanced' | 'gemini_fast' | 'gpt_quality' | 'gpt_balanced' | 'gpt_fast' | 'grok_quality' | 'grok_balanced' | 'grok_fast' | 'claude_balanced' | 'claude_fast';
   capabilities?: { tools?: boolean; webSearch?: boolean; reasoning?: boolean; refinePrevious?: boolean };
   params?: { temperature?: number; systemInstruction?: string };
   // If true, the primary model should immediately respond to this agent's reply
@@ -82,8 +82,8 @@ PRINCIPLES:
       'Expose hidden premises and re‑weight arguments using fresh data',
       'Plan minimal measurements to break key uncertainty'
     ],
-    provider: 'grok',
-    modelAlias: 'grok_balanced',
+    provider: 'claude',
+    modelAlias: 'claude_balanced',
     capabilities: { tools: true, webSearch: true, reasoning: true, refinePrevious: true },
     params: {
       temperature: 0.3,

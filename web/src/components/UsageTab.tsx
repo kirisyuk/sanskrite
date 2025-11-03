@@ -206,7 +206,7 @@ export const UsageTab: React.FC = () => {
     return usageData.tokenCategories;
   }, [usageData]);
 
-  // Group events by model and time proximity
+  // Group events by model and time proximity, or consecutive same-model events
   const groupedEvents = React.useMemo(() => {
     if (!usageData?.events) return [];
     
@@ -231,8 +231,7 @@ export const UsageTab: React.FC = () => {
       const eventTime = new Date(event.createdAt).getTime();
       const eventKey = `${event.model}:${event.modelAlias || ''}:${event.kind}`;
       
-      // Try to find an existing group that matches model/alias/kind and is within time window
-      // Check if event is within time window from the expanded group time range
+      // First, try to find an existing group that matches model/alias/kind and is within time window
       let foundGroup = groups.find(group => {
         const groupKey = `${group.model}:${group.modelAlias || ''}:${group.kind}`;
         if (groupKey !== eventKey) return false;
@@ -242,6 +241,49 @@ export const UsageTab: React.FC = () => {
         // Check if event is within expanded time window
         return eventTime >= groupStartTime && eventTime <= groupEndTime;
       });
+      
+      // If not found by time window, check if this event is consecutive (same model, no other models in between)
+      // Find the most recent group (by endTime) that matches the same model/alias/kind
+      if (!foundGroup) {
+        // Find all groups with matching model/alias/kind, sorted by endTime (newest first)
+        const matchingGroups = groups
+          .filter(group => {
+            const groupKey = `${group.model}:${group.modelAlias || ''}:${group.kind}`;
+            return groupKey === eventKey;
+          })
+          .sort((a, b) => b.endTime.getTime() - a.endTime.getTime());
+        
+        // Check if this event is consecutive to any matching group
+        // (event is older than group's endTime, meaning it comes right before chronologically)
+        for (const group of matchingGroups) {
+          if (eventTime < group.endTime.getTime()) {
+            // Check if there are any other events (not in this group) between this event and the group
+            // by checking original sortedEvents array
+            const groupEndTime = group.endTime.getTime();
+            const hasOtherModelsBetween = sortedEvents.some(otherEvent => {
+              // Skip events that are already in this group
+              if (group.events.some(e => e.id === otherEvent.id)) return false;
+              // Skip the current event
+              if (otherEvent.id === event.id) return false;
+              
+              const otherEventTime = new Date(otherEvent.createdAt).getTime();
+              const otherEventKey = `${otherEvent.model}:${otherEvent.modelAlias || ''}:${otherEvent.kind}`;
+              
+              // Check if other event is between eventTime and groupEndTime and has different model
+              if (otherEventTime >= eventTime && otherEventTime <= groupEndTime && otherEventKey !== eventKey) {
+                return true;
+              }
+              return false;
+            });
+            
+            // If no other models between, it's consecutive
+            if (!hasOtherModelsBetween) {
+              foundGroup = group;
+              break;
+            }
+          }
+        }
+      }
       
       if (foundGroup) {
         // Add to existing group

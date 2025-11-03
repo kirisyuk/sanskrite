@@ -786,24 +786,24 @@ func (mm *AIModelManager) CalculateProcessingCost(modelName string, inputTokens 
 // Gemini pricing typically has tiers: first 128K tokens at one rate, after 128K at a different rate
 func (mm *AIModelManager) calculateGeminiCost(modelName string, inputTokens int, outputTokens int, capabilities AIModelCapabilities) (float64, error) {
 	const geminiTierThreshold = 128000 // 128K tokens threshold
-	
+
 	// Base prices (first tier, up to 128K tokens)
 	// Gemini pricing has tiers: first 128K tokens at full price, after 128K at 50% discount
 	// Prices from model_manager.go (these are max prices for first tier)
 	// For Gemini 2.5 Flash: $0.30/$2.50 per 1M tokens (input/output) for first 128K
 	// For Gemini 2.5 Flash Lite: $0.10/$0.41 per 1M tokens (input/output) for first 128K
 	// For Gemini 2.5 Pro: $2.50/$15.00 per 1M tokens (input/output) for first 128K
-	
+
 	// After 128K threshold: 50% discount
 	var inputPriceTier1, inputPriceTier2, outputPriceTier1, outputPriceTier2 float64
-	
+
 	// Check more specific models first (flash-lite before flash, pro before other)
 	switch {
 	case strings.Contains(modelName, "gemini-2.5-flash-lite"):
 		// Most specific: flash-lite (cheapest)
-		inputPriceTier1 = 0.00000010  // $0.10 / 1M (from model_manager.go)
-		inputPriceTier2 = 0.00000005  // $0.05 / 1M (50% discount after threshold)
-		outputPriceTier1 = 0.00000041 // $0.41 / 1M (from model_manager.go)
+		inputPriceTier1 = 0.00000010   // $0.10 / 1M (from model_manager.go)
+		inputPriceTier2 = 0.00000005   // $0.05 / 1M (50% discount after threshold)
+		outputPriceTier1 = 0.00000041  // $0.41 / 1M (from model_manager.go)
 		outputPriceTier2 = 0.000000205 // $0.205 / 1M (50% discount after threshold)
 	case strings.Contains(modelName, "gemini-2.5-pro"):
 		// Pro model (most expensive)
@@ -824,7 +824,7 @@ func (mm *AIModelManager) calculateGeminiCost(modelName string, inputTokens int,
 		outputPriceTier1 = capabilities.PricePerOutputToken
 		outputPriceTier2 = capabilities.PricePerOutputToken * 0.5
 	}
-	
+
 	// Calculate input cost with tiered pricing
 	var inputCost float64
 	if inputTokens <= geminiTierThreshold {
@@ -832,7 +832,7 @@ func (mm *AIModelManager) calculateGeminiCost(modelName string, inputTokens int,
 	} else {
 		inputCost = float64(geminiTierThreshold)*inputPriceTier1 + float64(inputTokens-geminiTierThreshold)*inputPriceTier2
 	}
-	
+
 	// Calculate output cost with tiered pricing
 	var outputCost float64
 	if outputTokens <= geminiTierThreshold {
@@ -840,7 +840,7 @@ func (mm *AIModelManager) calculateGeminiCost(modelName string, inputTokens int,
 	} else {
 		outputCost = float64(geminiTierThreshold)*outputPriceTier1 + float64(outputTokens-geminiTierThreshold)*outputPriceTier2
 	}
-	
+
 	return inputCost + outputCost, nil
 }
 

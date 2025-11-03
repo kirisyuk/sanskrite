@@ -5,21 +5,32 @@ import { ThemeContext } from './ThemeProvider';
 
 // Inline evaluation details renderer (reads eval.bias interactions)
 export const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }) => {
-  const genaiChat = useGenaiChatStore();
+  // PERFORMANCE FIX: Subscribe only to specific values, not entire store
+  const projectId = useGenaiChatStore((s) => s.projectId);
+  const interactionsLength = useGenaiChatStore((s) => s.interactions.length);
+  const messagesLength = useGenaiChatStore((s) => s.messages.length);
+  const persistedByLocalId = useGenaiChatStore((s) => (s as any).persistedByLocalId);
+  
+  // Get interactions/messages only when needed via getState()
+  const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
+  const getMessages = React.useCallback(() => useGenaiChatStore.getState().messages, []);
+  const hydrateInteractions = useGenaiChatStore((s) => s.hydrateInteractions);
+  const ensureStanceAggregate = useGenaiChatStore((s) => s.ensureStanceAggregate);
+  
   // Hydrate interactions when a concrete project is selected
   React.useEffect(() => {
     try {
-      if (genaiChat.projectId && genaiChat.projectId !== 'local-unfold') {
-        genaiChat.hydrateInteractions();
-        genaiChat.ensureStanceAggregate();
+      if (projectId && projectId !== 'local-unfold') {
+        hydrateInteractions();
+        ensureStanceAggregate();
       }
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genaiChat.projectId]);
+  }, [projectId]);
   const { t, i18n } = useTranslation();
   const ev = React.useMemo(() => {
     try {
-      const map = (genaiChat as any).persistedByLocalId || {};
+      const map = persistedByLocalId || {};
       const serverId = map[messageId];
       // Build reverse map for bidirectional lookup
       const reverseMap: Record<string, string[]> = {};
@@ -28,17 +39,21 @@ export const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }
         reverseMap[server as string].push(local);
       });
       const localIds = reverseMap[messageId] || [];
-      const found = [...genaiChat.interactions].reverse().find((it: any) => 
+      const interactions = getInteractions();
+      const found = [...interactions].reverse().find((it: any) => 
         it.subkind === 'eval.bias' && 
         (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
       );
       if (!found) return null;
       try { return JSON.parse((found as any).content || '{}'); } catch { try { return JSON.parse((found as any).contentSanitized || '{}'); } catch { return null; } }
     } catch { return null; }
-  }, [genaiChat.interactions, (genaiChat as any).persistedByLocalId, messageId]);
+  }, [getInteractions, interactionsLength, persistedByLocalId, messageId]);
   const [open, setOpen] = React.useState(false);
   const [selectedTag, setSelectedTag] = React.useState<string | null>(null);
-  const msg = React.useMemo(() => genaiChat.messages.find((m) => m.id === messageId), [genaiChat.messages, messageId]);
+  const msg = React.useMemo(() => {
+    const messages = getMessages();
+    return messages.find((m) => m.id === messageId);
+  }, [getMessages, messagesLength, messageId]);
   const { theme } = React.useContext(ThemeContext);
   if (!ev) return null;
   const level = Math.max(0, Math.min(1, Number(ev.biasLevel || 0)));

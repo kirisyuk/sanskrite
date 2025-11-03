@@ -17,7 +17,10 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const { i18n } = useTranslation();
   const uiLanguage = useUIStore((s) => s.uiLanguage);
   const setUiLanguage = useUIStore((s) => s.setUiLanguage);
-  const genaiChat = useGenaiChatStore();
+  // PERFORMANCE FIX: Subscribe only to specific values, not entire store
+  const genaiChatProjectId = useGenaiChatStore((s) => s.projectId);
+  const genaiChatInteractionsLength = useGenaiChatStore((s) => s.interactions.length);
+  const genaiChatMessagesLength = useGenaiChatStore((s) => s.messages.length);
   const [shareBusy, setShareBusy] = React.useState(false);
   const [shareOpen, setShareOpen] = React.useState(false);
   const [shareUrl, setShareUrl] = React.useState<string | null>(null);
@@ -59,19 +62,16 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const canShare = React.useMemo(() => {
     try {
       if (!currentUser) return false;
-      const pid = (genaiChat as any)?.projectId;
-      if (!pid || pid === 'local-unfold') return false;
-      const hasInts = Array.isArray((genaiChat as any).interactions) && (genaiChat as any).interactions.length > 0;
-      const hasMsgs = Array.isArray((genaiChat as any).messages) && (genaiChat as any).messages.length > 0;
-      return hasInts || hasMsgs;
+      if (!genaiChatProjectId || genaiChatProjectId === 'local-unfold') return false;
+      return genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0;
     } catch { return false; }
-  }, [currentUser, (genaiChat as any)?.projectId, (genaiChat as any)?.interactions, (genaiChat as any)?.messages]);
+  }, [genaiChatProjectId, genaiChatInteractionsLength, genaiChatMessagesLength, currentUser]);
 
   const createShare = React.useCallback(async () => {
     try {
       if (shareBusy) return;
       setShareBusy(true);
-      const pid = (genaiChat as any)?.projectId as string;
+      const pid = genaiChatProjectId as string;
       if (!pid || pid === 'local-unfold') { setShareBusy(false); return; }
       // default: 7 days from now
       const exp = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -85,7 +85,7 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
     } finally {
       setShareBusy(false);
     }
-  }, [genaiChat, shareBusy]);
+  }, [genaiChatProjectId, shareBusy]);
 
   React.useEffect(() => {
     const onDocClick = (e: MouseEvent) => {

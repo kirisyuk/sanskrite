@@ -157,15 +157,15 @@ var ModelContextWindows = map[string]int{
 	"gpt_quality":  400_000, // gpt-5
 
 	// Grok models
-	"grok_fast":    2_000_000, // grok-4-fast-non-reasoning
+	"grok_fast":     2_000_000, // grok-4-fast-non-reasoning
 	"grok_balanced": 2_000_000, // grok-4-fast-reasoning
-	"grok_quality": 256_000,   // grok-4-0709
+	"grok_quality":  256_000,   // grok-4-0709
 
 	// Claude models
 	"claude_fast":     200_000, // claude-haiku-4-5-20251001
 	"claude_balanced": 200_000, // claude-sonnet-4-5-20250929
 	// claude_quality (Opus) disabled in frontend - too expensive, kept here for backward compatibility only
-	"claude_quality":  200_000, // claude-opus-4-1-20250805 (deprecated)
+	"claude_quality": 200_000, // claude-opus-4-1-20250805 (deprecated)
 
 	// DeepSeek models
 	"deepseek_fast":    128_000, // deepseek-chat
@@ -220,7 +220,7 @@ func (c *Client) normalizeOptionsForClaude(opts Options) cl.Options {
 			"claude_fast":     "claude-haiku-4-5-20251001",
 			"claude_balanced": "claude-sonnet-4-5-20250929",
 			// claude_quality (Opus) disabled in frontend - too expensive, fallback to balanced
-			"claude_quality":  "claude-sonnet-4-5-20250929", // was: claude-opus-4-1-20250805
+			"claude_quality": "claude-sonnet-4-5-20250929", // was: claude-opus-4-1-20250805
 		}[canonicalizeAlias(opts.ModelOverride)],
 		Temperature:       opts.Temperature,
 		MaxOutputTokens:   opts.MaxOutputTokens,

@@ -174,8 +174,8 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
 
   if (!projectId || projectId === 'local-unfold') {
     return (
-      <div className="flex items-center justify-center py-8" style={{ color: 'var(--text-secondary)' }}>
-        <span className="text-xs">This chat has no documents</span>
+      <div className="flex items-center justify-center py-8 text-center" style={{ color: 'var(--text-secondary)' }}>
+        <span className="text-xs">No documents, no sources. Nothing.<br />But you may add or create.</span>
       </div>
     );
   }

@@ -17,12 +17,14 @@ import DiscoveryRequest from '../components/DiscoveryRequest';
 import UnfoldRequest from '../components/UnfoldRequest';
 import ChatMessage from '../components/ChatMessage';
 import PerspectivesPanel from '../components/PerspectivesPanel';
+import PerspectiveAnalysisPanel from '../components/PerspectiveAnalysisPanel';
 import AgentPalette from '../components/AgentPalette';
 import WorkspaceLibrary from '../components/WorkspaceLibrary';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
+import { getAverageTiming } from '../lib/timingCache';
+import { mapAliasToModel } from '../lib/modelMapping';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Legend, Tooltip } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { AGENT_PRESETS } from '../lib/agentPresets';
 import { HATL_ONE_INSTRUCTIONS } from '../lib/hatlInstructions';
@@ -62,6 +64,7 @@ import {
 const DiscoveryPage: React.FC = () => {
   const { t } = useTranslation();
   const { currentUser } = useAuth();
+  const { theme } = React.useContext(ThemeContext);
   const { projects, currentProject, fetchProjects, deleteProject, setCurrentProject } = useProjectsStore();
   const { sources, loading, executeDiscovery, fetchProjectSources, fetchProjectInteractions, clearSources, connectWs, answer, correlationId, interactions, sendChatMessage } = useDiscoveryStore();
   const { viewMode } = useUIStore();
@@ -71,8 +74,11 @@ const DiscoveryPage: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const [genaiThinkingSeconds, setGenaiThinkingSeconds] = useState(0);
+  const [averageTimingSeconds, setAverageTimingSeconds] = useState<number | null>(null);
   const [entitiesAnalyzing, setEntitiesAnalyzing] = useState(false);
   const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives'>('chat');
+  const [currentPerspectivePreset, setCurrentPerspectivePreset] = useState<string>('consulting');
+  const [isAnalysisClosed, setIsAnalysisClosed] = useState(false);
   const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph'>('text');
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
@@ -122,7 +128,13 @@ const DiscoveryPage: React.FC = () => {
   const [tgSubmitting, setTgSubmitting] = useState(false);
   const [tgError, setTgError] = useState<string | null>(null);
   // GenAI chat state (for Unfold view)
+  // PERFORMANCE FIX: Subscribe only to specific values for critical paths, keep genaiChat for compatibility
   const genaiChat = useGenaiChatStore();
+  const genaiChatProjectId = useGenaiChatStore((state) => state.projectId);
+  const genaiChatInteractionsLength = useGenaiChatStore((state) => state.interactions.length);
+  const genaiChatMessagesLength = useGenaiChatStore((state) => state.messages.length);
+  const genaiChatHydrating = useGenaiChatStore((state) => state.hydrating);
+  const genaiChatStreaming = useGenaiChatStore((state) => state.streaming);
   const genaiSettings = useGenAISettings();
   const lastAnalysisStatus = useDiscoveryStore((s: any) => (s as any).lastAnalysisStatus);
   const notifiedAnalysesRef = React.useRef<Set<string>>(new Set());
@@ -132,15 +144,18 @@ const DiscoveryPage: React.FC = () => {
     try {
       setUnfoldSubView('chat');
     } catch {}
-  }, [genaiChat.projectId]);
+  }, [genaiChatProjectId]);
 
   React.useEffect(() => {
-    const ints = Array.isArray(genaiChat.interactions) ? genaiChat.interactions.length : 0;
-    const msgs = Array.isArray(genaiChat.messages) ? genaiChat.messages.length : 0;
-    if (ints === 0 && msgs === 0) {
+    if (genaiChatInteractionsLength === 0 && genaiChatMessagesLength === 0) {
       try { setUnfoldSubView('chat'); } catch {}
     }
-  }, [genaiChat.interactions, genaiChat.messages]);
+  }, [genaiChatInteractionsLength, genaiChatMessagesLength]);
+
+  // Reset analysis closed state when preset changes or switching to perspectives
+  React.useEffect(() => {
+    setIsAnalysisClosed(false);
+  }, [currentPerspectivePreset, unfoldSubView]);
 
   React.useEffect(() => {
     try {
@@ -198,27 +213,64 @@ const DiscoveryPage: React.FC = () => {
   const [activeDoc, setActiveDoc] = useState<null | { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string }>(null);
   const hasPinned = React.useMemo(() => {
     try {
-      return useGenaiChatStore.getState().interactions.some((it: any) => !!it?.metadata?.pinned);
+      return useGenaiChatStore.getState().interactions.some((it: any) => {
+        // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+          return false;
+        }
+        // Exclude perspective analysis interactions
+        if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
+          return false;
+        }
+        return !!it?.metadata?.pinned;
+      });
     } catch { return false; }
-  }, [genaiChat.interactions, rightContextOpen, rightPanelOpen]);
+  }, [genaiChatInteractionsLength, rightContextOpen, rightPanelOpen]);
+  
+  // PERFORMANCE FIX: Use selector to get interactions only when needed, not subscribe to entire array
+  const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
+  
   const sectionStarts = React.useMemo(() => {
-    try { return (genaiChat.interactions || []).filter((it: any) => it?.kind === 'section_start'); } catch { return []; }
-  }, [genaiChat.interactions]);
+    try { 
+      const interactions = getInteractions();
+      return (interactions || []).filter((it: any) => it?.kind === 'section_start'); 
+    } catch { return []; }
+  }, [getInteractions, genaiChatInteractionsLength]);
   const hasSections = sectionStarts.length > 0;
   React.useEffect(() => { if (!hasPinned && !hasSections) setRightContextOpen(false); }, [hasPinned, hasSections]);
   // Ensure interactions are loaded on chat load to detect pinned items
+  // Only hydrate once per projectId, not on every store update
+  const projectId = useGenaiChatStore((s) => s.projectId);
+  const hydrateInteractions = useGenaiChatStore((s) => s.hydrateInteractions);
+  const interactionsLoadedRef = React.useRef<string | null>(null);
+  
   React.useEffect(() => {
     try {
-      if (genaiChat.projectId && genaiChat.projectId !== 'local-unfold') {
-        genaiChat.hydrateInteractions();
+      if (projectId && projectId !== 'local-unfold' && interactionsLoadedRef.current !== projectId) {
+        interactionsLoadedRef.current = projectId;
+        hydrateInteractions();
+      } else if (!projectId || projectId === 'local-unfold') {
+        interactionsLoadedRef.current = null;
       }
     } catch {}
-  }, [genaiChat.projectId]);
+  }, [projectId, hydrateInteractions]);
+
   const pinnedInteractions = React.useMemo(() => {
     try {
-      return (genaiChat.interactions || []).filter((it: any) => !!it?.metadata?.pinned);
+      const interactions = getInteractions();
+      return (interactions || []).filter((it: any) => {
+        // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+          return false;
+        }
+        // Exclude perspective analysis interactions
+        if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
+          return false;
+        }
+        return !!it?.metadata?.pinned;
+      });
     } catch { return []; }
-  }, [genaiChat.interactions]);
+  }, [getInteractions, genaiChatInteractionsLength]);
   const truncateCenterWords = (s: string, headWords: number = 12, tailWords: number = 12) => {
     try {
       const t = (s || '').toString().replace(/\s+/g, ' ').trim();
@@ -252,29 +304,38 @@ const DiscoveryPage: React.FC = () => {
   const [riskBanner, setRiskBanner] = useState<null | { visible: boolean; level: 'High'|'Medium'|'Low'; rationale: string }>(null);
   const [isHighRisk, setIsHighRisk] = useState(false);
   const hasAssistant = React.useMemo(
-    () => useGenaiChatStore.getState().interactions.some((it) => it.kind === 'assistant' && (it.contentSanitized || it.content)),
-    [genaiChat.interactions.length]
+    () => {
+      const interactions = getInteractions();
+      return interactions.some((it) => it.kind === 'assistant' && (it.contentSanitized || it.content));
+    },
+    [getInteractions, genaiChatInteractionsLength]
   );
 
   // Detect server-provided user stance (eval.stance linked to a user message)
   const stanceFromInteractionsTop = React.useMemo(() => {
     try {
-      const ints = [...genaiChat.interactions].reverse();
+      const interactions = getInteractions();
+      const ints = [...interactions].reverse();
       const userIds = new Set(ints.filter((it) => it.kind === 'user').map((it) => it.id));
       return ints.find((it) => it.subkind === 'eval.stance' && it.replyTo && userIds.has(it.replyTo));
     } catch { return null as any; }
-  }, [genaiChat.interactions]);
+  }, [getInteractions, genaiChatInteractionsLength]);
 
   // If server already sent stance, make the User button available
   React.useEffect(() => {
     setAvailUserAnalysis(!!stanceFromInteractionsTop);
   }, [stanceFromInteractionsTop]);
 
-  // Derive Discussion Flow availability from message count (2+ turns)
+  // Discussion Flow is always available now (no need to check message count)
   React.useEffect(() => {
-    const hasFlow = genaiChat.messages.length >= 2;
-    setAvailDiscussionFlow(hasFlow);
-  }, [genaiChat.messages.length]);
+    setAvailDiscussionFlow(true);
+  }, []);
+
+  // Callback for DiscussionFlow onFirstResult - must be defined unconditionally (Rules of Hooks)
+  const onFirstResultDiscussionFlow = React.useCallback(() => {
+    setBadgeFlow(true);
+    setAvailDiscussionFlow(true);
+  }, []);
 
   // Floating selection button state (position in viewport)
   const selectionBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -438,11 +499,11 @@ const DiscoveryPage: React.FC = () => {
     if (messagesRef.current) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }
-  }, [interactions.length, running, genaiChat.messages]);
+  }, [interactions.length, running, genaiChatMessagesLength]);
 
   // Auto-scroll to bottom after hydration completes
   useEffect(() => {
-    if (!genaiChat.hydrating && genaiChat.interactions.length > 0 && messagesRef.current) {
+    if (!genaiChatHydrating && genaiChatInteractionsLength > 0 && messagesRef.current) {
       // Small delay to ensure DOM has updated
       const timeoutId = setTimeout(() => {
         if (messagesRef.current) {
@@ -451,7 +512,7 @@ const DiscoveryPage: React.FC = () => {
       }, 100);
       return () => clearTimeout(timeoutId);
     }
-  }, [genaiChat.hydrating, genaiChat.interactions.length]);
+  }, [genaiChatHydrating, genaiChatInteractionsLength]);
   // Track text selection within assistant markdown and position a floating action button
   useEffect(() => {
     const container = messagesRef.current;
@@ -1039,21 +1100,39 @@ const DiscoveryPage: React.FC = () => {
 
   // GenAI thinking seconds timer: runs until first chunk arrives
   useEffect(() => {
-    const msgs = genaiChat.messages;
+    const msgs = useGenaiChatStore.getState().messages;
     const last = msgs[msgs.length - 1];
-    const awaitingFirstChunk = !!(genaiChat.streaming && last && last.role === 'assistant' && !last.content);
+    const awaitingFirstChunk = !!(genaiChatStreaming && last && last.role === 'assistant' && !last.content);
     if (awaitingFirstChunk) {
       if (!genaiThinkingIntervalRef.current) {
         setGenaiThinkingSeconds(0);
         genaiThinkingIntervalRef.current = window.setInterval(() => {
           setGenaiThinkingSeconds((s) => s + 1);
         }, 1000) as unknown as number;
+        
+        // Fetch average timing estimate
+        const modelMapping = mapAliasToModel(genaiSettings.model);
+        if (modelMapping) {
+          // Estimate output tokens based on maxOutputTokens setting
+          const estimatedTokens = genaiSettings.maxOutputTokens || 8192;
+          getAverageTiming(modelMapping.provider, modelMapping.model, estimatedTokens)
+            .then((timing) => {
+              setAverageTimingSeconds(timing);
+            })
+            .catch((err) => {
+              console.error('[DiscoveryPage] Failed to get average timing:', err);
+              setAverageTimingSeconds(null);
+            });
+        } else {
+          setAverageTimingSeconds(null);
+        }
       }
     } else if (genaiThinkingIntervalRef.current) {
       window.clearInterval(genaiThinkingIntervalRef.current);
       genaiThinkingIntervalRef.current = null;
+      setAverageTimingSeconds(null);
     }
-  }, [genaiChat.streaming, genaiChat.messages.length]);
+  }, [genaiChat.streaming, genaiChat.messages.length, genaiSettings.model, genaiSettings.maxOutputTokens]);
 
   // Cleanup genai thinking timer on unmount
   useEffect(() => {
@@ -1655,24 +1734,24 @@ const DiscoveryPage: React.FC = () => {
             </button>
           )}
 
-          {/* Discussion Flow button (visible only when discussion flow is available) */}
-          {availDiscussionFlow && (
-            <button
-              onClick={() => { setLeftPanel((p) => (p === 'flow' ? null : 'flow')); }}
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
-              style={{ backgroundColor: leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)', color: leftPanel === 'flow' ? 'white' : 'var(--text-heading)', marginTop: '8px' }}
-              aria-label={t('unfold.sections.discussionFlow')}
-              title={t('unfold.sections.discussionFlow')}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg-hover)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)'; }}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path d="M5 5h6v6H5z" strokeWidth={2} />
-                <path d="M13 7h6" strokeWidth={2} strokeLinecap="round" />
-                <path d="M13 17h6" strokeWidth={2} strokeLinecap="round" />
-                <path d="M8 11v2c0 2.209 1.791 4 4 4h1" strokeWidth={2} strokeLinecap="round" />
-              </svg>
-            </button>
+          {/* Discussion Flow button (only visible if chat is not empty) */}
+          {!(genaiChatInteractionsLength === 0 && genaiChatMessagesLength === 0) && (
+          <button
+            onClick={() => { setLeftPanel((p) => (p === 'flow' ? null : 'flow')); }}
+            className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
+            style={{ backgroundColor: leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)', color: leftPanel === 'flow' ? 'white' : 'var(--text-heading)', marginTop: '8px' }}
+            aria-label={t('unfold.sections.discussionFlow')}
+            title={t('unfold.sections.discussionFlow')}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg-hover)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)'; }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M5 5h6v6H5z" strokeWidth={2} />
+              <path d="M13 7h6" strokeWidth={2} strokeLinecap="round" />
+              <path d="M13 17h6" strokeWidth={2} strokeLinecap="round" />
+              <path d="M8 11v2c0 2.209 1.791 4 4 4h1" strokeWidth={2} strokeLinecap="round" />
+            </svg>
+          </button>
           )}
 
         </div>
@@ -1836,8 +1915,8 @@ const DiscoveryPage: React.FC = () => {
           gap: '16px',
         }}
       >
-        {/* Sources column (scrollable) */}
-        <div className="min-h-0 h-full" style={{ background: 'transparent', display: 'flex', flexDirection: 'column' }}>
+        {/* Sources column (scrollable) - hidden when Account or Settings are shown */}
+        <div className="min-h-0 h-full" style={{ background: 'transparent', display: (showAccount || showSettings) ? 'none' : 'flex', flexDirection: 'column' }}>
           {sources.length > 0 && (
             <div className="space-y-2">
               {sources.map((source) => renderSourceCard(source))}
@@ -1868,20 +1947,64 @@ const DiscoveryPage: React.FC = () => {
           </div>
 
           {/* Left panel holder: matches sidebar style, single active section */}
+          {/* Show perspective analysis when in perspectives view, otherwise show user/flow panels */}
+          {unfoldSubView === 'perspectives' && !isAnalysisClosed && (() => {
+            const projectId = genaiChat.projectId;
+            if (!projectId || projectId === 'local-unfold') return null;
+            
+            // Get perspective from cache (O(1) lookup)
+            const perspective = genaiChat.perspectives[currentPerspectivePreset];
+            
+            if (!perspective) return null;
+            
+            return (
+              <>
+                {/* Spacer to align with separator line in center column */}
+                <div style={{ height: '44px' }} />
+                <div
+                  className="mt-3 rounded-xl sidebar-panel"
+                  style={{
+                    backgroundColor: 'var(--bg-sidebar)',
+                    border: '1px solid var(--overlay-line-90)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    flex: 1,
+                    minHeight: 0,
+                    overflowY: 'auto',
+                  }}
+                >
+                  <PerspectiveAnalysisPanel 
+                    preset={currentPerspectivePreset}
+                    perspectiveId={perspective.id}
+                    perspectiveContent={perspective.content || null}
+                    onClose={() => setIsAnalysisClosed(true)}
+                  />
+                </div>
+              </>
+            );
+          })()}
           {leftPanel && (
-            <div
-              className="mt-3 p-3 rounded-xl sidebar-panel"
-              style={{
-                backgroundColor: 'var(--bg-sidebar)',
-                border: '1px solid var(--overlay-line-90)',
-                display: 'flex',
-                flexDirection: 'column',
-                flex: 1,
-                minHeight: 0,
-                overflowY: 'auto',
-              }}
-            >
-              {/* Header: chosen section title + close */}
+            <>
+              {/* Empty spacer matching Chat | Perspectives toggle height (only for flow panel) - placed before entire panel to shift it down */}
+              {leftPanel === 'flow' && (
+                <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label="Spacer" style={{ visibility: 'hidden', pointerEvents: 'none', height: '28px' }}>
+                  <div className="px-2 py-1 text-12 rounded" />
+                  <div className="px-2 py-1 text-12 rounded" />
+                </div>
+              )}
+              <div
+                className="mt-3 p-3 rounded-xl sidebar-panel"
+                style={{
+                  backgroundColor: 'var(--bg-sidebar)',
+                  border: '1px solid var(--overlay-line-90)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: 'auto',
+                }}
+              >
+                {/* Header: chosen section title + close */}
               {leftPanel && (
                 <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
                   <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? 'How you engage' : 'Discussion flow'}</h3>
@@ -1907,13 +2030,14 @@ const DiscoveryPage: React.FC = () => {
                       }} />
                     )}
                     {leftPanel === 'flow' && (
-                      <DiscussionFlow onFirstResult={() => { setBadgeFlow(true); setAvailDiscussionFlow(true); }} />
+                      <DiscussionFlow onFirstResult={onFirstResultDiscussionFlow} />
                     )}
                   </div>
                 </div>
               )}
               {/* Duplicate old header/content removed to avoid double rendering */}
             </div>
+            </>
           )}
 
             {/* Bottom slot: topic title suggestions now run headless (no UI) */}
@@ -2049,13 +2173,16 @@ const DiscoveryPage: React.FC = () => {
           )}
         </div>
 
-        {/* Main center column: renders discussion or graph placeholder (spans center+right when graph) */}
+        {/* Main center column: renders discussion or graph placeholder (spans center+right when graph, or all columns when Account/Settings) */}
         <div
           className="min-h-0 flex flex-col"
-          style={{ position: 'relative', gridColumn: viewMode === 'graph' ? '2 / 4' : '2 / 3' }}
+          style={{ 
+            position: 'relative', 
+            gridColumn: (showAccount || showSettings) ? '1 / 4' : (viewMode === 'graph' ? '2 / 4' : '2 / 3')
+          }}
         >
         {showAccount ? (
-          <div className="w-full px-4 mt-2 mb-2">
+          <div className="w-full px-6 mt-2 mb-2" style={{ maxWidth: '100%' }}>
             <div className="mb-2 flex items-center">
               <button
                 onClick={() => setShowAccount(false)}
@@ -2074,7 +2201,7 @@ const DiscoveryPage: React.FC = () => {
             <Account />
           </div>
         ) : showSettings ? (
-          <div className="w-full px-4 mt-2 mb-2">
+          <div className="w-full px-6 mt-2 mb-2" style={{ maxWidth: '100%' }}>
             <div className="mb-2 flex items-center">
               <button
                 onClick={() => setShowSettings(false)}
@@ -2228,39 +2355,76 @@ const DiscoveryPage: React.FC = () => {
                 {t('unfold.sections.perspectives')}
               </button>
             </div>
+            {/* Subtle separator line */}
+            <div 
+              className="mb-4 w-full" 
+              style={{ 
+                height: '1px', 
+                backgroundColor: 'var(--overlay-line-90)',
+                opacity: theme === 'light' ? 0.3 : 0.7
+              }} 
+            />
             {/* Perspectives content (full column) */}
             {unfoldSubView === 'perspectives' && (
-              <PerspectivesPanel />
+              <PerspectivesPanel onPresetChange={setCurrentPerspectivePreset} />
             )}
             {/* GenAI chat history */}
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px', display: unfoldSubView === 'perspectives' ? 'none' : undefined }}>
-              <div className="space-y-2">
-                {/* Skeleton loading during hydration */}
-                {genaiChat.hydrating && genaiChat.interactions.length === 0 && (
-                  <div className="space-y-2 py-2">
-                    <div style={{ height: 14, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              {(() => {
+                // Check if chat is empty (not hydrating and no messages/interactions)
+                const isEmpty = !genaiChat.hydrating && genaiChat.interactions.length === 0 && genaiChat.messages.length === 0;
+                
+                if (isEmpty) {
+                  return (
+                    <div className="flex items-center justify-center" style={{ height: '100%', minHeight: 'calc(100vh - 300px)', padding: '48px 24px' }}>
+                      <div className="max-w-md text-center">
+                        <div className="text-16" style={{ color: 'var(--text-heading)', lineHeight: '1.6', fontSize: 'clamp(18px, 2vw, 24px)', fontWeight: 500 }}>
+                          {t('unfold.perspectives.chatEmptyState.description')}
+                        </div>
+                      </div>
                     </div>
-                    <div style={{ height: 10, width: '90%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
-                    </div>
-                    <div style={{ height: 10, width: '80%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
-                    </div>
-                    <div style={{ height: 10, width: '70%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
-                    </div>
-                  </div>
-                )}
-                {(() => {
+                  );
+                }
+                
+                return (
+                  <div className="space-y-2">
+                    {/* Skeleton loading during hydration */}
+                    {genaiChat.hydrating && genaiChat.interactions.length === 0 && (
+                      <div className="space-y-2 py-2">
+                        <div style={{ height: 14, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                        </div>
+                        <div style={{ height: 10, width: '90%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                        </div>
+                        <div style={{ height: 10, width: '80%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                        </div>
+                        <div style={{ height: 10, width: '70%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                        </div>
+                      </div>
+                    )}
+                    {(() => {
                   // Merge messages and interactions, sort by timestamp to ensure correct order
                   type MergedItem = { type: 'message' | 'interaction'; data: any; timestamp: number; };
                   const merged: MergedItem[] = [];
 
                   // Add interactions first (user, assistant, and section markers)
                   // This ensures interactions are processed before messages during streaming
+                  // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
                   genaiChat.interactions
-                    .filter((it) => it.kind === 'user' || it.kind === 'assistant' || it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end')
+                    .filter((it) => {
+                      // Exclude perspective interactions
+                      if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+                        return false;
+                      }
+                      // Exclude perspective analysis interactions
+                      if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
+                        return false;
+                      }
+                      return it.kind === 'user' || it.kind === 'assistant' || it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end';
+                    })
                     .forEach((it) => {
                       let ts = 0;
                       // First, try to get timestamp from originalMessageId (for messages created during streaming)
@@ -2973,6 +3137,7 @@ const DiscoveryPage: React.FC = () => {
                         headerText={header}
                         leftAccent={leftAccent}
                         footer={undefined}
+                        averageTimingSeconds={averageTimingSeconds}
                       >
                         <div className="space-y-1">
                           <div style={{ width: 160, height: 10, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
@@ -2991,7 +3156,9 @@ const DiscoveryPage: React.FC = () => {
                     );
                   } catch { return null; }
                 })()}
-              </div>
+                  </div>
+                );
+              })()}
             </div>
             {/* Edit status indicator */}
             {Object.values(frozenEdits).some(Boolean) && (
@@ -3492,8 +3659,8 @@ const DiscoveryPage: React.FC = () => {
         </>
         )}
         </div>
-        {/* Right column: container for contextual panels (transparent, no border) */}
-        {viewMode !== 'graph' && (
+        {/* Right column: container for contextual panels (transparent, no border) - hidden when Account or Settings are shown */}
+        {viewMode !== 'graph' && !showAccount && !showSettings && (
           <div className="min-h-0 h-full" style={{ background: 'transparent', display: 'flex', flexDirection: 'column', marginRight: 48 }}>
             {(rightPanelOpen || rightContextOpen || rightArtifactsOpen) && (
               <div

@@ -677,6 +677,23 @@ class ApiClient {
     return res.data;
   }
 
+  // Get average timing estimate for a model and token count
+  async getAverageTiming(params: { provider: string; model: string; estimatedOutputTokens: number }): Promise<{
+    estimatedSeconds: number | null;
+    provider: string;
+    model: string;
+    estimatedTokens: number;
+  }> {
+    const res = await this.client.get(`/api/v1/usage/avg-timing`, {
+      params: {
+        provider: params.provider,
+        model: params.model,
+        estimatedOutputTokens: params.estimatedOutputTokens.toString(),
+      },
+    });
+    return res.data;
+  }
+
   // Vouchers (admin only)
   async listVouchers(params?: { tier?: 'pro' | 'max'; isActive?: boolean }): Promise<Array<{
     id: string;

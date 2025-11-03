@@ -19,7 +19,7 @@ import (
 // PayPalHandler handles PayPal-related HTTP requests
 type PayPalHandler struct {
 	paypalClient        *paypal.Client
-	subscriptionService  *services.SubscriptionService
+	subscriptionService *services.SubscriptionService
 	subsRepo            *repo.SubscriptionsRepository
 	logger              *log.Logger
 }
@@ -75,7 +75,7 @@ func (h *PayPalHandler) CreateSubscription(w http.ResponseWriter, r *http.Reques
 	if currency == "" {
 		currency = "USD" // Default
 	}
-	
+
 	var price string
 	switch tier {
 	case models.SubscriptionTierPro:
@@ -133,9 +133,9 @@ func (h *PayPalHandler) CreateSubscription(w http.ResponseWriter, r *http.Reques
 
 	// Return approval URL to frontend
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"approvalUrl":     approvalURL,
-		"subscriptionId":  subscription.ID,
-		"planId":          plan.ID,
+		"approvalUrl":    approvalURL,
+		"subscriptionId": subscription.ID,
+		"planId":         plan.ID,
 	})
 }
 

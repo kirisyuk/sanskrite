@@ -761,19 +761,16 @@ Constraints:
           {!loading && !mdText && (
             <div className="flex items-center justify-center" style={{ flex: 1, minHeight: '100%' }}>
               <div 
-                className="max-w-md text-center px-6 py-8 rounded-xl"
-                style={{
-                  backgroundColor: 'var(--bg-elevated)',
-                  border: '1px solid var(--overlay-line-90)',
-                  boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
-                }}
+                className="max-w-md text-center px-6 py-8"
               >
-                <div className="text-13 mb-3" style={{ color: 'var(--text-heading)', lineHeight: '1.6' }}>
+                <div className="text-16" style={{ color: 'var(--text-heading)', lineHeight: '1.6', fontSize: 'clamp(18px, 2vw, 24px)', fontWeight: 500 }}>
                   {t('unfold.perspectives.emptyState.description')}
                 </div>
-                <div className="text-12" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5' }}>
-                  {t('unfold.perspectives.emptyState.note')}
-                </div>
+                {t('unfold.perspectives.emptyState.note') && (
+                  <div className="text-12" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5', marginTop: '12px' }}>
+                    {t('unfold.perspectives.emptyState.note')}
+                  </div>
+                )}
               </div>
             </div>
           )}
