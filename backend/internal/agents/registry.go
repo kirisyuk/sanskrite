@@ -29,23 +29,23 @@ func NewRegistry(executor *ai.AITaskExecutor, genaiClient *gen_combined.Client, 
 		publisher:   publisher,
 		logger:      logger,
 	}
-	
+
 	// Регистрируем внутренние агенты (usage metrics будут добавлены позже через WithUsageMetrics)
 	r.Register(NewEntitiesAgent(genaiClient, logger))
 	r.Register(NewDataAgent(genaiClient, logger))
-	
+
 	return r
 }
 
 // WithUsageMetrics sets usage metrics repository and model manager for all registered agents
 func (r *Registry) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 }, modelMgr interface {
 	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
 }) *Registry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	// Update all registered agents with usage metrics
 	for id, agent := range r.agents {
 		if entitiesAgent, ok := agent.(*EntitiesAgent); ok {
@@ -55,7 +55,7 @@ func (r *Registry) WithUsageMetrics(repo interface {
 		}
 		_ = id // avoid unused variable
 	}
-	
+
 	return r
 }
 
@@ -78,7 +78,7 @@ func (r *Registry) Get(id string) (Agent, bool) {
 func (r *Registry) List() []AgentInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	var list []AgentInfo
 	for _, agent := range r.agents {
 		list = append(list, AgentInfo{
@@ -107,7 +107,7 @@ func (r *Registry) ExecuteAgentWithStream(
 	if !ok {
 		return nil, ErrAgentNotFound
 	}
-	
+
 	// Callback для отправки обновлений через WebSocket
 	onUpdate := func(update Update) {
 		if r.publisher != nil {
@@ -134,7 +134,7 @@ func (r *Registry) ExecuteAgentWithStream(
 			r.logger.Printf("[Registry] Publisher is nil, cannot send agent update (taskId=%s)", update.TaskID)
 		}
 	}
-	
+
 	// Выполняем агента со стримингом
 	return agent.ExecuteWithStream(ctx, taskJSON, onUpdate)
 }
@@ -151,4 +151,3 @@ type AgentError struct {
 func (e *AgentError) Error() string {
 	return e.Message
 }
-

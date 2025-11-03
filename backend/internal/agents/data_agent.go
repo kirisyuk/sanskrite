@@ -20,7 +20,7 @@ type DataAgent struct {
 	genaiClient      *gen_combined.Client
 	logger           *log.Logger
 	usageMetricsRepo interface {
-		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 	}
 	modelManager interface {
 		CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
@@ -41,7 +41,7 @@ func NewDataAgent(genaiClient *gen_combined.Client, logger *log.Logger) *DataAge
 
 // WithUsageMetrics sets the usage metrics repository and model manager
 func (a *DataAgent) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 }, modelMgr interface {
 	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
 }) *DataAgent {
@@ -483,13 +483,15 @@ Return JSON in the following format:
 		return nil, fmt.Errorf("genAI call failed: %w", err)
 	}
 
+	duration := time.Since(startTime)
 	if a.logger != nil {
 		a.logger.Printf("[DataAgent] Step 1 genAI call completed: tokens=%d/%d (total=%d), model=%s, duration=%v",
-			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, time.Since(startTime))
+			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, duration)
 	}
 
 	// Save usage metrics
-	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "data.step1")
+	durationMs := int(duration.Milliseconds())
+	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "data.step1", &durationMs)
 
 	// Парсим JSON ответ
 	var step1Result Step1Result
@@ -635,13 +637,15 @@ Return JSON:
 		return nil, fmt.Errorf("genAI call failed: %w", err)
 	}
 
+	duration := time.Since(startTime)
 	if a.logger != nil {
 		a.logger.Printf("[DataAgent] Step 2 genAI call completed: tokens=%d/%d (total=%d), model=%s, duration=%v",
-			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, time.Since(startTime))
+			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, duration)
 	}
 
 	// Save usage metrics
-	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "data.step2")
+	durationMs := int(duration.Milliseconds())
+	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "data.step2", &durationMs)
 
 	var step2Result Step2Result
 	if err := json.Unmarshal([]byte(resp.Content), &step2Result); err != nil {
@@ -873,13 +877,15 @@ Return JSON in final result format:
 		return nil, fmt.Errorf("genAI call failed: %w", err)
 	}
 
+	duration := time.Since(startTime)
 	if a.logger != nil {
 		a.logger.Printf("[DataAgent] Step 3 genAI call completed: tokens=%d/%d (total=%d), model=%s, duration=%v",
-			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, time.Since(startTime))
+			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, duration)
 	}
 
 	// Save usage metrics
-	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "data.step3")
+	durationMs := int(duration.Milliseconds())
+	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "data.step3", &durationMs)
 
 	var finalResult FinalResult
 	if err := json.Unmarshal([]byte(resp.Content), &finalResult); err != nil {
@@ -909,7 +915,7 @@ Return JSON in final result format:
 // extractJSON теперь в agent.go (общая функция для всех агентов)
 
 // saveUsageMetric saves usage metrics if repository is available
-func (a *DataAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, modelName string, inputTokens, outputTokens int, taskType string) {
+func (a *DataAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, modelName string, inputTokens, outputTokens int, taskType string, durationMs *int) {
 	if a.usageMetricsRepo == nil || a.modelManager == nil {
 		return
 	}
@@ -943,7 +949,7 @@ func (a *DataAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, m
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := a.usageMetricsRepo.CreateMetric(metricCtx, agentCtx.TenantID, agentCtx.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr)
+		_, err := a.usageMetricsRepo.CreateMetric(metricCtx, agentCtx.TenantID, agentCtx.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
 		if err != nil && a.logger != nil {
 			a.logger.Printf("[DataAgent] Failed to save usage metric: %v", err)
 		}

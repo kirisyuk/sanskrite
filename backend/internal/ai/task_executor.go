@@ -19,7 +19,7 @@ type AITaskExecutor struct {
 	aiServices       map[AIProvider]AIService
 	modelManager     *AIModelManager
 	usageMetricsRepo interface {
-		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 	} // Wrapper to avoid circular import
 }
 
@@ -48,7 +48,7 @@ func NewAITaskExecutor(aiServices []AIService, modelManager *AIModelManager) *AI
 // WithUsageMetrics sets the usage metrics repository for tracking AI usage
 // repo should be *repo.UsageMetricsRepository but we use interface to avoid circular import
 func (e *AITaskExecutor) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 }) *AITaskExecutor {
 	e.usageMetricsRepo = repo
 	return e
@@ -107,7 +107,8 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 		result.ProcessingTime = time.Since(startedAt)
 
 		// Save usage metrics if repository is available
-		e.saveUsageMetric(ctx, task, currentModel, result.InputTokens, result.OutputTokens, cost)
+		durationMs := int(result.ProcessingTime.Milliseconds())
+		e.saveUsageMetric(ctx, task, currentModel, result.InputTokens, result.OutputTokens, cost, &durationMs)
 
 		return result, nil
 	}
@@ -197,7 +198,8 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 			inputToks := inputChars / 4
 			outputToks := len(result.Content) / 4
 			cost, _ := e.modelManager.CalculateProcessingCost(currentModel, inputToks, outputToks)
-			e.saveUsageMetric(ctx, task, currentModel, inputToks, outputToks, cost)
+			durationMs := int(time.Since(startedAt).Milliseconds())
+			e.saveUsageMetric(ctx, task, currentModel, inputToks, outputToks, cost, &durationMs)
 		}
 
 		_ = startedAt // для телеметрии
@@ -595,7 +597,7 @@ func (e *AITaskExecutor) tryFixJSON(jsonStr string) string {
 
 // saveUsageMetric saves usage metrics if repository is available and task has required metadata
 // Note: We use interface{} to avoid circular import with repo package
-func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelName string, inputTokens, outputTokens int, cost float64) {
+func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelName string, inputTokens, outputTokens int, cost float64, durationMs *int) {
 	if e.usageMetricsRepo == nil {
 		return
 	}
@@ -639,7 +641,7 @@ func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelN
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := e.usageMetricsRepo.CreateMetric(metricCtx, task.TenantID, task.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr)
+		_, err := e.usageMetricsRepo.CreateMetric(metricCtx, task.TenantID, task.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
 		if err != nil {
 			log.Printf("[AITaskExecutor] Failed to save usage metric: %v", err)
 		}

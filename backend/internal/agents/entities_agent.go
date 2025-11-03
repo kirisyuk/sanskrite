@@ -20,7 +20,7 @@ type EntitiesAgent struct {
 	genaiClient      *gen_combined.Client
 	logger           *log.Logger
 	usageMetricsRepo interface {
-		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 	}
 	modelManager interface {
 		CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
@@ -41,7 +41,7 @@ func NewEntitiesAgent(genaiClient *gen_combined.Client, logger *log.Logger) *Ent
 
 // WithUsageMetrics sets the usage metrics repository and model manager
 func (a *EntitiesAgent) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 }, modelMgr interface {
 	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
 }) *EntitiesAgent {
@@ -490,13 +490,15 @@ Return JSON in the following format:
 		return nil, fmt.Errorf("genAI call failed: %w", err)
 	}
 
+	duration := time.Since(startTime)
 	if a.logger != nil {
 		a.logger.Printf("[EntitiesAgent] Step 1 genAI call completed: tokens=%d/%d (total=%d), model=%s, duration=%v",
-			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, time.Since(startTime))
+			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, duration)
 	}
 
 	// Save usage metrics
-	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "entities.step1")
+	durationMs := int(duration.Milliseconds())
+	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "entities.step1", &durationMs)
 
 	var step1Result EntityStep1Result
 	if err := json.Unmarshal([]byte(resp.Content), &step1Result); err != nil {
@@ -622,13 +624,15 @@ Return JSON:
 		return nil, fmt.Errorf("genAI call failed: %w", err)
 	}
 
+	duration := time.Since(startTime)
 	if a.logger != nil {
 		a.logger.Printf("[EntitiesAgent] Step 2 genAI call completed: tokens=%d/%d (total=%d), model=%s, duration=%v",
-			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, time.Since(startTime))
+			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, duration)
 	}
 
 	// Save usage metrics
-	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "entities.step2")
+	durationMs := int(duration.Milliseconds())
+	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "entities.step2", &durationMs)
 
 	var step2Result EntityStep2Result
 	if err := json.Unmarshal([]byte(resp.Content), &step2Result); err != nil {
@@ -826,13 +830,15 @@ Return JSON in final result format:
 		return nil, fmt.Errorf("genAI call failed: %w", err)
 	}
 
+	duration := time.Since(startTime)
 	if a.logger != nil {
 		a.logger.Printf("[EntitiesAgent] Step 3 genAI call completed: tokens=%d/%d (total=%d), model=%s, duration=%v",
-			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, time.Since(startTime))
+			resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, resp.Model, duration)
 	}
 
 	// Save usage metrics
-	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "entities.step3")
+	durationMs := int(duration.Milliseconds())
+	a.saveUsageMetric(ctx, &task.Context, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "entities.step3", &durationMs)
 
 	var finalResult EntityFinalResult
 	if err := json.Unmarshal([]byte(resp.Content), &finalResult); err != nil {
@@ -877,7 +883,7 @@ func formatEntitiesList(entities []EntityInput) string {
 }
 
 // saveUsageMetric saves usage metrics if repository is available
-func (a *EntitiesAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, modelName string, inputTokens, outputTokens int, taskType string) {
+func (a *EntitiesAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, modelName string, inputTokens, outputTokens int, taskType string, durationMs *int) {
 	if a.usageMetricsRepo == nil || a.modelManager == nil {
 		return
 	}
@@ -911,7 +917,7 @@ func (a *EntitiesAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContex
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := a.usageMetricsRepo.CreateMetric(metricCtx, agentCtx.TenantID, agentCtx.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr)
+		_, err := a.usageMetricsRepo.CreateMetric(metricCtx, agentCtx.TenantID, agentCtx.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
 		if err != nil && a.logger != nil {
 			a.logger.Printf("[EntitiesAgent] Failed to save usage metric: %v", err)
 		}

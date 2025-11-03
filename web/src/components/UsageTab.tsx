@@ -496,11 +496,13 @@ export const UsageTab: React.FC = () => {
                   dataKey="date"
                   tickFormatter={formatDate}
                   stroke="var(--text-tertiary-weak)"
+                  tick={{ fill: 'var(--text-tertiary-weak)' }}
                   style={{ fontSize: '11px' }}
                 />
                 <YAxis
                   tickFormatter={formatTokens}
                   stroke="var(--text-tertiary-weak)"
+                  tick={{ fill: 'var(--text-tertiary-weak)' }}
                   style={{ fontSize: '11px' }}
                 />
                 <Tooltip
@@ -508,11 +510,22 @@ export const UsageTab: React.FC = () => {
                     backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
                     border: '1px solid var(--overlay-line-90)',
                     borderRadius: '6px',
+                    color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                  }}
+                  itemStyle={{
+                    color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                  }}
+                  labelStyle={{
+                    color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                   }}
                   labelFormatter={(label) => formatDate(label)}
                   formatter={(value: any) => formatTokens(value)}
                 />
-                <Legend />
+                <Legend 
+                  wrapperStyle={{
+                    color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                  }}
+                />
                 <Line
                   type="monotone"
                   dataKey="tokens"
@@ -535,11 +548,13 @@ export const UsageTab: React.FC = () => {
                   dataKey="date"
                   tickFormatter={formatDate}
                   stroke="var(--text-tertiary-weak)"
+                  tick={{ fill: 'var(--text-tertiary-weak)' }}
                   style={{ fontSize: '11px' }}
                 />
                 <YAxis
                   tickFormatter={(value) => formatCost(value)}
                   stroke="var(--text-tertiary-weak)"
+                  tick={{ fill: 'var(--text-tertiary-weak)' }}
                   style={{ fontSize: '11px' }}
                 />
                 <Tooltip
@@ -547,6 +562,13 @@ export const UsageTab: React.FC = () => {
                     backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
                     border: '1px solid var(--overlay-line-90)',
                     borderRadius: '6px',
+                    color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                  }}
+                  itemStyle={{
+                    color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                  }}
+                  labelStyle={{
+                    color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                   }}
                   labelFormatter={(label) => formatDate(label)}
                   formatter={(value: any, name: string) => {
@@ -557,7 +579,11 @@ export const UsageTab: React.FC = () => {
                     return value;
                   }}
                 />
-                <Legend />
+                <Legend 
+                  wrapperStyle={{
+                    color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                  }}
+                />
                 <Bar dataKey="cost" fill="#10A37F" name="Cost (USD)" />
               </BarChart>
             </ResponsiveContainer>
@@ -575,6 +601,7 @@ export const UsageTab: React.FC = () => {
               <XAxis 
                 type="number" 
                 stroke="var(--text-tertiary-weak)" 
+                tick={{ fill: 'var(--text-tertiary-weak)' }}
                 style={{ fontSize: '11px' }}
                 tickFormatter={(value) => formatCost(value)}
                 domain={[0, 'dataMax']}
@@ -584,6 +611,7 @@ export const UsageTab: React.FC = () => {
                 dataKey="model"
                 width={150}
                 stroke="var(--text-tertiary-weak)"
+                tick={{ fill: 'var(--text-tertiary-weak)' }}
                 style={{ fontSize: '11px' }}
                 interval={0}
                 domain={modelData.map((item) => item.model)}
@@ -594,6 +622,13 @@ export const UsageTab: React.FC = () => {
                   backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
                   border: '1px solid var(--overlay-line-90)',
                   borderRadius: '6px',
+                  color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                }}
+                itemStyle={{
+                  color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                }}
+                labelStyle={{
+                  color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                 }}
                 formatter={(value: any, name: string) => {
                   // Recharts may pass value as array for some chart types
@@ -613,7 +648,11 @@ export const UsageTab: React.FC = () => {
                   return actualValue;
                 }}
               />
-              <Legend />
+              <Legend 
+                wrapperStyle={{
+                  color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
+                }}
+              />
               <Bar dataKey="costUSD" name="Cost (USD)" radius={[0, 4, 4, 0]}>
                 {modelData.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={getProviderColor(entry.provider)} />

@@ -24,10 +24,10 @@ import (
 )
 
 type GenAIHandler struct {
-	client          *gen_combined.Client
-	publisher       Publisher
+	client           *gen_combined.Client
+	publisher        Publisher
 	usageMetricsRepo *repo.UsageMetricsRepository
-	modelManager    *ai.AIModelManager
+	modelManager     *ai.AIModelManager
 }
 
 // Publisher is a small interface for realtime publisher used here
@@ -84,7 +84,7 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		_ = WriteBadRequest(w, "INVALID_PARAMS", "model and prompt are required")
 		return
 	}
-    ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
 	defer cancel()
 	started := time.Now()
 	resp, err := h.client.GenAIGenerate(ctx, req)
@@ -113,13 +113,14 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 					"strictJSONEnabled":  req.StrictJSONEnabled,
 				},
 			})
-			
+
 			// Save usage metrics asynchronously with a new context
 			if h.usageMetricsRepo != nil && h.modelManager != nil {
 				go func() {
 					metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
-					_ = h.saveUsageMetric(metricCtx, auth, req, *resp, nil, nil)
+					durationMs := int(time.Since(started).Milliseconds())
+					_ = h.saveUsageMetric(metricCtx, auth, req, *resp, nil, nil, &durationMs)
 				}()
 			}
 		}
@@ -154,6 +155,7 @@ func (h *GenAIHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
+	started := time.Now()
 	resp, err := h.client.Generate(ctx, req.Prompt, req.Tools, req.Options)
 	if err != nil {
 		status, code, msg, details := parseUpstreamError(err)
@@ -171,7 +173,8 @@ func (h *GenAIHandler) Complete(w http.ResponseWriter, r *http.Request) {
 			}
 			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+			durationMs := int(time.Since(started).Milliseconds())
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
 		}
 	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
@@ -192,6 +195,7 @@ func (h *GenAIHandler) CompleteWithTools(w http.ResponseWriter, r *http.Request)
 	reg := gen_gemini.NewSimpleRegistry()
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
+	started := time.Now()
 	resp, err := h.client.ExecuteWithTools(ctx, req.Prompt, req.Tools, reg, req.Options)
 	if err != nil {
 		status, code, msg, details := parseUpstreamError(err)
@@ -209,7 +213,8 @@ func (h *GenAIHandler) CompleteWithTools(w http.ResponseWriter, r *http.Request)
 			}
 			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+			durationMs := int(time.Since(started).Milliseconds())
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
 		}
 	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
@@ -228,6 +233,7 @@ func (h *GenAIHandler) CompleteJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
+	started := time.Now()
 	resp, err := h.client.GenerateJSON(ctx, req.Prompt, req.Tools, req.JSONSchema, req.Options)
 	if err != nil {
 		status, code, msg, details := parseUpstreamError(err)
@@ -245,7 +251,8 @@ func (h *GenAIHandler) CompleteJSON(w http.ResponseWriter, r *http.Request) {
 			}
 			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+			durationMs := int(time.Since(started).Milliseconds())
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
 		}
 	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
@@ -264,6 +271,7 @@ func (h *GenAIHandler) CompleteJSONStrict(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
+	started := time.Now()
 	resp, err := h.client.GenerateJSONStrict(ctx, req.Prompt, req.Tools, req.JSONSchema, req.Options)
 	if err != nil {
 		status, code, msg, details := parseUpstreamError(err)
@@ -281,7 +289,8 @@ func (h *GenAIHandler) CompleteJSONStrict(w http.ResponseWriter, r *http.Request
 			}
 			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+			durationMs := int(time.Since(started).Milliseconds())
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
 		}
 	}()
 	_ = WriteJSON(w, http.StatusOK, resp)
@@ -301,6 +310,7 @@ func (h *GenAIHandler) AdhocJSON(w http.ResponseWriter, r *http.Request) {
 	req.Options.ResponseFormat = "json"
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
+	started := time.Now()
 	resp, err := h.client.GenerateJSON(ctx, req.Prompt, nil, nil, req.Options)
 	if err != nil {
 		_ = WriteError(w, http.StatusBadGateway, "GENAI_ERROR", err.Error(), nil)
@@ -317,7 +327,8 @@ func (h *GenAIHandler) AdhocJSON(w http.ResponseWriter, r *http.Request) {
 			}
 			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil)
+			durationMs := int(time.Since(started).Milliseconds())
+			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
 		}
 	}()
 	var parsed interface{}
@@ -518,7 +529,7 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 						"webSearchEnabled": req.Options.GroundingEnabled,
 					},
 				})
-				
+
 				// Save usage metrics asynchronously with a new context
 				// Always save metrics, even if usage is zero (for tracking purposes)
 				if h.usageMetricsRepo != nil && h.modelManager != nil {
@@ -537,7 +548,8 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 					go func() {
 						metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 						defer cancel()
-						if err := h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil); err != nil {
+						durationMs := int(time.Since(started).Milliseconds())
+						if err := h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs); err != nil {
 							log.Printf("[GenAI Stream] Failed to save usage metric: %v (model=%s, promptTokens=%d, outputTokens=%d)", err, e.Model, e.Usage.PromptTokens, e.Usage.OutputTokens)
 						} else {
 							log.Printf("[GenAI Stream] Saved usage metric (model=%s, promptTokens=%d, outputTokens=%d, totalTokens=%d)", e.Model, e.Usage.PromptTokens, e.Usage.OutputTokens, e.Usage.TotalTokens)
@@ -597,14 +609,15 @@ func parseUpstreamError(err error) (int, string, string, interface{}) {
 }
 
 // saveUsageMetric saves a usage metric record
-func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req gen_combined.GenAIRequest, resp gen_combined.GenAIResponse, projectID *string, interactionID *string) error {
+// durationMs is optional (can be nil if timing not available)
+func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req gen_combined.GenAIRequest, resp gen_combined.GenAIResponse, projectID *string, interactionID *string, durationMs *int) error {
 	if h.usageMetricsRepo == nil || h.modelManager == nil {
 		return nil
 	}
-	
+
 	// Determine provider from model name
 	provider := h.determineProvider(resp.Model)
-	
+
 	// Calculate cost using modelManager (which handles tiered pricing for Gemini)
 	cost, err := h.modelManager.CalculateProcessingCost(resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens)
 	if err != nil {
@@ -612,13 +625,13 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 		log.Printf("[saveUsageMetric] Model %s not found in modelManager, using fallback pricing", resp.Model)
 		cost = h.calculateFallbackCost(provider, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens)
 	}
-	
+
 	// Determine model alias if available
 	modelAlias := &req.Model
 	if req.Model == "" {
 		modelAlias = nil
 	}
-	
+
 	metric := &repo.UsageMetric{
 		TenantID:      auth.TenantID,
 		UserID:        auth.UID,
@@ -631,10 +644,11 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 		OutputTokens:  resp.Usage.OutputTokens,
 		TotalTokens:   resp.Usage.TotalTokens,
 		CostUSD:       cost,
-		TaskType:      nil, // Can be set from context if needed
+		DurationMs:    durationMs,
+		TaskType:      nil,        // Can be set from context if needed
 		Kind:          "included", // Default to included, can be changed based on plan
 	}
-	
+
 	_, err = h.usageMetricsRepo.Create(ctx, metric)
 	return err
 }
@@ -643,19 +657,19 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 // Uses approximate pricing based on provider
 func (h *GenAIHandler) calculateFallbackCost(provider, modelName string, inputTokens, outputTokens int) float64 {
 	modelLower := strings.ToLower(modelName)
-	
+
 	switch provider {
 	case "gemini":
 		// Gemini tiered pricing: first 128K at one rate, after at 50% discount
 		// Prices match model_manager.go (max prices for first tier)
 		const threshold = 128000
 		var inputPriceTier1, inputPriceTier2, outputPriceTier1, outputPriceTier2 float64
-		
+
 		// Check more specific models first (flash-lite before flash)
 		if strings.Contains(modelLower, "flash-lite") {
-			inputPriceTier1 = 0.00000010  // $0.10 / 1M (from model_manager.go)
-			inputPriceTier2 = 0.00000005  // $0.05 / 1M (50% discount after threshold)
-			outputPriceTier1 = 0.00000041 // $0.41 / 1M (from model_manager.go)
+			inputPriceTier1 = 0.00000010   // $0.10 / 1M (from model_manager.go)
+			inputPriceTier2 = 0.00000005   // $0.05 / 1M (50% discount after threshold)
+			outputPriceTier1 = 0.00000041  // $0.41 / 1M (from model_manager.go)
 			outputPriceTier2 = 0.000000205 // $0.205 / 1M (50% discount after threshold)
 		} else if strings.Contains(modelLower, "pro") {
 			inputPriceTier1 = 0.00000250  // $2.50 / 1M (from model_manager.go)
@@ -668,21 +682,21 @@ func (h *GenAIHandler) calculateFallbackCost(provider, modelName string, inputTo
 			outputPriceTier1 = 0.00000250 // $2.50 / 1M (from model_manager.go)
 			outputPriceTier2 = 0.00000125 // $1.25 / 1M (50% discount after threshold)
 		}
-		
+
 		var inputCost float64
 		if inputTokens <= threshold {
 			inputCost = float64(inputTokens) * inputPriceTier1
 		} else {
 			inputCost = float64(threshold)*inputPriceTier1 + float64(inputTokens-threshold)*inputPriceTier2
 		}
-		
+
 		var outputCost float64
 		if outputTokens <= threshold {
 			outputCost = float64(outputTokens) * outputPriceTier1
 		} else {
 			outputCost = float64(threshold)*outputPriceTier1 + float64(outputTokens-threshold)*outputPriceTier2
 		}
-		
+
 		return inputCost + outputCost
 	case "openai":
 		// OpenAI pricing - check specific models first

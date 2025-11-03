@@ -29,6 +29,9 @@ type UsageMetric struct {
 	// Cost information
 	CostUSD float64 `json:"costUSD" firestore:"costUSD"`
 
+	// Timing information (optional, for backward compatibility)
+	DurationMs *int `json:"durationMs,omitempty" firestore:"durationMs,omitempty"` // Execution time in milliseconds
+
 	// Metadata
 	TaskType *string `json:"taskType,omitempty" firestore:"taskType,omitempty"` // e.g., "discovery.answer", "eval.stance", "genai.generate"
 	Kind     string  `json:"kind" firestore:"kind"`                             // "included" or "on_demand"
@@ -60,7 +63,8 @@ func (r *UsageMetricsRepository) Create(ctx context.Context, metric *UsageMetric
 
 // CreateMetric is a convenience method that creates a usage metric from individual parameters
 // This allows AITaskExecutor to save metrics without importing the UsageMetric struct
-func (r *UsageMetricsRepository) CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error) {
+// durationMs is optional (can be nil for backward compatibility)
+func (r *UsageMetricsRepository) CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error) {
 	metric := &UsageMetric{
 		TenantID:     tenantID,
 		UserID:       userID,
@@ -71,6 +75,7 @@ func (r *UsageMetricsRepository) CreateMetric(ctx context.Context, tenantID, use
 		OutputTokens: outputTokens,
 		TotalTokens:  inputTokens + outputTokens,
 		CostUSD:      cost,
+		DurationMs:   durationMs,
 		TaskType:     taskType,
 		Kind:         "included",
 	}

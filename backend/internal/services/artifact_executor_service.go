@@ -18,7 +18,7 @@ type ArtifactExecutorService struct {
 	contextSvc       *ArtifactContextService
 	publisher        *realtime.Publisher
 	usageMetricsRepo interface {
-		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 	}
 	modelManager interface {
 		CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
@@ -40,7 +40,7 @@ func NewArtifactExecutorService(
 
 // WithUsageMetrics sets the usage metrics repository and model manager
 func (s *ArtifactExecutorService) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
 }, modelMgr interface {
 	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
 }) *ArtifactExecutorService {
@@ -106,10 +106,11 @@ func (s *ArtifactExecutorService) GenerateSection(
 		return nil, fmt.Errorf("failed to generate section: %w", err)
 	}
 
-	// Save usage metrics
-	s.saveUsageMetric(ctx, req.TenantID, req.ProjectID, req.UserID, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "artifact.generate")
-
 	duration := time.Since(startTime)
+	durationMs := int(duration.Milliseconds())
+
+	// Save usage metrics
+	s.saveUsageMetric(ctx, req.TenantID, req.ProjectID, req.UserID, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens, "artifact.generate", &durationMs)
 
 	// Calculate quality if context is available
 	var quality *SectionQuality
@@ -197,7 +198,8 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 			if modelName == "" {
 				modelName = req.Model
 			}
-			s.saveUsageMetric(ctx, req.TenantID, req.ProjectID, req.UserID, modelName, inputToks, outputToks, "artifact.stream")
+			durationMs := int(time.Since(startTime).Milliseconds())
+			s.saveUsageMetric(ctx, req.TenantID, req.ProjectID, req.UserID, modelName, inputToks, outputToks, "artifact.stream", &durationMs)
 		}
 		return nil
 	})
@@ -461,7 +463,7 @@ func (s *ArtifactExecutorService) AssembleDocument(
 }
 
 // saveUsageMetric saves usage metrics if repository is available
-func (s *ArtifactExecutorService) saveUsageMetric(_ context.Context, tenantID, projectID, userID, modelName string, inputTokens, outputTokens int, taskType string) {
+func (s *ArtifactExecutorService) saveUsageMetric(_ context.Context, tenantID, projectID, userID, modelName string, inputTokens, outputTokens int, taskType string, durationMs *int) {
 	if s.usageMetricsRepo == nil || s.modelManager == nil {
 		return
 	}
@@ -492,7 +494,7 @@ func (s *ArtifactExecutorService) saveUsageMetric(_ context.Context, tenantID, p
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := s.usageMetricsRepo.CreateMetric(metricCtx, tenantID, userID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr)
+		_, err := s.usageMetricsRepo.CreateMetric(metricCtx, tenantID, userID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
 		if err != nil {
 			// Log error silently to avoid blocking
 		}
