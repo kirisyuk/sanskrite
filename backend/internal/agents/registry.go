@@ -11,8 +11,9 @@ import (
 )
 
 // Registry управляет регистрацией и выполнением агентов
+// Использует универсальный Agent интерфейс для поддержки всех типов агентов
 type Registry struct {
-	agents      map[string]Agent
+	agents      map[string]Agent // Универсальный интерфейс Agent
 	mu          sync.RWMutex
 	executor    *ai.AITaskExecutor
 	genaiClient *gen_combined.Client
@@ -30,9 +31,9 @@ func NewRegistry(executor *ai.AITaskExecutor, genaiClient *gen_combined.Client, 
 		logger:      logger,
 	}
 
-	// Регистрируем внутренние агенты (usage metrics будут добавлены позже через WithUsageMetrics)
-	r.Register(NewEntitiesAgent(genaiClient, logger))
-	r.Register(NewDataAgent(genaiClient, logger))
+	// Регистрируем внутренние агенты через адаптеры (usage metrics будут добавлены позже через WithUsageMetrics)
+	r.RegisterTaskAgent(NewEntitiesAgent(genaiClient, logger))
+	r.RegisterTaskAgent(NewDataAgent(genaiClient, logger))
 
 	return r
 }
@@ -47,11 +48,15 @@ func (r *Registry) WithUsageMetrics(repo interface {
 	defer r.mu.Unlock()
 
 	// Update all registered agents with usage metrics
+	// Проверяем адаптеры для доступа к исходным агентам
 	for id, agent := range r.agents {
-		if entitiesAgent, ok := agent.(*EntitiesAgent); ok {
-			entitiesAgent.WithUsageMetrics(repo, modelMgr)
-		} else if dataAgent, ok := agent.(*DataAgent); ok {
-			dataAgent.WithUsageMetrics(repo, modelMgr)
+		// Проверяем TaskAgentAdapter
+		if taskAdapter, ok := agent.(*TaskAgentAdapter); ok {
+			if entitiesAgent, ok := taskAdapter.TaskAgent.(*EntitiesAgent); ok {
+				entitiesAgent.WithUsageMetrics(repo, modelMgr)
+			} else if dataAgent, ok := taskAdapter.TaskAgent.(*DataAgent); ok {
+				dataAgent.WithUsageMetrics(repo, modelMgr)
+			}
 		}
 		_ = id // avoid unused variable
 	}
@@ -59,11 +64,35 @@ func (r *Registry) WithUsageMetrics(repo interface {
 	return r
 }
 
-// Register регистрирует агента
+// Register регистрирует агента напрямую (если уже реализует Agent интерфейс)
 func (r *Registry) Register(agent Agent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.agents[agent.ID()] = agent
+}
+
+// RegisterTaskAgent регистрирует TaskAgent через адаптер
+// Создает TaskAgentAdapter и регистрирует его как универсальный Agent
+func (r *Registry) RegisterTaskAgent(taskAgent TaskAgent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	adapter := NewTaskAgentAdapter(taskAgent)
+	r.agents[adapter.ID()] = adapter
+	if r.logger != nil {
+		r.logger.Printf("[Registry] Registered TaskAgent: %s", taskAgent.Name())
+	}
+}
+
+// RegisterDomainAgent регистрирует DomainAgent через адаптер
+// Создает DomainAgentAdapter и регистрирует его как универсальный Agent
+func (r *Registry) RegisterDomainAgent(domainAgent DomainAgent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	adapter := NewDomainAgentAdapter(domainAgent, r.logger)
+	r.agents[adapter.ID()] = adapter
+	if r.logger != nil {
+		r.logger.Printf("[Registry] Registered DomainAgent: %s (domain: %s)", domainAgent.Name(), domainAgent.Domain())
+	}
 }
 
 // Get возвращает агента по ID
@@ -135,8 +164,8 @@ func (r *Registry) ExecuteAgentWithStream(
 		}
 	}
 
-	// Выполняем агента со стримингом
-	return agent.ExecuteWithStream(ctx, taskJSON, onUpdate)
+	// Выполняем агента через универсальный интерфейс
+	return agent.ExecuteAsTask(ctx, taskJSON, onUpdate)
 }
 
 // Errors

@@ -8,38 +8,47 @@ import (
 	"time"
 )
 
-// Agent интерфейс для всех агентов
-type Agent interface {
+// BaseAgent базовый интерфейс для всех агентов (общие методы)
+type BaseAgent interface {
 	// ID возвращает уникальный идентификатор агента
 	ID() string
-	
+
 	// Name возвращает полное имя агента
 	Name() string
-	
+
 	// DisplayName возвращает короткое имя для UI
 	DisplayName() string
-	
+
 	// Description возвращает описание агента
 	Description() string
-	
+
 	// Skills возвращает список навыков агента
 	Skills() []string
-	
+
 	// Type возвращает тип агента ("internal" | "external")
 	Type() string
-	
+
 	// IsExternal возвращает true если агент внешний
 	IsExternal() bool
-	
+
+	// Health проверяет здоровье агента (опционально, может возвращать nil для TaskAgent)
+	Health(ctx context.Context) (*AgentHealth, error)
+}
+
+// TaskAgent интерфейс для агентов, выполняющих задачи через JSON схемы
+// Реализуют: EntitiesAgent, DataAgent
+type TaskAgent interface {
+	BaseAgent
+
 	// TaskSchema возвращает JSON Schema для задачи
 	TaskSchema() map[string]interface{}
-	
+
 	// ResultSchema возвращает JSON Schema для результата
 	ResultSchema() map[string]interface{}
-	
+
 	// Execute выполняет задание без стриминга
 	Execute(ctx context.Context, taskJSON []byte) ([]byte, error)
-	
+
 	// ExecuteWithStream выполняет задание со стримингом обновлений через WebSocket
 	ExecuteWithStream(
 		ctx context.Context,
@@ -48,13 +57,27 @@ type Agent interface {
 	) ([]byte, error)
 }
 
+// DomainAgent интерфейс для доменных агентов Knowledge Graph системы
+// Реализуют: FinancialAgent, PoliticalAgent, SocialAgent, TechnicalAgent
+// См. domain_agent.go для полного определения
+
+// Agent универсальный интерфейс, объединяющий все типы агентов
+// Реализуется как TaskAgent или DomainAgent (через встраивание BaseAgent)
+type Agent interface {
+	BaseAgent
+
+	// ExecuteAsTask выполняет задание как TaskAgent (для DomainAgent преобразует запрос)
+	// Возвращает ошибку если агент не поддерживает выполнение задач
+	ExecuteAsTask(ctx context.Context, taskJSON []byte, onUpdate func(Update)) ([]byte, error)
+}
+
 // Update представляет обновление прогресса агента
 type Update struct {
 	TaskID    string                 `json:"taskId"`
 	AgentID   string                 `json:"agentId"`
 	AgentName string                 `json:"agentName"`
-	Stage     string                 `json:"stage"`      // "searching", "analyzing", "saving", "completed", "error"
-	Progress  float64                `json:"progress"`   // 0.0 - 1.0
+	Stage     string                 `json:"stage"`    // "searching", "analyzing", "saving", "completed", "error"
+	Progress  float64                `json:"progress"` // 0.0 - 1.0
 	Message   string                 `json:"message"`
 	Data      map[string]interface{} `json:"data,omitempty"`
 	Timestamp time.Time              `json:"timestamp"`
@@ -84,6 +107,14 @@ type AgentInfo struct {
 	Skills      []string `json:"skills"`
 	Type        string   `json:"type"`
 	IsExternal  bool     `json:"isExternal"`
+}
+
+// AgentHealth здоровье агента (используется в BaseAgent)
+type AgentHealth struct {
+	Status    string                 `json:"status"` // "healthy", "degraded", "unhealthy"
+	Message   string                 `json:"message"`
+	Metrics   map[string]interface{} `json:"metrics,omitempty"`
+	LastCheck time.Time              `json:"lastCheck"`
 }
 
 // generateTaskID генерирует уникальный ID задачи
@@ -127,7 +158,7 @@ func extractJSON(content string) string {
 
 	for i := start; i < len(content); i++ {
 		ch := content[i]
-		
+
 		if inStr {
 			if esc {
 				esc = false
@@ -142,12 +173,12 @@ func extractJSON(content string) string {
 			}
 			continue
 		}
-		
+
 		if ch == '"' {
 			inStr = true
 			continue
 		}
-		
+
 		switch ch {
 		case '{':
 			depthObj++
@@ -174,16 +205,16 @@ func extractJSON(content string) string {
 
 	if end > start {
 		jsonStr := content[start : end+1]
-		
+
 		// Исправляем неэкранированные переносы строк внутри строковых значений
 		// Это критично важно для корректного парсинга
 		result := make([]byte, 0, len(jsonStr))
 		inStr := false
 		esc := false
-		
+
 		for i := 0; i < len(jsonStr); i++ {
 			ch := jsonStr[i]
-			
+
 			if inStr {
 				if esc {
 					esc = false
@@ -216,13 +247,13 @@ func extractJSON(content string) string {
 				result = append(result, ch)
 				continue
 			}
-			
+
 			if ch == '"' {
 				inStr = true
 			}
 			result = append(result, ch)
 		}
-		
+
 		return string(result)
 	}
 
@@ -240,4 +271,3 @@ func formatSchemaAsText(schema map[string]interface{}) string {
 	}
 	return string(schemaJSON)
 }
-

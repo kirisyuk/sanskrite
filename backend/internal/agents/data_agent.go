@@ -78,6 +78,14 @@ func (a *DataAgent) IsExternal() bool {
 	return false
 }
 
+func (a *DataAgent) Health(ctx context.Context) (*AgentHealth, error) {
+	return &AgentHealth{
+		Status:    "healthy",
+		Message:   "DataAgent is operational",
+		LastCheck: time.Now(),
+	}, nil
+}
+
 func (a *DataAgent) TaskSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",

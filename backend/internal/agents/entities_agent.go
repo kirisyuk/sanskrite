@@ -78,6 +78,14 @@ func (a *EntitiesAgent) IsExternal() bool {
 	return false
 }
 
+func (a *EntitiesAgent) Health(ctx context.Context) (*AgentHealth, error) {
+	return &AgentHealth{
+		Status:    "healthy",
+		Message:   "EntitiesAgent is operational",
+		LastCheck: time.Now(),
+	}, nil
+}
+
 func (a *EntitiesAgent) TaskSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
