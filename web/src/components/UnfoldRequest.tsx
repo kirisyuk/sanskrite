@@ -137,6 +137,9 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   const [slashActiveIdx, setSlashActiveIdx] = React.useState(0);
   const textAreaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const slashMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const focusTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const mountedRef = React.useRef(true);
+  const statusTimeoutsRef = React.useRef<Map<string, NodeJS.Timeout[]>>(new Map());
   // Feature toggle: lightweight hint-only mode (no dropdown)
   const ENABLE_SLASH_MENU = false;
   
@@ -177,7 +180,16 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     const newValue = commandKey + ' ';
     setValue(newValue);
     setShowSlashMenu(false);
-    setTimeout(() => textAreaRef.current?.focus(), 0);
+    // Clear previous timeout if exists
+    if (focusTimeoutRef.current) {
+      clearTimeout(focusTimeoutRef.current);
+    }
+    focusTimeoutRef.current = setTimeout(() => {
+      if (mountedRef.current && textAreaRef.current) {
+        textAreaRef.current.focus();
+      }
+      focusTimeoutRef.current = null;
+    }, 0);
   }, []);
 
   // Memoize styles for textarea
@@ -359,6 +371,24 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     return SUPPORTED_EXTENSIONS.includes(ext);
   }, [SUPPORTED_TYPES, SUPPORTED_EXTENSIONS]);
 
+  // Track mounted state to prevent updates after unmount
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      // Cleanup all pending timeouts on unmount
+      statusTimeoutsRef.current.forEach((timeouts) => {
+        timeouts.forEach((timeout) => clearTimeout(timeout));
+      });
+      statusTimeoutsRef.current.clear();
+      // Cleanup focus timeout
+      if (focusTimeoutRef.current) {
+        clearTimeout(focusTimeoutRef.current);
+        focusTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   const addStatusMessage = React.useCallback((type: StatusMessage['type'], text: string) => {
     const id = `status-${Date.now()}-${Math.random()}`;
     const message: StatusMessage = { id, type, text, fadingOut: false };
@@ -366,14 +396,23 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     setStatusMessages(prev => [...prev, message]);
     
     // Start fade out after 4.5 seconds
-    setTimeout(() => {
-      setStatusMessages(prev => prev.map(m => m.id === id ? { ...m, fadingOut: true } : m));
+    const timeoutId1 = setTimeout(() => {
+      if (mountedRef.current) {
+        setStatusMessages(prev => prev.map(m => m.id === id ? { ...m, fadingOut: true } : m));
+      }
+      statusTimeoutsRef.current.delete(id);
     }, 4500);
     
     // Remove after 5 seconds (fade out duration: 500ms)
-    setTimeout(() => {
-      setStatusMessages(prev => prev.filter(m => m.id !== id));
+    const timeoutId2 = setTimeout(() => {
+      if (mountedRef.current) {
+        setStatusMessages(prev => prev.filter(m => m.id !== id));
+      }
+      statusTimeoutsRef.current.delete(id);
     }, 5000);
+    
+    // Store timeouts for cleanup
+    statusTimeoutsRef.current.set(id, [timeoutId1, timeoutId2]);
   }, []);
 
   const handleFileUpload = React.useCallback(async (file: File) => {

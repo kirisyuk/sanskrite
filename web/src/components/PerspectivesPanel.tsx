@@ -6,12 +6,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
+import { generatePerspectiveAnalysis } from '../lib/perspectiveAnalysis';
 
 interface PerspectivesPanelProps {
-  // Placeholder for future filters/sections
+  onPresetChange?: (preset: string) => void;
 }
 
-const PerspectivesPanel: React.FC<PerspectivesPanelProps> = () => {
+const PerspectivesPanel: React.FC<PerspectivesPanelProps> = ({ onPresetChange }) => {
   const { t, i18n } = useTranslation();
   const { theme } = React.useContext(ThemeContext);
   const [preset, setPreset] = React.useState<string>('consulting');
@@ -29,11 +30,18 @@ const PerspectivesPanel: React.FC<PerspectivesPanelProps> = () => {
   const dropdownRef = React.useRef<HTMLDivElement | null>(null);
   const buttonRef = React.useRef<HTMLButtonElement | null>(null);
   const [dropdownPosition, setDropdownPosition] = React.useState<{ top: number; left: number; width: number } | null>(null);
-  const genaiChat = useGenaiChatStore();
   const genaiSettings = useGenAISettings();
 
-  const interactions = useGenaiChatStore((s) => s.interactions);
-  const messages = useGenaiChatStore((s) => s.messages);
+  // PERFORMANCE FIX: Subscribe only to lengths, not entire arrays
+  const interactionsLength = useGenaiChatStore((s) => s.interactions.length);
+  const messagesLength = useGenaiChatStore((s) => s.messages.length);
+  const perspectives = useGenaiChatStore((s) => s.perspectives);
+  const projectId = useGenaiChatStore((s) => s.projectId);
+  
+  // Get interactions/messages only when needed via getState()
+  const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
+  const getMessages = React.useCallback(() => useGenaiChatStore.getState().messages, []);
+  
   const prefLangCode = React.useMemo(() => {
     try {
       const raw = typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN';
@@ -44,25 +52,37 @@ const PerspectivesPanel: React.FC<PerspectivesPanelProps> = () => {
   const buildTranscript = React.useCallback(() => {
     const parts: string[] = [];
     // Use interactions first (they are persisted), then fallback to in-flight messages if streaming
+    // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
+    const interactions = getInteractions();
     interactions
-      .filter((it: any) => it && (it.kind === 'user' || it.kind === 'assistant'))
+      .filter((it: any) => {
+        if (!it) return false;
+        // Exclude perspective interactions
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+          return false;
+        }
+        return it.kind === 'user' || it.kind === 'assistant';
+      })
       .forEach((it: any) => {
         const isUser = it.kind === 'user';
         const text = String(it.content || '').trim();
         if (text) parts.push(`${isUser ? 'user' : 'assistant'}: ${text}`);
       });
-    if (parts.length < 3 && messages && messages.length > 0) {
-      messages.forEach((m: any) => {
-        const text = String(m?.content || '').trim();
-        if (!text) return;
-        const isUser = String(m?.role || '').toLowerCase() === 'user';
-        parts.push(`${isUser ? 'user' : 'assistant'}: ${text}`);
-      });
+    if (parts.length < 3) {
+      const messages = getMessages();
+      if (messages && messages.length > 0) {
+        messages.forEach((m: any) => {
+          const text = String(m?.content || '').trim();
+          if (!text) return;
+          const isUser = String(m?.role || '').toLowerCase() === 'user';
+          parts.push(`${isUser ? 'user' : 'assistant'}: ${text}`);
+        });
+      }
     }
     const joined = parts.join('\n');
     // Analyze the entire chat transcript (no truncation)
     return joined;
-  }, [interactions, messages]);
+  }, [getInteractions, getMessages, interactionsLength, messagesLength]);
 
   const presetToInstruction = React.useCallback((p: string) => {
     switch (p) {
@@ -232,6 +252,38 @@ Constraints:
     }
   }, []);
 
+  // Load existing perspective when preset or project changes
+  React.useEffect(() => {
+    if (!projectId || projectId === 'local-unfold') {
+      setMdText('');
+      return;
+    }
+
+    // Get perspective from cache (O(1) lookup)
+    const existingPerspective = perspectives[preset];
+
+    if (existingPerspective?.content) {
+      setMdText(existingPerspective.content);
+    } else {
+      setMdText('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, preset, perspectives]);
+
+  // Notify parent when preset changes
+  React.useEffect(() => {
+    onPresetChange?.(preset);
+  }, [preset, onPresetChange]);
+
+  // Cleanup interval on unmount
+  React.useEffect(() => {
+    return () => {
+      try {
+        if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
+      } catch {}
+    };
+  }, []);
+
   // Reset Perspectives on New Chat (any): project change or chat cleared
   React.useEffect(() => {
     try {
@@ -245,12 +297,10 @@ Constraints:
     setSaving(false);
     setSavedAt(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genaiChat.projectId]);
+  }, [projectId]);
 
   React.useEffect(() => {
-    const ints = Array.isArray(interactions) ? interactions.length : 0;
-    const msgs = Array.isArray(messages) ? messages.length : 0;
-    if (ints === 0 && msgs === 0) {
+    if (interactionsLength === 0 && messagesLength === 0) {
       try {
         if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
       } catch {}
@@ -262,11 +312,94 @@ Constraints:
       setSaving(false);
       setSavedAt(null);
     }
-  }, [interactions, messages]);
+  }, [interactionsLength, messagesLength]);
+
+  const ensureProject = useGenaiChatStore((s) => s.ensureProject);
+  const persistedByLocalId = useGenaiChatStore((s) => (s as any).persistedByLocalId);
 
   const handleRun = React.useCallback(async (p: string, customInstruction?: string) => {
     setError(null);
     setMdText('');
+    
+    // Get project ID and ensure project exists
+    let currentProjectId = projectId;
+    if (!currentProjectId || currentProjectId === 'local-unfold') {
+      try {
+        currentProjectId = await ensureProject();
+      } catch (e) {
+        setError(t('unfold.perspectives.status.noProject'));
+        return;
+      }
+    }
+
+    // Delete old perspective of the same type before generating new one
+    const perspectiveSubkind = `perspective.${p}`;
+    const analysisSubkind = `perspective.${p}.analysis`;
+    const oldPerspective = perspectives[p];
+
+    // Also find and delete associated analysis
+    // Need to handle both local and server IDs
+    const map = persistedByLocalId || {};
+    const perspectiveServerId = oldPerspective ? (map[oldPerspective.id] || oldPerspective.id) : null;
+    const reverseMap: Record<string, string[]> = {};
+    Object.entries(map).forEach(([local, server]) => {
+      if (!reverseMap[server as string]) reverseMap[server as string] = [];
+      reverseMap[server as string].push(local);
+    });
+    const perspectiveLocalIds = oldPerspective && perspectiveServerId ? (reverseMap[perspectiveServerId] || []) : [];
+    
+    const interactions = getInteractions();
+    const oldAnalysis = oldPerspective ? interactions.find((it: any) => {
+      if (it.kind !== 'system' || typeof it.subkind !== 'string' || it.subkind !== analysisSubkind) {
+        return false;
+      }
+      // Check replyTo
+      if (it.replyTo === oldPerspective.id || it.replyTo === perspectiveServerId || 
+          perspectiveLocalIds.includes(it.replyTo || '')) {
+        return true;
+      }
+      // Check relations
+      if (it.relations && Array.isArray(it.relations)) {
+        return it.relations.some((r: any) => 
+          r.targetId === oldPerspective.id || r.targetId === perspectiveServerId ||
+          perspectiveLocalIds.includes(r.targetId)
+        );
+      }
+      return false;
+    }) : null;
+
+    if (oldPerspective && oldPerspective.id) {
+      try {
+        await api.deleteProjectInteraction(currentProjectId, oldPerspective.id);
+        // Also remove from local state immediately
+        useGenaiChatStore.setState((s) => {
+          const updatedPerspectives = { ...s.perspectives };
+          delete updatedPerspectives[p];
+          return {
+            interactions: s.interactions.filter((it) => it.id !== oldPerspective.id),
+            perspectives: updatedPerspectives,
+          };
+        });
+      } catch (e) {
+        console.warn('[Perspectives] Failed to delete old perspective', e);
+        // Continue anyway - we'll overwrite it
+      }
+    }
+
+    // Delete associated analysis if it exists
+    if (oldAnalysis && oldAnalysis.id) {
+      try {
+        await api.deleteProjectInteraction(currentProjectId, oldAnalysis.id);
+        // Also remove from local state immediately
+        useGenaiChatStore.setState((s) => ({
+          interactions: s.interactions.filter((it) => it.id !== oldAnalysis.id)
+        }));
+      } catch (e) {
+        console.warn('[Perspectives] Failed to delete old analysis', e);
+        // Continue anyway
+      }
+    }
+
     // Start elapsed timer
     try {
       if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
@@ -398,6 +531,56 @@ Constraints:
       });
       const text = (res && typeof res.content === 'string') ? res.content : '';
       setMdText(text);
+
+      // Save as Interaction with kind='note' and subkind='perspective.{preset}'
+      if (text && currentProjectId && currentProjectId !== 'local-unfold') {
+        try {
+          const perspectiveSubkind = `perspective.${p}`;
+          const savedInteraction = await api.createProjectInteraction(currentProjectId, {
+            kind: 'note',
+            subkind: perspectiveSubkind,
+            content: text,
+          });
+          
+          // Add to local state so it appears in interactions immediately
+          const createdAt = new Date().toISOString();
+          useGenaiChatStore.setState((s) => {
+            const newInteraction: any = {
+              id: savedInteraction.id,
+              projectId: currentProjectId,
+              kind: 'note',
+              subkind: perspectiveSubkind,
+              content: text,
+              createdAt,
+            };
+            // Update perspectives cache
+            const updatedPerspectives = { ...s.perspectives };
+            updatedPerspectives[p] = {
+              id: savedInteraction.id,
+              content: text,
+              preset: p,
+              createdAt,
+            };
+            return {
+              interactions: [...s.interactions, newInteraction],
+              perspectives: updatedPerspectives,
+            };
+          });
+
+          // Generate structured analysis after saving perspective
+          (async () => {
+            try {
+              await generatePerspectiveAnalysis(savedInteraction.id, text, p);
+            } catch (e) {
+              console.warn('[Perspectives] Failed to generate analysis', e);
+              // Don't block UI - analysis can be generated manually via refresh
+            }
+          })();
+        } catch (e) {
+          console.error('[Perspectives] Failed to save perspective interaction', e);
+          // Don't show error to user - perspective is still displayed, just not persisted
+        }
+      }
     } catch (e: any) {
       setError(t('unfold.perspectives.status.analysisFailed'));
     } finally {
@@ -406,7 +589,7 @@ Constraints:
         if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
       } catch {}
     }
-  }, [buildTranscript, presetToInstruction, genaiSettings.model, genaiSettings.systemInstruction, genaiSettings.temperature, genaiSettings.maxOutputTokens, genaiSettings.groundingEnabled, t, prefLangCode]);
+    }, [buildTranscript, presetToInstruction, genaiSettings.model, genaiSettings.systemInstruction, genaiSettings.temperature, genaiSettings.maxOutputTokens, genaiSettings.groundingEnabled, t, prefLangCode, projectId, ensureProject, perspectives]);
 
   // Run only manually on selection (no auto reruns on chat updates)
 
@@ -748,14 +931,14 @@ Constraints:
       </div>
 
       {/* Settings component at bottom (like UnfoldRequest) */}
-      <div 
-        className="rounded-xl border mt-2 relative" 
-        style={{
-          ...containerStyle,
-          transition: 'all 0.2s ease',
-          overflow: 'visible',
-        }}
-      >
+        <div 
+          className="rounded-xl border mt-2 relative" 
+          style={{
+            ...containerStyle,
+            transition: 'all 0.2s ease',
+            overflow: 'visible',
+          }}
+        >
         <div className="p-3">
           {/* Label above dropdown */}
           <div className="text-12 mb-1" style={{ color: 'var(--text-secondary-strong)' }}>

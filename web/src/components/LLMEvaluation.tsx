@@ -12,17 +12,27 @@ export const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirs
   const [loading, setLoading] = React.useState(false);
   const [durationMs, setDurationMs] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const genaiChat = useGenaiChatStore();
+  // PERFORMANCE FIX: Subscribe only to lengths, not entire arrays
+  const interactionsLength = useGenaiChatStore((s) => s.interactions.length);
+  const messagesLength = useGenaiChatStore((s) => s.messages.length);
+  const streaming = useGenaiChatStore((s) => s.streaming);
+  const persistedByLocalId = useGenaiChatStore((s) => (s as any).persistedByLocalId);
   const { currentUser } = useAuth();
   const { i18n: i18nCore } = useTranslation();
-  const hasAssistant = React.useMemo(() =>
-    genaiChat.messages.some((m) => m.role === 'assistant' && m.content && m.content.trim().length > 0),
-    [genaiChat.messages]
-  );
+  
+  // Get interactions/messages only when needed via getState()
+  const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
+  const getMessages = React.useCallback(() => useGenaiChatStore.getState().messages, []);
+  
+  const hasAssistant = React.useMemo(() => {
+    const messages = getMessages();
+    return messages.some((m) => m.role === 'assistant' && m.content && m.content.trim().length > 0);
+  }, [getMessages, messagesLength]);
   const lastAssistant = React.useMemo(() => {
-    const ints = useGenaiChatStore.getState().interactions.filter((it) => it.kind === 'assistant' && (it.contentSanitized || it.content));
+    const interactions = getInteractions();
+    const ints = interactions.filter((it) => it.kind === 'assistant' && (it.contentSanitized || it.content));
     return ints.length > 0 ? ints[ints.length - 1] : null;
-  }, [genaiChat.interactions.length]);
+  }, [getInteractions, interactionsLength]);
   const lastReviewedId = React.useRef<string | null>(null);
   const evaluatingRef = React.useRef<Set<string>>(new Set());
 
@@ -31,7 +41,7 @@ export const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirs
     const run = async () => {
       if (!currentUser?.uid) return;
       // Trigger only AFTER streaming completes and a new assistant message is available
-      if (genaiChat.streaming) return;
+      if (streaming) return;
       if (!lastAssistant) return;
       // Skip evaluations for assistant summaries generated without LLM
       try {
@@ -51,7 +61,7 @@ export const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirs
       
       // Check if eval.bias already exists for this assistant message
       try {
-        const map = (genaiChat as any).persistedByLocalId || {};
+        const map = persistedByLocalId || {};
         const serverId = map[lastAssistant.id];
         const reverseMap: Record<string, string[]> = {};
         Object.entries(map).forEach(([local, server]) => {
@@ -59,7 +69,8 @@ export const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirs
           reverseMap[server as string].push(local);
         });
         const localIds = reverseMap[lastAssistant.id] || [];
-        const existingEvalBias = [...genaiChat.interactions].reverse().find((it: any) => 
+        const interactions = getInteractions();
+        const existingEvalBias = [...interactions].reverse().find((it: any) => 
           it.subkind === 'eval.bias' && 
           (it.replyTo === lastAssistant.id || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
         );
@@ -80,14 +91,15 @@ export const LLMEvaluation: React.FC<{ onFirstResult?: () => void }> = ({ onFirs
       try {
         const started = performance.now();
         // Prefer local interactions (assistant), fallback to chat messages
-        const st = useGenaiChatStore.getState();
-        const assistantInteractions = st.interactions.filter((it: any) => it.kind === 'assistant');
+        const interactions = getInteractions();
+        const assistantInteractions = interactions.filter((it: any) => it.kind === 'assistant');
         let texts: string[] = [];
         if (assistantInteractions.length > 0) {
           const last = assistantInteractions.slice(Math.max(0, assistantInteractions.length - 5));
           texts = last.map((it: any) => (it.summary && it.summary.trim()) ? it.summary : it.content);
         } else {
-          const all = genaiChat.messages.filter((m) => m.role === 'assistant' && m.content && m.content.trim());
+          const messages = getMessages();
+          const all = messages.filter((m) => m.role === 'assistant' && m.content && m.content.trim());
           const last = all.slice(Math.max(0, all.length - 5));
           texts = last.map((m) => m.content);
         }
@@ -299,7 +311,7 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
 
         // Check if eval.review already exists for this assistant message
         try {
-          const map = (genaiChat as any).persistedByLocalId || {};
+          const map = persistedByLocalId || {};
           const serverId = map[lastAssistant.id];
           const reverseMap: Record<string, string[]> = {};
           Object.entries(map).forEach(([local, server]) => {
@@ -307,15 +319,18 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
             reverseMap[server as string].push(local);
           });
           const localIds = reverseMap[lastAssistant.id] || [];
-          const existingReview = [...genaiChat.interactions].reverse().find((it: any) => 
+          const interactions = getInteractions();
+          const existingReview = [...interactions].reverse().find((it: any) => 
             it.subkind === 'eval.review' && 
             (it.replyTo === lastAssistant.id || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
           );
           if (existingReview) {
             console.log('[LLMEvaluation] eval.review already exists for message', lastAssistant.id, '- skipping');
             lastReviewedId.current = lastAssistant.id;
-            setReview((existingReview as any).content || (existingReview as any).contentSanitized || '');
-            setLoading(false);
+            if (!cancelled) {
+              setReview((existingReview as any).content || (existingReview as any).contentSanitized || '');
+              setLoading(false);
+            }
             return;
           }
         } catch (e) {
@@ -345,68 +360,73 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
             }
             lastReviewedId.current = lastAssistant?.id || null;
             // Create eval.review interaction linked to the last assistant message
-            try {
-              const evalId = Date.now().toString() + '-eval-review-a';
-              const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-              const projectId = useGenaiChatStore.getState().projectId;
-              
-              // Add to local state
-              useGenaiChatStore.setState((s) => ({
-                interactions: [
-                  ...s.interactions,
-                  {
-                    id: evalId,
-                    projectId: s.projectId,
-                    kind: 'system',
-                    subkind: 'eval.review',
-                    content: content,
-                    contentSanitized: content,
-                    replyTo: lastAssistant?.id,
-                    relations: lastAssistant?.id ? [{ type: 'evaluates', targetId: lastAssistant.id }] : undefined,
-                    language: preferredLang,
-                    createdAt: new Date().toISOString(),
-                  } as any,
-                ],
-              } as any));
-              
-              // Persist to server
-              if (projectId && projectId !== 'local-unfold' && lastAssistant?.id) {
-                (async () => {
-                  try {
-                    const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
-                    const serverReplyTo = map[lastAssistant.id] || lastAssistant.id;
-                    
-                    const payload: any = {
+            if (!cancelled) {
+              try {
+                const evalId = Date.now().toString() + '-eval-review-a';
+                const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                const projectId = useGenaiChatStore.getState().projectId;
+                
+                // Add to local state
+                useGenaiChatStore.setState((s) => ({
+                  interactions: [
+                    ...s.interactions,
+                    {
+                      id: evalId,
+                      projectId: s.projectId,
                       kind: 'system',
                       subkind: 'eval.review',
                       content: content,
-                      replyTo: serverReplyTo,
-                      relations: [{ type: 'evaluates', targetId: serverReplyTo }],
+                      contentSanitized: content,
+                      replyTo: lastAssistant?.id,
+                      relations: lastAssistant?.id ? [{ type: 'evaluates', targetId: lastAssistant.id }] : undefined,
                       language: preferredLang,
-                    };
-                    
-                    const res = await api.createProjectInteraction(projectId, payload);
-                    
-                    // Update local interaction with server ID
-                    useGenaiChatStore.setState((st) => {
-                      const items = [...st.interactions];
-                      const idx = items.findIndex((it) => it.id === evalId);
-                      if (idx >= 0) { (items[idx] as any).id = res.id; }
+                      createdAt: new Date().toISOString(),
+                    } as any,
+                  ],
+                } as any));
+                
+                // Persist to server
+                if (projectId && projectId !== 'local-unfold' && lastAssistant?.id && !cancelled) {
+                  (async () => {
+                    try {
+                      const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
+                      const serverReplyTo = map[lastAssistant.id] || lastAssistant.id;
                       
-                      const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
-                      newMap[evalId] = res.id;
+                      const payload: any = {
+                        kind: 'system',
+                        subkind: 'eval.review',
+                        content: content,
+                        replyTo: serverReplyTo,
+                        relations: [{ type: 'evaluates', targetId: serverReplyTo }],
+                        language: preferredLang,
+                      };
                       
-                      return { interactions: items, persistedByLocalId: newMap } as any;
-                    });
-                    
-                    console.log('[LLMEvaluation] eval.review persisted to server', { evalId, serverId: res.id });
-                  } catch (e) {
-                    console.warn('[LLMEvaluation] Failed to persist eval.review to server', e);
-                  }
-                })();
+                      const res = await api.createProjectInteraction(projectId, payload);
+                      
+                      // Check cancelled before updating state
+                      if (!cancelled) {
+                        // Update local interaction with server ID
+                        useGenaiChatStore.setState((st) => {
+                          const items = [...st.interactions];
+                          const idx = items.findIndex((it) => it.id === evalId);
+                          if (idx >= 0) { (items[idx] as any).id = res.id; }
+                          
+                          const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                          newMap[evalId] = res.id;
+                          
+                          return { interactions: items, persistedByLocalId: newMap } as any;
+                        });
+                        
+                        console.log('[LLMEvaluation] eval.review persisted to server', { evalId, serverId: res.id });
+                      }
+                    } catch (e) {
+                      console.warn('[LLMEvaluation] Failed to persist eval.review to server', e);
+                    }
+                  })();
+                }
+              } catch (e) {
+                console.warn('[LLMEvaluation] Failed to create eval.review', e);
               }
-            } catch (e) {
-              console.warn('[LLMEvaluation] Failed to create eval.review', e);
             }
           } else {
             setError('The model returned an empty review.');
@@ -433,7 +453,7 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
         evaluatingRef.current.delete(lastAssistant.id);
       }
     };
-  }, [genaiChat.streaming, lastAssistant?.id, currentUser?.uid]);
+  }, [streaming, lastAssistant?.id, currentUser?.uid]);
 
   if (!hasAssistant) return null;
   const sanitizeSx = (s: string) => {

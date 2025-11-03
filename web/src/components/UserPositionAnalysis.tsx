@@ -32,28 +32,40 @@ export const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRisk
   const [showTechnicalDetails, setShowTechnicalDetails] = React.useState(false);
   const [showRiskRationale, setShowRiskRationale] = React.useState(false);
   const [showWhoLeadsExplanation, setShowWhoLeadsExplanation] = React.useState(false);
-  const genaiChat = useGenaiChatStore();
+  // PERFORMANCE FIX: Subscribe only to interactions.length, not entire array
+  const interactionsLength = useGenaiChatStore((s) => s.interactions.length);
+  const stanceAggregate = useGenaiChatStore((s) => s.stanceAggregate);
   const { currentUser } = useAuth();
+  
+  // Get interactions only when needed via getState()
+  const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
+  
   const hasAssistant = React.useMemo(
-    () => genaiChat.interactions.some((it) => it.kind === 'assistant' && (it.contentSanitized || it.content)),
-    [genaiChat.interactions]
+    () => {
+      const interactions = getInteractions();
+      return interactions.some((it) => it.kind === 'assistant' && (it.contentSanitized || it.content));
+    },
+    [getInteractions, interactionsLength]
   );
   // Latest user interaction and whether it already has eval.stance
   const lastUserInter = React.useMemo(() => {
-    const ints = [...useGenaiChatStore.getState().interactions].filter((it) => it.kind === 'user');
+    const interactions = getInteractions();
+    const ints = [...interactions].filter((it) => it.kind === 'user');
     return ints.length > 0 ? ints[ints.length - 1] : null;
-  }, [genaiChat.interactions.length]);
+  }, [getInteractions, interactionsLength]);
   const hasEvalForLatestUser = React.useMemo(() => {
     try {
       if (!lastUserInter) return false;
-      return !![...useGenaiChatStore.getState().interactions].reverse()
+      const interactions = getInteractions();
+      return !![...interactions].reverse()
         .find((it) => it.subkind === 'eval.stance' && it.replyTo === lastUserInter.id);
     } catch { return false; }
-  }, [genaiChat.interactions.length, lastUserInter?.id]);
+  }, [getInteractions, interactionsLength, lastUserInter?.id]);
   // Most recent previous stance text (not tied to the current last user)
   const previousStanceText = React.useMemo(() => {
     try {
-      const ints = [...useGenaiChatStore.getState().interactions].reverse();
+      const interactions = getInteractions();
+      const ints = [...interactions].reverse();
       for (const it of ints) {
         if (it.subkind === 'eval.stance' && (!lastUserInter || it.replyTo !== lastUserInter.id)) {
           return (it.contentSanitized || it.content) as string;
@@ -61,18 +73,19 @@ export const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRisk
       }
       return null as any;
     } catch { return null as any; }
-  }, [genaiChat.interactions.length, lastUserInter?.id]);
+  }, [getInteractions, interactionsLength, lastUserInter?.id]);
   const notifiedRef = React.useRef(false);
   const generatingStanceRef = React.useRef<Set<string>>(new Set());
   // Read the latest stored stance for the latest USER message (source of truth)
   const stanceForLatestUser = React.useMemo(() => {
     try {
       if (!lastUserInter?.id) return null as any;
-      const ints = [...useGenaiChatStore.getState().interactions].reverse();
+      const interactions = getInteractions();
+      const ints = [...interactions].reverse();
       const hit = ints.find((it) => it.subkind === 'eval.stance' && it.replyTo === lastUserInter.id);
       return hit || null;
     } catch { return null as any; }
-  }, [genaiChat.interactions.length, lastUserInter?.id]);
+  }, [getInteractions, interactionsLength, lastUserInter?.id]);
 
   React.useEffect(() => {
     // Skip if stance for the latest USER message already exists
@@ -270,7 +283,7 @@ ${prevBlock}`;
             resultFormat: (typeof df.resultFormat === 'string' && df.resultFormat.trim()) ? df.resultFormat.trim() : undefined,
           } : undefined;
 
-          if (stanceText) {
+          if (stanceText && !cancelled) {
             setPosition(stanceText);
             if (riskLevel && typeof riskScore === 'number') {
               setRisk({ level: riskLevel, score: riskScore, rationale: riskRationale || undefined });
@@ -280,79 +293,86 @@ ${prevBlock}`;
               try { onRiskUpdate && onRiskUpdate(null); } catch {}
             }
             // Create eval.stance interaction linked to the latest USER interaction and persist to server
-            try {
-              const stAll = useGenaiChatStore.getState();
-              const evalId = Date.now().toString() + '-eval-stance-u';
-              const projectId = stAll.projectId;
-              const risk = (riskLevel && typeof riskScore === 'number') ? { level: riskLevel as any, score: riskScore, rationale: riskRationale || undefined } : undefined;
-              
-              // Add to local state
-              useGenaiChatStore.setState((s) => ({
-                interactions: [
-                  ...s.interactions,
-                  {
-                    id: evalId,
-                    projectId: s.projectId,
-                    kind: 'system',
-                    subkind: 'eval.stance',
-                    content: stanceText,
-                    contentSanitized: stanceText,
-                    replyTo: lastUserInter ? lastUserInter.id : undefined,
-                    relations: lastUserInter ? [{ type: 'evaluates', targetId: lastUserInter.id }] : undefined,
-                    highRisk: risk,
-                    discussionFacts: discussionFacts,
-                    language: lang,
-                    createdAt: new Date().toISOString(),
-                  } as any,
-                ],
-              } as any));
-              
-              // Persist to server
-              if (projectId && projectId !== 'local-unfold' && lastUserInter) {
-                (async () => {
-                  try {
-                    const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
-                    const serverReplyTo = map[lastUserInter.id] || lastUserInter.id;
-                    
-                    const payload: any = {
+            if (!cancelled) {
+              try {
+                const stAll = useGenaiChatStore.getState();
+                const evalId = Date.now().toString() + '-eval-stance-u';
+                const projectId = stAll.projectId;
+                const risk = (riskLevel && typeof riskScore === 'number') ? { level: riskLevel as any, score: riskScore, rationale: riskRationale || undefined } : undefined;
+                
+                // Add to local state
+                useGenaiChatStore.setState((s) => ({
+                  interactions: [
+                    ...s.interactions,
+                    {
+                      id: evalId,
+                      projectId: s.projectId,
                       kind: 'system',
                       subkind: 'eval.stance',
                       content: stanceText,
-                      replyTo: serverReplyTo,
-                      relations: [{ type: 'evaluates', targetId: serverReplyTo }],
+                      contentSanitized: stanceText,
+                      replyTo: lastUserInter ? lastUserInter.id : undefined,
+                      relations: lastUserInter ? [{ type: 'evaluates', targetId: lastUserInter.id }] : undefined,
+                      highRisk: risk,
+                      discussionFacts: discussionFacts,
                       language: lang,
-                    };
-                    if (risk) payload.highRisk = risk;
-                    if (discussionFacts) payload.discussionFacts = discussionFacts;
-                    
-                    const res = await api.createProjectInteraction(projectId, payload);
-                    
-                    // Update local interaction with server ID
-                    useGenaiChatStore.setState((st) => {
-                      const items = [...st.interactions];
-                      const idx = items.findIndex((it) => it.id === evalId);
-                      if (idx >= 0) { (items[idx] as any).id = res.id; }
+                      createdAt: new Date().toISOString(),
+                    } as any,
+                  ],
+                } as any));
+                
+                // Persist to server
+                if (projectId && projectId !== 'local-unfold' && lastUserInter && !cancelled) {
+                  (async () => {
+                    try {
+                      const map = (useGenaiChatStore.getState() as any).persistedByLocalId || {};
+                      const serverReplyTo = map[lastUserInter.id] || lastUserInter.id;
                       
-                      const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
-                      newMap[evalId] = res.id;
+                      const payload: any = {
+                        kind: 'system',
+                        subkind: 'eval.stance',
+                        content: stanceText,
+                        replyTo: serverReplyTo,
+                        relations: [{ type: 'evaluates', targetId: serverReplyTo }],
+                        language: lang,
+                      };
+                      if (risk) payload.highRisk = risk;
+                      if (discussionFacts) payload.discussionFacts = discussionFacts;
                       
-                      return { interactions: items, persistedByLocalId: newMap } as any;
-                    });
-                    
-                    console.log('[UserPositionAnalysis] eval.stance persisted to server', { evalId, serverId: res.id });
-                  } catch (e) {
-                    console.warn('[UserPositionAnalysis] Failed to persist eval.stance to server', e);
-                  }
-                })();
+                      const res = await api.createProjectInteraction(projectId, payload);
+                      
+                      // Check cancelled before updating state
+                      if (!cancelled) {
+                        // Update local interaction with server ID
+                        useGenaiChatStore.setState((st) => {
+                          const items = [...st.interactions];
+                          const idx = items.findIndex((it) => it.id === evalId);
+                          if (idx >= 0) { (items[idx] as any).id = res.id; }
+                          
+                          const newMap = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                          newMap[evalId] = res.id;
+                          
+                          return { interactions: items, persistedByLocalId: newMap } as any;
+                        });
+                        
+                        console.log('[UserPositionAnalysis] eval.stance persisted to server', { evalId, serverId: res.id });
+                      }
+                    } catch (e) {
+                      console.warn('[UserPositionAnalysis] Failed to persist eval.stance to server', e);
+                    }
+                  })();
+                }
+              } catch (e) {
+                console.warn('[UserPositionAnalysis] Failed to create eval.stance', e);
               }
-            } catch (e) {
-              console.warn('[UserPositionAnalysis] Failed to create eval.stance', e);
             }
-            setDurationMs(Math.max(1, Math.round(finished - started)));
-            setError(null);
-            if (!notifiedRef.current) {
-              notifiedRef.current = true;
-              onFirstResult && onFirstResult();
+            if (!cancelled) {
+              setDurationMs(Math.max(1, Math.round(finished - started)));
+              setError(null);
+              if (!notifiedRef.current) {
+                notifiedRef.current = true;
+                onFirstResult && onFirstResult();
+              }
             }
           } else {
             setError('The model returned an empty result.');
@@ -373,14 +393,14 @@ ${prevBlock}`;
     };
     run();
     return () => { cancelled = true; };
-  }, [genaiChat.interactions, currentUser?.uid, hasEvalForLatestUser, lastUserInter?.id]);
+  }, [interactionsLength, currentUser?.uid, hasEvalForLatestUser, lastUserInter?.id, getInteractions]);
 
   // Do not render until есть хотя бы одно сообщение пользователя
   if (!lastUserInter) return null;
   const sanitizeSx = (s: string) => {
     try { return (s || '').replace(/<!--\s*@sx:[\s\S]*?-->/g, '').trim(); } catch { return s; }
   };
-  const agg = genaiChat.stanceAggregate;
+  const agg = stanceAggregate;
 
   // Display content: prefer stanceForLatestUser, fallback to position, then previousStanceText
   const displayContent = stanceForLatestUser 
