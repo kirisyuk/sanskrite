@@ -105,6 +105,7 @@ func main() {
 		string(realtime.EventArtifactGenerationCompleted),
 		string(realtime.EventArtifactGenerationError),
 		string(realtime.EventAgentUpdate),
+		string(realtime.EventVerifiedStream),
 	)
 
 	srv := &http.Server{Addr: ":" + addr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 5 * time.Second}

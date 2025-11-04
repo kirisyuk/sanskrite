@@ -1,0 +1,49 @@
+steps:
+  # Build the container image (from backend root, using Dockerfile in cmd/verified-proxy)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', './cmd/verified-proxy/Dockerfile', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/verified-proxy:${_IMAGE_TAG}', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/verified-proxy:latest', '.']
+  
+  # Push the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/verified-proxy:${_IMAGE_TAG}']
+  
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/verified-proxy:latest']
+  
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'verified-proxy'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/verified-proxy:${_IMAGE_TAG}'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--service-account'
+      - 'backend@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--memory'
+      - '256Mi'
+      - '--timeout'
+      - '60'
+      - '--min-instances'
+      - '0'
+      - '--max-instances'
+      - '10'
+      - '--set-env-vars'
+      - 'BACKEND_URL=${_BACKEND_URL}'
+      - '--set-secrets'
+      - 'FUNCTIONS_KEY=${_FUNCTIONS_KEY}'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/verified-proxy:${_IMAGE_TAG}'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/verified-proxy:latest'
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+

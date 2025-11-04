@@ -215,6 +215,8 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
         }
 
         wsRef = new WebSocket(wsUrl);
+        // Expose wsRef to window for verified page subscription
+        (window as any).__wsRef = wsRef;
         import('./wsStore').then(({ useWsStore }) => {
           useWsStore.getState().setConnecting(wsUrl, tenantId);
           useWsStore.getState().setReadyState(wsRef?.readyState ?? 0);
@@ -265,6 +267,18 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
             import('./wsStore').then(({ useWsStore }) => {
               try { useWsStore.getState().noteMessage(msg?.type, msg?.data); } catch {}
             }).catch(() => {});
+            
+            // Notify verified.stream listeners
+            if (msg?.type?.startsWith('verified.stream.')) {
+              const listeners = (window as any).__verifiedWsListeners || [];
+              listeners.forEach((listener: (evt: MessageEvent) => void) => {
+                try {
+                  listener(evt);
+                } catch (e) {
+                  console.error('Verified WS listener error:', e);
+                }
+              });
+            }
 
             // Handle subscription ack to reflect connId and ts in diagnostics
             if (msg?.type === 'ws.subscribed' && msg?.data?.projectId) {

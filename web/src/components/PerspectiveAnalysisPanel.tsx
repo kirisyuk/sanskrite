@@ -10,9 +10,10 @@ interface PerspectiveAnalysisPanelProps {
   perspectiveId: string | null;
   perspectiveContent: string | null;
   onClose?: () => void;
+  onApplyKeyPoint?: (keyPoint: string) => void;
 }
 
-const PerspectiveAnalysisPanel: React.FC<PerspectiveAnalysisPanelProps> = ({ preset, perspectiveId, perspectiveContent, onClose }) => {
+const PerspectiveAnalysisPanel: React.FC<PerspectiveAnalysisPanelProps> = ({ preset, perspectiveId, perspectiveContent, onClose, onApplyKeyPoint }) => {
   const { t } = useTranslation();
   const { theme } = React.useContext(ThemeContext);
   const [analysis, setAnalysis] = React.useState<PerspectiveAnalysis | null>(null);
@@ -228,6 +229,28 @@ const PerspectiveAnalysisPanel: React.FC<PerspectiveAnalysisPanelProps> = ({ pre
                         <span className="text-12 flex-1" style={{ color: 'var(--text-heading)', lineHeight: '1.5' }}>
                           {point}
                         </span>
+                        {onApplyKeyPoint && (
+                          <button
+                            type="button"
+                            onClick={() => onApplyKeyPoint(point)}
+                            className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors shrink-0"
+                            style={{
+                              background: 'var(--accent-primary)',
+                              color: 'var(--text-on-accent)',
+                              border: 'none',
+                              cursor: 'pointer',
+                            }}
+                            title={t('unfold.perspectives.analysis.apply', { defaultValue: 'Apply to chat' })}
+                            onMouseEnter={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.opacity = '0.85';
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+                            }}
+                          >
+                            {t('unfold.perspectives.analysis.applyButton', { defaultValue: 'Apply' })}
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>

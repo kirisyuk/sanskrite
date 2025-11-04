@@ -335,6 +335,54 @@ class ApiClient {
     return res.data as any;
   }
 
+  // --- Verified URL Analysis ---
+  async verifiedCreate(url: string, model?: string): Promise<{ code: string; url: string; status: string }> {
+    // Use proxy endpoint (Cloud Function) instead of direct backend call
+    // The proxy adds x-functions-key header for system authentication
+    const proxyUrl = import.meta.env.VITE_VERIFIED_PROXY_URL;
+    if (!proxyUrl) {
+      throw new Error('VITE_VERIFIED_PROXY_URL is not configured. Please set it in environment variables.');
+    }
+    const payload: { url: string; model?: string } = { url };
+    if (model) {
+      payload.model = model;
+    }
+    const res = await axios.post(`${proxyUrl}/verified`, payload);
+    return res.data as any;
+  }
+
+  async verifiedGetPublic(code: string): Promise<{
+    id: string;
+    code: string;
+    url: string;
+    canonicalUrl: string;
+    analysis: string;
+    model: string;
+    status: string;
+    documentId?: string;
+    sourceId?: string;
+    error?: string;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await axios.get(`${API_BASE_URL}/api/v1/public/verified/${encodeURIComponent(code)}`);
+    return res.data as any;
+  }
+
+  async publicDocumentGet(documentId: string): Promise<{
+    id: string;
+    title?: string;
+    url?: string;
+    fullText: string;
+    contentType?: string;
+    documentType?: string;
+    language?: string;
+    ingestedAt: string;
+  }> {
+    const res = await axios.get(`${API_BASE_URL}/api/v1/public/documents/${encodeURIComponent(documentId)}`);
+    return res.data as any;
+  }
+
   // --- Analysis: Entities ---
   async analyzeEntities(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
     const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/entities`, { prompt: prompt || '' });

@@ -18,6 +18,8 @@ type Hub struct {
 	conns map[string]map[*websocket.Conn]struct{}
 	// tenantId -> projectId -> set of connections (only for clients that sent subscribe)
 	projConns map[string]map[string]map[*websocket.Conn]struct{}
+	// verifiedCode -> set of connections (for verified.stream events)
+	verifiedConns map[string]map[*websocket.Conn]struct{}
 	// connection ids for diagnostics
 	connIDs map[*websocket.Conn]string
 	mu      sync.RWMutex
@@ -31,10 +33,11 @@ func NewHub(logger *log.Logger) *Hub {
 			WriteBufferSize: 1024,
 			CheckOrigin:     func(r *http.Request) bool { return true },
 		},
-		conns:     make(map[string]map[*websocket.Conn]struct{}),
-		projConns: make(map[string]map[string]map[*websocket.Conn]struct{}),
-		connIDs:   make(map[*websocket.Conn]string),
-		logger:    logger,
+		conns:         make(map[string]map[*websocket.Conn]struct{}),
+		projConns:     make(map[string]map[string]map[*websocket.Conn]struct{}),
+		verifiedConns: make(map[string]map[*websocket.Conn]struct{}),
+		connIDs:       make(map[*websocket.Conn]string),
+		logger:        logger,
 	}
 }
 
@@ -83,7 +86,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 			// Process subscribe messages (text frames with small JSON)
 			if mt == websocket.TextMessage && len(msg) > 0 {
 				// minimal parsing without extra deps
-				// expect {"type":"subscribe","projectId":"..."}
+				// expect {"type":"subscribe","projectId":"..."} or {"type":"subscribe","verifiedCode":"..."}
 				if bytesIndex := indexOfSubscribe(msg); bytesIndex {
 					if pid := extractProjectID(msg); pid != "" {
 						h.addProjectSubscription(tenantID, pid, c)
@@ -100,6 +103,21 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 						_ = c.WriteJSON(ack)
 						if h.logger != nil {
 							h.logger.Printf("ws: subscribed conn=%s tenant=%s project=%s", h.getConnID(c), tenantID, pid)
+						}
+					} else if vcode := extractVerifiedCode(msg); vcode != "" {
+						h.addVerifiedSubscription(vcode, c)
+						// send ack back
+						ack := map[string]interface{}{
+							"type": "ws.subscribed",
+							"data": map[string]interface{}{
+								"verifiedCode": vcode,
+								"connId":       h.getConnID(c),
+								"ts":           time.Now().UnixMilli(),
+							},
+						}
+						_ = c.WriteJSON(ack)
+						if h.logger != nil {
+							h.logger.Printf("ws: subscribed conn=%s verifiedCode=%s", h.getConnID(c), vcode)
 						}
 					}
 				}
@@ -126,6 +144,13 @@ func (h *Hub) removeConn(tenantID string, c *websocket.Conn) {
 		}
 		if len(pm) == 0 {
 			delete(h.projConns, tenantID)
+		}
+	}
+	// Remove from verified subscriptions
+	for vcode, set := range h.verifiedConns {
+		delete(set, c)
+		if len(set) == 0 {
+			delete(h.verifiedConns, vcode)
 		}
 	}
 	delete(h.connIDs, c)
@@ -195,6 +220,15 @@ func (h *Hub) addProjectSubscription(tenantID, projectID string, c *websocket.Co
 	h.projConns[tenantID][projectID][c] = struct{}{}
 }
 
+func (h *Hub) addVerifiedSubscription(verifiedCode string, c *websocket.Conn) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.verifiedConns[verifiedCode]; !ok {
+		h.verifiedConns[verifiedCode] = make(map[*websocket.Conn]struct{})
+	}
+	h.verifiedConns[verifiedCode][c] = struct{}{}
+}
+
 // naive helpers to avoid json unmarshalling for tiny control frames
 func indexOfSubscribe(b []byte) bool {
 	// check for \"type\":\"subscribe\"
@@ -239,6 +273,37 @@ func extractProjectID(b []byte) string {
 	return strings.TrimSpace(tail)
 }
 
+func extractVerifiedCode(b []byte) string {
+	s := string(b)
+	const key = "\"verifiedCode\""
+	idx := strings.Index(s, key)
+	if idx < 0 {
+		return ""
+	}
+	tail := s[idx+len(key):]
+	colon := strings.Index(tail, ":")
+	if colon < 0 {
+		return ""
+	}
+	tail = tail[colon+1:]
+	tail = strings.TrimSpace(tail)
+	if len(tail) == 0 {
+		return ""
+	}
+	if tail[0] == '"' {
+		tail = tail[1:]
+		end := strings.IndexByte(tail, '"')
+		if end >= 0 {
+			return tail[:end]
+		}
+	}
+	end := strings.IndexAny(tail, ",}")
+	if end >= 0 {
+		return strings.TrimSpace(tail[:end])
+	}
+	return strings.TrimSpace(tail)
+}
+
 // GetProjectConnCount returns number of connections subscribed for a given tenant/project
 func (h *Hub) GetProjectConnCount(tenantID, projectID string) int {
 	h.mu.RLock()
@@ -258,6 +323,32 @@ func (h *Hub) getConnID(c *websocket.Conn) string {
 		return id
 	}
 	return ""
+}
+
+// BroadcastVerified sends payload to clients subscribed to a specific verified code
+func (h *Hub) BroadcastVerified(verifiedCode string, v interface{}) {
+	h.mu.RLock()
+	set := h.verifiedConns[verifiedCode]
+	h.mu.RUnlock()
+	if len(set) == 0 {
+		return
+	}
+	for c := range set {
+		if err := c.WriteJSON(v); err != nil {
+			h.logger.Printf("ws write error (verified broadcast): %v", err)
+			// Find tenant for this connection to remove it properly
+			h.mu.Lock()
+			for tid, connSet := range h.conns {
+				if _, ok := connSet[c]; ok {
+					h.mu.Unlock()
+					h.removeConn(tid, c)
+					_ = c.Close()
+					break
+				}
+			}
+			h.mu.Unlock()
+		}
+	}
 }
 
 // GetConnectedClients returns the count of connected WS clients per tenantID (for debugging)

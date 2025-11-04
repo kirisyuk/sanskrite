@@ -1208,6 +1208,24 @@ const DiscoveryPage: React.FC = () => {
       setTgSubmitting(false);
     }
   };
+
+  // Handle Apply button from perspective analysis - sends key point to chat
+  const handleApplyKeyPoint = React.useCallback(async (keyPoint: string) => {
+    try {
+      // Switch to chat view
+      setUnfoldSubView('chat');
+
+      // Send message to chat using genaiChatStore
+      const genaiChat = useGenaiChatStore.getState();
+      await genaiChat.startStream({
+        prompt: keyPoint,
+        suppressUserEcho: false,
+      });
+    } catch (error) {
+      console.error('Failed to apply key point:', error);
+    }
+  }, []);
+
   const handleDeleteChat = async (projectId: string, projectName: string) => {
     if (!confirm(`Delete "${projectName}"?`)) return;
     
@@ -1973,11 +1991,12 @@ const DiscoveryPage: React.FC = () => {
                     overflowY: 'auto',
                   }}
                 >
-                  <PerspectiveAnalysisPanel 
+                  <PerspectiveAnalysisPanel
                     preset={currentPerspectivePreset}
                     perspectiveId={perspective.id}
                     perspectiveContent={perspective.content || null}
                     onClose={() => setIsAnalysisClosed(true)}
+                    onApplyKeyPoint={handleApplyKeyPoint}
                   />
                 </div>
               </>

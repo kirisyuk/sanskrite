@@ -106,6 +106,7 @@ func main() {
 	var aiExecHandler *httphandlers.AIExecHandler
 	var metaHandler *httphandlers.MetaHandler
 	var agentsHandler *httphandlers.AgentsHandler
+	var verifiedHandler *httphandlers.VerifiedHandler
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger)
 	searchEventsRepo := repo.NewSearchEventsRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
@@ -292,6 +293,18 @@ func main() {
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
 		orchestrator = orchestrator.WithCache(cacheRepo).WithInteractions(interactions)
+
+		// Verified URL Analysis handler (initialized after orchestrator and genaiHandler are ready)
+		verifiedRepo := repo.NewVerifiedAnalysesRepository(fsClient.Client())
+		verifiedHandler = httphandlers.NewVerifiedHandler(
+			verifiedRepo,
+			s.dsrcs,
+			docsRepo,
+			orchestrator,
+			genaiHandler,
+			pub,
+			logger,
+		)
 		// Core docs repo
 		coreDocsRepo := repo.NewCoreDocsRepo(fsClient.Client())
 		// bucket name env or default
@@ -726,6 +739,16 @@ func main() {
 
 	// Public share endpoint (unauthenticated)
 	mux.Handle("/api/v1/public/share/", http.HandlerFunc(shareHandler.GetPublicShare))
+
+	// Verified URL Analysis endpoints
+	if verifiedHandler != nil {
+		// POST /api/v1/verified - requires system auth (x-functions-key)
+		mux.Handle("/api/v1/verified", authMiddleware(http.HandlerFunc(verifiedHandler.CreateVerified)))
+		// GET /api/v1/public/verified/{code} - public endpoint
+		mux.Handle("/api/v1/public/verified/", http.HandlerFunc(verifiedHandler.GetPublicVerified))
+		// GET /api/v1/public/documents/{id} - public endpoint for system documents
+		mux.Handle("/api/v1/public/documents/", http.HandlerFunc(verifiedHandler.GetPublicDocument))
+	}
 
 	// Admin: publish-due (handled below with jobAuth middleware for Cloud Scheduler)
 

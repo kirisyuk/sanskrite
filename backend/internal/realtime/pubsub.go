@@ -37,15 +37,26 @@ const (
 	EventAnalysisStatus EventType = "analysis.status"
 	// Agent execution updates
 	EventAgentUpdate EventType = "agent.update"
+	// Verified URL analysis streaming: all events go to a single topic for ordering
+	EventVerifiedStream EventType = "verified.stream"
 )
 
 var genaiStreamEventTypes = map[EventType]bool{
 	"genai.stream.start":       true,
 	"genai.stream.chunk":       true,
 	"genai.stream.tool_call":   true,
-	"genai.stream.tool_result": true,
-	"genai.stream.done":        true,
-	"genai.stream.error":       true,
+	"genai.stream.tool_result":  true,
+	"genai.stream.done":         true,
+	"genai.stream.error":        true,
+}
+
+var verifiedStreamEventTypes = map[EventType]bool{
+	"verified.stream.fetch_start":      true,
+	"verified.stream.fetch_success":    true,
+	"verified.stream.fetch_failed":     true,
+	"verified.stream.analysis_start":   true,
+	"verified.stream.analysis_complete": true,
+	"verified.stream.analysis_failed":  true,
 }
 
 type Publisher struct {
@@ -84,6 +95,8 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 		EventArtifactGenerationError,
 		EventAnalysisStatus,
 		EventAgentUpdate,
+		// Verified stream topic
+		EventVerifiedStream,
 	} {
 		name := string(et)
 		t := client.Topic(name)
@@ -134,6 +147,10 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 	if t, ok := p.topics[EventArtifactGenerationError]; ok && t != nil {
 		t.EnableMessageOrdering = true
 	}
+	// Enable ordering for verified stream topic
+	if t, ok := p.topics[EventVerifiedStream]; ok && t != nil {
+		t.EnableMessageOrdering = true
+	}
 	return p, nil
 }
 
@@ -142,6 +159,9 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 	// Reroute all genai.stream.* events to the single EventGenAIStream topic for ordering
 	if _, isGenaiStream := genaiStreamEventTypes[et]; isGenaiStream {
 		topicToUse = EventGenAIStream
+	} else if _, isVerifiedStream := verifiedStreamEventTypes[et]; isVerifiedStream {
+		// Reroute all verified.stream.* events to the single EventVerifiedStream topic for ordering
+		topicToUse = EventVerifiedStream
 	} else {
 		topicToUse = et
 	}
@@ -172,7 +192,8 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 		topicToUse == EventArtifactAssemblyChunk ||
 		topicToUse == EventArtifactAssemblyCompleted ||
 		topicToUse == EventArtifactGenerationCompleted ||
-		topicToUse == EventArtifactGenerationError)
+		topicToUse == EventArtifactGenerationError ||
+		topicToUse == EventVerifiedStream)
 
 	// Derive optional routing context from payload if present
 	orderingKey := ""
@@ -184,7 +205,7 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 		"eventType": string(et),
 		"ts":        fmt.Sprintf("%d", time.Now().UnixMilli()),
 	}
-	// If payload is an object, mirror projectId/streamId into attributes and ordering key
+	// If payload is an object, mirror projectId/streamId/code into attributes and ordering key
 	var obj map[string]interface{}
 	if err := json.Unmarshal(b, &obj); err == nil {
 		if v, ok := obj["projectId"].(string); ok && v != "" {
@@ -197,6 +218,15 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 			attrs["streamId"] = v
 			if requireOrdering {
 				orderingKey = fmt.Sprintf("%s:%s", orderingKey, v)
+			}
+		}
+		// For verified.stream events, use code for ordering
+		if _, isVerifiedStream := verifiedStreamEventTypes[et]; isVerifiedStream {
+			if v, ok := obj["code"].(string); ok && v != "" {
+				attrs["code"] = v
+				if requireOrdering {
+					orderingKey = fmt.Sprintf("%s:%s", orderingKey, v)
+				}
 			}
 		}
 	}

@@ -10,6 +10,8 @@ import { BottomBar } from './components/BottomBar';
 import { ServerUnavailableBanner } from './components/ServerUnavailableBanner';
 import DiscoveryPage from './pages/DiscoveryPage';
 import ShareViewPage from './pages/ShareViewPage';
+import VerifiedPage from './pages/VerifiedPage';
+import VerifiedViewPage from './pages/VerifiedViewPage';
 import Homepage from './pages/homepage';
 import TermsOfUsage from './pages/TermsOfUsage';
 import PrivacyNotice from './pages/PrivacyNotice';
@@ -76,6 +78,8 @@ function AppContent() {
         <div className="content-area">
           <Routes>
             <Route path="/shared/:token" element={<ShareViewPage />} />
+            <Route path="/verified" element={<VerifiedPage />} />
+            <Route path="/verified/:code" element={<VerifiedViewPage />} />
             <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
             <Route path="/terms" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
             <Route path="/privacy" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />

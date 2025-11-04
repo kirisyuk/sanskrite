@@ -15,6 +15,8 @@ API_DIR="$ROOT_DIR/backend"
 TARGET_WEB=1
 TARGET_API=1
 TARGET_WS=0
+TARGET_VERIFIED_PROXY=0
+TARGET_CHECK_INFRA=0
 
 REGION=${REGION:-us-central1}
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null || true)
@@ -27,17 +29,27 @@ fi
 SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws] [--verified-proxy] [--check-infra]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
+  echo ""
+  echo "Flags:"
+  echo "  --web           Deploy frontend only"
+  echo "  --api           Deploy backend API only (skips infra checks)"
+  echo "  --py            Deploy Telegram service only (skips infra checks)"
+  echo "  --ws            Deploy WS broker only (skips infra checks)"
+  echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
+  echo "  --check-infra   Run infrastructure checks only (no deployments)"
 }
 
 TARGET_PY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --web) TARGET_API=0 ;;
-    --api) TARGET_WEB=0 ;;
-    --py) TARGET_WEB=0; TARGET_API=0 ;;
-    --ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=1 ;;
+    --api) TARGET_WEB=0; TARGET_CHECK_INFRA=0 ;;
+    --py) TARGET_WEB=0; TARGET_API=0; TARGET_CHECK_INFRA=0 ;;
+    --ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=1; TARGET_CHECK_INFRA=0 ;;
+    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
+    --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
   esac
@@ -86,9 +98,32 @@ deploy_web() {
       WS_URL=$(gcloud run services describe sanskrite-ws --region "$REGION" --format='value(status.url)')
     fi
   fi
+  
+  # Try to resolve verified-proxy URL for Vite env
+  local VERIFIED_PROXY_URL="${VERIFIED_PROXY_URL:-}"
+  if [[ -z "$VERIFIED_PROXY_URL" ]]; then
+    if gcloud run services describe verified-proxy --region "$REGION" >/dev/null 2>&1; then
+      VERIFIED_PROXY_URL=$(gcloud run services describe verified-proxy --region "$REGION" --format='value(status.url)')
+    fi
+  fi
+  
+  # Build with environment variables
+  local build_cmd="npm ci"
   if [[ -n "$WS_URL" ]]; then
     echo -e "${BLUE}[web] Using ws-broker URL for build:${NC} $WS_URL"
-    (cd "$WEB_DIR" && VITE_WS_BROKER_URL="$WS_URL" npm ci && VITE_WS_BROKER_URL="$WS_URL" npm run build)
+    build_cmd="VITE_WS_BROKER_URL=\"$WS_URL\" $build_cmd"
+  fi
+  if [[ -n "$VERIFIED_PROXY_URL" ]]; then
+    echo -e "${BLUE}[web] Using verified-proxy URL for build:${NC} $VERIFIED_PROXY_URL"
+    build_cmd="VITE_VERIFIED_PROXY_URL=\"$VERIFIED_PROXY_URL\" $build_cmd"
+  fi
+  
+  if [[ -n "$WS_URL" || -n "$VERIFIED_PROXY_URL" ]]; then
+    # Build with env vars
+    local build_env=""
+    [[ -n "$WS_URL" ]] && build_env="VITE_WS_BROKER_URL=\"$WS_URL\""
+    [[ -n "$VERIFIED_PROXY_URL" ]] && build_env="${build_env}${build_env:+ }VITE_VERIFIED_PROXY_URL=\"$VERIFIED_PROXY_URL\""
+    (cd "$WEB_DIR" && eval "$build_env npm ci" && eval "$build_env npm run build")
   else
     (cd "$WEB_DIR" && npm ci && npm run build)
   fi
@@ -159,7 +194,8 @@ setup_infrastructure() {
     artifact.assembly.started artifact.assembly.chunk artifact.assembly.completed \
     artifact.generation.completed artifact.generation.error \
     analysis.status \
-    agent.update; do
+    agent.update \
+    verified.stream; do
     if ! gcloud pubsub topics describe "$topic" >/dev/null 2>&1; then
       gcloud pubsub topics create "$topic" --quiet
       echo -e "${GREEN}  ✓${NC} Created topic: $topic"
@@ -208,6 +244,63 @@ setup_infrastructure() {
       echo -e "${YELLOW}[infra] Cloud Scheduler API not enabled or not available; skipping job creation.${NC}"
     fi
   fi
+}
+
+# Clean up old Cloud Run revisions, keeping only the last N
+# Usage: cleanup_old_revisions <service-name> <region> <keep-count>
+cleanup_old_revisions() {
+  local service="$1"
+  local region="$2"
+  local keep_count="${3:-10}"
+  
+  echo -e "${BLUE}[cleanup] Cleaning up old revisions for $service (keeping last $keep_count)...${NC}"
+  
+  # Get active revision (the one receiving traffic)
+  local active_revision=$(gcloud run services describe "$service" --region "$region" \
+    --format='value(status.traffic[0].revisionName)' 2>/dev/null || echo "")
+  
+  # Get all revisions sorted by creation time (newest first)
+  # Format: REVISION_NAME
+  local all_revisions=$(gcloud run revisions list --service="$service" --region="$region" \
+    --format='value(metadata.name)' --sort-by='~metadata.creationTimestamp' 2>/dev/null || echo "")
+  
+  if [[ -z "$all_revisions" ]]; then
+    echo -e "${YELLOW}[cleanup] No revisions found for $service${NC}"
+    return 0
+  fi
+  
+  # Count total revisions
+  local total=$(echo "$all_revisions" | grep -c . || echo "0")
+  
+  if [[ "$total" -le "$keep_count" ]]; then
+    echo -e "${GREEN}[cleanup] Only $total revisions exist (keeping all)${NC}"
+    return 0
+  fi
+  
+  # Get revisions to delete (all except the last N, but skip active one)
+  local deleted=0
+  local skipped_active=0
+  
+  # Skip first N revisions (the ones to keep) and process the rest
+  echo "$all_revisions" | tail -n +$((keep_count + 1)) | while read -r revision_name; do
+    if [[ -z "$revision_name" ]]; then
+      continue
+    fi
+    
+    if [[ "$revision_name" == "$active_revision" ]]; then
+      echo -e "${YELLOW}[cleanup] Skipping active revision: $revision_name${NC}" >&2
+      continue
+    fi
+    
+    echo -e "${BLUE}[cleanup] Deleting revision: $revision_name${NC}" >&2
+    if gcloud run revisions delete "$revision_name" --region="$region" --quiet 2>/dev/null; then
+      echo "deleted" >&2
+    else
+      echo -e "${YELLOW}[cleanup] Failed to delete $revision_name (may be in use)${NC}" >&2
+    fi
+  done
+  
+  echo -e "${GREEN}[cleanup] Cleanup completed for $service${NC}"
 }
 
 deploy_api() {
@@ -262,12 +355,123 @@ deploy_api() {
     --to-latest \
     --quiet
   
+  # Clean up old revisions (keep last 10)
+  cleanup_old_revisions "$service" "$REGION" 10
+  
   local current_revision=$(gcloud run services describe "$service" --region "$REGION" --format="value(status.traffic[0].revisionName)")
   echo -e "${GREEN}[api] Traffic routed to:${NC} $current_revision"
 
   API_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[api] Deployed successfully${NC}"
   echo -e "${BLUE}[api] URL:${NC} $API_URL"
+}
+
+deploy_verified_proxy() {
+  echo -e "${BLUE}[verified-proxy] Pre-deployment: validating Go build...${NC}"
+  (cd "$API_DIR" && go build -o /dev/null ./cmd/verified-proxy) || {
+    echo -e "${RED}[verified-proxy] Go build failed! Fix errors before deploying.${NC}"
+    exit 1
+  }
+  echo -e "${GREEN}[verified-proxy] Go build successful locally${NC}"
+  
+  echo -e "${BLUE}[verified-proxy] Building container image...${NC}"
+  local service="verified-proxy"
+  
+  # Get backend URL and functions key
+  local backend_url="${API_URL:-}"
+  if [[ -z "$backend_url" ]]; then
+    backend_url=$(gcloud run services describe sanskrite-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+  fi
+  
+  if [[ -z "$backend_url" ]]; then
+    echo -e "${YELLOW}[verified-proxy] Skipping deployment: backend API URL not available${NC}"
+    return
+  fi
+  
+  # Get or create functions key secret
+  local functions_key_secret="functions-key"
+  if ! gcloud secrets describe "$functions_key_secret" >/dev/null 2>&1; then
+    echo -e "${YELLOW}[verified-proxy] Creating placeholder functions-key secret (update with real value!)${NC}"
+    echo -n "PLACEHOLDER_UPDATE_ME" | gcloud secrets create "$functions_key_secret" --data-file=-
+  fi
+  
+  # Get allowed origins (same logic as main API)
+  # Support FRONTEND_ORIGINS (comma-separated) or FRONTEND_ORIGIN (single)
+  local allowed_origins="${FRONTEND_ORIGINS:-}"
+  if [[ -z "$allowed_origins" ]]; then
+    local single_origin="${FRONTEND_ORIGIN:-https://hatl.one}"
+    # Add localhost if not already in the list
+    if [[ "$single_origin" != *"localhost"* ]]; then
+      allowed_origins="${single_origin},http://localhost:5173"
+    else
+      allowed_origins="$single_origin"
+    fi
+  fi
+  
+  # Generate image tag (timestamp for uniqueness)
+  local image_tag=$(date +%s)
+  
+  # Build and deploy using cloudbuild.yaml
+  # Use JSON format for substitutions to handle comma in ALLOWED_ORIGINS
+  # Escape the JSON properly for shell
+  local allowed_origins_json=$(echo "$allowed_origins" | sed 's/"/\\"/g')
+  
+  echo -e "${BLUE}[verified-proxy] Starting Cloud Build (this may take a few minutes)...${NC}"
+  # Don't pass ALLOWED_ORIGINS in substitutions (comma causes issues), will set after deploy
+  gcloud builds submit "$API_DIR" \
+    --project "$PROJECT_ID" \
+    --config="$API_DIR/cmd/verified-proxy/cloudbuild.yaml" \
+    --substitutions=_BACKEND_URL="$backend_url",_FUNCTIONS_KEY="${functions_key_secret}:latest",_IMAGE_TAG="$image_tag" || {
+    echo -e "${YELLOW}[verified-proxy] Cloud Build failed, trying direct deploy...${NC}"
+    # Fallback: deploy directly from source
+    # Note: --source doesn't support --env-vars-file, so use update after deploy
+    gcloud run deploy "$service" \
+      --source "$API_DIR/cmd/verified-proxy" \
+      --region "$REGION" \
+      --allow-unauthenticated \
+      --service-account "$SA_BACKEND" \
+      --min-instances=0 \
+      --max-instances=10 \
+      --memory=256Mi \
+      --timeout=60 \
+      --set-secrets "FUNCTIONS_KEY=${functions_key_secret}:latest" \
+      --project "$PROJECT_ID" \
+      --quiet
+    # Update env vars separately (using update-env-vars to preserve existing)
+    local env_file=$(mktemp)
+    echo "BACKEND_URL=$backend_url" > "$env_file"
+    echo "ALLOWED_ORIGINS=$allowed_origins" >> "$env_file"
+    gcloud run services update "$service" \
+      --region "$REGION" \
+      --env-vars-file="$env_file" \
+      --project "$PROJECT_ID" \
+      --quiet 2>/dev/null || true
+    rm -f "$env_file"
+  }
+  
+  # Update env vars after deployment (to set ALLOWED_ORIGINS with comma)
+  echo -e "${BLUE}[verified-proxy] Updating environment variables...${NC}"
+  local env_file=$(mktemp)
+  echo "BACKEND_URL=$backend_url" > "$env_file"
+  echo "ALLOWED_ORIGINS=$allowed_origins" >> "$env_file"
+  gcloud run services update "$service" \
+    --region "$REGION" \
+    --env-vars-file="$env_file" \
+    --project "$PROJECT_ID" \
+    --quiet 2>/dev/null || echo -e "${YELLOW}[verified-proxy] Warning: Failed to update env vars (may need manual update)${NC}"
+  rm -f "$env_file"
+  
+  # Get proxy URL
+  echo -e "${BLUE}[verified-proxy] Waiting for service to be ready...${NC}"
+  sleep 3
+  VERIFIED_PROXY_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+  if [[ -n "$VERIFIED_PROXY_URL" ]]; then
+    echo -e "${GREEN}[verified-proxy] ✓ Deployed successfully${NC}"
+    echo -e "${BLUE}[verified-proxy] URL:${NC} $VERIFIED_PROXY_URL"
+    echo -e "${YELLOW}[verified-proxy] Note: Update VITE_VERIFIED_PROXY_URL in frontend env: $VERIFIED_PROXY_URL${NC}"
+  else
+    echo -e "${YELLOW}[verified-proxy] Deployment completed but URL not available (check Cloud Run console)${NC}"
+  fi
 }
 
 deploy_ws() {
@@ -306,6 +510,9 @@ deploy_ws() {
 
   # Route traffic to latest revision
   gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet
+  
+  # Clean up old revisions (keep last 10)
+  cleanup_old_revisions "$service" "$REGION" 10
 
   WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[ws] Deployed successfully${NC}"
@@ -327,6 +534,12 @@ deploy_py() {
     --set-secrets "TELEGRAM_API_ID=TELEGRAM_API_ID:latest,TELEGRAM_API_HASH=TELEGRAM_API_HASH:latest,TELEGRAM_SESSION_STRING=TELEGRAM_SESSION_STRING:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest" \
     --project "$PROJECT_ID" \
     --quiet
+  
+  # Route traffic to latest revision (if not already)
+  gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet 2>/dev/null || true
+  
+  # Clean up old revisions (keep last 10)
+  cleanup_old_revisions "$service" "$REGION" 10
   
   echo -e "${GREEN}[py] Deployed successfully${NC}"
   TG_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
@@ -468,8 +681,15 @@ create_indexes() {
   fi
 }
 
-# Setup infrastructure first (idempotent) — skip for web-only deploys to avoid gcloud prompts
-if [[ "$TARGET_API" -eq 1 || "$TARGET_PY" -eq 1 ]]; then
+# Setup infrastructure only on full deploy or explicit check
+# Individual service deploys (--api, --ws, --verified-proxy, --py) skip infra checks for speed
+if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
+  setup_infrastructure
+  create_indexes
+  echo -e "${GREEN}[infra] Infrastructure checks completed${NC}"
+  exit 0
+elif [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_WS" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
+  # Full deploy: run infrastructure checks
   setup_infrastructure
 fi
 
@@ -489,9 +709,16 @@ if [[ "$TARGET_PY" -eq 1 ]]; then
   deploy_py
 fi
 
+if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]]; then
+  deploy_verified_proxy
+fi
+
 # Firestore indexes are only relevant for backend; skip for web-only
-if [[ "$TARGET_API" -eq 1 || "$TARGET_PY" -eq 1 ]]; then
-  create_indexes
+# Create indexes only on full deploy (already handled in --check-infra path above)
+if [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_WS" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
+  if [[ "$TARGET_API" -eq 1 || "$TARGET_PY" -eq 1 ]]; then
+    create_indexes
+  fi
 fi
 
 echo ""
@@ -502,6 +729,9 @@ echo -e "${GREEN}═════════════════════
 # Summary
 if [[ "$TARGET_API" -eq 1 ]] && [[ -n "${API_URL:-}" ]]; then
   echo -e "${BLUE}Backend API:${NC} $API_URL"
+fi
+if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]] && [[ -n "${VERIFIED_PROXY_URL:-}" ]]; then
+  echo -e "${BLUE}Verified Proxy:${NC} $VERIFIED_PROXY_URL"
 fi
 if [[ "$TARGET_WS" -eq 1 ]] && [[ -n "${WS_URL:-}" ]]; then
   echo -e "${BLUE}WS Broker:${NC} $WS_URL"
@@ -516,6 +746,14 @@ fi
 echo ""
 echo -e "${YELLOW}Post-deployment checklist:${NC}"
 echo -e "  ☐ Verify secrets have real API keys (not placeholders)"
+if [[ "$TARGET_API" -eq 1 ]]; then
+  echo -e "  ☐ Update functions-key secret with real value: gcloud secrets versions add functions-key --data-file=-"
+fi
+if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]]; then
+  if [[ -n "${VERIFIED_PROXY_URL:-}" ]]; then
+    echo -e "  ☐ Update VITE_VERIFIED_PROXY_URL in frontend: $VERIFIED_PROXY_URL"
+  fi
+fi
 echo -e "  ☐ Test API health: curl \$API_URL/health"
 echo -e "  ☐ Check Cloud Run logs for errors"
 echo -e "  ☐ Verify traffic is on latest revision"

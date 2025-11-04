@@ -65,6 +65,11 @@ func (h *GenAIHandler) WithModelManager(mm *ai.AIModelManager) *GenAIHandler {
 	return h
 }
 
+// GenerateDirect performs direct GenAI generation without HTTP layer (for internal use)
+func (h *GenAIHandler) GenerateDirect(ctx context.Context, req gen_combined.GenAIRequest) (*gen_combined.GenAIResponse, error) {
+	return h.client.GenAIGenerate(ctx, req)
+}
+
 // GenAIGenerate: unified generation endpoint
 func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

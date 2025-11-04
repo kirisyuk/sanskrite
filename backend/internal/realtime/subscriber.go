@@ -48,9 +48,9 @@ func (s *Subscriber) Start(ctx context.Context, topicNames ...string) error {
 			}
 			sub = created
 		} else {
-			// If subscription exists but ordering is not enabled, recreate for genai.stream topic
+			// If subscription exists but ordering is not enabled, recreate for genai.stream, verified.stream and artifact topics
 			if cfg, err := sub.Config(ctx); err == nil {
-				if !cfg.EnableMessageOrdering && (tname == string(EventGenAIStream) || strings.HasPrefix(tname, "artifact.")) {
+				if !cfg.EnableMessageOrdering && (tname == string(EventGenAIStream) || tname == string(EventVerifiedStream) || strings.HasPrefix(tname, "artifact.")) {
 					_ = sub.Delete(ctx)
 					t := s.client.Topic(tname)
 					created, err := s.client.CreateSubscription(ctx, subID, pubsub.SubscriptionConfig{Topic: t, EnableMessageOrdering: true})
@@ -79,8 +79,8 @@ func (s *Subscriber) run(ctx context.Context, sub *pubsub.Subscription) {
 		et := m.Attributes["eventType"]
 		projectID := m.Attributes["projectId"]
 
-		// Diagnostics: log genai/artifact deliveries with project routing and conn counts
-		if s.logger != nil && (strings.HasPrefix(et, "genai.stream") || strings.HasPrefix(et, "artifact.")) {
+		// Diagnostics: log genai/artifact/verified deliveries with project routing and conn counts
+		if s.logger != nil && (strings.HasPrefix(et, "genai.stream") || strings.HasPrefix(et, "artifact.") || strings.HasPrefix(et, "verified.stream")) {
 			connCount := 0
 			if projectID != "" {
 				connCount = s.hub.GetProjectConnCount(tenant, projectID)
@@ -109,8 +109,13 @@ func (s *Subscriber) run(ctx context.Context, sub *pubsub.Subscription) {
 				"type": et,
 				"data": obj,
 			}
-			// Prefer routing by project if present
-			if projectID != "" {
+			// Verified.stream events: route by verified code from payload
+			if strings.HasPrefix(et, "verified.stream.") {
+				if code, ok := obj["code"].(string); ok && code != "" {
+					s.hub.BroadcastVerified(code, envelope)
+				}
+			} else if projectID != "" {
+				// Prefer routing by project if present
 				// Pass-through projectId inside envelope for FE-side checks too
 				obj["projectId"] = projectID
 				s.hub.BroadcastJSONProject(tenant, projectID, envelope)
@@ -130,7 +135,11 @@ func (s *Subscriber) run(ctx context.Context, sub *pubsub.Subscription) {
 						"type": et,
 						"data": o,
 					}
-					if projectID != "" {
+					if strings.HasPrefix(et, "verified.stream.") {
+						if code, ok := o["code"].(string); ok && code != "" {
+							s.hub.BroadcastVerified(code, envelope)
+						}
+					} else if projectID != "" {
 						o["projectId"] = projectID
 						s.hub.BroadcastJSONProject(tenant, projectID, envelope)
 					} else {

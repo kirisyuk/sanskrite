@@ -101,9 +101,11 @@ func (c *WebCrawler) FetchContent(ctx context.Context, url string) (*FetchResult
 
 // extractHTMLText extracts plain text from HTML content
 func extractHTMLText(htmlBytes []byte) string {
-	// Remove <script> and <style> tags
-	reScript := regexp.MustCompile(`(?is)<(script|style)[^>]*>.*?</\1>`)
+	// Remove <script> and <style> tags (Go regexp doesn't support backreferences, use two patterns)
+	reScript := regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
 	cleaned := reScript.ReplaceAll(htmlBytes, []byte{})
+	reStyle := regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	cleaned = reStyle.ReplaceAll(cleaned, []byte{})
 
 	// Parse HTML
 	doc, err := html.Parse(bytes.NewReader(cleaned))
@@ -147,9 +149,11 @@ func extractHTMLText(htmlBytes []byte) string {
 func extractHTMLTextRegex(htmlBytes []byte) string {
 	html := string(htmlBytes)
 
-	// Remove <script> and <style> blocks
-	reScriptStyle := regexp.MustCompile(`(?is)<(script|style)[^>]*>.*?</\1>`)
-	html = reScriptStyle.ReplaceAllString(html, "")
+	// Remove <script> and <style> blocks (Go regexp doesn't support backreferences, use two patterns)
+	reScript := regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	html = reScript.ReplaceAllString(html, "")
+	reStyle := regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	html = reStyle.ReplaceAllString(html, "")
 
 	// Replace <br> and </p> with newlines
 	reBr := regexp.MustCompile(`(?i)<br\s*/?>`)
