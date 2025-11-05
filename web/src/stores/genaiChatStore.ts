@@ -1812,6 +1812,19 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const projectId = s.projectId;
       const lastAssistant = [...s.messages].reverse().find((m) => m.role === 'assistant');
       if (lastAssistant && lastAssistant.content.trim()) {
+        // Check if interaction for this message already exists (prevent duplicates)
+        const existingInteraction = s.interactions.find((it) => 
+          it.kind === 'assistant' && 
+          ((it as any).originalMessageId === lastAssistant.id || it.id === lastAssistant.id)
+        );
+        if (existingInteraction) {
+          console.log('[onDone] Interaction already exists for this assistant message, skipping duplicate creation', { 
+            messageId: lastAssistant.id, 
+            existingInteractionId: existingInteraction.id 
+          });
+          return {} as any; // Return empty update to prevent duplicate
+        }
+        
         const id = Date.now().toString() + '-ia';
         const createdAt = new Date().toISOString();
         const meta = s.pendingAssistantMeta;

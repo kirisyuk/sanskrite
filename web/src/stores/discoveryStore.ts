@@ -92,6 +92,9 @@ interface DiscoveryState {
   setPendingSources: (sources: Array<{ id: string; kind: 'web' | 'telegram'; status: string }>) => void;
 }
 
+// Track processed stream.done events to prevent duplicates
+const processedDoneEvents = new Set<string>();
+
 export const useDiscoveryStore = create<DiscoveryState>((set) => ({
   sources: [],
   loading: false,
@@ -425,6 +428,18 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
                     if (Array.isArray(msg.data?.toolCalls)) st.onToolResult(msg.data.toolCalls);
                     break;
                   case 'genai.stream.done':
+                    // Prevent duplicate processing of done events (PubSub can deliver messages multiple times)
+                    const streamId = msg.data?.streamId;
+                    const doneEventKey = streamId ? `done:${streamId}` : null;
+                    if (doneEventKey && processedDoneEvents.has(doneEventKey)) {
+                      console.log('[DiscoveryStore] Skipping duplicate genai.stream.done event', { streamId });
+                      break;
+                    }
+                    if (doneEventKey) {
+                      processedDoneEvents.add(doneEventKey);
+                      // Clean up after 5 minutes to prevent memory leak
+                      setTimeout(() => processedDoneEvents.delete(doneEventKey), 5 * 60 * 1000);
+                    }
                     // CRITICAL: onDoneMeta must run BEFORE onDone so that usage/searchQueries/sources are in state when creating Interaction
                     st.onDoneMeta({ 
                       usage: msg.data?.usage, 
