@@ -43,7 +43,7 @@
   /* Base backgrounds - graphite black with purple-blue gradient */
   --bg-body: #121212;           /* Graphite black */
   --bg-canvas-deep: #1A1A2E;   /* Slightly lighter for gradient end */
-  --bg-sidebar: #141414;       /* Slightly lighter for sidebar */
+  --bg-sidebar: #1A1A1A;       /* Graphite gray same as input field */
   --bg-elevated: #2C2C4A;      /* Main UI surface (modals, cards) */
   --bg-surface: #121212;       /* Keep equal to body for seamless look */
   --bg-content: #2C2C4A;      /* Main content containers */
@@ -728,9 +728,11 @@ html, body, .content-area, .main-content-container, .card {
 /* Sidebar styles */
 .sidebar-panel {
   box-shadow: none;
-  border: none;
+  border: 1px solid var(--border-input, #505050);  /* Gray border like input field */
 }
-
+[data-theme="dark"] .sidebar-panel {
+  background-color: var(--bg-sidebar);  /* Graphite gray */
+}
 [data-theme="light"] .sidebar-panel {
   border: 1px solid var(--surface-770);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
