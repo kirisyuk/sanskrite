@@ -773,14 +773,6 @@ html, body, .content-area, .main-content-container, .card {
   color: #FFFFFF;
 }
 
-.markdown pre code {
-  background: none;
-  padding: 0;
-  border: none;
-  color: inherit;
-  font-size: inherit;
-}
-
 .markdown code:not(pre code) {
   background-color: rgba(255, 255, 255, 0.08);
   padding: 2px 4px;
