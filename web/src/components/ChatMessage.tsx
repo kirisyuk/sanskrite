@@ -29,6 +29,40 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   averageTimingSeconds,
 }) => {
   const { t } = useTranslation();
+  
+  // Icon components for roles
+  const UserIcon = () => (
+    <div className="flex items-center justify-center rounded-full" style={{ 
+      width: 20, 
+      height: 20, 
+      backgroundColor: 'var(--text-tertiary-weak)',
+      color: 'var(--bg-body)',
+      flexShrink: 0
+    }}>
+      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="8" r="3"/>
+        <path d="M4 20c0-3.314 3.134-6 7-6s7 2.686 7 6"/>
+      </svg>
+    </div>
+  );
+
+  const RobotIcon = () => (
+    <div className="flex items-center justify-center rounded-full" style={{ 
+      width: 20, 
+      height: 20, 
+      backgroundColor: 'var(--text-tertiary-weak)',
+      color: 'var(--bg-body)',
+      flexShrink: 0
+    }}>
+      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="5" y="2" width="14" height="20" rx="2"/>
+        <circle cx="9" cy="9" r="1.5" fill="currentColor"/>
+        <circle cx="15" cy="9" r="1.5" fill="currentColor"/>
+        <path d="M9 14h6M9 17h6"/>
+      </svg>
+    </div>
+  );
+
   const header = headerText || (role === 'user' ? t('chatMessage.userRole', { defaultValue: 'you' }) : t('chatMessage.assistantRole', { defaultValue: 'assistant' }));
   const containerStyle: React.CSSProperties = {
     maxWidth: align === 'right' ? '75%' : '100%',
@@ -39,22 +73,43 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     borderLeft: leftAccent ? '2px solid var(--overlay-line-90)' : 'none',
   };
   
-  // Build header text with timing info
-  let headerTextContent = header;
-  if (isThinking && role === 'assistant') {
+  // Build header with icon and optional timing info
+  let headerContent: React.ReactNode = (
+    <div className="flex items-center gap-2">
+      {role === 'user' ? <UserIcon /> : <RobotIcon />}
+      {headerText && (
+        <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+          {headerText}
+        </span>
+      )}
+    </div>
+  );
+
+  if (isThinking && role === 'assistant' && !headerText) {
     const thinkingText = t('chatMessage.thinking', { seconds: thinkingSeconds ?? 0, defaultValue: `thinking ${thinkingSeconds ?? 0} sec` });
-    headerTextContent = `${header} (${thinkingText})`;
-    if (averageTimingSeconds !== null && averageTimingSeconds !== undefined) {
-      const averageText = t('chatMessage.averageResponseTime', { seconds: averageTimingSeconds, defaultValue: `average response time ${averageTimingSeconds} sec` });
-      headerTextContent += ` • ${averageText}`;
-    }
+    headerContent = (
+      <div className="flex items-center gap-2">
+        <RobotIcon />
+        <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+          {thinkingText}
+        </span>
+        {averageTimingSeconds !== null && averageTimingSeconds !== undefined && (
+          <>
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>•</span>
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+              {t('chatMessage.averageResponseTime', { seconds: averageTimingSeconds, defaultValue: `average response time ${averageTimingSeconds} sec` })}
+            </span>
+          </>
+        )}
+      </div>
+    );
   }
   
   // Transparent, no borders; color handled by parent theme
   return (
     <div className={`rounded-2xl px-4 py-3 ${align === 'right' ? 'ml-auto' : ''}`} style={containerStyle}>
-      <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-        {headerTextContent}
+      <div className="mb-1">
+        {headerContent}
       </div>
       <div className="text-13" style={{ color: 'var(--text-heading)' }}>
         {isError ? (
