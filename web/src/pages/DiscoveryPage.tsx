@@ -2757,11 +2757,8 @@ const DiscoveryPage: React.FC = () => {
                                       </code>
                                     );
                                   }
-                                  return (
-                                    <pre>
-                                      <code {...rest} className={className}>{children}</code>
-                                    </pre>
-                                  );
+                                  // For code blocks, ReactMarkdown already wraps in <pre>, just return <code>
+                                  return <code {...rest} className={className}>{children}</code>;
                                 },
                                 ul: (props: React.DetailedHTMLProps<React.HTMLAttributes<HTMLUListElement>, HTMLUListElement>) => (
                                   <ul {...props} style={{ paddingLeft: '1.25rem' }} />
@@ -3099,11 +3096,8 @@ const DiscoveryPage: React.FC = () => {
                                   if (inline || isSingleLineBlock) {
                                     return (<code {...rest} style={{ backgroundColor: 'var(--white-10)', padding: '0 3px', borderRadius: 4 }}>{text}</code>);
                                   }
-                                  return (
-                                    <pre>
-                                      <code {...rest} className={className}>{children}</code>
-                                    </pre>
-                                  );
+                                  // For multi-line code blocks ReactMarkdown provides the <pre> wrapper; return only <code>
+                                  return <code {...rest} className={className}>{children}</code>;
                                 },
                                 ul: (props: React.DetailedHTMLProps<React.HTMLAttributes<HTMLUListElement>, HTMLUListElement>) => (<ul {...props} style={{ paddingLeft: '1.25rem' }} />),
                                 ol: (props: React.DetailedHTMLProps<React.OlHTMLAttributes<HTMLOListElement>, HTMLOListElement>) => (<ol {...props} style={{ paddingLeft: '1.25rem' }} />),
