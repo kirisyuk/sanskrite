@@ -35,13 +35,14 @@ export default function LegalModal({ type, onClose }: LegalModalProps) {
       onClick={onClose}
     >
       <div
-        className="relative rounded-xl shadow-2xl overflow-hidden"
+        className="relative rounded-xl overflow-hidden"
         style={{
           width: '70%',
           maxWidth: '1200px',
           height: '85vh',
           backgroundColor: 'var(--bg-elevated)',
-          border: '1px solid var(--overlay-line-90)'
+          border: '1px solid var(--overlay-line-90)',
+          boxShadow: '0 12px 48px rgba(0, 0, 0, 0.4)'  /* Enhanced shadow for depth */
         }}
         onClick={(e) => e.stopPropagation()}
       >

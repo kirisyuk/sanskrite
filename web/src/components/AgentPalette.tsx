@@ -72,7 +72,7 @@ export const AgentPalette: React.FC<AgentPaletteProps> = ({ mode, visible, title
       <div className="absolute inset-0">
         <div
           ref={containerRef}
-          className="rounded-xl shadow-xl"
+          className="rounded-xl"
           style={{
             position: 'fixed',
             width: widthPx,
@@ -81,7 +81,8 @@ export const AgentPalette: React.FC<AgentPaletteProps> = ({ mode, visible, title
             bottom: bottomPx ?? undefined,
             top: bottomPx ? undefined : 60,
             backgroundColor: 'var(--bg-elevated)',
-            border: '1px solid var(--overlay-line-90)'
+            border: '1px solid var(--overlay-line-90)',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)'  /* Enhanced shadow for depth */
           }}
         >
           <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>

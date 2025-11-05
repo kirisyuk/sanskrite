@@ -532,6 +532,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
         totalTokens += interaction.usage.totalTokens;
       } else {
         // Fallback: estimate from content (chars / 4)
+        // This includes document.attach interactions automatically
         const content = interaction.summary || interaction.content || '';
         totalTokens += Math.ceil(content.length / 4);
       }
@@ -1024,7 +1025,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       {showSettings && createPortal(
         <div className="fixed inset-0 z-[80] flex items-center justify-center" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/30" onClick={() => setShowSettings(false)} />
-          <div className="relative w-full max-w-lg rounded-xl border p-4" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--overlay-line-90)' }}>
+          <div className="relative w-full max-w-lg rounded-xl border p-4" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--overlay-line-90)', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)' }}>
             <div className="flex items-center justify-between mb-3">
               <div className="text-lg" style={{ color: 'var(--text-heading)' }}>{t('unfold.request.settingsModal.title')}</div>
               <button onClick={() => setShowSettings(false)} aria-label="Close" className="rounded-full" style={{ width: 32, height: 32 }}>

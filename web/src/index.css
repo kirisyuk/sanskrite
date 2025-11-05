@@ -34,19 +34,19 @@
 }
 @keyframes etg-pulse-blue {
   0% { box-shadow: 0 0 0 0 var(--brand-30); }
-  70% { box-shadow: 0 0 0 12px rgba(59, 130, 246, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+  70% { box-shadow: 0 0 0 12px rgba(0, 123, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0); }
 }
 
 /* Theme variables */
 [data-theme="dark"], :root {
-  /* Base backgrounds */
-  --bg-body: #0A0A0F;           /* Almost black */
-  --bg-canvas-deep: #121216;    /* Deep gray-blue end of gradient */
-  --bg-sidebar: #121418;        /* One tone lighter for side/inspector */
-  --bg-elevated: #16181C;       /* Components surface inside canvas (slightly lighter than body) */
-  --bg-surface: #0A0A0F;        /* Keep equal to body for seamless look */
-  --bg-content: #16181C;        /* Main content containers */
+  /* Base backgrounds - inspired by Bot Hub dark theme */
+  --bg-body: #1A1A2E;           /* Deep indigo-blue base */
+  --bg-canvas-deep: #2C2C4A;   /* Indigo-blue end of gradient */
+  --bg-sidebar: #1F1F35;       /* Slightly lighter for sidebar */
+  --bg-elevated: #2C2C4A;      /* Main UI surface (modals, cards) */
+  --bg-surface: #1A1A2E;       /* Keep equal to body for seamless look */
+  --bg-content: #2C2C4A;      /* Main content containers */
 
   /* Borders */
   --border-none: transparent;
@@ -54,13 +54,13 @@
 
   /* Typography */
   --text-primary: #FFFFFF;
-  --text-secondary: #A0A0AA;
+  --text-secondary: #A0A0B0;   /* Slightly adjusted for new background */
   --text-muted: #9FA5B3;
   --text-disabled: #7A7A85;
   --text-on-light: #1A1C1F;
 
   /* Accents */
-  --accent-brand: #739aeb;      /* Primary action blue (updated) */
+  --accent-brand: #007BFF;      /* Vibrant blue accent */
   --accent-badge: #304FFF;      /* Badge background (e.g., MAX) */
   --accent-success: #10B981;
   --accent-danger: #EF4444;
@@ -83,21 +83,21 @@
   --gray-300: #D1D5DB;
   --gray-200: #E5E7EB;
   --neutral-50: #F1F3F5;
-  --surface-700: #1A1D22; /* tab active */
-  --surface-750: #2A2D32;
-  --surface-770: #2A2F36;
-  --brand-hover: #5f88e3;
+  --surface-700: #1F1F35;      /* tab active - adjusted for new scheme */
+  --surface-750: #2C2C4A;       /* Matching elevated */
+  --surface-770: #353550;       /* Slightly lighter for borders/hover */
+  --brand-hover: #0066CC;       /* Darker blue for hover */
   --danger-600: #DC2626;
   --danger-300: #FCA5A5;
   --warning-300: #FACC15;
 
-  /* Precomputed alpha tokens (preserve exact current visuals) */
+  /* Precomputed alpha tokens - updated for new brand color */
   --blue600-20: rgba(37, 99, 235, 0.20);
   --blue600-30: rgba(37, 99, 235, 0.30);
-  --brand-10: rgba(59, 130, 246, 0.10);
-  --brand-20: rgba(59, 130, 246, 0.20);
-  --brand-30: rgba(59, 130, 246, 0.30);
-  --brand-35: rgba(59, 130, 246, 0.35);
+  --brand-10: rgba(0, 123, 255, 0.10);
+  --brand-20: rgba(0, 123, 255, 0.20);
+  --brand-30: rgba(0, 123, 255, 0.30);
+  --brand-35: rgba(0, 123, 255, 0.35);
   --toggle-15: rgba(244, 162, 97, 0.15); /* two tones lighter than toggle */
   --toggle-25: rgba(244, 162, 97, 0.25);
   --danger-10: rgba(239, 68, 68, 0.10);
@@ -114,28 +114,28 @@
   --white-10: rgba(255, 255, 255, 0.10);
   --white-20: rgba(255, 255, 255, 0.20);
   --neutral-300-20: rgba(160, 165, 173, 0.20);
-  --overlay-dark-95: rgba(12, 15, 20, 0.95);
-  --overlay-deep-95: rgba(24, 30, 36, 0.95);
-  --overlay-line-90: rgba(36, 42, 48, 0.90);
-  --overlay-30: rgba(42, 45, 50, 0.30);
-  --overlay-50: rgba(42, 45, 50, 0.50);
-  --overlay-60: rgba(42, 45, 50, 0.60);
+  --overlay-dark-95: rgba(26, 26, 46, 0.95);  /* Updated for new bg */
+  --overlay-deep-95: rgba(44, 44, 74, 0.95);  /* Updated for new elevated */
+  --overlay-line-90: rgba(60, 60, 85, 0.90);  /* Adjusted for new scheme */
+  --overlay-30: rgba(44, 44, 74, 0.30);
+  --overlay-50: rgba(44, 44, 74, 0.50);
+  --overlay-60: rgba(44, 44, 74, 0.60);
   --danger-80: rgba(220, 38, 38, 0.80);
   --danger-90: rgba(220, 38, 38, 0.90);
   --neutral-300-30: rgba(160, 165, 173, 0.30);
-  --brand-25: rgba(59, 130, 246, 0.25);
+  --brand-25: rgba(0, 123, 255, 0.25);
   --research-25: rgba(255, 179, 102, 0.25);
-  --overlay-40: rgba(42, 45, 50, 0.40);
-  --overlay-80: rgba(35, 40, 48, 0.80);
+  --overlay-40: rgba(44, 44, 74, 0.40);
+  --overlay-80: rgba(44, 44, 74, 0.80);
   --disabled-20: rgba(94, 100, 108, 0.20);
   --text-tertiary-weak: #8B919A;
-  --avatar-bg: #1F1F25;
+  --avatar-bg: #2C2C4A;
 
   /* New Chat button theme tokens (dark) */
   --newchat-bg: var(--surface-770);         /* base */
-  --newchat-bg-hover: #343A42;              /* ~1 tone lighter than surface-770 */
+  --newchat-bg-hover: #3F3F5F;              /* ~1 tone lighter than surface-770 */
   /* User message bubble background (dark): 1 tone darker than newchat-bg */
-  --user-msg-bg: #24282E;
+  --user-msg-bg: #252545;
   /* Agent/system info bubbles (dark) */
   --agent-info-bg: var(--surface-750);
 }
@@ -390,9 +390,16 @@ p {
 /* Card component */
 .card {
   background-color: var(--bg-elevated);
-  border-radius: 8px;
+  border-radius: 12px;  /* More rounded for modern look */
   padding: 20px;
   border: none; /* Remove borders */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);  /* Subtle shadow for depth */
+}
+[data-theme="dark"] .card {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);  /* Softer shadow in dark theme */
+}
+[data-theme="light"] .card {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);  /* Lighter shadow in light theme */
 }
 
 /* Tabs (TopBar) */
@@ -403,7 +410,7 @@ p {
 .tab {
   font-size: 0.8125rem;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: 8px;  /* More rounded */
   cursor: pointer;
   font-weight: 500;
   background-color: transparent;
@@ -426,14 +433,18 @@ p {
   background-color: rgba(30,35,42,0.9);
   border: 1px solid rgba(231,234,240,0.15);
   color: #E7EAF0;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);  /* Enhanced shadow */
+  border-radius: 8px;  /* More rounded */
+}
+[data-theme="dark"] .lang-select {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);  /* Softer shadow in dark theme */
 }
 [data-theme="light"] .lang-select {
   background-color: rgba(255,255,255,0.98);
   border: 1px solid rgba(11,13,18,0.15);
   color: #0B0D12;
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  border-radius: 8px;  /* More rounded */
 }
 
 /* Button components */
@@ -445,7 +456,7 @@ p {
   padding: 8px 16px;
   font-size: 0.8125rem; /* 13px to match Settings */
   font-weight: 500;      /* medium */
-  border-radius: 6px;
+  border-radius: 8px;  /* More rounded */
   border: 1px solid transparent;
   cursor: pointer;
   transition: all 150ms ease;
@@ -492,11 +503,17 @@ p {
 
 .auth-card {
   background-color: var(--bg-elevated);
-  border-radius: 12px;
+  border-radius: 16px;  /* More rounded */
   padding: 48px;
   max-width: 440px;
   width: 100%;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] .auth-card {
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);  /* Enhanced shadow for depth */
+}
+[data-theme="light"] .auth-card {
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);  /* Softer shadow in light theme */
 }
 
 .auth-logo {
@@ -527,7 +544,7 @@ p {
   font-size: 0.875rem;
   background-color: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: 10px;  /* More rounded */
   color: var(--text-primary);
   transition: all 150ms ease;
   margin-bottom: 16px;
@@ -551,7 +568,7 @@ p {
   background-color: var(--accent-brand);
   color: var(--text-on-light);
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;  /* More rounded */
   cursor: pointer;
   transition: all 150ms ease;
   margin-top: 8px;
@@ -603,7 +620,7 @@ p {
 .auth-error {
   background-color: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.2);
-  border-radius: 8px;
+  border-radius: 10px;  /* More rounded */
   padding: 12px 16px;
   color: #FCA5A5;
   font-size: 0.875rem;
@@ -646,7 +663,7 @@ p {
   font-size: 0.875rem;
   background-color: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 8px;  /* More rounded */
   color: var(--text-primary);
   transition: all 150ms ease;
 }
@@ -654,7 +671,7 @@ p {
 .input:focus {
   outline: none;
   border-color: var(--accent-brand);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 3px var(--brand-10);
 }
 
 .input::placeholder {
@@ -894,7 +911,7 @@ html, body, .content-area, .main-content-container, .card {
 }
 
 .rounded {
-  border-radius: 6px;
+  border-radius: 8px;  /* More rounded */
 }
 
 .rounded-full {
