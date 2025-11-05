@@ -481,7 +481,10 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
 			return err
 		}
-		return onEvent(StreamEvent{Type: "done", Usage: toGemUsage(u), SearchQueries: qs, Sources: srcs})
+		log.Printf("[Combined Stream] OpenAI done event received, Usage before conversion: %+v", u)
+		convertedUsage := toGemUsage(u)
+		log.Printf("[Combined Stream] OpenAI done event, Usage after conversion: %+v", convertedUsage)
+		return onEvent(StreamEvent{Type: "done", Usage: convertedUsage, SearchQueries: qs, Sources: srcs})
 	case "grok":
 		if c.gr == nil {
 			return errors.New("grok not configured")

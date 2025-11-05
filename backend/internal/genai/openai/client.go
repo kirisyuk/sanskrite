@@ -696,7 +696,11 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 	// Calculate TotalTokens if not set
 	if accUsage.TotalTokens == 0 && (accUsage.PromptTokens > 0 || accUsage.OutputTokens > 0) {
 		accUsage.TotalTokens = accUsage.PromptTokens + accUsage.OutputTokens
+		log.Printf("[OpenAI Stream] Calculated total_tokens: %d (prompt: %d + output: %d)", accUsage.TotalTokens, accUsage.PromptTokens, accUsage.OutputTokens)
 	}
+	
+	// Log final usage before returning
+	log.Printf("[OpenAI Stream] Final usage before return: promptTokens=%d outputTokens=%d totalTokens=%d reasoningTokens=%d", accUsage.PromptTokens, accUsage.OutputTokens, accUsage.TotalTokens, accUsage.ReasoningTokens)
 	
 	// Log final usage for debugging
 	if accUsage.PromptTokens > 0 || accUsage.OutputTokens > 0 {
