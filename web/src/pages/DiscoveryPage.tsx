@@ -2758,7 +2758,7 @@ const DiscoveryPage: React.FC = () => {
                                     );
                                   }
                                   return (
-                                    <pre style={{ backgroundColor: '#1F1F35', padding: 8, borderRadius: 8, overflowX: 'auto', border: '1px solid var(--overlay-line-90)' }}>
+                                    <pre style={{ backgroundColor: '#151515', padding: 8, borderRadius: 8, overflowX: 'auto', border: '1px solid var(--overlay-line-90)', color: '#FFFFFF' }}>
                                       <code {...rest} className={className}>{children}</code>
                                     </pre>
                                   );
@@ -3100,7 +3100,7 @@ const DiscoveryPage: React.FC = () => {
                                     return (<code {...rest} style={{ backgroundColor: 'var(--white-10)', padding: '0 3px', borderRadius: 4 }}>{text}</code>);
                                   }
                                   return (
-                                    <pre style={{ backgroundColor: '#1F1F35', padding: 8, borderRadius: 8, overflowX: 'auto', border: '1px solid var(--overlay-line-90)' }}>
+                                    <pre style={{ backgroundColor: '#151515', padding: 8, borderRadius: 8, overflowX: 'auto', border: '1px solid var(--overlay-line-90)', color: '#FFFFFF' }}>
                                       <code {...rest} className={className}>{children}</code>
                                     </pre>
                                   );
