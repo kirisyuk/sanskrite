@@ -194,8 +194,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
 
   // Memoize styles for textarea
   const textareaStyle = React.useMemo(() => ({
-    backgroundColor: 'transparent',
-    border: 'none',
+    backgroundColor: 'transparent',  /* Transparent since container has bg */
+    border: 'none',  /* No border since container has border */
     outline: 'none',
     color: 'var(--text-heading)'
   }), []);
@@ -343,8 +343,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     });
   }, [lastDocEvent]);
   const containerStyle: React.CSSProperties = React.useMemo(() => ({
-    borderColor: dangerTint ? 'rgba(220, 20, 60, 0.35)' : 'var(--overlay-line-90)',
-    backgroundColor: 'var(--bg-elevated)',
+    borderColor: dangerTint ? 'rgba(220, 20, 60, 0.35)' : 'var(--border-input, #505050)',  /* Gray border */
+    backgroundColor: 'var(--bg-input, #1A1A1A)',  /* Graphite black */
     boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
     backgroundImage: dangerTint ? 'linear-gradient(0deg, rgba(255,0,0,0.04), rgba(255,0,0,0.04))' : undefined,
   }), [theme, dangerTint]);
