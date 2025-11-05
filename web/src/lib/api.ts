@@ -725,18 +725,16 @@ class ApiClient {
     return res.data;
   }
 
-  // Get average timing estimate for a model and token count
-  async getAverageTiming(params: { provider: string; model: string; estimatedOutputTokens: number }): Promise<{
+  // Get average timing estimate for a model (without token count)
+  async getAverageTiming(params: { provider: string; model: string }): Promise<{
     estimatedSeconds: number | null;
     provider: string;
     model: string;
-    estimatedTokens: number;
   }> {
     const res = await this.client.get(`/api/v1/usage/avg-timing`, {
       params: {
         provider: params.provider,
         model: params.model,
-        estimatedOutputTokens: params.estimatedOutputTokens.toString(),
       },
     });
     return res.data;

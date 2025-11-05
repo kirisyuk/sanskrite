@@ -16,13 +16,21 @@ export function isGeneratingDiscussionFlowAnalysis(projectId: string, messageCou
 
 export interface DiscussionFlowAnalysis {
   blindSpots: string[];
-  recommendations: string[];
+  frameShiftRecommendations: string[];
   frame: string;
   confidence: 'low' | 'medium' | 'high';
+  // Assistant stance and risk profile (from eval.stance)
+  assistantStance?: string;
+  assistantRiskProfile?: {
+    score: number;
+    level: 'High' | 'Medium' | 'Low';
+    rationale: string;
+    triggerCategories: string[];
+  };
 }
 
 /**
- * Generates structured analysis for discussion flow (blind spots, recommendations, frame, confidence).
+ * Generates structured analysis for discussion flow (blind spots, frame shift recommendations, frame, confidence).
  * Creates an interaction with subkind 'discussion.flow.analysis'.
  * 
  * @param projectId - Project ID
@@ -45,7 +53,6 @@ export async function generateDiscussionFlowAnalysis(
   // Check if generation is already in progress
   const analysisKey = `${projectId}:${chatMessages.length}`;
   if (generatingAnalyses.has(analysisKey)) {
-    console.log('[DiscussionFlowAnalysis] Generation already in progress, skipping', { analysisKey });
     return;
   }
 
@@ -81,8 +88,64 @@ export async function generateDiscussionFlowAnalysis(
     // Build transcript from messages
     let transcript = '';
     if (existingAnalysis && lastPair) {
-      // Incremental update: use previous analysis + last pair
-      transcript = `PREVIOUS ANALYSIS:\n${JSON.stringify(existingAnalysis, null, 2)}\n\nLAST MESSAGE PAIR:\n${lastPair.map(m => `${m.role}: ${m.content}`).join('\n')}`;
+      // Incremental update: use previous analysis + recent context (last 3-5 message pairs) + last pair
+      // Get recent message pairs for context (but limit to avoid exceeding context window)
+      const messagesForAnalysis = chatMessages.filter(m => 
+        m.role === 'user' || m.role === 'assistant' || (m.role && (m as any).agentProfile)
+      );
+      
+      // Extract recent message pairs (last 3-5 pairs, excluding the lastPair which we'll add separately)
+      const recentPairs: Array<Array<{ role: string; content: string }>> = [];
+      let userMsg: { role: string; content: string } | null = null;
+      
+      // Rough token estimation: ~4 chars per token
+      const maxContextChars = Math.floor(maxContextTokens * 4);
+      let contextChars = 0;
+      const existingAnalysisChars = JSON.stringify(existingAnalysis, null, 2).length;
+      const lastPairChars = lastPair.map(m => `${m.role}: ${m.content}`).join('\n').length;
+      const basePromptChars = 2000; // Rough estimate for prompt overhead
+      const availableChars = maxContextChars - existingAnalysisChars - lastPairChars - basePromptChars;
+      
+      // Go backwards from the end, but skip the last pair (it's already in lastPair)
+      for (let i = messagesForAnalysis.length - 1; i >= 0; i--) {
+        const msg = messagesForAnalysis[i];
+        
+        // Skip if this is part of lastPair
+        let isLastPair = false;
+        for (const lp of lastPair) {
+          if (lp.content === msg.content && lp.role === msg.role) {
+            isLastPair = true;
+            break;
+          }
+        }
+        if (isLastPair) {
+          continue;
+        }
+        
+        const msgChars = (msg.content || '').length;
+        
+        if (msg.role === 'assistant' || (msg.role && (msg as any).agentProfile)) {
+          if (userMsg) {
+            const pairChars = userMsg.content.length + msgChars + 50; // +50 for formatting
+            if (contextChars + pairChars > availableChars && recentPairs.length > 0) {
+              break; // Don't exceed available context
+            }
+            recentPairs.unshift([userMsg, msg]);
+            contextChars += pairChars;
+            userMsg = null;
+            if (recentPairs.length >= 5) break; // Limit to 5 recent pairs
+          }
+        } else if (msg.role === 'user') {
+          userMsg = msg;
+        }
+      }
+      
+      // Build context section
+      const recentContext = recentPairs.length > 0 
+        ? `\n\nRECENT DISCUSSION CONTEXT (last ${recentPairs.length} message pairs):\n${recentPairs.map(pair => pair.map(m => `${m.role}: ${m.content}`).join('\n')).join('\n\n')}`
+        : '';
+      
+      transcript = `PREVIOUS ANALYSIS:\n${JSON.stringify(existingAnalysis, null, 2)}${recentContext}\n\nLAST MESSAGE PAIR (new):\n${lastPair.map(m => `${m.role}: ${m.content}`).join('\n')}`;
     } else {
       // Full analysis: use all messages (limit to 70% of context)
       const messagesForAnalysis = chatMessages.filter(m => 
@@ -114,6 +177,13 @@ export async function generateDiscussionFlowAnalysis(
     }
 
     // Schema for structured response
+    const riskCategories = [
+      'medical_or_mental_health',
+      'self_harm_or_life_threats',
+      'law_immigration_tax_finance_investments_insurance',
+      'relationships_abuse_children_vulnerable_groups',
+      'safety_emergency',
+    ];
     const schema = {
       type: 'object',
       additionalProperties: false,
@@ -129,15 +199,15 @@ export async function generateDiscussionFlowAnalysis(
             description: 'Blind spot or gap in the discussion that needs to be addressed'
           }
         },
-        recommendations: {
+        frameShiftRecommendations: {
           type: 'array',
-          minItems: 2,
-          maxItems: 8,
+          minItems: 0,
+          maxItems: 2,
           items: {
             type: 'string',
-            minLength: 10,
-            maxLength: 300,
-            description: 'Recommendation for deepening or expanding the discussion'
+            minLength: 20,
+            maxLength: 500,
+            description: 'Recommendation for shifting the discussion frame to be more effective in achieving the presumed goal. Should formulate how the discussion frame could be reframed for better effectiveness.'
           }
         },
         frame: {
@@ -150,9 +220,27 @@ export async function generateDiscussionFlowAnalysis(
           type: 'string',
           enum: ['low', 'medium', 'high'],
           description: 'Confidence level in the analysis. Should be low on early stages of discussion, medium as more context accumulates, high when discussion is well-developed.'
+        },
+        assistantStance: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 600,
+          description: '1-2 concise sentences (<=100 words) that state what the assistant seems to be asserting/pursuing in the most recent assistant response, avoiding moral judgement and unsupported assumptions. Only analyze the LAST assistant message in the transcript.'
+        },
+        assistantRiskProfile: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            score: { type: 'number', minimum: 0, maximum: 1 },
+            level: { type: 'string', enum: ['High', 'Medium', 'Low'] },
+            rationale: { type: 'string', minLength: 1, maxLength: 600 },
+            triggerCategories: { type: 'array', items: { type: 'string', enum: riskCategories }, minItems: 0 },
+          },
+          required: ['score', 'level', 'rationale', 'triggerCategories'],
+          description: 'EU AI Act risk assessment for the most recent assistant response. High risk auto-triggers (must set level to High ONLY if the content provides PERSONAL, ACTIONABLE guidance): medical/mental health, self-harm/suicide/life threats, law/immigration/tax/finance/investments/insurance (personal advice only), relationships/abuse/children/vulnerable groups (personal situations only), safety/emergency (personal instructions). RISK LEVEL RULES: High: score in [0.7, 1], Medium: score in [0.3, 0.7), Low: score in [0, 0.3).'
         }
       },
-      required: ['blindSpots', 'recommendations', 'frame', 'confidence']
+      required: ['blindSpots', 'frameShiftRecommendations', 'frame', 'confidence']
     } as any;
 
     const schemaText = JSON.stringify(schema, null, 2);
@@ -160,22 +248,69 @@ export async function generateDiscussionFlowAnalysis(
     // Prompt
     const updateMode = existingAnalysis && lastPair;
     const prompt = updateMode
-      ? `You are an expert analyst reviewing a discussion flow analysis.
+      ? `You are an expert analyst reviewing a discussion flow analysis. Your most valuable contribution is evaluating whether the team is asking the RIGHT question, not just answering their stated question well.
 
 Task:
 1. Review the PREVIOUS ANALYSIS provided
-2. Review the LAST MESSAGE PAIR (new user message and assistant/agent response)
-3. Update the analysis based on the new information:
-   - Update blind spots if new gaps are revealed or old ones are addressed
-   - Update recommendations based on the new turn in the discussion
-   - Refine the frame identification if the discussion direction has shifted
-   - Update confidence level (should increase as discussion develops)
+2. Review the RECENT DISCUSSION CONTEXT (last 3-5 message pairs) to understand the flow
+3. Review the LAST MESSAGE PAIR (new user message and assistant/agent response)
+4. Update the analysis incrementally based on the new information, MINIMIZING CHANGES to preserve stability
+5. Analyze the LAST assistant/agent response for stance and risk profile
+
+CRITICAL: INCREMENTAL UPDATE REQUIREMENTS:
+- DO NOT reformulate the entire analysis. Keep most of the previous analysis unchanged.
+- Only modify elements that are DIRECTLY affected by the new message pair.
+- Preserve elements that are still relevant and have not been addressed or changed.
+- Frame: Only update if the discussion direction has clearly shifted. Otherwise, keep it mostly the same, perhaps with minor refinements.
+- Confidence: Should generally increase as discussion develops, but don't change it unless there's a clear reason.
+
+What to UPDATE:
+- Blind Spots: 
+  * Remove items that have been explicitly addressed or resolved in the new messages
+  * Add new blind spots only if they are revealed by the new messages
+  * Keep existing blind spots that are still relevant and not addressed
+  * Preserve the structure and phrasing of items that remain unchanged
+- Frame Shift Recommendations:
+  * Only update if the new messages reveal a significantly different framing opportunity
+  * Keep existing recommendations if they are still relevant
+  * Maximum 2 recommendations total
+- Frame:
+  * Only refine if the discussion direction has clearly shifted
+  * Keep most of the previous frame description if it's still accurate
+  * Minor refinements are acceptable, but avoid complete reformulation
+- Confidence:
+  * Should generally increase as discussion develops
+  * Low: < 3 message pairs, Medium: 3-8 pairs, High: > 8 pairs
+  * Only change if there's a clear reason based on discussion maturity
+- Assistant Stance and Risk Profile:
+  * ALWAYS update these fields based on the LAST assistant/agent response in the transcript
+  * Extract stance: 1-2 concise sentences (<=100 words) stating what the assistant seems to be asserting/pursuing
+  * Assess risk profile: EU AI Act risk assessment with score 0..1 and derived level
+  * High risk auto-triggers (set level to High ONLY if content provides PERSONAL, ACTIONABLE guidance):
+    - Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов (только персональные рекомендации)
+    - Самоповреждение/суицид/угрозы жизни и безопасности (всегда High при инструкциях)
+    - Право/иммиграция/налоги/личные финансы/инвестиции/страхование (только персональные советы)
+    - Отношения/абьюз/дети/уязвимые группы (только персональные ситуации и советы)
+    - Безопасность/экстренные ситуации (персональные инструкции)
+  * RISK LEVEL RULES: High: score in [0.7, 1], Medium: score in [0.3, 0.7), Low: score in [0, 0.3)
+
+FRAME ASSESSMENT LOGIC (from consulting perspective):
+- Is this the right problem to solve?
+- Are they addressing symptoms vs. root causes?
+- Is there a more strategic question one level up/down?
+- Suggest alternative framings if current one is suboptimal
+- The highest value is often in reframing the question itself, not just answering it better
 
 STYLE REQUIREMENTS:
 - Blind Spots: Each should identify a specific gap, assumption, or missing consideration. 10-300 characters each.
-- Recommendations: Each should be a concrete suggestion for deepening or expanding the discussion. 10-300 characters each.
+- Frame Shift Recommendations: Each should formulate how the discussion frame could be reframed to be more effective in achieving the presumed goal. Consider: Is this the right problem? Are they addressing symptoms vs. root causes? Is there a more strategic question one level up/down? Suggest alternative framings if current one is suboptimal. Maximum 2 recommendations. 20-500 characters each. Only include if a meaningful frame shift would improve effectiveness.
 - Frame: Should capture what goals the user is likely trying to achieve. 20-500 characters.
 - Confidence: Should reflect the maturity of the discussion. Low for early stages (< 3 turns), medium for developing (3-8 turns), high for well-developed (> 8 turns).
+
+CRITICAL REQUIREMENTS:
+- Frame shift recommendations should be specific and actionable - not generic advice
+- Only include frame shift recommendations if there is a meaningful way to reframe the discussion for better effectiveness
+- PRESERVE STABILITY: Keep unchanged elements from the previous analysis unless they are directly affected by new information
 
 User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
 
@@ -183,24 +318,45 @@ The JSON MUST conform EXACTLY to this schema (no additional keys, types must mat
 ${schemaText}
 
 ${transcript}`
-      : `You are an expert analyst reviewing a discussion flow.
+      : `You are an expert analyst reviewing a discussion flow. Your most valuable contribution is evaluating whether the team is asking the RIGHT question, not just answering their stated question well.
 
 Task:
 1. Analyze the discussion transcript
 2. Identify blind spots (gaps, assumptions, missing considerations)
-3. Provide recommendations for deepening or expanding the discussion
-4. Identify the discussion frame (what goals the user is likely trying to achieve)
-5. Assess confidence level based on discussion maturity
+3. Identify the discussion frame (what goals the user is likely trying to achieve)
+4. Assess confidence level based on discussion maturity
+5. Formulate frame shift recommendations: how could the discussion frame be reframed to be more effective in achieving the presumed goal?
+6. Analyze the LAST assistant/agent response for stance and risk profile
+
+ASSISTANT STANCE AND RISK PROFILE ANALYSIS:
+- Extract stance from the LAST assistant/agent response: 1-2 concise sentences (<=100 words) that state what the assistant seems to be asserting/pursuing, avoiding moral judgement and unsupported assumptions
+- Assess risk profile: EU AI Act risk assessment with score 0..1 and derived level
+- High risk auto-triggers (must set level to High ONLY if the content provides PERSONAL, ACTIONABLE guidance in these areas; general/educational discussion does NOT trigger High):
+  - Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов (только персональные рекомендации)
+  - Самоповреждение/суицид/угрозы жизни и безопасности (всегда High при инструкциях)
+  - Право/иммиграция/налоги/личные финансы/инвестиции/страхование (только персональные советы)
+  - Отношения/абьюз/дети/уязвимые группы (только персональные ситуации и советы)
+  - Безопасность/экстренные ситуации (персональные инструкции)
+- RISK LEVEL RULES: High: score in [0.7, 1], Medium: score in [0.3, 0.7), Low: score in [0, 0.3)
+- Use triggerCategories strictly from DICTIONARY (English tokens only): ${JSON.stringify(riskCategories)}
+
+FRAME ASSESSMENT LOGIC (from consulting perspective):
+- Is this the right problem to solve?
+- Are they addressing symptoms vs. root causes?
+- Is there a more strategic question one level up/down?
+- Suggest alternative framings if current one is suboptimal
+- The highest value is often in reframing the question itself, not just answering it better
 
 STYLE REQUIREMENTS:
 - Blind Spots: Each should identify a specific gap, assumption, or missing consideration. 10-300 characters each. Include 2-8 items.
-- Recommendations: Each should be a concrete suggestion for deepening or expanding the discussion. 10-300 characters each. Include 2-8 items.
+- Frame Shift Recommendations: Each should formulate how the discussion frame could be reframed to be more effective. Consider: Is this the right problem? Are they addressing symptoms vs. root causes? Is there a more strategic question one level up/down? Suggest alternative framings if current one is suboptimal. Maximum 2 recommendations. 20-500 characters each. Only include if a meaningful frame shift would improve effectiveness.
 - Frame: Should capture what goals the user is likely trying to achieve through this discussion. 20-500 characters.
 - Confidence: Should reflect the maturity of the discussion. Low for early stages (< 3 turns), medium for developing (3-8 turns), high for well-developed (> 8 turns).
 
 CRITICAL REQUIREMENTS:
 - All content must be grounded in the discussion transcript provided
-- Be specific and actionable
+- Frame shift recommendations should be specific and actionable - not generic advice
+- Only include frame shift recommendations if there is a meaningful way to reframe the discussion for better effectiveness
 - Confidence should be low if discussion has fewer than 3 message pairs, medium for 3-8 pairs, high for more than 8 pairs
 
 User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
@@ -212,8 +368,6 @@ DISCUSSION TRANSCRIPT:
 ${transcript}`;
 
     const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
-
-    console.log('[DiscussionFlowAnalysis] sending structured request', { model: evalModel, promptChars: prompt.length, updateMode });
 
     const res = await api.genaiGenerate({
       model: evalModel,
@@ -247,31 +401,45 @@ ${transcript}`;
       console.warn('[DiscussionFlowAnalysis] parse failed', pe, { contentPreview: (res?.content || '').slice(0, 200) });
     }
 
-    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blindSpots) || !Array.isArray(parsed.recommendations) || typeof parsed.frame !== 'string' || !['low', 'medium', 'high'].includes(parsed.confidence)) {
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blindSpots) || !Array.isArray(parsed.frameShiftRecommendations) || typeof parsed.frame !== 'string' || !['low', 'medium', 'high'].includes(parsed.confidence)) {
       console.log('[DiscussionFlowAnalysis] no valid analysis parsed, skipping');
       return;
     }
 
     // Extract and validate analysis
+    const clamp01 = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
     const analysis: DiscussionFlowAnalysis = {
       blindSpots: parsed.blindSpots
         .filter((b: any) => b && typeof b === 'string' && b.trim().length > 0)
         .slice(0, 8)
         .map((b: any) => b.trim()),
-      recommendations: parsed.recommendations
+      frameShiftRecommendations: parsed.frameShiftRecommendations
         .filter((r: any) => r && typeof r === 'string' && r.trim().length > 0)
-        .slice(0, 8)
+        .slice(0, 2)
         .map((r: any) => r.trim()),
       frame: parsed.frame.trim(),
       confidence: parsed.confidence as 'low' | 'medium' | 'high',
     };
 
-    if (analysis.blindSpots.length < 2 || analysis.recommendations.length < 2 || !analysis.frame) {
-      console.log('[DiscussionFlowAnalysis] insufficient analysis data', { blindSpots: analysis.blindSpots.length, recommendations: analysis.recommendations.length, frame: !!analysis.frame });
-      return;
+    // Extract assistant stance and risk profile if present
+    if (parsed.assistantStance && typeof parsed.assistantStance === 'string' && parsed.assistantStance.trim()) {
+      analysis.assistantStance = parsed.assistantStance.trim();
+    }
+    if (parsed.assistantRiskProfile && typeof parsed.assistantRiskProfile === 'object') {
+      const rp = parsed.assistantRiskProfile;
+      if (typeof rp.score === 'number' && typeof rp.level === 'string' && ['High', 'Medium', 'Low'].includes(rp.level) && typeof rp.rationale === 'string' && Array.isArray(rp.triggerCategories)) {
+        analysis.assistantRiskProfile = {
+          score: clamp01(rp.score),
+          level: rp.level as 'High' | 'Medium' | 'Low',
+          rationale: rp.rationale.trim(),
+          triggerCategories: rp.triggerCategories.filter((cat: any) => typeof cat === 'string'),
+        };
+      }
     }
 
-    console.log('[DiscussionFlowAnalysis] generated analysis', { blindSpots: analysis.blindSpots.length, recommendations: analysis.recommendations.length, frame: analysis.frame.substring(0, 50), confidence: analysis.confidence, model: evalModel, projectId });
+    if (analysis.blindSpots.length < 2 || !analysis.frame) {
+      return;
+    }
 
     // Create or update discussion.flow.analysis interaction
     try {
@@ -297,7 +465,6 @@ ${transcript}`;
               content: JSON.stringify(analysisData),
               contentSanitized: JSON.stringify(analysisData),
             });
-            console.log('[DiscussionFlowAnalysis] updated on server', { analysisId, projectId });
           } catch (e) {
             console.warn('[DiscussionFlowAnalysis] Failed to update on server', e);
           }
@@ -343,8 +510,6 @@ ${transcript}`;
 
               return { interactions: items, persistedByLocalId: newMap } as any;
             });
-
-            console.log('[DiscussionFlowAnalysis] persisted to server', { analysisId, serverId: res.id, projectId });
           } catch (e) {
             console.warn('[DiscussionFlowAnalysis] Failed to persist to server', e);
           }

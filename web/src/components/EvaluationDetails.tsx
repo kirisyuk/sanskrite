@@ -15,14 +15,12 @@ export const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }
   const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
   const getMessages = React.useCallback(() => useGenaiChatStore.getState().messages, []);
   const hydrateInteractions = useGenaiChatStore((s) => s.hydrateInteractions);
-  const ensureStanceAggregate = useGenaiChatStore((s) => s.ensureStanceAggregate);
   
   // Hydrate interactions when a concrete project is selected
   React.useEffect(() => {
     try {
       if (projectId && projectId !== 'local-unfold') {
         hydrateInteractions();
-        ensureStanceAggregate();
       }
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps

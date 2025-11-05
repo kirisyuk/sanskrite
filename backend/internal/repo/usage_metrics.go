@@ -234,11 +234,12 @@ func (r *UsageMetricsRepository) GetTokenCategoryTotals(ctx context.Context, ten
 	}, nil
 }
 
-// GetAverageTiming estimates average response time in seconds for a given model and token count
-// Uses historical data from the last 30 days to calculate average duration per token
+// GetAverageTiming calculates average response time in seconds for a given model
+// Uses historical data from the last 30 days
 // Filters out outliers using IQR (Interquartile Range) method to avoid skewing from extreme values
-// Returns estimated time in seconds, or nil if not enough data is available
-func (r *UsageMetricsRepository) GetAverageTiming(ctx context.Context, tenantID, userID, provider, model string, estimatedOutputTokens int) (*float64, error) {
+// Returns average response time in seconds, or nil if not enough data is available
+// Simply returns the average duration without considering token count
+func (r *UsageMetricsRepository) GetAverageTiming(ctx context.Context, tenantID, userID, provider, model string) (*float64, error) {
 	// Look at last 30 days of data
 	endTime := time.Now().UTC()
 	startTime := endTime.AddDate(0, 0, -30)
@@ -252,7 +253,7 @@ func (r *UsageMetricsRepository) GetAverageTiming(ctx context.Context, tenantID,
 	// Note: DurationMs == nil means the metric was recorded before timing was added, so we skip it
 	var relevantMetrics []*UsageMetric
 	for _, m := range metrics {
-		if m.Provider == provider && m.Model == model && m.DurationMs != nil && m.OutputTokens > 0 {
+		if m.Provider == provider && m.Model == model && m.DurationMs != nil {
 			relevantMetrics = append(relevantMetrics, m)
 		}
 	}
@@ -261,53 +262,42 @@ func (r *UsageMetricsRepository) GetAverageTiming(ctx context.Context, tenantID,
 		return nil, nil // Not enough data
 	}
 
-	// Calculate duration per token for each metric
-	type metricRate struct {
-		durationMs   int64
-		outputTokens int64
-		msPerToken   float64
-	}
-	rates := make([]metricRate, 0, len(relevantMetrics))
+	// Extract durations for outlier filtering
+	durations := make([]float64, 0, len(relevantMetrics))
 	for _, m := range relevantMetrics {
-		msPerToken := float64(*m.DurationMs) / float64(m.OutputTokens)
-		rates = append(rates, metricRate{
-			durationMs:   int64(*m.DurationMs),
-			outputTokens: int64(m.OutputTokens),
-			msPerToken:   msPerToken,
-		})
+		durationMs := float64(*m.DurationMs)
+		durations = append(durations, durationMs)
 	}
 
 	// Filter outliers using IQR method
-	// Sort by msPerToken to find quartiles
-	sortedRates := make([]float64, len(rates))
-	for i, r := range rates {
-		sortedRates[i] = r.msPerToken
-	}
+	// Sort durations to find quartiles
+	sortedDurations := make([]float64, len(durations))
+	copy(sortedDurations, durations)
 
 	// Simple insertion sort (good enough for small datasets)
-	for i := 1; i < len(sortedRates); i++ {
-		key := sortedRates[i]
+	for i := 1; i < len(sortedDurations); i++ {
+		key := sortedDurations[i]
 		j := i - 1
-		for j >= 0 && sortedRates[j] > key {
-			sortedRates[j+1] = sortedRates[j]
+		for j >= 0 && sortedDurations[j] > key {
+			sortedDurations[j+1] = sortedDurations[j]
 			j--
 		}
-		sortedRates[j+1] = key
+		sortedDurations[j+1] = key
 	}
 
 	// Calculate quartiles
 	var q1, q3 float64
-	n := len(sortedRates)
+	n := len(sortedDurations)
 	if n < 4 {
 		// Too few samples, use all data
-		q1 = sortedRates[0]
-		q3 = sortedRates[n-1]
+		q1 = sortedDurations[0]
+		q3 = sortedDurations[n-1]
 	} else {
 		// Q1: 25th percentile, Q3: 75th percentile
 		q1Idx := n / 4
 		q3Idx := (3 * n) / 4
-		q1 = sortedRates[q1Idx]
-		q3 = sortedRates[q3Idx]
+		q1 = sortedDurations[q1Idx]
+		q3 = sortedDurations[q3Idx]
 	}
 
 	// Calculate IQR and bounds
@@ -320,51 +310,42 @@ func (r *UsageMetricsRepository) GetAverageTiming(ctx context.Context, tenantID,
 	const maxDurationMs = 120000 // 120 seconds
 	const minDurationMs = 10     // 10ms
 
-	// Filter rates, keeping only those within bounds
-	var filteredRates []metricRate
-	for _, r := range rates {
-		if r.msPerToken >= lowerBound && r.msPerToken <= upperBound &&
-			r.durationMs >= minDurationMs && r.durationMs <= maxDurationMs {
-			filteredRates = append(filteredRates, r)
+	// Filter durations, keeping only those within bounds
+	var filteredDurations []float64
+	for _, d := range durations {
+		if d >= lowerBound && d <= upperBound &&
+			d >= minDurationMs && d <= maxDurationMs {
+			filteredDurations = append(filteredDurations, d)
 		}
 	}
 
 	// If filtering removed too many samples, use original data (but still apply hard limits)
-	if len(filteredRates) < len(rates)/2 {
-		filteredRates = filteredRates[:0]
-		for _, r := range rates {
-			if r.durationMs >= minDurationMs && r.durationMs <= maxDurationMs {
-				filteredRates = append(filteredRates, r)
+	if len(filteredDurations) < len(durations)/2 {
+		filteredDurations = filteredDurations[:0]
+		for _, d := range durations {
+			if d >= minDurationMs && d <= maxDurationMs {
+				filteredDurations = append(filteredDurations, d)
 			}
 		}
 	}
 
-	if len(filteredRates) == 0 {
+	if len(filteredDurations) == 0 {
 		return nil, nil // All data filtered out as outliers
 	}
 
-	// Calculate average duration per output token from filtered data
-	var totalDurationMs int64
-	var totalOutputTokens int64
-	for _, r := range filteredRates {
-		totalDurationMs += r.durationMs
-		totalOutputTokens += r.outputTokens
+	// Calculate average duration from filtered data
+	var totalDurationMs float64
+	for _, d := range filteredDurations {
+		totalDurationMs += d
 	}
 
-	if totalOutputTokens == 0 {
-		return nil, nil
-	}
-
-	// Average milliseconds per output token
-	avgMsPerToken := float64(totalDurationMs) / float64(totalOutputTokens)
-
-	// Estimate duration for requested token count
-	estimatedMs := avgMsPerToken * float64(estimatedOutputTokens)
+	// Average milliseconds
+	avgMs := totalDurationMs / float64(len(filteredDurations))
 
 	// Convert to seconds and round to 1 decimal place
-	estimatedSeconds := estimatedMs / 1000.0
+	avgSeconds := avgMs / 1000.0
 	// Round to 1 decimal place
-	estimatedSeconds = float64(int(estimatedSeconds*10+0.5)) / 10.0
+	avgSeconds = float64(int(avgSeconds*10+0.5)) / 10.0
 
-	return &estimatedSeconds, nil
+	return &avgSeconds, nil
 }

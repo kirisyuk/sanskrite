@@ -126,6 +126,9 @@ export default function VerifiedViewPage() {
       }).catch(() => {});
     }
 
+    // Track WS open listener to prevent accumulation
+    let wsOpenListener: (() => void) | null = null;
+
     // Also listen for WS open events (in case WS reconnects)
     const checkAndSubscribe = () => {
       const ws = (window as any).__wsRef;
@@ -133,12 +136,24 @@ export default function VerifiedViewPage() {
         if (ws.readyState === WebSocket.OPEN) {
           subscribeToCode();
         } else {
+          // Remove previous listener if exists to prevent accumulation
+          if (wsOpenListener) {
+            try {
+              ws.removeEventListener('open', wsOpenListener);
+            } catch {}
+          }
           // Wait for open
           const onOpen = () => {
             subscribeToCode();
-            ws.removeEventListener('open', onOpen);
+            if (wsOpenListener) {
+              try {
+                ws.removeEventListener('open', wsOpenListener);
+              } catch {}
+              wsOpenListener = null;
+            }
           };
           ws.addEventListener('open', onOpen);
+          wsOpenListener = onOpen;
         }
       }
     };
@@ -150,6 +165,16 @@ export default function VerifiedViewPage() {
 
     return () => {
       clearInterval(checkInterval);
+      // Clean up WS open listener
+      if (wsOpenListener) {
+        try {
+          const ws = (window as any).__wsRef;
+          if (ws) {
+            ws.removeEventListener('open', wsOpenListener);
+          }
+        } catch {}
+        wsOpenListener = null;
+      }
       if ((window as any).__verifiedWsListeners) {
         (window as any).__verifiedWsListeners = (window as any).__verifiedWsListeners.filter(
           (l: any) => l !== listener

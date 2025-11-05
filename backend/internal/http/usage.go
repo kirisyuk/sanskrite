@@ -1,7 +1,6 @@
 package http
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -105,7 +104,7 @@ func (h *UsageHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetAverageTiming handles GET /api/v1/usage/avg-timing
-// Query params: provider, model, estimatedOutputTokens
+// Query params: provider, model
 func (h *UsageHandler) GetAverageTiming(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
@@ -122,20 +121,13 @@ func (h *UsageHandler) GetAverageTiming(w http.ResponseWriter, r *http.Request) 
 	q := r.URL.Query()
 	provider := q.Get("provider")
 	model := q.Get("model")
-	estimatedOutputTokensStr := q.Get("estimatedOutputTokens")
 
-	if provider == "" || model == "" || estimatedOutputTokensStr == "" {
-		WriteBadRequest(w, "MISSING_PARAMS", "provider, model, and estimatedOutputTokens are required")
+	if provider == "" || model == "" {
+		WriteBadRequest(w, "MISSING_PARAMS", "provider and model are required")
 		return
 	}
 
-	var estimatedOutputTokens int
-	if _, err := fmt.Sscanf(estimatedOutputTokensStr, "%d", &estimatedOutputTokens); err != nil || estimatedOutputTokens <= 0 {
-		WriteBadRequest(w, "INVALID_PARAMS", "estimatedOutputTokens must be a positive integer")
-		return
-	}
-
-	avgTiming, err := h.repo.GetAverageTiming(r.Context(), auth.TenantID, auth.UID, provider, model, estimatedOutputTokens)
+	avgTiming, err := h.repo.GetAverageTiming(r.Context(), auth.TenantID, auth.UID, provider, model)
 	if err != nil {
 		h.logger.Printf("Failed to get average timing: %v", err)
 		WriteInternalError(w, "Failed to retrieve average timing")
@@ -146,7 +138,6 @@ func (h *UsageHandler) GetAverageTiming(w http.ResponseWriter, r *http.Request) 
 		"estimatedSeconds": avgTiming,
 		"provider":         provider,
 		"model":            model,
-		"estimatedTokens":  estimatedOutputTokens,
 	}
 
 	WriteJSON(w, http.StatusOK, response)

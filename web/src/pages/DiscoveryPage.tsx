@@ -39,7 +39,8 @@ import { ActionRow } from '../components/ActionRow';
 import { UserPositionAnalysis } from '../components/UserPositionAnalysis';
 import { LLMEvaluation } from '../components/LLMEvaluation';
 import { DiscussionFlow } from '../components/DiscussionFlow';
-import { TitleSuggestions } from '../components/TitleSuggestions';
+import { TextTasksPanel, TextTask } from '../components/TextTasksPanel';
+// TitleSuggestions removed - title generation now handled automatically in genaiChatStore.onDone
 import { toggleInteractionPin, isInteractionPinned } from '../lib/interactionHelpers';
 import { highlightNotes, clearHighlights, findFirstRange, applyGlobalHighlight, clearGlobalHighlight } from '../lib/textHighlight';
 import { getPreferredLanguage, getLanguageName, getAnchorRect, getSxSystemInstructionShort, getSxSystemInstructionFull } from '../lib/uiUtils';
@@ -62,12 +63,25 @@ import {
 } from '../lib/metaInterpretations';
 
 const DiscoveryPage: React.FC = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { currentUser } = useAuth();
   const { theme } = React.useContext(ThemeContext);
-  const { projects, currentProject, fetchProjects, deleteProject, setCurrentProject } = useProjectsStore();
+  const projects = useProjectsStore((s) => s.projects);
+  const currentProject = useProjectsStore((s) => s.currentProject);
+  const fetchProjects = useProjectsStore((s) => s.fetchProjects);
+  const deleteProject = useProjectsStore((s) => s.deleteProject);
+  const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const { sources, loading, executeDiscovery, fetchProjectSources, fetchProjectInteractions, clearSources, connectWs, answer, correlationId, interactions, sendChatMessage } = useDiscoveryStore();
   const { viewMode } = useUIStore();
+  
+  // Get random empty state message (selected once per language)
+  const emptyStateMessage = React.useMemo(() => {
+    const emptyMessages = t('unfold.perspectives.chatEmptyState.descriptions', { returnObjects: true }) as string[];
+    if (Array.isArray(emptyMessages) && emptyMessages.length > 0) {
+      return emptyMessages[Math.floor(Math.random() * emptyMessages.length)];
+    }
+    return emptyMessages?.[0] || 'Ready to start a conversation?';
+  }, [i18n.language, t]);
   
   const [queryText, setQueryText] = useState('');
   const [sideOpen, setSideOpen] = useState(false);
@@ -201,7 +215,7 @@ const DiscoveryPage: React.FC = () => {
   const [badgeUser, setBadgeUser] = useState(false);
   const [badgeLLM, setBadgeLLM] = useState(false);
   const [badgeFlow, setBadgeFlow] = useState(false);
-  // Bottom slot (TitleSuggestions) min height to align its top with chat input top
+  // Bottom slot min height to align its top with chat input top
   const [titleSlotMinHeight, setTitleSlotMinHeight] = useState<number>(48);
   const [titlesVisible, setTitlesVisible] = useState(true);
   const [titlesAvailable, setTitlesAvailable] = useState(false);
@@ -211,6 +225,10 @@ const DiscoveryPage: React.FC = () => {
   const [rightArtifactsOpen, setRightArtifactsOpen] = useState(false);
   // Active document viewer state
   const [activeDoc, setActiveDoc] = useState<null | { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string }>(null);
+  // Text tasks state
+  const [textTasks, setTextTasks] = useState<TextTask[]>([]);
+  const [textTasksApplying, setTextTasksApplying] = useState(false);
+  
   const hasPinned = React.useMemo(() => {
     try {
       return useGenaiChatStore.getState().interactions.some((it: any) => {
@@ -254,6 +272,12 @@ const DiscoveryPage: React.FC = () => {
       }
     } catch {}
   }, [projectId, hydrateInteractions]);
+
+  // Clear text tasks when project changes
+  React.useEffect(() => {
+    setTextTasks([]);
+    setTextTasksApplying(false);
+  }, [projectId]);
 
   const pinnedInteractions = React.useMemo(() => {
     try {
@@ -333,9 +357,61 @@ const DiscoveryPage: React.FC = () => {
 
   // Callback for DiscussionFlow onFirstResult - must be defined unconditionally (Rules of Hooks)
   const onFirstResultDiscussionFlow = React.useCallback(() => {
-    setBadgeFlow(true);
+    setBadgeFlow(false);
     setAvailDiscussionFlow(true);
   }, []);
+
+  // Text tasks management functions
+  const handleAddTextTask = React.useCallback((task: TextTask) => {
+    setTextTasks((prev) => {
+      // Check if task already exists
+      if (prev.some((t) => t.id === task.id)) {
+        return prev;
+      }
+      return [...prev, task];
+    });
+  }, []);
+
+  const handleRemoveTextTask = React.useCallback((taskId: string) => {
+    setTextTasks((prev) => prev.filter((t) => t.id !== taskId));
+  }, []);
+
+  const handleApplyTextTasks = React.useCallback(() => {
+    if (textTasks.length === 0) return;
+    setTextTasksApplying(true);
+    try {
+      const container = document.getElementById('unfold-request-container');
+      if (container) {
+        const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+        if (textarea) {
+          // Format as numbered list
+          const numberedList = textTasks.map((task, idx) => `${idx + 1}. ${task.prompt}`).join('\n');
+          
+          // Set value using React-friendly method
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+          if (nativeInputValueSetter) {
+            nativeInputValueSetter.call(textarea, numberedList);
+          } else {
+            textarea.value = numberedList;
+          }
+          // Trigger React's onChange handler by dispatching input event
+          const inputEvent = new Event('input', { bubbles: true });
+          textarea.dispatchEvent(inputEvent);
+          // Focus the textarea and move cursor to end
+          textarea.focus();
+          setTimeout(() => {
+            textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+          }, 0);
+        }
+      }
+      // Clear tasks after applying
+      setTextTasks([]);
+    } catch (e) {
+      console.warn('[DiscoveryPage] Failed to apply text tasks', e);
+    } finally {
+      setTextTasksApplying(false);
+    }
+  }, [textTasks]);
 
   // Floating selection button state (position in viewport)
   const selectionBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -472,7 +548,6 @@ const DiscoveryPage: React.FC = () => {
       try {
         const st = useGenaiChatStore.getState();
         st.hydrateInteractions();
-        st.ensureStanceAggregate();
       } catch {}
     } else {
       clearSources();
@@ -1102,20 +1177,21 @@ const DiscoveryPage: React.FC = () => {
   useEffect(() => {
     const msgs = useGenaiChatStore.getState().messages;
     const last = msgs[msgs.length - 1];
+    // Check if we're waiting for the first chunk: streaming is active, last message is assistant, and content is empty
     const awaitingFirstChunk = !!(genaiChatStreaming && last && last.role === 'assistant' && !last.content);
+    
     if (awaitingFirstChunk) {
+      // Start timer if not already running
       if (!genaiThinkingIntervalRef.current) {
         setGenaiThinkingSeconds(0);
         genaiThinkingIntervalRef.current = window.setInterval(() => {
           setGenaiThinkingSeconds((s) => s + 1);
         }, 1000) as unknown as number;
         
-        // Fetch average timing estimate
+        // Fetch average timing estimate (without token count) - cached for 30 minutes
         const modelMapping = mapAliasToModel(genaiSettings.model);
         if (modelMapping) {
-          // Estimate output tokens based on maxOutputTokens setting
-          const estimatedTokens = genaiSettings.maxOutputTokens || 8192;
-          getAverageTiming(modelMapping.provider, modelMapping.model, estimatedTokens)
+          getAverageTiming(modelMapping.provider, modelMapping.model)
             .then((timing) => {
               setAverageTimingSeconds(timing);
             })
@@ -1127,12 +1203,15 @@ const DiscoveryPage: React.FC = () => {
           setAverageTimingSeconds(null);
         }
       }
-    } else if (genaiThinkingIntervalRef.current) {
-      window.clearInterval(genaiThinkingIntervalRef.current);
-      genaiThinkingIntervalRef.current = null;
-      setAverageTimingSeconds(null);
+    } else {
+      // Stop timer when first chunk arrives or streaming stops
+      if (genaiThinkingIntervalRef.current) {
+        window.clearInterval(genaiThinkingIntervalRef.current);
+        genaiThinkingIntervalRef.current = null;
+        // Don't reset averageTimingSeconds here - keep it until next request
+      }
     }
-  }, [genaiChat.streaming, genaiChat.messages.length, genaiSettings.model, genaiSettings.maxOutputTokens]);
+  }, [genaiChatStreaming, genaiChat.messages.length, genaiSettings.model]);
 
   // Cleanup genai thinking timer on unmount
   useEffect(() => {
@@ -1680,7 +1759,7 @@ const DiscoveryPage: React.FC = () => {
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                   <circle cx="12" cy="7" r="4" />
                 </svg>
-                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>Account</span>
+                <span className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.account')}</span>
               </button>
               <button
                 type="button"
@@ -1740,8 +1819,8 @@ const DiscoveryPage: React.FC = () => {
               onClick={() => { setLeftPanel((p) => (p === 'user' ? null : 'user')); }}
               className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
               style={{ backgroundColor: leftPanel === 'user' ? '#669999' : 'var(--newchat-bg)', color: leftPanel === 'user' ? 'white' : 'var(--text-heading)', marginTop: '72px' }}
-              aria-label="User"
-              title="User"
+              aria-label={t('unfold.sections.user')}
+              title={t('unfold.sections.user')}
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'user' ? '#669999' : 'var(--newchat-bg-hover)'; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'user' ? '#669999' : 'var(--newchat-bg)'; }}
             >
@@ -1778,7 +1857,7 @@ const DiscoveryPage: React.FC = () => {
       {/* Mirror toggle button on the right edge (independent of sidebar) */}
       <button
         type="button"
-        aria-label="Toggle Workspace Library"
+        aria-label={t('unfold.sections.toggleWorkspaceLibrary')}
         className="mirror-doc-btn rounded-lg flex items-center justify-center transition-all duration-300"
         style={{ position: 'fixed', right: 8, top: 76, width: 32, height: 32, color: 'white', zIndex: 40 }}
         onClick={() => {
@@ -1800,8 +1879,8 @@ const DiscoveryPage: React.FC = () => {
       {hasPinned && (
         <button
           type="button"
-          aria-label="Context Navigation"
-          title="Context Navigation"
+          aria-label={t('unfold.sections.contextNavigation')}
+          title={t('unfold.sections.contextNavigation')}
           onClick={() => {
             // Ensure mutual exclusivity
             setRightPanelOpen(false);
@@ -1834,8 +1913,8 @@ const DiscoveryPage: React.FC = () => {
       <button
         id="btn-artifacts"
         type="button"
-        aria-label="Workspace Artifacts"
-        title="Workspace Artifacts"
+        aria-label={t('unfold.sections.workspaceArtifacts')}
+        title={t('unfold.sections.workspaceArtifacts')}
         onClick={() => {
           // Ensure mutual exclusivity
           setRightPanelOpen(false);
@@ -2026,8 +2105,8 @@ const DiscoveryPage: React.FC = () => {
                 {/* Header: chosen section title + close */}
               {leftPanel && (
                 <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
-                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? 'How you engage' : 'Discussion flow'}</h3>
-                  <button type="button" aria-label="Close" title="Close" className="p-2 rounded-lg transition-colors" style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }} onClick={() => setLeftPanel(null)}>
+                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? t('unfold.sections.howYouEngage') : t('unfold.sections.discussionFlow')}</h3>
+                  <button type="button" aria-label={t('unfold.sections.close')} title={t('unfold.sections.close')} className="p-2 rounded-lg transition-colors" style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }} onClick={() => setLeftPanel(null)}>
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
                 </div>
@@ -2049,7 +2128,12 @@ const DiscoveryPage: React.FC = () => {
                       }} />
                     )}
                     {leftPanel === 'flow' && (
-                      <DiscussionFlow onFirstResult={onFirstResultDiscussionFlow} />
+                      <DiscussionFlow 
+                        onFirstResult={onFirstResultDiscussionFlow}
+                        onAddTextTask={handleAddTextTask}
+                        onRemoveTextTask={handleRemoveTextTask}
+                        textTasks={textTasks}
+                      />
                     )}
                   </div>
                 </div>
@@ -2059,21 +2143,14 @@ const DiscoveryPage: React.FC = () => {
             </>
           )}
 
-            {/* Bottom slot: topic title suggestions now run headless (no UI) */}
-          <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight, position: 'relative' }}>
-            <TitleSuggestions
-              visible={false}
-              onClose={() => {}}
-              onAvailableChange={() => {}}
-            />
-          </div>
+            {/* Title generation now handled automatically in genaiChatStore.onDone */}
 
           {/* Add source button (only when chat exists and has sources) */}
           {currentProject?.id && sources.length > 0 && (
             <div className="mt-2" ref={addMenuRef}>
               <button
                 type="button"
-                title="Add source"
+                title={t('unfold.sections.addSource')}
                 aria-haspopup="true"
                 aria-expanded={showAddSourceMenu}
                 onClick={() => setShowAddSourceMenu((v) => !v)}
@@ -2096,7 +2173,7 @@ const DiscoveryPage: React.FC = () => {
               {showAddSourceMenu && (
                 <div
                   role="menu"
-                  aria-label="Add source options"
+                  aria-label={t('unfold.sections.addSourceOptions')}
                   className="mt-2 rounded-xl shadow-lg"
                   style={{
                     backgroundColor: 'var(--bg-elevated)',
@@ -2209,13 +2286,13 @@ const DiscoveryPage: React.FC = () => {
                 style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                aria-label="Back"
+                aria-label={t('unfold.sections.back')}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              <div className="ml-2 text-13" style={{ color: 'var(--text-heading)' }}>Account</div>
+              <div className="ml-2 text-13" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.account')}</div>
             </div>
             <Account />
           </div>
@@ -2228,13 +2305,13 @@ const DiscoveryPage: React.FC = () => {
                 style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                aria-label="Back"
+                aria-label={t('unfold.sections.back')}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              <div className="ml-2 text-13" style={{ color: 'var(--text-heading)' }}>Settings</div>
+              <div className="ml-2 text-13" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.settings')}</div>
             </div>
             <Settings />
           </div>
@@ -2247,13 +2324,13 @@ const DiscoveryPage: React.FC = () => {
                 style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                aria-label="Back"
+                aria-label={t('unfold.sections.back')}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              <div className="ml-2 text-13" style={{ color: 'var(--text-heading)' }}>Admin access</div>
+              <div className="ml-2 text-13" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.adminAccess')}</div>
             </div>
             <AdminAccess />
           </div>
@@ -2266,7 +2343,7 @@ const DiscoveryPage: React.FC = () => {
                 style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                aria-label="Back"
+                aria-label={t('unfold.sections.back')}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -2284,7 +2361,7 @@ const DiscoveryPage: React.FC = () => {
         {/* Graph placeholder when in graph mode */}
         {viewMode === 'graph' ? (
           <div className="w-full h-full flex items-center justify-center" style={{ background: 'var(--bg-elevated)', border: '1px dashed var(--overlay-line-90)', borderRadius: '12px' }}>
-            <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>Graph will appear here</div>
+            <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.status.graphPlaceholder')}</div>
           </div>
         ) : viewMode === 'unfold' ? (
           <div className="w-full px-4 flex-1 flex flex-col min-h-0 pb-2" style={{ position: 'relative' }}>
@@ -2306,12 +2383,12 @@ const DiscoveryPage: React.FC = () => {
               return (
                 <div className="absolute inset-0 z-30 rounded-xl" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', overflow: 'hidden' }}>
                   <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>
-                    <div className="text-13" style={{ color: 'var(--text-heading)' }}>{cache?.metric?.metricName || (cache?.metric as any)?.name || cache?.metric?.id || 'Metric'}</div>
+                    <div className="text-13" style={{ color: 'var(--text-heading)' }}>{cache?.metric?.metricName || (cache?.metric as any)?.name || cache?.metric?.id || t('unfold.sections.metric')}</div>
                     <button
                       type="button"
                       className="rounded-lg transition-colors"
-                      aria-label="Close"
-                      title="Close"
+                      aria-label={t('unfold.sections.close')}
+                      title={t('unfold.sections.close')}
                       onClick={() => {
                         try {
                           genaiChat.closeMetricOverlay();
@@ -2329,13 +2406,13 @@ const DiscoveryPage: React.FC = () => {
                   <div className="absolute inset-0 pt-[38px]">
                     <div className="w-full h-full overflow-y-auto px-4 py-3">
                       {loading ? (
-                        <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Loading metric analysis…</div>
+                        <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.status.loadingMetricAnalysis')}</div>
                       ) : content ? (
                         <div className="markdown text-13" style={{ color: 'var(--text-heading)' }}>
                           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{content}</ReactMarkdown>
                         </div>
                       ) : (
-                        <div className="text-12" style={{ color: 'var(--text-secondary)' }}>No content.</div>
+                        <div className="text-12" style={{ color: 'var(--text-secondary)' }}>{t('unfold.status.noContent')}</div>
                       )}
                       {/* TODO: создавать документ на базе метрики; создавать графики на базе анализа метрики */}
                     </div>
@@ -2344,7 +2421,7 @@ const DiscoveryPage: React.FC = () => {
               );
             })()}
             {/* Unfold subview toggle */}
-            <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label="Unfold view">
+            <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label={t('unfold.sections.unfoldView')}>
               <button
                 type="button"
                 role="tab"
@@ -2398,7 +2475,7 @@ const DiscoveryPage: React.FC = () => {
                     <div className="flex items-center justify-center" style={{ height: '100%', minHeight: 'calc(100vh - 300px)', padding: '48px 24px' }}>
                       <div className="max-w-md text-center">
                         <div className="text-16" style={{ color: 'var(--text-heading)', lineHeight: '1.6', fontSize: 'clamp(18px, 2vw, 24px)', fontWeight: 500 }}>
-                          {t('unfold.perspectives.chatEmptyState.description')}
+                          {emptyStateMessage}
                         </div>
                       </div>
                     </div>
@@ -2526,6 +2603,7 @@ const DiscoveryPage: React.FC = () => {
                       align={isUser ? 'right' : 'left'}
                       isThinking={isAssistantPlaceholder}
                       thinkingSeconds={genaiThinkingSeconds}
+                      averageTimingSeconds={averageTimingSeconds}
                       isError={isAssistantError}
                         headerText={!isUser ? (genaiChat.messageMeta?.[m.id]?.headerText || 'assistant') : undefined}
                         leftAccent={!isUser ? !!genaiChat.messageMeta?.[m.id]?.leftAccent : false}
@@ -2549,8 +2627,8 @@ const DiscoveryPage: React.FC = () => {
                             const threshold = genaiSettings.groundingEnabled ? 35 : 20;
                             if ((genaiThinkingSeconds || 0) < threshold) return null;
                             const msg = genaiSettings.groundingEnabled
-                              ? 'The model is updating its analysis with up‑to‑date information from web search, which may take additional time.'
-                              : 'This model is performing complex reasoning and may respond more slowly than usual.';
+                              ? t('unfold.status.modelUpdatingAnalysis')
+                              : t('unfold.status.modelComplexReasoning');
                             return (
                               <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
                                 {msg}
@@ -3143,8 +3221,8 @@ const DiscoveryPage: React.FC = () => {
                     const threshold = genaiSettings.groundingEnabled ? 35 : 20;
                     const showInfo = (genaiThinkingSeconds || 0) >= threshold && isQuality;
                     const infoMsg = genaiSettings.groundingEnabled
-                      ? 'The model is updating its analysis with up‑to‑date information from web search, which may take additional time.'
-                      : 'This model is performing complex reasoning and may respond more slowly than usual.';
+                      ? t('unfold.status.modelUpdatingAnalysis')
+                      : t('unfold.status.modelComplexReasoning');
                     return (
                       <ChatMessage
                         key={m.id}
@@ -3288,6 +3366,15 @@ const DiscoveryPage: React.FC = () => {
               );
             })()}
             {/* Analysis status banner unified in UnfoldRequest; duplicate removed here */}
+            {/* Text Tasks Panel */}
+            {textTasks.length > 0 && (
+              <TextTasksPanel
+                tasks={textTasks}
+                onRemove={handleRemoveTextTask}
+                onApply={handleApplyTextTasks}
+                isApplying={textTasksApplying}
+              />
+            )}
             {/* Input */}
             {unfoldSubView !== 'perspectives' && (
             <UnfoldRequest

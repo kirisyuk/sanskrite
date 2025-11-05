@@ -693,27 +693,42 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
           const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
           let text = '';
+          const getUnitKey = (kind: string, plural: boolean) => {
+            if (kind === 'entities') return plural ? 'entities' : 'entity';
+            if (kind === 'facts') return plural ? 'facts' : 'fact';
+            if (kind === 'events') return plural ? 'events' : 'event';
+            if (kind === 'metrics') return plural ? 'metrics' : 'metric';
+            if (kind === 'decisions') return plural ? 'decisions' : 'decision';
+            return plural ? kind + 's' : kind;
+          };
+          
           if (st === 'started') {
-            text = `Analyzing ${kind}…`;
+            const unitOne = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
+            text = t('unfold.request.analysisStatus.analyzing', { kind: unitOne });
           } else if (docParsing && (!status || st !== 'done')) {
-            text = `Parsing ${kind}…`;
+            const unitOne = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
+            text = t('unfold.request.analysisStatus.parsing', { kind: unitOne });
           } else if (st === 'done') {
             const n = typeof count === 'number' ? count : 0;
-            const t = fmtTime(elapsedMs);
-            const unitOne = kind === 'entities' ? 'entity' : kind === 'facts' ? 'fact' : kind === 'events' ? 'event' : kind === 'metrics' ? 'metric' : kind === 'decisions' ? 'decision' : kind;
-            const unitMany = kind === 'entities' ? 'entities' : kind === 'facts' ? 'facts' : kind === 'events' ? 'events' : kind === 'metrics' ? 'metrics' : kind === 'decisions' ? 'decisions' : kind;
+            const timeStr = fmtTime(elapsedMs);
+            const timeText = timeStr ? t('unfold.request.analysisStatus.timePrefix', { time: timeStr, defaultValue: ` in ${timeStr}` }) : '';
+            const unitOne = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
+            const unitMany = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, true)}`, { defaultValue: kind });
             if (n === 0) {
-              text = `Found no ${unitMany}${t ? ` in ${t}` : ''}`;
+              text = t('unfold.request.analysisStatus.foundNone', { unitMany, time: timeText });
             } else if (n === 1) {
-              text = `Found 1 ${unitOne}${t ? ` in ${t}` : ''}`;
+              text = t('unfold.request.analysisStatus.foundOne', { unitOne, time: timeText });
             } else {
-              text = `Found ${n} ${unitMany}${t ? ` in ${t}` : ''}`;
+              text = t('unfold.request.analysisStatus.foundMany', { count: n, unitMany, time: timeText });
             }
           } else if (st === 'failed' || st === 'error') {
-            const reason = err ? `: ${err}` : '';
-            text = `${kind.charAt(0).toUpperCase() + kind.slice(1)} analysis failed${reason}`;
+            const reason = err ? t('unfold.request.analysisStatus.reasonPrefix', { reason: err, defaultValue: `: ${err}` }) : '';
+            const unitOne = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
+            text = t('unfold.request.analysisStatus.failed', { kind: unitOne, reason });
           } else if (st) {
-            text = `${kind}: ${st}`;
+            const translatedKind = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
+            const translatedStatus = t(`unfold.request.analysisStatus.status.${st}`, { defaultValue: st });
+            text = t('unfold.request.analysisStatus.statusFormat', { kind: translatedKind, status: translatedStatus, defaultValue: `${translatedKind}: ${translatedStatus}` });
           }
           if (!text) return null;
 
@@ -728,8 +743,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               <div style={{ flex: 1 }} />
               <button
                 type="button"
-                aria-label="Dismiss status"
-                title="Dismiss"
+                aria-label={t('unfold.request.analysisStatus.dismissAriaLabel', { defaultValue: 'Dismiss status' })}
+                title={t('unfold.request.analysisStatus.dismissTitle', { defaultValue: 'Dismiss' })}
                 onClick={() => { setAnalysisDismissTs(tsVal || Date.now()); try { const btn = document.getElementById('btn-artifacts'); if (btn) btn.classList.remove('etg-glow-blue'); } catch {} }}
                 className="rounded"
                 style={{ background: 'transparent', color: '#60a5fa' }}
@@ -812,7 +827,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <span className="text-sm font-medium">Drop files to attach</span>
+              <span className="text-sm font-medium">{t('unfold.request.dropFilesToAttach')}</span>
             </div>
           </div>
         )}

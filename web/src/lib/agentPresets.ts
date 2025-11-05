@@ -51,9 +51,10 @@ MANDATORY CLOSING SECTION:
 EVIDENCE SUMMARY
 
 Sources Used:
-[1] URL or reference - brief description
-[2] URL or reference - brief description
-[...]
+Format each source on a separate line with a bullet point (•). Example:
+• Author, A. (Year). Title. Publisher. — Description
+• Author, B. (Year). Title. URL — Description
+CRITICAL: Each source MUST be on its own line. Do NOT write sources as a continuous paragraph.
 
 Assumptions & Approximations:
 • [Assumption 1]: How it was interpreted and applied

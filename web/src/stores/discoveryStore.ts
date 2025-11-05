@@ -9,6 +9,8 @@ let reconnectTimer: number | null = null;
 let isManuallyClosed = false;
 let isConnecting = false; // Prevent multiple simultaneous connection attempts
 let listenersAttached = false; // Track if event listeners are already attached
+let projectsStoreUnsubscribe: (() => void) | null = null; // Store unsubscribe function to prevent memory leaks
+let windowEventListeners: { visibilitychange: () => void; online: () => void } | null = null; // Store listeners for cleanup
 
 function clearReconnectTimer() {
   if (reconnectTimer !== null) {
@@ -23,6 +25,45 @@ function computeBackoffDelay(attempt: number): number {
   const exp = Math.min(max, base * Math.pow(2, Math.max(0, attempt - 1)));
   const jitter = exp * (0.2 * (Math.random() - 0.5)); // +/-10%
   return Math.max(1000, Math.floor(exp + jitter));
+}
+
+// Cleanup function to remove all event listeners and subscriptions (for testing/debugging)
+export function cleanupDiscoveryStore() {
+  // Clear reconnect timer
+  clearReconnectTimer();
+  
+  // Unsubscribe from projects store
+  if (projectsStoreUnsubscribe) {
+    try {
+      projectsStoreUnsubscribe();
+    } catch {}
+    projectsStoreUnsubscribe = null;
+  }
+  
+  // Remove window event listeners
+  if (windowEventListeners) {
+    try {
+      window.removeEventListener('visibilitychange', windowEventListeners.visibilitychange);
+      window.removeEventListener('online', windowEventListeners.online);
+    } catch {}
+    windowEventListeners = null;
+    listenersAttached = false;
+  }
+  
+  // Close WebSocket if open
+  if (wsRef) {
+    try {
+      wsRef.onclose = null;
+      wsRef.onerror = null;
+      wsRef.onmessage = null;
+      wsRef.close();
+    } catch {}
+    wsRef = null;
+  }
+  
+  isManuallyClosed = true;
+  isConnecting = false;
+  reconnectAttempts = 0;
 }
 
 interface DiscoveryState {
@@ -263,7 +304,6 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
         wsRef.onmessage = (evt) => {
           try {
             const msg = JSON.parse(evt.data);
-            console.log('[WS] Message received:', msg);
             import('./wsStore').then(({ useWsStore }) => {
               try { useWsStore.getState().noteMessage(msg?.type, msg?.data); } catch {}
             }).catch(() => {});
@@ -376,7 +416,6 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
                     st.onStart();
                     break;
                   case 'genai.stream.chunk':
-                    console.log('[WS] chunk received, data:', msg.data, 'text:', msg.data?.text);
                     if (msg.data?.text) st.onChunk(msg.data.text);
                     break;
                   case 'genai.stream.tool_call':
@@ -504,6 +543,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
       };
       window.addEventListener('visibilitychange', onVisibility);
       window.addEventListener('online', onOnline);
+      windowEventListeners = { visibilitychange: onVisibility, online: onOnline };
       listenersAttached = true;
     }
 
@@ -511,10 +551,17 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
     openSocket();
 
     // Subscribe on project changes (in case currentProject isn't ready at ws onopen)
+    // Clean up previous subscription if exists to prevent memory leaks
+    if (projectsStoreUnsubscribe) {
+      try {
+        projectsStoreUnsubscribe();
+      } catch {}
+      projectsStoreUnsubscribe = null;
+    }
     try {
       import('./projectsStore').then(({ useProjectsStore }) => {
         let lastPid: string | undefined;
-        useProjectsStore.subscribe((st) => {
+        const unsubscribe = useProjectsStore.subscribe((st) => {
           const pid = (st as any)?.currentProject?.id as string | undefined;
           if (!pid || pid === lastPid) return;
           lastPid = pid;
@@ -523,6 +570,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
             import('./wsStore').then(({ useWsStore }) => { useWsStore.getState().setSubscribed(pid); }).catch(() => {});
           }
         });
+        projectsStoreUnsubscribe = unsubscribe;
       }).catch(() => {});
     } catch {}
 

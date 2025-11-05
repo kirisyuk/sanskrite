@@ -3,8 +3,10 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { api } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { ThemeContext } from './ThemeProvider';
+import { useTranslation } from 'react-i18next';
 
 export const UsageTab: React.FC = () => {
+  const { t } = useTranslation();
   const { theme } = React.useContext(ThemeContext);
   const { currentUser } = useAuth();
   const [loading, setLoading] = React.useState(true);
@@ -91,7 +93,7 @@ export const UsageTab: React.FC = () => {
         });
         setUsageData(data);
       } catch (err: any) {
-        setError(err?.message || 'Failed to load usage data');
+        setError(err?.message || t('account.tabs.usageDetails.failedToLoad'));
         console.error('[UsageTab] Error loading usage:', err);
       } finally {
         setLoading(false);
@@ -129,6 +131,8 @@ export const UsageTab: React.FC = () => {
         return {
           date,
           tokens: totals?.totalTokens ?? totals?.TotalTokens ?? 0,
+          inputTokens: totals?.inputTokens ?? totals?.InputTokens ?? 0,
+          outputTokens: totals?.outputTokens ?? totals?.OutputTokens ?? 0,
           cost: totals?.costUSD ?? totals?.CostUSD ?? 0,
           count: totals?.count ?? totals?.Count ?? 0,
         };
@@ -336,6 +340,46 @@ export const UsageTab: React.FC = () => {
     return tokens.toString();
   };
 
+  const formatModelName = (modelName: string): string => {
+    if (!modelName) return modelName;
+    
+    // Handle Claude models: convert "claude-sonnet-4-5-20250929" -> "claude sonnet"
+    if (modelName.includes('claude-')) {
+      const parts = modelName.split('-');
+      if (parts.length >= 2) {
+        // Extract model type (sonnet, opus, haiku, etc.)
+        const modelType = parts[1];
+        return `claude ${modelType}`;
+      }
+    }
+    
+    // Handle Gemini models: keep readable parts
+    if (modelName.includes('gemini-')) {
+      const parts = modelName.split('-');
+      if (parts.length >= 2) {
+        // Extract version and type (e.g., "2.5-pro", "2.5-flash-lite")
+        const versionType = parts.slice(1).join(' ').replace(/\d{8}/g, '').trim(); // Remove date patterns
+        return `gemini ${versionType}`;
+      }
+    }
+    
+    // Handle Grok models
+    if (modelName.includes('grok-')) {
+      return modelName.replace(/-/g, ' ').replace(/\d{8}/g, '').trim();
+    }
+    
+    // Handle GPT models
+    if (modelName.includes('gpt-')) {
+      const parts = modelName.split('-');
+      if (parts.length >= 2) {
+        return parts.slice(0, 2).join(' '); // Keep "gpt-5" format
+      }
+    }
+    
+    // Default: replace dashes with spaces, remove date patterns
+    return modelName.replace(/-/g, ' ').replace(/\d{8}/g, '').trim();
+  };
+
   const formatTimeRange = (startTime: Date, endTime: Date) => {
     const start = startTime;
     const end = endTime;
@@ -374,7 +418,7 @@ export const UsageTab: React.FC = () => {
   if (loading) {
     return (
       <div className="flex items-center justify-center" style={{ minHeight: '400px' }}>
-        <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>Loading usage data...</div>
+        <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>{t('account.tabs.usageDetails.loading')}</div>
       </div>
     );
   }
@@ -390,7 +434,7 @@ export const UsageTab: React.FC = () => {
   if (!usageData || !totals) {
     return (
       <div className="flex items-center justify-center" style={{ minHeight: '400px' }}>
-        <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>No usage data available</div>
+        <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>{t('account.tabs.usageDetails.noDataAvailable')}</div>
       </div>
     );
   }
@@ -400,15 +444,15 @@ export const UsageTab: React.FC = () => {
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-4">
         <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-          <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>Total Requests</div>
+          <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.totalRequests')}</div>
           <div className="text-2xl font-semibold" style={{ color: 'var(--text-heading)' }}>{totals.totalCount.toLocaleString()}</div>
         </div>
         <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-          <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>Total Tokens</div>
+          <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.totalTokens')}</div>
           <div className="text-2xl font-semibold" style={{ color: 'var(--text-heading)' }}>{formatTokens(totals.totalTokens)}</div>
         </div>
         <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-          <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>Total Cost</div>
+          <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.totalCost')}</div>
           <div className="text-2xl font-semibold" style={{ color: 'var(--text-heading)' }}>{formatCost(totals.totalCost)}</div>
         </div>
       </div>
@@ -418,30 +462,30 @@ export const UsageTab: React.FC = () => {
         <div className="grid grid-cols-2 gap-4">
           <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
             <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-              Старшие модели (GPT-5, Sonnet 4.5/Opus 4.1, Gemini 2.5 Pro)
+              {t('account.tabs.usageDetails.premiumModels')}
             </div>
             <div className="text-xl font-semibold mb-2" style={{ color: 'var(--text-heading)' }}>
               {formatTokens(tokenCategories.premiumTokens.totalTokens)}
             </div>
             <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-              {tokenCategories.premiumTokens.count.toLocaleString()} запросов • {formatCost(tokenCategories.premiumTokens.costUSD)}
+              {tokenCategories.premiumTokens.count.toLocaleString()} {t('account.tabs.usageDetails.requests')} • {formatCost(tokenCategories.premiumTokens.costUSD)}
             </div>
             <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-              ({formatTokens(tokenCategories.premiumTokens.inputTokens)} вх / {formatTokens(tokenCategories.premiumTokens.outputTokens)} вых)
+              ({formatTokens(tokenCategories.premiumTokens.inputTokens)} {t('account.tabs.usageDetails.input')} / {formatTokens(tokenCategories.premiumTokens.outputTokens)} {t('account.tabs.usageDetails.output')})
             </div>
           </div>
           <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
             <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-              Остальные модели
+              {t('account.tabs.usageDetails.otherModels')}
             </div>
             <div className="text-xl font-semibold mb-2" style={{ color: 'var(--text-heading)' }}>
               {formatTokens(tokenCategories.regularTokens.totalTokens)}
             </div>
             <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-              {tokenCategories.regularTokens.count.toLocaleString()} запросов • {formatCost(tokenCategories.regularTokens.costUSD)}
+              {tokenCategories.regularTokens.count.toLocaleString()} {t('account.tabs.usageDetails.requests')} • {formatCost(tokenCategories.regularTokens.costUSD)}
             </div>
             <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-              ({formatTokens(tokenCategories.regularTokens.inputTokens)} вх / {formatTokens(tokenCategories.regularTokens.outputTokens)} вых)
+              ({formatTokens(tokenCategories.regularTokens.inputTokens)} {t('account.tabs.usageDetails.input')} / {formatTokens(tokenCategories.regularTokens.outputTokens)} {t('account.tabs.usageDetails.output')})
             </div>
           </div>
         </div>
@@ -493,7 +537,7 @@ export const UsageTab: React.FC = () => {
               color: 'var(--text-heading)',
             }}
           />
-          <span style={{ color: 'var(--text-tertiary-weak)' }}>to</span>
+          <span style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.to')}</span>
           <input
             type="date"
             value={selectedEndDate}
@@ -521,7 +565,7 @@ export const UsageTab: React.FC = () => {
             color: 'var(--text-secondary-strong)',
           }}
         >
-          Reset
+          {t('account.tabs.usageDetails.reset')}
         </button>
       </div>
 
@@ -530,7 +574,7 @@ export const UsageTab: React.FC = () => {
         <div className="space-y-6">
           {/* Daily Tokens Chart */}
           <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-            <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>Daily Token Usage</div>
+            <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>{t('account.tabs.usageDetails.dailyTokenUsage')}</div>
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--overlay-line-90)" />
@@ -561,7 +605,12 @@ export const UsageTab: React.FC = () => {
                     color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                   }}
                   labelFormatter={(label) => formatDate(label)}
-                  formatter={(value: any) => formatTokens(value)}
+                  formatter={(value: any, name: string) => {
+                    if (name === t('account.tabs.usageDetails.total') || name === t('account.tabs.usageDetails.input') || name === t('account.tabs.usageDetails.output')) {
+                      return formatTokens(value);
+                    }
+                    return formatTokens(value);
+                  }}
                 />
                 <Legend 
                   wrapperStyle={{
@@ -573,7 +622,23 @@ export const UsageTab: React.FC = () => {
                   dataKey="tokens"
                   stroke="#4285F4"
                   strokeWidth={2}
-                  name="Tokens"
+                  name={t('account.tabs.usageDetails.total')}
+                  dot={{ r: 3 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="inputTokens"
+                  stroke="#10A37F"
+                  strokeWidth={2}
+                  name={t('account.tabs.usageDetails.input')}
+                  dot={{ r: 3 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="outputTokens"
+                  stroke="#FF6B35"
+                  strokeWidth={2}
+                  name={t('account.tabs.usageDetails.output')}
                   dot={{ r: 3 }}
                 />
               </LineChart>
@@ -582,7 +647,7 @@ export const UsageTab: React.FC = () => {
 
           {/* Daily Cost Chart */}
           <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-            <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>Daily Cost</div>
+            <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>{t('account.tabs.usageDetails.dailyCost')}</div>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--overlay-line-90)" />
@@ -614,7 +679,7 @@ export const UsageTab: React.FC = () => {
                   }}
                   labelFormatter={(label) => formatDate(label)}
                   formatter={(value: any, name: string) => {
-                    if (name === 'cost' || name === 'Cost (USD)') {
+                    if (name === 'cost' || name === t('account.tabs.usageDetails.costUSD')) {
                       const numValue = typeof value === 'number' ? value : parseFloat(value);
                       return formatCost(numValue);
                     }
@@ -626,7 +691,7 @@ export const UsageTab: React.FC = () => {
                     color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                   }}
                 />
-                <Bar dataKey="cost" fill="#10A37F" name="Cost (USD)" />
+                <Bar dataKey="cost" fill="#10A37F" name={t('account.tabs.usageDetails.costUSD')} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -636,9 +701,9 @@ export const UsageTab: React.FC = () => {
       {/* Model Breakdown */}
       {modelData.length > 0 && (
         <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
-          <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>Usage by Model</div>
+          <div className="text-13 mb-4" style={{ color: 'var(--text-heading)' }}>{t('account.tabs.usageDetails.usageByModel')}</div>
           <ResponsiveContainer width="100%" height={Math.max(200, modelData.length * 50)}>
-            <BarChart data={modelData} layout="vertical" margin={{ top: 5, right: 30, bottom: 5, left: 0 }}>
+            <BarChart data={modelData} layout="vertical" margin={{ top: 5, right: 30, bottom: 5, left: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--overlay-line-90)" />
               <XAxis 
                 type="number" 
@@ -651,13 +716,14 @@ export const UsageTab: React.FC = () => {
               <YAxis
                 type="category"
                 dataKey="model"
-                width={150}
+                width={220}
                 stroke="var(--text-tertiary-weak)"
                 tick={{ fill: 'var(--text-tertiary-weak)' }}
                 style={{ fontSize: '11px' }}
                 interval={0}
                 domain={modelData.map((item) => item.model)}
                 allowDataOverflow={false}
+                tickFormatter={formatModelName}
               />
               <Tooltip
                 contentStyle={{
@@ -672,15 +738,20 @@ export const UsageTab: React.FC = () => {
                 labelStyle={{
                   color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                 }}
+                labelFormatter={(label) => {
+                  // Find the full model name from modelData (label is formatted, need to find original)
+                  const entry = modelData.find(item => formatModelName(item.model) === label);
+                  return entry ? entry.model : label;
+                }}
                 formatter={(value: any, name: string) => {
                   // Recharts may pass value as array for some chart types
                   const actualValue = Array.isArray(value) ? value[0] : value;
                   
                   // For "Usage by Model" chart, name is "Cost (USD)" and value is costUSD
-                  if (name === 'Cost (USD)' || name === 'costUSD') {
+                  if (name === t('account.tabs.usageDetails.costUSD') || name === 'costUSD') {
                     return formatCost(actualValue);
                   }
-                  if (name === 'Tokens' || name === 'totalTokens') {
+                  if (name === t('account.tabs.usageDetails.tokens') || name === 'totalTokens') {
                     return formatTokens(actualValue);
                   }
                   // Fallback: format any number < 1 as cost (likely USD)
@@ -695,7 +766,7 @@ export const UsageTab: React.FC = () => {
                   color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                 }}
               />
-              <Bar dataKey="costUSD" name="Cost (USD)" radius={[0, 4, 4, 0]}>
+              <Bar dataKey="costUSD" name={t('account.tabs.usageDetails.costUSD')} radius={[0, 4, 4, 0]}>
                 {modelData.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={getProviderColor(entry.provider)} />
                 ))}
@@ -709,13 +780,13 @@ export const UsageTab: React.FC = () => {
       {usageData.events && usageData.events.length > 0 && (
         <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
           <div className="flex items-center justify-between mb-4">
-            <div className="text-13" style={{ color: 'var(--text-heading)' }}>All Events</div>
+            <div className="text-13" style={{ color: 'var(--text-heading)' }}>{t('account.tabs.usageDetails.allEvents')}</div>
             <button
               onClick={async () => {
                 // Export CSV functionality
                 if (!usageData.events) return;
                 const csv = [
-                  ['Date', 'Model', 'Kind', 'Tokens', 'Cost'].join(','),
+                  [t('account.tabs.usageDetails.date'), t('account.tabs.usageDetails.model'), t('account.tabs.usageDetails.kind'), t('account.tabs.usageDetails.tokens'), t('account.tabs.usageDetails.cost')].join(','),
                   ...usageData.events.map(e => [
                     new Date(e.createdAt).toLocaleString(),
                     e.model,
@@ -738,18 +809,18 @@ export const UsageTab: React.FC = () => {
                 color: 'var(--text-secondary-strong)',
               }}
             >
-              Export CSV
+              {t('account.tabs.usageDetails.exportCSV')}
             </button>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full" style={{ fontSize: '12px' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>
-                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>Date</th>
-                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>Model</th>
-                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>Kind</th>
-                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>Tokens</th>
-                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>Cost</th>
+                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.date')}</th>
+                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.model')}</th>
+                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.kind')}</th>
+                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.tokens')}</th>
+                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.cost')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -762,7 +833,7 @@ export const UsageTab: React.FC = () => {
                         {formatTimeRange(group.startTime, group.endTime)}
                         {group.count > 1 && (
                           <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                            {group.count} событий
+                            {group.count} {t('account.tabs.usageDetails.events')}
                           </div>
                         )}
                       </div>
@@ -801,7 +872,12 @@ export const UsageTab: React.FC = () => {
             {groupedEvents.length > eventsPerPage && (
               <div className="flex items-center justify-between mt-4">
                 <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                  Показано {((eventsPage - 1) * eventsPerPage) + 1} - {Math.min(eventsPage * eventsPerPage, groupedEvents.length)} из {groupedEvents.length} групп ({usageData.events.length} событий)
+                  {t('account.tabs.usageDetails.showing', {
+                    start: ((eventsPage - 1) * eventsPerPage) + 1,
+                    end: Math.min(eventsPage * eventsPerPage, groupedEvents.length),
+                    total: groupedEvents.length,
+                    eventsCount: usageData.events.length
+                  })}
                 </div>
                 <div className="flex gap-2">
                   <button
@@ -814,7 +890,7 @@ export const UsageTab: React.FC = () => {
                       cursor: eventsPage === 1 ? 'not-allowed' : 'pointer',
                     }}
                   >
-                    Previous
+                    {t('account.tabs.usageDetails.previous')}
                   </button>
                   <button
                     onClick={() => setEventsPage(p => p + 1)}
@@ -826,7 +902,7 @@ export const UsageTab: React.FC = () => {
                       cursor: eventsPage * eventsPerPage >= usageData.events.length ? 'not-allowed' : 'pointer',
                     }}
                   >
-                    Next
+                    {t('account.tabs.usageDetails.next')}
                   </button>
                 </div>
               </div>

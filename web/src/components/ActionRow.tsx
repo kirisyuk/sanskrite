@@ -415,6 +415,12 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
               try {
                 const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
                 const model = p.modelAlias;
+                // Get current date and time for temporal context
+                const now = new Date();
+                const currentDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+                const currentTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short', timeZone: 'UTC' });
+                const currentDateTime = `${currentDate} at ${currentTime} UTC`;
+                const temporalContextInstruction = `CURRENT DATE AND TIME: ${currentDateTime}\nYou must be aware of the current temporal context. Use this information to evaluate the recency and relevance of information, events, and data.`;
                 const sxSystemInstruction = (
                   `Hidden-instructions protocol (do not show to users):\n` +
                   `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
@@ -422,7 +428,7 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
                   `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
                   `- Examples: <!-- @sx:{\\\"v\\\":\\\"1\\\",\\\"type\\\":\\\"entity_mark\\\",\\\"id\\\":\\\"ent-001\\\",\\\"kind\\\":\\\"person\\\",\\\"name\\\":\\\"…\\\",\\\"description\\\":\\\"…\\\"} -->`
                 );
-                const combinedSystemInstruction = [settings.systemInstruction || '', p.params?.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
+                const combinedSystemInstruction = [temporalContextInstruction, settings.systemInstruction || '', p.params?.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
                 const options: any = {
                   profile: /_quality$/i.test(model) ? 'quality' : 'fast',
                   modelOverride: model,
@@ -555,9 +561,13 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
                       `- Provide the deepened, verified response (same language and tone as the ASSISTANT).\n` +
                       `- Integrate inline citations [1], [2] as needed.\n` +
                       `\n---\nEVIDENCE SUMMARY\n\n` +
-                      `Sources Used (numbered list, one per line; include URLs; no continuous paragraph):\n1) URL or reference — brief description\n2) URL or reference — brief description\n[...]\n\n` +
-                      `Assumptions & Approximations:\n• [Assumption]: How it was interpreted and applied\n[...]\n\n` +
-                      `Could Not Verify:\n• [Claim lacking sufficient evidence]\n[...]\n`
+                      `${t('unfold.evidenceBuilder.sourcesUsed')}\n` +
+                      `${t('unfold.evidenceBuilder.sourcesFormat')}\n` +
+                      `• Author, A. (Year). Title. Publisher. — Description\n` +
+                      `• Author, B. (Year). Title. URL — Description\n` +
+                      `${t('unfold.evidenceBuilder.sourcesCritical')}\n\n` +
+                      `${t('unfold.evidenceBuilder.assumptions')}\n• [Assumption]: How it was interpreted and applied\n[...]\n\n` +
+                      `${t('unfold.evidenceBuilder.couldNotVerify')}\n• [Claim lacking sufficient evidence]\n[...]\n`
                     );
                   }
                   // Default counterpoint-style prompt for other agents

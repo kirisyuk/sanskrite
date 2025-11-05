@@ -22,7 +22,6 @@ export async function generateFrameExpansions(
 ): Promise<void> {
   // Check if generation is already in progress for this message
   if (generatingExpansions.has(assistantMessageId)) {
-    console.log('[FrameExpansions] Generation already in progress, skipping', { messageId: assistantMessageId });
     return;
   }
 
@@ -49,7 +48,6 @@ export async function generateFrameExpansions(
   );
   
   if (existingExpansion) {
-    console.log('[FrameExpansions] Already exists, skipping', { messageId: assistantMessageId, expansionId: existingExpansion.id });
     return;
   }
 
@@ -153,8 +151,6 @@ ${assistantContent}`;
 
     const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
 
-    console.log('[FrameExpansions] sending structured request', { model: evalModel, promptChars: prompt.length });
-
     const res = await api.genaiGenerate({
       model: evalModel,
       prompt,
@@ -199,11 +195,8 @@ ${assistantContent}`;
       .map((e: any) => ({ question: e.question.trim() }));
 
     if (expansions.length < 3) {
-      console.log('[FrameExpansions] insufficient expansions', { count: expansions.length });
       return;
     }
-
-    console.log('[FrameExpansions] generated expansions', { count: expansions.length, model: evalModel, messageId: assistantMessageId });
 
     // Create eval.frame_expansions interaction
     try {
@@ -270,8 +263,6 @@ ${assistantContent}`;
 
               return { interactions: items, persistedByLocalId: newMap } as any;
             });
-
-            console.log('[FrameExpansions] persisted to server', { evalId, serverId: res.id, messageId: assistantMessageId });
           } catch (e) {
             console.warn('[FrameExpansions] Failed to persist to server', e);
           }

@@ -212,8 +212,6 @@ ${evalInstruction} Return only the JSON.`;
 
   const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
 
-  console.log('[BiasEval] sending structured eval', { messageRole, model: evalModel, promptChars: promptEval.length });
-
   const res = await api.genaiGenerate({
     model: evalModel,
     prompt: promptEval,
@@ -223,16 +221,6 @@ ${evalInstruction} Return only the JSON.`;
     webSearchEnabled: false,
     systemInstruction: langDirective,
   });
-
-  // Debug raw model response
-  try {
-    const rawJSON = (res as any)?.rawJSON;
-    if (typeof rawJSON === 'string' && rawJSON.trim().length > 0) {
-      console.log('[BiasEval] raw model JSON', { model: evalModel, messageRole, rawJSON });
-    } else {
-      console.log('[BiasEval] raw model content', { model: evalModel, messageRole, content: res?.content });
-    }
-  } catch {}
 
   // Parse response
   let parsed: any = null;
@@ -299,8 +287,6 @@ ${evalInstruction} Return only the JSON.`;
       : []
   } as any;
 
-  console.log('[BiasEval] structured eval result', { model: evalModel, messageRole, ev });
-
   // Update local state
   useGenaiChatStore.getState().setEvaluation(messageId, ev);
 
@@ -355,8 +341,6 @@ ${evalInstruction} Return only the JSON.`;
 
             return { interactions: items, persistedByLocalId: newMap } as any;
           });
-
-          console.log('[BiasEval] persisted to server', { evalId, serverId: res.id, messageRole });
         } catch (e) {
           console.warn('[BiasEval] Failed to persist to server', e);
         }

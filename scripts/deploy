@@ -89,13 +89,24 @@ enable_api cloudscheduler.googleapis.com
 enable_api cloudresourcemanager.googleapis.com
 
 deploy_web() {
-  echo -e "${BLUE}[web] Building Vite app...${NC}"
+  echo -e "${BLUE}[web] Starting frontend deployment...${NC}"
   require firebase
+  require npm
+  
+  # Check if web directory exists
+  if [[ ! -d "$WEB_DIR" ]]; then
+    echo -e "${RED}[web] Error: Web directory not found at $WEB_DIR${NC}" >&2
+    exit 1
+  fi
+  
   # Try to resolve ws-broker URL for Vite env
   local WS_URL="${WS_URL:-}"
   if [[ -z "$WS_URL" ]]; then
     if gcloud run services describe sanskrite-ws --region "$REGION" >/dev/null 2>&1; then
       WS_URL=$(gcloud run services describe sanskrite-ws --region "$REGION" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found ws-broker URL:${NC} $WS_URL"
+    else
+      echo -e "${YELLOW}[web] ws-broker service not found (will use default from env if set)${NC}"
     fi
   fi
   
@@ -104,38 +115,83 @@ deploy_web() {
   if [[ -z "$VERIFIED_PROXY_URL" ]]; then
     if gcloud run services describe verified-proxy --region "$REGION" >/dev/null 2>&1; then
       VERIFIED_PROXY_URL=$(gcloud run services describe verified-proxy --region "$REGION" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found verified-proxy URL:${NC} $VERIFIED_PROXY_URL"
+    else
+      echo -e "${YELLOW}[web] verified-proxy service not found (will use default from env if set)${NC}"
     fi
   fi
   
   # Build with environment variables
-  local build_cmd="npm ci"
-  if [[ -n "$WS_URL" ]]; then
-    echo -e "${BLUE}[web] Using ws-broker URL for build:${NC} $WS_URL"
-    build_cmd="VITE_WS_BROKER_URL=\"$WS_URL\" $build_cmd"
-  fi
-  if [[ -n "$VERIFIED_PROXY_URL" ]]; then
-    echo -e "${BLUE}[web] Using verified-proxy URL for build:${NC} $VERIFIED_PROXY_URL"
-    build_cmd="VITE_VERIFIED_PROXY_URL=\"$VERIFIED_PROXY_URL\" $build_cmd"
+  echo -e "${BLUE}[web] Installing dependencies...${NC}"
+  cd "$WEB_DIR"
+  
+  # Install dependencies
+  if ! npm ci --no-audit --no-fund; then
+    echo -e "${RED}[web] Error: npm ci failed${NC}" >&2
+    exit 1
   fi
   
-  if [[ -n "$WS_URL" || -n "$VERIFIED_PROXY_URL" ]]; then
-    # Build with env vars
-    local build_env=""
-    [[ -n "$WS_URL" ]] && build_env="VITE_WS_BROKER_URL=\"$WS_URL\""
-    [[ -n "$VERIFIED_PROXY_URL" ]] && build_env="${build_env}${build_env:+ }VITE_VERIFIED_PROXY_URL=\"$VERIFIED_PROXY_URL\""
-    (cd "$WEB_DIR" && eval "$build_env npm ci" && eval "$build_env npm run build")
-  else
-    (cd "$WEB_DIR" && npm ci && npm run build)
+  # Build with environment variables
+  echo -e "${BLUE}[web] Building Vite app...${NC}"
+  local build_env_vars=()
+  if [[ -n "$WS_URL" ]]; then
+    build_env_vars+=("VITE_WS_BROKER_URL=$WS_URL")
+    echo -e "${BLUE}[web] Using ws-broker URL for build:${NC} $WS_URL"
   fi
+  if [[ -n "$VERIFIED_PROXY_URL" ]]; then
+    build_env_vars+=("VITE_VERIFIED_PROXY_URL=$VERIFIED_PROXY_URL")
+    echo -e "${BLUE}[web] Using verified-proxy URL for build:${NC} $VERIFIED_PROXY_URL"
+  fi
+  
+  # Build with env vars if any are set
+  if [[ ${#build_env_vars[@]} -gt 0 ]]; then
+    export "${build_env_vars[@]}"
+    if ! npm run build; then
+      echo -e "${RED}[web] Error: npm run build failed${NC}" >&2
+      exit 1
+    fi
+    # Unset variables (extract variable names only)
+    for env_var in "${build_env_vars[@]}"; do
+      var_name="${env_var%%=*}"
+      unset "$var_name"
+    done
+  else
+    if ! npm run build; then
+      echo -e "${RED}[web] Error: npm run build failed${NC}" >&2
+      exit 1
+    fi
+  fi
+  
+  # Verify build output exists
+  if [[ ! -d "$WEB_DIR/dist" ]]; then
+    echo -e "${RED}[web] Error: Build output directory 'dist' not found${NC}" >&2
+    exit 1
+  fi
+  
+  echo -e "${GREEN}[web] Build completed successfully${NC}"
 
+  # Deploy to Firebase Hosting
   echo -e "${BLUE}[web] Deploying to Firebase Hosting...${NC}"
   local FB_ARGS=("--only" "hosting" "--project" "$PROJECT_ID" "--non-interactive" "--force")
   if [[ -n "${FIREBASE_TOKEN:-}" ]]; then
     FB_ARGS+=("--token" "$FIREBASE_TOKEN")
+    echo -e "${BLUE}[web] Using Firebase token from environment${NC}"
+  else
+    echo -e "${YELLOW}[web] No FIREBASE_TOKEN found, will use interactive authentication${NC}"
   fi
-  (cd "$WEB_DIR" && firebase deploy "${FB_ARGS[@]}")
+  
+  if ! firebase deploy "${FB_ARGS[@]}"; then
+    echo -e "${RED}[web] Error: Firebase deployment failed${NC}" >&2
+    exit 1
+  fi
 
-  echo -e "${GREEN}[web] Firebase Hosting deploy completed.${NC}"
+  echo -e "${GREEN}[web] ✓ Firebase Hosting deploy completed successfully${NC}"
+  
+  # Get hosting URL
+  local hosting_url=$(firebase hosting:sites:list --project "$PROJECT_ID" --json 2>/dev/null | grep -o '"defaultHostingSite": "[^"]*' | cut -d'"' -f4 || echo "")
+  if [[ -n "$hosting_url" ]]; then
+    echo -e "${BLUE}[web] Frontend URL:${NC} https://$hosting_url"
+  fi
 }
 
 setup_infrastructure() {

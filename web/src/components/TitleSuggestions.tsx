@@ -15,9 +15,22 @@ export const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void;
   const appliedProjectRef = React.useRef<string | null>(null);
   const finalizedRef = React.useRef(false);
   const fetchedForProjectRef = React.useRef<string | null>(null);
+  const lastProjectIdRef = React.useRef<string | null>(null);
   
   // Get messages only when needed via getState()
   const getMessages = React.useCallback(() => useGenaiChatStore.getState().messages, []);
+  
+  // Reset refs when project changes
+  React.useEffect(() => {
+    const currentPid = currentProject?.id || null;
+    if (lastProjectIdRef.current !== currentPid) {
+      // Project changed - reset refs
+      appliedProjectRef.current = null;
+      finalizedRef.current = false;
+      fetchedForProjectRef.current = null;
+      lastProjectIdRef.current = currentPid;
+    }
+  }, [currentProject?.id]);
   
   const hasAssistant = React.useMemo(() => {
     const messages = getMessages();
@@ -37,15 +50,34 @@ export const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void;
         const cpid = useProjectsStore.getState().currentProject?.id;
         if (!pid || pid === 'local-unfold' || !cpid || pid !== cpid) return;
       } catch {}
-      // If user has already finalized a title or project already named (not Draft), skip fetching
+      
+      // Check if title was already finalized for this project (priority check)
       try {
-        const projectId = useGenaiChatStore.getState().projectId || currentProject?.id;
+        const projectId = pid || currentProject?.id;
         if (projectId && projectId !== 'local-unfold' && typeof window !== 'undefined') {
           finalizedRef.current = window.localStorage.getItem(`chatTitleFinal:${projectId}`) === '1';
         }
-        const name = (useProjectsStore.getState().currentProject?.displayName || '').trim();
-        if (finalizedRef.current || (name && name.toLowerCase() !== 'draft')) return;
+        if (finalizedRef.current) {
+          // Title already finalized - reset refs for this project and skip
+          if (fetchedForProjectRef.current === pid) fetchedForProjectRef.current = null;
+          return;
+        }
       } catch {}
+      
+      // Check if project already has a name (not Draft) - skip fetching if so
+      try {
+        const name = (useProjectsStore.getState().currentProject?.displayName || '').trim();
+        if (name && name.toLowerCase() !== 'draft') {
+          // Project already has a name - mark as finalized and skip
+          if (pid && typeof window !== 'undefined') {
+            try { window.localStorage.setItem(`chatTitleFinal:${pid}`, '1'); } catch {}
+          }
+          finalizedRef.current = true;
+          if (fetchedForProjectRef.current === pid) fetchedForProjectRef.current = null;
+          return;
+        }
+      } catch {}
+      
       // If we already fetched titles for this project, don't fetch again
       if (fetchedForProjectRef.current === pid) return;
       setLoading(true);
@@ -124,16 +156,37 @@ export const TitleSuggestions: React.FC<{ visible: boolean; onClose: () => void;
         try {
           await api.updateProject(activePid, { displayName: first, view: 'discovery' } as any);
           console.log('[Titles] auto-applied to project', { projectId: activePid, name: first });
+          
+          // Get updated project data from server to ensure consistency
+          let updatedProject: any;
+          try {
+            updatedProject = await api.getProject(activePid);
+          } catch {
+            // Fallback to local update if fetch fails
+            updatedProject = { ...(currentProject || proj), id: activePid, displayName: first, view: 'discovery' };
+          }
+          
           useProjectsStore.setState((prev) => {
             const exists = prev.projects.some((p) => p.id === activePid);
-            const updated = { ...(prev.currentProject || proj), id: activePid, displayName: first, view: 'discovery' } as any;
+            const updated = { ...updatedProject, id: activePid, displayName: first, view: 'discovery' } as any;
+            console.log('[Titles] updating projects store', { exists, activePid, updated });
             return {
               projects: exists
-                ? prev.projects.map((p) => (p.id === activePid ? { ...p, displayName: first, view: 'discovery' } : p))
-                : [{ id: activePid, displayName: first, view: 'discovery' } as any, ...prev.projects],
+                ? prev.projects.map((p) => (p.id === activePid ? updated : p))
+                : [updated, ...prev.projects],
               currentProject: updated,
             } as any;
           });
+          
+          // Also refresh projects list from server to ensure consistency (especially if project was draft)
+          try {
+            const { fetchProjects } = useProjectsStore.getState();
+            await fetchProjects('discovery');
+            console.log('[Titles] refreshed projects list from server');
+          } catch (e) {
+            console.warn('[Titles] failed to refresh projects list', e);
+          }
+          
           appliedProjectRef.current = activePid;
           // Finalize: suppress future suggestions and hide component permanently
           try { if (typeof window !== 'undefined') window.localStorage.setItem(`chatTitleFinal:${activePid}`, '1'); } catch {}

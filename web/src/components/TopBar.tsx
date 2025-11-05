@@ -8,6 +8,7 @@ import { UserProfile } from './UserProfile';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../stores/uiStore';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
+import { useProjectsStore } from '../stores/projectsStore';
 import { api } from '../lib/api';
 
 export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) => {
@@ -21,6 +22,7 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const genaiChatProjectId = useGenaiChatStore((s) => s.projectId);
   const genaiChatInteractionsLength = useGenaiChatStore((s) => s.interactions.length);
   const genaiChatMessagesLength = useGenaiChatStore((s) => s.messages.length);
+  const { currentProject } = useProjectsStore();
   const [shareBusy, setShareBusy] = React.useState(false);
   const [shareOpen, setShareOpen] = React.useState(false);
   const [shareUrl, setShareUrl] = React.useState<string | null>(null);
@@ -62,16 +64,19 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const canShare = React.useMemo(() => {
     try {
       if (!currentUser) return false;
-      if (!genaiChatProjectId || genaiChatProjectId === 'local-unfold') return false;
+      // Use currentProject?.id if available, otherwise fallback to genaiChatProjectId
+      const projectId = currentProject?.id || genaiChatProjectId;
+      if (!projectId || projectId === 'local-unfold') return false;
       return genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0;
     } catch { return false; }
-  }, [genaiChatProjectId, genaiChatInteractionsLength, genaiChatMessagesLength, currentUser]);
+  }, [currentProject?.id, genaiChatProjectId, genaiChatInteractionsLength, genaiChatMessagesLength, currentUser]);
 
   const createShare = React.useCallback(async () => {
     try {
       if (shareBusy) return;
       setShareBusy(true);
-      const pid = genaiChatProjectId as string;
+      // Use currentProject?.id if available (most reliable), otherwise fallback to genaiChatProjectId
+      const pid = (currentProject?.id || genaiChatProjectId) as string;
       if (!pid || pid === 'local-unfold') { setShareBusy(false); return; }
       // default: 7 days from now
       const exp = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -85,7 +90,7 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
     } finally {
       setShareBusy(false);
     }
-  }, [genaiChatProjectId, shareBusy]);
+  }, [currentProject?.id, genaiChatProjectId, shareBusy]);
 
   React.useEffect(() => {
     const onDocClick = (e: MouseEvent) => {

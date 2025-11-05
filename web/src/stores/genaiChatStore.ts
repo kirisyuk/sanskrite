@@ -242,7 +242,6 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       set((s) => {
         // If project changed while request was in flight, ignore this response
         if (s.projectId !== projectId) {
-          console.log('[hydrateInteractions] Project changed during request, ignoring stale response', { requestedProjectId: projectId, currentProjectId: s.projectId });
           return s;
         }
         const byServerId = new Set<string>((serverItems as any[]).map((it: any) => it.id));
@@ -311,12 +310,12 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         const restoredMeta = { ...s.messageMeta };
         
         // Generate frameExpansions for assistant interactions that don't have them yet
-        // Only for non-agent responses and if we have at least 2 assistant interactions
+        // Include both LLM responses and agent responses (bring-in agents)
         // Only generate for the last assistant interaction if it doesn't have an expansion interaction
         const assistantInteractions = merged.filter((it: any) => 
-          it.kind === 'assistant' && !it.author?.displayName && it.content && it.content.trim()
+          it.kind === 'assistant' && it.content && it.content.trim()
         );
-        if (assistantInteractions.length >= 2) {
+        if (assistantInteractions.length >= 1) {
           // Generate expansions for the last assistant interaction if it doesn't have them
           const lastAssistant = assistantInteractions[assistantInteractions.length - 1];
           
@@ -442,7 +441,6 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           );
           
           if (existingAnalysisInteraction) {
-            console.log('[hydrateInteractions] Discussion flow analysis already exists');
             return;
           }
           
@@ -456,13 +454,11 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           
           // Only generate if we have at least 2 messages (user + assistant)
           if (chatMessages.length < 2) {
-            console.log('[hydrateInteractions] Not enough messages for discussion flow analysis', { count: chatMessages.length });
             return;
           }
           
           const { generateDiscussionFlowAnalysis } = await import('../lib/discussionFlowAnalysis');
           await generateDiscussionFlowAnalysis(projectId, chatMessages, null, undefined);
-          console.log('[hydrateInteractions] Generated discussion flow analysis after hydration');
         } catch (e) {
           console.warn('[hydrateInteractions] Failed to generate discussion flow analysis', e);
         }
@@ -488,15 +484,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       // Check if projectId is still current before applying results (race condition guard)
       set((s) => {
         if (s.projectId !== projectId) {
-          console.log('[loadStanceAggregate] Project changed during request, ignoring stale response', { requestedProjectId: projectId, currentProjectId: s.projectId });
           return { stanceLoading: false };
         }
         return { stanceAggregate: agg, stanceLoading: false };
       });
     } catch (e: any) {
-      // 404 is normal for projects without aggregate yet
+      // 404 is normal for projects without aggregate yet - silently ignore
       if (e?.response?.status === 404) {
-        console.log('[loadStanceAggregate] No aggregate yet (404) - normal for new project');
+        // Don't log - 404 is expected for new projects without analysis
       } else {
         console.warn('[loadStanceAggregate] Failed to load aggregate', e);
       }
@@ -508,19 +503,24 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     const projectId = get().projectId;
     if (!projectId || projectId === 'local-unfold') return;
     
-    // Don't load aggregate if project is empty (no interactions yet)
-    const hasInteractions = get().interactions.length > 0;
-    if (!hasInteractions) {
-      console.log('[ensureStanceAggregate] Skipping for empty project - no interactions yet');
+    // META ANALYSIS GENERATION IS DISABLED (see onDone around line 2019)
+    // Therefore, loading aggregate only makes sense for old projects that already have it
+    // Skip for new projects since no new aggregates will be generated
+    
+    // Don't load aggregate if project is empty or has very few interactions
+    const interactions = get().interactions;
+    const hasEnoughInteractions = interactions.length >= 3;
+    if (!hasEnoughInteractions) {
       return;
     }
     
-    // Only load existing aggregate; do not run analysis here
+    // Only load existing aggregate from old projects; skip silently if not found
+    // Since meta analysis generation is disabled, new projects won't have aggregates
     try {
       set({ stanceLoading: true });
       await get().loadStanceAggregate();
     } catch (e: any) {
-      // 404 is expected for new projects without analysis yet
+      // 404 is expected - meta analysis generation is disabled, so new projects won't have aggregates
       if (e?.response?.status !== 404) {
         console.warn('[ensureStanceAggregate] Error loading aggregate', e);
       }
@@ -1743,30 +1743,6 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const promptTokens = Math.ceil(prompt.length / 4);
       messages.push({ role: 'user', text: prompt });
       totalTokens += promptTokens;
-      try {
-        const modelOverride = options?.modelOverride;
-        const provider = (agentMeta as any)?.agentProfile?.provider;
-        const model = (agentMeta as any)?.agentProfile?.model || modelOverride;
-        console.log('[GenAI Stream] start', {
-          kind: (agentMeta as any)?.subkind || 'chat',
-          agentName: agentMeta?.displayName,
-          provider,
-          model,
-          promptChars: (prompt || '').length,
-          promptTokens,
-          contextMessagesCount: messages.length - 1, // Exclude the prompt itself
-          contextTokens: totalTokens - promptTokens,
-          totalTokens,
-          contextWindow,
-          maxContextTokens,
-          hasTools: Array.isArray(tools) && tools.length > 0,
-          groundingEnabled: !!options?.groundingEnabled,
-          temperature: options?.temperature,
-          maxOutputTokens: options?.maxOutputTokens,
-          lang: options?.__lang,
-          replyTo: (agentMeta as any)?.replyTo,
-        });
-      } catch {}
       // Generate per-stream UUID for FE-side filtering
       const streamId = (crypto && 'randomUUID' in crypto) ? (crypto as any).randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
       await api.genaiStream({ prompt, tools, options, messages, projectId, streamId });
@@ -2003,7 +1979,48 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         })();
 
+        // Generate project title after first assistant response
+        (async () => {
+          try {
+            if (!projectId || projectId === 'local-unfold') return;
+            // Only generate title after first assistant response (exactly one assistant message)
+            // Use nextInteractions for assistant messages, but also check messages for user messages
+            // since user messages might not be in interactions yet if they were just sent
+            const assistantMessages = nextInteractions.filter((it) => it.kind === 'assistant');
+            const userMessagesFromInteractions = nextInteractions.filter((it) => it.kind === 'user');
+            
+            // Also check messages array for user messages (in case they're not in interactions yet)
+            const userMessagesFromMessages = s.messages.filter((m) => m.role === 'user');
+            const totalUserMessages = Math.max(userMessagesFromInteractions.length, userMessagesFromMessages.length);
+            
+            console.log('[ProjectTitle] Checking conditions', { 
+              projectId, 
+              userMessagesFromInteractions: userMessagesFromInteractions.length,
+              userMessagesFromMessages: userMessagesFromMessages.length,
+              totalUserMessages,
+              assistantMessagesCount: assistantMessages.length 
+            });
+            // Skip if no user messages or if already has multiple exchanges
+            if (totalUserMessages === 0 || assistantMessages.length !== 1) {
+              console.log('[ProjectTitle] Skipping - conditions not met', { 
+                totalUserMessages,
+                assistantMessagesCount: assistantMessages.length 
+              });
+              return;
+            }
+            
+            const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+            const { generateProjectTitle } = await import('../lib/projectTitleGeneration');
+            console.log('[ProjectTitle] Calling generateProjectTitle', { projectId, preferredLang });
+            await generateProjectTitle({ projectId, preferredLang });
+          } catch (e) {
+            console.warn('[ProjectTitle] Title generation failed', e);
+          }
+        })();
+
         // Trigger meta-analysis only for standard USER→ASSISTANT exchanges on server-backed projects
+        // DISABLED: temporarily disabled to reduce LLM API calls
+        /*
         (async () => {
           try {
             if (!projectId || projectId === 'local-unfold') return;
@@ -2044,7 +2061,6 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 }
               }
               req = { analyzers: ['thinking','biases','decisions','comm','learning'], interactions: refs } as any;
-              console.log('[Meta] Full recompute', { count: refs.length });
             } else {
               // Incremental: previous aggregate + last pair (user, assistant)
               const prev = (agg?.lastResults || agg?.result || agg) as any;
@@ -2065,8 +2081,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             console.warn('[Meta] analysis failed', e);
           }
         })();
+        */
 
-        // Generate discussion flow analysis (blind spots, recommendations, frame, confidence)
+        // Generate discussion flow analysis (blind spots, frame shift recommendations, frame, confidence)
         (async () => {
           try {
             if (!projectId || projectId === 'local-unfold') return;
@@ -2133,20 +2150,18 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         })();
 
-        // Generate frame expansions for assistant responses (only after 2nd LLM response, not for agents)
+        // Generate frame expansions for assistant responses (includes both LLM responses and agent responses)
         (async () => {
           try {
             if (!projectId || projectId === 'local-unfold') return;
-            // Skip if this is an agent reply (has displayName)
-            if (meta?.displayName) return;
-            // Count assistant interactions (non-agent, LLM responses) to ensure we're at least on the 2nd response
-            // Count includes this one we're about to add, so we check if we'll have >= 2 after adding
+            // Count all assistant interactions (including agents) to ensure we have at least 1 response
+            // Count includes this one we're about to add, so we check if we'll have >= 1 after adding
             const currentAssistants = get().interactions.filter((it) => 
-              it.kind === 'assistant' && !(it as any).author?.displayName
+              it.kind === 'assistant'
             );
             // After adding this interaction, we'll have currentAssistants.length + 1
-            if (currentAssistants.length + 1 < 2) {
-              console.log('[FrameExpansions] Skipping - need at least 2 LLM responses');
+            if (currentAssistants.length + 1 < 1) {
+              console.log('[FrameExpansions] Skipping - need at least 1 assistant response');
               return;
             }
             // Generate expansions for the last assistant message
@@ -2305,9 +2320,15 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       }
     }
     
+    // Limit attributions size to prevent memory leaks (keep last 500 entries)
+    const MAX_ATTRIBUTIONS = 500;
+    const limitedAttributions = allAttributions.length > MAX_ATTRIBUTIONS 
+      ? allAttributions.slice(-MAX_ATTRIBUTIONS)
+      : allAttributions;
+    
     return { 
       usage: meta.usage, 
-      attributions: allAttributions, 
+      attributions: limitedAttributions, 
       searchQueries: incomingQueries, 
       sources: incomingSources 
     } as any;

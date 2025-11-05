@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface ChatMessageProps {
   role: 'user' | 'assistant';
@@ -27,7 +28,8 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   leftAccent,
   averageTimingSeconds,
 }) => {
-  const header = headerText || (role === 'user' ? 'you' : 'assistant');
+  const { t } = useTranslation();
+  const header = headerText || (role === 'user' ? t('chatMessage.userRole', { defaultValue: 'you' }) : t('chatMessage.assistantRole', { defaultValue: 'assistant' }));
   const containerStyle: React.CSSProperties = {
     maxWidth: align === 'right' ? '75%' : '100%',
     width: align === 'right' ? 'fit-content' : '100%',
@@ -40,9 +42,11 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   // Build header text with timing info
   let headerTextContent = header;
   if (isThinking && role === 'assistant') {
-    headerTextContent = `${header} (thinking ${thinkingSeconds ?? 0} sec)`;
+    const thinkingText = t('chatMessage.thinking', { seconds: thinkingSeconds ?? 0, defaultValue: `thinking ${thinkingSeconds ?? 0} sec` });
+    headerTextContent = `${header} (${thinkingText})`;
     if (averageTimingSeconds !== null && averageTimingSeconds !== undefined) {
-      headerTextContent += ` • в среднем ответ занимает ${averageTimingSeconds} с`;
+      const averageText = t('chatMessage.averageResponseTime', { seconds: averageTimingSeconds, defaultValue: `average response time ${averageTimingSeconds} sec` });
+      headerTextContent += ` • ${averageText}`;
     }
   }
   
@@ -55,7 +59,9 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       <div className="text-13" style={{ color: 'var(--text-heading)' }}>
         {isError ? (
           <div>
-            К сожалению, не удалось обработать запрос. Мы зафиксировали техническую неполадку и уже анализируем ситуацию. Пожалуйста, повторите попытку чуть позже.
+            {t('chatMessage.errorMessage', { 
+              defaultValue: 'К сожалению, не удалось обработать запрос. Мы зафиксировали техническую неполадку и уже анализируем ситуацию. Пожалуйста, повторите попытку чуть позже.' 
+            })}
           </div>
         ) : (
           children

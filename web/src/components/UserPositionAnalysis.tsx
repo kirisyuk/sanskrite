@@ -3,23 +3,6 @@ import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useAuth } from '../contexts/AuthContext';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
 import { api } from '../lib/api';
-import {
-  generateKeyInsights,
-  interpretThinkingDepth,
-  interpretTimeHorizon,
-  interpretUncertainty,
-  interpretDecisionProcess,
-  interpretRiskAttitude,
-  interpretCriteriaStyle,
-  interpretClarity,
-  interpretAbstraction,
-  interpretContextCompleteness,
-  interpretLearningDynamics,
-  interpretIntegration,
-  interpretMetaAwareness,
-  getMetricColor,
-  formatPercent
-} from '../lib/metaInterpretations';
 
 // Component to analyze user's position based on their interactions
 export const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRiskUpdate?: (r: { level: string; score: number; rationale?: string } | null) => void; hideTitle?: boolean }> = ({ onFirstResult, onRiskUpdate, hideTitle = false }) => {
@@ -28,13 +11,9 @@ export const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRisk
   const [loading, setLoading] = React.useState(false);
   const [durationMs, setDurationMs] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [showMetaDetails, setShowMetaDetails] = React.useState(false);
-  const [showTechnicalDetails, setShowTechnicalDetails] = React.useState(false);
   const [showRiskRationale, setShowRiskRationale] = React.useState(false);
-  const [showWhoLeadsExplanation, setShowWhoLeadsExplanation] = React.useState(false);
   // PERFORMANCE FIX: Subscribe only to interactions.length, not entire array
   const interactionsLength = useGenaiChatStore((s) => s.interactions.length);
-  const stanceAggregate = useGenaiChatStore((s) => s.stanceAggregate);
   const { currentUser } = useAuth();
   
   // Get interactions only when needed via getState()
@@ -223,7 +202,6 @@ ${prevBlock}`;
 
         const settingsState = useGenAISettings.getState();
         const modelAlias = (settingsState.stanceModel && settingsState.stanceModel.trim()) ? settingsState.stanceModel : 'gemini_fast';
-        console.log('[UserPositionAnalysis] sending structured stance', { model: modelAlias, promptChars: prompt.length });
         const response = await api.genaiGenerate({
           model: modelAlias,
           prompt,
@@ -237,15 +215,6 @@ ${prevBlock}`;
         const finished = performance.now();
 
         if (!cancelled) {
-          try {
-            const rawJSON = (response as any)?.rawJSON;
-            if (typeof rawJSON === 'string' && rawJSON.trim().length > 0) {
-              console.log('[UserPositionAnalysis] raw model JSON', { model: modelAlias, rawJSON });
-            } else {
-              console.log('[UserPositionAnalysis] raw model content', { model: modelAlias, content: response?.content });
-            }
-          } catch {}
-
           let parsed: any = null;
           try {
             if (typeof response?.content === 'string') {
@@ -354,8 +323,6 @@ ${prevBlock}`;
                           
                           return { interactions: items, persistedByLocalId: newMap } as any;
                         });
-                        
-                        console.log('[UserPositionAnalysis] eval.stance persisted to server', { evalId, serverId: res.id });
                       }
                     } catch (e) {
                       console.warn('[UserPositionAnalysis] Failed to persist eval.stance to server', e);
@@ -399,9 +366,7 @@ ${prevBlock}`;
   if (!lastUserInter) return null;
   const sanitizeSx = (s: string) => {
     try { return (s || '').replace(/<!--\s*@sx:[\s\S]*?-->/g, '').trim(); } catch { return s; }
-  };
-  const agg = stanceAggregate;
-
+      };
   // Display content: prefer stanceForLatestUser, fallback to position, then previousStanceText
   const displayContent = stanceForLatestUser 
     ? (stanceForLatestUser.contentSanitized || stanceForLatestUser.content)
@@ -470,33 +435,10 @@ ${prevBlock}`;
                     </button>
                   );
                 })()}
-                {agg && typeof agg === 'object' && typeof agg.whoLeads === 'string' && (
-                  <button
-                    type="button"
-                    onClick={() => setShowWhoLeadsExplanation(!showWhoLeadsExplanation)}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium cursor-pointer hover:opacity-80 transition-opacity"
-                    style={{ 
-                      backgroundColor: 'rgba(59, 130, 246, 0.1)', // blue
-                      border: '1px solid rgba(59, 130, 246, 0.3)',
-                      color: 'rgb(59, 130, 246)'
-                    }}
-                  >
-                    {agg.whoLeads === 'User' ? 'You lead' : agg.whoLeads === 'AI' ? 'AI leads' : 'Mixed control'}
-                  </button>
-                )}
               </div>
               {showRiskRationale && displayRisk?.rationale && (
                 <div className="text-[11px] mt-2" style={{ color: 'var(--text-secondary-strong)' }}>
                   {displayRisk.rationale}
-                </div>
-              )}
-              {showWhoLeadsExplanation && agg && typeof agg === 'object' && typeof agg.whoLeads === 'string' && (
-                <div className="text-[11px] mt-2" style={{ color: 'var(--text-secondary-strong)' }}>
-                  {agg.whoLeads === 'User' 
-                    ? 'You, not the AI, are taking the leading role in this discussion.'
-                    : agg.whoLeads === 'AI'
-                    ? 'The AI is taking the leading role in this discussion, guiding the conversation direction.'
-                    : 'You and the AI are sharing control of the conversation, taking turns to lead.'}
                 </div>
               )}
             </div>
@@ -555,208 +497,6 @@ ${prevBlock}`;
           {typeof durationMs === 'number' && !stanceForLatestUser && (
             <div className="text-[11px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
               Time: {durationMs} ms
-            </div>
-          )}
-          {agg && typeof agg === 'object' && (
-            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                  {(() => {
-                    const messagesAnalyzed = (agg as any)?.lastAnalyzedMessageCount;
-                    const samples = (agg as any)?.samples;
-                    const label = typeof messagesAnalyzed === 'number' && messagesAnalyzed > 0
-                      ? `Conversation insights (${messagesAnalyzed} messages)`
-                      : (typeof samples === 'number' && samples > 0 ? `Conversation insights (${samples} update${samples > 1 ? 's' : ''})` : 'Conversation insights');
-                    return label;
-                  })()}
-                </div>
-                <button
-                  type="button"
-                  className="text-[10px] underline"
-                  style={{ color: 'var(--text-secondary-strong)' }}
-                  onClick={() => setShowMetaDetails(!showMetaDetails)}
-                >
-                  {showMetaDetails ? 'Hide' : 'Show'}
-                </button>
-              </div>
-              
-              {showMetaDetails && (
-                <>
-                  {/* Key Insights */}
-                  {(() => {
-                    try {
-                      const insights = generateKeyInsights(agg);
-                      if (insights.length === 0) return null;
-                      return (
-                        <div className="space-y-2 mb-3">
-                          {insights.map((insight, idx) => {
-                            const iconColor = insight.sentiment === 'positive' ? 'hsl(120, 50%, 50%)' : insight.sentiment === 'negative' ? 'hsl(0, 50%, 50%)' : 'hsl(45, 70%, 55%)';
-                            return (
-                              <div key={idx} className="flex items-start gap-2">
-                                <div className="w-1 h-1 rounded-full mt-1.5" style={{ backgroundColor: iconColor, flexShrink: 0 }} />
-                                <div className="flex-1">
-                                  <div className="text-[11px]" style={{ color: 'var(--text-heading)' }}>{insight.title}</div>
-                                  <div className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{insight.description}</div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    } catch (e) {
-                      console.error('[Meta] Failed to generate insights:', e);
-                      return null;
-                    }
-                  })()}
-
-                  {/* Technical Details Toggle */}
-                  <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Technical details</span>
-                    <button
-                      type="button"
-                      className="text-[9px] underline"
-                      style={{ color: 'var(--text-secondary-strong)' }}
-                      onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
-                    >
-                      {showTechnicalDetails ? 'Hide' : 'Show'}
-                    </button>
-                  </div>
-
-                  {showTechnicalDetails && (
-                    <div className="space-y-2 mt-2">
-                      {typeof agg.whoLeads === 'string' && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Dialog control:</span>
-                          <span className="text-[10px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)' }}>{agg.whoLeads}</span>
-                        </div>
-                      )}
-                      {typeof agg.effectiveness === 'number' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Effectiveness:</span>
-                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.effectiveness)}</span>
-                          </div>
-                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: formatPercent(agg.effectiveness), height: '100%', backgroundColor: getMetricColor(agg.effectiveness), transition: 'width 0.3s ease' }} />
-                          </div>
-                        </div>
-                      )}
-                      {typeof agg.leadershipIndex === 'number' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Leadership:</span>
-                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.leadershipIndex)}</span>
-                          </div>
-                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: formatPercent(agg.leadershipIndex), height: '100%', backgroundColor: getMetricColor(agg.leadershipIndex) }} />
-                          </div>
-                        </div>
-                      )}
-                      {typeof agg.focusRetention === 'number' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Focus retention:</span>
-                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.focusRetention)}</span>
-                          </div>
-                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: formatPercent(agg.focusRetention), height: '100%', backgroundColor: getMetricColor(agg.focusRetention) }} />
-                          </div>
-                        </div>
-                      )}
-                      {typeof agg.structureScore === 'number' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>Structure:</span>
-                            <span className="text-[10px]" style={{ color: 'var(--text-secondary-strong)' }}>{formatPercent(agg.structureScore)}</span>
-                          </div>
-                          <div style={{ width: '100%', height: 3, backgroundColor: 'var(--overlay-line-90)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ width: formatPercent(agg.structureScore), height: '100%', backgroundColor: getMetricColor(agg.structureScore) }} />
-                          </div>
-                        </div>
-                      )}
-                      {agg.lastResults && typeof agg.lastResults === 'object' && (() => {
-                        try {
-                          const res = agg.lastResults as any;
-                          const results = Array.isArray(res.results) ? res.results : [];
-                          if (results.length === 0) return null;
-                          
-                          const analyzerDetails = results.map((r: any) => {
-                            const name = r.analyzer || r.Analyzer || 'unknown';
-                            const resultData = r.result || r.Result || {};
-                            return { name, data: resultData };
-                          });
-
-                          return (
-                            <div className="mt-2 pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-                              <div className="text-[9px] mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
-                                Detailed patterns ({analyzerDetails.length} analyzers):
-                              </div>
-                              <div className="space-y-3">
-                                {analyzerDetails.map((a: any, i: number) => {
-                                  const data: any = a.data || {};
-                                  const interpretations: string[] = [];
-                                  
-                                  try {
-                                    if (a.name === 'thinking') {
-                                      if (data.depth?.label) interpretations.push(interpretThinkingDepth(data.depth.label));
-                                      if (Array.isArray(data.timeHorizon) && data.timeHorizon.length > 0) {
-                                        data.timeHorizon.slice(0, 2).forEach((h: any) => {
-                                          if (h?.label) interpretations.push(interpretTimeHorizon(h.label));
-                                        });
-                                      }
-                                      if (data.uncertainty?.label) interpretations.push(interpretUncertainty(data.uncertainty.label));
-                                    } else if (a.name === 'decisions') {
-                                      if (data.process?.label) interpretations.push(interpretDecisionProcess(data.process.label));
-                                      if (data.riskAttitude?.label) interpretations.push(interpretRiskAttitude(data.riskAttitude.label));
-                                      if (data.criteriaStyle?.label) interpretations.push(interpretCriteriaStyle(data.criteriaStyle.label));
-                                    } else if (a.name === 'comm' || a.name === 'communication' || a.name === 'communicationPatterns') {
-                                      if (data.clarity?.label) interpretations.push(interpretClarity(data.clarity.label));
-                                      if (data.abstraction?.label) interpretations.push(interpretAbstraction(data.abstraction.label));
-                                      if (data.contextCompleteness?.label) interpretations.push(interpretContextCompleteness(data.contextCompleteness.label));
-                                    } else if (a.name === 'learning') {
-                                      if (data.metaAwareness?.label) interpretations.push(interpretMetaAwareness(data.metaAwareness.label));
-                                      if (data.dynamics?.label) interpretations.push(interpretLearningDynamics(data.dynamics.label));
-                                      if (data.integration?.label) interpretations.push(interpretIntegration(data.integration.label));
-                                    } else if (a.name === 'biases') {
-                                      if (Array.isArray(data.biases) && data.biases.length > 0) {
-                                        data.biases.slice(0, 3).forEach((b: any) => {
-                                          if (b?.label) interpretations.push(`${b.label}${b.intensity ? ` (${formatPercent(b.intensity)})` : ''}`);
-                                        });
-                                      }
-                                    }
-                                  } catch {}
-                                  
-                                  if (interpretations.length === 0) return null;
-                                  
-                                  const analyzerLabel = a.name === 'thinking' ? 'Thinking' : a.name === 'decisions' ? 'Decision-making' : a.name === 'comm' || a.name === 'communication' ? 'Communication' : a.name === 'learning' ? 'Learning' : a.name === 'biases' ? 'Cognitive biases' : a.name;
-                                  
-                                  return (
-                                    <div key={i}>
-                                      <div className="text-[9px] mb-1" style={{ color: 'var(--text-heading)' }}>
-                                        {analyzerLabel}
-                                      </div>
-                                      <div className="space-y-0.5">
-                                        {interpretations.map((interp, idx) => (
-                                          <div key={idx} className="text-[9px] pl-2" style={{ color: 'var(--text-secondary-strong)' }}>
-                                            • {interp}
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          );
-                        } catch (e) { 
-                          console.error('[Meta] Failed to parse lastResults:', e, agg.lastResults);
-                          return null; 
-                        }
-                      })()}
-                    </div>
-                  )}
-                </>
-              )}
             </div>
           )}
         </>

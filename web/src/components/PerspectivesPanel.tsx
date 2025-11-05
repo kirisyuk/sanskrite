@@ -22,6 +22,18 @@ const PerspectivesPanel: React.FC<PerspectivesPanelProps> = ({ onPresetChange })
   const [mdText, setMdText] = React.useState<string>('');
   const [runSeconds, setRunSeconds] = React.useState<number>(0);
   const runTimerRef = React.useRef<number | null>(null);
+
+  // Cleanup timer on unmount to prevent memory leaks
+  React.useEffect(() => {
+    return () => {
+      if (runTimerRef.current) {
+        try {
+          clearInterval(runTimerRef.current as any);
+          runTimerRef.current = null;
+        } catch {}
+      }
+    };
+  }, []);
   const [saving, setSaving] = React.useState<boolean>(false);
   const [savedAt, setSavedAt] = React.useState<string | null>(null);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
