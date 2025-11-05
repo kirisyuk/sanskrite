@@ -3,6 +3,7 @@ package combined
 import (
 	"context"
 	"errors"
+	"log"
 	"os"
 	"strings"
 
@@ -494,7 +495,10 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 			case "tool_call":
 				return onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(ev.ToolCalls)})
 			case "done":
-				return onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(ev.Usage), Model: ev.Model, SearchQueries: ev.SearchQueries, Sources: ev.Sources})
+				log.Printf("[Combined Stream] Grok done event received, Usage before conversion: %+v", ev.Usage)
+				convertedUsage := toGemUsageFromGrok(ev.Usage)
+				log.Printf("[Combined Stream] Grok done event, Usage after conversion: %+v", convertedUsage)
+				return onEvent(StreamEvent{Type: "done", Usage: convertedUsage, Model: ev.Model, SearchQueries: ev.SearchQueries, Sources: ev.Sources})
 			case "error":
 				return onEvent(StreamEvent{Type: "error", Error: ev.Error})
 			default:

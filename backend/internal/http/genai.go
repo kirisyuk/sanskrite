@@ -564,7 +564,12 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[GenAI Stream] Usage metrics not saved: repo=%v manager=%v", h.usageMetricsRepo != nil, h.modelManager != nil)
 				}
 			}()
-			return h.publisher.PublishJSON(ctx, "genai.stream.done", auth.TenantID, payload)
+			if err := h.publisher.PublishJSON(ctx, "genai.stream.done", auth.TenantID, payload); err != nil {
+				log.Printf("[GenAI Stream] Failed to publish genai.stream.done event: %v (projectId=%s streamId=%s)", err, projectID, streamID)
+			} else {
+				log.Printf("[GenAI Stream] Published genai.stream.done event (projectId=%s streamId=%s)", projectID, streamID)
+			}
+			return nil
 		case "start":
 			return nil
 		default:

@@ -286,6 +286,7 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 	var acc Usage
 	srcs := make([]string, 0)
 	queries := make([]string, 0)
+	var lastUsageMessage map[string]interface{}
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -309,6 +310,7 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 
 		// Process usage first - it may come in a message without choices
 		if u, ok := m["usage"].(map[string]interface{}); ok {
+			lastUsageMessage = m // Save the message containing usage
 			if v, ok := u["prompt_tokens"].(float64); ok {
 				acc.PromptTokens = int(v)
 				log.Printf("[Grok Stream] Received prompt_tokens: %d", acc.PromptTokens)
@@ -367,9 +369,19 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 		acc.TotalTokens = acc.PromptTokens + acc.OutputTokens
 		log.Printf("[Grok Stream] Calculated total_tokens: %d (prompt: %d + output: %d)", acc.TotalTokens, acc.PromptTokens, acc.OutputTokens)
 	}
-	log.Printf("[Grok Stream] Final usage: prompt=%d, output=%d, total=%d, reasoning=%d", acc.PromptTokens, acc.OutputTokens, acc.TotalTokens, acc.ReasoningTokens)
+	log.Printf("[Grok Stream] Final usage before onEvent: prompt=%d, output=%d, total=%d, reasoning=%d", acc.PromptTokens, acc.OutputTokens, acc.TotalTokens, acc.ReasoningTokens)
+	if lastUsageMessage != nil {
+		log.Printf("[Grok Stream] Last usage message had usage field: %v", lastUsageMessage["usage"])
+	}
 	if onEvent != nil {
-		_ = onEvent(StreamEvent{Type: "done", Usage: acc, Model: model, Sources: srcs, SearchQueries: queries})
+		log.Printf("[Grok Stream] Calling onEvent with done event, Usage: %+v", acc)
+		if err := onEvent(StreamEvent{Type: "done", Usage: acc, Model: model, Sources: srcs, SearchQueries: queries}); err != nil {
+			log.Printf("[Grok Stream] onEvent returned error: %v", err)
+			return err
+		}
+		log.Printf("[Grok Stream] onEvent completed successfully")
+	} else {
+		log.Printf("[Grok Stream] WARNING: onEvent is nil, cannot send done event")
 	}
 	return nil
 }
