@@ -768,15 +768,16 @@ html, body, .content-area, .main-content-container, .card {
   padding: 12px;
   border-radius: 8px;
   overflow-x: auto;
-  background-color: #151515;  /* Slightly darker than unfoldrequest (#1A1A1A) */
+  background-color: #151515;
   border: 1px solid var(--overlay-line-90);
-  color: #FFFFFF;  /* Bright white text */
+  color: #FFFFFF;
 }
 
 .markdown pre code {
   background-color: transparent;
   padding: 0;
-  color: #FFFFFF;  /* Bright white text */
+  border-radius: 0;
+  color: inherit;
 }
 
 .markdown code:not(pre code) {
