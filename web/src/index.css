@@ -136,8 +136,8 @@
   /* New Chat button theme tokens (dark) */
   --newchat-bg: var(--surface-770);         /* base */
   --newchat-bg-hover: #3F3F5F;              /* ~1 tone lighter than surface-770 */
-  /* User message bubble background (dark): 1 tone darker than newchat-bg */
-  --user-msg-bg: #252545;
+  /* User message bubble background (dark): graphite gray same as input field */
+  --user-msg-bg: #1A1A1A;                   /* Graphite gray, no border */
   /* Agent/system info bubbles (dark) */
   --agent-info-bg: var(--surface-750);
 }
