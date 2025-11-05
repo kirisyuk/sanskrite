@@ -774,10 +774,11 @@ html, body, .content-area, .main-content-container, .card {
 }
 
 .markdown pre code {
-  background-color: transparent;
+  background: none;
   padding: 0;
-  border-radius: 0;
+  border: none;
   color: inherit;
+  font-size: inherit;
 }
 
 .markdown code:not(pre code) {
