@@ -765,6 +765,31 @@ html, body, .content-area, .main-content-container, .card {
 }
 .markdown pre {
   margin: 8px 0 12px;
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  background-color: #1F1F35;  /* Slightly brighter than text background */
+  border: 1px solid var(--overlay-line-90);
+  color: var(--text-heading);
+}
+
+.markdown pre code {
+  background-color: transparent;  /* Inherit from pre */
+  padding: 0;
+  border-radius: 0;
+  color: var(--text-heading);
+}
+
+.markdown code {
+  background-color: rgba(255, 255, 255, 0.08);  /* Slightly brighter for inline code */
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--text-heading);
+  font-size: 0.875em;
+}
+
+.markdown code:not(pre code) {
+  background-color: rgba(255, 255, 255, 0.08);  /* Inline code only */
 }
 .markdown p {
   margin: 0 0 10px;

@@ -40,6 +40,8 @@ import { UserPositionAnalysis } from '../components/UserPositionAnalysis';
 import { LLMEvaluation } from '../components/LLMEvaluation';
 import { DiscussionFlow } from '../components/DiscussionFlow';
 import { TextTasksPanel, TextTask } from '../components/TextTasksPanel';
+import { ExperimentalResponsePanel } from '../components/ExperimentalResponsePanel';
+import { generateExperimentalResponse, ExperimentalResponse } from '../lib/experimentalResponse';
 // TitleSuggestions removed - title generation now handled automatically in genaiChatStore.onDone
 import { toggleInteractionPin, isInteractionPinned } from '../lib/interactionHelpers';
 import { highlightNotes, clearHighlights, findFirstRange, applyGlobalHighlight, clearGlobalHighlight } from '../lib/textHighlight';
@@ -223,6 +225,10 @@ const DiscoveryPage: React.FC = () => {
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [rightContextOpen, setRightContextOpen] = useState(false);
   const [rightArtifactsOpen, setRightArtifactsOpen] = useState(false);
+  const [rightExperimentalOpen, setRightExperimentalOpen] = useState(false);
+  const [experimentalResponse, setExperimentalResponse] = useState<ExperimentalResponse | null>(null);
+  const [experimentalLoading, setExperimentalLoading] = useState(false);
+  const lastUserMessageIdRef = React.useRef<string | null>(null);
   // Active document viewer state
   const [activeDoc, setActiveDoc] = useState<null | { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string }>(null);
   // Text tasks state
@@ -273,11 +279,48 @@ const DiscoveryPage: React.FC = () => {
     } catch {}
   }, [projectId, hydrateInteractions]);
 
-  // Clear text tasks when project changes
+  // Clear text tasks and experimental response when project changes
   React.useEffect(() => {
     setTextTasks([]);
     setTextTasksApplying(false);
+    setExperimentalResponse(null);
+    setExperimentalLoading(false);
+    lastUserMessageIdRef.current = null;
   }, [projectId]);
+
+  // Track new user messages and generate experimental response when panel is open
+  React.useEffect(() => {
+    if (!rightExperimentalOpen) return;
+    
+    const interactions = getInteractions();
+    const userInteractions = interactions.filter((it: any) => it.kind === 'user');
+    if (userInteractions.length === 0) return;
+    
+    const lastUserInteraction = userInteractions[userInteractions.length - 1];
+    const messageId = lastUserInteraction.id;
+    
+    // Skip if already processed or if no content
+    if (!messageId || messageId === lastUserMessageIdRef.current || !lastUserInteraction.content?.trim()) {
+      return;
+    }
+    
+    // Generate experimental response for new user message
+    lastUserMessageIdRef.current = messageId;
+    setExperimentalLoading(true);
+    
+    generateExperimentalResponse(lastUserInteraction.content, messageId)
+      .then((response) => {
+        if (response) {
+          setExperimentalResponse(response);
+        }
+      })
+      .catch((error) => {
+        console.error('[ExperimentalResponse] Failed to generate', error);
+      })
+      .finally(() => {
+        setExperimentalLoading(false);
+      });
+  }, [genaiChatInteractionsLength, rightExperimentalOpen, getInteractions]);
 
   const pinnedInteractions = React.useMemo(() => {
     try {
@@ -1141,7 +1184,7 @@ const DiscoveryPage: React.FC = () => {
         selectionMenuRef.current = null;
       }
     };
-  }, [messagesRef.current]);
+  }, [messagesRef]); // Use ref object instead of .current to avoid re-running on every message change
 
   // Highlight notes in message content
   useEffect(() => {
@@ -1698,9 +1741,11 @@ const DiscoveryPage: React.FC = () => {
                 onMouseLeave={(e) => { if (leftPanel !== 'user') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
                 onClick={() => setLeftPanel((p) => (p === 'user' ? null : 'user'))}
               >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <circle cx="12" cy="8" r="3.5" strokeWidth={2} />
-                  <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth={2} strokeLinecap="round" />
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                 </svg>
                 <span className="text-12">{t('unfold.sections.howYouEngage')}</span>
               </button>
@@ -1714,11 +1759,11 @@ const DiscoveryPage: React.FC = () => {
                 onMouseLeave={(e) => { if (leftPanel !== 'flow') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
                 onClick={() => setLeftPanel((p) => (p === 'flow' ? null : 'flow'))}
               >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path d="M5 5h6v6H5z" strokeWidth={2} />
-                  <path d="M13 7h6" strokeWidth={2} strokeLinecap="round" />
-                  <path d="M13 17h6" strokeWidth={2} strokeLinecap="round" />
-                  <path d="M8 11v2c0 2.209 1.791 4 4 4h1" strokeWidth={2} strokeLinecap="round" />
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  <path d="M8 10h.01" />
+                  <path d="M12 10h.01" />
+                  <path d="M16 10h.01" />
                 </svg>
                 <span className="text-12">{t('unfold.sections.discussionFlow')}</span>
               </button>
@@ -1824,9 +1869,11 @@ const DiscoveryPage: React.FC = () => {
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'user' ? '#669999' : 'var(--newchat-bg-hover)'; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'user' ? '#669999' : 'var(--newchat-bg)'; }}
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <circle cx="12" cy="8" r="3.5" strokeWidth={2} />
-                <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" strokeWidth={2} strokeLinecap="round" />
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
             </button>
           )}
@@ -1842,11 +1889,11 @@ const DiscoveryPage: React.FC = () => {
             onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg-hover)'; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)'; }}
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path d="M5 5h6v6H5z" strokeWidth={2} />
-              <path d="M13 7h6" strokeWidth={2} strokeLinecap="round" />
-              <path d="M13 17h6" strokeWidth={2} strokeLinecap="round" />
-              <path d="M8 11v2c0 2.209 1.791 4 4 4h1" strokeWidth={2} strokeLinecap="round" />
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              <path d="M8 10h.01" />
+              <path d="M12 10h.01" />
+              <path d="M16 10h.01" />
             </svg>
           </button>
           )}
@@ -1865,6 +1912,7 @@ const DiscoveryPage: React.FC = () => {
           // Ensure mutual exclusivity
           setRightContextOpen(false);
           setRightArtifactsOpen(false);
+          setRightExperimentalOpen(false);
           setRightPanelOpen((v) => !v);
         }}
       >
@@ -1885,6 +1933,7 @@ const DiscoveryPage: React.FC = () => {
             // Ensure mutual exclusivity
             setRightPanelOpen(false);
             setRightArtifactsOpen(false);
+            setRightExperimentalOpen(false);
             setRightContextOpen((v) => !v);
           }}
           className="rounded-lg flex items-center justify-center transition-all duration-300"
@@ -1919,6 +1968,7 @@ const DiscoveryPage: React.FC = () => {
           // Ensure mutual exclusivity
           setRightPanelOpen(false);
           setRightContextOpen(false);
+          setRightExperimentalOpen(false);
           setRightArtifactsOpen((v) => !v);
           try {
             const btn = document.getElementById('btn-artifacts');
@@ -1944,6 +1994,47 @@ const DiscoveryPage: React.FC = () => {
           <path d="M12 2L2 7l10 5 10-5-10-5z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
           <path d="M2 17l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
           <path d="M2 12l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {/* Experimental Response button (styled like Context Navigation) shown on right edge */}
+      <button
+        type="button"
+        aria-label="Experimental Response"
+        title="Experimental Response"
+        onClick={() => {
+          // Ensure mutual exclusivity
+          setRightPanelOpen(false);
+          setRightContextOpen(false);
+          setRightArtifactsOpen(false);
+          setRightExperimentalOpen((v) => !v);
+        }}
+        className="rounded-lg flex items-center justify-center transition-all duration-300"
+        style={{
+          position: 'fixed',
+          right: 8,
+          top: hasPinned ? 196 : 156,
+          width: 32,
+          height: 32,
+          backgroundColor: rightExperimentalOpen ? 'var(--accent-primary)' : 'var(--newchat-bg)',
+          color: rightExperimentalOpen ? 'var(--text-on-accent)' : 'var(--text-heading)',
+          zIndex: 40,
+        }}
+        onMouseEnter={(e) => { 
+          if (!rightExperimentalOpen) {
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)';
+          }
+        }}
+        onMouseLeave={(e) => { 
+          if (!rightExperimentalOpen) {
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)';
+          }
+        }}
+      >
+        {/* Icon: brain/experiment for experimental response */}
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44L2 13.88" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44L22 13.88" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
       {/* Floating Account and Settings buttons (visible only when sidebar is hidden) */}
@@ -2667,7 +2758,7 @@ const DiscoveryPage: React.FC = () => {
                                     );
                                   }
                                   return (
-                                    <pre style={{ backgroundColor: 'var(--bg-elevated)', padding: 8, borderRadius: 8, overflowX: 'auto', border: '1px solid var(--overlay-line-90)' }}>
+                                    <pre style={{ backgroundColor: '#1F1F35', padding: 8, borderRadius: 8, overflowX: 'auto', border: '1px solid var(--overlay-line-90)' }}>
                                       <code {...rest} className={className}>{children}</code>
                                     </pre>
                                   );
@@ -3009,7 +3100,7 @@ const DiscoveryPage: React.FC = () => {
                                     return (<code {...rest} style={{ backgroundColor: 'var(--white-10)', padding: '0 3px', borderRadius: 4 }}>{text}</code>);
                                   }
                                   return (
-                                    <pre style={{ backgroundColor: 'var(--bg-elevated)', padding: 8, borderRadius: 8, overflowX: 'auto', border: '1px solid var(--overlay-line-90)' }}>
+                                    <pre style={{ backgroundColor: '#1F1F35', padding: 8, borderRadius: 8, overflowX: 'auto', border: '1px solid var(--overlay-line-90)' }}>
                                       <code {...rest} className={className}>{children}</code>
                                     </pre>
                                   );
@@ -3768,7 +3859,7 @@ const DiscoveryPage: React.FC = () => {
         {/* Right column: container for contextual panels (transparent, no border) - hidden when Account or Settings are shown */}
         {viewMode !== 'graph' && !showAccount && !showSettings && (
           <div className="min-h-0 h-full" style={{ background: 'transparent', display: 'flex', flexDirection: 'column', marginRight: 48 }}>
-            {(rightPanelOpen || rightContextOpen || rightArtifactsOpen) && (
+            {(rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) && (
               <div
                 className="mt-3 p-3 rounded-xl sidebar-panel"
                 style={{
@@ -3783,7 +3874,7 @@ const DiscoveryPage: React.FC = () => {
               >
                 <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
                   <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>
-                    {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : 'Workspace Library'}
+                    {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : rightExperimentalOpen ? 'Experimental Response' : 'Workspace Library'}
                   </h3>
                   <button
                     type="button"
@@ -3793,7 +3884,7 @@ const DiscoveryPage: React.FC = () => {
                     style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }}
                     onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                     onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                    onClick={() => { setRightPanelOpen(false); setRightContextOpen(false); setRightArtifactsOpen(false); }}
+                    onClick={() => { setRightPanelOpen(false); setRightContextOpen(false); setRightArtifactsOpen(false); setRightExperimentalOpen(false); }}
                   >
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
@@ -3947,6 +4038,11 @@ const DiscoveryPage: React.FC = () => {
                         ))
                       )}
                     </div>
+                  ) : rightExperimentalOpen ? (
+                    <ExperimentalResponsePanel 
+                      response={experimentalResponse}
+                      loading={experimentalLoading}
+                    />
                   ) : (
                     <WorkspaceLibrary 
                       projectId={genaiChat.projectId} 
