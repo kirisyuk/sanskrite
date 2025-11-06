@@ -18,6 +18,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 )
 
 // ProjectsHandler handles project-related HTTP requests
@@ -38,6 +39,10 @@ type ProjectsHandler struct {
 	pub     *realtime.Publisher
 	// ai executor for analysis tasks
 	exec *ai.AITaskExecutor
+	// RAG dependencies for CoreDoc indexing
+	docsRepo   *repo.DocumentsRepository
+	chunksRepo *repo.ChunksRepository
+	emb        ai.EmbeddingProvider
 }
 
 // NewProjectsHandler creates a new ProjectsHandler
@@ -91,6 +96,14 @@ func (h *ProjectsHandler) WithPublisher(pub *realtime.Publisher) *ProjectsHandle
 // WithAIExecutor wires AI TaskExecutor for analysis tasks
 func (h *ProjectsHandler) WithAIExecutor(exec *ai.AITaskExecutor) *ProjectsHandler {
 	h.exec = exec
+	return h
+}
+
+// WithRAG wires RAG repositories and embedding provider for CoreDoc indexing
+func (h *ProjectsHandler) WithRAG(docs *repo.DocumentsRepository, chunks *repo.ChunksRepository, emb ai.EmbeddingProvider) *ProjectsHandler {
+	h.docsRepo = docs
+	h.chunksRepo = chunks
+	h.emb = emb
 	return h
 }
 
@@ -2005,6 +2018,19 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 		WriteNotFound(w, "Document not found")
 		return
 	}
+	// Cascade delete: find and delete associated Document and Chunks
+	if h.docsRepo != nil && h.chunksRepo != nil {
+		if doc, err := h.docsRepo.GetByCoreDocID(r.Context(), authInfo.TenantID, docID); err == nil && doc != nil {
+			// Delete all chunks for this document
+			if err := h.chunksRepo.DeleteByDoc(r.Context(), authInfo.TenantID, doc.ID); err != nil {
+				h.logger.Printf("Warning: failed to delete chunks for doc %s: %v", doc.ID, err)
+			}
+			// Delete the document
+			if err := h.docsRepo.Delete(r.Context(), doc.ID); err != nil {
+				h.logger.Printf("Warning: failed to delete document %s: %v", doc.ID, err)
+			}
+		}
+	}
 	if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") && h.storage != nil {
 		bucket, object := splitGsPath(*cd.StoragePath)
 		_ = h.storage.DeleteObject(r.Context(), bucket, object)
@@ -2014,6 +2040,117 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 		_ = h.pub.PublishJSON(r.Context(), realtime.EventDocProcess, authInfo.TenantID, map[string]any{"projectId": projectID, "docId": docID, "status": "deleted", "ts": time.Now().UnixMilli()})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// indexCoreDoc indexes a CoreDoc by creating/updating Document and Chunks with embeddings
+func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd *models.CoreDoc) error {
+	if h.docsRepo == nil || h.chunksRepo == nil || h.emb == nil {
+		// RAG not configured, skip indexing
+		return nil
+	}
+	if cd.ExtractedText == nil || strings.TrimSpace(*cd.ExtractedText) == "" {
+		// No text to index
+		return nil
+	}
+	// Skip indexing for dynamic artifacts (they are generated, not indexed)
+	if cd.DocType != nil && *cd.DocType == "dynamic_artifact" {
+		return nil
+	}
+
+	// Virtual SourceID for project documents
+	virtualSourceID := fmt.Sprintf("project:%s", cd.ProjectID)
+	externalID := fmt.Sprintf("coredoc:%s", cd.ID)
+	text := strings.TrimSpace(*cd.ExtractedText)
+
+	// Check if Document already exists
+	existingDoc, _ := h.docsRepo.GetByCoreDocID(ctx, tenantID, cd.ID)
+	var docID string
+	now := time.Now().UTC()
+
+	if existingDoc != nil {
+		// Update existing document
+		existingDoc.FullText = text
+		existingDoc.Title = cd.Filename
+		existingDoc.ContentType = cd.ContentType
+		existingDoc.DocumentType = "coredoc"
+		existingDoc.DocumentPath = fmt.Sprintf("coredoc/%s/%s", cd.ProjectID, cd.ID)
+		existingDoc.ContentHash = repo.HashContent(text)
+		existingDoc.UpdatedAt = now
+		existingDoc.Status = "new"
+		if err := h.docsRepo.Upsert(ctx, existingDoc); err != nil {
+			return fmt.Errorf("failed to update document: %w", err)
+		}
+		docID = existingDoc.ID
+		// Delete old chunks before creating new ones
+		if err := h.chunksRepo.DeleteByDoc(ctx, tenantID, docID); err != nil {
+			h.logger.Printf("Warning: failed to delete old chunks for doc %s: %v", docID, err)
+		}
+	} else {
+		// Create new document
+		doc := &models.Document{
+			TenantID:     tenantID,
+			SourceID:     virtualSourceID,
+			ExternalID:    externalID,
+			Title:        cd.Filename,
+			DocumentPath: fmt.Sprintf("coredoc/%s/%s", cd.ProjectID, cd.ID),
+			FullText:     text,
+			Status:       "new",
+			ContentType:  cd.ContentType,
+			DocumentType: "coredoc",
+			ContentHash:  repo.HashContent(text),
+			IngestedAt:   now,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Attrs: map[string]any{
+				"coreDocId":  cd.ID,
+				"projectId":  cd.ProjectID,
+				"documentType": "coredoc",
+			},
+		}
+		id, err := h.docsRepo.Create(ctx, doc)
+		if err != nil {
+			return fmt.Errorf("failed to create document: %w", err)
+		}
+		docID = id
+	}
+
+	// Chunk and embed
+	parts := discovery.ChunkText(text, 1200)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	vectors, err := h.emb.EmbedTexts(ctx, parts)
+	if err != nil {
+		return fmt.Errorf("failed to create embeddings: %w", err)
+	}
+
+	for i := range parts {
+		ch := &models.Chunk{
+			TenantID:         tenantID,
+			DocID:            docID,
+			SourceID:         virtualSourceID,
+			Position:         i,
+			Text:             parts[i],
+			Embedding:        vectors[i],
+			EmbeddingModel:   h.emb.ModelID(),
+			EmbeddingVersion: "v1",
+			Attrs:            map[string]any{"documentType": "coredoc", "coreDocId": cd.ID},
+			ContentHash:      repo.HashContent(parts[i]),
+			CreatedAt:        now,
+		}
+		if _, err := h.chunksRepo.Create(ctx, ch); err != nil {
+			return fmt.Errorf("failed to create chunk: %w", err)
+		}
+	}
+
+	// Mark document as embedded
+	if doc, _ := h.docsRepo.GetByID(ctx, docID); doc != nil {
+		doc.Status = "embedded"
+		_ = h.docsRepo.Upsert(ctx, doc)
+	}
+
+	return nil
 }
 
 // helper: parse and persist + publish events
@@ -2087,6 +2224,11 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 			chars = len(*cd.ExtractedText)
 		}
 		_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": projectID, "docId": cd.ID, "status": "parsed", "chars": chars, "ts": time.Now().UnixMilli()})
+	}
+	// Index CoreDoc for vector search
+	if err := h.indexCoreDoc(ctx, tenantID, cd); err != nil {
+		h.logger.Printf("Warning: failed to index CoreDoc %s: %v", cd.ID, err)
+		// Don't fail parsing if indexing fails
 	}
 	return nil
 }

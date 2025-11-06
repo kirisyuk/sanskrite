@@ -220,3 +220,37 @@ func (r *DocumentsRepository) ListBySources(ctx context.Context, tenantID string
 	}
 	return results, nil
 }
+
+// Delete deletes a document by ID
+func (r *DocumentsRepository) Delete(ctx context.Context, id string) error {
+	if id == "" {
+		return ErrInvalidDocument
+	}
+	_, err := r.col.Doc(id).Delete(ctx)
+	return err
+}
+
+// GetByCoreDocID finds a document by CoreDocID stored in Attrs
+func (r *DocumentsRepository) GetByCoreDocID(ctx context.Context, tenantID, coreDocID string) (*models.Document, error) {
+	if tenantID == "" || coreDocID == "" {
+		return nil, ErrInvalidDocument
+	}
+	// Query documents where attrs.coreDocId == coreDocID
+	q := r.col.Where("tenantId", "==", tenantID).Limit(100)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range docs {
+		var doc models.Document
+		if err := d.DataTo(&doc); err != nil {
+			continue
+		}
+		if doc.Attrs != nil {
+			if v, ok := doc.Attrs["coreDocId"].(string); ok && v == coreDocID {
+				return &doc, nil
+			}
+		}
+	}
+	return nil, ErrInvalidDocument
+}

@@ -353,6 +353,7 @@ p {
 .layout-main {
   display: flex;
   height: 100vh;
+  height: 100dvh; /* Use dynamic viewport height on mobile */
   background-color: var(--bg-body);
   overflow: hidden;
 }
@@ -516,6 +517,7 @@ p {
 /* Auth screen specific styles */
 .auth-container {
   min-height: calc(100vh - 56px);
+  min-height: calc(100dvh - 56px); /* Use dynamic viewport height on mobile */
   background-color: var(--bg-body);
   display: flex;
   align-items: center;
@@ -755,16 +757,28 @@ html, body, .content-area, .main-content-container, .card {
 }
 
 /* Markdown content styling (tables, code blocks, lists) */
+.markdown {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  overflow-x: auto;
+  min-width: 0; /* Allow flex items to shrink */
+}
 .markdown table {
   width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
   margin: 8px 0 12px;
+  table-layout: auto;
+  word-break: break-word;
 }
 .markdown th,
 .markdown td {
   border: 1px solid var(--overlay-line-90);
   padding: 6px 8px;
   vertical-align: top;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .markdown thead th {
   background-color: var(--bg-elevated);
@@ -783,10 +797,24 @@ html, body, .content-area, .main-content-container, .card {
   margin: 8px 0 12px;
   padding: 12px;
   border-radius: 8px;
-  overflow-x: auto;
+  overflow-x: visible; /* No horizontal scroll, wrap instead */
+  overflow-y: visible;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
   background-color: #151515;
   border: 1px solid var(--overlay-line-90);
   color: #FFFFFF;
+  white-space: pre-wrap; /* Allow wrapping for very long lines */
+  word-break: break-all; /* Break long words/strings without spaces */
+  overflow-wrap: anywhere; /* Break anywhere if needed */
+}
+.markdown pre code {
+  display: block;
+  max-width: 100%;
+  word-break: break-all; /* Break long words/strings */
+  white-space: pre-wrap; /* Allow wrapping */
+  overflow-wrap: anywhere; /* Break anywhere if needed */
 }
 
 [data-theme="light"] .markdown pre {
@@ -808,10 +836,6 @@ html, body, .content-area, .main-content-container, .card {
 }
 .markdown p {
   margin: 0 0 10px;
-}
-.markdown {
-  line-height: 1.6;
-  overflow-wrap: anywhere;
 }
 .markdown > * + * {
   margin-top: 8px;
@@ -985,22 +1009,39 @@ html, body, .content-area, .main-content-container, .card {
 /* Responsive design */
 @media (max-width: 768px) {
   .content-area {
-    padding: 16px;
+    padding: 8px; /* Reduced from 16px */
   }
   
   .main-content-container {
-    min-height: calc(100vh - 112px);
-    padding: 16px;
+    min-height: 0; /* Remove min-height to prevent overflow */
+    padding: 8px; /* Reduced from 16px */
   }
   
   /* Ensure proper height control on mobile */
   .layout-main {
     height: 100vh;
+    height: 100dvh; /* Use dynamic viewport height on mobile */
+    max-height: 100vh;
+    max-height: 100dvh; /* Prevent exceeding viewport */
     overflow: hidden;
   }
   
   .main-content {
     min-height: 0;
+    max-height: 100vh;
+    max-height: 100dvh; /* Prevent exceeding viewport */
+    overflow: hidden;
+  }
+  
+  /* Reduce padding on very small screens */
+  @media (max-height: 600px) {
+    .content-area {
+      padding: 4px;
+    }
+    
+    .main-content-container {
+      padding: 4px;
+    }
   }
 }
 
@@ -1011,12 +1052,32 @@ html, body, .content-area, .main-content-container, .card {
   
   .main-content-container {
     border-radius: 8px;
-    padding: 12px;
+    padding: 8px; /* Reduced from 12px */
   }
   
   /* Additional mobile height controls */
   .content-area {
     min-height: 0;
+    padding: 4px; /* Further reduced for very small screens */
+  }
+  
+  /* Extra small height screens (like Galaxy Fold) */
+  @media (max-height: 500px) {
+    .content-area {
+      padding: 2px;
+    }
+    
+    .main-content-container {
+      padding: 4px;
+    }
+    
+    .topbar {
+      padding: 0 8px;
+    }
+    
+    .bottombar {
+      padding: 0 8px;
+    }
   }
 }
 

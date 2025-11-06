@@ -119,3 +119,30 @@ func (r *ChunksRepository) GetByIDs(ctx context.Context, ids []string) ([]*model
 	}
 	return res, nil
 }
+
+// DeleteByDoc deletes all chunks for a given document
+func (r *ChunksRepository) DeleteByDoc(ctx context.Context, tenantID, docID string) error {
+	if tenantID == "" || docID == "" {
+		return ErrInvalidDocument
+	}
+	chunks, err := r.ListByDoc(ctx, tenantID, docID)
+	if err != nil {
+		return err
+	}
+	for _, c := range chunks {
+		if _, err := r.col.Doc(c.ID).Delete(ctx); err != nil {
+			// Log but continue - best effort deletion
+			continue
+		}
+	}
+	return nil
+}
+
+// Delete deletes a single chunk by ID
+func (r *ChunksRepository) Delete(ctx context.Context, id string) error {
+	if id == "" {
+		return ErrInvalidDocument
+	}
+	_, err := r.col.Doc(id).Delete(ctx)
+	return err
+}

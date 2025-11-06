@@ -185,7 +185,7 @@ func main() {
 		emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 		_ = emb // wired into orchestrator when ingest endpoints are added
 		orchestrator = orchestrator.WithRAG(reg, docsRepo, chunksRepo).WithEmbedding(emb)
-		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo)
+		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo).WithFirestoreClient(fsClient.Client())
 
 		// Start document processor worker (background)
 		if pub != nil {
@@ -313,6 +313,10 @@ func main() {
 			bucket = projectID + "-core-docs"
 		}
 		s.projectsHandler = s.projectsHandler.WithCoreDocs(coreDocsRepo).WithStorage(gcsClient, bucket).WithAIExecutor(exec)
+		// Wire RAG dependencies for CoreDoc indexing
+		if emb != nil {
+			s.projectsHandler = s.projectsHandler.WithRAG(docsRepo, chunksRepo, emb)
+		}
 		// Wire cascade repos to projects handler
 		s.projectsHandler = s.projectsHandler.WithCascade(s.sprofs, interactions)
 		s.discoveryHandler = s.discoveryHandler.WithOrchestrator(orchestrator).WithInteractions(interactions).WithProfiles(s.sprofs)

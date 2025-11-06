@@ -57,6 +57,16 @@ export const Settings: React.FC = () => {
   const { i18n, t } = useTranslation();
   const uiLanguage = useUIStore((s) => s.uiLanguage);
   const setUiLanguage = useUIStore((s) => s.setUiLanguage);
+  const [isMobile, setIsMobile] = React.useState(false);
+
+  React.useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: 'personal', label: t('settings.tabs.personal') },
@@ -153,17 +163,18 @@ export const Settings: React.FC = () => {
 
   return (
     <div className="rounded-xl" style={{ backgroundColor: 'transparent', padding: '0' }}>
-      <div className="flex" style={{ gap: '16px' }}>
-        {/* Tabs column */}
-        <div className="flex-shrink-0" style={{ width: '220px' }}>
-          <div className="flex flex-col" style={{ gap: '6px' }}>
+      <div className={isMobile ? 'flex flex-col' : 'flex'} style={{ gap: '16px' }}>
+        {/* Tabs column/row */}
+        <div className={isMobile ? 'w-full' : 'flex-shrink-0'} style={{ width: isMobile ? '100%' : '220px' }}>
+          <div className={isMobile ? 'flex flex-row' : 'flex flex-col'} style={{ gap: '6px' }}>
             {tabs.map(t => (
               <button
                 key={t.key}
-                className="text-13 text-left rounded-lg px-3 py-2 transition-colors"
+                className={`text-13 ${isMobile ? 'text-center' : 'text-left'} rounded-lg px-3 py-2 transition-colors`}
                 style={{
                   backgroundColor: active === t.key ? 'var(--white-10)' : 'transparent',
-                  color: 'var(--text-heading)'
+                  color: 'var(--text-heading)',
+                  ...(isMobile ? { flex: '1 1 0' } : {})
                 }}
                 onMouseEnter={(e) => { if (active !== t.key) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                 onMouseLeave={(e) => { if (active !== t.key) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
@@ -175,11 +186,15 @@ export const Settings: React.FC = () => {
           </div>
         </div>
 
-        {/* Vertical divider */}
-        <div style={{ width: '1px', backgroundColor: 'var(--overlay-line-90)' }} />
+        {/* Divider */}
+        {isMobile ? (
+          <div style={{ width: '100%', height: '1px', backgroundColor: 'var(--overlay-line-90)' }} />
+        ) : (
+          <div style={{ width: '1px', backgroundColor: 'var(--overlay-line-90)' }} />
+        )}
 
         {/* Content full width */}
-        <div className="flex-1" style={{ paddingLeft: '16px' }}>
+        <div className="flex-1" style={{ paddingLeft: isMobile ? '0' : '16px' }}>
           {active === 'personal' && (
             <div className="space-y-4">
               <div>

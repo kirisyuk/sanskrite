@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
@@ -31,6 +32,7 @@ type DiscoveryHandler struct {
 	searchRepo         *repo.SearchEventsRepository
 	sourceProjectsRepo *repo.SourceProjectsRepository
 	chunksRepo         *repo.ChunksRepository
+	firestoreClient    *firestore.Client
 }
 
 // NewDiscoveryHandler creates a new DiscoveryHandler
@@ -73,6 +75,12 @@ func (h *DiscoveryHandler) WithSourceProjects(sp *repo.SourceProjectsRepository)
 // WithChunks wires chunks repository for vector search
 func (h *DiscoveryHandler) WithChunks(cr *repo.ChunksRepository) *DiscoveryHandler {
 	h.chunksRepo = cr
+	return h
+}
+
+// WithFirestoreClient wires Firestore client for native vector search
+func (h *DiscoveryHandler) WithFirestoreClient(client *firestore.Client) *DiscoveryHandler {
+	h.firestoreClient = client
 	return h
 }
 
@@ -122,12 +130,30 @@ func (h *DiscoveryHandler) SearchDocuments(w http.ResponseWriter, r *http.Reques
 		// fallback to legacy linkage
 		sources, err := h.dataSourcesRepo.ListByProject(r.Context(), auth.TenantID, projectID)
 		if err != nil || len(sources) == 0 {
-			WriteJSON(w, http.StatusOK, []any{})
-			return
+			// If no sources, include virtual project source for CoreDocs
+			virtualSourceID := fmt.Sprintf("project:%s", projectID)
+			sourceIDs = append(sourceIDs, virtualSourceID)
+		} else {
+			for _, s := range sources {
+				sourceIDs = append(sourceIDs, s.ID)
+			}
 		}
-		for _, s := range sources {
-			sourceIDs = append(sourceIDs, s.ID)
+	}
+	// Also include virtual project source for CoreDocs if not already present
+	virtualSourceID := fmt.Sprintf("project:%s", projectID)
+	hasVirtual := false
+	for _, sid := range sourceIDs {
+		if sid == virtualSourceID {
+			hasVirtual = true
+			break
 		}
+	}
+	if !hasVirtual {
+		sourceIDs = append(sourceIDs, virtualSourceID)
+	}
+	if len(sourceIDs) == 0 {
+		WriteJSON(w, http.StatusOK, []any{})
+		return
 	}
 
 	q := r.URL.Query()
@@ -361,6 +387,11 @@ func (h *DiscoveryHandler) VectorSearch(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
+	// If still no sources, include virtual project source for CoreDocs
+	if len(sourceIDs) == 0 {
+		virtualSourceID := fmt.Sprintf("project:%s", projectID)
+		sourceIDs = append(sourceIDs, virtualSourceID)
+	}
 	if len(sourceIDs) == 0 {
 		WriteJSON(w, http.StatusOK, map[string]any{"items": []any{}})
 		return
@@ -386,6 +417,9 @@ func (h *DiscoveryHandler) VectorSearch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	index := ai.NewFirestoreVectorIndex(h.chunksRepo)
+	if h.firestoreClient != nil {
+		index = index.WithClient(h.firestoreClient)
+	}
 	ids, err := index.Query(r.Context(), qv, body.TopK, map[string]any{"tenantId": auth.TenantID, "sourceIds": sourceIDs})
 	if err != nil {
 		WriteInternalError(w, "Vector query failed")
@@ -842,13 +876,13 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 			Triggers  []string `json:"triggers,omitempty" firestore:"triggers,omitempty"`
 		} `json:"highRisk,omitempty"`
 		DiscussionFacts *struct {
-			Dependencies      *string `json:"dependencies,omitempty" firestore:"dependencies,omitempty"`
-			Prerequisites     *string `json:"prerequisites,omitempty" firestore:"prerequisites,omitempty"`
-			Participants      *string `json:"participants,omitempty" firestore:"participants,omitempty"`
-			ParticipantRoles  *string `json:"participantRoles,omitempty" firestore:"participantRoles,omitempty"`
+			Dependencies       *string `json:"dependencies,omitempty" firestore:"dependencies,omitempty"`
+			Prerequisites      *string `json:"prerequisites,omitempty" firestore:"prerequisites,omitempty"`
+			Participants       *string `json:"participants,omitempty" firestore:"participants,omitempty"`
+			ParticipantRoles   *string `json:"participantRoles,omitempty" firestore:"participantRoles,omitempty"`
 			AvailableResources *string `json:"availableResources,omitempty" firestore:"availableResources,omitempty"`
-			PreviousAttempts  *string `json:"previousAttempts,omitempty" firestore:"previousAttempts,omitempty"`
-			ResultFormat      *string `json:"resultFormat,omitempty" firestore:"resultFormat,omitempty"`
+			PreviousAttempts   *string `json:"previousAttempts,omitempty" firestore:"previousAttempts,omitempty"`
+			ResultFormat       *string `json:"resultFormat,omitempty" firestore:"resultFormat,omitempty"`
 		} `json:"discussionFacts,omitempty"`
 		OriginalMessageID *string  `json:"originalMessageId,omitempty"`
 		CoreDocIDs        []string `json:"coreDocIds,omitempty"`

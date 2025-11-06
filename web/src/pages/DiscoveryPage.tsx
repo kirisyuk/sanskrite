@@ -231,6 +231,29 @@ const DiscoveryPage: React.FC = () => {
   // Drawer width state (default 400px, resizable)
   const [drawerWidth, setDrawerWidth] = useState(400);
   
+  // Detect mobile device
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+  
+  // Prevent body scroll on mobile when sidebar or drawer is open
+  useEffect(() => {
+    if (isMobile && (sideOpen || rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen || rightUserPanelOpen || rightFlowPanelOpen)) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isMobile, sideOpen, rightPanelOpen, rightContextOpen, rightArtifactsOpen, rightExperimentalOpen, rightUserPanelOpen, rightFlowPanelOpen]);
+  
   // Sync drawer width when resized natively
   const drawerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1659,13 +1682,44 @@ const DiscoveryPage: React.FC = () => {
     return () => window.removeEventListener('ui.openPage', handler as any);
   }, []);
   return (
-    <div className="flex h-full" style={{ padding: '16px 0' }}>
+    <div className="flex h-full" style={{ padding: isMobile ? '8px 0' : '16px 0' }}>
       {/* Side panel (hidden by default) - LEFT */}
       {sideOpen && (
-        <div
-          className="flex-shrink-0 rounded-xl mr-4 overflow-hidden relative sidebar-panel"
-          style={{ backgroundColor: 'var(--bg-input)', width: '320px', minWidth: '260px', maxWidth: '420px' }}
-        >
+        <>
+          {/* Mobile overlay backdrop */}
+          {isMobile && (
+            <div
+              onClick={() => setSideOpen(false)}
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                zIndex: 40,
+              }}
+            />
+          )}
+          <div
+            className="flex-shrink-0 rounded-xl mr-4 overflow-hidden relative sidebar-panel"
+            style={{
+              backgroundColor: 'var(--bg-input)',
+              width: '320px',
+              minWidth: '260px',
+              maxWidth: '420px',
+              ...(isMobile ? {
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                bottom: 0,
+                zIndex: 50,
+                marginRight: 0,
+                borderRadius: 0,
+                maxWidth: '85vw',
+              } : {})
+            }}
+          >
           <div className="p-6 h-full flex flex-col">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{t('unfold.sections.navigation')}</h3>
@@ -1693,6 +1747,9 @@ const DiscoveryPage: React.FC = () => {
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
                 onClick={() => {
                   resetChatState();
+                  if (isMobile) {
+                    setSideOpen(false);
+                  }
                 }}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -1718,7 +1775,12 @@ const DiscoveryPage: React.FC = () => {
                       key={project.id}
                       className="px-2 py-1 rounded text-xs flex items-center gap-2 group cursor-pointer"
                       title={project.displayName}
-                      onClick={() => setCurrentProject(project)}
+                      onClick={() => {
+                        setCurrentProject(project);
+                        if (isMobile) {
+                          setSideOpen(false);
+                        }
+                      }}
                       style={{
                         backgroundColor: currentProject?.id === project.id ? 'var(--white-10)' : 'transparent',
                       }}
@@ -1748,59 +1810,6 @@ const DiscoveryPage: React.FC = () => {
                 </div>
               )}
             </div>
-
-            {/* Analysis shortcuts (duplicate of floating buttons when sidebar hidden) */}
-            {(availUserAnalysis || availDiscussionFlow) && (
-            <div className="mb-4 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-              <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
-                {t('unfold.sections.analysis')}
-              </div>
-              {availUserAnalysis && (
-              <button
-                type="button"
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
-                style={{ backgroundColor: leftPanel === 'user' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
-                onMouseEnter={(e) => { if (leftPanel !== 'user') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { if (leftPanel !== 'user') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => setLeftPanel((p) => (p === 'user' ? null : 'user'))}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                  <circle cx="9" cy="7" r="4" />
-                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                </svg>
-                <span className="text-12">{t('unfold.sections.howYouEngage')}</span>
-              </button>
-              )}
-              {availDiscussionFlow && (
-              <button
-                type="button"
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
-                style={{ backgroundColor: leftPanel === 'flow' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
-                onMouseEnter={(e) => { if (leftPanel !== 'flow') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { if (leftPanel !== 'flow') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => {
-                  const startTime = performance.now();
-                  console.log('[DiscussionFlow Button] Click at', startTime);
-                  setLeftPanel((p) => {
-                    const endTime = performance.now();
-                    console.log('[DiscussionFlow Button] setState called at', endTime, 'delay:', endTime - startTime, 'ms');
-                    return p === 'flow' ? null : 'flow';
-                  });
-                }}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  <path d="M8 10h.01" />
-                  <path d="M12 10h.01" />
-                  <path d="M16 10h.01" />
-                </svg>
-                <span className="text-12">{t('unfold.sections.discussionFlow')}</span>
-              </button>
-              )}
-            </div>
-            )}
 
             {/* Bottom settings button */}
             <div className="mt-auto pt-4">
@@ -1857,6 +1866,7 @@ const DiscoveryPage: React.FC = () => {
 
           
         </div>
+        </>
       )}
 
       {/* Toggle + New Chat buttons stacked (visible only when sidebar is hidden) */}
@@ -2193,7 +2203,7 @@ const DiscoveryPage: React.FC = () => {
                 
                 if (isEmpty) {
                   return (
-                    <div className="flex items-center justify-center" style={{ height: '100%', minHeight: 'calc(100vh - 300px)', padding: '48px 24px' }}>
+                    <div className="flex items-center justify-center" style={{ height: '100%', minHeight: isMobile ? '200px' : 'calc(100vh - 300px)', padding: isMobile ? '24px 12px' : '48px 24px' }}>
                       <div className="max-w-md text-center">
                         <div className="text-16" style={{ color: 'var(--text-heading)', lineHeight: '1.6', fontSize: 'clamp(18px, 2vw, 24px)', fontWeight: 500 }}>
                           {emptyStateMessage}
@@ -3488,6 +3498,28 @@ const DiscoveryPage: React.FC = () => {
         {/* Right drawer: appears when any drawer is open */}
         {(rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen || rightUserPanelOpen || rightFlowPanelOpen) && viewMode !== 'graph' && !showAccount && !showSettings && (
           <>
+            {/* Mobile overlay backdrop */}
+            {isMobile && (
+              <div
+                onClick={() => {
+                  setRightPanelOpen(false);
+                  setRightContextOpen(false);
+                  setRightArtifactsOpen(false);
+                  setRightExperimentalOpen(false);
+                  setRightUserPanelOpen(false);
+                  setRightFlowPanelOpen(false);
+                }}
+                style={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                  zIndex: 40,
+                }}
+              />
+            )}
             <div
               ref={drawerRef}
               className="min-h-0 flex flex-col drawer-resizable"
@@ -3497,13 +3529,23 @@ const DiscoveryPage: React.FC = () => {
                 maxWidth: '800px',
                 flexShrink: 0,
                 flexGrow: 0,
-                position: 'relative',
+                position: isMobile ? 'fixed' : 'relative',
+                top: isMobile ? 0 : 'auto',
+                right: isMobile ? 0 : 'auto',
+                bottom: isMobile ? 0 : 'auto',
                 height: '100%',
                 maxHeight: '100%',
                 overflow: 'hidden',
+                zIndex: isMobile ? 50 : 'auto',
+                backgroundColor: isMobile ? 'var(--bg-sidebar)' : 'transparent',
+                ...(isMobile ? {
+                  maxWidth: '85vw',
+                  borderRadius: 0,
+                } : {})
               }}
             >
               {/* Resize handle on left edge */}
+              {!isMobile && (
               <div
                 onMouseDown={(e) => {
                   e.preventDefault();
@@ -3537,6 +3579,7 @@ const DiscoveryPage: React.FC = () => {
                   zIndex: 10,
                 }}
               />
+              )}
               {/* Drawer content */}
               <div className="min-h-0 flex flex-col" style={{ background: 'transparent', height: '100%', overflow: 'hidden' }}>
             {/* Right panel container - ALWAYS in DOM, never removed */}

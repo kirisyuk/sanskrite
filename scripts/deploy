@@ -706,17 +706,78 @@ create_indexes() {
     --field-config field-path=createdAt,order=DESCENDING \
     --quiet || true
 
-  # Vector field for rag_chunks.embedding (dimension=1536, COSINE)
-  # Requires gcloud alpha (as of now). If not available, skip with a notice.
-  if gcloud alpha --help >/dev/null 2>&1; then
-    echo -e "${BLUE}[firestore] Ensuring vector field config for rag_chunks.embedding...${NC}"
-    gcloud alpha firestore indexes fields create \
-      --collection-group=rag_chunks \
-      --field-path=embedding \
-      --vector-config=dimension=1536,distance-measure=COSINE \
-      --quiet || true
+  # Vector index for rag_chunks.embedding (dimension=1536)
+  # Vector fields are created as composite indexes with vector-config
+  echo -e "${BLUE}[firestore] Ensuring vector index for rag_chunks.embedding...${NC}"
+  # Check if vector index already exists (check for any index with vectorConfig in fields for rag_chunks)
+  local has_vector_index=false
+  if command -v jq >/dev/null 2>&1; then
+    # Get all indexes and filter for rag_chunks with vectorConfig
+    local vector_index_count
+    vector_index_count=$(gcloud firestore indexes composite list --format=json 2>/dev/null | jq '[.[] | select(.fields[]?.vectorConfig != null and (.name | contains("rag_chunks")))] | length' 2>/dev/null || echo "0")
+    if [ "$vector_index_count" -gt 0 ] 2>/dev/null; then
+      has_vector_index=true
+    fi
   else
-    echo -e "${YELLOW}[firestore] Skipping vector field create (gcloud alpha not available). Index present in backend/firestore.indexes.json${NC}"
+    # Fallback: check if any index contains "rag_chunks", "embedding" and "vectorConfig" in JSON
+    if gcloud firestore indexes composite list --format=json 2>/dev/null | grep -q 'rag_chunks.*embedding.*vectorConfig' 2>/dev/null; then
+      has_vector_index=true
+    fi
+  fi
+  
+  if [ "$has_vector_index" = true ]; then
+    echo -e "${GREEN}  ✓${NC} Vector index already exists for rag_chunks.embedding"
+  else
+    echo -e "${BLUE}  Creating vector index...${NC}"
+    if gcloud firestore indexes composite create \
+      --collection-group=rag_chunks \
+      --query-scope=COLLECTION \
+      --field-config='field-path=embedding,vector-config={"dimension":"1536", "flat": "{}"}' \
+      --database="(default)" \
+      --project="$PROJECT_ID" \
+      --quiet 2>/dev/null; then
+      echo -e "${GREEN}  ✓${NC} Vector index created successfully"
+      echo -e "${YELLOW}  ⚠${NC} Note: Vector index propagation may take several minutes"
+    else
+      echo -e "${YELLOW}  ⚠${NC} Failed to create vector index (may require permissions)"
+      echo -e "${YELLOW}  ⚠${NC} Create manually: gcloud firestore indexes composite create \\"
+      echo -e "${YELLOW}     --collection-group=rag_chunks --query-scope=COLLECTION \\"
+      echo -e "${YELLOW}     --field-config='field-path=embedding,vector-config={\"dimension\":\"1536\", \"flat\": \"{}\"}' \\"
+      echo -e "${YELLOW}     --database=\"(default)\" --project=$PROJECT_ID"
+    fi
+  fi
+  
+  # Also deploy firestore.indexes.json for other composite indexes
+  # Note: Vector indexes are created separately via gcloud (see above)
+  echo -e "${BLUE}[firestore] Deploying firestore.indexes.json (composite indexes)...${NC}"
+  # Ensure firestore.indexes.json exists in web directory (Firebase CLI requires it there)
+  if [[ -f "$API_DIR/firestore.indexes.json" && ! -f "$WEB_DIR/firestore.indexes.json" ]]; then
+    cp "$API_DIR/firestore.indexes.json" "$WEB_DIR/firestore.indexes.json"
+    echo -e "${BLUE}  Copied${NC} firestore.indexes.json to web directory"
+  fi
+  
+  if [[ -f "$WEB_DIR/firestore.indexes.json" ]]; then
+    # Try Firebase CLI first (if available) - deploy from web directory where firebase.json is
+    if command -v firebase >/dev/null 2>&1 && [[ -f "$WEB_DIR/firebase.json" ]]; then
+      cd "$WEB_DIR"
+      if firebase deploy --only firestore:indexes --project "$PROJECT_ID" --non-interactive --force 2>/dev/null; then
+        echo -e "${GREEN}  ✓${NC} Indexes deployed via Firebase CLI"
+        cd "$ROOT_DIR"
+      else
+        cd "$ROOT_DIR"
+        echo -e "${YELLOW}  ⚠${NC} Firebase CLI deploy failed (this is normal if indexes already exist)"
+        echo -e "${BLUE}  Note:${NC} Vector field config is in $WEB_DIR/firestore.indexes.json"
+        echo -e "${BLUE}  To deploy manually:${NC} cd web && firebase deploy --only firestore:indexes --project $PROJECT_ID"
+      fi
+    else
+      echo -e "${YELLOW}  ⚠${NC} Firebase CLI not found or firebase.json missing"
+      echo -e "${YELLOW}  ⚠${NC} Deploy indexes manually:"
+      echo -e "${YELLOW}     cd web && firebase deploy --only firestore:indexes --project $PROJECT_ID${NC}"
+      echo -e "${YELLOW}  ⚠${NC} Or use Firebase Console: Firestore > Indexes > Deploy from file"
+    fi
+    echo -e "${BLUE}  Index file:${NC} $WEB_DIR/firestore.indexes.json"
+  else
+    echo -e "${YELLOW}  ⚠${NC} firestore.indexes.json not found at $WEB_DIR/firestore.indexes.json"
   fi
 
   # Verify meta_analyses indexes presence (best-effort)

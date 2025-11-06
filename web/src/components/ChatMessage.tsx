@@ -71,6 +71,8 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     backgroundColor: bgOverride ? bgOverride : (role === 'user' ? 'var(--user-msg-bg)' : 'transparent'),
     border: 'none',
     borderLeft: leftAccent ? '2px solid var(--overlay-line-90)' : 'none',
+    boxSizing: 'border-box', // Ensure border-left doesn't add to width
+    minWidth: 0, // Allow flex items to shrink below content size
   };
   
   // Build header with icon and optional timing info
