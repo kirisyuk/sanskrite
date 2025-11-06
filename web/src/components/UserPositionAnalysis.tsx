@@ -416,14 +416,19 @@ ${prevBlock}`;
     <div className="mt-3 p-3">
       {!hideTitle && (<div className="text-13 mb-2" style={{ color: '#669999' }}>How you engage</div>)}
       {error ? (
-        <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{error}</div>
+        <div className="text-12 p-3 rounded-lg" style={{ color: 'var(--text-secondary-strong)', backgroundColor: 'var(--toolbar-bg)' }}>{error}</div>
       ) : displayContent ? (
         <>
-          <div className="text-12 fade-in" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5', opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
-            {sanitizeSx(displayContent as string)}
+          {/* Stance section */}
+          <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+            <div className="text-12 fade-in" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5', opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+              {sanitizeSx(displayContent as string)}
+            </div>
           </div>
+          
+          {/* Risk section */}
           {displayRisk && (
-            <div className="mt-2 mb-2">
+            <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
               <div className="flex items-center gap-2">
                 {(() => {
                   const hr = displayRisk;
@@ -475,8 +480,10 @@ ${prevBlock}`;
               )}
             </div>
           )}
+          
+          {/* Roles and Industries section */}
           {(displayRoles.length > 0 || displayIndustries.length > 0) && (
-            <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
+            <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
               {displayRoles.length > 0 && (
                 <div className="mb-2">
                   <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-tertiary-weak)', fontWeight: 500 }}>
@@ -529,6 +536,7 @@ ${prevBlock}`;
               )}
             </div>
           )}
+          
           {typeof durationMs === 'number' && !stanceForLatestUser && (
             <div className="text-[11px] mt-1" style={{ color: 'var(--text-tertiary-weak)' }}>
               Time: {durationMs} ms
@@ -536,7 +544,7 @@ ${prevBlock}`;
           )}
         </>
       ) : (
-        <div className="text-12" style={{ color: 'var(--text-secondary)' }}>No clear position identified.</div>
+        <div className="text-12 p-3 rounded-lg" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--toolbar-bg)' }}>No clear position identified.</div>
       )}
     </div>
   );

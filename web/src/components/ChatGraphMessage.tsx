@@ -246,7 +246,7 @@ const ChatGraphMessage: React.FC<ChatGraphMessageProps> = ({ chartTitle, chartTy
       content = <div style={{ color: 'var(--accent-danger)' }}>Ошибка построения графика: {String(e?.message || '')}</div>;
     }
   }
-  return <div className="etg-graphmessage" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', borderRadius: 12, padding: '18px 16px', marginTop: 2 }}>{content}</div>;
+  return <div className="etg-graphmessage" style={{ background: 'transparent', borderRadius: 12, padding: '18px 16px', marginTop: 2 }}>{content}</div>;
 };
 
 export default ChatGraphMessage;

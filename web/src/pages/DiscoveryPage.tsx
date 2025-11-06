@@ -226,6 +226,29 @@ const DiscoveryPage: React.FC = () => {
   const [rightContextOpen, setRightContextOpen] = useState(false);
   const [rightArtifactsOpen, setRightArtifactsOpen] = useState(false);
   const [rightExperimentalOpen, setRightExperimentalOpen] = useState(false);
+  const [rightUserPanelOpen, setRightUserPanelOpen] = useState(false);
+  const [rightFlowPanelOpen, setRightFlowPanelOpen] = useState(false);
+  // Drawer width state (default 400px, resizable)
+  const [drawerWidth, setDrawerWidth] = useState(400);
+  
+  // Sync drawer width when resized natively
+  const drawerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const drawer = drawerRef.current;
+    if (!drawer) return;
+    
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const width = entry.contentRect.width;
+        if (Math.abs(width - drawerWidth) > 1) { // Avoid infinite loops
+          setDrawerWidth(width);
+        }
+      }
+    });
+    
+    observer.observe(drawer);
+    return () => observer.disconnect();
+  }, [drawerWidth]);
   const [experimentalResponse, setExperimentalResponse] = useState<ExperimentalResponse | null>(null);
   const [experimentalLoading, setExperimentalLoading] = useState(false);
   const lastUserMessageIdRef = React.useRef<string | null>(null);
@@ -1866,190 +1889,9 @@ const DiscoveryPage: React.FC = () => {
             </svg>
           </button>
 
-          {/* Person button, visually analogous to New Chat, placed ~2 buttons below */}
-          {availUserAnalysis && (
-            <button
-              onClick={() => { setLeftPanel((p) => (p === 'user' ? null : 'user')); }}
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
-              style={{ backgroundColor: leftPanel === 'user' ? '#669999' : 'var(--newchat-bg)', color: leftPanel === 'user' ? 'white' : 'var(--text-heading)', marginTop: '72px' }}
-              aria-label={t('unfold.sections.user')}
-              title={t('unfold.sections.user')}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'user' ? '#669999' : 'var(--newchat-bg-hover)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'user' ? '#669999' : 'var(--newchat-bg)'; }}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-            </button>
-          )}
-
-          {/* Discussion Flow button (only visible if chat is not empty) */}
-          {!(genaiChatInteractionsLength === 0 && genaiChatMessagesLength === 0) && (
-          <button
-            onClick={() => { setLeftPanel((p) => (p === 'flow' ? null : 'flow')); }}
-            className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
-            style={{ backgroundColor: leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)', color: leftPanel === 'flow' ? 'white' : 'var(--text-heading)', marginTop: '8px' }}
-            aria-label={t('unfold.sections.discussionFlow')}
-            title={t('unfold.sections.discussionFlow')}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg-hover)'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = leftPanel === 'flow' ? '#669999' : 'var(--newchat-bg)'; }}
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              <path d="M8 10h.01" />
-              <path d="M12 10h.01" />
-              <path d="M16 10h.01" />
-            </svg>
-          </button>
-          )}
-
         </div>
       )}
 
-      {/* Mirror toggle button on the right edge (independent of sidebar) */}
-      <button
-        type="button"
-        aria-label={t('unfold.sections.toggleWorkspaceLibrary')}
-        className="mirror-doc-btn rounded-lg flex items-center justify-center transition-all duration-300"
-        style={{ position: 'fixed', right: 8, top: 76, width: 32, height: 32, color: 'white', zIndex: 40 }}
-        onClick={() => {
-          const startTime = performance.now();
-          console.log('[RightPanel] Click at', startTime, 'toggle', !rightPanelOpen);
-          // Ensure mutual exclusivity
-          setRightContextOpen(false);
-          setRightArtifactsOpen(false);
-          setRightExperimentalOpen(false);
-          setRightPanelOpen((v) => {
-            const endTime = performance.now();
-            console.log('[RightPanel] setState called at', endTime, 'delay:', endTime - startTime, 'ms');
-            return !v;
-          });
-        }}
-      >
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M8 7h8M8 11h8M8 15h4" strokeWidth={2} strokeLinecap="round" />
-        </svg>
-      </button>
-
-      {/* Context Navigation button (gray, like New Chat) shown on right edge */}
-      {hasPinned && (
-        <button
-          type="button"
-          aria-label={t('unfold.sections.contextNavigation')}
-          title={t('unfold.sections.contextNavigation')}
-          onClick={() => {
-            // Ensure mutual exclusivity
-            setRightPanelOpen(false);
-            setRightArtifactsOpen(false);
-            setRightExperimentalOpen(false);
-            setRightContextOpen((v) => !v);
-          }}
-          className="rounded-lg flex items-center justify-center transition-all duration-300"
-          style={{
-            position: 'fixed',
-            right: 8,
-            top: 116,
-            width: 32,
-            height: 32,
-            backgroundColor: 'var(--newchat-bg)',
-            color: 'var(--text-heading)',
-            zIndex: 40,
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)'; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)'; }}
-        >
-          {/* Icon: compass/graph for context navigation */}
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <circle cx="12" cy="12" r="9" strokeWidth={2} />
-            <path d="M10 14l2-6 6-2-2 6-6 2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-      )}
-
-      {/* Workspace Artifacts button (styled like Context Navigation) shown on right edge */}
-      <button
-        id="btn-artifacts"
-        type="button"
-        aria-label={t('unfold.sections.workspaceArtifacts')}
-        title={t('unfold.sections.workspaceArtifacts')}
-        onClick={() => {
-          // Ensure mutual exclusivity
-          setRightPanelOpen(false);
-          setRightContextOpen(false);
-          setRightExperimentalOpen(false);
-          setRightArtifactsOpen((v) => !v);
-          try {
-            const btn = document.getElementById('btn-artifacts');
-            if (btn) btn.classList.remove('etg-glow-blue');
-          } catch {}
-        }}
-        className="rounded-lg flex items-center justify-center transition-all duration-300"
-        style={{
-          position: 'fixed',
-          right: 8,
-          top: hasPinned ? 156 : 116,
-          width: 32,
-          height: 32,
-          backgroundColor: 'var(--newchat-bg)',
-          color: 'var(--text-heading)',
-          zIndex: 40,
-        }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)'; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)'; }}
-      >
-        {/* Icon: layers/stack for artifacts */}
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path d="M12 2L2 7l10 5 10-5-10-5z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M2 17l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M2 12l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
-
-      {/* Experimental Response button (styled like Context Navigation) shown on right edge */}
-      <button
-        type="button"
-        aria-label="Experimental Response"
-        title="Experimental Response"
-        onClick={() => {
-          // Ensure mutual exclusivity
-          setRightPanelOpen(false);
-          setRightContextOpen(false);
-          setRightArtifactsOpen(false);
-          setRightExperimentalOpen((v) => !v);
-        }}
-        className="rounded-lg flex items-center justify-center transition-all duration-300"
-        style={{
-          position: 'fixed',
-          right: 8,
-          top: hasPinned ? 196 : 156,
-          width: 32,
-          height: 32,
-          backgroundColor: rightExperimentalOpen ? 'var(--accent-primary)' : 'var(--newchat-bg)',
-          color: rightExperimentalOpen ? 'var(--text-on-accent)' : 'var(--text-heading)',
-          zIndex: 40,
-        }}
-        onMouseEnter={(e) => { 
-          if (!rightExperimentalOpen) {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)';
-          }
-        }}
-        onMouseLeave={(e) => { 
-          if (!rightExperimentalOpen) {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)';
-          }
-        }}
-      >
-        {/* Icon: brain/experiment for experimental response */}
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44L2 13.88" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44L22 13.88" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
       {/* Floating Account and Settings buttons (visible only when sidebar is hidden) */}
       {!sideOpen && !showSettings && !showAccount && (
         <>
@@ -2106,26 +1948,27 @@ const DiscoveryPage: React.FC = () => {
         </>
       )}
 
-      {/* Grid wrapper to the right of the sidebar: Sources | Center | Right */}
+      {/* Main content area: 5% margin + chat + drawer */}
       <div
         className="flex-1 min-h-0"
         style={{
           position: 'relative',
-          display: 'grid',
-          gridTemplateColumns: `minmax(320px, 25%) var(--center-col-width, minmax(640px, 1fr)) minmax(320px, 25%)`,
+          display: 'flex',
           gap: '16px',
         }}
       >
-        {/* Sources column (scrollable) - hidden when Account or Settings are shown */}
-        <div className="min-h-0 h-full" style={{ background: 'transparent', display: (showAccount || showSettings) ? 'none' : 'flex', flexDirection: 'column' }}>
-          {sources.length > 0 && (
-            <div className="space-y-2">
-              {sources.map((source) => renderSourceCard(source))}
-            </div>
-          )}
+        {/* 2% left margin for breathing room */}
+        <div style={{ width: '2%', minWidth: '2%', flexShrink: 0 }} />
 
-          {/* Analysis toggles removed */}
-
+        {/* Chat area - flexible width */}
+        <div
+          className="flex-1 min-h-0"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+          }}
+        >
           {/* Headless runner to fetch user stance in background so the button appears */}
           <div style={{ display: 'none' }} aria-hidden>
             <UserPositionAnalysis
@@ -2147,270 +1990,12 @@ const DiscoveryPage: React.FC = () => {
             <LLMEvaluation />
           </div>
 
-          {/* Left panel holder: matches sidebar style, single active section */}
-          {/* Show perspective analysis when in perspectives view, otherwise show user/flow panels */}
-          {unfoldSubView === 'perspectives' && !isAnalysisClosed && (() => {
-            const projectId = genaiChat.projectId;
-            if (!projectId || projectId === 'local-unfold') return null;
-            
-            // Get perspective from cache (O(1) lookup)
-            const perspective = genaiChat.perspectives[currentPerspectivePreset];
-            
-            if (!perspective) return null;
-            
-            return (
-              <>
-                {/* Spacer to align with separator line in center column */}
-                <div style={{ height: '44px' }} />
-                <div
-                  className="mt-3 rounded-xl sidebar-panel"
-                  style={{
-                    backgroundColor: 'var(--bg-sidebar)',
-                    border: '1px solid rgba(60, 60, 85, 0.15)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    flex: 1,
-                    minHeight: 0,
-                    overflowY: 'auto',
-                  }}
-                >
-                  <PerspectiveAnalysisPanel
-                    preset={currentPerspectivePreset}
-                    perspectiveId={perspective.id}
-                    perspectiveContent={perspective.content || null}
-                    onClose={() => setIsAnalysisClosed(true)}
-                    onApplyKeyPoint={handleApplyKeyPoint}
-                  />
-                </div>
-              </>
-            );
-          })()}
-          {/* Left panel container - ALWAYS in DOM, never removed */}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              flex: leftPanel ? 1 : 0,
-              minWidth: leftPanel ? 'auto' : 0,
-              visibility: leftPanel ? 'visible' : 'hidden',
-              pointerEvents: leftPanel ? 'auto' : 'none',
-            }}
-          >
-            {/* Empty spacer matching Chat | Perspectives toggle height - placed before entire panel to shift it down */}
-            <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label="Spacer" style={{ visibility: 'hidden', pointerEvents: 'none', height: '28px' }}>
-              <div className="px-2 py-1 text-12 rounded" />
-              <div className="px-2 py-1 text-12 rounded" />
-            </div>
-            <div
-              className="mt-3 p-3 rounded-xl sidebar-panel"
-              style={{
-                backgroundColor: 'var(--bg-sidebar)',
-                border: '1px solid rgba(60, 60, 85, 0.15)',
-                display: 'flex',
-                flexDirection: 'column',
-                flex: 1,
-                minHeight: 0,
-                overflowY: 'auto',
-              }}
-            >
-                {/* Header: chosen section title + close */}
-                <div 
-                  className="flex items-center justify-between" 
-                  style={{ 
-                    position: 'sticky', 
-                    top: 0, 
-                    backgroundColor: 'var(--bg-sidebar)', 
-                    paddingBottom: 8, 
-                    marginBottom: 8, 
-                    zIndex: 1,
-                    display: leftPanel ? 'flex' : 'none'
-                  }}
-                >
-                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? t('unfold.sections.howYouEngage') : t('unfold.sections.discussionFlow')}</h3>
-                  <button type="button" aria-label={t('unfold.sections.close')} title={t('unfold.sections.close')} className="p-2 rounded-lg transition-colors" style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }} onClick={() => setLeftPanel(null)}>
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
-                  </button>
-                </div>
-
-              {/* Content area: selected section */}
-              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
-                <div style={{ flex: 1, minHeight: 0 }}>
-                  {/* User Analysis - ALWAYS in DOM, never unmounted */}
-                  <div style={{ 
-                    visibility: leftPanel === 'user' ? 'visible' : 'hidden',
-                    pointerEvents: leftPanel === 'user' ? 'auto' : 'none',
-                    position: leftPanel === 'user' ? 'static' : 'absolute',
-                    width: leftPanel === 'user' ? 'auto' : 0,
-                    height: leftPanel === 'user' ? 'auto' : 0,
-                    overflow: 'hidden',
-                  }}>
-                    <UserPositionAnalysis hideTitle onFirstResult={() => { setBadgeUser(true); setAvailUserAnalysis(true); }} onRiskUpdate={(r) => {
-                      const high = !!(r && r.level === 'High');
-                      setIsHighRisk(high);
-                      if (high) {
-                        setRiskBanner((prev) => (prev && prev.visible === false ? prev : { visible: true, level: 'High', rationale: r?.rationale || '' }));
-                      } else if (!r) {
-                        setRiskBanner(null);
-                      }
-                    }} />
-                  </div>
-                  {/* Discussion Flow - ALWAYS in DOM, never unmounted */}
-                  <div style={{ 
-                    visibility: leftPanel === 'flow' ? 'visible' : 'hidden',
-                    pointerEvents: leftPanel === 'flow' ? 'auto' : 'none',
-                    position: leftPanel === 'flow' ? 'static' : 'absolute',
-                    width: leftPanel === 'flow' ? 'auto' : 0,
-                    height: leftPanel === 'flow' ? 'auto' : 0,
-                    overflow: 'hidden',
-                  }}>
-                    <DiscussionFlow 
-                      onFirstResult={onFirstResultDiscussionFlow}
-                      onAddTextTask={handleAddTextTask}
-                      onRemoveTextTask={handleRemoveTextTask}
-                      textTasks={textTasks}
-                    />
-                  </div>
-                </div>
-              </div>
-              {/* Duplicate old header/content removed to avoid double rendering */}
-            </div>
-          </div>
-
-            {/* Title generation now handled automatically in genaiChatStore.onDone */}
-
-          {/* Bottom slot: reserved area to match right column layout */}
-          <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight, position: 'relative' }} />
-
-          {/* Add source button (only when chat exists and has sources) */}
-          {currentProject?.id && sources.length > 0 && (
-            <div className="mt-2" ref={addMenuRef}>
-              <button
-                type="button"
-                title={t('unfold.sections.addSource')}
-                aria-haspopup="true"
-                aria-expanded={showAddSourceMenu}
-                onClick={() => setShowAddSourceMenu((v) => !v)}
-                className="rounded-lg transition-colors flex items-center justify-center"
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  backgroundColor: 'transparent',
-                  color: 'var(--text-heading)',
-                  border: '1px solid var(--overlay-line-90)'
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path strokeLinecap="round" strokeWidth={2} d="M12 6v12M6 12h12" />
-                </svg>
-              </button>
-
-              {showAddSourceMenu && (
-                <div
-                  role="menu"
-                  aria-label={t('unfold.sections.addSourceOptions')}
-                  className="mt-2 rounded-xl shadow-lg"
-                  style={{
-                    backgroundColor: 'var(--bg-elevated)',
-                    border: '1px solid var(--overlay-line-90)'
-                  }}
-                >
-                  {/* Telegram Channel */}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => { setShowAddSourceMenu(false); setShowAddTelegramModal(true); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-t-xl text-left transition-colors"
-                    style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 11l18-7-7 18-4-8-7-3z" />
-                    </svg>
-                    <span className="text-13">Telegram Channel</span>
-                  </button>
-
-                  {/* Web Page */}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => setShowAddSourceMenu(false)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors"
-                    style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <circle cx="12" cy="12" r="9" strokeWidth={2} />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18" />
-                    </svg>
-                    <span className="text-13">Web Page</span>
-                  </button>
-
-                  {/* RSS */}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => setShowAddSourceMenu(false)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors"
-                    style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5c7.18 0 13 5.82 13 13" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 11a7 7 0 017 7" />
-                      <circle cx="6" cy="18" r="1.5" fill="currentColor" />
-                    </svg>
-                    <span className="text-13">RSS</span>
-                  </button>
-
-                  {/* Document upload */}
-                  <label
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-b-xl text-left cursor-pointer"
-                    style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLLabelElement).style.backgroundColor = 'var(--white-10)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLLabelElement).style.backgroundColor = 'transparent'; }}
-                  >
-                    <input
-                      type="file"
-                      accept=".txt,.md,.csv,.tsv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv,text/tab-separated-values"
-                      style={{ display: 'none' }}
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        try {
-                          setShowAddSourceMenu(false);
-                          const pid = useGenaiChatStore.getState().projectId || (await useGenaiChatStore.getState().ensureProject());
-                          const doc = await api.docsUpload(pid as string, file);
-                          try { await api.docsParse(pid as string, doc.id); } catch {}
-                        } catch (err) {
-                          console.error('[Discovery] Document upload failed', err);
-                        } finally {
-                          (e.currentTarget as HTMLInputElement).value = '';
-                        }
-                      }}
-                    />
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 3h7l4 4v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 3v4h4" />
-                    </svg>
-                    <span className="text-13">Document</span>
-                  </label>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Main center column: renders discussion or graph placeholder (spans center+right when graph, or all columns when Account/Settings) */}
+          {/* Main center column: renders discussion or graph placeholder */}
         <div
           className="min-h-0 flex flex-col"
           style={{ 
             position: 'relative', 
-            gridColumn: (showAccount || showSettings) ? '1 / 4' : (viewMode === 'graph' ? '2 / 4' : '2 / 3')
+              flex: 1,
           }}
         >
         {showAccount ? (
@@ -3707,7 +3292,10 @@ const DiscoveryPage: React.FC = () => {
             {/* Resizer handle at right edge of center column */}
             <div
               className="chat-resizer"
-              style={{ right: -4 }}
+              style={{ 
+                right: -4,
+                pointerEvents: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen || rightUserPanelOpen || rightFlowPanelOpen) ? 'none' : 'auto',
+              }}
               onMouseDown={(e) => {
                 const root = document.documentElement;
                 const startX = e.clientX;
@@ -3895,18 +3483,74 @@ const DiscoveryPage: React.FC = () => {
         </>
         )}
         </div>
-        {/* Right column: container for contextual panels (transparent, no border) - hidden when Account or Settings are shown */}
-        {viewMode !== 'graph' && !showAccount && !showSettings && (
-          <div className="min-h-0 h-full" style={{ background: 'transparent', display: 'flex', flexDirection: 'column', marginRight: 48 }}>
+        </div>
+
+        {/* Right drawer: appears when any drawer is open */}
+        {(rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen || rightUserPanelOpen || rightFlowPanelOpen) && viewMode !== 'graph' && !showAccount && !showSettings && (
+          <>
+            <div
+              ref={drawerRef}
+              className="min-h-0 flex flex-col drawer-resizable"
+              style={{
+                width: `${drawerWidth}px`,
+                minWidth: '300px',
+                maxWidth: '800px',
+                flexShrink: 0,
+                flexGrow: 0,
+                position: 'relative',
+                height: '100%',
+                maxHeight: '100%',
+                overflow: 'hidden',
+              }}
+            >
+              {/* Resize handle on left edge */}
+              <div
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  const startX = e.clientX;
+                  const startWidth = drawerRef.current?.clientWidth || drawerWidth;
+                  
+                  const onMove = (ev: MouseEvent) => {
+                    const delta = startX - ev.clientX; // Handle on left: moving right (ev.clientX > startX) decreases width
+                    const newWidth = Math.max(300, Math.min(800, startWidth + delta));
+                    if (drawerRef.current) {
+                      drawerRef.current.style.width = `${newWidth}px`;
+                      setDrawerWidth(newWidth);
+                    }
+                  };
+                  
+                  const onUp = () => {
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                  };
+                  
+                  window.addEventListener('mousemove', onMove);
+                  window.addEventListener('mouseup', onUp);
+                }}
+                style={{
+                  position: 'absolute',
+                  left: -4,
+                  top: 0,
+                  bottom: 0,
+                  width: '8px',
+                  cursor: 'col-resize',
+                  zIndex: 10,
+                }}
+              />
+              {/* Drawer content */}
+              <div className="min-h-0 flex flex-col" style={{ background: 'transparent', height: '100%', overflow: 'hidden' }}>
             {/* Right panel container - ALWAYS in DOM, never removed */}
             <div
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                flex: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) ? 1 : 0,
-                minWidth: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) ? 'auto' : 0,
-                visibility: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) ? 'visible' : 'hidden',
-                pointerEvents: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) ? 'auto' : 'none',
+                flex: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen || rightUserPanelOpen || rightFlowPanelOpen) ? 1 : 0,
+                minWidth: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen || rightUserPanelOpen || rightFlowPanelOpen) ? 'auto' : 0,
+                visibility: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen || rightUserPanelOpen || rightFlowPanelOpen) ? 'visible' : 'hidden',
+                pointerEvents: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen || rightUserPanelOpen || rightFlowPanelOpen) ? 'auto' : 'none',
+                height: '100%',
+                minHeight: 0,
+                overflow: 'hidden',
               }}
             >
               {/* Empty spacer matching Chat | Perspectives toggle height - placed before entire panel to shift it down */}
@@ -3915,10 +3559,8 @@ const DiscoveryPage: React.FC = () => {
                 <div className="px-2 py-1 text-12 rounded" />
               </div>
               <div
-                className="mt-3 p-3 rounded-xl sidebar-panel"
+                className="mt-3 p-3"
                 style={{
-                  backgroundColor: 'var(--bg-sidebar)',
-                  border: '1px solid rgba(60, 60, 85, 0.15)',
                   display: 'flex',
                   flexDirection: 'column',
                   flex: 1,
@@ -3926,9 +3568,9 @@ const DiscoveryPage: React.FC = () => {
                   overflowY: 'auto',
                 }}
               >
-                  <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
+                <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
                     <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>
-                      {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : rightExperimentalOpen ? 'Experimental Response' : 'Workspace Library'}
+                      {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : rightExperimentalOpen ? 'Experimental Response' : rightUserPanelOpen ? t('unfold.sections.howYouEngage') : rightFlowPanelOpen ? t('unfold.sections.discussionFlow') : 'Workspace Library'}
                     </h3>
                     <button
                       type="button"
@@ -3938,13 +3580,223 @@ const DiscoveryPage: React.FC = () => {
                       style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={() => { setRightPanelOpen(false); setRightContextOpen(false); setRightArtifactsOpen(false); setRightExperimentalOpen(false); }}
+                      onClick={() => { setRightPanelOpen(false); setRightContextOpen(false); setRightArtifactsOpen(false); setRightExperimentalOpen(false); setRightUserPanelOpen(false); setRightFlowPanelOpen(false); }}
                     >
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                     </button>
                   </div>
+                  
+                  {/* Workspace Artifacts toolbar (top) */}
+                  {rightArtifactsOpen && (
+                    <div className="mb-3 px-3 py-2 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 6 }}>
+                        <button
+                          type="button"
+                          aria-label="Analyze entities"
+                          title="Analyze entities"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          onClick={async () => {
+                            try {
+                              const pid = await genaiChat.ensureProject();
+                              try {
+                                if ((window as any).wsSubscribeProject && pid) {
+                                  (window as any).wsSubscribeProject(pid);
+                                  const waitForWsSubscribed = async (projectId: string, timeoutMs = 1500) => {
+                                    const start = Date.now();
+                                    // eslint-disable-next-line no-constant-condition
+                                    while (true) {
+                                      try {
+                                        const ws = (await import('../stores/wsStore')).useWsStore.getState();
+                                        if (ws.connected && ws.subscribedProjectId === projectId) break;
+                                      } catch {}
+                                      if (Date.now() - start > timeoutMs) break;
+                                      await new Promise((r) => setTimeout(r, 60));
+                                    }
+                                  };
+                                  await waitForWsSubscribed(pid);
+                                }
+                              } catch {}
+                              const res = await (await import('../lib/api')).api.analyzeEntities(pid, '');
+                              try { console.log('[AnalyzeEntities] queued:', res); } catch {}
+                            } catch {}
+                          }}
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <circle cx="5" cy="12" r="2" strokeWidth="2" />
+                            <circle cx="19" cy="7" r="2" strokeWidth="2" />
+                            <circle cx="19" cy="17" r="2" strokeWidth="2" />
+                            <path d="M7 12h8M17 8l-4 4 4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Analyze facts"
+                          title="Analyze facts"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeFacts(pid, ''); try { console.log('[AnalyzeFacts] queued:', res); } catch {} } catch {} }}
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M3 4h18v4H3zM3 10h18v10H3z" strokeWidth="2" />
+                            <path d="M6 13h6M6 17h10" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Analyze events"
+                          title="Analyze events"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeEvents(pid, ''); try { console.log('[AnalyzeEvents] queued:', res); } catch {} } catch {} }}
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth="2" />
+                            <path d="M3 8h18M7 2v4M17 2v4M8 12h4" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Analyze metrics"
+                          title="Analyze metrics"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeMetrics(pid, ''); try { console.log('[AnalyzeMetrics] queued:', res); } catch {} } catch {} }}
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M4 20V10M10 20V4M16 20v-8M22 20H2" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Analyze decisions"
+                          title="Analyze decisions"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeDecisions(pid, ''); try { console.log('[AnalyzeDecisions] queued:', res); } catch {} } catch {} }}
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M4 12h8M12 12l4-4M12 12l4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            <circle cx="4" cy="12" r="2" strokeWidth="2" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Create artifact"
+                          title="Create artifact"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          onClick={() => { /* no-op for now */ }}
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M6 2h7l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" strokeWidth="2" />
+                            <path d="M13 2v6h6" strokeWidth="2" />
+                            <path d="M12 10v6M9 13h6" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Workspace Library toolbar (top) */}
+                  {rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen && !rightUserPanelOpen && !rightFlowPanelOpen && (
+                    <div className="mb-3 px-3 py-2 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 6 }}>
+                        <button
+                          type="button"
+                          aria-label="Add document"
+                          title="Add document"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          onClick={() => { document.getElementById('doc-upload-input')?.click(); }}
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" strokeWidth="2" />
+                            <path d="M14 2v6h6M12 11v6M9 14h6" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Add RSS source"
+                          title="Add RSS source (coming soon)"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-tertiary-weak)', cursor: 'not-allowed', opacity: 0.5 }}
+                          disabled
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16" strokeWidth="2" strokeLinecap="round" />
+                            <circle cx="5" cy="19" r="1" fill="currentColor" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Add Telegram source"
+                          title="Add Telegram source (coming soon)"
+                          className="p-2 rounded"
+                          style={{ background: 'transparent', color: 'var(--text-tertiary-weak)', cursor: 'not-allowed', opacity: 0.5 }}
+                          disabled
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 5L2 12.5l7 1M21 5l-2.5 15L9 13M21 5L9 13m0 0l1 6l2-3" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  
                   {/* Panel content - always render all panels, hide inactive ones */}
                   <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+                    {/* User Analysis drawer */}
+                    <div style={{ 
+                      visibility: rightUserPanelOpen ? 'visible' : 'hidden',
+                      pointerEvents: rightUserPanelOpen ? 'auto' : 'none',
+                      position: rightUserPanelOpen ? 'static' : 'absolute',
+                      width: rightUserPanelOpen ? 'auto' : 0,
+                      height: rightUserPanelOpen ? 'auto' : 0,
+                      overflow: 'hidden',
+                    }}>
+                      <UserPositionAnalysis hideTitle onFirstResult={() => { setBadgeUser(true); setAvailUserAnalysis(true); }} onRiskUpdate={(r) => {
+                        const high = !!(r && r.level === 'High');
+                        setIsHighRisk(high);
+                        if (high) {
+                          setRiskBanner((prev) => (prev && prev.visible === false ? prev : { visible: true, level: 'High', rationale: r?.rationale || '' }));
+                        } else if (!r) {
+                          setRiskBanner(null);
+                        }
+                      }} />
+                    </div>
+                    
+                    {/* Discussion Flow drawer */}
+                    <div style={{ 
+                      visibility: rightFlowPanelOpen ? 'visible' : 'hidden',
+                      pointerEvents: rightFlowPanelOpen ? 'auto' : 'none',
+                      position: rightFlowPanelOpen ? 'static' : 'absolute',
+                      width: rightFlowPanelOpen ? 'auto' : 0,
+                      height: rightFlowPanelOpen ? 'auto' : 0,
+                      overflow: 'hidden',
+                    }}>
+                      <DiscussionFlow 
+                        onFirstResult={onFirstResultDiscussionFlow}
+                        onAddTextTask={handleAddTextTask}
+                        onRemoveTextTask={handleRemoveTextTask}
+                        textTasks={textTasks}
+                      />
+                    </div>
+                    
                     {/* FindingsPanel - ALWAYS in DOM, never unmounted */}
                     <div style={{ 
                       visibility: rightArtifactsOpen ? 'visible' : 'hidden',
@@ -4129,13 +3981,147 @@ const DiscoveryPage: React.FC = () => {
                     
                     {/* Workspace Library - ALWAYS in DOM, never unmounted */}
                     <div style={{ 
-                      visibility: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'visible' : 'hidden',
-                      pointerEvents: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'auto' : 'none',
-                      position: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'static' : 'absolute',
-                      width: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'auto' : 0,
-                      height: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'auto' : 0,
+                      visibility: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen && !rightUserPanelOpen && !rightFlowPanelOpen) ? 'visible' : 'hidden',
+                      pointerEvents: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen && !rightUserPanelOpen && !rightFlowPanelOpen) ? 'auto' : 'none',
+                      position: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen && !rightUserPanelOpen && !rightFlowPanelOpen) ? 'static' : 'absolute',
+                      width: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen && !rightUserPanelOpen && !rightFlowPanelOpen) ? 'auto' : 0,
+                      height: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen && !rightUserPanelOpen && !rightFlowPanelOpen) ? 'auto' : 0,
                       overflow: 'hidden',
                     }}>
+                      {/* Sources section */}
+                      {sources.length > 0 && (
+                        <div className="mb-4">
+                          <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                            Sources
+                    </div>
+                          <div className="space-y-2">
+                            {sources.map((source) => renderSourceCard(source))}
+                  </div>
+                        </div>
+                      )}
+                      
+                      {/* Add source button */}
+                      {currentProject?.id && (
+                        <div className="mb-4" ref={addMenuRef}>
+                    <button
+                      type="button"
+                            title={t('unfold.sections.addSource')}
+                            aria-haspopup="true"
+                            aria-expanded={showAddSourceMenu}
+                            onClick={() => setShowAddSourceMenu((v) => !v)}
+                            className="w-full rounded-lg transition-colors flex items-center justify-center gap-2 px-3 py-2"
+                            style={{
+                              backgroundColor: 'transparent',
+                              color: 'var(--text-heading)',
+                              border: '1px solid var(--overlay-line-90)'
+                            }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                          >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                              <path strokeLinecap="round" strokeWidth={2} d="M12 6v12M6 12h12" />
+                      </svg>
+                            <span className="text-12">{t('unfold.sections.addSource')}</span>
+                    </button>
+
+                          {showAddSourceMenu && (
+                            <div
+                              role="menu"
+                              aria-label={t('unfold.sections.addSourceOptions')}
+                              className="mt-2 rounded-xl shadow-lg"
+                              style={{
+                                backgroundColor: 'var(--bg-elevated)',
+                                border: '1px solid var(--overlay-line-90)'
+                              }}
+                            >
+                              {/* Telegram Channel */}
+                    <button
+                      type="button"
+                                role="menuitem"
+                                onClick={() => { setShowAddSourceMenu(false); setShowAddTelegramModal(true); }}
+                                className="w-full flex items-center gap-2 px-3 py-2 rounded-t-xl text-left transition-colors"
+                                style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 11l18-7-7 18-4-8-7-3z" />
+                      </svg>
+                                <span className="text-13">Telegram Channel</span>
+                    </button>
+
+                              {/* Web Page */}
+                    <button
+                      type="button"
+                                role="menuitem"
+                                onClick={() => setShowAddSourceMenu(false)}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors"
+                                style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                  <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18" />
+                      </svg>
+                                <span className="text-13">Web Page</span>
+                    </button>
+
+                              {/* RSS */}
+                    <button
+                      type="button"
+                                role="menuitem"
+                                onClick={() => setShowAddSourceMenu(false)}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors"
+                                style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5c7.18 0 13 5.82 13 13" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 11a7 7 0 017 7" />
+                                  <circle cx="6" cy="18" r="1.5" fill="currentColor" />
+                      </svg>
+                                <span className="text-13">RSS</span>
+                    </button>
+
+                              {/* Document upload */}
+                              <label
+                                className="w-full flex items-center gap-2 px-3 py-2 rounded-b-xl text-left cursor-pointer"
+                                style={{ backgroundColor: 'transparent', color: 'var(--text-heading)' }}
+                                onMouseEnter={(e) => { (e.currentTarget as HTMLLabelElement).style.backgroundColor = 'var(--white-10)'; }}
+                                onMouseLeave={(e) => { (e.currentTarget as HTMLLabelElement).style.backgroundColor = 'transparent'; }}
+                              >
+                                <input
+                                  type="file"
+                                  accept=".txt,.md,.csv,.tsv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv,text/tab-separated-values"
+                                  style={{ display: 'none' }}
+                                  onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+                                    try {
+                                      setShowAddSourceMenu(false);
+                                      const pid = useGenaiChatStore.getState().projectId || (await useGenaiChatStore.getState().ensureProject());
+                                      const doc = await api.docsUpload(pid as string, file);
+                                      try { await api.docsParse(pid as string, doc.id); } catch {}
+                                    } catch (err) {
+                                      console.error('[Discovery] Document upload failed', err);
+                                    } finally {
+                                      (e.currentTarget as HTMLInputElement).value = '';
+                                    }
+                                  }}
+                                />
+                                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 3h7l4 4v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 3v4h4" />
+                                </svg>
+                                <span className="text-13">Document</span>
+                              </label>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
                       <WorkspaceLibrary 
                         projectId={genaiChat.projectId} 
                         onDocumentDelete={(docId: string) => {
@@ -4146,188 +4132,261 @@ const DiscoveryPage: React.FC = () => {
                       />
                     </div>
                   </div>
-                
-                {/* Workspace Artifacts toolbar (bottom) */}
-                {rightArtifactsOpen && (
-                  <div className="mt-2 px-3" style={{ borderTop: '1px solid var(--overlay-line-90)', paddingTop: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 6 }}>
-                    <button
-                      type="button"
-                      aria-label="Analyze entities"
-                      title="Analyze entities"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => {
-                        try {
-                          const pid = await genaiChat.ensureProject();
-                          try {
-                            if ((window as any).wsSubscribeProject && pid) {
-                              (window as any).wsSubscribeProject(pid);
-                              const waitForWsSubscribed = async (projectId: string, timeoutMs = 1500) => {
-                                const start = Date.now();
-                                // eslint-disable-next-line no-constant-condition
-                                while (true) {
-                                  try {
-                                    const ws = (await import('../stores/wsStore')).useWsStore.getState();
-                                    if (ws.connected && ws.subscribedProjectId === projectId) break;
-                                  } catch {}
-                                  if (Date.now() - start > timeoutMs) break;
-                                  await new Promise((r) => setTimeout(r, 60));
-                                }
-                              };
-                              await waitForWsSubscribed(pid);
-                            }
-                          } catch {}
-                          const res = await (await import('../lib/api')).api.analyzeEntities(pid, '');
-                          try { console.log('[AnalyzeEntities] queued:', res); } catch {}
-                        } catch {}
-                      }}
-                    >
-                      {/* New entities icon: network nodes */}
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <circle cx="5" cy="12" r="2" strokeWidth="2" />
-                        <circle cx="19" cy="7" r="2" strokeWidth="2" />
-                        <circle cx="19" cy="17" r="2" strokeWidth="2" />
-                        <path d="M7 12h8M17 8l-4 4 4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                    {/* Facts */}
-                    <button
-                      type="button"
-                      aria-label="Analyze facts"
-                      title="Analyze facts"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeFacts(pid, ''); try { console.log('[AnalyzeFacts] queued:', res); } catch {} } catch {} }}
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path d="M3 4h18v4H3zM3 10h18v10H3z" strokeWidth="2" />
-                        <path d="M6 13h6M6 17h10" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                    {/* Events */}
-                    <button
-                      type="button"
-                      aria-label="Analyze events"
-                      title="Analyze events"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeEvents(pid, ''); try { console.log('[AnalyzeEvents] queued:', res); } catch {} } catch {} }}
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth="2" />
-                        <path d="M3 8h18M7 2v4M17 2v4M8 12h4" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                    {/* Metrics */}
-                    <button
-                      type="button"
-                      aria-label="Analyze metrics"
-                      title="Analyze metrics"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeMetrics(pid, ''); try { console.log('[AnalyzeMetrics] queued:', res); } catch {} } catch {} }}
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path d="M4 20V10M10 20V4M16 20v-8M22 20H2" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                    {/* Decisions */}
-                    <button
-                      type="button"
-                      aria-label="Analyze decisions"
-                      title="Analyze decisions"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={async () => { try { const pid = await genaiChat.ensureProject(); try { if ((window as any).wsSubscribeProject && pid) { (window as any).wsSubscribeProject(pid); const ws = await import('../stores/wsStore'); const wait = async (projectId: string, timeoutMs = 1500) => { const start = Date.now(); while (true) { try { const st = ws.useWsStore.getState(); if (st.connected && st.subscribedProjectId === projectId) break; } catch {} if (Date.now() - start > timeoutMs) break; await new Promise((r)=>setTimeout(r,60)); } }; await wait(pid); } } catch {} const res = await (await import('../lib/api')).api.analyzeDecisions(pid, ''); try { console.log('[AnalyzeDecisions] queued:', res); } catch {} } catch {} }}
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path d="M4 12h8M12 12l4-4M12 12l4 4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                        <circle cx="4" cy="12" r="2" strokeWidth="2" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Create artifact"
-                      title="Create artifact"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={() => { /* no-op for now */ }}
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path d="M6 2h7l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" strokeWidth="2" />
-                        <path d="M13 2v6h6" strokeWidth="2" />
-                        <path d="M12 10v6M9 13h6" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Workspace Library toolbar (bottom) */}
-                {rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && (
-                  <div className="mt-2 px-3" style={{ borderTop: '1px solid var(--overlay-line-90)', paddingTop: 8, display: 'flex', justifyContent: 'flex-start', gap: 6 }}>
-                    <button
-                      type="button"
-                      aria-label="Add document"
-                      title="Add document"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                      onClick={() => { document.getElementById('doc-upload-input')?.click(); }}
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" strokeWidth="2" />
-                        <path d="M14 2v6h6M12 11v6M9 14h6" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Add RSS source"
-                      title="Add RSS source (coming soon)"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-tertiary-weak)', cursor: 'not-allowed', opacity: 0.5 }}
-                      disabled
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16" strokeWidth="2" strokeLinecap="round" />
-                        <circle cx="5" cy="19" r="1" fill="currentColor" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Add Telegram source"
-                      title="Add Telegram source (coming soon)"
-                      className="p-2 rounded"
-                      style={{ background: 'transparent', color: 'var(--text-tertiary-weak)', cursor: 'not-allowed', opacity: 0.5 }}
-                      disabled
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path d="M21 5L2 12.5l7 1M21 5l-2.5 15L9 13M21 5L9 13m0 0l1 6l2-3" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
               </div>
             </div>
 
             {/* Bottom slot: reserved area to match left column layout */}
             <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight, position: 'relative' }} />
           </div>
+            </div>
+          </>
         )}
+
+        {/* Right buttons column - always visible */}
+        <div
+          className="flex flex-col items-center gap-2"
+          style={{
+            width: '48px',
+            minWidth: '48px',
+            flexShrink: 0,
+            paddingTop: '76px',
+          }}
+        >
+          {/* Workspace Library button */}
+                    <button
+                      type="button"
+            aria-label={t('unfold.sections.toggleWorkspaceLibrary')}
+            className="mirror-doc-btn rounded-lg flex items-center justify-center transition-all duration-300"
+            style={{ width: 32, height: 32, color: 'white' }}
+            onClick={() => {
+              const startTime = performance.now();
+              console.log('[RightPanel] Click at', startTime, 'toggle', !rightPanelOpen);
+              // Ensure mutual exclusivity
+              setRightContextOpen(false);
+              setRightArtifactsOpen(false);
+              setRightExperimentalOpen(false);
+              setRightUserPanelOpen(false);
+              setRightFlowPanelOpen(false);
+              setRightPanelOpen((v) => {
+                const endTime = performance.now();
+                console.log('[RightPanel] setState called at', endTime, 'delay:', endTime - startTime, 'ms');
+                return !v;
+              });
+            }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M8 7h8M8 11h8M8 15h4" strokeWidth={2} strokeLinecap="round" />
+                      </svg>
+                    </button>
+
+          {/* Context Navigation button */}
+          {hasPinned && (
+                    <button
+                      type="button"
+              aria-label={t('unfold.sections.contextNavigation')}
+              title={t('unfold.sections.contextNavigation')}
+              onClick={() => {
+                // Ensure mutual exclusivity
+                setRightPanelOpen(false);
+                setRightArtifactsOpen(false);
+                setRightExperimentalOpen(false);
+                setRightUserPanelOpen(false);
+                setRightFlowPanelOpen(false);
+                setRightContextOpen((v) => !v);
+              }}
+              className="rounded-lg flex items-center justify-center transition-all duration-300"
+              style={{
+                width: 32,
+                height: 32,
+                backgroundColor: rightContextOpen ? '#669999' : 'var(--newchat-bg)',
+                color: rightContextOpen ? 'white' : 'var(--text-heading)',
+              }}
+              onMouseEnter={(e) => { 
+                if (!rightContextOpen) {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)';
+                }
+              }}
+              onMouseLeave={(e) => { 
+                if (!rightContextOpen) {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)';
+                }
+              }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                <path d="M10 14l2-6 6-2-2 6-6 2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                )}
+                
+          {/* Workspace Artifacts button */}
+                    <button
+            id="btn-artifacts"
+                      type="button"
+            aria-label={t('unfold.sections.workspaceArtifacts')}
+            title={t('unfold.sections.workspaceArtifacts')}
+            onClick={() => {
+              // Ensure mutual exclusivity
+              setRightPanelOpen(false);
+              setRightContextOpen(false);
+              setRightExperimentalOpen(false);
+              setRightUserPanelOpen(false);
+              setRightFlowPanelOpen(false);
+              setRightArtifactsOpen((v) => !v);
+              try {
+                const btn = document.getElementById('btn-artifacts');
+                if (btn) btn.classList.remove('etg-glow-blue');
+              } catch {}
+            }}
+            className="rounded-lg flex items-center justify-center transition-all duration-300"
+            style={{
+              width: 32,
+              height: 32,
+              backgroundColor: rightArtifactsOpen ? '#669999' : 'var(--newchat-bg)',
+              color: rightArtifactsOpen ? 'white' : 'var(--text-heading)',
+            }}
+            onMouseEnter={(e) => { 
+              if (!rightArtifactsOpen) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)';
+              }
+            }}
+            onMouseLeave={(e) => { 
+              if (!rightArtifactsOpen) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)';
+              }
+            }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2 17l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2 12l10 5 10-5" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+
+          {/* How You Engage button */}
+          {availUserAnalysis && (
+                    <button
+                      type="button"
+              aria-label={t('unfold.sections.howYouEngage')}
+              title={t('unfold.sections.howYouEngage')}
+              onClick={() => {
+                // Ensure mutual exclusivity
+                setRightPanelOpen(false);
+                setRightContextOpen(false);
+                setRightArtifactsOpen(false);
+                setRightExperimentalOpen(false);
+                setRightFlowPanelOpen(false);
+                setRightUserPanelOpen((v) => !v);
+              }}
+              className="rounded-lg flex items-center justify-center transition-all duration-300"
+              style={{
+                width: 32,
+                height: 32,
+                backgroundColor: rightUserPanelOpen ? '#669999' : 'var(--newchat-bg)',
+                color: rightUserPanelOpen ? 'white' : 'var(--text-heading)',
+              }}
+              onMouseEnter={(e) => { 
+                if (!rightUserPanelOpen) {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)';
+                }
+              }}
+              onMouseLeave={(e) => { 
+                if (!rightUserPanelOpen) {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)';
+                }
+              }}
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                      </svg>
+                    </button>
+          )}
+
+          {/* Discussion Flow button */}
+          {!(genaiChatInteractionsLength === 0 && genaiChatMessagesLength === 0) && (
+                    <button
+                      type="button"
+              aria-label={t('unfold.sections.discussionFlow')}
+              title={t('unfold.sections.discussionFlow')}
+              onClick={() => {
+                // Ensure mutual exclusivity
+                setRightPanelOpen(false);
+                setRightContextOpen(false);
+                setRightArtifactsOpen(false);
+                setRightExperimentalOpen(false);
+                setRightUserPanelOpen(false);
+                setRightFlowPanelOpen((v) => !v);
+              }}
+              className="rounded-lg flex items-center justify-center transition-all duration-300"
+              style={{
+                width: 32,
+                height: 32,
+                backgroundColor: rightFlowPanelOpen ? '#669999' : 'var(--newchat-bg)',
+                color: rightFlowPanelOpen ? 'white' : 'var(--text-heading)',
+              }}
+              onMouseEnter={(e) => { 
+                if (!rightFlowPanelOpen) {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)';
+                }
+              }}
+              onMouseLeave={(e) => { 
+                if (!rightFlowPanelOpen) {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)';
+                }
+              }}
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                <path d="M8 10h.01" />
+                <path d="M12 10h.01" />
+                <path d="M16 10h.01" />
+                      </svg>
+                    </button>
+          )}
+
+          {/* Experimental Response button */}
+          <button
+            type="button"
+            aria-label="Experimental Response"
+            title="Experimental Response"
+            onClick={() => {
+              // Ensure mutual exclusivity
+              setRightPanelOpen(false);
+              setRightContextOpen(false);
+              setRightArtifactsOpen(false);
+              setRightUserPanelOpen(false);
+              setRightFlowPanelOpen(false);
+              setRightExperimentalOpen((v) => !v);
+            }}
+            className="rounded-lg flex items-center justify-center transition-all duration-300"
+            style={{
+              width: 32,
+              height: 32,
+              backgroundColor: rightExperimentalOpen ? 'var(--accent-primary)' : 'var(--newchat-bg)',
+              color: rightExperimentalOpen ? 'var(--text-on-accent)' : 'var(--text-heading)',
+            }}
+            onMouseEnter={(e) => { 
+              if (!rightExperimentalOpen) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg-hover)';
+              }
+            }}
+            onMouseLeave={(e) => { 
+              if (!rightExperimentalOpen) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--newchat-bg)';
+              }
+            }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44L2 13.88" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44L22 13.88" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          </div>
       </div>
     </div>
   );

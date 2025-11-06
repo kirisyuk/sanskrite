@@ -97,6 +97,7 @@
   --surface-700: #1F1F35;      /* tab active - adjusted for new scheme */
   --surface-750: #2C2C4A;       /* Matching elevated */
   --surface-770: #353550;       /* Slightly lighter for borders/hover */
+  --toolbar-bg: #1A1A1A;       /* Neutral gray for drawer toolbars (2 tones darker than body) */
   --brand-hover: #0066CC;       /* Darker blue for hover */
   --danger-600: #DC2626;
   --danger-300: #FCA5A5;
@@ -191,6 +192,7 @@
   --surface-700: #F7F9FC; /* base surface for cards/lists */
   --surface-750: #EEF2F7; /* +1 tone darker */
   --surface-770: #D4DAE3; /* +2 tones darker (use for borders) */
+  --toolbar-bg: #F0F0F0; /* Neutral gray for drawer toolbars (2 tones darker than body) */
   --brand-hover: #1D4ED8;
   --danger-600: #DC2626;
   --danger-300: #EF9A9A;
