@@ -12,20 +12,6 @@ export const UsageTab: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [usageData, setUsageData] = React.useState<{
-    events: Array<{
-      id: string;
-      tenantId: string;
-      userId: string;
-      provider: string;
-      model: string;
-      modelAlias?: string;
-      inputTokens: number;
-      outputTokens: number;
-      totalTokens: number;
-      costUSD: number;
-      kind: string;
-      createdAt: string;
-    }>;
     byModel: Record<string, {
       count: number;
       inputTokens: number;
@@ -56,6 +42,41 @@ export const UsageTab: React.FC = () => {
         count: number;
       };
     };
+    totals: {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUSD: number;
+      count: number;
+    };
+    period: {
+      startDate: string;
+      endDate: string;
+    };
+  } | null>(null);
+
+  // Separate state for paginated events
+  const [eventsData, setEventsData] = React.useState<{
+    events: Array<{
+      id: string;
+      tenantId: string;
+      userId: string;
+      provider: string;
+      model: string;
+      modelAlias?: string;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUSD: number;
+      kind: string;
+      createdAt: string;
+    }>;
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
     period: {
       startDate: string;
       endDate: string;
@@ -66,7 +87,9 @@ export const UsageTab: React.FC = () => {
   const [selectedStartDate, setSelectedStartDate] = React.useState<string>('');
   const [selectedEndDate, setSelectedEndDate] = React.useState<string>('');
   const [eventsPage, setEventsPage] = React.useState(1);
+  const [eventsLoading, setEventsLoading] = React.useState(false);
   const eventsPerPage = 20;
+  const eventsLimit = 200; // Minimum limit for efficient grouping
 
   React.useEffect(() => {
     if (!currentUser?.uid) return;
@@ -85,7 +108,7 @@ export const UsageTab: React.FC = () => {
         
         const data = await api.getUsage({ startDate, endDate, granularity: dateRange });
         console.log('[UsageTab] Received data:', {
-          eventsCount: data.events?.length,
+          totals: data.totals,
           dailyTotalsKeys: Object.keys(data.dailyTotals || {}),
           dailyTotalsSample: Object.entries(data.dailyTotals || {}).slice(0, 2),
           byModelKeys: Object.keys(data.byModel || {}),
@@ -107,6 +130,38 @@ export const UsageTab: React.FC = () => {
   React.useEffect(() => {
     setEventsPage(1);
   }, [dateRange, selectedStartDate, selectedEndDate]);
+
+  // Load paginated events separately
+  React.useEffect(() => {
+    if (!currentUser?.uid || !usageData) return;
+
+    const loadEvents = async () => {
+      setEventsLoading(true);
+      try {
+        const endDate = selectedEndDate || usageData.period.endDate;
+        const startDate = selectedStartDate || usageData.period.startDate;
+        
+        const data = await api.getUsageEvents({
+          startDate,
+          endDate,
+          page: eventsPage,
+          limit: eventsLimit,
+        });
+        console.log('[UsageTab] Received events data:', {
+          eventsCount: data.events.length,
+          pagination: data.pagination,
+        });
+        setEventsData(data);
+      } catch (err: any) {
+        console.error('[UsageTab] Error loading events:', err);
+        // Don't show error to user, just log it
+      } finally {
+        setEventsLoading(false);
+      }
+    };
+
+    loadEvents();
+  }, [currentUser?.uid, usageData, eventsPage, selectedStartDate, selectedEndDate]);
 
   // Prepare chart data from dailyTotals
   const chartData = React.useMemo(() => {
@@ -188,20 +243,15 @@ export const UsageTab: React.FC = () => {
     return result;
   }, [usageData]);
 
-  // Calculate totals from events directly (more reliable)
+  // Use totals from API
   const totals = React.useMemo(() => {
-    if (!usageData || !usageData.events) return null;
+    if (!usageData?.totals) return null;
     
-    let totalTokens = 0;
-    let totalCost = 0;
-    let totalCount = usageData.events.length;
-    
-    usageData.events.forEach(event => {
-      totalTokens += event.totalTokens || 0;
-      totalCost += event.costUSD || 0;
-    });
-    
-    return { totalTokens, totalCost, totalCount };
+    return {
+      totalTokens: usageData.totals.totalTokens,
+      totalCost: usageData.totals.costUSD,
+      totalCount: usageData.totals.count,
+    };
   }, [usageData]);
 
   // Calculate token category totals
@@ -212,11 +262,12 @@ export const UsageTab: React.FC = () => {
 
   // Group events by model and time proximity, or consecutive same-model events
   const groupedEvents = React.useMemo(() => {
-    if (!usageData?.events) return [];
+    if (!eventsData?.events || eventsData.events.length === 0) return [];
     
     const TIME_WINDOW_MS = 60000; // 60 seconds (1 minute) window for grouping
-    const sortedEvents = [...usageData.events].sort((a, b) => 
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    // Sort events chronologically (oldest first) for proper consecutive checking
+    const sortedEvents = [...eventsData.events].sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
     
     const groups: Array<{
@@ -320,7 +371,7 @@ export const UsageTab: React.FC = () => {
     
     // Sort groups by start time (newest first)
     return groups.sort((a, b) => b.startTime.getTime() - a.startTime.getTime());
-  }, [usageData?.events]);
+  }, [eventsData?.events]);
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr + 'T00:00:00');
@@ -777,17 +828,17 @@ export const UsageTab: React.FC = () => {
       )}
 
       {/* All Events Table */}
-      {usageData.events && usageData.events.length > 0 && (
+      {eventsData && eventsData.events.length > 0 && (
         <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
           <div className="flex items-center justify-between mb-4">
             <div className="text-13" style={{ color: 'var(--text-heading)' }}>{t('account.tabs.usageDetails.allEvents')}</div>
             <button
               onClick={async () => {
-                // Export CSV functionality
-                if (!usageData.events) return;
+                // Export CSV functionality - export current page events
+                if (!eventsData?.events) return;
                 const csv = [
                   [t('account.tabs.usageDetails.date'), t('account.tabs.usageDetails.model'), t('account.tabs.usageDetails.kind'), t('account.tabs.usageDetails.tokens'), t('account.tabs.usageDetails.cost')].join(','),
-                  ...usageData.events.map(e => [
+                  ...eventsData.events.map(e => [
                     new Date(e.createdAt).toLocaleString(),
                     e.model,
                     e.kind,
@@ -799,10 +850,11 @@ export const UsageTab: React.FC = () => {
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `usage-${usageData.period.startDate}-${usageData.period.endDate}.csv`;
+                a.download = `usage-${eventsData.period.startDate}-${eventsData.period.endDate}-page-${eventsData.pagination.page}.csv`;
                 a.click();
                 URL.revokeObjectURL(url);
               }}
+              disabled={eventsLoading}
               className="px-3 py-1 rounded text-12"
               style={{
                 backgroundColor: 'var(--white-10)',
@@ -869,37 +921,49 @@ export const UsageTab: React.FC = () => {
                 ))}
               </tbody>
             </table>
-            {groupedEvents.length > eventsPerPage && (
+            {(groupedEvents.length > eventsPerPage || (eventsData.pagination && eventsData.pagination.totalPages > 1)) && (
               <div className="flex items-center justify-between mt-4">
                 <div className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                  {t('account.tabs.usageDetails.showing', {
-                    start: ((eventsPage - 1) * eventsPerPage) + 1,
-                    end: Math.min(eventsPage * eventsPerPage, groupedEvents.length),
-                    total: groupedEvents.length,
-                    eventsCount: usageData.events.length
-                  })}
+                  {eventsLoading ? (
+                    t('account.tabs.usageDetails.loading')
+                  ) : (
+                    <>
+                      {t('account.tabs.usageDetails.showing', {
+                        start: ((eventsPage - 1) * eventsPerPage) + 1,
+                        end: Math.min(eventsPage * eventsPerPage, groupedEvents.length),
+                        total: groupedEvents.length,
+                        eventsCount: eventsData.pagination?.total || groupedEvents.length
+                      })}
+                      {' • '}
+                      {eventsData.pagination && eventsData.pagination.totalPages > 1 && (
+                        <span>~{eventsData.pagination.totalPages} {t('account.tabs.usageDetails.pages')}</span>
+                      )}
+                    </>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setEventsPage(p => Math.max(1, p - 1))}
-                    disabled={eventsPage === 1}
+                    disabled={eventsPage === 1 || eventsLoading}
                     className="px-3 py-1 rounded text-12"
                     style={{
-                      backgroundColor: eventsPage === 1 ? 'var(--white-05)' : 'var(--white-10)',
-                      color: eventsPage === 1 ? 'var(--text-tertiary-weak)' : 'var(--text-secondary-strong)',
-                      cursor: eventsPage === 1 ? 'not-allowed' : 'pointer',
+                      backgroundColor: eventsPage === 1 || eventsLoading ? 'var(--white-05)' : 'var(--white-10)',
+                      color: eventsPage === 1 || eventsLoading ? 'var(--text-tertiary-weak)' : 'var(--text-secondary-strong)',
+                      cursor: eventsPage === 1 || eventsLoading ? 'not-allowed' : 'pointer',
+                      border: '1px solid var(--overlay-line-90)',
                     }}
                   >
                     {t('account.tabs.usageDetails.previous')}
                   </button>
                   <button
                     onClick={() => setEventsPage(p => p + 1)}
-                    disabled={eventsPage * eventsPerPage >= usageData.events.length}
+                    disabled={(eventsData.pagination && eventsPage >= eventsData.pagination.totalPages) || eventsLoading}
                     className="px-3 py-1 rounded text-12"
                     style={{
-                      backgroundColor: eventsPage * eventsPerPage >= usageData.events.length ? 'var(--white-05)' : 'var(--white-10)',
-                      color: eventsPage * eventsPerPage >= usageData.events.length ? 'var(--text-tertiary-weak)' : 'var(--text-secondary-strong)',
-                      cursor: eventsPage * eventsPerPage >= usageData.events.length ? 'not-allowed' : 'pointer',
+                      backgroundColor: (eventsData.pagination && eventsPage >= eventsData.pagination.totalPages) || eventsLoading ? 'var(--white-05)' : 'var(--white-10)',
+                      color: (eventsData.pagination && eventsPage >= eventsData.pagination.totalPages) || eventsLoading ? 'var(--text-tertiary-weak)' : 'var(--text-secondary-strong)',
+                      cursor: (eventsData.pagination && eventsPage >= eventsData.pagination.totalPages) || eventsLoading ? 'not-allowed' : 'pointer',
+                      border: '1px solid var(--overlay-line-90)',
                     }}
                   >
                     {t('account.tabs.usageDetails.next')}

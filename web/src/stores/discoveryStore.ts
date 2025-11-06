@@ -95,7 +95,7 @@ interface DiscoveryState {
 // Track processed stream.done events to prevent duplicates
 const processedDoneEvents = new Set<string>();
 
-export const useDiscoveryStore = create<DiscoveryState>((set) => ({
+export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
   sources: [],
   loading: false,
   error: null,
@@ -130,6 +130,13 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
   },
 
   fetchProjectSources: async (projectId) => {
+    const state = get();
+    // Защита от множественных одновременных вызовов
+    if (state.loading) {
+      console.log('[fetchProjectSources] Already loading, skipping duplicate call');
+      return;
+    }
+    
     set({ loading: true, error: null });
     try {
       const sources = await api.getProjectSources(projectId);
@@ -160,13 +167,24 @@ export const useDiscoveryStore = create<DiscoveryState>((set) => ({
   },
 
   fetchProjectInteractions: async (projectId) => {
+    // Защита от множественных одновременных вызовов для одного projectId
+    // Используем отдельный флаг для отслеживания загрузки interactions
+    const state = get();
+    if ((state as any).fetchingInteractions) {
+      console.log('[fetchProjectInteractions] Already fetching, skipping duplicate call');
+      return;
+    }
+    
+    set({ fetchingInteractions: true } as any);
     try {
       const items = await api.getProjectInteractions(projectId);
-      set({ interactions: items });
+      set({ interactions: items, fetchingInteractions: false } as any);
     } catch (error: any) {
       // Network errors are handled by the global error interceptor
       if (error.response) {
-        set({ error: error.message });
+        set({ error: error.message, fetchingInteractions: false } as any);
+      } else {
+        set({ fetchingInteractions: false } as any);
       }
       // Silently fail for network errors
     }

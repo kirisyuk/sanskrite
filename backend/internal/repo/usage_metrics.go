@@ -83,16 +83,36 @@ func (r *UsageMetricsRepository) CreateMetric(ctx context.Context, tenantID, use
 }
 
 // ListByUser returns usage metrics for a user within a time range
-func (r *UsageMetricsRepository) ListByUser(ctx context.Context, tenantID, userID string, startTime, endTime time.Time) ([]*UsageMetric, error) {
+// limit: maximum number of records to return (default: 0 = all)
+// offset: number of records to skip (default: 0)
+func (r *UsageMetricsRepository) ListByUser(ctx context.Context, tenantID, userID string, startTime, endTime time.Time, limit, offset int) ([]*UsageMetric, int, error) {
 	q := r.col.Where("tenantId", "==", tenantID).
 		Where("userId", "==", userID).
 		Where("createdAt", ">=", startTime).
 		Where("createdAt", "<=", endTime).
 		OrderBy("createdAt", firestore.Desc)
 
+	// Get total count first (for pagination info)
+	var totalCount int
+	if limit > 0 {
+		allDocs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, 0, err
+		}
+		totalCount = len(allDocs)
+	}
+
+	// Apply pagination
+	if offset > 0 {
+		q = q.Offset(offset)
+	}
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var metrics []*UsageMetric
@@ -103,7 +123,7 @@ func (r *UsageMetricsRepository) ListByUser(ctx context.Context, tenantID, userI
 		}
 		metrics = append(metrics, &m)
 	}
-	return metrics, nil
+	return metrics, totalCount, nil
 }
 
 // ModelAggregate represents aggregated usage for a model
@@ -117,11 +137,15 @@ type ModelAggregate struct {
 
 // AggregateByModel returns aggregated usage grouped by model
 func (r *UsageMetricsRepository) AggregateByModel(ctx context.Context, tenantID, userID string, startTime, endTime time.Time) (map[string]ModelAggregate, error) {
-	metrics, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime)
+	metrics, _, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime, 0, 0)
 	if err != nil {
 		return nil, err
 	}
+	return r.AggregateByModelFromMetrics(ctx, metrics)
+}
 
+// AggregateByModelFromMetrics aggregates usage from already loaded metrics
+func (r *UsageMetricsRepository) AggregateByModelFromMetrics(ctx context.Context, metrics []*UsageMetric) (map[string]ModelAggregate, error) {
 	agg := make(map[string]ModelAggregate)
 
 	for _, m := range metrics {
@@ -167,11 +191,15 @@ func isPremiumModel(provider string, modelAlias *string) bool {
 
 // GetDailyTotals returns daily totals for a user
 func (r *UsageMetricsRepository) GetDailyTotals(ctx context.Context, tenantID, userID string, startTime, endTime time.Time) (map[string]DailyTotal, error) {
-	metrics, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime)
+	metrics, _, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime, 0, 0)
 	if err != nil {
 		return nil, err
 	}
+	return r.GetDailyTotalsFromMetrics(ctx, metrics)
+}
 
+// GetDailyTotalsFromMetrics calculates daily totals from already loaded metrics
+func (r *UsageMetricsRepository) GetDailyTotalsFromMetrics(ctx context.Context, metrics []*UsageMetric) (map[string]DailyTotal, error) {
 	daily := make(map[string]DailyTotal)
 
 	for _, m := range metrics {
@@ -205,11 +233,15 @@ type TokenTotals struct {
 
 // GetTokenCategoryTotals returns token totals split by premium vs regular models
 func (r *UsageMetricsRepository) GetTokenCategoryTotals(ctx context.Context, tenantID, userID string, startTime, endTime time.Time) (*TokenCategoryTotals, error) {
-	metrics, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime)
+	metrics, _, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime, 0, 0)
 	if err != nil {
 		return nil, err
 	}
+	return r.GetTokenCategoryTotalsFromMetrics(ctx, metrics)
+}
 
+// GetTokenCategoryTotalsFromMetrics calculates token category totals from already loaded metrics
+func (r *UsageMetricsRepository) GetTokenCategoryTotalsFromMetrics(ctx context.Context, metrics []*UsageMetric) (*TokenCategoryTotals, error) {
 	var premium, regular TokenTotals
 
 	for _, m := range metrics {
@@ -234,6 +266,115 @@ func (r *UsageMetricsRepository) GetTokenCategoryTotals(ctx context.Context, ten
 	}, nil
 }
 
+// UsageAggregates contains all aggregated usage data computed in a single pass
+type UsageAggregates struct {
+	ByModel         map[string]ModelAggregate `json:"byModel"`
+	DailyTotals     map[string]DailyTotal     `json:"dailyTotals"`
+	TokenCategories *TokenCategoryTotals      `json:"tokenCategories"`
+	Totals          *DailyTotal               `json:"totals"`
+}
+
+// GetAllAggregates loads metrics once and computes all aggregations in a single pass
+// This is much more efficient than calling separate aggregation methods
+func (r *UsageMetricsRepository) GetAllAggregates(ctx context.Context, tenantID, userID string, startTime, endTime time.Time) (*UsageAggregates, error) {
+	// Load metrics once
+	metrics, _, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Initialize aggregation structures
+	byModel := make(map[string]ModelAggregate)
+	dailyTotals := make(map[string]DailyTotal)
+	var premium, regular TokenTotals
+	var totals DailyTotal
+
+	// Single pass through all metrics to compute all aggregations
+	for _, m := range metrics {
+		// 1. Aggregate by model (provider:model)
+		modelKey := m.Provider + ":" + m.Model
+		modelAgg := byModel[modelKey]
+		modelAgg.Count++
+		modelAgg.InputTokens += m.InputTokens
+		modelAgg.OutputTokens += m.OutputTokens
+		modelAgg.TotalTokens += m.TotalTokens
+		modelAgg.CostUSD += m.CostUSD
+		byModel[modelKey] = modelAgg
+
+		// 2. Aggregate by day
+		dateKey := m.CreatedAt.Format("2006-01-02")
+		daily := dailyTotals[dateKey]
+		daily.Count++
+		daily.InputTokens += m.InputTokens
+		daily.OutputTokens += m.OutputTokens
+		daily.TotalTokens += m.TotalTokens
+		daily.CostUSD += m.CostUSD
+		dailyTotals[dateKey] = daily
+
+		// 3. Aggregate by token category (premium vs regular)
+		if isPremiumModel(m.Provider, m.ModelAlias) {
+			premium.Count++
+			premium.InputTokens += m.InputTokens
+			premium.OutputTokens += m.OutputTokens
+			premium.TotalTokens += m.TotalTokens
+			premium.CostUSD += m.CostUSD
+		} else {
+			regular.Count++
+			regular.InputTokens += m.InputTokens
+			regular.OutputTokens += m.OutputTokens
+			regular.TotalTokens += m.TotalTokens
+			regular.CostUSD += m.CostUSD
+		}
+
+		// 4. Aggregate totals
+		totals.Count++
+		totals.InputTokens += m.InputTokens
+		totals.OutputTokens += m.OutputTokens
+		totals.TotalTokens += m.TotalTokens
+		totals.CostUSD += m.CostUSD
+	}
+
+	return &UsageAggregates{
+		ByModel:         byModel,
+		DailyTotals:     dailyTotals,
+		TokenCategories: &TokenCategoryTotals{PremiumTokens: premium, RegularTokens: regular},
+		Totals:          &totals,
+	}, nil
+}
+
+// ListByUserPaginated returns paginated usage metrics with total count
+// Returns events for the requested page and the total count of all matching events
+// limit must be at least 200 for efficient grouping
+func (r *UsageMetricsRepository) ListByUserPaginated(ctx context.Context, tenantID, userID string, startTime, endTime time.Time, page, limit int) ([]*UsageMetric, int, error) {
+	if limit < 200 {
+		limit = 200 // Minimum limit for efficient grouping
+	}
+	if page < 1 {
+		page = 1
+	}
+
+	// Load all matching metrics (needed for accurate total count)
+	// This is acceptable because we need them for aggregations anyway
+	allMetrics, totalCount, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime, 0, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Calculate pagination
+	offset := (page - 1) * limit
+	if offset >= totalCount {
+		return []*UsageMetric{}, totalCount, nil
+	}
+
+	end := offset + limit
+	if end > totalCount {
+		end = totalCount
+	}
+
+	// Return paginated slice
+	return allMetrics[offset:end], totalCount, nil
+}
+
 // GetAverageTiming calculates average response time in seconds for a given model
 // Uses historical data from the last 30 days
 // Filters out outliers using IQR (Interquartile Range) method to avoid skewing from extreme values
@@ -244,7 +385,7 @@ func (r *UsageMetricsRepository) GetAverageTiming(ctx context.Context, tenantID,
 	endTime := time.Now().UTC()
 	startTime := endTime.AddDate(0, 0, -30)
 
-	metrics, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime)
+	metrics, _, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime, 0, 0)
 	if err != nil {
 		return nil, err
 	}

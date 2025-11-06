@@ -48,7 +48,7 @@ function useKindItems(projectId: string, kind: Kind, expanded: boolean) {
 const SectionHeader: React.FC<{ title: string; badge?: number; badgeLoading?: boolean; status?: string; onRefresh?: () => void; expanded: boolean; onToggle: () => void }>
   = ({ title, badge, badgeLoading, status, onRefresh, expanded, onToggle }) => {
   return (
-    <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+    <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
       <button type="button" onClick={onToggle} className="rounded flex items-center" aria-label={expanded ? 'Collapse' : 'Expand'}
         style={{ background: 'transparent', color: 'var(--text-heading)' }}>
         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -222,7 +222,7 @@ const FindingsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
                           switch (k) {
                             case 'entities': {
                               return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
                                   <div className="flex items-center justify-between gap-2">
                                     <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.name}</div>
                                     <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{it.type}</span>
@@ -233,7 +233,7 @@ const FindingsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
                             }
                             case 'facts': {
                               return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
                                   <div className="flex items-center justify-between gap-2">
                                     <div className="text-12" style={{ color: 'var(--text-heading)' }}>{it.statement}</div>
                                     {typeof it.confidence === 'number' && (
@@ -248,7 +248,7 @@ const FindingsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
                             }
                             case 'events': {
                               return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
                                   <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.title}</div>
                                   <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.ts}</div>
                                   {it.summary && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.summary}</div>}
@@ -257,7 +257,7 @@ const FindingsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
                             }
                             case 'metrics': {
                               return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
                                   <div className="flex items-center justify-between gap-2">
                                     <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.label || it.key}</div>
                                     <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{String(it.value)}{it.unit ? ` ${it.unit}` : ''}</div>
@@ -267,7 +267,7 @@ const FindingsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
                             }
                             case 'decisions': {
                               return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)' }}>
+                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
                                   <div className="flex items-center justify-between gap-2">
                                     <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.title}</div>
                                     {it.selected && (

@@ -11,7 +11,7 @@ export const AuthLoading: React.FC<AuthLoadingProps> = ({ message = 'Signing you
   const { theme } = React.useContext(ThemeContext);
   
   return (
-    <div className="auth-container" style={{ backgroundColor: theme === 'dark' ? 'var(--bg-base)' : 'var(--bg-base)' }}>
+    <div className="auth-container">
       <div className="flex flex-col items-center">
         <img src={theme === 'dark' ? darkLogo : lightLogo} alt="HATL" className="h-8 w-auto mb-4" />
         <div className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>{message}</div>

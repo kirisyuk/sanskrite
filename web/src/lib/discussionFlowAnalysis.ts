@@ -14,8 +14,13 @@ export function isGeneratingDiscussionFlowAnalysis(projectId: string, messageCou
   return generatingAnalyses.has(analysisKey);
 }
 
+export interface BlindSpot {
+  text: string;
+  practical_relevance: number; // 0..1
+}
+
 export interface DiscussionFlowAnalysis {
-  blindSpots: string[];
+  blindSpots: BlindSpot[];
   frameShiftRecommendations: string[];
   frame: string;
   confidence: 'low' | 'medium' | 'high';
@@ -193,10 +198,23 @@ export async function generateDiscussionFlowAnalysis(
           minItems: 2,
           maxItems: 8,
           items: {
-            type: 'string',
-            minLength: 10,
-            maxLength: 300,
-            description: 'Blind spot or gap in the discussion that needs to be addressed'
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              text: {
+                type: 'string',
+                minLength: 10,
+                maxLength: 300,
+                description: 'Blind spot or gap in the discussion that needs to be addressed'
+              },
+              practical_relevance: {
+                type: 'number',
+                minimum: 0,
+                maximum: 1,
+                description: 'Practical relevance score from 0 to 1, indicating how relevant this blind spot is for practical decision-making'
+              }
+            },
+            required: ['text', 'practical_relevance']
           }
         },
         frameShiftRecommendations: {
@@ -270,6 +288,8 @@ What to UPDATE:
   * Add new blind spots only if they are revealed by the new messages
   * Keep existing blind spots that are still relevant and not addressed
   * Preserve the structure and phrasing of items that remain unchanged
+  * Update practical_relevance scores if new information changes their relevance
+  * Each blind spot must include a practical_relevance score (0..1) indicating how relevant it is for practical decision-making
 - Frame Shift Recommendations:
   * Only update if the new messages reveal a significantly different framing opportunity
   * Keep existing recommendations if they are still relevant
@@ -302,7 +322,7 @@ FRAME ASSESSMENT LOGIC (from consulting perspective):
 - The highest value is often in reframing the question itself, not just answering it better
 
 STYLE REQUIREMENTS:
-- Blind Spots: Each should identify a specific gap, assumption, or missing consideration. 10-300 characters each.
+- Blind Spots: Each should identify a specific gap, assumption, or missing consideration. 10-300 characters each. Each blind spot must include a practical_relevance score (0..1) indicating how relevant it is for practical decision-making. Higher scores indicate blind spots that, if addressed, would have more immediate practical impact on the discussion goals.
 - Frame Shift Recommendations: Each should formulate how the discussion frame could be reframed to be more effective in achieving the presumed goal. Consider: Is this the right problem? Are they addressing symptoms vs. root causes? Is there a more strategic question one level up/down? Suggest alternative framings if current one is suboptimal. Maximum 2 recommendations. 20-500 characters each. Only include if a meaningful frame shift would improve effectiveness.
 - Frame: Should capture what goals the user is likely trying to achieve. 20-500 characters.
 - Confidence: Should reflect the maturity of the discussion. Low for early stages (< 3 turns), medium for developing (3-8 turns), high for well-developed (> 8 turns).
@@ -348,7 +368,7 @@ FRAME ASSESSMENT LOGIC (from consulting perspective):
 - The highest value is often in reframing the question itself, not just answering it better
 
 STYLE REQUIREMENTS:
-- Blind Spots: Each should identify a specific gap, assumption, or missing consideration. 10-300 characters each. Include 2-8 items.
+- Blind Spots: Each should identify a specific gap, assumption, or missing consideration. 10-300 characters each. Each blind spot must include a practical_relevance score (0..1) indicating how relevant it is for practical decision-making. Higher scores indicate blind spots that, if addressed, would have more immediate practical impact on the discussion goals. Include 2-8 items.
 - Frame Shift Recommendations: Each should formulate how the discussion frame could be reframed to be more effective. Consider: Is this the right problem? Are they addressing symptoms vs. root causes? Is there a more strategic question one level up/down? Suggest alternative framings if current one is suboptimal. Maximum 2 recommendations. 20-500 characters each. Only include if a meaningful frame shift would improve effectiveness.
 - Frame: Should capture what goals the user is likely trying to achieve through this discussion. 20-500 characters.
 - Confidence: Should reflect the maturity of the discussion. Low for early stages (< 3 turns), medium for developing (3-8 turns), high for well-developed (> 8 turns).
@@ -405,14 +425,61 @@ ${transcript}`;
       console.log('[DiscussionFlowAnalysis] no valid analysis parsed, skipping');
       return;
     }
+    
+    // Validate that arrays contain valid items (strings or objects with text property)
+    const isValidBlindSpot = (item: any): boolean => {
+      if (typeof item === 'string') return item.trim().length > 0;
+      if (typeof item === 'object' && item !== null) {
+        return typeof item.text === 'string' && item.text.trim().length > 0 &&
+               typeof item.practical_relevance === 'number' && !isNaN(item.practical_relevance);
+      }
+      return false;
+    };
+    
+    const isValidRecommendation = (item: any): boolean => {
+      if (typeof item === 'string') return item.trim().length > 0;
+      if (typeof item === 'object' && item !== null) {
+        return typeof (item.text || item.textValue || item.value || item.description || item.content || item.recommendation) === 'string';
+      }
+      return false;
+    };
+    
+    // Check if arrays have valid items
+    if (!parsed.blindSpots.some(isValidBlindSpot) || !parsed.frameShiftRecommendations.every((r: any) => !r || isValidRecommendation(r))) {
+      console.log('[DiscussionFlowAnalysis] arrays contain invalid items, skipping');
+      return;
+    }
 
     // Extract and validate analysis
     const clamp01 = (n: any) => Math.max(0, Math.min(1, Number(n) || 0));
+    
     const analysis: DiscussionFlowAnalysis = {
       blindSpots: parsed.blindSpots
-        .filter((b: any) => b && typeof b === 'string' && b.trim().length > 0)
+        .filter((b: any) => {
+          // Support both old format (string) and new format (object)
+          if (typeof b === 'string') {
+            return b.trim().length > 0;
+          }
+          if (typeof b === 'object' && b !== null) {
+            return b.text && typeof b.text === 'string' && b.text.trim().length > 0 &&
+                   typeof b.practical_relevance === 'number' && !isNaN(b.practical_relevance);
+          }
+          return false;
+        })
         .slice(0, 8)
-        .map((b: any) => b.trim()),
+        .map((b: any) => {
+          // Convert old format to new format if needed
+          if (typeof b === 'string') {
+            return {
+              text: b.trim(),
+              practical_relevance: 0.5 // Default relevance for old format
+            };
+          }
+          return {
+            text: b.text.trim(),
+            practical_relevance: clamp01(b.practical_relevance)
+          };
+        }),
       frameShiftRecommendations: parsed.frameShiftRecommendations
         .filter((r: any) => r && typeof r === 'string' && r.trim().length > 0)
         .slice(0, 2)

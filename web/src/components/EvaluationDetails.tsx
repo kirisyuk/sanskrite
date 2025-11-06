@@ -14,17 +14,8 @@ export const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }
   // Get interactions/messages only when needed via getState()
   const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
   const getMessages = React.useCallback(() => useGenaiChatStore.getState().messages, []);
-  const hydrateInteractions = useGenaiChatStore((s) => s.hydrateInteractions);
   
-  // Hydrate interactions when a concrete project is selected
-  React.useEffect(() => {
-    try {
-      if (projectId && projectId !== 'local-unfold') {
-        hydrateInteractions();
-      }
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  // NOTE: hydrateInteractions вызывается в DiscoveryPage, не нужно дублировать здесь
   const { t, i18n } = useTranslation();
   const ev = React.useMemo(() => {
     try {

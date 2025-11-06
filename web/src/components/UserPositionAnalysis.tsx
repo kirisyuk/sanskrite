@@ -108,8 +108,8 @@ export const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRisk
         // Build compact transcript: recent user messages + last LLM response (for context only)
         const userMessagesText = recentUserMessages.join('\n');
         const transcript = lastAssistantMessage 
-          ? `RECENT USER MESSAGES (analyze these for stance and discussionFacts):\n${userMessagesText}\n\nLAST ASSISTANT RESPONSE (for context only - do NOT extract facts from this):\n${lastAssistantMessage}`
-          : `RECENT USER MESSAGES (analyze these for stance and discussionFacts):\n${userMessagesText}`;
+          ? `RECENT USER MESSAGES (analyze these for stance, roles, and industries):\n${userMessagesText}\n\nLAST ASSISTANT RESPONSE (for context only - do NOT extract facts from this):\n${lastAssistantMessage}`
+          : `RECENT USER MESSAGES (analyze these for stance, roles, and industries):\n${userMessagesText}`;
 
         // Determine preferred language (fallback to EN)
         const lang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
@@ -138,17 +138,34 @@ export const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRisk
               },
               required: ['score', 'level', 'rationale', 'triggerCategories'],
             },
-            discussionFacts: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                dependencies: { type: 'string', maxLength: 500 },
-                prerequisites: { type: 'string', maxLength: 500 },
-                participants: { type: 'string', maxLength: 500 },
-                participantRoles: { type: 'string', maxLength: 500 },
-                availableResources: { type: 'string', maxLength: 500 },
-                previousAttempts: { type: 'string', maxLength: 500 },
-                resultFormat: { type: 'string', maxLength: 500 },
+            roles: {
+              type: 'array',
+              minItems: 0,
+              maxItems: 3,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  role: { type: 'string', minLength: 1, maxLength: 100 },
+                  confidence: { type: 'number', minimum: 0, maximum: 1 },
+                  rationale: { type: 'string', minLength: 1, maxLength: 300 },
+                },
+                required: ['role', 'confidence', 'rationale'],
+              },
+            },
+            industries: {
+              type: 'array',
+              minItems: 0,
+              maxItems: 3,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  industry: { type: 'string', minLength: 1, maxLength: 100 },
+                  confidence: { type: 'number', minimum: 0, maximum: 1 },
+                  rationale: { type: 'string', minLength: 1, maxLength: 300 },
+                },
+                required: ['industry', 'confidence', 'rationale'],
               },
             },
           },
@@ -163,23 +180,25 @@ export const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRisk
         const prompt = `In this request, you act as an external expert and must return your assessment STRICTLY following the provided JSON schema. Return ONLY JSON (no prose, no markdown, no code fences).
 
 User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
-All natural-language fields (stance, riskProfile.rationale, discussionFacts) must be written strictly in the required language.
+All natural-language fields (stance, riskProfile.rationale, roles, industries) must be written strictly in the required language.
 
-CRITICAL: Your analysis MUST be based PRIMARILY on USER MESSAGES only. The assistant's response is provided ONLY for context to understand what the user is responding to or referring to. Do NOT extract facts from the assistant's content into discussionFacts fields - these fields should reflect what the USER mentions, needs, or describes, not what the assistant discusses.
+CRITICAL: Your analysis MUST be based PRIMARILY on USER MESSAGES only. The assistant's response is provided ONLY for context to understand what the user is responding to or referring to.
 
 IMPORTANT: You are updating the stance based on RECENT conversation only. Use the PREVIOUS_STANCE as context, but update it based on the latest user messages. The assistant response is for context only - do not analyze its content. Do not re-analyze the entire conversation history.
 
 Task: From the USER MESSAGES below, neutrally extract and update:
 - stance: 1–2 concise sentences (<=100 words) written DIRECTLY to the user in SECOND PERSON ("you"). Do NOT describe the user in the third person. State what you seem to be pursuing, your perspective and deep intent, avoiding moral judgement and unsupported assumptions. Base this ONLY on what the user expresses, not on assistant content.
 - riskProfile: EU AI Act risk assessment with score 0..1 and derived level. If you need to reference the user in rationale, also use SECOND PERSON ("you"). Assess risk based on USER requests and intent, not assistant responses.
-- discussionFacts: Extract key information that the USER mentions, needs, or describes in their messages. All fields are optional strings. Use empty string or omit if information is not available or cannot be inferred from USER messages. Write in ${lang} language (same as stance). IMPORTANT: Extract only what the USER explicitly or implicitly mentions - do NOT include facts from assistant responses:
-  * dependencies: What the USER mentions their decision/action depends on (extract from user messages only, e.g., "approval from management", "weather conditions", "budget allocation")
-  * prerequisites: What the USER indicates must happen first (extract from user messages only, e.g., "obtain visa", "complete training", "gather documents")
-  * participants: Who the USER mentions is involved (extract from user messages only, e.g., "user and family of 4", "user and colleagues", "user, client, and legal advisor")
-  * participantRoles: Roles and relationships the USER describes (extract from user messages only, e.g., "user is parent, children are 8 and 12 years old", "user is project manager, team members are developers")
-  * availableResources: Resources the USER mentions having or needing (extract from user messages only, e.g., "budget of $5000", "2 weeks available", "access to library database")
-  * previousAttempts: Previous attempts or experience the USER mentions (extract from user messages only, e.g., "user tried similar approach last year", "first time considering this option")
-  * resultFormat: Format or type of result the USER requests or expects (extract from user messages only, e.g., "detailed travel itinerary", "comparison table", "step-by-step guide", "formal document")
+- roles: Identify up to 3 professional roles that best describe the user's position in the professional world. A role is WHO the user likely is professionally (e.g., "Software Engineer", "Product Manager", "Marketing Director", "Data Scientist", "UX Designer", "Consultant", "Entrepreneur", "Researcher", "Teacher", "Doctor", "Lawyer", etc.). Each role must include:
+  * role: The professional role name (1-100 characters, write in ${lang} language)
+  * confidence: Confidence score 0..1 indicating how confident you are that this role matches the user's professional context based on the discussion
+  * rationale: Brief explanation (1-300 characters) why this role fits the discussion, written in ${lang} language
+  Consider what professional role would be most characteristic of such a discussion. Order by confidence (highest first). Include only roles you can identify with reasonable confidence (confidence >= 0.3).
+- industries: Identify up to 3 industries that best describe whose interests the user represents, if they were part of a company, professional community, or other structured organization. An industry is WHAT professional domain/industry the user likely operates in (e.g., "Technology/Software", "Healthcare", "Finance", "Education", "Retail/E-commerce", "Manufacturing", "Consulting", "Media/Entertainment", "Real Estate", "Legal Services", "Non-profit", "Government", etc.). Each industry must include:
+  * industry: The industry name (1-100 characters, write in ${lang} language)
+  * confidence: Confidence score 0..1 indicating how confident you are that this industry matches the user's professional context based on the discussion
+  * rationale: Brief explanation (1-300 characters) why this industry fits the discussion, written in ${lang} language
+  Consider what industry would be most characteristic of such a discussion. Order by confidence (highest first). Include only industries you can identify with reasonable confidence (confidence >= 0.3).
 High risk auto-triggers (must set level to High ONLY if the user seeks PERSONAL, ACTIONABLE advice in these areas; general or educational discussion does NOT trigger High):
 - Медицинское/психическое здоровье, фарма/дозировки/отмена препаратов — только персональные рекомендации/советы по здоровью, диагнозам, схемам/дозировкам/отмене; НЕ включает общие сведения, новости фарма/здравполитики, обсуждение индустрии или науки без личных указаний.
 - Самоповреждение/суицид/угрозы жизни и безопасности — всегда High при признаках просьбы о помощи/инструкциях.
@@ -240,17 +259,27 @@ ${prevBlock}`;
           const riskScore = rp && typeof rp.score !== 'undefined' ? clamp01(rp.score) : null;
           const riskRationale = rp && typeof rp.rationale === 'string' ? rp.rationale : null;
           
-          // Extract discussion facts
-          const df = (parsed && typeof parsed === 'object') ? (parsed as any).discussionFacts : null;
-          const discussionFacts = df && typeof df === 'object' ? {
-            dependencies: (typeof df.dependencies === 'string' && df.dependencies.trim()) ? df.dependencies.trim() : undefined,
-            prerequisites: (typeof df.prerequisites === 'string' && df.prerequisites.trim()) ? df.prerequisites.trim() : undefined,
-            participants: (typeof df.participants === 'string' && df.participants.trim()) ? df.participants.trim() : undefined,
-            participantRoles: (typeof df.participantRoles === 'string' && df.participantRoles.trim()) ? df.participantRoles.trim() : undefined,
-            availableResources: (typeof df.availableResources === 'string' && df.availableResources.trim()) ? df.availableResources.trim() : undefined,
-            previousAttempts: (typeof df.previousAttempts === 'string' && df.previousAttempts.trim()) ? df.previousAttempts.trim() : undefined,
-            resultFormat: (typeof df.resultFormat === 'string' && df.resultFormat.trim()) ? df.resultFormat.trim() : undefined,
-          } : undefined;
+          // Extract roles and industries
+          const rolesRaw = (parsed && typeof parsed === 'object' && Array.isArray((parsed as any).roles)) ? (parsed as any).roles : [];
+          const industriesRaw = (parsed && typeof parsed === 'object' && Array.isArray((parsed as any).industries)) ? (parsed as any).industries : [];
+          
+          const roles = rolesRaw
+            .filter((r: any) => r && typeof r === 'object' && typeof r.role === 'string' && r.role.trim() && typeof r.confidence === 'number' && typeof r.rationale === 'string' && r.rationale.trim())
+            .slice(0, 3)
+            .map((r: any) => ({
+              role: r.role.trim(),
+              confidence: clamp01(r.confidence),
+              rationale: r.rationale.trim(),
+            }));
+          
+          const industries = industriesRaw
+            .filter((i: any) => i && typeof i === 'object' && typeof i.industry === 'string' && i.industry.trim() && typeof i.confidence === 'number' && typeof i.rationale === 'string' && i.rationale.trim())
+            .slice(0, 3)
+            .map((i: any) => ({
+              industry: i.industry.trim(),
+              confidence: clamp01(i.confidence),
+              rationale: i.rationale.trim(),
+            }));
 
           if (stanceText && !cancelled) {
             setPosition(stanceText);
@@ -283,7 +312,8 @@ ${prevBlock}`;
                       replyTo: lastUserInter ? lastUserInter.id : undefined,
                       relations: lastUserInter ? [{ type: 'evaluates', targetId: lastUserInter.id }] : undefined,
                       highRisk: risk,
-                      discussionFacts: discussionFacts,
+                      roles: roles.length > 0 ? roles : undefined,
+                      industries: industries.length > 0 ? industries : undefined,
                       language: lang,
                       createdAt: new Date().toISOString(),
                     } as any,
@@ -306,7 +336,8 @@ ${prevBlock}`;
                         language: lang,
                       };
                       if (risk) payload.highRisk = risk;
-                      if (discussionFacts) payload.discussionFacts = discussionFacts;
+                      if (roles.length > 0) payload.roles = roles;
+                      if (industries.length > 0) payload.industries = industries;
                       
                       const res = await api.createProjectInteraction(projectId, payload);
                       
@@ -377,8 +408,9 @@ ${prevBlock}`;
   // Display risk: prefer from stanceForLatestUser, fallback to local risk state
   const displayRisk = stanceForLatestUser?.highRisk || risk;
   
-  // Display discussion facts: prefer from stanceForLatestUser
-  const displayDiscussionFacts = stanceForLatestUser?.discussionFacts;
+  // Display roles and industries: prefer from stanceForLatestUser
+  const displayRoles = stanceForLatestUser?.roles || [];
+  const displayIndustries = stanceForLatestUser?.industries || [];
 
   return (
     <div className="mt-3 p-3">
@@ -443,55 +475,58 @@ ${prevBlock}`;
               )}
             </div>
           )}
-          {displayDiscussionFacts && (
+          {(displayRoles.length > 0 || displayIndustries.length > 0) && (
             <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
-              <div className="text-[11px] mb-2" style={{ color: 'var(--text-tertiary-weak)', fontWeight: 500 }}>
-                Key facts
-              </div>
-              <div className="space-y-1.5">
-                {displayDiscussionFacts.dependencies && (
-                  <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                    <span style={{ color: 'var(--text-tertiary-weak)' }}>Dependencies: </span>
-                    {displayDiscussionFacts.dependencies}
+              {displayRoles.length > 0 && (
+                <div className="mb-2">
+                  <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-tertiary-weak)', fontWeight: 500 }}>
+                    Professional roles
                   </div>
-                )}
-                {displayDiscussionFacts.prerequisites && (
-                  <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                    <span style={{ color: 'var(--text-tertiary-weak)' }}>Prerequisites: </span>
-                    {displayDiscussionFacts.prerequisites}
+                  <div className="space-y-1.5">
+                    {displayRoles.map((r: any, idx: number) => {
+                      const confidencePercent = Math.round((r.confidence || 0) * 100);
+                      return (
+                        <div key={idx} className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
+                          <span style={{ fontWeight: 500 }}>{r.role}</span>
+                          <span className="ml-2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                            ({confidencePercent}%)
+                          </span>
+                          {r.rationale && (
+                            <div className="mt-0.5 ml-0" style={{ color: 'var(--text-tertiary-weak)', fontSize: '10px' }}>
+                              {r.rationale}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                )}
-                {displayDiscussionFacts.participants && (
-                  <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                    <span style={{ color: 'var(--text-tertiary-weak)' }}>Participants: </span>
-                    {displayDiscussionFacts.participants}
+                </div>
+              )}
+              {displayIndustries.length > 0 && (
+                <div>
+                  <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-tertiary-weak)', fontWeight: 500 }}>
+                    Industries
                   </div>
-                )}
-                {displayDiscussionFacts.participantRoles && (
-                  <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                    <span style={{ color: 'var(--text-tertiary-weak)' }}>Roles: </span>
-                    {displayDiscussionFacts.participantRoles}
+                  <div className="space-y-1.5">
+                    {displayIndustries.map((i: any, idx: number) => {
+                      const confidencePercent = Math.round((i.confidence || 0) * 100);
+                      return (
+                        <div key={idx} className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
+                          <span style={{ fontWeight: 500 }}>{i.industry}</span>
+                          <span className="ml-2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                            ({confidencePercent}%)
+                          </span>
+                          {i.rationale && (
+                            <div className="mt-0.5 ml-0" style={{ color: 'var(--text-tertiary-weak)', fontSize: '10px' }}>
+                              {i.rationale}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                )}
-                {displayDiscussionFacts.availableResources && (
-                  <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                    <span style={{ color: 'var(--text-tertiary-weak)' }}>Available resources: </span>
-                    {displayDiscussionFacts.availableResources}
-                  </div>
-                )}
-                {displayDiscussionFacts.previousAttempts && (
-                  <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                    <span style={{ color: 'var(--text-tertiary-weak)' }}>Previous attempts: </span>
-                    {displayDiscussionFacts.previousAttempts}
-                  </div>
-                )}
-                {displayDiscussionFacts.resultFormat && (
-                  <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                    <span style={{ color: 'var(--text-tertiary-weak)' }}>Result format: </span>
-                    {displayDiscussionFacts.resultFormat}
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           )}
           {typeof durationMs === 'number' && !stanceForLatestUser && (

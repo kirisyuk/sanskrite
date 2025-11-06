@@ -20,7 +20,7 @@ export const TextTasksPanel: React.FC<TextTasksPanelProps> = ({ tasks, onRemove,
   if (tasks.length === 0) return null;
 
   return (
-    <div className="mb-3 rounded-lg border p-3" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--overlay-line-90)' }}>
+    <div className="mb-3 rounded-lg border p-3" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--overlay-line-90)' }}>
       <div className="flex items-center justify-between mb-2">
         <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-tertiary-weak)' }}>
           {t('unfold.discussionFlow.textTasks', { defaultValue: 'Text Tasks' })}
@@ -31,8 +31,8 @@ export const TextTasksPanel: React.FC<TextTasksPanelProps> = ({ tasks, onRemove,
           disabled={isApplying}
           className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors shrink-0 flex items-center gap-1"
           style={{
-            background: isApplying ? 'var(--white-06)' : 'var(--accent-primary)',
-            color: isApplying ? 'var(--text-tertiary-weak)' : 'var(--text-on-accent)',
+            background: isApplying ? 'var(--white-06)' : 'var(--white-10)',
+            color: isApplying ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
             border: '1px solid var(--overlay-line-90)',
             cursor: isApplying ? 'not-allowed' : 'pointer',
             opacity: isApplying ? 0.6 : 1

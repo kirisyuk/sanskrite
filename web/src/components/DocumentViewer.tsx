@@ -168,26 +168,58 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
   };
 
   return (
-    <div className="absolute inset-0 z-[70] rounded-xl" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', overflow: 'hidden' }}>
+    <div className="absolute inset-0 z-[70] rounded-xl" style={{ background: 'var(--bg-input)', border: '1px solid var(--overlay-line-90)', overflow: 'hidden' }}>
       <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>
         <div className="text-13" style={{ color: 'var(--text-heading)' }} title={doc.filename}>{headerTitle}</div>
         <div className="flex items-center gap-2">
           {isMarkdown && (
             <button 
               type="button" 
-              className="px-2 py-1 rounded text-11" 
+              className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors shrink-0 flex items-center gap-1"
               onClick={exportToDocx} 
               disabled={exporting}
               title="Export to Word" 
               aria-label="Export to Word" 
-              style={{ background: 'transparent', color: 'var(--text-secondary-strong)', opacity: exporting ? 0.6 : 1 }} 
-              onMouseEnter={(e) => { if (!exporting) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} 
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+              style={{
+                background: exporting ? 'var(--white-06)' : 'var(--white-10)',
+                color: exporting ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
+                border: '1px solid var(--overlay-line-90)',
+                cursor: exporting ? 'not-allowed' : 'pointer',
+                opacity: exporting ? 0.6 : 1
+              }}
+              onMouseEnter={(e) => {
+                if (!exporting) {
+                  (e.currentTarget as HTMLButtonElement).style.opacity = '0.85';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!exporting) {
+                  (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+                }
+              }}
             >
               {exporting ? 'Exporting...' : 'Export to Word'}
             </button>
           )}
-          <button type="button" className="px-2 py-1 rounded text-11" onClick={download} title="Download" aria-label="Download" style={{ background: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}>
+          <button 
+            type="button" 
+            className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors shrink-0 flex items-center gap-1"
+            onClick={download} 
+            title="Download" 
+            aria-label="Download" 
+            style={{
+              background: 'var(--white-10)',
+              color: 'var(--text-heading)',
+              border: '1px solid var(--overlay-line-90)',
+              cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.opacity = '0.85';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+            }}
+          >
             Download
           </button>
           <button type="button" className="p-1 rounded-lg transition-colors" aria-label="Close" title="Close" onClick={onClose} style={{ backgroundColor: 'transparent', color: 'var(--text-heading)', cursor: 'pointer', transition: 'background-color 120ms ease-in-out' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}>

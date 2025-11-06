@@ -1,12 +1,12 @@
 ﻿/* Right-edge mirror button (document) */
 .mirror-doc-btn {
-  background-color: #E9B27E;
+  background-color: #FFA94D;
 }
 [data-theme="light"] .mirror-doc-btn:hover {
-  background-color: #F0BE8D;
+  background-color: #FFB366;
 }
 [data-theme="dark"] .mirror-doc-btn:hover {
-  background-color: #D79F66;
+  background-color: #FF9538;
 }
 .topic-suggest-slot:empty {
   display: none;
@@ -38,12 +38,20 @@
   100% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0); }
 }
 
+/* Gradient border for UnfoldRequest in dark theme */
+[data-theme="dark"] .unfold-request-gradient-border {
+  border: 2px solid transparent;
+  background: 
+    linear-gradient(var(--bg-input, #1A1A1A), var(--bg-input, #1A1A1A)) padding-box,
+    linear-gradient(135deg, #3b82f6 0%, #6d28d9 50%, #64748b 100%) border-box;
+}
+
 /* Theme variables */
 [data-theme="dark"], :root {
   /* Base backgrounds - graphite black with purple-blue gradient */
   --bg-body: #121212;           /* Graphite black */
   --bg-canvas-deep: #1A1A2E;   /* Slightly lighter for gradient end */
-  --bg-sidebar: #1A1A1A;       /* Graphite gray same as input field */
+  --bg-sidebar: #151515;       /* Darker graphite gray for sidebar panels */
   --bg-elevated: #2C2C4A;      /* Main UI surface (modals, cards) */
   --bg-surface: #121212;       /* Keep equal to body for seamless look */
   --bg-content: #2C2C4A;      /* Main content containers */
@@ -63,6 +71,7 @@
 
   /* Accents */
   --accent-brand: #007BFF;      /* Vibrant blue accent */
+  --accent-primary: #FFA94D;    /* More saturated orange accent (matching workspace library button) */
   --accent-badge: #304FFF;      /* Badge background (e.g., MAX) */
   --accent-success: #10B981;
   --accent-danger: #EF4444;
@@ -164,6 +173,7 @@
   --text-tertiary-weak: #7B8592;
 
   --accent-brand: #2563EB;
+  --accent-primary: #FFB366;    /* More saturated orange accent (lighter for light theme) */
   --accent-badge: #1E3A8A;
   --accent-success: #059669;
   --accent-danger: #DC2626;
@@ -226,6 +236,10 @@
   --user-msg-bg: #E1E6EE;
   /* Agent/system info bubbles (light) */
   --agent-info-bg: var(--surface-700);
+  
+  /* Input fields (light theme) */
+  --bg-input: #FFFFFF;
+  --border-input: rgba(0, 0, 0, 0.15);
 }
 
 /* Global shimmer animation (used by skeletons) */
@@ -773,12 +787,22 @@ html, body, .content-area, .main-content-container, .card {
   color: #FFFFFF;
 }
 
+[data-theme="light"] .markdown pre {
+  background-color: #F7F9FC;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  color: var(--text-heading);
+}
+
 .markdown code:not(pre code) {
   background-color: rgba(255, 255, 255, 0.08);
   padding: 2px 4px;
   border-radius: 4px;
   color: var(--text-heading);
   font-size: 0.875em;
+}
+
+[data-theme="light"] .markdown code:not(pre code) {
+  background-color: rgba(0, 0, 0, 0.08);
 }
 .markdown p {
   margin: 0 0 10px;

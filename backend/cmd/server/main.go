@@ -777,6 +777,7 @@ func main() {
 
 	// Usage routes
 	mux.Handle("/api/v1/usage", authMiddleware(http.HandlerFunc(usageHandler.GetUsage)))
+	mux.Handle("/api/v1/usage/events", authMiddleware(http.HandlerFunc(usageHandler.GetEvents)))
 	mux.Handle("/api/v1/usage/avg-timing", authMiddleware(http.HandlerFunc(usageHandler.GetAverageTiming)))
 	// Universal structured AI endpoint
 	if aiExecHandler != nil {

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
-import { DiscussionFlowAnalysis, isGeneratingDiscussionFlowAnalysis, generateDiscussionFlowAnalysis } from '../lib/discussionFlowAnalysis';
+import { DiscussionFlowAnalysis, BlindSpot, isGeneratingDiscussionFlowAnalysis, generateDiscussionFlowAnalysis } from '../lib/discussionFlowAnalysis';
 import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
@@ -18,9 +18,13 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
   const { t } = useTranslation();
   const notifiedRef = React.useRef(false);
   
-  // Reset notifiedRef on unmount to allow re-notification if component is reopened
+  // PERF: Track mount time
   React.useEffect(() => {
+    const mountTime = performance.now();
+    console.log('[DiscussionFlow] Component mounted at', mountTime);
     return () => {
+      const unmountTime = performance.now();
+      console.log('[DiscussionFlow] Component unmounted at', unmountTime, 'lifetime:', unmountTime - mountTime, 'ms');
       notifiedRef.current = false;
     };
   }, []);
@@ -38,6 +42,8 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
   // Track which blind spots have prompts generated
   const [blindSpotPrompts, setBlindSpotPrompts] = React.useState<Record<string, string>>({});
   const [generatingPrompts, setGeneratingPrompts] = React.useState<Record<string, boolean>>({});
+  // Track expanded state for blind spots
+  const [blindSpotsExpanded, setBlindSpotsExpanded] = React.useState(false);
   
   // Track mounted state to prevent updates after unmount
   const mountedRef = React.useRef(true);
@@ -57,15 +63,34 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
     const state = useGenaiChatStore.getState();
     const interactions = state.interactions;
     
-    // Find analysis interaction
-    const found = interactions.find((it: any) => 
-      it.subkind === 'discussion.flow.analysis' && it.projectId === state.projectId
-    );
+    // PERF: Use early return if no interactions
+    if (interactions.length === 0) {
+      setAnalysisInteraction(null);
+      setChatMessageCount(0);
+      return;
+    }
     
-    // Count chat messages
-    const count = interactions.filter((it: any) => 
-      it.kind === 'user' || it.kind === 'assistant'
-    ).length;
+    // PERF: Cache projectId to avoid repeated access
+    const currentProjectId = state.projectId;
+    
+    // Find analysis interaction - use simple loop instead of find for better performance
+    let found = null;
+    for (let i = interactions.length - 1; i >= 0; i--) {
+      const it = interactions[i];
+      if (it.subkind === 'discussion.flow.analysis' && it.projectId === currentProjectId) {
+        found = it;
+        break; // Found it, stop searching
+      }
+    }
+    
+    // Count chat messages - optimized: single pass with counter
+    let count = 0;
+    for (let i = 0; i < interactions.length; i++) {
+      const kind = interactions[i].kind;
+      if (kind === 'user' || kind === 'assistant') {
+        count++;
+      }
+    }
     
     // Only update state if still mounted
     if (mountedRef.current) {
@@ -82,7 +107,30 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
           data.frameShiftRecommendations && Array.isArray(data.frameShiftRecommendations) &&
           data.frame && typeof data.frame === 'string' &&
           data.confidence && ['low', 'medium', 'high'].includes(data.confidence)) {
-        return data as DiscussionFlowAnalysis;
+        // Normalize blindSpots to new format if needed
+        const normalizedBlindSpots = data.blindSpots
+          .map((b: any) => {
+            if (typeof b === 'string') {
+              return { text: b, practical_relevance: 0.5 };
+            }
+            if (typeof b === 'object' && b !== null) {
+              const text = b.text || b.textValue || b.value || b.description || b.content || String(b);
+              const practical_relevance = typeof b.practical_relevance === 'number' 
+                ? Math.max(0, Math.min(1, b.practical_relevance))
+                : 0.5;
+              return {
+                text: typeof text === 'string' ? text.trim() : String(text).trim(),
+                practical_relevance
+              };
+            }
+            return { text: String(b || ''), practical_relevance: 0.5 };
+          })
+          .filter((b: any) => b && typeof b === 'object' && b.text && typeof b.text === 'string' && b.text.trim().length > 0);
+        
+        return {
+          ...data,
+          blindSpots: normalizedBlindSpots
+        } as DiscussionFlowAnalysis;
       }
     } catch (e) {
       console.warn('[DiscussionFlow] Failed to parse analysis', e);
@@ -224,7 +272,7 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
   }), [t]);
 
   // Handle blind spot checkbox toggle - generate prompt and add/remove task
-  const handleBlindSpotToggle = React.useCallback(async (blindSpot: string, index: number) => {
+  const handleBlindSpotToggle = React.useCallback(async (blindSpot: BlindSpot, index: number) => {
     const taskId = `blind-spot-${index}`;
     const existingTask = textTasks?.find((t) => t.id === taskId);
     
@@ -239,7 +287,7 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
       // Add task with existing prompt
       onAddTextTask?.({
         id: taskId,
-        title: blindSpot,
+        title: blindSpot.text,
         prompt: blindSpotPrompts[taskId],
       });
       return;
@@ -259,7 +307,7 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
 
       const prompt = `You are helping to convert a blind spot (gap or missing consideration) into a well-formulated prompt for a research discussion.
 
-The blind spot is: "${blindSpot}"
+The blind spot is: "${blindSpot.text}"
 
 Task: Reformulate this blind spot as a clear, actionable prompt that can be used to continue the discussion. The prompt should:
 - Be concise and direct
@@ -295,7 +343,7 @@ User requirement: you should create your answer in ${langName} language. Use Eng
       // Add task
       onAddTextTask?.({
         id: taskId,
-        title: blindSpot,
+        title: blindSpot.text,
         prompt: reformulatedPrompt,
       });
     } catch (e) {
@@ -637,55 +685,158 @@ User requirement: you should create your answer in ${langName} language. Use Eng
       </div>
 
       {/* Blind Spots */}
-      {analysis.blindSpots && analysis.blindSpots.length > 0 && (
-        <div className="mb-4">
-          <div className="text-[11px] uppercase tracking-wide mb-1.5" style={textTertiaryWeakStyle}>
-            {sectionLabels.blindSpots}
+      {analysis.blindSpots && analysis.blindSpots.length > 0 && (() => {
+        // Ensure all blindSpots are properly normalized
+        const safeBlindSpots = analysis.blindSpots
+          .filter((spot: any) => spot && typeof spot === 'object' && spot.text && typeof spot.text === 'string')
+          .map((spot: any) => ({
+            text: String(spot.text || '').trim(),
+            practical_relevance: typeof spot.practical_relevance === 'number' 
+              ? Math.max(0, Math.min(1, spot.practical_relevance))
+              : 0.5
+          }))
+          .filter((spot: BlindSpot) => spot.text.length > 0);
+        
+        if (safeBlindSpots.length === 0) return null;
+        
+        // Sort by practical_relevance descending, preserving original index
+        const sortedBlindSpots = safeBlindSpots
+          .map((spot, idx) => ({ spot, originalIdx: idx }))
+          .sort((a, b) => b.spot.practical_relevance - a.spot.practical_relevance);
+        const visibleBlindSpots = blindSpotsExpanded ? sortedBlindSpots : sortedBlindSpots.slice(0, 3);
+        const hasMore = sortedBlindSpots.length > 3;
+        
+        return (
+          <div className="mb-4">
+            <div className="text-[11px] uppercase tracking-wide mb-1.5" style={textTertiaryWeakStyle}>
+              {sectionLabels.blindSpots}
+            </div>
+            <ul className="space-y-1.5" style={listStyle}>
+              {visibleBlindSpots
+                .map(({ spot, originalIdx }) => {
+                  // Additional safety check
+                  if (!spot || typeof spot !== 'object' || !spot.text || typeof spot.text !== 'string') {
+                    console.warn('[DiscussionFlow] Invalid blind spot format', spot);
+                    return null;
+                  }
+                  
+                  const taskId = `blind-spot-${originalIdx}`;
+                  const isChecked = textTasks?.some((t) => t.id === taskId) || false;
+                  const isGenerating = generatingPrompts[taskId] || false;
+                  const relevancePercent = Math.round((spot.practical_relevance || 0) * 100);
+                  
+                  return (
+                    <li key={originalIdx} className="flex items-center gap-2">
+                      {isGenerating ? (
+                        <svg 
+                          className="w-3 h-3 animate-spin shrink-0" 
+                          viewBox="0 0 24 24" 
+                          fill="none" 
+                          stroke="currentColor"
+                          style={{ color: 'var(--text-secondary-strong)' }}
+                        >
+                          <circle cx="12" cy="12" r="9" strokeWidth="2" opacity="0.25" />
+                          <path d="M21 12a9 9 0 0 0-9-9" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                      ) : (
+                        <span className="text-12 shrink-0" style={dangerColorStyle}>⚠</span>
+                      )}
+                      <span className="text-12 flex-1" style={textHeadingStyle}>
+                        {spot.text}
+                      </span>
+                      <span className="text-[11px] shrink-0" style={{ color: 'var(--text-tertiary-weak)' }}>
+                        {relevancePercent}%
+                      </span>
+                      <label 
+                        className="shrink-0 relative inline-block"
+                        style={{ cursor: isGenerating ? 'not-allowed' : 'pointer' }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => handleBlindSpotToggle(spot, originalIdx)}
+                          disabled={isGenerating}
+                          style={{
+                            width: '16px',
+                            height: '16px',
+                            cursor: isGenerating ? 'not-allowed' : 'pointer',
+                            opacity: isGenerating ? 0.6 : 1,
+                            backgroundColor: isChecked ? '#E9B27E' : 'var(--bg-input)',
+                            border: `1px solid ${isChecked ? '#E9B27E' : 'var(--border-input)'}`,
+                            borderRadius: '3px',
+                            appearance: 'none',
+                            WebkitAppearance: 'none',
+                            MozAppearance: 'none',
+                            position: 'relative',
+                            margin: 0,
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isGenerating && !isChecked) {
+                              (e.currentTarget as HTMLInputElement).style.borderColor = 'var(--text-secondary-strong)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isChecked) {
+                              (e.currentTarget as HTMLInputElement).style.borderColor = 'var(--border-input)';
+                            }
+                          }}
+                        />
+                        {isChecked && (
+                          <svg
+                            width="10"
+                            height="10"
+                            viewBox="0 0 10 10"
+                            fill="none"
+                            style={{
+                              position: 'absolute',
+                              left: '3px',
+                              top: '3px',
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            <path
+                              d="M1.5 5L4 7.5L8.5 2.5"
+                              stroke="white"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        )}
+                      </label>
+                    </li>
+                  );
+                })
+                .filter((item): item is React.ReactElement => item !== null)}
+            </ul>
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => setBlindSpotsExpanded(!blindSpotsExpanded)}
+                className="mt-2 text-[11px] text-left transition-colors"
+                style={{
+                  color: 'var(--text-secondary-strong)',
+                  cursor: 'pointer',
+                  background: 'transparent',
+                  border: 'none',
+                  padding: 0
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent-primary)';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary-strong)';
+                }}
+              >
+                {blindSpotsExpanded 
+                  ? t('unfold.discussionFlow.showLess', { defaultValue: 'Show less' })
+                  : t('unfold.discussionFlow.showMore', { defaultValue: `Show more (${sortedBlindSpots.length - 3})` })
+                }
+              </button>
+            )}
           </div>
-          <ul className="space-y-1.5" style={listStyle}>
-            {analysis.blindSpots.map((spot, idx) => {
-              const taskId = `blind-spot-${idx}`;
-              const isChecked = textTasks?.some((t) => t.id === taskId) || false;
-              const isGenerating = generatingPrompts[taskId] || false;
-              
-              return (
-                <li key={idx} className="flex items-center gap-2">
-                  {isGenerating ? (
-                    <svg 
-                      className="w-3 h-3 animate-spin shrink-0" 
-                      viewBox="0 0 24 24" 
-                      fill="none" 
-                      stroke="currentColor"
-                      style={{ color: 'var(--text-secondary-strong)' }}
-                    >
-                      <circle cx="12" cy="12" r="9" strokeWidth="2" opacity="0.25" />
-                      <path d="M21 12a9 9 0 0 0-9-9" strokeWidth="2" strokeLinecap="round" />
-                    </svg>
-                  ) : (
-                    <span className="text-12 shrink-0" style={dangerColorStyle}>⚠</span>
-                  )}
-                  <span className="text-12 flex-1" style={textHeadingStyle}>
-                    {spot}
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={isChecked}
-                    onChange={() => handleBlindSpotToggle(spot, idx)}
-                    disabled={isGenerating}
-                    className="shrink-0"
-                    style={{
-                      width: '16px',
-                      height: '16px',
-                      cursor: isGenerating ? 'not-allowed' : 'pointer',
-                      opacity: isGenerating ? 0.6 : 1
-                    }}
-                  />
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Frame Shift Recommendations */}
       {analysis.frameShiftRecommendations && analysis.frameShiftRecommendations.length > 0 && (
@@ -706,8 +857,8 @@ User requirement: you should create your answer in ${langName} language. Use Eng
                   disabled={applyingIndex !== null}
                   className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors shrink-0 flex items-center gap-1"
                   style={{
-                    background: applyingIndex === idx ? 'var(--white-06)' : 'var(--accent-primary)',
-                    color: applyingIndex === idx ? 'var(--text-tertiary-weak)' : 'var(--text-on-accent)',
+                    background: applyingIndex === idx ? 'var(--white-06)' : 'var(--white-10)',
+                    color: applyingIndex === idx ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
                     border: '1px solid var(--overlay-line-90)',
                     cursor: applyingIndex !== null ? 'not-allowed' : 'pointer',
                     opacity: applyingIndex !== null && applyingIndex !== idx ? 0.6 : 1

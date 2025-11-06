@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, startTransition } from 'react';
 import ReactMarkdown, { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -619,9 +619,9 @@ const DiscoveryPage: React.FC = () => {
     }
   }, [interactions.length, running, genaiChatMessagesLength]);
 
-  // Auto-scroll to bottom after hydration completes
+  // Auto-scroll to bottom when interactions are added (works during hydration too)
   useEffect(() => {
-    if (!genaiChatHydrating && genaiChatInteractionsLength > 0 && messagesRef.current) {
+    if (genaiChatInteractionsLength > 0 && messagesRef.current) {
       // Small delay to ensure DOM has updated
       const timeoutId = setTimeout(() => {
         if (messagesRef.current) {
@@ -630,7 +630,7 @@ const DiscoveryPage: React.FC = () => {
       }, 100);
       return () => clearTimeout(timeoutId);
     }
-  }, [genaiChatHydrating, genaiChatInteractionsLength]);
+  }, [genaiChatInteractionsLength]);
   // Track text selection within assistant markdown and position a floating action button
   useEffect(() => {
     const container = messagesRef.current;
@@ -1641,7 +1641,7 @@ const DiscoveryPage: React.FC = () => {
       {sideOpen && (
         <div
           className="flex-shrink-0 rounded-xl mr-4 overflow-hidden relative sidebar-panel"
-          style={{ backgroundColor: 'var(--bg-sidebar)', width: '320px', minWidth: '260px', maxWidth: '420px' }}
+          style={{ backgroundColor: 'var(--bg-input)', width: '320px', minWidth: '260px', maxWidth: '420px' }}
         >
           <div className="p-6 h-full flex flex-col">
             <div className="flex items-center justify-between mb-6">
@@ -1757,7 +1757,15 @@ const DiscoveryPage: React.FC = () => {
                 style={{ backgroundColor: leftPanel === 'flow' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
                 onMouseEnter={(e) => { if (leftPanel !== 'flow') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
                 onMouseLeave={(e) => { if (leftPanel !== 'flow') (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                onClick={() => setLeftPanel((p) => (p === 'flow' ? null : 'flow'))}
+                onClick={() => {
+                  const startTime = performance.now();
+                  console.log('[DiscussionFlow Button] Click at', startTime);
+                  setLeftPanel((p) => {
+                    const endTime = performance.now();
+                    console.log('[DiscussionFlow Button] setState called at', endTime, 'delay:', endTime - startTime, 'ms');
+                    return p === 'flow' ? null : 'flow';
+                  });
+                }}
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -1908,12 +1916,17 @@ const DiscoveryPage: React.FC = () => {
         className="mirror-doc-btn rounded-lg flex items-center justify-center transition-all duration-300"
         style={{ position: 'fixed', right: 8, top: 76, width: 32, height: 32, color: 'white', zIndex: 40 }}
         onClick={() => {
-          console.log('[RightPanel] toggle', !rightPanelOpen);
+          const startTime = performance.now();
+          console.log('[RightPanel] Click at', startTime, 'toggle', !rightPanelOpen);
           // Ensure mutual exclusivity
           setRightContextOpen(false);
           setRightArtifactsOpen(false);
           setRightExperimentalOpen(false);
-          setRightPanelOpen((v) => !v);
+          setRightPanelOpen((v) => {
+            const endTime = performance.now();
+            console.log('[RightPanel] setState called at', endTime, 'delay:', endTime - startTime, 'ms');
+            return !v;
+          });
         }}
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
@@ -2153,7 +2166,7 @@ const DiscoveryPage: React.FC = () => {
                   className="mt-3 rounded-xl sidebar-panel"
                   style={{
                     backgroundColor: 'var(--bg-sidebar)',
-                    border: '1px solid var(--overlay-line-90)',
+                    border: '1px solid rgba(60, 60, 85, 0.15)',
                     display: 'flex',
                     flexDirection: 'column',
                     flex: 1,
@@ -2172,69 +2185,101 @@ const DiscoveryPage: React.FC = () => {
               </>
             );
           })()}
-          {leftPanel && (
-            <>
-              {/* Empty spacer matching Chat | Perspectives toggle height (only for flow panel) - placed before entire panel to shift it down */}
-              {leftPanel === 'flow' && (
-                <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label="Spacer" style={{ visibility: 'hidden', pointerEvents: 'none', height: '28px' }}>
-                  <div className="px-2 py-1 text-12 rounded" />
-                  <div className="px-2 py-1 text-12 rounded" />
-                </div>
-              )}
-              <div
-                className="mt-3 p-3 rounded-xl sidebar-panel"
-                style={{
-                  backgroundColor: 'var(--bg-sidebar)',
-                  border: '1px solid var(--overlay-line-90)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  flex: 1,
-                  minHeight: 0,
-                  overflowY: 'auto',
-                }}
-              >
+          {/* Left panel container - ALWAYS in DOM, never removed */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              flex: leftPanel ? 1 : 0,
+              minWidth: leftPanel ? 'auto' : 0,
+              visibility: leftPanel ? 'visible' : 'hidden',
+              pointerEvents: leftPanel ? 'auto' : 'none',
+            }}
+          >
+            {/* Empty spacer matching Chat | Perspectives toggle height - placed before entire panel to shift it down */}
+            <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label="Spacer" style={{ visibility: 'hidden', pointerEvents: 'none', height: '28px' }}>
+              <div className="px-2 py-1 text-12 rounded" />
+              <div className="px-2 py-1 text-12 rounded" />
+            </div>
+            <div
+              className="mt-3 p-3 rounded-xl sidebar-panel"
+              style={{
+                backgroundColor: 'var(--bg-sidebar)',
+                border: '1px solid rgba(60, 60, 85, 0.15)',
+                display: 'flex',
+                flexDirection: 'column',
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+              }}
+            >
                 {/* Header: chosen section title + close */}
-              {leftPanel && (
-                <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
+                <div 
+                  className="flex items-center justify-between" 
+                  style={{ 
+                    position: 'sticky', 
+                    top: 0, 
+                    backgroundColor: 'var(--bg-sidebar)', 
+                    paddingBottom: 8, 
+                    marginBottom: 8, 
+                    zIndex: 1,
+                    display: leftPanel ? 'flex' : 'none'
+                  }}
+                >
                   <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{leftPanel === 'user' ? t('unfold.sections.howYouEngage') : t('unfold.sections.discussionFlow')}</h3>
                   <button type="button" aria-label={t('unfold.sections.close')} title={t('unfold.sections.close')} className="p-2 rounded-lg transition-colors" style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }} onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }} onClick={() => setLeftPanel(null)}>
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
                 </div>
-              )}
 
               {/* Content area: selected section */}
-              {leftPanel && (
-                <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
-                  <div style={{ flex: 1, minHeight: 0 }}>
-                    {leftPanel === 'user' && (
-                      <UserPositionAnalysis hideTitle onFirstResult={() => { setBadgeUser(true); setAvailUserAnalysis(true); }} onRiskUpdate={(r) => {
-                        const high = !!(r && r.level === 'High');
-                        setIsHighRisk(high);
-                        if (high) {
-                          setRiskBanner((prev) => (prev && prev.visible === false ? prev : { visible: true, level: 'High', rationale: r?.rationale || '' }));
-                        } else if (!r) {
-                          setRiskBanner(null);
-                        }
-                      }} />
-                    )}
-                    {leftPanel === 'flow' && (
-                      <DiscussionFlow 
-                        onFirstResult={onFirstResultDiscussionFlow}
-                        onAddTextTask={handleAddTextTask}
-                        onRemoveTextTask={handleRemoveTextTask}
-                        textTasks={textTasks}
-                      />
-                    )}
+              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  {/* User Analysis - ALWAYS in DOM, never unmounted */}
+                  <div style={{ 
+                    visibility: leftPanel === 'user' ? 'visible' : 'hidden',
+                    pointerEvents: leftPanel === 'user' ? 'auto' : 'none',
+                    position: leftPanel === 'user' ? 'static' : 'absolute',
+                    width: leftPanel === 'user' ? 'auto' : 0,
+                    height: leftPanel === 'user' ? 'auto' : 0,
+                    overflow: 'hidden',
+                  }}>
+                    <UserPositionAnalysis hideTitle onFirstResult={() => { setBadgeUser(true); setAvailUserAnalysis(true); }} onRiskUpdate={(r) => {
+                      const high = !!(r && r.level === 'High');
+                      setIsHighRisk(high);
+                      if (high) {
+                        setRiskBanner((prev) => (prev && prev.visible === false ? prev : { visible: true, level: 'High', rationale: r?.rationale || '' }));
+                      } else if (!r) {
+                        setRiskBanner(null);
+                      }
+                    }} />
+                  </div>
+                  {/* Discussion Flow - ALWAYS in DOM, never unmounted */}
+                  <div style={{ 
+                    visibility: leftPanel === 'flow' ? 'visible' : 'hidden',
+                    pointerEvents: leftPanel === 'flow' ? 'auto' : 'none',
+                    position: leftPanel === 'flow' ? 'static' : 'absolute',
+                    width: leftPanel === 'flow' ? 'auto' : 0,
+                    height: leftPanel === 'flow' ? 'auto' : 0,
+                    overflow: 'hidden',
+                  }}>
+                    <DiscussionFlow 
+                      onFirstResult={onFirstResultDiscussionFlow}
+                      onAddTextTask={handleAddTextTask}
+                      onRemoveTextTask={handleRemoveTextTask}
+                      textTasks={textTasks}
+                    />
                   </div>
                 </div>
-              )}
+              </div>
               {/* Duplicate old header/content removed to avoid double rendering */}
             </div>
-            </>
-          )}
+          </div>
 
             {/* Title generation now handled automatically in genaiChatStore.onDone */}
+
+          {/* Bottom slot: reserved area to match right column layout */}
+          <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight, position: 'relative' }} />
 
           {/* Add source button (only when chat exists and has sources) */}
           {currentProject?.id && sources.length > 0 && (
@@ -2512,45 +2557,45 @@ const DiscoveryPage: React.FC = () => {
               );
             })()}
             {/* Unfold subview toggle */}
-            <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label={t('unfold.sections.unfoldView')}>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={unfoldSubView === 'chat'}
-                aria-controls="unfold-chat-panel"
-                onClick={() => setUnfoldSubView('chat')}
-                className="px-2 py-1 text-12 rounded"
+            <div className="w-fit self-start mb-3">
+              <div 
+                className="inline-flex items-center gap-1 rounded-xl px-2 py-1" 
+                role="tablist" 
+                aria-label={t('unfold.sections.unfoldView')}
                 style={{
-                  background: unfoldSubView === 'chat' ? 'var(--white-10)' : 'transparent',
-                  color: 'var(--text-heading)'
+                  backgroundColor: theme === 'light' ? 'rgba(0, 0, 0, 0.02)' : 'rgba(255, 255, 255, 0.04)',
                 }}
               >
-                {t('unfold.sections.chat')}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={unfoldSubView === 'perspectives'}
-                aria-controls="unfold-perspectives-panel"
-                onClick={() => setUnfoldSubView('perspectives')}
-                className="px-2 py-1 text-12 rounded"
-                style={{
-                  background: unfoldSubView === 'perspectives' ? 'var(--white-10)' : 'transparent',
-                  color: 'var(--text-heading)'
-                }}
-              >
-                {t('unfold.sections.perspectives')}
-              </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={unfoldSubView === 'chat'}
+                  aria-controls="unfold-chat-panel"
+                  onClick={() => setUnfoldSubView('chat')}
+                  className="px-2 py-1 text-12 rounded"
+                  style={{
+                    background: unfoldSubView === 'chat' ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)'
+                  }}
+                >
+                  {t('unfold.sections.chat')}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={unfoldSubView === 'perspectives'}
+                  aria-controls="unfold-perspectives-panel"
+                  onClick={() => setUnfoldSubView('perspectives')}
+                  className="px-2 py-1 text-12 rounded"
+                  style={{
+                    background: unfoldSubView === 'perspectives' ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)'
+                  }}
+                >
+                  {t('unfold.sections.perspectives')}
+                </button>
+              </div>
             </div>
-            {/* Subtle separator line */}
-            <div 
-              className="mb-4 w-full" 
-              style={{ 
-                height: '1px', 
-                backgroundColor: 'var(--overlay-line-90)',
-                opacity: theme === 'light' ? 0.3 : 0.7
-              }} 
-            />
             {/* Perspectives content (full column) */}
             {unfoldSubView === 'perspectives' && (
               <PerspectivesPanel onPresetChange={setCurrentPerspectivePreset} />
@@ -3853,12 +3898,27 @@ const DiscoveryPage: React.FC = () => {
         {/* Right column: container for contextual panels (transparent, no border) - hidden when Account or Settings are shown */}
         {viewMode !== 'graph' && !showAccount && !showSettings && (
           <div className="min-h-0 h-full" style={{ background: 'transparent', display: 'flex', flexDirection: 'column', marginRight: 48 }}>
-            {(rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) && (
+            {/* Right panel container - ALWAYS in DOM, never removed */}
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                flex: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) ? 1 : 0,
+                minWidth: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) ? 'auto' : 0,
+                visibility: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) ? 'visible' : 'hidden',
+                pointerEvents: (rightPanelOpen || rightContextOpen || rightArtifactsOpen || rightExperimentalOpen) ? 'auto' : 'none',
+              }}
+            >
+              {/* Empty spacer matching Chat | Perspectives toggle height - placed before entire panel to shift it down */}
+              <div className="flex items-center justify-center gap-1 mb-2 w-full" role="tablist" aria-label="Spacer" style={{ visibility: 'hidden', pointerEvents: 'none', height: '28px' }}>
+                <div className="px-2 py-1 text-12 rounded" />
+                <div className="px-2 py-1 text-12 rounded" />
+              </div>
               <div
                 className="mt-3 p-3 rounded-xl sidebar-panel"
                 style={{
                   backgroundColor: 'var(--bg-sidebar)',
-                  border: '1px solid var(--overlay-line-90)',
+                  border: '1px solid rgba(60, 60, 85, 0.15)',
                   display: 'flex',
                   flexDirection: 'column',
                   flex: 1,
@@ -3866,29 +3926,47 @@ const DiscoveryPage: React.FC = () => {
                   overflowY: 'auto',
                 }}
               >
-                <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
-                  <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>
-                    {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : rightExperimentalOpen ? 'Experimental Response' : 'Workspace Library'}
-                  </h3>
-                  <button
-                    type="button"
-                    aria-label="Close right panel"
-                    title="Close"
-                    className="p-2 rounded-lg transition-colors"
-                    style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                    onClick={() => { setRightPanelOpen(false); setRightContextOpen(false); setRightArtifactsOpen(false); setRightExperimentalOpen(false); }}
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
-                  </button>
-                </div>
-                {/* Panel content */}
-                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
-                  {rightArtifactsOpen ? (
-                    <FindingsPanel projectId={genaiChat.projectId} />
-                  ) : rightContextOpen ? (
-                    <div className="space-y-2">
+                  <div className="flex items-center justify-between" style={{ position: 'sticky', top: 0, backgroundColor: 'var(--bg-sidebar)', paddingBottom: 8, marginBottom: 8, zIndex: 1 }}>
+                    <h3 className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>
+                      {rightArtifactsOpen ? 'Workspace Artifacts' : rightContextOpen ? 'Context Navigation' : rightExperimentalOpen ? 'Experimental Response' : 'Workspace Library'}
+                    </h3>
+                    <button
+                      type="button"
+                      aria-label="Close right panel"
+                      title="Close"
+                      className="p-2 rounded-lg transition-colors"
+                      style={{ backgroundColor: 'transparent', color: 'var(--text-secondary-strong)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                      onClick={() => { setRightPanelOpen(false); setRightContextOpen(false); setRightArtifactsOpen(false); setRightExperimentalOpen(false); }}
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" /></svg>
+                    </button>
+                  </div>
+                  {/* Panel content - always render all panels, hide inactive ones */}
+                  <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+                    {/* FindingsPanel - ALWAYS in DOM, never unmounted */}
+                    <div style={{ 
+                      visibility: rightArtifactsOpen ? 'visible' : 'hidden',
+                      pointerEvents: rightArtifactsOpen ? 'auto' : 'none',
+                      position: rightArtifactsOpen ? 'static' : 'absolute',
+                      width: rightArtifactsOpen ? 'auto' : 0,
+                      height: rightArtifactsOpen ? 'auto' : 0,
+                      overflow: 'hidden',
+                    }}>
+                      <FindingsPanel projectId={genaiChat.projectId} />
+                    </div>
+                    
+                    {/* Context Navigation - ALWAYS in DOM, never unmounted */}
+                    <div style={{ 
+                      visibility: rightContextOpen ? 'visible' : 'hidden',
+                      pointerEvents: rightContextOpen ? 'auto' : 'none',
+                      position: rightContextOpen ? 'static' : 'absolute',
+                      width: rightContextOpen ? 'auto' : 0,
+                      height: rightContextOpen ? 'auto' : 0,
+                      overflow: 'hidden',
+                    }}>
+                      <div className="space-y-2">
                       {/* Sections list */}
                       {sectionStarts.length > 0 && (
                         <div className="mb-2">
@@ -4032,22 +4110,42 @@ const DiscoveryPage: React.FC = () => {
                         ))
                       )}
                     </div>
-                  ) : rightExperimentalOpen ? (
-                    <ExperimentalResponsePanel 
-                      response={experimentalResponse}
-                      loading={experimentalLoading}
-                    />
-                  ) : (
-                    <WorkspaceLibrary 
-                      projectId={genaiChat.projectId} 
-                      onDocumentDelete={(docId: string) => {
-                        console.log('[DiscoveryPage] Document deleted', { docId });
-                        // Optionally refresh interactions or handle cleanup
-                      }}
-                      onOpenDocument={(doc: any) => setActiveDoc(doc)}
-                    />
-                  )}
-                </div>
+                    </div>
+                    
+                    {/* Experimental Response Panel - ALWAYS in DOM, never unmounted */}
+                    <div style={{ 
+                      visibility: rightExperimentalOpen ? 'visible' : 'hidden',
+                      pointerEvents: rightExperimentalOpen ? 'auto' : 'none',
+                      position: rightExperimentalOpen ? 'static' : 'absolute',
+                      width: rightExperimentalOpen ? 'auto' : 0,
+                      height: rightExperimentalOpen ? 'auto' : 0,
+                      overflow: 'hidden',
+                    }}>
+                      <ExperimentalResponsePanel 
+                        response={experimentalResponse}
+                        loading={experimentalLoading}
+                      />
+                    </div>
+                    
+                    {/* Workspace Library - ALWAYS in DOM, never unmounted */}
+                    <div style={{ 
+                      visibility: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'visible' : 'hidden',
+                      pointerEvents: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'auto' : 'none',
+                      position: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'static' : 'absolute',
+                      width: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'auto' : 0,
+                      height: (rightPanelOpen && !rightArtifactsOpen && !rightContextOpen && !rightExperimentalOpen) ? 'auto' : 0,
+                      overflow: 'hidden',
+                    }}>
+                      <WorkspaceLibrary 
+                        projectId={genaiChat.projectId} 
+                        onDocumentDelete={(docId: string) => {
+                          console.log('[DiscoveryPage] Document deleted', { docId });
+                          // Optionally refresh interactions or handle cleanup
+                        }}
+                        onOpenDocument={(doc: any) => setActiveDoc(doc)}
+                      />
+                    </div>
+                  </div>
                 
                 {/* Workspace Artifacts toolbar (bottom) */}
                 {rightArtifactsOpen && (
@@ -4224,7 +4322,7 @@ const DiscoveryPage: React.FC = () => {
                   </div>
                 )}
               </div>
-            )}
+            </div>
 
             {/* Bottom slot: reserved area to match left column layout */}
             <div className="mt-3" style={{ marginTop: 'auto', minHeight: titleSlotMinHeight, position: 'relative' }} />

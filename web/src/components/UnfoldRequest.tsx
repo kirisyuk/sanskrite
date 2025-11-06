@@ -342,12 +342,23 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       });
     });
   }, [lastDocEvent]);
-  const containerStyle: React.CSSProperties = React.useMemo(() => ({
-    borderColor: dangerTint ? 'rgba(220, 20, 60, 0.35)' : 'var(--border-input, #505050)',  /* Gray border */
-    backgroundColor: 'var(--bg-input, #1A1A1A)',  /* Graphite black */
-    boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
-    backgroundImage: dangerTint ? 'linear-gradient(0deg, rgba(255,0,0,0.04), rgba(255,0,0,0.04))' : undefined,
-  }), [theme, dangerTint]);
+  const containerStyle: React.CSSProperties = React.useMemo(() => {
+    // In dark theme with gradient border, don't set borderColor/backgroundImage
+    if (theme === 'dark') {
+      return {
+        backgroundColor: 'var(--bg-input, #1A1A1A)',  /* Graphite black */
+        boxShadow: 'none',
+      };
+    }
+    
+    // In light theme, use light background and border from CSS variables
+    return {
+      backgroundColor: 'var(--bg-input, #FFFFFF)',  /* White background for light theme */
+      borderColor: dangerTint ? 'rgba(220, 20, 60, 0.35)' : 'var(--border-input, rgba(0, 0, 0, 0.15))',  /* Light gray border */
+      boxShadow: '0 2px 10px rgba(0,0,0,0.06)',
+      backgroundImage: dangerTint ? 'linear-gradient(0deg, rgba(255,0,0,0.04), rgba(255,0,0,0.04))' : undefined,
+    };
+  }, [theme, dangerTint]);
 
   // Supported file types (same as input accept attribute)
   const SUPPORTED_TYPES = React.useMemo(() => [
@@ -765,13 +776,19 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       
       <div 
         id="unfold-request-container" 
-        className="rounded-xl border overflow-hidden mt-2 relative" 
+        className={`rounded-xl ${theme === 'dark' ? 'overflow-hidden unfold-request-gradient-border' : 'border'} mt-2 relative`}
         style={{
-          ...containerStyle,
           transition: 'all 0.2s ease',
           contain: 'layout paint style',
+          ...(theme === 'dark' ? {
+            // Dark theme: gradient border via CSS class
+            backgroundColor: containerStyle.backgroundColor || 'var(--bg-input, #1A1A1A)',
+            boxShadow: containerStyle.boxShadow,
+          } : {
+            // Light theme: regular border
+            ...containerStyle,
+          }),
           ...(isDragging ? {
-            borderColor: 'var(--text-secondary)',
             backgroundColor: 'var(--white-10)',
             boxShadow: '0 0 0 2px var(--white-06)',
           } : {}),
@@ -1014,9 +1031,25 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                 backgroundColor: 'transparent',
                 opacity: disabled ? 0.6 : 1,
               }}
+              onMouseEnter={(e) => {
+                if (!disabled) {
+                  const svg = e.currentTarget.querySelector('svg path');
+                  if (svg) {
+                    (svg as SVGPathElement).style.fill = theme === 'light' ? '#FFB366' : '#FF9538';
+                  }
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!disabled) {
+                  const svg = e.currentTarget.querySelector('svg path');
+                  if (svg) {
+                    (svg as SVGPathElement).style.fill = theme === 'dark' ? '#FF9538' : '#FFB366';
+                  }
+                }
+              }}
             >
               <svg className="w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M8 5v14l11-7z" fill="var(--text-secondary-strong)" />
+                <path d="M8 5v14l11-7z" style={{ fill: theme === 'dark' ? '#FF9538' : '#FFB366' }} />
               </svg>
             </button>
           </div>

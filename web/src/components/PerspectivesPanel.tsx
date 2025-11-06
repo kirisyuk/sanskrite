@@ -754,11 +754,22 @@ Constraints:
     };
   }, [dropdownOpen]);
 
-  const containerStyle: React.CSSProperties = React.useMemo(() => ({
-    borderColor: 'var(--overlay-line-90)',
-    backgroundColor: 'var(--bg-elevated)',
-    boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
-  }), [theme]);
+  const containerStyle: React.CSSProperties = React.useMemo(() => {
+    // In dark theme with gradient border, don't set borderColor/backgroundImage
+    if (theme === 'dark') {
+      return {
+        backgroundColor: 'var(--bg-input, #1A1A1A)',  /* Graphite black */
+        boxShadow: 'none',
+      };
+    }
+    
+    // In light theme, use light background and border from CSS variables
+    return {
+      backgroundColor: 'var(--bg-input, #FFFFFF)',  /* White background for light theme */
+      borderColor: 'var(--border-input, rgba(0, 0, 0, 0.15))',  /* Light gray border */
+      boxShadow: '0 2px 10px rgba(0,0,0,0.06)',
+    };
+  }, [theme]);
 
   return (
     <div className="flex flex-col flex-1" style={{ minHeight: 0 }}>
@@ -941,16 +952,23 @@ Constraints:
 
       {/* Settings component at bottom (like UnfoldRequest) */}
         <div 
-          className="rounded-xl border mt-2 relative" 
+          className={`rounded-xl ${theme === 'dark' ? 'unfold-request-gradient-border' : 'border'} mt-2 relative`}
           style={{
-            ...containerStyle,
             transition: 'all 0.2s ease',
             overflow: 'visible',
+            ...(theme === 'dark' ? {
+              // Dark theme: gradient border via CSS class
+              backgroundColor: containerStyle.backgroundColor || 'var(--bg-input, #1A1A1A)',
+              boxShadow: containerStyle.boxShadow,
+            } : {
+              // Light theme: regular border
+              ...containerStyle,
+            }),
           }}
         >
         <div className="p-3">
           {/* Label above dropdown */}
-          <div className="text-12 mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+          <div className="text-12 mb-2" style={{ color: 'var(--text-secondary-strong)' }}>
             {t('unfold.perspectives.header.analyticalPerspective')}
           </div>
           {/* Dropdown selector on first line */}
@@ -961,8 +979,15 @@ Constraints:
                 id="perspective-select"
                 type="button"
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="text-12 px-2 py-1 rounded w-full text-left flex items-center justify-between"
-                style={{ background: 'var(--bg-elevated)', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)' }}
+                className="text-xs w-full text-left flex items-center justify-between cursor-pointer"
+                style={{ 
+                  background: 'transparent', 
+                  color: 'var(--text-heading)', 
+                  border: '1px solid var(--overlay-line-90)', 
+                  borderRadius: 8, 
+                  padding: '4px 8px',
+                  outline: 'none',
+                }}
               >
                 <span>{presetItems.find(p => p.id === preset)?.title || t('unfold.perspectives.selector.placeholder')}</span>
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
@@ -974,7 +999,7 @@ Constraints:
                   ref={dropdownRef}
                   className="fixed rounded-lg border shadow-lg overflow-hidden"
                   style={{
-                    backgroundColor: 'var(--bg-elevated)',
+                    backgroundColor: 'var(--bg-sidebar)',
                     borderColor: 'var(--overlay-line-90)',
                     maxHeight: '300px',
                     overflowY: 'auto',
@@ -1021,23 +1046,6 @@ Constraints:
                 </div>
               )}
             </div>
-            <button
-              type="button"
-              className="text-12 px-2 py-1 rounded"
-              onClick={() => { 
-                if (preset === 'custom') {
-                  if (customQuery.trim()) {
-                    void handleRun(preset, customQuery.trim());
-                  }
-                } else if (preset) {
-                  void handleRun(preset);
-                }
-              }}
-              disabled={!preset || loading || (preset === 'custom' && !customQuery.trim())}
-              style={{ background: 'var(--white-10)', color: 'var(--text-heading)', opacity: (!preset || loading || (preset === 'custom' && !customQuery.trim())) ? 0.6 : 1 }}
-            >
-              {t('unfold.perspectives.actions.run')}
-            </button>
           </div>
           {/* Custom query input (shown when custom is selected) */}
           {preset === 'custom' && (
@@ -1049,9 +1057,9 @@ Constraints:
                 placeholder={t('unfold.perspectives.custom.placeholder', { defaultValue: 'Enter your analytical perspective...' })}
                 className="text-12 px-2 py-1 rounded w-full"
                 style={{ 
-                  background: 'var(--bg-elevated)', 
+                  background: 'transparent', 
                   color: 'var(--text-heading)', 
-                  border: '1px solid var(--overlay-line-90)',
+                  border: 'none',
                   outline: 'none'
                 }}
                 onKeyDown={(e) => {
@@ -1063,8 +1071,20 @@ Constraints:
               />
             </div>
           )}
-          {/* Header: title + language + actions */}
-          <div className="flex items-center justify-between gap-2 mb-2">
+          {error && (
+            <div className="text-12 mt-2" style={{ color: 'var(--danger-50)' }}>{error}</div>
+          )}
+          {loading && (
+            <div className="mt-2 flex items-center gap-2 text-12" style={{ color: 'var(--text-secondary-strong)' }}>
+              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="12" cy="12" r="9" strokeWidth="2" opacity="0.25" />
+                <path d="M21 12a9 9 0 0 0-9-9" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <span>{t('unfold.perspectives.status.running', { seconds: runSeconds })}</span>
+            </div>
+          )}
+          {/* Bottom: controls row (like UnfoldRequest) */}
+          <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.perspectives.header.choose')}</div>
               <span className="text-11 px-1.5 py-0.5 rounded" title={t('unfold.perspectives.header.langTitle')} style={{ color: 'var(--text-secondary-strong)', background: 'var(--white-06)' }}>{prefLangCode}</span>
@@ -1090,20 +1110,49 @@ Constraints:
                   <path d="M20 12a8 8 0 1 1-2.343-5.657" strokeWidth="2" strokeLinecap="round" />
                 </svg>
               </button>
+              <button
+                type="button"
+                aria-label={t('unfold.perspectives.actions.run')}
+                className="flex items-center justify-center rounded-full"
+                onClick={() => { 
+                  if (preset === 'custom') {
+                    if (customQuery.trim()) {
+                      void handleRun(preset, customQuery.trim());
+                    }
+                  } else if (preset) {
+                    void handleRun(preset);
+                  }
+                }}
+                disabled={!preset || loading || (preset === 'custom' && !customQuery.trim())}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  backgroundColor: 'transparent',
+                  opacity: (!preset || loading || (preset === 'custom' && !customQuery.trim())) ? 0.6 : 1,
+                }}
+                onMouseEnter={(e) => {
+                  if (!(!preset || loading || (preset === 'custom' && !customQuery.trim()))) {
+                    const svg = e.currentTarget.querySelector('svg path');
+                    if (svg) {
+                      (svg as SVGPathElement).style.fill = theme === 'light' ? '#FFB366' : '#FF9538';
+                    }
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!(!preset || loading || (preset === 'custom' && !customQuery.trim()))) {
+                    const svg = e.currentTarget.querySelector('svg path');
+                    if (svg) {
+                      (svg as SVGPathElement).style.fill = theme === 'dark' ? '#FF9538' : '#FFB366';
+                    }
+                  }
+                }}
+              >
+                <svg className="w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 5v14l11-7z" style={{ fill: theme === 'dark' ? '#FF9538' : '#FFB366' }} />
+                </svg>
+              </button>
             </div>
           </div>
-          {error && (
-            <div className="text-12 mt-2" style={{ color: 'var(--danger-50)' }}>{error}</div>
-          )}
-          {loading && (
-            <div className="mt-2 flex items-center gap-2 text-12" style={{ color: 'var(--text-secondary-strong)' }}>
-              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <circle cx="12" cy="12" r="9" strokeWidth="2" opacity="0.25" />
-                <path d="M21 12a9 9 0 0 0-9-9" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-              <span>{t('unfold.perspectives.status.running', { seconds: runSeconds })}</span>
-            </div>
-          )}
         </div>
       </div>
     </div>

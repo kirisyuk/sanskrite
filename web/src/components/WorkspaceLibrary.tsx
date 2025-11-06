@@ -34,14 +34,28 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   const [sources, setSources] = React.useState<Source[]>([]);
   const [loading, setLoading] = React.useState(false);
 
+  // PERF: Track mount time
+  React.useEffect(() => {
+    const mountTime = performance.now();
+    console.log('[WorkspaceLibrary] Component mounted at', mountTime);
+    return () => {
+      const unmountTime = performance.now();
+      console.log('[WorkspaceLibrary] Component unmounted at', unmountTime, 'lifetime:', unmountTime - mountTime, 'ms');
+    };
+  }, []);
+
   // Load documents when projectId changes
   React.useEffect(() => {
     if (!projectId || projectId === 'local-unfold') return;
     
     const loadDocuments = async () => {
+      const startTime = performance.now();
+      console.log('[WorkspaceLibrary] Starting document load at', startTime);
       setLoading(true);
       try {
         const docs = await api.docsList(projectId);
+        const endTime = performance.now();
+        console.log('[WorkspaceLibrary] Document load completed at', endTime, 'took', endTime - startTime, 'ms');
         setDocuments(docs || []);
       } catch (err) {
         console.error('[WorkspaceLibrary] Failed to load documents', err);

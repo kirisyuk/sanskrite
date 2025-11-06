@@ -134,7 +134,7 @@ const PerspectiveAnalysisPanel: React.FC<PerspectiveAnalysisPanelProps> = ({ pre
 
   const containerStyle: React.CSSProperties = React.useMemo(() => ({
     borderColor: 'var(--overlay-line-90)',
-    backgroundColor: 'var(--bg-elevated)',
+    backgroundColor: 'var(--bg-sidebar)',
     boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
   }), [theme]);
 
@@ -235,9 +235,9 @@ const PerspectiveAnalysisPanel: React.FC<PerspectiveAnalysisPanelProps> = ({ pre
                             onClick={() => onApplyKeyPoint(point)}
                             className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors shrink-0"
                             style={{
-                              background: 'var(--accent-primary)',
-                              color: 'var(--text-on-accent)',
-                              border: 'none',
+                              background: 'var(--white-10)',
+                              color: 'var(--text-heading)',
+                              border: '1px solid var(--overlay-line-90)',
                               cursor: 'pointer',
                             }}
                             title={t('unfold.perspectives.analysis.apply', { defaultValue: 'Apply to chat' })}

@@ -235,6 +235,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   hydrateInteractions: async () => {
     const projectId = get().projectId;
     if (!projectId || projectId === 'local-unfold') return;
+    
+    // Защита от множественных одновременных вызовов
+    const state = get();
+    if (state.hydrating) {
+      console.log('[hydrateInteractions] Already hydrating, skipping duplicate call');
+      return;
+    }
+    
     set({ hydrating: true });
     try {
       const serverItems = await api.getProjectInteractions(projectId);
@@ -478,6 +486,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   loadStanceAggregate: async () => {
     const projectId = get().projectId;
     if (!projectId || projectId === 'local-unfold') return;
+    
+    // Защита от множественных одновременных вызовов
+    const state = get();
+    if (state.stanceLoading) {
+      console.log('[loadStanceAggregate] Already loading, skipping duplicate call');
+      return;
+    }
+    
     set({ stanceLoading: true });
     try {
       const agg = await api.metaGetAggregate(projectId);

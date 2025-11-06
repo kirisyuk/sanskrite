@@ -685,6 +685,59 @@ class ApiClient {
 
   // Usage metrics
   async getUsage(params?: { startDate?: string; endDate?: string; granularity?: '1d' | '7d' | '30d' }): Promise<{
+    byModel: Record<string, {
+      count: number;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUSD: number;
+    }>;
+    dailyTotals: Record<string, {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUSD: number;
+      count: number;
+    }>;
+    tokenCategories?: {
+      premiumTokens: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        costUSD: number;
+        count: number;
+      };
+      regularTokens: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        costUSD: number;
+        count: number;
+      };
+    };
+    totals: {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUSD: number;
+      count: number;
+    };
+    period: {
+      startDate: string;
+      endDate: string;
+    };
+  }> {
+    const res = await this.client.get(`/api/v1/usage`, { params });
+    return res.data;
+  }
+
+  // Get paginated usage events
+  async getUsageEvents(params: {
+    startDate: string;
+    endDate: string;
+    page?: number;
+    limit?: number;
+  }): Promise<{
     events: Array<{
       id: string;
       tenantId: string;
@@ -702,26 +755,18 @@ class ApiClient {
       kind: string;
       createdAt: string;
     }>;
-    byModel: Record<string, {
-      count: number;
-      inputTokens: number;
-      outputTokens: number;
-      totalTokens: number;
-      costUSD: number;
-    }>;
-    dailyTotals: Record<string, {
-      inputTokens: number;
-      outputTokens: number;
-      totalTokens: number;
-      costUSD: number;
-      count: number;
-    }>;
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
     period: {
       startDate: string;
       endDate: string;
     };
   }> {
-    const res = await this.client.get(`/api/v1/usage`, { params });
+    const res = await this.client.get(`/api/v1/usage/events`, { params });
     return res.data;
   }
 
