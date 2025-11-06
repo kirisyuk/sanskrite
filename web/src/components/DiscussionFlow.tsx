@@ -44,6 +44,7 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
   const [generatingPrompts, setGeneratingPrompts] = React.useState<Record<string, boolean>>({});
   // Track expanded state for blind spots
   const [blindSpotsExpanded, setBlindSpotsExpanded] = React.useState(false);
+  const [showRawJSON, setShowRawJSON] = React.useState(false);
   
   // Track mounted state to prevent updates after unmount
   const mountedRef = React.useRef(true);
@@ -100,7 +101,20 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
   }, [projectId, interactionsLength]);
 
   const analysis: DiscussionFlowAnalysis | null = React.useMemo(() => {
-    if (!analysisInteraction || !analysisInteraction.content) return null;
+    if (!analysisInteraction) return null;
+    
+    // Check if this is a failed parse (has rawResponse but no content)
+    const hasRawResponse = !!(analysisInteraction as any).rawResponse;
+    const hasContent = !!(analysisInteraction.content || analysisInteraction.contentSanitized);
+    const hasParseError = !!(analysisInteraction as any).parseError;
+    
+    // If we have raw response but no valid content, return null but keep rawResponse available
+    if (hasRawResponse && !hasContent && hasParseError) {
+      return null;
+    }
+    
+    if (!hasContent) return null;
+    
     try {
       const data = JSON.parse(analysisInteraction.content || analysisInteraction.contentSanitized || '{}');
       if (data.blindSpots && Array.isArray(data.blindSpots) && 
@@ -163,12 +177,32 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
 
   // Memoize helper functions to prevent recreation on every render
   // MUST be called before any early returns to follow Rules of Hooks
-  const getConfidenceColor = React.useCallback((confidence: string) => {
+  const getConfidenceBadgeStyle = React.useCallback((confidence: string) => {
     switch (confidence) {
-      case 'low': return 'var(--text-tertiary-weak)';
-      case 'medium': return 'var(--text-secondary-strong)';
-      case 'high': return '#669999';
-      default: return 'var(--text-secondary-strong)';
+      case 'low':
+        return {
+          backgroundColor: 'rgba(156, 163, 175, 0.1)', // gray
+          borderColor: 'rgba(156, 163, 175, 0.3)',
+          color: 'rgb(156, 163, 175)',
+        };
+      case 'medium':
+        return {
+          backgroundColor: 'rgba(251, 191, 36, 0.1)', // yellow/orange
+          borderColor: 'rgba(251, 191, 36, 0.3)',
+          color: 'rgb(251, 191, 36)',
+        };
+      case 'high':
+        return {
+          backgroundColor: 'rgba(34, 197, 94, 0.1)', // green
+          borderColor: 'rgba(34, 197, 94, 0.3)',
+          color: 'rgb(34, 197, 94)',
+        };
+      default:
+        return {
+          backgroundColor: 'rgba(156, 163, 175, 0.1)',
+          borderColor: 'rgba(156, 163, 175, 0.3)',
+          color: 'rgb(156, 163, 175)',
+        };
     }
   }, []);
 
@@ -209,19 +243,28 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
       const state = useGenaiChatStore.getState();
       const interactions = state.interactions;
       
-      // Delete existing analysis if it exists
-      if (analysisInteraction && analysisInteraction.id) {
-        try {
-          await api.deleteProjectInteraction(projectId, analysisInteraction.id);
-          // Remove from local state
-          useGenaiChatStore.setState((s) => ({
-            interactions: s.interactions.filter((it) => it.id !== analysisInteraction.id)
-          }));
-        } catch (e) {
-          console.warn('[DiscussionFlow] Failed to delete old analysis', e);
-          // Continue anyway - will overwrite
+      // Delete existing analysis if it exists (including failed parse ones)
+      const analysisSubkind = 'discussion.flow.analysis';
+      const existingAnalyses = interactions.filter((it) => 
+        it.subkind === analysisSubkind && it.projectId === projectId
+      );
+      
+      for (const existing of existingAnalyses) {
+        if (existing.id) {
+          try {
+            await api.deleteProjectInteraction(projectId, existing.id);
+          } catch (e) {
+            console.warn('[DiscussionFlow] Failed to delete old analysis', e);
+          }
         }
       }
+      
+      // Remove from local state
+      useGenaiChatStore.setState((s) => ({
+        interactions: s.interactions.filter((it) => 
+          !(it.subkind === analysisSubkind && it.projectId === projectId)
+        )
+      }));
 
       // Get all chat messages (user, assistant, agent)
       const chatMessages: Array<{ role: string; content: string }> = interactions
@@ -248,12 +291,12 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
         return;
       }
 
-      // Generate full analysis (no existingAnalysis, no lastPair = full recompute)
+      // Generate full analysis (pass null explicitly to force regeneration)
       // generateDiscussionFlowAnalysis will handle context window limitation (70%) and filtering
       await generateDiscussionFlowAnalysis(
         projectId,
         finalMessages,
-        null, // no existing analysis
+        null, // explicitly null to force regeneration
         undefined // no last pair - full recompute
       );
     } catch (e) {
@@ -443,13 +486,111 @@ User requirement: you should create your answer in ${langName} language. Use Eng
   const dangerColorStyle = React.useMemo(() => ({ color: 'var(--danger-50)' }), []);
   const recommendationColorStyle = React.useMemo(() => ({ color: '#669999' }), []);
 
-  // Show empty message only if chat is empty (less than 2 messages)
-  if (!analysis && !isLoading && chatMessageCount < 2) {
+  // Check if we have raw response even without valid analysis (parse error case)
+  const hasRawResponse = analysisInteraction && !!(analysisInteraction as any).rawResponse;
+  const hasParseError = analysisInteraction && !!(analysisInteraction as any).parseError;
+
+  // Show empty message only if chat is empty (less than 2 messages) AND no raw response to show
+  if (!analysis && !isLoading && chatMessageCount < 2 && !hasRawResponse) {
     return (
       <div className="mt-3 p-3">
         <div className="text-12 text-center" style={{ ...textSecondaryStrongStyle, whiteSpace: 'pre-line' }}>
           {emptyMessage}
         </div>
+      </div>
+    );
+  }
+  
+  // If we have raw response but no analysis, show debug section
+  if (!analysis && !isLoading && hasRawResponse) {
+    return (
+      <div className="mt-3 p-3">
+        {/* Header with refresh button */}
+        <div className="flex items-center justify-between mb-3">
+          <div />
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={!projectId || projectId === 'local-unfold' || chatMessageCount < 2 || isLoading}
+            className="p-1.5 rounded transition-colors"
+            style={{
+              background: 'transparent',
+              color: (!projectId || projectId === 'local-unfold' || chatMessageCount < 2 || isLoading) 
+                ? 'var(--text-tertiary-weak)' 
+                : 'var(--text-secondary-strong)',
+              cursor: (!projectId || projectId === 'local-unfold' || chatMessageCount < 2 || isLoading) 
+                ? 'not-allowed' 
+                : 'pointer',
+              opacity: (!projectId || projectId === 'local-unfold' || chatMessageCount < 2 || isLoading) ? 0.6 : 1
+            }}
+            title={t('unfold.discussionFlow.refresh', { defaultValue: 'Refresh Analysis' })}
+            onMouseEnter={(e) => {
+              if (!(!projectId || projectId === 'local-unfold' || chatMessageCount < 2 || isLoading)) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+            }}
+          >
+            <svg 
+              className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor"
+            >
+              <path d="M20 7h-5M20 7v5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M20 12a8 8 0 1 1-2.343-5.657" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+        
+        {/* Raw JSON Debug Section - Show when parse failed */}
+        {hasRawResponse && (
+          <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] uppercase tracking-wide" style={textTertiaryWeakStyle}>
+                {hasParseError ? '⚠️ Raw API Response (Parse Failed)' : 'Raw API Response (Debug)'}
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRawJSON(!showRawJSON)}
+                className="text-[11px] px-2 py-1 rounded transition-colors"
+                style={{
+                  background: 'var(--white-10)',
+                  color: 'var(--text-secondary-strong)',
+                  border: '1px solid var(--border-input)',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                }}
+              >
+                {showRawJSON ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            {showRawJSON && (
+              <div className="mt-2">
+                <pre
+                  className="text-[10px] overflow-auto p-2 rounded"
+                  style={{
+                    backgroundColor: 'var(--bg-input)',
+                    color: 'var(--text-secondary-strong)',
+                    border: '1px solid var(--border-input)',
+                    maxHeight: '400px',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {JSON.stringify((analysisInteraction as any).rawResponse, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -664,23 +805,38 @@ User requirement: you should create your answer in ${langName} language. Use Eng
 
         {/* Frame */}
       {analysis.frame && (
-        <div className="mb-4">
+        <>
           <div className="text-[11px] uppercase tracking-wide mb-1.5" style={textTertiaryWeakStyle}>
             {sectionLabels.frame}
           </div>
-          <div className="text-12" style={textHeadingStyle}>
-            {analysis.frame}
+          <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+            <div className="text-12" style={textHeadingStyle}>
+              {analysis.frame}
+            </div>
           </div>
-        </div>
+        </>
       )}
 
       {/* Confidence */}
-      <div className="mb-4">
+      <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
         <div className="text-[11px] uppercase tracking-wide mb-1.5" style={textTertiaryWeakStyle}>
           {sectionLabels.confidence}
         </div>
-        <div className="text-12" style={{ color: getConfidenceColor(analysis.confidence) } as React.CSSProperties}>
-          {getConfidenceLabel(analysis.confidence)}
+        <div className="inline-flex items-center">
+          {(() => {
+            const badgeStyle = getConfidenceBadgeStyle(analysis.confidence);
+            return (
+              <span
+                className="inline-flex items-center px-2 py-1 rounded text-[11px] font-medium"
+                style={{
+                  ...badgeStyle,
+                  border: `1px solid ${badgeStyle.borderColor}`,
+                }}
+              >
+                {getConfidenceLabel(analysis.confidence)}
+              </span>
+            );
+          })()}
         </div>
       </div>
 
@@ -707,11 +863,12 @@ User requirement: you should create your answer in ${langName} language. Use Eng
         const hasMore = sortedBlindSpots.length > 3;
         
         return (
-          <div className="mb-4">
+          <>
             <div className="text-[11px] uppercase tracking-wide mb-1.5" style={textTertiaryWeakStyle}>
               {sectionLabels.blindSpots}
             </div>
-            <ul className="space-y-1.5" style={listStyle}>
+            <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+              <ul className="space-y-1.5" style={listStyle}>
               {visibleBlindSpots
                 .map(({ spot, originalIdx }) => {
                   // Additional safety check
@@ -727,7 +884,7 @@ User requirement: you should create your answer in ${langName} language. Use Eng
                   
                   return (
                     <li key={originalIdx} className="flex items-center gap-2">
-                      {isGenerating ? (
+                      {isGenerating && (
                         <svg 
                           className="w-3 h-3 animate-spin shrink-0" 
                           viewBox="0 0 24 24" 
@@ -738,8 +895,6 @@ User requirement: you should create your answer in ${langName} language. Use Eng
                           <circle cx="12" cy="12" r="9" strokeWidth="2" opacity="0.25" />
                           <path d="M21 12a9 9 0 0 0-9-9" strokeWidth="2" strokeLinecap="round" />
                         </svg>
-                      ) : (
-                        <span className="text-12 shrink-0" style={dangerColorStyle}>⚠</span>
                       )}
                       <span className="text-12 flex-1" style={textHeadingStyle}>
                         {spot.text}
@@ -835,19 +990,20 @@ User requirement: you should create your answer in ${langName} language. Use Eng
               </button>
             )}
           </div>
+          </>
         );
       })()}
 
       {/* Frame Shift Recommendations */}
       {analysis.frameShiftRecommendations && analysis.frameShiftRecommendations.length > 0 && (
-        <div className="mb-4">
+        <>
           <div className="text-[11px] uppercase tracking-wide mb-1.5" style={textTertiaryWeakStyle}>
             {sectionLabels.frameShiftRecommendations}
           </div>
-          <ul className="space-y-1.5" style={listStyle}>
+          <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+            <ul className="space-y-1.5" style={listStyle}>
             {analysis.frameShiftRecommendations.map((rec, idx) => (
               <li key={idx} className="flex items-center gap-2">
-                <span className="text-12" style={recommendationColorStyle}>→</span>
                 <span className="text-12 flex-1" style={textHeadingStyle}>
                   {rec}
                 </span>
@@ -894,7 +1050,55 @@ User requirement: you should create your answer in ${langName} language. Use Eng
                 </button>
               </li>
             ))}
-          </ul>
+            </ul>
+          </div>
+        </>
+      )}
+
+      {/* Raw JSON Debug Section - Show even if parsing failed */}
+      {hasRawResponse && (
+        <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[11px] uppercase tracking-wide" style={textTertiaryWeakStyle}>
+              {hasParseError ? '⚠️ Raw API Response (Parse Failed)' : 'Raw API Response (Debug)'}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowRawJSON(!showRawJSON)}
+              className="text-[11px] px-2 py-1 rounded transition-colors"
+              style={{
+                background: 'var(--white-10)',
+                color: 'var(--text-secondary-strong)',
+                border: '1px solid var(--border-input)',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+              }}
+            >
+              {showRawJSON ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          {showRawJSON && (
+            <div className="mt-2">
+              <pre
+                className="text-[10px] overflow-auto p-2 rounded"
+                style={{
+                  backgroundColor: 'var(--bg-input)',
+                  color: 'var(--text-secondary-strong)',
+                  border: '1px solid var(--border-input)',
+                  maxHeight: '400px',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {JSON.stringify((analysisInteraction as any).rawResponse, null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
       )}
     </div>

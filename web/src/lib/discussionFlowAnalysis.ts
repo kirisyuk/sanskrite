@@ -68,7 +68,13 @@ export async function generateDiscussionFlowAnalysis(
     it.subkind === analysisSubkind && it.projectId === projectId
   );
 
-  if (existingAnalysisInteraction && !existingAnalysis && !lastPair) {
+  // Only skip if we have existing interaction AND not doing incremental update AND not forcing refresh
+  // Allow regeneration when existingAnalysis is explicitly null (refresh case) or undefined (new generation)
+  // Skip only if existingAnalysisInteraction exists AND we're not doing incremental update AND existingAnalysis is not null/undefined
+  const isRefresh = existingAnalysis === null; // Explicit null means refresh
+  const isIncremental = existingAnalysis && lastPair; // Both present means incremental
+  
+  if (existingAnalysisInteraction && !isIncremental && !isRefresh && existingAnalysis === undefined) {
     console.log('[DiscussionFlowAnalysis] Already exists, skipping', { projectId });
     return;
   }
@@ -399,6 +405,15 @@ ${transcript}`;
       systemInstruction: langDirective,
     });
 
+    // Save raw API response for debugging (BEFORE parsing, so we can see what failed)
+    const rawResponse = {
+      content: res?.content,
+      rawJSON: (res as any)?.rawJSON,
+      toolCalls: (res as any)?.toolCalls,
+      model: res?.model,
+      usage: res?.usage,
+    };
+
     // Parse response
     let parsed: any = null;
     try {
@@ -423,6 +438,35 @@ ${transcript}`;
 
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blindSpots) || !Array.isArray(parsed.frameShiftRecommendations) || typeof parsed.frame !== 'string' || !['low', 'medium', 'high'].includes(parsed.confidence)) {
       console.log('[DiscussionFlowAnalysis] no valid analysis parsed, skipping');
+      
+      // Save raw response even if parsing failed, so user can see what went wrong
+      try {
+        const analysisId = existingAnalysisInteraction?.id || (Date.now().toString() + '-discussion-flow-analysis-failed');
+        useGenaiChatStore.setState((s) => {
+          const items = [...s.interactions];
+          const idx = items.findIndex((it) => it.id === analysisId);
+          if (idx >= 0) {
+            (items[idx] as any).rawResponse = rawResponse;
+            (items[idx] as any).parseError = true;
+          } else {
+            items.push({
+              id: analysisId,
+              projectId: s.projectId,
+              kind: 'note',
+              subkind: analysisSubkind,
+              content: '',
+              contentSanitized: '',
+              rawResponse: rawResponse,
+              parseError: true,
+              createdAt: new Date().toISOString(),
+            } as any);
+          }
+          return { interactions: items } as any;
+        });
+      } catch (e) {
+        console.warn('[DiscussionFlowAnalysis] Failed to save raw response', e);
+      }
+      
       return;
     }
     
@@ -512,6 +556,15 @@ ${transcript}`;
     try {
       const analysisId = existingAnalysisInteraction?.id || (Date.now().toString() + '-discussion-flow-analysis');
       const analysisData = analysis;
+      
+      // Save raw API response for debugging
+      const rawResponse = {
+        content: res?.content,
+        rawJSON: (res as any)?.rawJSON,
+        toolCalls: (res as any)?.toolCalls,
+        model: res?.model,
+        usage: res?.usage,
+      };
 
       if (existingAnalysisInteraction) {
         // Update existing interaction
@@ -521,6 +574,7 @@ ${transcript}`;
           if (idx >= 0) {
             (items[idx] as any).content = JSON.stringify(analysisData);
             (items[idx] as any).contentSanitized = JSON.stringify(analysisData);
+            (items[idx] as any).rawResponse = rawResponse;
           }
           return { interactions: items } as any;
         });
@@ -548,6 +602,7 @@ ${transcript}`;
               subkind: analysisSubkind,
               content: JSON.stringify(analysisData),
               contentSanitized: JSON.stringify(analysisData),
+              rawResponse: rawResponse,
               createdAt: new Date().toISOString(),
             } as any,
           ],
