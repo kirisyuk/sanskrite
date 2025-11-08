@@ -826,6 +826,22 @@ func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIRes
 		return base
 	}
 
+	// Helper: normalize strict JSON response - extract return_structured tool call arguments into Content
+	normalizeStrictResponse := func(resp *GenerateResponse) *GenerateResponse {
+		// If Content is empty but we have a return_structured tool call, extract its arguments into Content
+		if resp.Content == "" && len(resp.ToolCalls) > 0 {
+			for _, tc := range resp.ToolCalls {
+				if tc.Name == "return_structured" && tc.Arguments != "" {
+					resp.Content = tc.Arguments
+					// Clear IsToolStep since we've normalized to Content
+					resp.IsToolStep = false
+					break
+				}
+			}
+		}
+		return resp
+	}
+
 	provider := route(opts)
 
 	// If strict JSON requested
@@ -845,6 +861,8 @@ func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIRes
 			if gerr == nil {
 				strict = mergeExtras(strict, grounded)
 			}
+			// Normalize: extract return_structured arguments into Content if needed
+			strict = normalizeStrictResponse(strict)
 			return (*GenAIResponse)(strict), nil
 		}
 		// Other providers: attempt unified strict generation
@@ -852,6 +870,8 @@ func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIRes
 		if err != nil {
 			return nil, err
 		}
+		// Normalize: extract return_structured arguments into Content if needed
+		strict = normalizeStrictResponse(strict)
 		return (*GenAIResponse)(strict), nil
 	}
 

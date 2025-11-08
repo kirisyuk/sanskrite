@@ -1,5 +1,6 @@
 import React from 'react';
 import { api } from '../lib/api';
+import { useGenaiChatStore } from '../stores/genaiChatStore';
 
 interface Document {
   id: string;
@@ -33,6 +34,8 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   const [documents, setDocuments] = React.useState<Document[]>([]);
   const [sources, setSources] = React.useState<Source[]>([]);
   const [loading, setLoading] = React.useState(false);
+  const pendingAttachedDocIds = useGenaiChatStore((state) => state.pendingAttachedDocIds);
+  const setPendingAttachedDocIds = useGenaiChatStore((state) => state.setPendingAttachedDocIds);
 
   // PERF: Track mount time
   React.useEffect(() => {
@@ -186,6 +189,16 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
     }
   };
 
+  const handleDocumentToggle = (docId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const isAttached = pendingAttachedDocIds.includes(docId);
+    if (isAttached) {
+      setPendingAttachedDocIds(pendingAttachedDocIds.filter(id => id !== docId));
+    } else {
+      setPendingAttachedDocIds([...pendingAttachedDocIds, docId]);
+    }
+  };
+
   if (!projectId || projectId === 'local-unfold') {
     return (
       <div className="flex items-center justify-center py-8 text-center" style={{ color: 'var(--text-secondary)' }}>
@@ -225,43 +238,66 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
             Documents ({documents.length})
           </h4>
           <div className="space-y-1">
-            {documents.map((doc) => (
-              <div
-                key={doc.id}
-                className="flex items-center gap-2 px-2 py-1.5 rounded group hover:bg-white/5 transition-colors cursor-pointer"
-                onClick={() => onOpenDocument?.(doc)}
-              >
-                {/* Icon */}
-                <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                  {getFileIcon(doc.filename, doc.contentType)}
-                </div>
-
-                {/* File info */}
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate" style={{ color: 'var(--text-heading)' }} title={doc.filename}>
-                    {getDocumentDisplayName(doc.filename)}
-                  </div>
-                  <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                    {formatSize(doc.sizeBytes)}
-                    {doc.parseStatus && ` • ${doc.parseStatus}`}
-                  </div>
-                </div>
-
-                {/* Delete button */}
-                <button
-                  type="button"
-                  onClick={(e) => handleDocumentDelete(doc, e)}
-                  className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-all"
-                  style={{ color: 'var(--text-secondary)' }}
-                  aria-label="Delete document"
-                  title="Delete document"
+            {documents.map((doc) => {
+              const isAttached = pendingAttachedDocIds.includes(doc.id);
+              return (
+                <div
+                  key={doc.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded group hover:bg-white/5 transition-colors"
                 >
-                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button>
-              </div>
-            ))}
+                  {/* Checkbox for attaching to context */}
+                  <input
+                    type="checkbox"
+                    checked={isAttached}
+                    onChange={() => {}}
+                    onClick={(e) => handleDocumentToggle(doc.id, e)}
+                    className="flex-shrink-0 w-4 h-4 rounded cursor-pointer"
+                    style={{ 
+                      accentColor: 'var(--accent-primary)',
+                      cursor: 'pointer'
+                    }}
+                    aria-label="Attach to context"
+                    title="Attach to context for next message"
+                  />
+
+                  {/* Icon and file info - clickable to open */}
+                  <div
+                    className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
+                    onClick={() => onOpenDocument?.(doc)}
+                  >
+                    {/* Icon */}
+                    <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                      {getFileIcon(doc.filename, doc.contentType)}
+                    </div>
+
+                    {/* File info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium truncate" style={{ color: 'var(--text-heading)' }} title={doc.filename}>
+                        {getDocumentDisplayName(doc.filename)}
+                      </div>
+                      <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                        {formatSize(doc.sizeBytes)}
+                        {doc.parseStatus && ` • ${doc.parseStatus}`}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Delete button */}
+                  <button
+                    type="button"
+                    onClick={(e) => handleDocumentDelete(doc, e)}
+                    className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-all"
+                    style={{ color: 'var(--text-secondary)' }}
+                    aria-label="Delete document"
+                    title="Delete document"
+                  >
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

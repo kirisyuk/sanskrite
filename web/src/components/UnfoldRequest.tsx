@@ -143,6 +143,51 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   // Feature toggle: lightweight hint-only mode (no dropdown)
   const ENABLE_SLASH_MENU = false;
   
+  // Dynamic rows calculation: min 3, max 7
+  const [textareaRows, setTextareaRows] = React.useState(3);
+  
+  // Calculate rows based on content height
+  React.useEffect(() => {
+    if (!textAreaRef.current) return;
+    
+    // If value is empty, reset to 3 rows
+    if (!value || !value.trim()) {
+      setTextareaRows(3);
+      return;
+    }
+    
+    const textarea = textAreaRef.current;
+    
+    // Temporarily set rows to 1 to get accurate scrollHeight measurement
+    const originalRows = textarea.rows;
+    textarea.rows = 1;
+    
+    // Get scrollHeight (content height)
+    const scrollHeight = textarea.scrollHeight;
+    
+    // Get computed line height
+    const computedStyle = getComputedStyle(textarea);
+    const lineHeight = parseFloat(computedStyle.lineHeight);
+    
+    // Calculate padding (top + bottom)
+    const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+    const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
+    const totalPadding = paddingTop + paddingBottom;
+    
+    // Calculate number of rows needed
+    // Subtract padding and divide by line height
+    const contentHeight = scrollHeight - totalPadding;
+    const calculatedRows = Math.ceil(contentHeight / lineHeight);
+    
+    // Restore original rows
+    textarea.rows = originalRows;
+    
+    // Clamp between 3 and 7
+    const clampedRows = Math.min(7, Math.max(3, calculatedRows));
+    
+    setTextareaRows(clampedRows);
+  }, [value]);
+  
   // Pre-compute lowercase versions once to avoid repeated toLowerCase() calls
   const SLASH_COMMANDS = React.useMemo(() => [
     { key: '/section', title: 'Начать раздел', hint: 'Создать новый раздел', keyLower: '/section', titleLower: 'начать раздел' },
@@ -215,6 +260,16 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     }
   }, [showSlashMenu, slashActiveIdx]);
 
+  // Detect mobile device
+  const isMobile = React.useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    // Check for touch support and screen size
+    const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const isSmallScreen = window.matchMedia('(max-width: 768px)').matches;
+    const isCoarsePointer = window.matchMedia('(pointer: coarse)').matches;
+    return hasTouch && (isSmallScreen || isCoarsePointer);
+  }, []);
+
   // Memoize onKeyDown handler
   const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Slash menu keyboard handling
@@ -242,7 +297,12 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
         return; 
       }
     }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    // On mobile: Enter submits, on desktop: Ctrl/Cmd+Enter submits
+    const shouldSubmit = isMobile 
+      ? (e.key === 'Enter' && !(e.metaKey || e.ctrlKey))
+      : (e.key === 'Enter' && (e.metaKey || e.ctrlKey));
+    
+    if (shouldSubmit) {
       e.preventDefault();
       
       if (!value.trim()) return;
@@ -254,10 +314,13 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       setValue('');
       setAttachedDocs([]);
       
+      // Reset rows to 3 after submit
+      setTextareaRows(3);
+      
       // Notify parent if needed
       onClear?.();
     }
-  }, [isSlashInput, slashItems, showSlashMenu, slashActiveIdx, value, onSubmit, onClear]);
+  }, [isMobile, isSlashInput, slashItems, showSlashMenu, slashActiveIdx, value, onSubmit, onClear]);
 
   // Click submit handler (same behavior as Ctrl/Cmd+Enter)
   const handleClickSubmit = React.useCallback(() => {
@@ -265,6 +328,10 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     onSubmit(value);
     setValue('');
     setAttachedDocs([]);
+    
+    // Reset rows to 3 after submit
+    setTextareaRows(3);
+    
     onClear?.();
   }, [value, onSubmit, onClear]);
 
@@ -776,22 +843,17 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       
       <div 
         id="unfold-request-container" 
-        className={`rounded-xl ${theme === 'dark' ? 'overflow-hidden unfold-request-gradient-border' : 'border'} mt-2 relative`}
+        className={`rounded-xl overflow-hidden unfold-request-gradient-border relative`}
         style={{
           transition: 'all 0.2s ease',
           contain: 'layout paint style',
-          ...(theme === 'dark' ? {
-            // Dark theme: gradient border via CSS class
-            backgroundColor: containerStyle.backgroundColor || 'var(--bg-input, #1A1A1A)',
-            boxShadow: containerStyle.boxShadow,
-          } : {
-            // Light theme: regular border
-            ...containerStyle,
-          }),
-          ...(isDragging ? {
-            backgroundColor: 'var(--white-10)',
-            boxShadow: '0 0 0 2px var(--white-06)',
-          } : {}),
+          // Both themes: gradient border via CSS class
+          backgroundColor: isDragging 
+            ? 'var(--white-10)' 
+            : (containerStyle.backgroundColor || (theme === 'dark' ? 'var(--bg-input, #1A1A1A)' : 'var(--bg-input, #FFFFFF)')),
+          boxShadow: isDragging 
+            ? '0 0 0 2px var(--white-06)' 
+            : (theme === 'light' ? '0 4px 16px rgba(0,0,0,0.12)' : 'none'),
         }}
         onDragOver={(e) => {
           e.preventDefault();
@@ -892,7 +954,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
             </div>
           )}
           <textarea
-            rows={3}
+            rows={textareaRows}
             value={value}
             onChange={handleTextareaChange}
             placeholder={placeholderText}
@@ -970,8 +1032,13 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               <div
                 className="flex items-center justify-center rounded-full cursor-pointer"
                 style={{ width: 32, height: 32 }}
-                title={`Context usage: ${contextUsage.used.toLocaleString()} / ${contextUsage.total.toLocaleString()} tokens (${contextUsage.percentage.toFixed(1)}%)`}
+                title={isMobile ? undefined : `Context usage: ${contextUsage.used.toLocaleString()} / ${contextUsage.total.toLocaleString()} tokens (${contextUsage.percentage.toFixed(1)}%)`}
                 aria-label={`Context usage: ${contextUsage.percentage.toFixed(1)}%`}
+                onClick={() => {
+                  if (isMobile) {
+                    addStatusMessage('info', `Context usage: ${contextUsage.used.toLocaleString()} / ${contextUsage.total.toLocaleString()} tokens (${contextUsage.percentage.toFixed(1)}%)`);
+                  }
+                }}
               >
                 <ContextUsageRing percentage={contextUsage.percentage} size={19} />
               </div>
@@ -1002,10 +1069,17 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                   color: '#cc3344',
                   fontSize: 11,
                   fontWeight: 600,
+                  padding: isMobile ? '4px 8px' : undefined,
                 }}
               >
-                <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 9999, backgroundColor: '#cc3344' }} />
-                <span>{t('unfold.request.highRiskTag')}</span>
+                {isMobile ? (
+                  <span style={{ fontSize: 14, fontWeight: 700 }}>!</span>
+                ) : (
+                  <>
+                    <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 9999, backgroundColor: '#cc3344' }} />
+                    <span>{t('unfold.request.highRiskTag')}</span>
+                  </>
+                )}
               </button>
             )}
             <button

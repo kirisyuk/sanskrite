@@ -299,7 +299,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
               const pid = current?.id;
               if (pid && wsRef && wsRef.readyState === WebSocket.OPEN) {
                 wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid }));
-                import('./wsStore').then(({ useWsStore }) => { useWsStore.getState().setSubscribed(pid); }).catch(() => {});
+                // State will be updated when we receive ws.subscribed ACK
               }
             }).catch(() => {});
           } catch {}
@@ -600,7 +600,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
           lastPid = pid;
           if (wsRef && wsRef.readyState === WebSocket.OPEN) {
             try { wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid })); } catch {}
-            import('./wsStore').then(({ useWsStore }) => { useWsStore.getState().setSubscribed(pid); }).catch(() => {});
+            // State will be updated when we receive ws.subscribed ACK
           }
         });
         projectsStoreUnsubscribe = unsubscribe;
@@ -613,7 +613,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
         try {
           if (wsRef && wsRef.readyState === WebSocket.OPEN && pid) {
             wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid }));
-            import('./wsStore').then(({ useWsStore }) => { useWsStore.getState().setSubscribed(pid); }).catch(() => {});
+            // State will be updated when we receive ws.subscribed ACK
           }
         } catch {}
       };

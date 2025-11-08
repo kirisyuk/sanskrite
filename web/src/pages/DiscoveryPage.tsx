@@ -27,6 +27,7 @@ import { mapAliasToModel } from '../lib/modelMapping';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { useTranslation } from 'react-i18next';
 import { AGENT_PRESETS } from '../lib/agentPresets';
+import { buildContext } from '../lib/contextBuilder';
 import { HATL_ONE_INSTRUCTIONS } from '../lib/hatlInstructions';
 import DocumentViewer from '../components/DocumentViewer';
 import FindingsPanel from '../components/FindingsPanel';
@@ -96,6 +97,13 @@ const DiscoveryPage: React.FC = () => {
   const [currentPerspectivePreset, setCurrentPerspectivePreset] = useState<string>('consulting');
   const [isAnalysisClosed, setIsAnalysisClosed] = useState(false);
   const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph'>('text');
+  const [showOpponentPalette, setShowOpponentPalette] = React.useState(false);
+  const [showOpponentAgents, setShowOpponentAgents] = React.useState(false);
+  const [expandedAgentId, setExpandedAgentId] = React.useState<string | null>(null);
+  const opponentAgentsRef = React.useRef<HTMLDivElement | null>(null);
+  const unfoldRequestRef = React.useRef<HTMLDivElement | null>(null);
+  const opponentButtonRef = React.useRef<HTMLDivElement | null>(null);
+  const [opponentButtonBottom, setOpponentButtonBottom] = React.useState<number>(120);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
   const genaiThinkingIntervalRef = useRef<number | null>(null);
@@ -147,6 +155,33 @@ const DiscoveryPage: React.FC = () => {
   // PERFORMANCE FIX: Subscribe only to specific values for critical paths, keep genaiChat for compatibility
   const genaiChat = useGenaiChatStore();
   const genaiChatProjectId = useGenaiChatStore((state) => state.projectId);
+  // Close opponent agents list on outside click
+  React.useEffect(() => {
+    if (!showOpponentAgents) return;
+    
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        opponentButtonRef.current && 
+        opponentButtonRef.current.contains(target)
+      ) {
+        return; // Click on button itself - handled by onClick
+      }
+      if (
+        opponentAgentsRef.current && 
+        opponentAgentsRef.current.contains(target)
+      ) {
+        return; // Click inside agents list
+      }
+      setShowOpponentAgents(false);
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside, { capture: true });
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside, { capture: true } as any);
+    };
+  }, [showOpponentAgents]);
+  
   const genaiChatInteractionsLength = useGenaiChatStore((state) => state.interactions.length);
   const genaiChatMessagesLength = useGenaiChatStore((state) => state.messages.length);
   const genaiChatHydrating = useGenaiChatStore((state) => state.hydrating);
@@ -154,6 +189,65 @@ const DiscoveryPage: React.FC = () => {
   const genaiSettings = useGenAISettings();
   const lastAnalysisStatus = useDiscoveryStore((s: any) => (s as any).lastAnalysisStatus);
   const notifiedAnalysesRef = React.useRef<Set<string>>(new Set());
+
+  // Track UnfoldRequest container position for opponent button positioning
+  React.useEffect(() => {
+    if (unfoldSubView === 'perspectives') return;
+    
+    const updatePosition = () => {
+      const container = document.getElementById('unfold-request-container');
+      if (!container) return;
+      
+      // Find parent container with position: relative (the chat container)
+      const parentContainer = container.closest('[style*="position: relative"]') as HTMLElement;
+      if (!parentContainer) return;
+      
+      // Calculate distance from bottom of parent container to top of UnfoldRequest
+      const parentHeight = parentContainer.offsetHeight;
+      const containerTop = container.offsetTop;
+      const distanceFromBottom = parentHeight - containerTop;
+      
+      // Position button 0.5rem (8px) above UnfoldRequest
+      setOpponentButtonBottom(distanceFromBottom + 8);
+    };
+    
+    // Initial position with small delay to ensure DOM is ready
+    const timeoutId = setTimeout(updatePosition, 0);
+    
+    // Use ResizeObserver to track size changes of UnfoldRequest
+    const container = document.getElementById('unfold-request-container');
+    if (!container) {
+      clearTimeout(timeoutId);
+      return;
+    }
+    
+    const resizeObserver = new ResizeObserver(() => {
+      updatePosition();
+    });
+    
+    resizeObserver.observe(container);
+    
+    // Also observe parent container for size changes
+    const parentContainer = container.closest('[style*="position: relative"]') as HTMLElement;
+    if (parentContainer) {
+      resizeObserver.observe(parentContainer);
+      
+      // Update on scroll (in case parent scrolls)
+      parentContainer.addEventListener('scroll', updatePosition, { passive: true });
+    }
+    
+    // Update on window resize
+    window.addEventListener('resize', updatePosition, { passive: true });
+    
+    return () => {
+      clearTimeout(timeoutId);
+      resizeObserver.disconnect();
+      if (parentContainer) {
+        parentContainer.removeEventListener('scroll', updatePosition);
+      }
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [unfoldSubView, genaiChatInteractionsLength, genaiChatMessagesLength]);
 
   // Auto-switch to Chat tab when switching chats/New Chat
   React.useEffect(() => {
@@ -1279,6 +1373,7 @@ const DiscoveryPage: React.FC = () => {
         
         // Fetch average timing estimate (without token count) - cached for 30 minutes
         const modelMapping = mapAliasToModel(genaiSettings.model);
+        
         if (modelMapping) {
           getAverageTiming(modelMapping.provider, modelMapping.model)
             .then((timing) => {
@@ -1289,12 +1384,14 @@ const DiscoveryPage: React.FC = () => {
               setAverageTimingSeconds(null);
             });
         } else {
+          console.warn('[DiscoveryPage] No mapping found for model alias:', genaiSettings.model);
           setAverageTimingSeconds(null);
         }
       }
     } else {
       // Stop timer when first chunk arrives or streaming stops
       if (genaiThinkingIntervalRef.current) {
+        console.log('[DiscoveryPage] Stopping thinking timer');
         window.clearInterval(genaiThinkingIntervalRef.current);
         genaiThinkingIntervalRef.current = null;
         // Don't reset averageTimingSeconds here - keep it until next request
@@ -2095,7 +2192,7 @@ const DiscoveryPage: React.FC = () => {
             <div className="text-13" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.status.graphPlaceholder')}</div>
           </div>
         ) : viewMode === 'unfold' ? (
-          <div className="w-full px-4 flex-1 flex flex-col min-h-0 pb-2" style={{ position: 'relative' }}>
+          <div className="w-full px-4 flex-1 flex flex-col min-h-0" style={{ position: 'relative' }}>
             {/* Document viewer overlay - replaces chat area when open */}
             {activeDoc && genaiChat.projectId && genaiChat.projectId !== 'local-unfold' && (
               <DocumentViewer
@@ -2196,7 +2293,7 @@ const DiscoveryPage: React.FC = () => {
               <PerspectivesPanel onPresetChange={setCurrentPerspectivePreset} />
             )}
             {/* GenAI chat history */}
-            <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px', display: unfoldSubView === 'perspectives' ? 'none' : undefined }}>
+            <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px', display: unfoldSubView === 'perspectives' ? 'none' : undefined }}>
               {(() => {
                 // Check if chat is empty (not hydrating and no messages/interactions)
                 const isEmpty = !genaiChat.hydrating && genaiChat.interactions.length === 0 && genaiChat.messages.length === 0;
@@ -2248,6 +2345,10 @@ const DiscoveryPage: React.FC = () => {
                       }
                       // Exclude perspective analysis interactions
                       if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
+                        return false;
+                      }
+                      // Exclude document attachments (they are context, not chat content)
+                      if (it.subkind === 'document.attach') {
                         return false;
                       }
                       return it.kind === 'user' || it.kind === 'assistant' || it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end';
@@ -2326,7 +2427,10 @@ const DiscoveryPage: React.FC = () => {
                   const isUser = m.role === 'user';
                   const isAssistantPlaceholder = !isUser && genaiChat.streaming && !m.content;
                   const isAssistantError = !isUser && !genaiChat.streaming && !m.content && !!genaiChat.error;
-                  if (isAssistantPlaceholder) return null;
+                  
+                  if (isAssistantPlaceholder) {
+                    return null;
+                  }
                   return (
                     <ChatMessage
                       key={m.id}
@@ -2948,6 +3052,7 @@ const DiscoveryPage: React.FC = () => {
                     const infoMsg = genaiSettings.groundingEnabled
                       ? t('unfold.status.modelUpdatingAnalysis')
                       : t('unfold.status.modelComplexReasoning');
+                    
                     return (
                       <ChatMessage
                         key={m.id}
@@ -3019,41 +3124,8 @@ const DiscoveryPage: React.FC = () => {
             )}
             {/* Thinking indicator moved inside assistant bubble during streaming */}
             {/* Usage and attributions after completion */}
-            {!genaiChat.streaming && ((genaiChat.usage || genaiChat.attributions.length > 0) || (() => {
-              try {
-                const map = (genaiChat as any).preStanceLatency || {} as Record<string, number>;
-                const msgs = (genaiChat as any).messages || [];
-                for (let i = msgs.length - 1; i >= 0; i--) {
-                  const id = msgs[i]?.id;
-                  const ms = map[id];
-                  if (typeof ms === 'number' && ms > 0) return true;
-                }
-              } catch {}
-              return false;
-            })()) && (
+            {!genaiChat.streaming && genaiChat.attributions.length > 0 && (
               <div className="px-1 pb-2 space-y-1">
-                {(() => {
-                  try {
-                    const map = (genaiChat as any).preStanceLatency || {} as Record<string, number>;
-                    const msgs = (genaiChat as any).messages || [];
-                    let stanceMs = 0;
-                    for (let i = msgs.length - 1; i >= 0; i--) {
-                      const id = msgs[i]?.id;
-                      const ms = map[id];
-                      if (typeof ms === 'number' && ms > 0) { stanceMs = ms; break; }
-                    }
-                    const u = (genaiChat as any).usage;
-                    const hasUsage = !!u;
-                    if (!hasUsage && stanceMs <= 0) return null;
-                    const usageText = hasUsage ? `Tokens: prompt ${u?.promptTokens ?? 0}, output ${u?.outputTokens ?? 0}, total ${u?.totalTokens ?? 0}` : '';
-                    const stanceText = stanceMs > 0 ? `${hasUsage ? ' · ' : ''}stance: ${(stanceMs / 1000).toFixed(2)}s` : '';
-                    return (
-                      <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                        {usageText}{stanceText}
-                      </div>
-                    );
-                  } catch { return null; }
-                })()}
                 {genaiChat.attributions.length > 0 && (
                   <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
                     Sources:
@@ -3100,8 +3172,240 @@ const DiscoveryPage: React.FC = () => {
                 isApplying={textTasksApplying}
               />
             )}
+            {/* Opponent button and agents list - overlay above input, aligned to right edge */}
+            {unfoldSubView !== 'perspectives' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
+              <div
+                ref={opponentButtonRef}
+                className="absolute"
+                style={{
+                  bottom: `${opponentButtonBottom}px`, // Dynamically calculated from UnfoldRequest top
+                  right: '1rem', // Align to right edge (same padding as px-4 = 1rem)
+                  zIndex: 10,
+                  pointerEvents: 'auto',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                {/* Agents list - appears to the left */}
+                {showOpponentAgents && (
+                  <div
+                    ref={opponentAgentsRef}
+                    className="flex items-center gap-2"
+                    style={{
+                      animation: 'fadeInScale 0.2s ease-out',
+                      transformOrigin: 'right center',
+                    }}
+                  >
+                    {AGENT_PRESETS.map((preset) => {
+                      const isExpanded = expandedAgentId === preset.id;
+                      
+                      return (
+                        <div
+                          key={preset.id}
+                          className="flex items-center gap-2"
+                          style={{
+                            transition: 'all 0.2s ease',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            aria-label={preset.displayName}
+                            title={preset.description}
+                            onClick={async () => {
+                              // If already expanded, launch the agent
+                              if (isExpanded) {
+                                setShowOpponentAgents(false);
+                                setExpandedAgentId(null);
+                                
+                                try {
+                                  const pid = await genaiChat.ensureProject();
+                                  const preferredLang = getPreferredLanguage();
+                                  
+                                  // Build context using unified function (70% of context window)
+                                  const context = buildContext({
+                                    modelAlias: preset.modelAlias,
+                                    contextPercentage: 0.7,
+                                    includeAgents: true,
+                                  });
+                                  
+                                  console.log('[Opponent] Context built:', {
+                                    messagesCount: context.messages.length,
+                                    tokenCount: context.tokenCount,
+                                    maxTokens: context.maxTokens,
+                                    charCount: context.charCount,
+                                  });
+                                  
+                                  // Build prompt for agent discussion
+                                  // Use agent's system instruction if available, otherwise use default prompt
+                                  const basePrompt = preset.params?.systemInstruction 
+                                    ? `${preset.params.systemInstruction}\n\nContext from the discussion:\n${context.transcript}\n\nRespond in ${getLanguageName(preferredLang)} language.`
+                                    : `You are participating in a discussion as an opponent, providing a counterpoint or alternative perspective.
+
+Your role:
+- Challenge assumptions and provide alternative viewpoints
+- Identify potential weaknesses or gaps in the arguments presented
+- Offer constructive criticism and different perspectives
+- Maintain respectful and productive discourse
+- Focus on substantive arguments rather than personal attacks
+
+Context from the discussion:
+${context.transcript}
+
+Your response should:
+1. Acknowledge the key points made in the discussion
+2. Present alternative perspectives or counterarguments
+3. Identify any assumptions, gaps, or potential weaknesses
+4. Contribute constructively to the discussion
+
+Respond in ${getLanguageName(preferredLang)} language.`;
+                                  
+                                  const prompt = basePrompt;
+
+                                  // Get model and options
+                                  const modelMapping = mapAliasToModel(preset.modelAlias);
+                                  if (!modelMapping) {
+                                    console.error('[Opponent] Failed to map model alias:', preset.modelAlias);
+                                    return;
+                                  }
+                                  const tools = preset.capabilities?.tools ? (genaiSettings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined) : undefined;
+                                  const options: any = {
+                                    profile: preset.modelAlias.includes('quality') ? 'quality' : 'fast',
+                                    temperature: preset.params?.temperature ?? 0.7,
+                                    systemInstruction: preset.params?.systemInstruction,
+                                    __lang: preferredLang,
+                                  };
+
+                                  // Create indicator message
+                                  const indicatorContent = `${t('unfold.actions.opponentInvoked')} ${preset.displayName}`;
+                                  await genaiChat.createIndicatorMessage(indicatorContent, 'action.opponent', undefined, {
+                                    agentProfile: {
+                                      provider: modelMapping.provider,
+                                      model: modelMapping.model,
+                                      capabilities: {
+                                        tools: !!preset.capabilities?.tools,
+                                        webSearch: !!preset.capabilities?.webSearch,
+                                        reasoning: !!preset.capabilities?.reasoning,
+                                      },
+                                      params: preset.params,
+                                    },
+                                  });
+
+                                  // Start stream with context
+                                  await genaiChat.startStream({
+                                    prompt,
+                                    tools,
+                                    options,
+                                    agentMeta: {
+                                      displayName: preset.displayName,
+                                      agentProfile: {
+                                        provider: modelMapping.provider,
+                                        model: modelMapping.model,
+                                        capabilities: {
+                                          tools: !!preset.capabilities?.tools,
+                                          webSearch: !!preset.capabilities?.webSearch,
+                                          reasoning: !!preset.capabilities?.reasoning,
+                                        },
+                                        params: preset.params,
+                                      },
+                                      subkind: 'agent.opponent',
+                                    },
+                                    suppressUserEcho: true,
+                                  });
+                                } catch (err) {
+                                  console.error('[Opponent] Failed to start opponent discussion', err);
+                                }
+                              } else {
+                                // Expand this agent (collapse others)
+                                setExpandedAgentId(preset.id);
+                              }
+                            }}
+                            className="flex items-center justify-center rounded-full transition-all shadow-lg"
+                            style={{
+                              width: isExpanded ? 'auto' : '32px',
+                              height: '32px',
+                              backgroundColor: isExpanded ? 'var(--white-15)' : 'var(--bg-elevated)',
+                              color: 'var(--text-heading)',
+                              border: '1px solid var(--overlay-line-90)',
+                              backdropFilter: 'blur(8px)',
+                              opacity: 0.95,
+                              padding: isExpanded ? '0 12px' : '0',
+                              gap: isExpanded ? '8px' : '0',
+                            }}
+                            onMouseEnter={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+                              if (!isExpanded) {
+                                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-15)';
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.opacity = '0.95';
+                              if (!isExpanded) {
+                                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--bg-elevated)';
+                              }
+                            }}
+                          >
+                            {preset.icon || (
+                              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 16v-4M12 8h.01" />
+                              </svg>
+                            )}
+                            {isExpanded && (
+                              <span className="text-xs font-medium whitespace-nowrap">{preset.displayName}</span>
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                
+                {/* Main ? button */}
+                <button
+                  type="button"
+                  aria-label={t('unfold.request.opponent')}
+                  title={t('unfold.request.opponentExplain')}
+                  onClick={() => {
+                    setShowOpponentAgents(!showOpponentAgents);
+                    if (showOpponentAgents) {
+                      setExpandedAgentId(null); // Reset expanded state when closing
+                    }
+                  }}
+                  className="flex items-center justify-center rounded-full transition-all shadow-lg"
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    backgroundColor: showOpponentAgents ? 'var(--white-15)' : 'var(--bg-elevated)',
+                    color: 'var(--text-heading)',
+                    border: '1px solid var(--overlay-line-90)',
+                    backdropFilter: 'blur(8px)',
+                    opacity: showOpponentAgents ? 1 : 0.95,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!showOpponentAgents) {
+                      (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-15)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!showOpponentAgents) {
+                      (e.currentTarget as HTMLButtonElement).style.opacity = '0.95';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--bg-elevated)';
+                    }
+                  }}
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            )}
+            {/* Opponent Palette - keep for compatibility but not used */}
             {/* Input */}
             {unfoldSubView !== 'perspectives' && (
+            <div ref={unfoldRequestRef}>
             <UnfoldRequest
               dangerTint={isHighRisk}
               showHighRiskTag={isHighRisk}
@@ -3298,6 +3602,7 @@ const DiscoveryPage: React.FC = () => {
               }}
               disabled={genaiChat.streaming || !queryText.trim()}
             />
+            </div>
             )}
             {/* Resizer handle at right edge of center column */}
             <div
@@ -3327,9 +3632,9 @@ const DiscoveryPage: React.FC = () => {
           </div>
         ) : (
         /* Interactions + input container with internal scroll */
-        <div className="w-full px-4 flex-1 flex flex-col min-h-0 pb-2">
+        <div className="w-full px-4 flex-1 flex flex-col min-h-0">
           {/* Interactions history (LLM answers etc.) */}
-          <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 pb-2 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px' }}>
+          <div ref={messagesRef} className="flex-1 overflow-y-auto px-1 min-h-[160px]" style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px' }}>
             <div className="space-y-2">
               {/* Skeleton loading during hydration */}
               {genaiChat.hydrating && interactions.length === 0 && (
@@ -4005,7 +4310,7 @@ const DiscoveryPage: React.FC = () => {
                         ))
                       )}
                     </div>
-                    </div>
+                  </div>
                     
                     {/* Experimental Response Panel - ALWAYS in DOM, never unmounted */}
                     <div style={{ 

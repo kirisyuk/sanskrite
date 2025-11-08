@@ -38,12 +38,32 @@
   100% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0); }
 }
 
+/* Fade in scale animation for opponent agents list */
+@keyframes fadeInScale {
+  0% {
+    opacity: 0;
+    transform: scale(0.8) translateX(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+}
+
 /* Gradient border for UnfoldRequest in dark theme */
 [data-theme="dark"] .unfold-request-gradient-border {
   border: 2px solid transparent;
   background: 
     linear-gradient(var(--bg-input, #1A1A1A), var(--bg-input, #1A1A1A)) padding-box,
     linear-gradient(135deg, #3b82f6 0%, #6d28d9 50%, #64748b 100%) border-box;
+}
+
+/* Gradient border for UnfoldRequest in light theme */
+[data-theme="light"] .unfold-request-gradient-border {
+  border: 2px solid transparent;
+  background: 
+    linear-gradient(var(--bg-input, #FFFFFF), var(--bg-input, #FFFFFF)) padding-box,
+    linear-gradient(135deg, #E0E7FF 0%, #C7D2FE 50%, #9CA3AF 100%) border-box;
 }
 
 /* Theme variables */
@@ -370,7 +390,9 @@ p {
 }
 
 .bottombar {
-  height: 32px;
+  height: 20px;
+  min-height: 20px;
+  max-height: 20px;
   background-color: transparent;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -382,6 +404,13 @@ p {
   flex-shrink: 0;
   position: relative;
   z-index: 10;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.bottombar * {
+  line-height: 1 !important;
+  box-sizing: border-box;
 }
 
 .main-content {
@@ -390,6 +419,7 @@ p {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+  gap: 0;
 }
 
 .content-area {
@@ -397,6 +427,8 @@ p {
   overflow-y: auto;
   background-color: transparent; /* show canvas gradient */
   min-height: 0;
+  padding-bottom: 0;
+  margin-bottom: 0;
 }
 
 /* Main content container - transparent, no styling */
@@ -516,12 +548,20 @@ p {
 
 /* Auth screen specific styles */
 .auth-container {
-  min-height: calc(100vh - 56px);
-  min-height: calc(100dvh - 56px); /* Use dynamic viewport height on mobile */
+  height: 100vh;
+  height: 100dvh; /* Use dynamic viewport height on mobile */
+  min-height: 100vh;
+  min-height: 100dvh;
   background-color: var(--bg-body);
   display: flex;
   align-items: center;
   justify-content: center;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
 }
 
 .auth-card {
@@ -1009,7 +1049,7 @@ html, body, .content-area, .main-content-container, .card {
 /* Responsive design */
 @media (max-width: 768px) {
   .content-area {
-    padding: 8px; /* Reduced from 16px */
+    padding: 8px 8px 0 8px; /* Reduced from 16px, no bottom padding */
   }
   
   .main-content-container {
@@ -1036,7 +1076,7 @@ html, body, .content-area, .main-content-container, .card {
   /* Reduce padding on very small screens */
   @media (max-height: 600px) {
     .content-area {
-      padding: 4px;
+      padding: 4px 4px 0 4px;
     }
     
     .main-content-container {
@@ -1058,13 +1098,13 @@ html, body, .content-area, .main-content-container, .card {
   /* Additional mobile height controls */
   .content-area {
     min-height: 0;
-    padding: 4px; /* Further reduced for very small screens */
+    padding: 4px 4px 0 4px; /* Further reduced for very small screens, no bottom padding */
   }
   
   /* Extra small height screens (like Galaxy Fold) */
   @media (max-height: 500px) {
     .content-area {
-      padding: 2px;
+      padding: 2px 2px 0 2px;
     }
     
     .main-content-container {

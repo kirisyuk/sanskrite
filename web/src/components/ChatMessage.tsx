@@ -87,14 +87,26 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     </div>
   );
 
-  if (isThinking && role === 'assistant' && !headerText) {
+  if (isThinking && role === 'assistant') {
     const thinkingText = t('chatMessage.thinking', { seconds: thinkingSeconds ?? 0, defaultValue: `thinking ${thinkingSeconds ?? 0} sec` });
     headerContent = (
       <div className="flex items-center gap-2">
         <RobotIcon />
-        <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-          {thinkingText}
-        </span>
+        {headerText ? (
+          <>
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+              {headerText}
+            </span>
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>•</span>
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+              {thinkingText}
+            </span>
+          </>
+        ) : (
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+            {thinkingText}
+          </span>
+        )}
         {averageTimingSeconds !== null && averageTimingSeconds !== undefined && (
           <>
             <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>•</span>

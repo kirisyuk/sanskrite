@@ -154,11 +154,9 @@ export function useTextSelection({
               const preferredLang = getPreferredLanguage();
               // Open AgentPalette in edit mode anchored to input area
               const anchor = getAnchorRect();
-              const ctxNode = (
-                <div>
-                  <div><b>Fragment:</b> {selectedText.slice(0, 200)}{selectedText.length > 200 ? '…' : ''}</div>
-                  <div style={{ marginTop: 4 }}><b>Answer (head):</b> {(full || '').slice(0, 160)}{full.length > 160 ? '…' : ''}</div>
-                </div>
+              const ctxNode = React.createElement('div', null,
+                React.createElement('div', null, React.createElement('b', null, 'Fragment:'), ' ', selectedText.slice(0, 200), selectedText.length > 200 ? '…' : ''),
+                React.createElement('div', { style: { marginTop: 4 } }, React.createElement('b', null, 'Answer (head):'), ' ', (full || '').slice(0, 160), (full || '').length > 160 ? '…' : '')
               );
               const submit = async (request: string) => {
                 if (!request.trim()) return;

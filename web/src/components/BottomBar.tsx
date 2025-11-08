@@ -14,7 +14,7 @@ export const BottomBar: React.FC = () => {
   return (
     <div className="bottombar">
       {/* Left side - Connection status indicator (aligned with topbar logo/settings spacing) */}
-      <div className="flex items-center gap-3 px-5">
+      <div className="flex items-center gap-3 px-4">
         <div
           style={{
             width: '5px',
@@ -35,19 +35,19 @@ export const BottomBar: React.FC = () => {
       <div className="flex items-center gap-4" />
 
       {/* Right side - Links */}
-      <div className="flex items-center gap-3 px-6">
+      <div className="flex items-center gap-3 px-4">
         <a 
           href="/privacy" 
-          className="text-12 underline" 
-          style={{ color: 'var(--text-secondary-strong)' }} 
+          className="underline" 
+          style={{ color: 'var(--text-secondary-strong)', fontSize: '11px', lineHeight: '1' }} 
           onClick={(e) => handleLegalClick(e, 'privacy')}
         >
           Privacy Notice
         </a>
         <a 
           href="/terms" 
-          className="text-12 underline" 
-          style={{ color: 'var(--text-secondary-strong)' }} 
+          className="underline" 
+          style={{ color: 'var(--text-secondary-strong)', fontSize: '11px', lineHeight: '1' }} 
           onClick={(e) => handleLegalClick(e, 'terms')}
         >
           Terms of Usage

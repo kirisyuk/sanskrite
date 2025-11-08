@@ -100,7 +100,14 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 								"ts":        time.Now().UnixMilli(),
 							},
 						}
-						_ = c.WriteJSON(ack)
+						if err := c.WriteJSON(ack); err != nil {
+							if h.logger != nil {
+								h.logger.Printf("ws: failed to send subscribe ack conn=%s tenant=%s project=%s err=%v", h.getConnID(c), tenantID, pid, err)
+							}
+							h.removeConn(tenantID, c)
+							_ = c.Close()
+							return
+						}
 						if h.logger != nil {
 							h.logger.Printf("ws: subscribed conn=%s tenant=%s project=%s", h.getConnID(c), tenantID, pid)
 						}
@@ -129,6 +136,18 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 func (h *Hub) removeConn(tenantID string, c *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	connID := h.connIDs[c]
+	
+	// Log which projects this connection was subscribed to
+	var subscribedProjects []string
+	if pm, ok := h.projConns[tenantID]; ok {
+		for pid, set := range pm {
+			if _, hasConn := set[c]; hasConn {
+				subscribedProjects = append(subscribedProjects, pid)
+			}
+		}
+	}
+	
 	if set, ok := h.conns[tenantID]; ok {
 		delete(set, c)
 		if len(set) == 0 {
@@ -154,6 +173,11 @@ func (h *Hub) removeConn(tenantID string, c *websocket.Conn) {
 		}
 	}
 	delete(h.connIDs, c)
+	
+	// Log removal for debugging
+	if h.logger != nil && len(subscribedProjects) > 0 {
+		h.logger.Printf("ws: removed conn=%s tenant=%s projects=%v", connID, tenantID, subscribedProjects)
+	}
 }
 
 // BroadcastJSON sends payload to all clients of tenant
@@ -195,9 +219,26 @@ func (h *Hub) BroadcastJSONProject(tenantID, projectID string, v interface{}) {
 	if pm != nil {
 		set = pm[projectID]
 	}
+	connCount := len(set)
 	h.mu.RUnlock()
-	if len(set) == 0 {
+	if connCount == 0 {
+		// Log for genai.stream events to diagnose missing subscriptions
+		if env, ok := v.(map[string]interface{}); ok {
+			if t, hasType := env["type"].(string); hasType && strings.HasPrefix(t, "genai.stream") {
+				if h.logger != nil {
+					h.logger.Printf("ws: BroadcastJSONProject skipped (no connections) tenant=%s project=%s type=%s", tenantID, projectID, t)
+				}
+			}
+		}
 		return
+	}
+	// Log for genai.stream events
+	if env, ok := v.(map[string]interface{}); ok {
+		if t, hasType := env["type"].(string); hasType && strings.HasPrefix(t, "genai.stream") {
+			if h.logger != nil {
+				h.logger.Printf("ws: BroadcastJSONProject sending to %d connection(s) tenant=%s project=%s type=%s", connCount, tenantID, projectID, t)
+			}
+		}
 	}
 	for c := range set {
 		if err := c.WriteJSON(v); err != nil {

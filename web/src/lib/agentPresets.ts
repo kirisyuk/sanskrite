@@ -1,3 +1,5 @@
+import React from 'react';
+
 export type AgentPreset = {
   id: string;
   displayName: string;
@@ -10,6 +12,8 @@ export type AgentPreset = {
   params?: { temperature?: number; systemInstruction?: string };
   // If true, the primary model should immediately respond to this agent's reply
   requireImmediatePrimaryReply?: boolean;
+  // Icon component as React element
+  icon?: React.ReactNode;
 };
 
 // Two predefined presets available on the frontend without requiring backend storage.
@@ -72,6 +76,22 @@ PRINCIPLES:
 - No fabrication: never invent facts or sources`
     },
     requireImmediatePrimaryReply: false,
+    icon: React.createElement('svg', {
+      className: 'w-4 h-4',
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: '2',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round'
+    }, [
+      React.createElement('path', { key: '1', d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }),
+      React.createElement('polyline', { key: '2', points: '14 2 14 8 20 8' }),
+      React.createElement('line', { key: '3', x1: '16', y1: '13', x2: '8', y2: '13' }),
+      React.createElement('line', { key: '4', x1: '16', y1: '17', x2: '8', y2: '17' }),
+      React.createElement('polyline', { key: '5', points: '10 9 9 9 8 9' }),
+      React.createElement('path', { key: '6', d: 'M9 5l1 1 3-3' })
+    ]),
   },
   {
     id: 'socratic-counterpoint',
@@ -123,6 +143,19 @@ CONSTRAINTS:
 - When possible, distinguish between different types of risks or explanations rather than lumping them together.`
     },
     requireImmediatePrimaryReply: true,
+    icon: React.createElement('svg', {
+      className: 'w-4 h-4',
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: '2',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round'
+    }, [
+      React.createElement('circle', { key: '1', cx: '12', cy: '12', r: '10' }),
+      React.createElement('path', { key: '2', d: 'M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3' }),
+      React.createElement('line', { key: '3', x1: '12', y1: '17', x2: '12.01', y2: '17' })
+    ]),
   },
   {
     id: 'thoughtful-opponent',
@@ -139,6 +172,18 @@ CONSTRAINTS:
         'Adopt a thoughtful, good-faith opposing stance. Surface the strongest counter-arguments, risks and trade-offs; avoid strawmen; integrate evidence if available; remain concise and constructive. You may question even deeply entrenched narratives, claims, and intentions when doing so does not contradict overall logic; challenge premises rigorously but fairly.'
     },
     requireImmediatePrimaryReply: true,
+    icon: React.createElement('svg', {
+      className: 'w-4 h-4',
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: '2',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round'
+    }, [
+      React.createElement('path', { key: '1', d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' }),
+      React.createElement('path', { key: '2', d: 'M9 12l2 2 4-4' })
+    ]),
   },
 ];
 

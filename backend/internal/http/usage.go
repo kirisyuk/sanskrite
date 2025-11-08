@@ -73,6 +73,8 @@ func (h *UsageHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logger.Printf("[GetUsage] Aggregates: byModel=%d entries, dailyTotals=%d entries, totals.count=%d", len(aggregates.ByModel), len(aggregates.DailyTotals), aggregates.Totals.Count)
+
 	// Format response
 	response := map[string]interface{}{
 		"byModel":         aggregates.ByModel,
@@ -165,6 +167,8 @@ func (h *UsageHandler) GetEvents(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, "Failed to retrieve events")
 		return
 	}
+
+	h.logger.Printf("[GetEvents] Loaded %d events (page %d, limit %d, total %d) for user %s", len(events), page, limit, total, auth.UID)
 
 	// Calculate pagination metadata
 	totalPages := (total + limit - 1) / limit

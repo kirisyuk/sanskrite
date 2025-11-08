@@ -56,7 +56,6 @@ export async function getAverageTiming(
 
     return result.estimatedSeconds;
   } catch (error) {
-    console.error('[TimingCache] Failed to fetch average timing:', error);
     // Return cached value if available, even if expired
     if (cached) {
       return cached.estimatedSeconds;

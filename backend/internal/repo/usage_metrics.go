@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -94,35 +95,48 @@ func (r *UsageMetricsRepository) ListByUser(ctx context.Context, tenantID, userI
 
 	// Get total count first (for pagination info)
 	var totalCount int
+	var docs []*firestore.DocumentSnapshot
+
 	if limit > 0 {
 		allDocs, err := q.Documents(ctx).GetAll()
 		if err != nil {
 			return nil, 0, err
 		}
 		totalCount = len(allDocs)
-	}
 
-	// Apply pagination
-	if offset > 0 {
-		q = q.Offset(offset)
-	}
-	if limit > 0 {
+		// Apply pagination
+		if offset > 0 {
+			q = q.Offset(offset)
+		}
 		q = q.Limit(limit)
-	}
 
-	docs, err := q.Documents(ctx).GetAll()
-	if err != nil {
-		return nil, 0, err
+		docs, err = q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, 0, err
+		}
+	} else {
+		// If limit is 0, we need to get all docs anyway, so count them
+		allDocs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, 0, err
+		}
+		totalCount = len(allDocs)
+		// Use the same docs for results
+		docs = allDocs
 	}
 
 	var metrics []*UsageMetric
 	for _, d := range docs {
 		var m UsageMetric
 		if err := d.DataTo(&m); err != nil {
+			log.Printf("[ListByUser] Failed to parse document %s: %v", d.Ref.ID, err)
 			continue
 		}
+		// Set ID from document reference
+		m.ID = d.Ref.ID
 		metrics = append(metrics, &m)
 	}
+	log.Printf("[ListByUser] Loaded %d metrics for user %s (tenant %s) from %v to %v", len(metrics), userID, tenantID, startTime, endTime)
 	return metrics, totalCount, nil
 }
 
@@ -290,6 +304,7 @@ func (r *UsageMetricsRepository) GetAllAggregates(ctx context.Context, tenantID,
 	var totals DailyTotal
 
 	// Single pass through all metrics to compute all aggregations
+	log.Printf("[GetAllAggregates] Processing %d metrics for user %s", len(metrics), userID)
 	for _, m := range metrics {
 		// 1. Aggregate by model (provider:model)
 		modelKey := m.Provider + ":" + m.Model
@@ -334,6 +349,13 @@ func (r *UsageMetricsRepository) GetAllAggregates(ctx context.Context, tenantID,
 		totals.CostUSD += m.CostUSD
 	}
 
+	log.Printf("[GetAllAggregates] Aggregation complete: byModel=%d entries, dailyTotals=%d entries, totals.count=%d", len(byModel), len(dailyTotals), totals.Count)
+	if len(byModel) > 0 {
+		for key, agg := range byModel {
+			log.Printf("[GetAllAggregates] Model %s: count=%d, tokens=%d, cost=%.6f", key, agg.Count, agg.TotalTokens, agg.CostUSD)
+		}
+	}
+
 	return &UsageAggregates{
 		ByModel:         byModel,
 		DailyTotals:     dailyTotals,
@@ -353,16 +375,22 @@ func (r *UsageMetricsRepository) ListByUserPaginated(ctx context.Context, tenant
 		page = 1
 	}
 
+	log.Printf("[ListByUserPaginated] Request: page=%d, limit=%d, user=%s, tenant=%s, startTime=%v, endTime=%v", page, limit, userID, tenantID, startTime, endTime)
+
 	// Load all matching metrics (needed for accurate total count)
 	// This is acceptable because we need them for aggregations anyway
 	allMetrics, totalCount, err := r.ListByUser(ctx, tenantID, userID, startTime, endTime, 0, 0)
 	if err != nil {
+		log.Printf("[ListByUserPaginated] Error loading metrics: %v", err)
 		return nil, 0, err
 	}
+
+	log.Printf("[ListByUserPaginated] Loaded %d total metrics", totalCount)
 
 	// Calculate pagination
 	offset := (page - 1) * limit
 	if offset >= totalCount {
+		log.Printf("[ListByUserPaginated] Offset %d >= totalCount %d, returning empty slice", offset, totalCount)
 		return []*UsageMetric{}, totalCount, nil
 	}
 
@@ -370,6 +398,8 @@ func (r *UsageMetricsRepository) ListByUserPaginated(ctx context.Context, tenant
 	if end > totalCount {
 		end = totalCount
 	}
+
+	log.Printf("[ListByUserPaginated] Returning slice [%d:%d] (%d events)", offset, end, end-offset)
 
 	// Return paginated slice
 	return allMetrics[offset:end], totalCount, nil

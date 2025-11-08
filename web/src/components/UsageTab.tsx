@@ -113,6 +113,9 @@ export const UsageTab: React.FC = () => {
           dailyTotalsSample: Object.entries(data.dailyTotals || {}).slice(0, 2),
           byModelKeys: Object.keys(data.byModel || {}),
           byModelSample: Object.entries(data.byModel || {}).slice(0, 2),
+          byModelRaw: data.byModel,
+          hasByModel: !!data.byModel,
+          byModelType: typeof data.byModel,
         });
         setUsageData(data);
       } catch (err: any) {
@@ -133,13 +136,27 @@ export const UsageTab: React.FC = () => {
 
   // Load paginated events separately
   React.useEffect(() => {
-    if (!currentUser?.uid || !usageData) return;
+    if (!currentUser?.uid || !usageData) {
+      console.log('[UsageTab] Skipping events load:', {
+        hasUser: !!currentUser?.uid,
+        hasUsageData: !!usageData,
+      });
+      return;
+    }
 
     const loadEvents = async () => {
       setEventsLoading(true);
       try {
         const endDate = selectedEndDate || usageData.period.endDate;
         const startDate = selectedStartDate || usageData.period.startDate;
+        
+        console.log('[UsageTab] Loading events with params:', {
+          startDate,
+          endDate,
+          page: eventsPage,
+          limit: eventsLimit,
+          userId: currentUser?.uid,
+        });
         
         const data = await api.getUsageEvents({
           startDate,
@@ -150,10 +167,18 @@ export const UsageTab: React.FC = () => {
         console.log('[UsageTab] Received events data:', {
           eventsCount: data.events.length,
           pagination: data.pagination,
+          period: data.period,
+          firstEvent: data.events[0],
+          lastEvent: data.events[data.events.length - 1],
         });
         setEventsData(data);
       } catch (err: any) {
         console.error('[UsageTab] Error loading events:', err);
+        console.error('[UsageTab] Error details:', {
+          message: err?.message,
+          response: err?.response?.data,
+          status: err?.response?.status,
+        });
         // Don't show error to user, just log it
       } finally {
         setEventsLoading(false);
@@ -210,7 +235,13 @@ export const UsageTab: React.FC = () => {
       entriesCount: entries.length,
       firstEntry: entries[0],
       allKeys: Object.keys(usageData.byModel),
+      rawByModel: usageData.byModel,
     });
+    
+    if (entries.length === 0) {
+      console.log('[UsageTab] byModel is empty object');
+      return [];
+    }
     
     const result = entries
       .map(([key, stats]: [string, any], index: number) => {
@@ -220,26 +251,54 @@ export const UsageTab: React.FC = () => {
         }
         const parts = key.split(':');
         const costUSD = stats?.costUSD ?? stats?.CostUSD ?? 0;
+        const totalTokens = stats?.totalTokens ?? stats?.TotalTokens ?? 0;
+        const count = stats?.count ?? stats?.Count ?? 0;
         const modelName = parts.length > 1 ? parts[1] : key; // Remove provider prefix
         
         return {
           model: modelName,
           provider: parts.length > 1 ? parts[0] : 'unknown',
-          count: stats?.count ?? stats?.Count ?? 0,
+          count: count,
           inputTokens: stats?.inputTokens ?? stats?.InputTokens ?? 0,
           outputTokens: stats?.outputTokens ?? stats?.OutputTokens ?? 0,
-          totalTokens: stats?.totalTokens ?? stats?.TotalTokens ?? 0,
+          totalTokens: totalTokens,
           costUSD: costUSD,
         };
       })
       .filter((item) => {
-        // Filter out entries with zero cost, empty model name, or invalid data
-        return item.costUSD > 0 && item.model && item.model.trim() !== '';
+        // Filter out entries with zero tokens AND zero cost, empty model name, or invalid data
+        // Show models even if cost is 0, as long as they have tokens or count
+        const hasUsage = item.totalTokens > 0 || item.count > 0;
+        const isValid = item.model && item.model.trim() !== '';
+        const shouldInclude = hasUsage && isValid;
+        
+        if (!shouldInclude) {
+          console.log('[UsageTab] Filtering out model:', item.model, {
+            totalTokens: item.totalTokens,
+            count: item.count,
+            costUSD: item.costUSD,
+            isValid,
+          });
+        }
+        
+        return shouldInclude;
       })
-      .sort((a, b) => b.costUSD - a.costUSD)
+      .sort((a, b) => {
+        // Sort by cost first, then by tokens, then by count
+        if (b.costUSD !== a.costUSD) {
+          return b.costUSD - a.costUSD;
+        }
+        if (b.totalTokens !== a.totalTokens) {
+          return b.totalTokens - a.totalTokens;
+        }
+        return b.count - a.count;
+      })
       .slice(0, 10); // Top 10 models
     
-    console.log('[UsageTab] Model data result:', result);
+    console.log('[UsageTab] Model data result:', {
+      count: result.length,
+      models: result.map(m => ({ model: m.model, cost: m.costUSD, tokens: m.totalTokens, count: m.count })),
+    });
     return result;
   }, [usageData]);
 

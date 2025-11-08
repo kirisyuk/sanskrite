@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 
-type Mode = 'ask' | 'bring_in' | 'edit';
+type Mode = 'ask' | 'bring_in' | 'edit' | 'opponent';
 
 export interface AgentPresetItem {
   id: string;
@@ -86,11 +86,11 @@ export const AgentPalette: React.FC<AgentPaletteProps> = ({ mode, visible, title
           }}
         >
           <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>
-            <div className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{title || (mode === 'ask' ? 'Ask this agent' : mode === 'edit' ? 'Edit selected fragment' : 'Bring in an agent')}</div>
+            <div className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>{title || (mode === 'ask' ? 'Ask this agent' : mode === 'edit' ? 'Edit selected fragment' : mode === 'opponent' ? 'Bring opponent to discussion' : 'Bring in an agent')}</div>
             {subtitle && <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-tertiary-weak)' }}>{subtitle}</div>}
           </div>
           <div className="p-4 space-y-3">
-            {mode === 'bring_in' && (
+            {(mode === 'bring_in' || mode === 'opponent') && (
               <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="rounded-lg" style={{ height: 360, overflowY: 'auto' }}>
                   {(presets || []).map((p) => (

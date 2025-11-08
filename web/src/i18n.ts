@@ -95,6 +95,8 @@ const resources = {
           },
           attachTitle: 'Attach document',
           dropFilesToAttach: 'Drop files to attach',
+          opponent: 'Opponent',
+          opponentExplain: 'Bring an opponent model to the discussion with 70% context',
           analysisStatus: {
             analyzing: 'Analyzing {{kind}}…',
             parsing: 'Parsing {{kind}}…',
@@ -162,6 +164,7 @@ const resources = {
           askAgent: 'Ask this agent',
           refinePrev: 'Refine the previous answer',
           bringIn: 'Bring in another model',
+          opponentInvoked: 'Opponent invoked',
           copyAnswer: 'Copy answer',
           send: 'Send',
           cancel: 'Cancel',
@@ -627,6 +630,8 @@ const resources = {
           },
           attachTitle: 'Прикрепить документ',
           dropFilesToAttach: 'Перетащите файлы для прикрепления',
+          opponent: 'Оппонент',
+          opponentExplain: 'Привлечь модель-оппонента к дискуссии с 70% контекста',
           analysisStatus: {
             analyzing: 'Анализирую {{kind}}…',
             parsing: 'Обрабатываю {{kind}}…',
@@ -694,6 +699,7 @@ const resources = {
           askAgent: 'Спросить агента',
           refinePrev: 'Улучшить предыдущий ответ',
           bringIn: 'Привлечь другую модель',
+          opponentInvoked: 'Вызван оппонент',
           copyAnswer: 'Копировать ответ',
           send: 'Отправить',
           cancel: 'Отмена',

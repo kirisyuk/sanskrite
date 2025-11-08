@@ -29,6 +29,8 @@ export function mapAliasToModel(alias: string): { provider: string; model: strin
     'deepseek_quality': { provider: 'deepseek', model: 'deepseek-reasoner' },
   };
 
-  return mapping[alias] || null;
+  const result = mapping[alias] || null;
+  
+  return result;
 }
 

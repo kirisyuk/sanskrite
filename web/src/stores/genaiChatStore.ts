@@ -877,6 +877,55 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               try { console.log('[Chat] Attaching documents to interaction', { docIds: attachedDocIds }); } catch {}
             }
             const resUser = await api.createProjectInteraction(projectId, payload);
+            
+            // Create non-displayable interactions for attached documents
+            if (attachedDocIds && attachedDocIds.length > 0) {
+              try {
+                // Load documents to get their content
+                const docs = await api.docsList(projectId);
+                const docMap = new Map(docs.map((d: any) => [d.id, d]));
+                
+                // Create document interactions
+                const docInteractions: LocalInteraction[] = [];
+                for (const docId of attachedDocIds) {
+                  const doc = docMap.get(docId);
+                  if (doc && doc.extractedText) {
+                    const docInteraction: LocalInteraction = {
+                      id: `${now}-doc-${docId}`,
+                      projectId,
+                      kind: 'system',
+                      subkind: 'document.attach',
+                      content: doc.extractedText,
+                      createdAt: new Date().toISOString(),
+                      replyTo: resUser.id, // Link to user interaction
+                    };
+                    docInteractions.push(docInteraction);
+                    
+                    // Persist on server
+                    try {
+                      await api.createProjectInteraction(projectId, {
+                        kind: 'system',
+                        subkind: 'document.attach',
+                        content: doc.extractedText,
+                        replyTo: resUser.id,
+                      });
+                    } catch (e) {
+                      console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
+                    }
+                  }
+                }
+                
+                // Add to local interactions
+                if (docInteractions.length > 0) {
+                  set((st) => ({
+                    interactions: [...st.interactions, ...docInteractions],
+                  } as any));
+                }
+              } catch (e) {
+                console.warn('[Chat] Failed to create document interactions', { error: e });
+              }
+            }
+            
             // Clear attached docs after creating interaction
             set({ pendingAttachedDocIds: [] });
             set((st) => {
@@ -1249,6 +1298,55 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                   try { console.log('[Chat] Attaching documents to interaction', { docIds: attachedDocIds }); } catch {}
                 }
                 const resUser = await api.createProjectInteraction(projectId, payload);
+                
+                // Create non-displayable interactions for attached documents
+                if (attachedDocIds && attachedDocIds.length > 0) {
+                  try {
+                    // Load documents to get their content
+                    const docs = await api.docsList(projectId);
+                    const docMap = new Map(docs.map((d: any) => [d.id, d]));
+                    
+                    // Create document interactions
+                    const docInteractions: LocalInteraction[] = [];
+                    for (const docId of attachedDocIds) {
+                      const doc = docMap.get(docId);
+                      if (doc && doc.extractedText) {
+                        const docInteraction: LocalInteraction = {
+                          id: `${now}-doc-${docId}`,
+                          projectId,
+                          kind: 'system',
+                          subkind: 'document.attach',
+                          content: doc.extractedText,
+                          createdAt: new Date().toISOString(),
+                          replyTo: resUser.id, // Link to user interaction
+                        };
+                        docInteractions.push(docInteraction);
+                        
+                        // Persist on server
+                        try {
+                          await api.createProjectInteraction(projectId, {
+                            kind: 'system',
+                            subkind: 'document.attach',
+                            content: doc.extractedText,
+                            replyTo: resUser.id,
+                          });
+                        } catch (e) {
+                          console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
+                        }
+                      }
+                    }
+                    
+                    // Add to local interactions
+                    if (docInteractions.length > 0) {
+                      set((st) => ({
+                        interactions: [...st.interactions, ...docInteractions],
+                      } as any));
+                    }
+                  } catch (e) {
+                    console.warn('[Chat] Failed to create document interactions', { error: e });
+                  }
+                }
+                
                 // Clear attached docs after creating interaction
                 set({ pendingAttachedDocIds: [] });
                 set((st) => {
@@ -1605,6 +1703,55 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           console.log('[Chat] Attaching documents to interaction', { docIds: attachedDocIds });
         }
         const res = await api.createProjectInteraction(projectId, payload);
+        
+        // Create non-displayable interactions for attached documents
+        if (attachedDocIds && attachedDocIds.length > 0) {
+          try {
+            // Load documents to get their content
+            const docs = await api.docsList(projectId);
+            const docMap = new Map(docs.map((d: any) => [d.id, d]));
+            
+            // Create document interactions
+            const docInteractions: LocalInteraction[] = [];
+            for (const docId of attachedDocIds) {
+              const doc = docMap.get(docId);
+              if (doc && doc.extractedText) {
+                const docInteraction: LocalInteraction = {
+                  id: `${now}-doc-${docId}`,
+                  projectId,
+                  kind: 'system',
+                  subkind: 'document.attach',
+                  content: doc.extractedText,
+                  createdAt: new Date().toISOString(),
+                  replyTo: res.id, // Link to user interaction
+                };
+                docInteractions.push(docInteraction);
+                
+                // Persist on server
+                try {
+                  await api.createProjectInteraction(projectId, {
+                    kind: 'system',
+                    subkind: 'document.attach',
+                    content: doc.extractedText,
+                    replyTo: res.id,
+                  });
+                } catch (e) {
+                  console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
+                }
+              }
+            }
+            
+            // Add to local interactions
+            if (docInteractions.length > 0) {
+              set((st) => ({
+                interactions: [...st.interactions, ...docInteractions],
+              } as any));
+            }
+          } catch (e) {
+            console.warn('[Chat] Failed to create document interactions', { error: e });
+          }
+        }
+        
         // Clear attached docs after creating interaction
         set({ pendingAttachedDocIds: [] });
         set((st) => {
@@ -1637,6 +1784,32 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('eval.')) {
           return false;
         }
+        // Exclude document attachments (they are context, not chat content)
+        if (it.subkind === 'document.attach') {
+          return false;
+        }
+        // Exclude action, section markers (these are UI markers, not chat content)
+        if (it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end') {
+          return false;
+        }
+        return true;
+      });
+      
+      // LLM context includes document attachments (for token counting and LLM), but excludes other non-displayable types
+      const llmContextInteractions = interactions.filter((it) => {
+        // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+          return false;
+        }
+        // Exclude perspective analysis interactions (kind='system' with subkind starting with 'perspective.' and ending with '.analysis')
+        if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
+          return false;
+        }
+        // Exclude eval.* system messages (bias, stance, user_request, review evaluations)
+        if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('eval.')) {
+          return false;
+        }
+        // Include document attachments in LLM context (they are context for LLM)
         // Exclude action, section markers (these are UI markers, not chat content)
         if (it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end') {
           return false;
@@ -1658,14 +1831,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const now = Date.now();
       const twoDaysAgo = now - (2 * 24 * 60 * 60 * 1000); // 2 days in milliseconds
       
-      const pinnedInteractions = chatInteractions.filter((it) => {
+      const pinnedInteractions = llmContextInteractions.filter((it) => {
         if (!it.metadata?.pinned) return false;
         // Filter out pinned messages older than 2 days
         const createdAt = it.createdAt ? new Date(it.createdAt).getTime() : 0;
         return createdAt >= twoDaysAgo;
       });
       
-      const regularInteractions = chatInteractions.filter((it) => !it.metadata?.pinned);
+      const regularInteractions = llmContextInteractions.filter((it) => !it.metadata?.pinned);
       
       // Calculate tokens for each interaction and build messages array
       const messagesWithTokens: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string; tokens: number }> = [];
@@ -1696,7 +1869,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               : text;
             pinnedMessages.push({
               role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
-              text: truncated,
+              text: it.subkind === 'document.attach' 
+                ? `[ATTACHED DOCUMENT]\n${truncated}` 
+                : truncated,
               tokens: Math.ceil(truncated.length / 4),
             });
             pinnedTokens += Math.ceil(truncated.length / 4);
@@ -1707,7 +1882,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         
         pinnedMessages.push({
           role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
-          text: text,
+          text: it.subkind === 'document.attach' 
+            ? `[ATTACHED DOCUMENT]\n${text}` 
+            : text,
           tokens: tokens,
         });
         pinnedTokens += tokens;
@@ -1718,39 +1895,53 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       totalTokens += pinnedTokens;
       
       // Process regular interactions from newest to oldest, keeping recent ones fully
+      // Collect messages in reverse order (newest first), then reverse to get chronological order
+      const regularMessages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string; tokens: number }> = [];
+      let regularTokens = 0;
+      
       for (let i = regularInteractions.length - 1; i >= 0; i--) {
         const it = regularInteractions[i];
         const text = (it.summary && it.summary.trim()) ? it.summary : it.content;
         const tokens = Math.ceil(text.length / 4); // Approximate: 1 token = 4 chars
         
         // If adding this message would exceed remaining limit, truncate older messages
-        if (totalTokens + tokens > maxContextTokens && messagesWithTokens.length > pinnedMessages.length) {
+        if (totalTokens + regularTokens + tokens > maxContextTokens && regularMessages.length > 0) {
           // Truncate oldest messages to fit within limit
-          const remainingTokens = maxContextTokens - totalTokens;
+          const remainingTokens = maxContextTokens - totalTokens - regularTokens;
           if (remainingTokens > 100) { // Only add if we have meaningful space left
             // Truncate this message to fit remaining space
             const maxChars = remainingTokens * 4;
             const truncated = text.length > maxChars 
               ? text.slice(0, maxChars - 50) + '\n... [truncated]'
               : text;
-            messagesWithTokens.push({
+            regularMessages.push({
               role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
-              text: truncated,
+              text: it.subkind === 'document.attach' 
+                ? `[ATTACHED DOCUMENT]\n${truncated}` 
+                : truncated,
               tokens: Math.ceil(truncated.length / 4),
             });
-            totalTokens += Math.ceil(truncated.length / 4);
+            regularTokens += Math.ceil(truncated.length / 4);
           }
           // Stop processing older messages once we hit the limit
           break;
         }
         
-        messagesWithTokens.push({
+        regularMessages.push({
           role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
-          text: text,
+          text: it.subkind === 'document.attach' 
+            ? `[ATTACHED DOCUMENT]\n${text}` 
+            : text,
           tokens: tokens,
         });
-        totalTokens += tokens;
+        regularTokens += tokens;
       }
+      
+      // Reverse regular messages to get chronological order (oldest to newest)
+      // This ensures LLM sees messages in the correct temporal sequence
+      regularMessages.reverse();
+      messagesWithTokens.push(...regularMessages);
+      totalTokens += regularTokens;
       
       // Convert to final messages format (drop tokens field)
       const messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }> = messagesWithTokens.map(({ tokens, ...msg }) => msg);
