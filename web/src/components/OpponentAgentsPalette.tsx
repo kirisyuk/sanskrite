@@ -354,7 +354,7 @@ Respond in ${getLanguageName(preferredLang)} language.`;
         </div>
       )}
       
-      {/* Main ? button */}
+      {/* Main opponent button - scales */}
       <button
         type="button"
         aria-label={t('unfold.request.opponent')}
@@ -396,12 +396,12 @@ Respond in ${getLanguageName(preferredLang)} language.`;
           fill="none"
           stroke="currentColor"
           strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
         >
-          <circle cx="12" cy="12" r="10" />
-          <path
-            d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"
-            strokeLinecap="round"
-          />
+          {/* Flag - marking position/argument */}
+          <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+          <line x1="4" y1="22" x2="4" y2="15" />
         </svg>
       </button>
     </div>

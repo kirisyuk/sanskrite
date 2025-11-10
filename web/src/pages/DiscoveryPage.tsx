@@ -127,6 +127,8 @@ import { SettingsModal } from '../components/SettingsModal';
 import { AccountModal } from '../components/AccountModal';
 import { AdminModal } from '../components/AdminModal';
 import { TelegramAddModal } from '../components/TelegramAddModal';
+import { ChatMessagesList } from '../components/ChatMessagesList';
+import { RightDrawer } from '../components/RightDrawer';
 
 const DiscoveryPage: React.FC = () => {
   const { t, i18n } = useTranslation();
@@ -489,26 +491,9 @@ const DiscoveryPage: React.FC = () => {
     };
   }, [isMobile, sideOpen, rightPanelType]);
   
-  // Sync drawer width when resized natively
-  const drawerRef = useRef<HTMLDivElement>(null);
+  // Sync drawer width when resized natively - now handled by RightDrawer
+  // const drawerRef = useRef<HTMLDivElement>(null);
   const lastUserMessageIdRef = React.useRef<string | null>(null);
-  useEffect(() => {
-    const drawer = drawerRef.current;
-    if (!drawer) return;
-    
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const width = entry.contentRect.width;
-        if (Math.abs(width - drawerWidth) > 1) {
-          // Avoid infinite loops
-          setDrawerWidth(width);
-        }
-      }
-    });
-    
-    observer.observe(drawer);
-    return () => observer.disconnect();
-  }, [drawerWidth]);
   // Active document viewer state
   const [activeDoc, setActiveDoc] = useState<null | {
     id: string;
@@ -518,39 +503,12 @@ const DiscoveryPage: React.FC = () => {
     parseStatus?: string;
   }>(null);
   
-  const hasPinned = React.useMemo(() => {
-    try {
-      return useGenaiChatStore.getState().interactions.some((it: any) => {
-        // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
-        if (
-          it.kind === 'note' &&
-          typeof it.subkind === 'string' &&
-          it.subkind.startsWith('perspective.')
-        ) {
-          return false;
-        }
-        // Exclude perspective analysis interactions
-        if (
-          it.kind === 'system' &&
-          typeof it.subkind === 'string' &&
-          it.subkind.startsWith('perspective.') &&
-          it.subkind.endsWith('.analysis')
-        ) {
-          return false;
-        }
-        return !!it?.metadata?.pinned;
-      });
-    } catch {
-      return false;
-    }
-  }, [genaiChatInteractionsLength, rightPanelType]);
-  
   // PERFORMANCE FIX: Use selector to get interactions only when needed, not subscribe to entire array
   const getInteractions = React.useCallback(
     () => useGenaiChatStore.getState().interactions,
     [],
   );
-  
+
   const sectionStarts = React.useMemo(() => {
     try { 
       const interactions = getInteractions();
@@ -626,6 +584,40 @@ const DiscoveryPage: React.FC = () => {
         setExperimentalLoading(false);
       });
   }, [userInteractionsCount, rightPanelType, getInteractions]);
+  
+  // Track pinned status changes by subscribing to a hash of pinned interaction IDs
+  // This ensures pinnedInteractions updates even when interactions array length doesn't change
+  const pinnedIdsHash = useGenaiChatStore((s) => {
+    try {
+      const interactions = s.interactions || [];
+      const pinnedIds = interactions
+        .filter((it: any) => {
+          // Exclude perspective interactions
+          if (
+            it.kind === 'note' &&
+            typeof it.subkind === 'string' &&
+            it.subkind.startsWith('perspective.')
+          ) {
+            return false;
+          }
+          if (
+            it.kind === 'system' &&
+            typeof it.subkind === 'string' &&
+            it.subkind.startsWith('perspective.') &&
+            it.subkind.endsWith('.analysis')
+          ) {
+            return false;
+          }
+          return !!it?.metadata?.pinned;
+        })
+        .map((it: any) => it.id)
+        .sort()
+        .join(',');
+      return pinnedIds;
+    } catch {
+      return '';
+    }
+  });
 
   const pinnedInteractions = React.useMemo(() => {
     try {
@@ -653,7 +645,13 @@ const DiscoveryPage: React.FC = () => {
     } catch {
       return [];
     }
-  }, [getInteractions, genaiChatInteractionsLength]);
+  }, [getInteractions, genaiChatInteractionsLength, pinnedIdsHash]);
+  
+  // Use pinnedInteractions.length instead of separate computation
+  // This ensures hasPinned updates correctly when interactions are pinned/unpinned
+  const hasPinned = React.useMemo(() => {
+    return pinnedInteractions.length > 0;
+  }, [pinnedInteractions.length]);
   const truncateCenterWords = (
     s: string,
     headWords: number = 12,
@@ -1469,659 +1467,43 @@ const DiscoveryPage: React.FC = () => {
                         </div>
                       </div>
                     )}
-                    {(() => {
-                  // Merge messages and interactions, sort by timestamp to ensure correct order
-                  return mergedMessages.map((item) => {
-                    if (item.type === 'message') {
-                      const m = item.data;
-                      return (
-                        <MessageItem
-                          key={m.id}
-                          message={m}
-                          genaiChat={{
-                            streaming: genaiChat.streaming,
-                            error: genaiChat.error,
-                            messageMeta: genaiChat.messageMeta,
-                            preStanceLatency: genaiChat.preStanceLatency,
-                            evaluations: genaiChat.evaluations,
-                          }}
-                          genaiThinkingSeconds={genaiThinkingSeconds}
-                          averageTimingSeconds={averageTimingSeconds}
-                          genaiSettings={{
-                            strength: genaiSettings.strength,
-                            model: genaiSettings.model,
-                            groundingEnabled: genaiSettings.groundingEnabled,
-                          }}
-                          expandedChip={expandedChip}
-                          onExpandChip={setExpandedChip}
-                        />
-                      );
-                    } else {
-                                  // item.type === 'interaction'
-                      const it = item.data;
-                      // Render section markers
-                      if (
-                        it.kind === 'section_start' ||
-                        it.kind === 'section_end'
-                      ) {
-                        return (
-                          <SectionMarker
-                            key={it.id}
-                            interaction={it}
-                            collapsedSections={collapsedSections}
-                            onToggleCollapse={(sid) =>
-                              setCollapsedSections((s) => ({
-                                ...s,
-                                [sid]: !s[sid],
-                              }))
-                            }
-                          />
-                        );
+                    <ChatMessagesList
+                      mergedMessages={mergedMessages}
+                      genaiChat={{
+                        streaming: genaiChat.streaming,
+                        error: genaiChat.error,
+                        messageMeta: genaiChat.messageMeta,
+                        preStanceLatency: genaiChat.preStanceLatency,
+                        evaluations: genaiChat.evaluations,
+                        interactions: genaiChat.interactions,
+                        messages: genaiChat.messages,
+                        persistedByLocalId: (genaiChat as any).persistedByLocalId || {},
+                      }}
+                      genaiThinkingSeconds={genaiThinkingSeconds}
+                      averageTimingSeconds={averageTimingSeconds}
+                      genaiSettings={{
+                        strength: genaiSettings.strength,
+                        model: genaiSettings.model,
+                        groundingEnabled: genaiSettings.groundingEnabled,
+                      }}
+                      expandedChip={expandedChip}
+                      onExpandChip={setExpandedChip}
+                      collapsedSections={collapsedSections}
+                      onToggleCollapse={(sid) =>
+                        setCollapsedSections((s) => ({
+                          ...s,
+                          [sid]: !s[sid],
+                        }))
                       }
-                      
-                      // Special rendering for action interactions
-                      if (it.kind === 'action') {
-                        return (
-                          <ActionInteraction
-                            key={it.id}
-                            interaction={it}
-                            collapsedSections={collapsedSections}
-                          />
-                        );
-                      }
-                      
-                      const isUser = it.kind === 'user';
-                      // Skip rendering if inside a collapsed section
-                      try {
-                                    const sid = (it as any).sectionId as
-                                      | string
-                                      | undefined;
-                                    if (sid && collapsedSections[sid])
-                                      return null;
-                      } catch {}
-                      
-                      // Special rendering for action.bring_in indicator messages
-                      if (
-                        isUser &&
-                        it.subkind === 'action.bring_in'
-                      ) {
-                        return (
-                          <BringInIndicator
-                            key={it.id}
-                            interaction={it}
-                          />
-                        );
-                      }
-                      
-                      const meta = genaiChat.messageMeta[it.id];
-                                  const header = !isUser
-                                    ? meta?.headerText ||
-                                      it.author?.displayName ||
-                                      (it.agentProfile ? 'agent' : 'assistant')
-                                    : undefined;
-                                  const leftAccent = !isUser
-                                    ? (meta?.leftAccent ?? !!it.agentProfile)
-                                    : false;
-                      
-                      return (
-                        <div key={it.id} className="group relative">
-                          <MessageActions
-                            interactionId={it.id}
-                            isUser={isUser}
-                            interaction={it}
-                          />
-                                      <ChatMessage
-                                        role={isUser ? 'user' : 'assistant'}
-                                        align={isUser ? 'right' : 'left'}
-                                        isThinking={false}
-                                        thinkingSeconds={0}
-                                        isError={false}
-                                        headerText={header}
-                                        leftAccent={leftAccent}
-                                        footer={undefined}
-                                      >
-                          {isUser ? (
-                            <>
-                              <CollapsibleText maxLines={7}>
-                                <MarkdownRenderer
-                                  content={it.content}
-                                  className="text-13 markdown"
-                                  style={{
-                                    color: 'var(--text-heading)',
-                                    whiteSpace: 'pre-wrap',
-                                  }}
-                                />
-                              </CollapsibleText>
-                              {/* Lightweight action row for USER: only evaluation, no buttons */}
-                              {(() => {
-                                try {
-                                  const evalNode = findEvalBiasInteraction(
-                                    it.id,
-                                    genaiChat.interactions,
-                                    (genaiChat as any).persistedByLocalId || {},
-                                  );
-                                  if (!evalNode) return null;
-                                  return (
-                                    <div className="mt-1">
-                                      <EvaluationDetails messageId={it.id} />
-                                    </div>
-                                  );
-                                } catch {
-                                  return null;
-                                }
-                              })()}
-                            </>
-                          ) : (
-                            <>
-                              {/* Graph message rendering */}
-                              {(() => {
-                                const gd = parseGraphData(it);
-                                if (gd) {
-                                  return (
-                                    <div data-interaction-id={it.id}>
-                                      <ChatGraphMessage
-                                        chartTitle={gd.chartTitle}
-                                        chartType={gd.chartType || 'line'}
-                                        table={gd.table}
-                                        sources={gd.sources}
-                                      />
-                                    </div>
-                                  );
-                                }
-                                const contentWithHighlight = applyEditHighlight(
-                                  (it.contentSanitized || it.content) as string,
-                                  editHighlight[it.id],
-                                );
-                                
-                                return (
-                                  <div
-                                    className="text-13 markdown"
-                                    data-interaction-id={it.id}
-                                    style={{
-                                      color: 'var(--text-heading)',
-                                      position: 'relative',
-                                      opacity: frozenEdits[it.id] ? 0.6 : 1,
-                                      pointerEvents: frozenEdits[it.id]
-                                        ? ('none' as any)
-                                        : 'auto',
-                                    }}
-                                  >
-                                    <MarkdownRenderer
-                                      content={contentWithHighlight}
-                                      useRaw={true}
-                                      skipWrapper={true}
-                                    />
-                              {/* Top-right status chip */}
-                                                  {(frozenEdits[it.id] ||
-                                                    editErrors[it.id]) && (
-                                                    <div
-                                                      className="absolute"
-                                                      style={{
-                                                        top: 4,
-                                                        right: 4,
-                                                      }}
-                                                    >
-                                  {frozenEdits[it.id] && (
-                                                        <span
-                                                          className="px-2 py-0.5 rounded text-[10px]"
-                                                          style={{
-                                                            background:
-                                                              'var(--white-10)',
-                                                            border:
-                                                              '1px solid var(--overlay-line-90)',
-                                                            color:
-                                                              'var(--text-secondary-strong)',
-                                                          }}
-                                                        >
-                                                          <span
-                                                            className="inline-block mr-1"
-                                                            style={{
-                                                              width: 8,
-                                                              height: 8,
-                                                              borderRadius: 9999,
-                                                              background:
-                                                                'var(--text-secondary-strong)',
-                                                              opacity: 0.6,
-                                                              animation:
-                                                                'pulse 1.2s infinite',
-                                                            }}
-                                                          />
-                                      Updating…
-                                    </span>
-                                  )}
-                                                      {editErrors[it.id] &&
-                                                        !frozenEdits[it.id] && (
-                                                          <span
-                                                            className="px-2 py-0.5 rounded text-[10px]"
-                                                            style={{
-                                                              background:
-                                                                'var(--bg-elevated)',
-                                                              border:
-                                                                '1px solid var(--overlay-line-90)',
-                                                              color:
-                                                                'var(--accent-danger)',
-                                                            }}
-                                                          >
-                                      Failed
-                                                            <button
-                                                              className="ml-2 underline"
-                                                              style={{
-                                                                color:
-                                                                  'var(--text-secondary-strong)',
-                                                              }}
-                                                              onClick={() => {
-                                                                const last =
-                                                                  editLast[
-                                                                    it.id
-                                                                  ];
-                                                                if (
-                                                                  last &&
-                                                                  last.request
-                                                                ) {
-                                          // re-run with saved request
-                                          (async () => {
-                                                                    const req =
-                                                                      last.request;
-                                                                    const selText =
-                                                                      last.selected;
-                                                                    const markdownRoot =
-                                                                      document.querySelector(
-                                                                        `[data-interaction-id="${it.id}"]`,
-                                                                      ) as HTMLElement | null;
-                                                                    if (
-                                                                      !markdownRoot
-                                                                    )
-                                                                      return;
-                                                                    const inter =
-                                                                      useGenaiChatStore
-                                                                        .getState()
-                                                                        .interactions.find(
-                                                                          (x) =>
-                                                                            x.id ===
-                                                                            it.id,
-                                                                        );
-                                                                    if (!inter) return;
-                                                                    const full =
-                                                                      (
-                                                                        inter?.contentSanitized ||
-                                                                        inter?.content ||
-                                                                        ''
-                                                                      ).toString();
-                                                                    const displayed =
-                                                                      (markdownRoot.innerText || '').toString();
-                                                                    const meta =
-                                                                      useGenaiChatStore.getState()
-                                                                        .messageMeta[
-                                                                        it.id
-                                                                      ];
-                                                                    const agentName =
-                                                                      meta?.headerText ||
-                                                                      'agent';
-                                                                    const prof =
-                                                                      meta?.agentProfile;
-                                                                    await handleEditTextDirect({
-                                                                      interactionId: it.id,
-                                                                      selectedText: selText,
-                                                                      fullText: full,
-                                                                      displayedText: displayed,
-                                                                      agentName,
-                                                                      agentProfile: prof,
-                                                                      request: req,
-                                                                      onUpdate: (id, newContent) => {
-                                                                        handleEditUpdate(id, newContent);
-                                                                      },
-                                                                      onError: (id, error) => {
-                                                                        handleEditError(id, error);
-                                                                      },
-                                                                      onStart: (id) => {
-                                                                        handleEditStart(id);
-                                                                      },
-                                                                      onFinish: (id) => {
-                                                                        handleEditFinish(id);
-                                                                      },
-                                                                    });
-                                          })();
-                                        }
-                                                              }}
-                                                            >
-                                                              Retry
-                                                            </button>
-                                                            <button
-                                                              className="ml-1 underline"
-                                                              style={{
-                                                                color:
-                                                                  'var(--text-secondary-strong)',
-                                                              }}
-                                                              onClick={() =>
-                                                                handleEditError(it.id, null as any)
-                                                              }
-                                                            >
-                                                              Cancel
-                                                            </button>
-                                    </span>
-                                  )}
-            </div>
-                              )}
-                              {frozenEdits[it.id] && (
-                                                    <div
-                                                      className="absolute inset-0"
-                                                      style={{
-                                                        pointerEvents: 'none',
-                                                      }}
-                                                    >
-                                                      <div
-                                                        className="absolute inset-0"
-                                                        style={{
-                                                          background:
-                                                            'linear-gradient(90deg, transparent, var(--white-06), transparent)',
-                                                          animation:
-                                                            'etg-shimmer 2s infinite',
-                                                        }}
-                                                      />
-                                </div>
-                              )}
-                              {editErrors[it.id] && (
-                                                    <div
-                                                      className="mt-1 px-2 py-1 rounded"
-                                                      style={{
-                                                        border:
-                                                          '1px solid var(--overlay-line-90)',
-                                                        background:
-                                                          'var(--bg-elevated)',
-                                                      }}
-                                                    >
-                                                      <div
-                                                        className="text-[11px]"
-                                                        style={{
-                                                          color:
-                                                            'var(--accent-danger)',
-                                                        }}
-                                                      >
-                                                        Edit failed:{' '}
-                                                        {editErrors[it.id]}
-                                                      </div>
-                                </div>
-                              )}
-                            </div>
-                                              );
-                                            })()}
-                              {/* End of graph/markdown conditional rendering */}
-                              {/* Tags row: per-interaction chips for assistant - BEFORE ActionRow/EvaluationDetails */}
-                                            {!isUser &&
-                                              (() => {
-                                                try {
-                                                  const perQ = Array.isArray(
-                                                    (it as any).searchQueries,
-                                                  )
-                                                    ? (
-                                                        it as any
-                                                      ).searchQueries.filter(
-                                                        Boolean,
-                                                      )
-                                                    : [];
-                                                  const perS = Array.isArray(
-                                                    (it as any).sources,
-                                                  )
-                                                    ? (
-                                                        it as any
-                                                      ).sources.filter(Boolean)
-                                                    : [];
-                                  const qs = perQ.slice(0, 4);
-                                                  const attrs =
-                                                    perS.length > 0
-                                                      ? perS
-                                                          .map(
-                                                            (url: string) => ({
-                                                              url,
-                                                            }),
-                                                          )
-                                                          .slice(0, 4)
-                                                      : [];
-                                                  if (
-                                                    qs.length === 0 &&
-                                                    attrs.length === 0
-                                                  )
-                                                    return null;
-                                  return (
-                                    <div className="mt-1">
-                                                      <div
-                                                        className="text-[11px] mb-1"
-                                                        style={{
-                                                          color:
-                                                            'var(--text-tertiary-weak)',
-                                                        }}
-                                                      >
-                                                        Sources:
-                                                      </div>
-                                      <div className="flex flex-wrap gap-1">
-                                                        {qs.map(
-                                                          (
-                                                            q: string,
-                                                            i: number,
-                                                          ) => {
-                                        const chipId = `${it.id}-q-${i}`;
-                                                            const isExpanded =
-                                                              expandedChip ===
-                                                              chipId;
-                                                            const words =
-                                                              String(q || '')
-                                                                .trim()
-                                                                .split(/\s+/);
-                                                            const short =
-                                                              words.length > 3
-                                                                ? words
-                                                                    .slice(0, 3)
-                                                                    .join(' ') +
-                                                                  '…'
-                                                                : String(
-                                                                    q || '',
-                                                                  );
-                                                            const needsExpand =
-                                                              words.length > 3;
-                                        return (
-                                          <button
-                                            key={`q-${i}`}
-                                            type="button"
-                                            className="px-2 py-0.5 rounded-full text-[10px] transition-colors"
-                                                                style={{
-                                                                  backgroundColor:
-                                                                    isExpanded
-                                                                      ? 'var(--white-20)'
-                                                                      : 'var(--white-10)',
-                                                                  color:
-                                                                    'var(--text-secondary-strong)',
-                                                                  border:
-                                                                    'none',
-                                                                  cursor:
-                                                                    needsExpand
-                                                                      ? 'pointer'
-                                                                      : 'default',
-                                                                }}
-                                                                onClick={() =>
-                                                                  needsExpand &&
-                                                                  setExpandedChip(
-                                                                    isExpanded
-                                                                      ? null
-                                                                      : chipId,
-                                                                  )
-                                                                }
-                                                                onMouseEnter={(
-                                                                  e,
-                                                                ) => {
-                                                                  if (
-                                                                    needsExpand
-                                                                  )
-                                                                    (
-                                                                      e.currentTarget as HTMLButtonElement
-                                                                    ).style.backgroundColor =
-                                                                      isExpanded
-                                                                        ? 'var(--white-25)'
-                                                                        : 'var(--white-15)';
-                                                                }}
-                                                                onMouseLeave={(
-                                                                  e,
-                                                                ) => {
-                                                                  if (
-                                                                    needsExpand
-                                                                  )
-                                                                    (
-                                                                      e.currentTarget as HTMLButtonElement
-                                                                    ).style.backgroundColor =
-                                                                      isExpanded
-                                                                        ? 'var(--white-20)'
-                                                                        : 'var(--white-10)';
-                                                                }}
-                                                              >
-                                                                {isExpanded
-                                                                  ? String(
-                                                                      q || '',
-                                                                    )
-                                                                  : short}
-                                          </button>
-                                        );
-                                                          },
-                                                        )}
-                                                        {attrs.map(
-                                                          (
-                                                            a: any,
-                                                            i: number,
-                                                          ) => {
-                                        const chipId = `${it.id}-src-${i}`;
-                                                            const isExpanded =
-                                                              expandedChip ===
-                                                              chipId;
-                                                            const raw = String(
-                                                              (a as any).url ||
-                                                                '',
-                                                            ).replace(
-                                                              /^https?:\/\//i,
-                                                              '',
-                                                            );
-                                                            const parts =
-                                                              raw.split('/');
-                                                            const host =
-                                                              parts[0] || '';
-                                                            const tail =
-                                                              parts[1]
-                                                                ? `/${parts[1]}`
-                                                                : '';
-                                                            const label =
-                                                              host + tail ||
-                                                              (a as any)
-                                                                .title ||
-                                                              'link';
-                                                            const needsExpand =
-                                                              raw.length >
-                                                              (host + tail)
-                                                                .length;
-                                        return (
-                                          <a
-                                            key={`src-${i}`}
-                                                                href={
-                                                                  (a as any).url
-                                                                }
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="px-2 py-0.5 rounded-full text-[10px] underline transition-colors"
-                                                                style={{
-                                                                  backgroundColor:
-                                                                    isExpanded
-                                                                      ? 'var(--white-20)'
-                                                                      : 'var(--white-10)',
-                                                                  color:
-                                                                    'var(--text-secondary-strong)',
-                                                                }}
-                                                                onClick={(
-                                                                  e,
-                                                                ) => {
-                                                                  if (
-                                                                    needsExpand
-                                                                  ) {
-                                                                    e.preventDefault();
-                                                                    setExpandedChip(
-                                                                      isExpanded
-                                                                        ? null
-                                                                        : chipId,
-                                                                    );
-                                                                  }
-                                                                }}
-                                                                onMouseEnter={(
-                                                                  e,
-                                                                ) => {
-                                                                  (
-                                                                    e.currentTarget as HTMLAnchorElement
-                                                                  ).style.backgroundColor =
-                                                                    isExpanded
-                                                                      ? 'var(--white-25)'
-                                                                      : 'var(--white-15)';
-                                                                }}
-                                                                onMouseLeave={(
-                                                                  e,
-                                                                ) => {
-                                                                  (
-                                                                    e.currentTarget as HTMLAnchorElement
-                                                                  ).style.backgroundColor =
-                                                                    isExpanded
-                                                                      ? 'var(--white-20)'
-                                                                      : 'var(--white-10)';
-                                                                }}
-                                                              >
-                                                                {isExpanded
-                                                                  ? raw
-                                                                  : label}
-                                          </a>
-                                        );
-                                                          },
-                                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                                } catch {
-                                                  return null;
-                                                }
-                              })()}
-                              {!isUser && (
-                                              <ActionRow
-                                                messageId={it.id}
-                                                isAssistant={!isUser}
-                                                content={
-                                                  it.contentSanitized ||
-                                                  it.content
-                                                }
-                                              />
-                              )}
-                            </>
-                          )}
-                        </ChatMessage>
-                        </div>
-                      );
-                    }
-                  });
-                })()}
-                            {genaiChat.streaming &&
-                              (() => {
-                  try {
-                                  const m =
-                                    genaiChat.messages[
-                                      genaiChat.messages.length - 1
-                                    ];
-                    if (!m || m.role !== 'assistant') return null;
-                    // Don't show placeholder if message has content (streaming has started producing content)
-                                  if (m.content && m.content.trim())
-                                    return null;
-                    
-                    return (
-                      <ThinkingPlaceholder
-                        key={m.id}
-                        messageId={m.id}
-                        genaiThinkingSeconds={genaiThinkingSeconds}
-                        averageTimingSeconds={averageTimingSeconds}
-                      />
-                    );
-                                } catch {
-                                  return null;
-                                }
-                })()}
+                      frozenEdits={frozenEdits}
+                      editErrors={editErrors}
+                      editLast={editLast}
+                      editHighlight={editHighlight}
+                      onEditStart={handleEditStart}
+                      onEditFinish={handleEditFinish}
+                      onEditError={handleEditError}
+                      onEditUpdate={handleEditUpdate}
+                    />
                   </div>
                 );
               })()}
@@ -2701,318 +2083,65 @@ const DiscoveryPage: React.FC = () => {
         </div>
 
         {/* Right drawer: appears when any drawer is open */}
-        {rightPanelType !== null &&
-          viewMode !== 'graph' &&
-          !showAccount &&
-          !showSettings && (
-          <>
-            {/* Mobile overlay backdrop */}
-            {isMobile && (
-              <div
-                  onClick={closeAllRightPanels}
-                style={{
-                  position: 'fixed',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  backgroundColor: 'rgba(0, 0, 0, 0.5)',
-                  zIndex: 40,
-                }}
-              />
-            )}
-            <div
-              ref={drawerRef}
-              className="min-h-0 flex flex-col drawer-resizable"
-              style={{
-                width: `${drawerWidth}px`,
-                minWidth: '300px',
-                maxWidth: '800px',
-                flexShrink: 0,
-                flexGrow: 0,
-                position: isMobile ? 'fixed' : 'relative',
-                top: isMobile ? 0 : 'auto',
-                right: isMobile ? 0 : 'auto',
-                bottom: isMobile ? 0 : 'auto',
-                height: '100%',
-                maxHeight: '100%',
-                overflow: 'hidden',
-                zIndex: isMobile ? 50 : 'auto',
-                  backgroundColor: isMobile
-                    ? 'var(--bg-sidebar)'
-                    : 'transparent',
-                  ...(isMobile
-                    ? {
-                  maxWidth: '85vw',
-                  borderRadius: 0,
-                      }
-                    : {}),
-              }}
-            >
-              {/* Resize handle on left edge */}
-              {!isMobile && (
-              <div
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  const startX = e.clientX;
-                      const startWidth =
-                        drawerRef.current?.clientWidth || drawerWidth;
-                  
-                  const onMove = (ev: MouseEvent) => {
-                    const delta = startX - ev.clientX; // Handle on left: moving right (ev.clientX > startX) decreases width
-                        const newWidth = Math.max(
-                          300,
-                          Math.min(800, startWidth + delta),
-                        );
-                    if (drawerRef.current) {
-                      drawerRef.current.style.width = `${newWidth}px`;
-                      setDrawerWidth(newWidth);
-                    }
-                  };
-                  
-                  const onUp = () => {
-                    window.removeEventListener('mousemove', onMove);
-                    window.removeEventListener('mouseup', onUp);
-                  };
-                  
-                  window.addEventListener('mousemove', onMove);
-                  window.addEventListener('mouseup', onUp);
-                }}
-                style={{
-                  position: 'absolute',
-                  left: -4,
-                  top: 0,
-                  bottom: 0,
-                  width: '8px',
-                  cursor: 'col-resize',
-                  zIndex: 10,
-                }}
-              />
-              )}
-              {/* Drawer content */}
-                <div
-                  className="min-h-0 flex flex-col"
-                  style={{
-                    background: 'transparent',
-                    height: '100%',
-                    overflow: 'hidden',
-                  }}
-                >
-            {/* Right panel container - ALWAYS in DOM, never removed */}
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                      flex: rightPanelType !== null ? 1 : 0,
-                      minWidth: rightPanelType !== null ? 'auto' : 0,
-                      visibility:
-                        rightPanelType !== null ? 'visible' : 'hidden',
-                      pointerEvents: rightPanelType !== null ? 'auto' : 'none',
-                height: '100%',
-                minHeight: 0,
-                overflow: 'hidden',
-              }}
-            >
-              {/* Empty spacer matching Chat | Perspectives toggle height - placed before entire panel to shift it down */}
-                    <div
-                      className="flex items-center justify-center gap-1 mb-2 w-full"
-                      role="tablist"
-                      aria-label="Spacer"
-                      style={{
-                        visibility: 'hidden',
-                        pointerEvents: 'none',
-                        height: '28px',
-                      }}
-                    >
-                <div className="px-2 py-1 text-12 rounded" />
-                <div className="px-2 py-1 text-12 rounded" />
-              </div>
-              <div
-                className="mt-3 p-3"
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  flex: 1,
-                  minHeight: 0,
-                  overflowY: 'auto',
-                }}
-              >
-                      <div
-                        className="flex items-center justify-between"
-                        style={{
-                          position: 'sticky',
-                          top: 0,
-                          paddingBottom: 8,
-                          marginBottom: 8,
-                          zIndex: 1,
-                        }}
-                      >
-                        <h3
-                          className="text-13 font-medium"
-                          style={{ color: 'var(--text-heading)' }}
-                        >
-                          {rightPanelType === 'artifacts'
-                            ? 'Workspace Artifacts'
-                            : rightPanelType === 'experimental'
-                              ? 'Experimental Response'
-                              : rightPanelType === 'analysis'
-                                ? t('unfold.sections.analysis')
-                                : rightPanelType === 'context'
-                                  ? t('unfold.sections.contextNavigation', {
-                                      defaultValue: 'Context Navigation',
-                                    })
-                                  : 'Workspace'}
-                    </h3>
-                    <button
-                      type="button"
-                      aria-label="Close right panel"
-                      title="Close"
-                      className="p-2 rounded-lg transition-colors"
-                          style={{
-                            backgroundColor: 'transparent',
-                            color: 'var(--text-secondary-strong)',
-                          }}
-                          onMouseEnter={(e) => {
-                            (
-                              e.currentTarget as HTMLButtonElement
-                            ).style.backgroundColor = 'var(--white-10)';
-                          }}
-                          onMouseLeave={(e) => {
-                            (
-                              e.currentTarget as HTMLButtonElement
-                            ).style.backgroundColor = 'transparent';
-                          }}
-                          onClick={closeAllRightPanels}
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeWidth={2}
-                              d="M6 6l12 12M18 6L6 18"
-                            />
-                          </svg>
-                    </button>
-                  </div>
-                  
-                  {/* Workspace Artifacts toolbar (top) */}
-                  {rightPanelType === 'artifacts' && (
-                    <ArtifactsPanelToolbar
-                      onAnalyzeEntities={handleAnalyzeEntities}
-                      onAnalyzeFacts={handleAnalyzeFacts}
-                      onAnalyzeEvents={handleAnalyzeEvents}
-                      onAnalyzeMetrics={handleAnalyzeMetrics}
-                      onAnalyzeDecisions={handleAnalyzeDecisions}
-                    />
-                  )}
-                  
-                  {/* Workspace Library toolbar (top) - now handled by WorkspacePanel */}
-
-                      {/* Analysis tabs (User / Flow) - now handled by AnalysisPanel */}
-
-                      {/* Panel content - always render all panels, hide inactive ones */}
-                      <div
-                        style={{
-                          flex: 1,
-                          minHeight: 0,
-                          overflowY: 'auto',
-                          paddingRight: 4,
-                        }}
-                      >
-                        {/* Workspace Panel */}
-                        {rightPanelType === 'workspace' && (
-                          <div style={getPanelVisibilityStyles(true)}>
-                            <WorkspacePanel
-                              sources={sources}
-                              currentProjectId={currentProject?.id || null}
-                              addMenuRef={addMenuRef}
-                              showAddSourceMenu={showAddSourceMenu}
-                              onShowAddSourceMenuChange={setShowAddSourceMenu}
-                              onShowAddTelegramModalChange={setShowAddTelegramModal}
-                              onPreviewSource={setPreviewSource}
-                              onOpenDocument={setActiveDoc}
-                            />
-                          </div>
-                        )}
-
-                        {/* Analysis Panel */}
-                        {rightPanelType === 'analysis' && (
-                          <div style={getPanelVisibilityStyles(true)}>
-                            <AnalysisPanel
-                              analysisTab={analysisTab}
-                              onAnalysisTabChange={setAnalysisTab}
-                              onFirstResultUser={() => {
-                                setBadgeUser(true);
-                                setAvailUserAnalysis(true);
-                              }}
-                              onRiskUpdate={(r) => {
-                                const high = !!(r && r.level === 'High');
-                                setIsHighRisk(high);
-                                if (high) {
-                                  setRiskBanner((prev) =>
-                                    prev && prev.visible === false
-                                      ? prev
-                                      : {
-                                          visible: true,
-                                          level: 'High',
-                                          rationale: r?.rationale || '',
-                                        },
-                                  );
-                                } else if (!r) {
-                                  setRiskBanner(null);
-                                }
-                              }}
-                              onFirstResultDiscussionFlow={onFirstResultDiscussionFlow}
-                              onAddTextTask={handleAddTextTask}
-                              onRemoveTextTask={handleRemoveTextTask}
-                              textTasks={textTasks}
-                            />
-                          </div>
-                        )}
-
-                        {/* Workspace Artifacts Panel */}
-                        {rightPanelType === 'artifacts' && (
-                          <div style={getPanelVisibilityStyles(true)}>
-                            <FindingsPanel projectId={genaiChat.projectId} />
-                          </div>
-                        )}
-
-                        {/* Experimental Response Panel */}
-                        {rightPanelType === 'experimental' && (
-                          <div style={getPanelVisibilityStyles(true)}>
-                            <ExperimentalPanel
-                              response={experimentalResponse}
-                              loading={experimentalLoading}
-                            />
-                          </div>
-                        )}
-
-                        {/* Context Navigation Panel */}
-                        {rightPanelType === 'context' && (
-                          <div style={getPanelVisibilityStyles(true)}>
-                            <ContextPanel
-                              sectionStarts={sectionStarts}
-                              pinnedInteractions={pinnedInteractions}
-                              messagesRef={messagesRef}
-                              scrollToInteraction={scrollToInteraction}
-                              truncateCenterWords={truncateCenterWords}
-                              onRemoveNote={handleRemoveNote}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-            </div>
-
-            {/* Bottom slot: reserved area to match left column layout - removed to eliminate empty space */}
-          </div>
-            </div>
-          </>
-        )}
+        <RightDrawer
+          rightPanelType={rightPanelType}
+          viewMode={viewMode}
+          showAccount={showAccount}
+          showSettings={showSettings}
+          isMobile={isMobile}
+          drawerWidth={drawerWidth}
+          setDrawerWidth={setDrawerWidth}
+          closeAllRightPanels={closeAllRightPanels}
+          getPanelVisibilityStyles={getPanelVisibilityStyles}
+          sources={sources}
+          currentProjectId={currentProject?.id || null}
+          addMenuRef={addMenuRef}
+          showAddSourceMenu={showAddSourceMenu}
+          onShowAddSourceMenuChange={setShowAddSourceMenu}
+          onShowAddTelegramModalChange={setShowAddTelegramModal}
+          onPreviewSource={setPreviewSource}
+          onOpenDocument={setActiveDoc}
+          handleAnalyzeEntities={handleAnalyzeEntities}
+          handleAnalyzeFacts={handleAnalyzeFacts}
+          handleAnalyzeEvents={handleAnalyzeEvents}
+          handleAnalyzeMetrics={handleAnalyzeMetrics}
+          handleAnalyzeDecisions={handleAnalyzeDecisions}
+          analysisTab={analysisTab}
+          onAnalysisTabChange={setAnalysisTab}
+          onFirstResultUser={() => {
+            setBadgeUser(true);
+            setAvailUserAnalysis(true);
+          }}
+          onRiskUpdate={(r) => {
+            const high = !!(r && r.level === 'High');
+            setIsHighRisk(high);
+            if (high) {
+              setRiskBanner((prev) =>
+                prev && prev.visible === false
+                  ? prev
+                  : {
+                      visible: true,
+                      level: 'High',
+                      rationale: r?.rationale || '',
+                    },
+              );
+            } else if (!r) {
+              setRiskBanner(null);
+            }
+          }}
+          onFirstResultDiscussionFlow={onFirstResultDiscussionFlow}
+          onAddTextTask={handleAddTextTask}
+          onRemoveTextTask={handleRemoveTextTask}
+          textTasks={textTasks}
+          experimentalResponse={experimentalResponse}
+          experimentalLoading={experimentalLoading}
+          sectionStarts={sectionStarts}
+          pinnedInteractions={pinnedInteractions}
+          messagesRef={messagesRef}
+          scrollToInteraction={scrollToInteraction}
+          truncateCenterWords={truncateCenterWords}
+          onRemoveNote={handleRemoveNote}
+        />
 
         {/* Right buttons column - always visible */}
         <RightPanelButtons
@@ -3021,6 +2150,7 @@ const DiscoveryPage: React.FC = () => {
           hasPinned={hasPinned}
           hasSections={hasSections}
           availUserAnalysis={availUserAnalysis}
+          availDiscussionFlow={availDiscussionFlow}
         />
       </div>
     </div>

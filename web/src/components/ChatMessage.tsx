@@ -29,6 +29,35 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   averageTimingSeconds,
 }) => {
   const { t } = useTranslation();
+  const messageRef = React.useRef<HTMLDivElement | null>(null);
+  const [isHighlighted, setIsHighlighted] = React.useState(false);
+
+  // Check parent element for data-delete-hovered attribute
+  React.useEffect(() => {
+    if (role !== 'assistant') return;
+    
+    const checkParent = () => {
+      const parent = messageRef.current?.closest('.group');
+      if (parent) {
+        const hasAttribute = parent.hasAttribute('data-delete-hovered');
+        setIsHighlighted(hasAttribute);
+      }
+    };
+
+    // Check initially
+    checkParent();
+
+    // Use MutationObserver to watch for attribute changes
+    const parent = messageRef.current?.closest('.group');
+    if (parent) {
+      const observer = new MutationObserver(checkParent);
+      observer.observe(parent, {
+        attributes: true,
+        attributeFilter: ['data-delete-hovered'],
+      });
+      return () => observer.disconnect();
+    }
+  }, [role]);
   
   // Icon components for roles
   const UserIcon = () => (
@@ -68,11 +97,17 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     maxWidth: align === 'right' ? '75%' : '100%',
     width: align === 'right' ? 'fit-content' : '100%',
     // For user messages use theme-aware adjusted background
-    backgroundColor: bgOverride ? bgOverride : (role === 'user' ? 'var(--user-msg-bg)' : 'transparent'),
+    backgroundColor: bgOverride 
+      ? bgOverride 
+      : (role === 'user' 
+          ? 'var(--user-msg-bg)' 
+          : (isHighlighted ? 'var(--white-10)' : 'transparent')),
     border: 'none',
     borderLeft: leftAccent ? '2px solid var(--overlay-line-90)' : 'none',
     boxSizing: 'border-box', // Ensure border-left doesn't add to width
     minWidth: 0, // Allow flex items to shrink below content size
+    // Add smooth transition for highlight effect
+    transition: role === 'assistant' ? 'background-color 0.2s ease' : undefined,
   };
   
   // Build header with icon and optional timing info
@@ -121,7 +156,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   
   // Transparent, no borders; color handled by parent theme
   return (
-    <div className={`rounded-2xl px-4 py-3 ${align === 'right' ? 'ml-auto' : ''}`} style={containerStyle}>
+    <div ref={messageRef} className={`rounded-2xl px-4 py-3 ${align === 'right' ? 'ml-auto' : ''}`} style={containerStyle}>
       <div className="mb-1">
         {headerContent}
       </div>

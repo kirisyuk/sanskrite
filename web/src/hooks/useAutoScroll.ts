@@ -84,14 +84,25 @@ export function useAdvancedAutoScroll(
   }, [projectId, containerRef]);
 
   // Auto-scroll to bottom after hydration completes (when interactions are loaded)
+  // Only scroll if this is the initial load (lastScrollInteractionLength is 0)
+  // Don't scroll if hydration completes after updating existing interactions (e.g., pinning)
   useEffect(() => {
     if (!hydrating && interactionsLength > 0 && containerRef.current) {
-      // Small delay to ensure DOM has rendered
-      setTimeout(() => {
-        if (containerRef.current) {
-          containerRef.current.scrollTop = containerRef.current.scrollHeight;
-        }
-      }, 50);
+      // Only scroll if this is the first load (no interactions were tracked before)
+      // This prevents scrolling when updating existing interactions (like pinning)
+      if (lastScrollInteractionLength.current === 0) {
+        // Small delay to ensure DOM has rendered
+        setTimeout(() => {
+          if (containerRef.current) {
+            containerRef.current.scrollTop = containerRef.current.scrollHeight;
+          }
+        }, 50);
+        // Update tracked length after initial scroll
+        lastScrollInteractionLength.current = interactionsLength;
+      } else {
+        // Update tracked length even if we don't scroll (for consistency)
+        lastScrollInteractionLength.current = interactionsLength;
+      }
     }
   }, [hydrating, interactionsLength, containerRef]);
 

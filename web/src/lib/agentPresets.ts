@@ -85,12 +85,11 @@ PRINCIPLES:
       strokeLinecap: 'round',
       strokeLinejoin: 'round'
     }, [
-      React.createElement('path', { key: '1', d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }),
-      React.createElement('polyline', { key: '2', points: '14 2 14 8 20 8' }),
-      React.createElement('line', { key: '3', x1: '16', y1: '13', x2: '8', y2: '13' }),
-      React.createElement('line', { key: '4', x1: '16', y1: '17', x2: '8', y2: '17' }),
-      React.createElement('polyline', { key: '5', points: '10 9 9 9 8 9' }),
-      React.createElement('path', { key: '6', d: 'M9 5l1 1 3-3' })
+      // Magnifying glass
+      React.createElement('circle', { key: '1', cx: '11', cy: '11', r: '8' }),
+      React.createElement('path', { key: '2', d: 'm21 21-4.35-4.35' }),
+      // Checkmark for verification
+      React.createElement('path', { key: '3', d: 'M8 11l2 2 4-4', strokeWidth: '2.5' })
     ]),
   },
   {
@@ -152,9 +151,15 @@ CONSTRAINTS:
       strokeLinecap: 'round',
       strokeLinejoin: 'round'
     }, [
-      React.createElement('circle', { key: '1', cx: '12', cy: '12', r: '10' }),
-      React.createElement('path', { key: '2', d: 'M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3' }),
-      React.createElement('line', { key: '3', x1: '12', y1: '17', x2: '12.01', y2: '17' })
+      // Left speech bubble with question mark
+      React.createElement('path', { key: '1', d: 'M8 9c0 1.5-1.5 3-3 3s-3-1.5-3-3 1.5-3 3-3 3 1.5 3 3' }),
+      React.createElement('path', { key: '2', d: 'M8 9H5c-1.5 0-3 1.5-3 3v2' }),
+      // Question mark
+      React.createElement('circle', { key: '3', cx: '5', cy: '8.5', r: '0.8' }),
+      React.createElement('path', { key: '4', d: 'M5 10v2' }),
+      // Right speech bubble
+      React.createElement('path', { key: '5', d: 'M16 9c0 1.5 1.5 3 3 3s3-1.5 3-3-1.5-3-3-3-3 1.5-3 3' }),
+      React.createElement('path', { key: '6', d: 'M16 9h3c1.5 0 3 1.5 3 3v2' })
     ]),
   },
   {
@@ -181,8 +186,11 @@ CONSTRAINTS:
       strokeLinecap: 'round',
       strokeLinejoin: 'round'
     }, [
+      // Shield with X for counter-argument
       React.createElement('path', { key: '1', d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' }),
-      React.createElement('path', { key: '2', d: 'M9 12l2 2 4-4' })
+      // X mark for opposition
+      React.createElement('line', { key: '2', x1: '9', y1: '9', x2: '15', y2: '15' }),
+      React.createElement('line', { key: '3', x1: '15', y1: '9', x2: '9', y2: '15' })
     ]),
   },
 ];

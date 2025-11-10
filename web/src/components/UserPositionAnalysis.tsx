@@ -89,7 +89,7 @@ export const UserPositionAnalysis: React.FC<{ onFirstResult?: () => void; onRisk
         <>
           {/* Stance section */}
           <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
-            <div className="text-12 fade-in" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5', transition: 'opacity 0.2s' }}>
+            <div className="text-12 fade-in" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.6', transition: 'opacity 0.2s', whiteSpace: 'pre-wrap' }}>
               {sanitizeSx(displayContent as string)}
             </div>
           </div>

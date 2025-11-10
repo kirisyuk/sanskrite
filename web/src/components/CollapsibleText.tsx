@@ -17,10 +17,23 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
   const [needsCollapse, setNeedsCollapse] = useState(false);
   const [maxHeight, setMaxHeight] = useState<number>(0);
   const contentRef = useRef<HTMLDivElement>(null);
+  const isCheckingRef = useRef(false);
 
   useEffect(() => {
+    let resizeObserver: ResizeObserver | null = null;
+    let debounceTimeout: ReturnType<typeof setTimeout> | null = null;
+    
     const checkHeight = () => {
-      if (contentRef.current) {
+      if (isCheckingRef.current || !contentRef.current) return;
+      
+      isCheckingRef.current = true;
+      
+      // Temporarily disconnect ResizeObserver to prevent infinite loops
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      
+      try {
         // Get computed line height
         const computedStyle = window.getComputedStyle(contentRef.current);
         const lineHeight = parseFloat(computedStyle.lineHeight);
@@ -28,7 +41,6 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
         // Use line height if available, otherwise estimate (text-13 typically has ~20px line height)
         const effectiveLineHeight = lineHeight && !isNaN(lineHeight) && lineHeight > 0 ? lineHeight : 20;
         const calculatedMaxHeight = effectiveLineHeight * maxLines;
-        setMaxHeight(calculatedMaxHeight);
         
         // Temporarily remove max-height to measure full height
         const originalMaxHeight = contentRef.current.style.maxHeight;
@@ -39,8 +51,33 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
         contentRef.current.style.maxHeight = originalMaxHeight;
         contentRef.current.style.overflow = originalOverflow;
         
-        setNeedsCollapse(actualHeight > calculatedMaxHeight);
+        // Only update state if values actually changed to prevent infinite loops
+        setMaxHeight(prev => prev !== calculatedMaxHeight ? calculatedMaxHeight : prev);
+        setNeedsCollapse(prev => {
+          const newValue = actualHeight > calculatedMaxHeight;
+          return prev !== newValue ? newValue : prev;
+        });
+      } finally {
+        // Reconnect ResizeObserver after a delay to allow DOM to settle
+        setTimeout(() => {
+          isCheckingRef.current = false;
+          if (contentRef.current && resizeObserver) {
+            resizeObserver.observe(contentRef.current);
+          }
+        }, 50);
       }
+    };
+
+    // Debounced version for ResizeObserver
+    const debouncedCheckHeight = () => {
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
+      debounceTimeout = setTimeout(() => {
+        if (!isCheckingRef.current) {
+          checkHeight();
+        }
+      }, 100);
     };
 
     // Check immediately
@@ -52,11 +89,8 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
     const timeoutId3 = setTimeout(checkHeight, 1000);
 
     // Use ResizeObserver to detect when content size changes
-    let resizeObserver: ResizeObserver | null = null;
     if (contentRef.current) {
-      resizeObserver = new ResizeObserver(() => {
-        checkHeight();
-      });
+      resizeObserver = new ResizeObserver(debouncedCheckHeight);
       resizeObserver.observe(contentRef.current);
     }
 
@@ -64,6 +98,9 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
       clearTimeout(timeoutId1);
       clearTimeout(timeoutId2);
       clearTimeout(timeoutId3);
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
       if (resizeObserver) {
         resizeObserver.disconnect();
       }

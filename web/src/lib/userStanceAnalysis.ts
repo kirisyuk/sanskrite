@@ -283,7 +283,7 @@ CRITICAL: ANALYSIS FOCUS:
 - Focus on analyzing the USER's intent, position, and behavior patterns.
 
 What to UPDATE:
-- Stance: Only update if the user's intent or position has clearly shifted based on new user messages. Otherwise, keep it mostly the same, perhaps with minor refinements.
+- Stance: Only update if the user's intent or position has clearly shifted based on new user messages. Otherwise, keep it mostly the same, perhaps with minor refinements. Format the stance text as structured paragraphs: use clear paragraph breaks (\n\n) to separate different aspects or points. Each paragraph should focus on one main idea or aspect of the user's engagement pattern. Aim for 2-4 paragraphs, each containing 1-3 sentences.
 - Risk Profile: Update based on new USER requests and intent revealed in the new user message. Assess risk based on what the USER seeks, not assistant responses.
 - Roles: Only update if new user messages reveal different professional roles. Keep existing roles that are still relevant.
 - Industries: Only update if new user messages reveal different industries. Keep existing industries that are still relevant.
@@ -307,7 +307,7 @@ CRITICAL: ANALYSIS FOCUS:
 - Focus on analyzing the USER's intent, position, and behavior patterns.
 
 Task: From the USER MESSAGES below, neutrally extract:
-- stance: 1–2 concise sentences (<=100 words) written DIRECTLY to the user in SECOND PERSON ("you"). Do NOT describe the user in the third person. State what you seem to be pursuing, your perspective and deep intent, avoiding moral judgement and unsupported assumptions. Base this ONLY on what the user expresses, not on assistant content.
+- stance: Write DIRECTLY to the user in SECOND PERSON ("you"). Do NOT describe the user in the third person. State what you seem to be pursuing, your perspective and deep intent, avoiding moral judgement and unsupported assumptions. Base this ONLY on what the user expresses, not on assistant content. Format the stance text as structured paragraphs: use clear paragraph breaks (\n\n) to separate different aspects or points. Each paragraph should focus on one main idea or aspect of the user's engagement pattern. Aim for 2-4 paragraphs, each containing 1-3 sentences. Total length should be 50-200 words.
 - riskProfile: EU AI Act risk assessment with score 0..1 and derived level. If you need to reference the user in rationale, also use SECOND PERSON ("you"). Assess risk based on USER requests and intent, not assistant responses.
 - roles: Identify up to 3 professional roles that best describe the user's position in the professional world. A role is WHO the user likely is professionally (e.g., "Software Engineer", "Product Manager", "Marketing Director", "Data Scientist", "UX Designer", "Consultant", "Entrepreneur", "Researcher", "Teacher", "Doctor", "Lawyer", etc.). Each role must include:
   * role: The professional role name (1-100 characters, write in ${langName} language)

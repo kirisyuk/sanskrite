@@ -15,9 +15,33 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
 }) => {
   const genaiChat = useGenaiChatStore();
   const isPinned = !isUser && isInteractionPinned(interaction);
+  const [isDeleteHovered, setIsDeleteHovered] = React.useState(false);
+  const [isPinning, setIsPinning] = React.useState(false);
+  const [optimisticPinned, setOptimisticPinned] = React.useState<boolean | null>(null);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  
+  // Use optimistic state if available, otherwise use actual state
+  const displayPinned = optimisticPinned !== null ? optimisticPinned : isPinned;
+
+  // Update data attribute on parent container when delete button is hovered
+  React.useEffect(() => {
+    const container = containerRef.current?.closest('.group');
+    if (container) {
+      if (isDeleteHovered && !isUser) {
+        container.setAttribute('data-delete-hovered', 'true');
+      } else {
+        container.removeAttribute('data-delete-hovered');
+      }
+    }
+  }, [isDeleteHovered, isUser]);
 
   const handlePinToggle = async () => {
-    if (isUser) return; // Only for assistant messages
+    if (isUser || isPinning) return; // Only for assistant messages, prevent double-click
+    setIsPinning(true);
+    const newPinnedState = !isPinned;
+    // Optimistic update: show new state immediately
+    setOptimisticPinned(newPinnedState);
+    
     try {
       await toggleInteractionPin(
         genaiChat.projectId,
@@ -26,9 +50,15 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
       );
       // Refresh interactions to update pin state
       await genaiChat.hydrateInteractions();
+      // Clear optimistic state after successful update
+      setOptimisticPinned(null);
     } catch (e) {
+      // Revert optimistic update on error
+      setOptimisticPinned(null);
       alert('Failed to toggle pin. Please try again.');
       console.error('[Pin] Error:', e);
+    } finally {
+      setIsPinning(false);
     }
   };
 
@@ -45,25 +75,50 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
   };
 
   return (
-    <>
+    <div ref={containerRef}>
       {/* Pin button - appears on hover for assistant messages only */}
       {!isUser && (
         <button
           type="button"
-          aria-label={isPinned ? 'Unpin message' : 'Pin message'}
-          className="absolute top-2 right-10 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
+          aria-label={displayPinned ? 'Unpin message' : 'Pin message'}
+          disabled={isPinning}
+          className={`absolute top-2 right-10 p-1.5 rounded transition-opacity z-10 disabled:cursor-wait ${
+            isPinning ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          }`}
           style={{ backgroundColor: 'transparent' }}
           onClick={handlePinToggle}
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-              'var(--white-10)';
+            if (!isPinning) {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                'var(--white-10)';
+            }
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLButtonElement).style.backgroundColor =
               'transparent';
           }}
         >
-          {isPinned ? (
+          {isPinning ? (
+            <svg
+              className="w-3.5 h-3.5 animate-spin"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              style={{ color: 'var(--accent-research)' }}
+            >
+              <circle
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeDasharray="32"
+                strokeDashoffset="24"
+                strokeLinecap="round"
+                opacity="0.3"
+              />
+            </svg>
+          ) : displayPinned ? (
             <svg
               className="w-3.5 h-3.5"
               viewBox="0 0 24 24"
@@ -99,10 +154,12 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
         style={{ backgroundColor: 'transparent' }}
         onClick={handleDelete}
         onMouseEnter={(e) => {
+          setIsDeleteHovered(true);
           (e.currentTarget as HTMLButtonElement).style.backgroundColor =
             'var(--white-10)';
         }}
         onMouseLeave={(e) => {
+          setIsDeleteHovered(false);
           (e.currentTarget as HTMLButtonElement).style.backgroundColor =
             'transparent';
         }}
@@ -122,7 +179,7 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
           />
         </svg>
       </button>
-    </>
+    </div>
   );
 };
 

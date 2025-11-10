@@ -12,6 +12,7 @@ interface RightPanelButtonsProps {
   hasPinned: boolean;
   hasSections: boolean;
   availUserAnalysis: boolean;
+  availDiscussionFlow: boolean;
 }
 
 export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
@@ -20,6 +21,7 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
   hasPinned,
   hasSections,
   availUserAnalysis,
+  availDiscussionFlow,
 }) => {
   const { t } = useTranslation();
 
@@ -165,8 +167,8 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
         </svg>
       </button>
 
-      {/* Analysis button */}
-      {availUserAnalysis && (
+      {/* Analysis button - shows if User Analysis or Discussion Flow is available */}
+      {(availUserAnalysis || availDiscussionFlow) && (
         <button
           type="button"
           aria-label={t('unfold.sections.analysis', { defaultValue: 'Analysis' })}
