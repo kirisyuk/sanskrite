@@ -11,6 +11,7 @@ interface ProjectsState {
   // Actions
   fetchProjects: (view?: string) => Promise<void>;
   createProject: (data: { displayName: string; description?: string; view?: string }) => Promise<Project>;
+  updateProject: (projectId: string, data: Partial<Project>) => Promise<Project>;
   deleteProject: (projectId: string) => Promise<void>;
   setCurrentProject: (project: Project | null) => void;
 }
@@ -47,6 +48,27 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         loading: false,
       }));
       return project;
+    } catch (error: any) {
+      // Network errors are handled by the global error interceptor
+      if (error.response) {
+        set({ error: error.message, loading: false });
+      } else {
+        set({ loading: false });
+      }
+      throw error;
+    }
+  },
+
+  updateProject: async (projectId, data) => {
+    set({ loading: true, error: null });
+    try {
+      const updatedProject = await api.updateProject(projectId, data);
+      set((state) => ({
+        projects: state.projects.map((p) => (p.id === projectId ? updatedProject : p)),
+        currentProject: state.currentProject?.id === projectId ? updatedProject : state.currentProject,
+        loading: false,
+      }));
+      return updatedProject;
     } catch (error: any) {
       // Network errors are handled by the global error interceptor
       if (error.response) {

@@ -7,8 +7,9 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
   deleteUser,
+  signInWithPopup,
 } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { auth, googleAuthProvider } from '../lib/firebase';
 import { api } from '../lib/api';
 
 type SubscriptionTier = 'free' | 'pro' | 'max';
@@ -43,6 +44,7 @@ interface AuthContextType {
   refreshSubscription: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, accountType: 'personal' | 'corporate', displayName?: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -157,6 +159,85 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const signInWithGoogle = async () => {
+    if (!auth) throw new Error('Auth is not initialized');
+    
+    const userCredential = await signInWithPopup(auth, googleAuthProvider);
+    const firebaseUser = userCredential.user;
+    const email = firebaseUser.email;
+    
+    if (!email) {
+      throw new Error('Google account does not have an email address');
+    }
+
+    // Check if user exists in backend
+    try {
+      await api.getUser(firebaseUser.uid);
+      // User exists, authentication complete
+      console.log('✅ User signed in with Google');
+    } catch (error: any) {
+      // User doesn't exist in backend, need to create
+      // Check waitlist first
+      try {
+        const res = await api.waitlistCheck(email);
+        if (!res.found || (res.status || '').toLowerCase() !== 'approved') {
+          // Rollback: sign out and delete Firebase user
+          await firebaseSignOut(auth);
+          if (firebaseUser) {
+            try {
+              await deleteUser(firebaseUser);
+            } catch (deleteError) {
+              console.error('Failed to rollback Firebase user:', deleteError);
+            }
+          }
+          throw new Error('This email is not approved for Private Beta. Please join the waitlist.');
+        }
+      } catch (e: any) {
+        // Rollback on waitlist check failure
+        await firebaseSignOut(auth);
+        if (firebaseUser) {
+          try {
+            await deleteUser(firebaseUser);
+          } catch (deleteError) {
+            console.error('Failed to rollback Firebase user:', deleteError);
+          }
+        }
+        throw e;
+      }
+
+      // Determine account type based on email domain
+      const PUBLIC_DOMAINS = [
+        'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
+        'icloud.com', 'mail.com', 'protonmail.com', 'yandex.ru', 'mail.ru',
+        'live.com', 'msn.com', 'me.com', 'mac.com'
+      ];
+      const domain = email.split('@')[1]?.toLowerCase();
+      const accountType: 'personal' | 'corporate' = PUBLIC_DOMAINS.includes(domain || '') ? 'personal' : 'corporate';
+
+      // Create user in backend
+      try {
+        await api.createUser({
+          firebaseUid: firebaseUser.uid,
+          email: email,
+          accountType,
+          displayName: firebaseUser.displayName || undefined,
+        });
+        console.log('✅ User successfully created in backend after Google sign-in');
+      } catch (createError: any) {
+        // Rollback: sign out and delete Firebase user
+        await firebaseSignOut(auth);
+        if (firebaseUser) {
+          try {
+            await deleteUser(firebaseUser);
+          } catch (deleteError) {
+            console.error('Failed to rollback Firebase user:', deleteError);
+          }
+        }
+        throw createError;
+      }
+    }
+  };
+
   const resetPassword = async (email: string) => {
     if (!auth) throw new Error('Auth is not initialized');
     await sendPasswordResetEmail(auth, email);
@@ -176,6 +257,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshSubscription,
     signIn,
     signUp,
+    signInWithGoogle,
     resetPassword,
     signOut,
   };

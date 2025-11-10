@@ -82,7 +82,12 @@ func main() {
 	s.dsrcs = repo.NewDataSourcesRepository(fsClient.Client())
 	s.sprofs = repo.NewSourceProfilesRepository(fsClient.Client())
 	// RAG repos
+	ragDocsBucket := getEnv("RAG_DOCUMENTS_BUCKET", "")
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
+	if ragDocsBucket != "" && gcsClient != nil {
+		docsRepo = docsRepo.WithStorage(gcsClient, ragDocsBucket)
+		logger.Printf("RAG documents storage enabled: bucket=%s", ragDocsBucket)
+	}
 	chunksRepo := repo.NewChunksRepository(fsClient.Client())
 
 	// Artifact templates repo/service/handler (will be wired with AITaskExecutor later)
@@ -186,6 +191,19 @@ func main() {
 		_ = emb // wired into orchestrator when ingest endpoints are added
 		orchestrator = orchestrator.WithRAG(reg, docsRepo, chunksRepo).WithEmbedding(emb)
 		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo).WithFirestoreClient(fsClient.Client())
+		
+		// Initialize Vertex AI Search client if configured
+		vertexSearchProjectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
+		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "us-central1")
+		vertexSearchDataStoreID := getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")
+		vertexSearchAPIKey := getEnv("VERTEX_API_KEY", "")
+		if vertexSearchDataStoreID != "" && vertexSearchAPIKey != "" {
+			vertexSearchClient := ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, vertexSearchAPIKey)
+			s.discoveryHandler = s.discoveryHandler.WithVertexSearch(vertexSearchClient)
+			logger.Printf("Vertex AI Search enabled: project=%s, location=%s, dataStore=%s", vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID)
+		} else {
+			logger.Printf("Vertex AI Search disabled: VERTEX_SEARCH_DATA_STORE_ID or VERTEX_API_KEY not set")
+		}
 
 		// Start document processor worker (background)
 		if pub != nil {
@@ -295,9 +313,11 @@ func main() {
 		orchestrator = orchestrator.WithCache(cacheRepo).WithInteractions(interactions)
 
 		// Verified URL Analysis handler (initialized after orchestrator and genaiHandler are ready)
-		verifiedRepo := repo.NewVerifiedAnalysesRepository(fsClient.Client())
+		sharesRepo := repo.NewShareTokensRepository(fsClient.Client())
 		verifiedHandler = httphandlers.NewVerifiedHandler(
-			verifiedRepo,
+			s.projs,
+			sharesRepo,
+			interactions,
 			s.dsrcs,
 			docsRepo,
 			orchestrator,
@@ -534,6 +554,10 @@ func main() {
 		}
 		if strings.HasSuffix(r.URL.Path, "/vector-search") && r.Method == http.MethodPost {
 			s.discoveryHandler.VectorSearch(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/vertex-search") && r.Method == http.MethodPost {
+			s.discoveryHandler.VertexAISearch(w, r)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/ingest") && r.Method == http.MethodPost {

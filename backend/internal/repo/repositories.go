@@ -437,6 +437,22 @@ func (r *ProjectsRepository) UpdateLastInteraction(ctx context.Context, id strin
 	return err
 }
 
+func (r *ProjectsRepository) GetByVerifiedCode(ctx context.Context, code string) (*models.Project, error) {
+	if code == "" {
+		return nil, ErrInvalidDocument
+	}
+	q := r.col.Where("verifiedCode", "==", code).Limit(1)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil || len(docs) == 0 {
+		return nil, err
+	}
+	var p models.Project
+	if err := docs[0].DataTo(&p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 // --- DataSources ---
 func (r *DataSourcesRepository) Create(ctx context.Context, ds *models.DataSource) (string, error) {
 	if ds == nil {

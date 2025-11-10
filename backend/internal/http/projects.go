@@ -296,6 +296,26 @@ func (h *ProjectsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) 
 			h.logger.Printf("Warning: cascade delete interactions for project %s: %v", projectID, err)
 		}
 	}
+	// Cascade: delete documents and chunks for sources tied to this project
+	if h.docsRepo != nil && h.dataSources != nil {
+		sources, err := h.dataSources.ListByProject(r.Context(), authInfo.TenantID, projectID)
+		if err == nil {
+			for _, source := range sources {
+				// List documents first to delete chunks
+				docs, _ := h.docsRepo.ListBySource(r.Context(), authInfo.TenantID, source.ID, 0)
+				// Delete chunks for each document
+				if h.chunksRepo != nil {
+					for _, doc := range docs {
+						_ = h.chunksRepo.DeleteByDoc(r.Context(), authInfo.TenantID, doc.ID)
+					}
+				}
+				// Delete all documents for this source (which will also delete from GCS)
+				if err := h.docsRepo.DeleteBySource(r.Context(), authInfo.TenantID, source.ID); err != nil {
+					h.logger.Printf("Warning: cascade delete documents for source %s: %v", source.ID, err)
+				}
+			}
+		}
+	}
 	// Cascade: delete meta analysis events and project aggregates, recompute user aggregate
 	if h.metaEvents != nil {
 		if err := h.metaEvents.DeleteByProject(r.Context(), projectID); err != nil {

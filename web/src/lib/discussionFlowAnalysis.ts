@@ -19,11 +19,18 @@ export interface BlindSpot {
   practical_relevance: number; // 0..1
 }
 
+export interface ThinkingType {
+  type: 'exploratory' | 'decision-making' | 'explanatory' | 'validating' | 'synthesizing' | 'planning' | 'argumentative' | 'modeling' | 'communication' | 'tool-making';
+  score: number; // 0..1
+  manifestation?: string; // Brief explanation of how this thinking type manifests in the discussion text (1-2 sentences, max 300 chars)
+}
+
 export interface DiscussionFlowAnalysis {
   blindSpots: BlindSpot[];
   frameShiftRecommendations: string[];
   frame: string;
   confidence: 'low' | 'medium' | 'high';
+  thinkingTypes?: ThinkingType[]; // Up to 2 dominant thinking types with scores
   // Assistant stance and risk profile (from eval.stance)
   assistantStance?: string;
   assistantRiskProfile?: {
@@ -237,13 +244,43 @@ export async function generateDiscussionFlowAnalysis(
         frame: {
           type: 'string',
           minLength: 20,
-          maxLength: 500,
-          description: 'Identification of the discussion frame - what goals the user is likely trying to achieve through this discussion'
+          maxLength: 200,
+          description: 'Brief, focused identification of the discussion frame - the core goal or primary question the user is pursuing. Should be concise (max 200 chars), not a detailed summary of the entire discussion. Focus on the essential purpose, not all details.'
         },
         confidence: {
           type: 'string',
           enum: ['low', 'medium', 'high'],
           description: 'Confidence level in the analysis. Should be low on early stages of discussion, medium as more context accumulates, high when discussion is well-developed.'
+        },
+        thinkingTypes: {
+          type: 'array',
+          minItems: 0,
+          maxItems: 2,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['exploratory', 'decision-making', 'explanatory', 'validating', 'synthesizing', 'planning', 'argumentative', 'modeling', 'communication', 'tool-making'],
+                description: 'Type of thinking dominant in the discussion'
+              },
+              score: {
+                type: 'number',
+                minimum: 0,
+                maximum: 1,
+                description: 'Score from 0 to 1 indicating how dominant this thinking type is in the discussion'
+              },
+              manifestation: {
+                type: 'string',
+                minLength: 20,
+                maxLength: 300,
+                description: 'Brief explanation (1-2 sentences, max 300 chars) describing how this thinking type manifests in the discussion. Describe the manifestation itself (e.g., "Comparing options and evaluating criteria..."), NOT addressing the user (avoid "User compares..." or "Пользователь сравнивает..."). Focus on the thinking pattern, not who performs it. Provide specific examples from USER messages. REQUIRED: This field must always be included.'
+              }
+            },
+            required: ['type', 'score', 'manifestation']
+          },
+          description: 'Up to 2 dominant thinking types identified in the discussion, sorted by score (highest first). Each score represents how much this thinking type dominates (0 = not present, 1 = completely dominant). Scores should sum to approximately 1.0 if both are present. Each thinking type MUST include a manifestation field explaining how it manifests in the discussion text.'
         },
         assistantStance: {
           type: 'string',
@@ -272,7 +309,9 @@ export async function generateDiscussionFlowAnalysis(
     // Prompt
     const updateMode = existingAnalysis && lastPair;
     const prompt = updateMode
-      ? `You are an expert analyst reviewing a discussion flow analysis. Your most valuable contribution is evaluating whether the team is asking the RIGHT question, not just answering their stated question well.
+      ? `Preferred language: ${langName}.
+
+You are an expert analyst reviewing a discussion flow analysis. Your most valuable contribution is evaluating whether the team is asking the RIGHT question, not just answering their stated question well.
 
 Task:
 1. Review the PREVIOUS ANALYSIS provided
@@ -304,10 +343,18 @@ What to UPDATE:
   * Only refine if the discussion direction has clearly shifted
   * Keep most of the previous frame description if it's still accurate
   * Minor refinements are acceptable, but avoid complete reformulation
+  * MUST be concise (max 200 chars) - focus on the core goal/question, not a detailed summary
 - Confidence:
   * Should generally increase as discussion develops
   * Low: < 3 message pairs, Medium: 3-8 pairs, High: > 8 pairs
   * Only change if there's a clear reason based on discussion maturity
+- Thinking Types:
+  * Only update if discussion clearly shifts to different thinking types
+  * Keep existing thinking types if discussion continues in same mode
+  * CRITICAL: When analyzing thinking types, prioritize USER messages FIRST, then assistant responses SECOND. The thinking type should reflect how the USER is engaging with the discussion, not primarily how the assistant responds.
+  * If updating, identify up to 2 dominant types with scores (0..1), sorted by score
+  * REQUIRED: For each type, provide a manifestation explanation (1-2 sentences, STRICTLY MAX 300 characters) describing how it manifests in the discussion. CRITICAL FORMAT: Describe the manifestation itself (e.g., "Comparing options and evaluating criteria..."), NOT addressing the user (avoid "User compares..." or "Пользователь сравнивает..."). Focus on the thinking pattern itself, not who performs it. Base analysis on USER messages first, then assistant responses. Include specific examples from USER messages. The explanation MUST NOT exceed 300 characters. This field is MANDATORY and must be included in every thinking type object.
+  * Types: exploratory, decision-making, explanatory, validating, synthesizing, planning, argumentative, modeling, communication, tool-making
 - Assistant Stance and Risk Profile:
   * ALWAYS update these fields based on the LAST assistant/agent response in the transcript
   * Extract stance: 1-2 concise sentences (<=100 words) stating what the assistant seems to be asserting/pursuing
@@ -330,12 +377,13 @@ FRAME ASSESSMENT LOGIC (from consulting perspective):
 STYLE REQUIREMENTS:
 - Blind Spots: Each should identify a specific gap, assumption, or missing consideration. 10-300 characters each. Each blind spot must include a practical_relevance score (0..1) indicating how relevant it is for practical decision-making. Higher scores indicate blind spots that, if addressed, would have more immediate practical impact on the discussion goals.
 - Frame Shift Recommendations: Each should formulate how the discussion frame could be reframed to be more effective in achieving the presumed goal. Consider: Is this the right problem? Are they addressing symptoms vs. root causes? Is there a more strategic question one level up/down? Suggest alternative framings if current one is suboptimal. Maximum 2 recommendations. 20-500 characters each. Only include if a meaningful frame shift would improve effectiveness.
-- Frame: Should capture what goals the user is likely trying to achieve. 20-500 characters.
+- Frame: Should capture the CORE goal or primary question the user is pursuing. Must be BRIEF and FOCUSED (20-200 characters). Do NOT summarize the entire discussion - identify the essential purpose only. Example: "Understanding AI chip competition between Google and Nvidia" NOT "User asked about Google chips, then requested visualization, then asked about market share, then discussed business models..." Focus on the main objective, not all details.
 - Confidence: Should reflect the maturity of the discussion. Low for early stages (< 3 turns), medium for developing (3-8 turns), high for well-developed (> 8 turns).
 
 CRITICAL REQUIREMENTS:
 - Frame shift recommendations should be specific and actionable - not generic advice
 - Only include frame shift recommendations if there is a meaningful way to reframe the discussion for better effectiveness
+- Frame MUST be concise (max 200 chars) - focus on the core goal/question, NOT a detailed summary of the entire discussion
 - PRESERVE STABILITY: Keep unchanged elements from the previous analysis unless they are directly affected by new information
 
 User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
@@ -344,15 +392,38 @@ The JSON MUST conform EXACTLY to this schema (no additional keys, types must mat
 ${schemaText}
 
 ${transcript}`
-      : `You are an expert analyst reviewing a discussion flow. Your most valuable contribution is evaluating whether the team is asking the RIGHT question, not just answering their stated question well.
+      : `Preferred language: ${langName}.
+
+You are an expert analyst reviewing a discussion flow. Your most valuable contribution is evaluating whether the team is asking the RIGHT question, not just answering their stated question well.
 
 Task:
 1. Analyze the discussion transcript
 2. Identify blind spots (gaps, assumptions, missing considerations)
 3. Identify the discussion frame (what goals the user is likely trying to achieve)
-4. Assess confidence level based on discussion maturity
-5. Formulate frame shift recommendations: how could the discussion frame be reframed to be more effective in achieving the presumed goal?
-6. Analyze the LAST assistant/agent response for stance and risk profile
+4. Identify up to 2 dominant thinking types with scores (0..1)
+5. Assess confidence level based on discussion maturity
+6. Formulate frame shift recommendations: how could the discussion frame be reframed to be more effective in achieving the presumed goal?
+7. Analyze the LAST assistant/agent response for stance and risk profile
+
+THINKING TYPES ANALYSIS:
+Identify up to 2 dominant thinking types from these options:
+- exploratory: Exploring unknowns, mapping context, identifying gaps (e.g., "What don't we know?", "How are things connected?")
+- decision-making: Comparing options, making choices, evaluating criteria (e.g., "Which option is better?", "What should we do?")
+- explanatory: Explaining concepts, documenting, teaching (e.g., "How does this work?", "Why is this important?")
+- validating: Checking assumptions, critiquing, finding flaws (e.g., "Is this correct?", "What could go wrong?")
+- synthesizing: Finding patterns, summarizing, extracting insights (e.g., "What are the key takeaways?", "What patterns emerge?")
+- planning: Creating roadmaps, organizing tasks, structuring implementation (e.g., "How do we implement this?", "What are the steps?")
+- argumentative: Building arguments, defending positions, making cases (e.g., "Why is this right?", "What's the evidence?")
+- modeling: Creating frameworks, structuring knowledge, building ontologies (e.g., "How should we think about this?", "What's the structure?")
+- communication: Engaging stakeholders, conveying messages, managing relationships (e.g., "How do we explain this?", "Who needs to know?")
+- tool-making: Creating questions, methods, checklists, thinking tools (e.g., "What questions should we ask?", "How do we approach this?")
+
+CRITICAL: When analyzing thinking types, prioritize USER messages FIRST, then assistant responses SECOND. The thinking type should reflect how the USER is engaging with the discussion, not primarily how the assistant responds.
+
+For each identified thinking type:
+- Assign a score from 0 to 1 indicating dominance (scores should sum to approximately 1.0 if both types are present)
+- REQUIRED: Provide a manifestation explanation (1-2 sentences, STRICTLY MAX 300 characters) describing how this thinking type manifests in the discussion. CRITICAL FORMAT: Describe the manifestation itself (e.g., "Comparing options and evaluating criteria..."), NOT addressing the user (avoid "User compares..." or "Пользователь сравнивает..."). Focus on the thinking pattern itself, not who performs it. Base analysis on USER messages first, then assistant responses. Include specific examples from USER messages. The explanation MUST NOT exceed 300 characters. This field is MANDATORY and must be included in every thinking type object.
+- Sort by score (highest first)
 
 ASSISTANT STANCE AND RISK PROFILE ANALYSIS:
 - Extract stance from the LAST assistant/agent response: 1-2 concise sentences (<=100 words) that state what the assistant seems to be asserting/pursuing, avoiding moral judgement and unsupported assumptions
@@ -376,11 +447,12 @@ FRAME ASSESSMENT LOGIC (from consulting perspective):
 STYLE REQUIREMENTS:
 - Blind Spots: Each should identify a specific gap, assumption, or missing consideration. 10-300 characters each. Each blind spot must include a practical_relevance score (0..1) indicating how relevant it is for practical decision-making. Higher scores indicate blind spots that, if addressed, would have more immediate practical impact on the discussion goals. Include 2-8 items.
 - Frame Shift Recommendations: Each should formulate how the discussion frame could be reframed to be more effective. Consider: Is this the right problem? Are they addressing symptoms vs. root causes? Is there a more strategic question one level up/down? Suggest alternative framings if current one is suboptimal. Maximum 2 recommendations. 20-500 characters each. Only include if a meaningful frame shift would improve effectiveness.
-- Frame: Should capture what goals the user is likely trying to achieve through this discussion. 20-500 characters.
+- Frame: Should capture the CORE goal or primary question the user is pursuing. Must be BRIEF and FOCUSED (20-200 characters). Do NOT summarize the entire discussion - identify the essential purpose only. Example: "Understanding AI chip competition between Google and Nvidia" NOT "User asked about Google chips, then requested visualization, then asked about market share, then discussed business models..." Focus on the main objective, not all details.
 - Confidence: Should reflect the maturity of the discussion. Low for early stages (< 3 turns), medium for developing (3-8 turns), high for well-developed (> 8 turns).
 
 CRITICAL REQUIREMENTS:
 - All content must be grounded in the discussion transcript provided
+- Frame MUST be concise (max 200 chars) - focus on the core goal/question, NOT a detailed summary of the entire discussion
 - Frame shift recommendations should be specific and actionable - not generic advice
 - Only include frame shift recommendations if there is a meaningful way to reframe the discussion for better effectiveness
 - Confidence should be low if discussion has fewer than 3 message pairs, medium for 3-8 pairs, high for more than 8 pairs
@@ -417,7 +489,31 @@ ${transcript}`;
     // Parse response
     let parsed: any = null;
     try {
-      if (typeof res?.content === 'string') {
+      // First, check if result is in toolCalls (structured output via function calling)
+      const toolCalls = (res as any)?.toolCalls;
+      if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
+        // Look for return_structured tool call
+        const returnStructured = toolCalls.find((tc: any) => 
+          tc && typeof tc === 'object' && 
+          (tc.name === 'return_structured' || tc.functionName === 'return_structured')
+        );
+        if (returnStructured) {
+          const args = returnStructured.arguments || returnStructured.functionArguments;
+          if (typeof args === 'string') {
+            try {
+              parsed = JSON.parse(args);
+            } catch (e) {
+              // Ignore parse error, will try other sources
+            }
+          } else if (typeof args === 'object' && args !== null) {
+            // Already parsed object
+            parsed = args;
+          }
+        }
+      }
+      
+      // If not found in toolCalls, try content
+      if (!parsed && typeof res?.content === 'string') {
         const s = res.content.trim();
         if (s.startsWith('{') || s.startsWith('[')) parsed = JSON.parse(s);
       }
@@ -545,6 +641,31 @@ ${transcript}`;
           rationale: rp.rationale.trim(),
           triggerCategories: rp.triggerCategories.filter((cat: any) => typeof cat === 'string'),
         };
+      }
+    }
+    // Extract thinking types if present
+    if (parsed.thinkingTypes && Array.isArray(parsed.thinkingTypes)) {
+      const validThinkingTypes = parsed.thinkingTypes
+        .filter((tt: any) => 
+          tt && 
+          typeof tt === 'object' && 
+          typeof tt.type === 'string' && 
+          typeof tt.score === 'number' && 
+          !isNaN(tt.score) &&
+          ['exploratory', 'decision-making', 'explanatory', 'validating', 'synthesizing', 'planning', 'argumentative', 'modeling', 'communication', 'tool-making'].includes(tt.type)
+        )
+        .slice(0, 2)
+        .map((tt: any) => ({
+          type: tt.type as ThinkingType['type'],
+          score: clamp01(tt.score),
+          manifestation: tt.manifestation && typeof tt.manifestation === 'string' 
+            ? tt.manifestation.trim().slice(0, 300) 
+            : undefined
+        }))
+        .sort((a: ThinkingType, b: ThinkingType) => b.score - a.score); // Sort by score descending
+      
+      if (validThinkingTypes.length > 0) {
+        analysis.thinkingTypes = validThinkingTypes;
       }
     }
 

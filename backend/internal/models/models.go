@@ -331,7 +331,8 @@ type Document struct {
 	Title             string           `json:"title,omitempty" firestore:"title"`
 	URL               string           `json:"url,omitempty" firestore:"url"`
 	DocumentPath      string           `json:"documentPath" firestore:"documentPath"`
-	FullText          string           `json:"fullText" firestore:"fullText"`
+	FullText          string           `json:"fullText" firestore:"fullText"`                 // Kept for backward compatibility, but content should be in GCS
+	StoragePath       *string          `json:"storagePath,omitempty" firestore:"storagePath,omitempty"` // gs://bucket/path to content in GCS
 	Status            string           `json:"status" firestore:"status"`                       // new → embedded → processing → processed; error:*
 	ContentType       string           `json:"contentType,omitempty" firestore:"contentType"`   // plainText, html, markdown, binary
 	DocumentType      string           `json:"documentType,omitempty" firestore:"documentType"` // post, article, pdf, word
@@ -485,6 +486,8 @@ type Project struct {
 	BusinessUnitName             *string `json:"businessUnitName,omitempty" firestore:"businessUnitName"`
 	EnableRiskProfileSuggestions *bool   `json:"enableRiskProfileSuggestions,omitempty" firestore:"enableRiskProfileSuggestions"`
 	AiGuided                     *bool   `json:"aiguided,omitempty" firestore:"aiguided"`
+	// Verified project code (for /verified/{code} URLs)
+	VerifiedCode                 *string `json:"verifiedCode,omitempty" firestore:"verifiedCode,omitempty"`
 }
 
 // --- Core project documents (user-uploaded or externally linked) ---
@@ -943,22 +946,4 @@ type Voucher struct {
 
 	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
-}
-
-// VerifiedAnalysis соответствует core_verified_analyses
-type VerifiedAnalysis struct {
-	ID           string     `json:"id" firestore:"id"`
-	Code         string     `json:"code" firestore:"code"`                 // короткий код (8-12 символов)
-	URL          string     `json:"url" firestore:"url"`                   // оригинальный URL
-	CanonicalURL string     `json:"canonicalUrl" firestore:"canonicalUrl"` // для дедупликации
-	TenantID     string     `json:"tenantId" firestore:"tenantId"`         // "system"
-	SourceID     string     `json:"sourceId" firestore:"sourceId"`         // ID глобального источника (TenantID="")
-	DocumentID   string     `json:"documentId" firestore:"documentId"`     // ID документа из core_docs
-	Analysis     string     `json:"analysis" firestore:"analysis"`         // результат анализа
-	Model        string     `json:"model" firestore:"model"`               // использованная модель
-	Status       string     `json:"status" firestore:"status"`             // "pending" | "processing" | "completed" | "failed"
-	Error        *string    `json:"error,omitempty" firestore:"error,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt" firestore:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt" firestore:"updatedAt"`
-	ExpiresAt    *time.Time `json:"expiresAt,omitempty" firestore:"expiresAt,omitempty"` // опционально
 }

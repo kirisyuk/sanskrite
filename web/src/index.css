@@ -72,9 +72,9 @@
   --bg-body: #121212;           /* Graphite black */
   --bg-canvas-deep: #1A1A2E;   /* Slightly lighter for gradient end */
   --bg-sidebar: #151515;       /* Darker graphite gray for sidebar panels */
-  --bg-elevated: #2C2C4A;      /* Main UI surface (modals, cards) */
+  --bg-elevated: #1A1A1A;      /* Main UI surface (modals, cards) - graphite gray matching input */
   --bg-surface: #121212;       /* Keep equal to body for seamless look */
-  --bg-content: #2C2C4A;      /* Main content containers */
+  --bg-content: #1A1A1A;      /* Main content containers - graphite gray */
   --bg-input: #1A1A1A;        /* Graphite black for input fields */
 
   /* Borders */
@@ -114,9 +114,9 @@
   --gray-300: #D1D5DB;
   --gray-200: #E5E7EB;
   --neutral-50: #F1F3F5;
-  --surface-700: #1F1F35;      /* tab active - adjusted for new scheme */
-  --surface-750: #2C2C4A;       /* Matching elevated */
-  --surface-770: #353550;       /* Slightly lighter for borders/hover */
+  --surface-700: #1F1F1F;      /* tab active - graphite gray slightly lighter than body */
+  --surface-750: #1A1A1A;       /* Matching elevated - graphite gray */
+  --surface-770: #252525;       /* Slightly lighter for borders/hover - graphite gray */
   --toolbar-bg: #1A1A1A;       /* Neutral gray for drawer toolbars (2 tones darker than body) */
   --brand-hover: #0066CC;       /* Darker blue for hover */
   --danger-600: #DC2626;
@@ -147,25 +147,25 @@
   --white-20: rgba(255, 255, 255, 0.20);
   --neutral-300-20: rgba(160, 165, 173, 0.20);
   --overlay-dark-95: rgba(18, 18, 18, 0.95);  /* Updated for graphite bg */
-  --overlay-deep-95: rgba(44, 44, 74, 0.95);  /* Updated for new elevated */
-  --overlay-line-90: rgba(60, 60, 85, 0.90);  /* Adjusted for new scheme */
-  --overlay-30: rgba(44, 44, 74, 0.30);
-  --overlay-50: rgba(44, 44, 74, 0.50);
-  --overlay-60: rgba(44, 44, 74, 0.60);
+  --overlay-deep-95: rgba(26, 26, 26, 0.95);  /* Updated for graphite elevated */
+  --overlay-line-90: rgba(37, 37, 37, 0.90);  /* Adjusted for graphite scheme */
+  --overlay-30: rgba(26, 26, 26, 0.30);
+  --overlay-50: rgba(26, 26, 26, 0.50);
+  --overlay-60: rgba(26, 26, 26, 0.60);
   --danger-80: rgba(220, 38, 38, 0.80);
   --danger-90: rgba(220, 38, 38, 0.90);
   --neutral-300-30: rgba(160, 165, 173, 0.30);
   --brand-25: rgba(0, 123, 255, 0.25);
   --research-25: rgba(255, 179, 102, 0.25);
-  --overlay-40: rgba(44, 44, 74, 0.40);
-  --overlay-80: rgba(44, 44, 74, 0.80);
+  --overlay-40: rgba(26, 26, 26, 0.40);
+  --overlay-80: rgba(26, 26, 26, 0.80);
   --disabled-20: rgba(94, 100, 108, 0.20);
   --text-tertiary-weak: #8B919A;
-  --avatar-bg: #2C2C4A;
+  --avatar-bg: #1A1A1A;         /* Graphite gray matching elevated */
 
   /* New Chat button theme tokens (dark) */
   --newchat-bg: var(--surface-770);         /* base */
-  --newchat-bg-hover: #3F3F5F;              /* ~1 tone lighter than surface-770 */
+  --newchat-bg-hover: #2F2F2F;              /* ~1 tone lighter than surface-770 - graphite gray */
   /* User message bubble background (dark): graphite gray same as input field */
   --user-msg-bg: #1A1A1A;                   /* Graphite gray, no border */
   /* Agent/system info bubbles (dark) */
@@ -642,6 +642,33 @@ p {
 }
 
 .auth-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.auth-button-google {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 150ms ease;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-button-google:hover {
+  background-color: var(--bg-surface);
+  border-color: var(--border-strong);
+}
+
+.auth-button-google:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

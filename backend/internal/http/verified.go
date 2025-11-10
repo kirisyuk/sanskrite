@@ -19,17 +19,21 @@ import (
 )
 
 type VerifiedHandler struct {
-	verifiedRepo *repo.VerifiedAnalysesRepository
-	sourcesRepo  *repo.DataSourcesRepository
-	docsRepo     *repo.DocumentsRepository
-	orchestrator *discovery.Orchestrator
-	genaiHandler *GenAIHandler
-	publisher    *realtime.Publisher
-	logger       *log.Logger
+	projectsRepo  *repo.ProjectsRepository
+	sharesRepo    *repo.ShareTokensRepository
+	interRepo     *repo.InteractionsRepository
+	sourcesRepo   *repo.DataSourcesRepository
+	docsRepo      *repo.DocumentsRepository
+	orchestrator  *discovery.Orchestrator
+	genaiHandler  *GenAIHandler
+	publisher     *realtime.Publisher
+	logger        *log.Logger
 }
 
 func NewVerifiedHandler(
-	verifiedRepo *repo.VerifiedAnalysesRepository,
+	projectsRepo *repo.ProjectsRepository,
+	sharesRepo *repo.ShareTokensRepository,
+	interRepo *repo.InteractionsRepository,
 	sourcesRepo *repo.DataSourcesRepository,
 	docsRepo *repo.DocumentsRepository,
 	orchestrator *discovery.Orchestrator,
@@ -38,7 +42,9 @@ func NewVerifiedHandler(
 	logger *log.Logger,
 ) *VerifiedHandler {
 	return &VerifiedHandler{
-		verifiedRepo: verifiedRepo,
+		projectsRepo: projectsRepo,
+		sharesRepo:   sharesRepo,
+		interRepo:    interRepo,
 		sourcesRepo:  sourcesRepo,
 		docsRepo:     docsRepo,
 		orchestrator: orchestrator,
@@ -68,36 +74,13 @@ func randomCode(n int) string {
 	return string(b)
 }
 
-// ensureSystemUser ensures system user exists
-func (h *VerifiedHandler) ensureSystemUser(ctx context.Context, usersRepo *repo.UsersRepository) error {
-	// Try to get system user
-	_, err := usersRepo.GetByIDAndTenant(ctx, "system", "system")
-	if err == nil {
-		// User exists
-		return nil
-	}
-	// Create system user if doesn't exist
-	now := time.Now().UTC()
-	systemUser := &models.User{
-		ID:        "system",
-		TenantID:  "system",
-		Email:     "system@sanskrite.internal",
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	err = usersRepo.Upsert(ctx, systemUser)
-	return err
-}
-
-// generateUniqueCode generates a unique code for verified analysis
+// generateUniqueCode generates a unique code for verified project
 func (h *VerifiedHandler) generateUniqueCode(ctx context.Context) (string, error) {
 	for i := 0; i < 10; i++ {
 		code := randomCode(10)
-		exists, err := h.verifiedRepo.CodeExists(ctx, code)
+		_, err := h.projectsRepo.GetByVerifiedCode(ctx, code)
 		if err != nil {
-			return "", err
-		}
-		if !exists {
+			// Code doesn't exist, we can use it
 			return code, nil
 		}
 	}
@@ -152,17 +135,41 @@ func (h *VerifiedHandler) CreateVerified(w http.ResponseWriter, r *http.Request)
 	// Normalize URL
 	canonicalURL := crawler.CanonicalizeURL(req.URL)
 
-	// Check if analysis already exists for this URL
-	existing, err := h.verifiedRepo.GetByCanonicalURL(ctx, canonicalURL)
-	if err == nil && existing != nil && existing.Status == "completed" {
-		// Return existing analysis
-		resp := createVerifiedResponse{
-			Code:   existing.Code,
-			URL:    existing.URL,
-			Status: existing.Status,
+	// Check if verified project already exists for this URL
+	existingProjects, err := h.projectsRepo.List(ctx, "system", nil)
+	if err == nil {
+		for _, p := range existingProjects {
+			if p.VerifiedCode != nil {
+				// Check interactions for this project to find URL
+				interactions, err := h.interRepo.ListByProject(ctx, p.ID)
+				if err == nil && len(interactions) > 0 {
+					// First interaction should contain URL metadata
+					for _, it := range interactions {
+						if it.Kind == "system" && it.Subkind != nil && *it.Subkind == "verified.metadata" {
+							// Parse metadata from content (stored as JSON)
+							var metadata map[string]interface{}
+							if err := json.Unmarshal([]byte(it.Content), &metadata); err == nil {
+								if cu, ok := metadata["canonicalUrl"].(string); ok && cu == canonicalURL {
+									// Found existing verified project
+									status := "completed"
+									if s, ok := metadata["status"].(string); ok {
+										status = s
+									}
+									resp := createVerifiedResponse{
+										Code:   *p.VerifiedCode,
+										URL:    req.URL,
+										Status: status,
+									}
+									WriteJSON(w, http.StatusOK, resp)
+									return
+								}
+							}
+							break
+						}
+					}
+				}
+			}
 		}
-		WriteJSON(w, http.StatusOK, resp)
-		return
 	}
 
 	// Generate unique code
@@ -173,41 +180,74 @@ func (h *VerifiedHandler) CreateVerified(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Create pending analysis record
+	// Create verified project
 	now := time.Now().UTC()
 	selectedModel := req.Model
 	if selectedModel == "" {
 		selectedModel = "gemini_fast" // default model
 	}
-	va := &models.VerifiedAnalysis{
-		Code:         code,
-		URL:          req.URL,
-		CanonicalURL: canonicalURL,
-		TenantID:     "system",
-		Model:        selectedModel,
-		Status:       "pending",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+
+	project := &models.Project{
+		TenantID:    "system",
+		DisplayName: fmt.Sprintf("Verified: %s", req.URL),
+		Status:      "active",
+		OwnerUserID: "system",
+		VerifiedCode: &code,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
-	analysisID, err := h.verifiedRepo.Create(ctx, va)
+	projectID, err := h.projectsRepo.Create(ctx, project)
 	if err != nil {
-		h.logger.Printf("verified: failed to create analysis: %v", err)
-		WriteInternalError(w, "Failed to create analysis")
+		h.logger.Printf("verified: failed to create project: %v", err)
+		WriteInternalError(w, "Failed to create project")
 		return
 	}
-	va.ID = analysisID
+	project.ID = projectID
+
+	// Create ShareToken for public access
+	exp := time.Now().UTC().Add(365 * 24 * time.Hour) // 1 year expiration for verified
+	shareToken := &repo.ShareToken{
+		ProjectID: projectID,
+		Token:     code, // Use same code as token for simplicity
+		ExpiresAt: exp,
+		CreatedBy: "system",
+	}
+	_, err = h.sharesRepo.Create(ctx, shareToken)
+	if err != nil {
+		h.logger.Printf("verified: failed to create share token: %v", err)
+		// Continue anyway, token creation is not critical
+	}
+
+	// Create metadata interaction
+	metadataContent := fmt.Sprintf(`{"url":"%s","canonicalUrl":"%s","model":"%s","status":"pending"}`, req.URL, canonicalURL, selectedModel)
+	metadataInteraction := &repo.Interaction{
+		TenantID:  "system",
+		ProjectID: projectID,
+		Kind:      "system",
+		Subkind:   stringPtr("verified.metadata"),
+		Content:   metadataContent,
+		Author: &repo.ParticipantRef{
+			ParticipantID: "system",
+			Kind:          "system",
+		},
+	}
+	_, err = h.interRepo.Create(ctx, metadataInteraction)
+	if err != nil {
+		h.logger.Printf("verified: failed to create metadata interaction: %v", err)
+		// Continue anyway
+	}
 
 	// Publish fetch_start event
 	if h.publisher != nil {
 		_ = h.publisher.PublishJSON(ctx, "verified.stream.fetch_start", "system", map[string]interface{}{
-			"code": va.Code,
-			"url":  va.URL,
+			"code": code,
+			"url":  req.URL,
 		})
 	}
 
 	// Process asynchronously
-	go h.processVerifiedAnalysis(context.Background(), va)
+	go h.processVerifiedAnalysis(context.Background(), projectID, code, req.URL, canonicalURL, selectedModel)
 
 	// Return immediate response
 	resp := createVerifiedResponse{
@@ -219,20 +259,28 @@ func (h *VerifiedHandler) CreateVerified(w http.ResponseWriter, r *http.Request)
 }
 
 // processVerifiedAnalysis processes the URL analysis asynchronously
-func (h *VerifiedHandler) processVerifiedAnalysis(ctx context.Context, va *models.VerifiedAnalysis) {
-	// Update status to processing
-	va.Status = "processing"
-	va.UpdatedAt = time.Now().UTC()
-	if err := h.verifiedRepo.Update(ctx, va); err != nil {
-		h.logger.Printf("verified: failed to update status to processing: %v", err)
+func (h *VerifiedHandler) processVerifiedAnalysis(ctx context.Context, projectID, code, url, canonicalURL, model string) {
+	// Update metadata interaction status to processing
+	interactions, _ := h.interRepo.ListByProject(ctx, projectID)
+	var metadataInteractionID string
+	for _, it := range interactions {
+		if it.Kind == "system" && it.Subkind != nil && *it.Subkind == "verified.metadata" {
+			metadataInteractionID = it.ID
+			break
+		}
+	}
+	if metadataInteractionID != "" {
+		_ = h.interRepo.Update(ctx, metadataInteractionID, map[string]interface{}{
+			"content": fmt.Sprintf(`{"url":"%s","canonicalUrl":"%s","model":"%s","status":"processing"}`, url, canonicalURL, model),
+		})
 	}
 
 	// Step 1: Find or create data source
-	existingSource, err := h.sourcesRepo.FindByCanonicalSource(ctx, "", va.CanonicalURL)
+	existingSource, err := h.sourcesRepo.FindByCanonicalSource(ctx, "", canonicalURL)
 	var sourceID string
 	if err == nil && existingSource != nil {
 		sourceID = existingSource.ID
-		h.logger.Printf("verified: using existing source %s for %s", sourceID, va.CanonicalURL)
+		h.logger.Printf("verified: using existing source %s for %s", sourceID, canonicalURL)
 	} else {
 		// Create new public source
 		now := time.Now().UTC()
@@ -240,11 +288,11 @@ func (h *VerifiedHandler) processVerifiedAnalysis(ctx context.Context, va *model
 			TenantID:    "", // Empty for public sources
 			Pk:          "global",
 			Kind:        "web",
-			DisplayName: va.CanonicalURL,
+			DisplayName: canonicalURL,
 			Status:      "active",
 			OwnerUserID: "system",
 			Details: models.SourceDetails{
-				URI: &va.CanonicalURL,
+				URI: &canonicalURL,
 			},
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -254,39 +302,43 @@ func (h *VerifiedHandler) processVerifiedAnalysis(ctx context.Context, va *model
 		sourceID, err = h.sourcesRepo.Create(ctx, ds)
 		if err != nil {
 			h.logger.Printf("verified: failed to create source: %v", err)
-			va.Status = "failed"
-			errMsg := fmt.Sprintf("Failed to create source: %v", err)
-			va.Error = &errMsg
-			va.UpdatedAt = time.Now().UTC()
-			_ = h.verifiedRepo.Update(ctx, va)
+			// Update status to failed
+			if metadataInteractionID != "" {
+				errMsg := fmt.Sprintf("Failed to create source: %v", err)
+				_ = h.interRepo.Update(ctx, metadataInteractionID, map[string]interface{}{
+					"content": fmt.Sprintf(`{"url":"%s","canonicalUrl":"%s","model":"%s","status":"failed","error":"%s"}`, url, canonicalURL, model, errMsg),
+				})
+			}
 			// Publish fetch_failed event
 			if h.publisher != nil {
 				_ = h.publisher.PublishJSON(ctx, "verified.stream.fetch_failed", "system", map[string]interface{}{
-					"code":  va.Code,
-					"url":   va.URL,
-					"error": errMsg,
+					"code":  code,
+					"url":   url,
+					"error": fmt.Sprintf("Failed to create source: %v", err),
 				})
 			}
 			return
 		}
-		h.logger.Printf("verified: created new source %s for %s", sourceID, va.CanonicalURL)
+		h.logger.Printf("verified: created new source %s for %s", sourceID, canonicalURL)
 	}
 
 	// Step 2: Ingest web content (creates/updates document and chunks)
-	err = h.orchestrator.IngestWeb(ctx, "system", sourceID, va.CanonicalURL)
+	err = h.orchestrator.IngestWeb(ctx, "system", sourceID, canonicalURL)
 	if err != nil {
 		h.logger.Printf("verified: failed to ingest web content: %v", err)
-		va.Status = "failed"
-		errMsg := fmt.Sprintf("Failed to ingest content: %v", err)
-		va.Error = &errMsg
-		va.UpdatedAt = time.Now().UTC()
-		_ = h.verifiedRepo.Update(ctx, va)
+		// Update status to failed
+		if metadataInteractionID != "" {
+			errMsg := fmt.Sprintf("Failed to ingest content: %v", err)
+			_ = h.interRepo.Update(ctx, metadataInteractionID, map[string]interface{}{
+				"content": fmt.Sprintf(`{"url":"%s","canonicalUrl":"%s","model":"%s","status":"failed","error":"%s"}`, url, canonicalURL, model, errMsg),
+			})
+		}
 		// Publish fetch_failed event
 		if h.publisher != nil {
 			_ = h.publisher.PublishJSON(ctx, "verified.stream.fetch_failed", "system", map[string]interface{}{
-				"code":  va.Code,
-				"url":   va.URL,
-				"error": errMsg,
+				"code":  code,
+				"url":   url,
+				"error": fmt.Sprintf("Failed to ingest content: %v", err),
 			})
 		}
 		return
@@ -295,40 +347,46 @@ func (h *VerifiedHandler) processVerifiedAnalysis(ctx context.Context, va *model
 	// Publish fetch_success event
 	if h.publisher != nil {
 		_ = h.publisher.PublishJSON(ctx, "verified.stream.fetch_success", "system", map[string]interface{}{
-			"code":     va.Code,
-			"url":      va.URL,
+			"code":     code,
+			"url":      url,
 			"sourceId": sourceID,
 		})
 	}
 
 	// Step 3: Get document ID
-	doc, err := h.docsRepo.GetByExternalID(ctx, "system", sourceID, va.CanonicalURL)
+	doc, err := h.docsRepo.GetByExternalID(ctx, "system", sourceID, canonicalURL)
 	if err != nil || doc == nil {
 		h.logger.Printf("verified: failed to get document: %v", err)
-		va.Status = "failed"
-		errMsg := fmt.Sprintf("Failed to get document: %v", err)
-		va.Error = &errMsg
-		va.UpdatedAt = time.Now().UTC()
-		_ = h.verifiedRepo.Update(ctx, va)
-		// Publish analysis_failed event (can't start analysis without document)
+		// Update status to failed
+		if metadataInteractionID != "" {
+			errMsg := fmt.Sprintf("Failed to get document: %v", err)
+			_ = h.interRepo.Update(ctx, metadataInteractionID, map[string]interface{}{
+				"content": fmt.Sprintf(`{"url":"%s","canonicalUrl":"%s","model":"%s","status":"failed","error":"%s"}`, url, canonicalURL, model, errMsg),
+			})
+		}
+		// Publish analysis_failed event
 		if h.publisher != nil {
 			_ = h.publisher.PublishJSON(ctx, "verified.stream.analysis_failed", "system", map[string]interface{}{
-				"code":  va.Code,
-				"url":   va.URL,
-				"error": errMsg,
+				"code":  code,
+				"url":   url,
+				"error": fmt.Sprintf("Failed to get document: %v", err),
 			})
 		}
 		return
 	}
 
-	va.SourceID = sourceID
-	va.DocumentID = doc.ID
+	// Update metadata with source and document IDs
+	if metadataInteractionID != "" {
+		_ = h.interRepo.Update(ctx, metadataInteractionID, map[string]interface{}{
+			"content": fmt.Sprintf(`{"url":"%s","canonicalUrl":"%s","model":"%s","status":"processing","sourceId":"%s","documentId":"%s"}`, url, canonicalURL, model, sourceID, doc.ID),
+		})
+	}
 
 	// Publish analysis_start event
 	if h.publisher != nil {
 		_ = h.publisher.PublishJSON(ctx, "verified.stream.analysis_start", "system", map[string]interface{}{
-			"code":       va.Code,
-			"url":        va.URL,
+			"code":       code,
+			"url":        url,
 			"documentId": doc.ID,
 		})
 	}
@@ -369,11 +427,11 @@ Do not restate the prompt or context; respond directly with your analysis.
 Content:
 %s
 
-Your analysis:`, va.URL, doc.FullText)
+Your analysis:`, url, doc.FullText)
 
 	// Use selected model with mandatory web search grounding
 	genaiReq := gen_combined.GenAIRequest{
-		Model:              va.Model, // Use model from request (default: gemini_fast)
+		Model:              model,
 		Prompt:             analysisPrompt,
 		WebSearchEnabled:   true,
 		MaxOutputTokens:    2048,
@@ -384,42 +442,73 @@ Your analysis:`, va.URL, doc.FullText)
 	result, err := h.genaiHandler.GenerateDirect(ctx, genaiReq)
 	if err != nil {
 		h.logger.Printf("verified: failed to execute AI analysis: %v", err)
-		va.Status = "failed"
-		errMsg := fmt.Sprintf("Failed to analyze: %v", err)
-		va.Error = &errMsg
-		va.UpdatedAt = time.Now().UTC()
-		_ = h.verifiedRepo.Update(ctx, va)
+		// Update status to failed
+		if metadataInteractionID != "" {
+			errMsg := fmt.Sprintf("Failed to analyze: %v", err)
+			_ = h.interRepo.Update(ctx, metadataInteractionID, map[string]interface{}{
+				"content": fmt.Sprintf(`{"url":"%s","canonicalUrl":"%s","model":"%s","status":"failed","error":"%s"}`, url, canonicalURL, model, errMsg),
+			})
+		}
 		// Publish analysis_failed event
 		if h.publisher != nil {
 			_ = h.publisher.PublishJSON(ctx, "verified.stream.analysis_failed", "system", map[string]interface{}{
-				"code":  va.Code,
-				"url":   va.URL,
-				"error": errMsg,
+				"code":  code,
+				"url":   url,
+				"error": fmt.Sprintf("Failed to analyze: %v", err),
 			})
 		}
 		return
 	}
 
-	// Step 5: Save analysis result
-	va.Analysis = result.Content
-	va.Model = result.Model
-	va.Status = "completed"
-	va.UpdatedAt = time.Now().UTC()
-	if err := h.verifiedRepo.Update(ctx, va); err != nil {
-		h.logger.Printf("verified: failed to update analysis result: %v", err)
-		return
+	// Step 5: Create analysis interaction
+	analysisInteraction := &repo.Interaction{
+		TenantID:  "system",
+		ProjectID: projectID,
+		Kind:      "assistant",
+		Subkind:   stringPtr("verified.analysis"),
+		Content:   result.Content,
+		Model:     &result.Model,
+		Author: &repo.ParticipantRef{
+			ParticipantID: "system",
+			Kind:          "ai",
+		},
+		Usage: &repo.UsageMeta{
+			PromptTokens:    result.Usage.PromptTokens,
+			OutputTokens:    result.Usage.OutputTokens,
+			TotalTokens:     result.Usage.TotalTokens,
+			ReasoningTokens: result.Usage.ReasoningTokens,
+		},
+		Sources: []string{sourceID},
+		CoreDocIDs: []string{doc.ID},
+	}
+	_, err = h.interRepo.Create(ctx, analysisInteraction)
+	if err != nil {
+		h.logger.Printf("verified: failed to create analysis interaction: %v", err)
+		// Continue anyway
+	}
+
+	// Update metadata interaction status to completed
+	if metadataInteractionID != "" {
+		_ = h.interRepo.Update(ctx, metadataInteractionID, map[string]interface{}{
+			"content": fmt.Sprintf(`{"url":"%s","canonicalUrl":"%s","model":"%s","status":"completed","sourceId":"%s","documentId":"%s"}`, url, canonicalURL, result.Model, sourceID, doc.ID),
+		})
 	}
 
 	// Publish analysis_complete event
 	if h.publisher != nil {
 		_ = h.publisher.PublishJSON(ctx, "verified.stream.analysis_complete", "system", map[string]interface{}{
-			"code":  va.Code,
-			"url":   va.URL,
-			"model": va.Model,
+			"code":  code,
+			"url":   url,
+			"model": result.Model,
 		})
 	}
 
-	h.logger.Printf("verified: successfully completed analysis for %s (code: %s)", va.CanonicalURL, va.Code)
+	h.logger.Printf("verified: successfully completed analysis for %s (code: %s)", canonicalURL, code)
+}
+
+// Helper function to create string pointer
+func stringPtr(s string) *string {
+	return &s
 }
 
 // GET /api/v1/public/verified/{code}
@@ -437,16 +526,70 @@ func (h *VerifiedHandler) GetPublicVerified(w http.ResponseWriter, r *http.Reque
 	}
 	code := parts[4]
 
-	va, err := h.verifiedRepo.GetByCode(r.Context(), code)
+	// Get project by verified code
+	project, err := h.projectsRepo.GetByVerifiedCode(r.Context(), code)
 	if err != nil {
 		WriteNotFound(w, "Analysis not found")
 		return
 	}
 
+	// Get share token to check expiration
+	shareToken, _, err := h.sharesRepo.GetByToken(r.Context(), code)
+	if err != nil || shareToken == nil {
+		WriteNotFound(w, "Share token not found")
+		return
+	}
+
 	// Check if expired
-	if va.ExpiresAt != nil && time.Now().UTC().After(*va.ExpiresAt) {
+	if !shareToken.IsActive || time.Now().UTC().After(shareToken.ExpiresAt) {
 		WriteError(w, http.StatusGone, "EXPIRED", "Analysis has expired", nil)
 		return
+	}
+
+	// Touch access
+	_ = h.sharesRepo.TouchAccess(r.Context(), shareToken.ID)
+
+	// Load interactions
+	interactions, err := h.interRepo.ListByProject(r.Context(), project.ID)
+	if err != nil {
+		h.logger.Printf("verified: failed to load interactions: %v", err)
+		interactions = []*repo.Interaction{}
+	}
+
+	// Extract metadata and analysis from interactions
+	var metadataInteraction *repo.Interaction
+	var analysisInteraction *repo.Interaction
+	for _, it := range interactions {
+		if it.Kind == "system" && it.Subkind != nil && *it.Subkind == "verified.metadata" {
+			metadataInteraction = it
+		} else if it.Kind == "assistant" && it.Subkind != nil && *it.Subkind == "verified.analysis" {
+			analysisInteraction = it
+		}
+	}
+
+	// Parse metadata
+	var url, canonicalURL, status, model string
+	var errorMsg *string
+	if metadataInteraction != nil {
+		// Parse JSON from content
+		var metadata map[string]interface{}
+		if err := json.Unmarshal([]byte(metadataInteraction.Content), &metadata); err == nil {
+			if u, ok := metadata["url"].(string); ok {
+				url = u
+			}
+			if cu, ok := metadata["canonicalUrl"].(string); ok {
+				canonicalURL = cu
+			}
+			if s, ok := metadata["status"].(string); ok {
+				status = s
+			}
+			if m, ok := metadata["model"].(string); ok {
+				model = m
+			}
+			if e, ok := metadata["error"].(string); ok {
+				errorMsg = &e
+			}
+		}
 	}
 
 	// Return public format
@@ -458,24 +601,28 @@ func (h *VerifiedHandler) GetPublicVerified(w http.ResponseWriter, r *http.Reque
 		Analysis     string    `json:"analysis"`
 		Model        string    `json:"model"`
 		Status       string    `json:"status"`
-		DocumentID   string    `json:"documentId,omitempty"`
-		SourceID     string    `json:"sourceId,omitempty"`
+		Error        *string   `json:"error,omitempty"`
 		CreatedAt    time.Time `json:"createdAt"`
 		UpdatedAt    time.Time `json:"updatedAt"`
 	}
 
 	pub := PublicVerified{
-		ID:           va.ID,
-		Code:         va.Code,
-		URL:          va.URL,
-		CanonicalURL: va.CanonicalURL,
-		Analysis:     va.Analysis,
-		Model:        va.Model,
-		Status:       va.Status,
-		DocumentID:   va.DocumentID,
-		SourceID:     va.SourceID,
-		CreatedAt:    va.CreatedAt,
-		UpdatedAt:    va.UpdatedAt,
+		ID:           project.ID,
+		Code:         code,
+		URL:          url,
+		CanonicalURL: canonicalURL,
+		Model:        model,
+		Status:       status,
+		Error:        errorMsg,
+		CreatedAt:    project.CreatedAt,
+		UpdatedAt:    project.UpdatedAt,
+	}
+
+	if analysisInteraction != nil {
+		pub.Analysis = analysisInteraction.Content
+		if analysisInteraction.Model != nil {
+			pub.Model = *analysisInteraction.Model
+		}
 	}
 
 	WriteJSON(w, http.StatusOK, pub)
@@ -544,4 +691,3 @@ func (h *VerifiedHandler) GetPublicDocument(w http.ResponseWriter, r *http.Reque
 
 	WriteJSON(w, http.StatusOK, pubDoc)
 }
-

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
-import { DiscussionFlowAnalysis, BlindSpot, isGeneratingDiscussionFlowAnalysis, generateDiscussionFlowAnalysis } from '../lib/discussionFlowAnalysis';
+import { DiscussionFlowAnalysis, BlindSpot, ThinkingType, isGeneratingDiscussionFlowAnalysis, generateDiscussionFlowAnalysis } from '../lib/discussionFlowAnalysis';
 import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
@@ -45,6 +45,8 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
   // Track expanded state for blind spots
   const [blindSpotsExpanded, setBlindSpotsExpanded] = React.useState(false);
   const [showRawJSON, setShowRawJSON] = React.useState(false);
+  // Track expanded state for thinking types
+  const [expandedThinkingType, setExpandedThinkingType] = React.useState<number | null>(null);
   
   // Track mounted state to prevent updates after unmount
   const mountedRef = React.useRef(true);
@@ -115,7 +117,7 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
     
     if (!hasContent) return null;
     
-    try {
+      try {
       const data = JSON.parse(analysisInteraction.content || analysisInteraction.contentSanitized || '{}');
       if (data.blindSpots && Array.isArray(data.blindSpots) && 
           data.frameShiftRecommendations && Array.isArray(data.frameShiftRecommendations) &&
@@ -141,9 +143,32 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
           })
           .filter((b: any) => b && typeof b === 'object' && b.text && typeof b.text === 'string' && b.text.trim().length > 0);
         
+        // Normalize thinkingTypes if present
+        const normalizedThinkingTypes = data.thinkingTypes && Array.isArray(data.thinkingTypes)
+          ? data.thinkingTypes
+              .filter((tt: any) => 
+                tt && 
+                typeof tt === 'object' && 
+                typeof tt.type === 'string' && 
+                typeof tt.score === 'number' && 
+                !isNaN(tt.score) &&
+                ['exploratory', 'decision-making', 'explanatory', 'validating', 'synthesizing', 'planning', 'argumentative', 'modeling', 'communication', 'tool-making'].includes(tt.type)
+              )
+              .slice(0, 2)
+              .map((tt: any) => ({
+                type: tt.type,
+                score: Math.max(0, Math.min(1, tt.score)),
+                manifestation: tt.manifestation && typeof tt.manifestation === 'string' 
+                  ? tt.manifestation.trim().slice(0, 300) 
+                  : undefined
+              }))
+              .sort((a: any, b: any) => b.score - a.score)
+          : undefined;
+        
         return {
           ...data,
-          blindSpots: normalizedBlindSpots
+          blindSpots: normalizedBlindSpots,
+          thinkingTypes: normalizedThinkingTypes
         } as DiscussionFlowAnalysis;
       }
     } catch (e) {
@@ -493,7 +518,7 @@ User requirement: you should create your answer in ${langName} language. Use Eng
   // Show empty message only if chat is empty (less than 2 messages) AND no raw response to show
   if (!analysis && !isLoading && chatMessageCount < 2 && !hasRawResponse) {
     return (
-      <div className="mt-3 p-3">
+      <div>
         <div className="text-12 text-center" style={{ ...textSecondaryStrongStyle, whiteSpace: 'pre-line' }}>
           {emptyMessage}
         </div>
@@ -504,9 +529,9 @@ User requirement: you should create your answer in ${langName} language. Use Eng
   // If we have raw response but no analysis, show debug section
   if (!analysis && !isLoading && hasRawResponse) {
     return (
-      <div className="mt-3 p-3">
+      <div>
         {/* Header with refresh button */}
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-2">
           <div />
           <button
             type="button"
@@ -598,9 +623,9 @@ User requirement: you should create your answer in ${langName} language. Use Eng
   // Show skeleton if loading
   if (isLoading) {
     return (
-      <div className="mt-3 p-3">
+      <div>
         {/* Header with refresh button */}
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-2">
           <div />
           <button
             type="button"
@@ -712,10 +737,10 @@ User requirement: you should create your answer in ${langName} language. Use Eng
   // If no analysis and not loading, show empty (shouldn't happen if chat has messages, but safety check)
   if (!analysis) {
     return (
-      <div className="mt-3 p-3">
+      <div>
         {/* Header with refresh button */}
         {chatMessageCount >= 2 && (
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <div />
             <button
               type="button"
@@ -762,9 +787,9 @@ User requirement: you should create your answer in ${langName} language. Use Eng
   }
 
   return (
-    <div className="mt-3 p-3">
+    <div>
       {/* Header with refresh button */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-2">
         <div />
         <button
           type="button"
@@ -812,6 +837,61 @@ User requirement: you should create your answer in ${langName} language. Use Eng
           <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
             <div className="text-12" style={textHeadingStyle}>
               {analysis.frame}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Thinking Types */}
+      {analysis.thinkingTypes && analysis.thinkingTypes.length > 0 && (
+        <>
+          <div className="text-[11px] uppercase tracking-wide mb-1.5" style={textTertiaryWeakStyle}>
+            {t('unfold.discussionFlow.thinkingTypes', { defaultValue: 'Thinking Types' })}
+          </div>
+          <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+            <div className="space-y-2">
+              {analysis.thinkingTypes.map((thinkingType, idx) => {
+                const scorePercent = Math.round(thinkingType.score * 100);
+                const typeLabels: Record<string, string> = {
+                  'exploratory': t('unfold.discussionFlow.thinkingTypes.exploratory', { defaultValue: 'Exploratory' }),
+                  'decision-making': t('unfold.discussionFlow.thinkingTypes.decisionMaking', { defaultValue: 'Decision-Making' }),
+                  'explanatory': t('unfold.discussionFlow.thinkingTypes.explanatory', { defaultValue: 'Explanatory' }),
+                  'validating': t('unfold.discussionFlow.thinkingTypes.validating', { defaultValue: 'Validating' }),
+                  'synthesizing': t('unfold.discussionFlow.thinkingTypes.synthesizing', { defaultValue: 'Synthesizing' }),
+                  'planning': t('unfold.discussionFlow.thinkingTypes.planning', { defaultValue: 'Planning' }),
+                  'argumentative': t('unfold.discussionFlow.thinkingTypes.argumentative', { defaultValue: 'Argumentative' }),
+                  'modeling': t('unfold.discussionFlow.thinkingTypes.modeling', { defaultValue: 'Modeling' }),
+                  'communication': t('unfold.discussionFlow.thinkingTypes.communication', { defaultValue: 'Communication' }),
+                  'tool-making': t('unfold.discussionFlow.thinkingTypes.toolMaking', { defaultValue: 'Tool-Making' }),
+                };
+                const typeLabel = typeLabels[thinkingType.type] || thinkingType.type;
+                const isExpanded = expandedThinkingType === idx;
+                const hasManifestation = thinkingType.manifestation && thinkingType.manifestation.trim().length > 0;
+                
+                return (
+                  <div key={idx}>
+                    <div 
+                      className={`flex items-center justify-between ${hasManifestation ? 'cursor-pointer hover:opacity-80' : ''}`}
+                      onClick={() => hasManifestation && setExpandedThinkingType(isExpanded ? null : idx)}
+                      style={hasManifestation ? { transition: 'opacity 0.2s' } : {}}
+                    >
+                      <span className="text-12" style={textHeadingStyle}>
+                        {typeLabel}
+                      </span>
+                      <span className="text-[11px] shrink-0 ml-2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                        {scorePercent}%
+                      </span>
+                    </div>
+                    {isExpanded && hasManifestation && (
+                      <div className="mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                        <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                          {thinkingType.manifestation}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </>

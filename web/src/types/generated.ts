@@ -244,6 +244,7 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDocument {
   url?: string;
   documentPath: string;
   fullText: string;
+  storagePath?: string;
   status: string;
   contentType?: string;
   documentType?: string;
@@ -286,6 +287,7 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsProject {
   businessUnitName?: string;
   enableRiskProfileSuggestions?: boolean;
   aiguided?: boolean;
+  verifiedCode?: string;
 }
 
 export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsSourceProfile {

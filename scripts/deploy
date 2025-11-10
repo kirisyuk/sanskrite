@@ -84,6 +84,9 @@ enable_api pubsub.googleapis.com
 # Optional but recommended for future features
 enable_api aiplatform.googleapis.com
 enable_api generativelanguage.googleapis.com
+enable_api discoveryengine.googleapis.com  # Vertex AI Search API
+enable_api bigquery.googleapis.com  # BigQuery API
+enable_api bigqueryconnection.googleapis.com  # BigQuery Connections API (for Object Tables and ML)
 enable_api apikeys.googleapis.com
 enable_api cloudscheduler.googleapis.com
 enable_api cloudresourcemanager.googleapis.com
@@ -211,7 +214,10 @@ setup_infrastructure() {
     roles/pubsub.admin \
     roles/pubsub.publisher \
     roles/pubsub.subscriber \
-    roles/logging.logWriter; do
+    roles/logging.logWriter \
+    roles/storage.objectViewer \
+    roles/storage.objectCreator \
+    roles/storage.objectAdmin; do
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
       --member="serviceAccount:$SA_BACKEND" \
       --role="$role" \
@@ -238,6 +244,132 @@ setup_infrastructure() {
   else
     gcloud storage buckets create "$docs_bucket" --location=US --uniform-bucket-level-access
     echo -e "${GREEN}[infra] Created core docs bucket:${NC} $docs_bucket"
+  fi
+  
+  # 3.6 Ensure GCS bucket for RAG documents exists
+  local rag_docs_bucket="${PROJECT_ID}-rag-documents"
+  if gcloud storage buckets describe "gs://${rag_docs_bucket}" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] RAG documents bucket exists:${NC} gs://${rag_docs_bucket}"
+  else
+    gcloud storage buckets create "gs://${rag_docs_bucket}" --location=US --uniform-bucket-level-access
+    echo -e "${GREEN}[infra] Created RAG documents bucket:${NC} gs://${rag_docs_bucket}"
+  fi
+  
+  # 3.7 Setup Vertex AI Search permissions and Data Store
+  echo -e "${BLUE}[infra] Setting up Vertex AI Search...${NC}"
+  
+  # Get project number for Vertex AI service account
+  local PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || echo "")
+  if [[ -n "$PROJECT_NUMBER" ]]; then
+    local VERTEX_AI_SA="service-${PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com"
+    echo -e "${BLUE}[infra] Vertex AI service account:${NC} $VERTEX_AI_SA"
+    
+    # Grant Vertex AI service account access to RAG documents bucket
+    # Check if Vertex AI SA already has access
+    local has_access=$(gcloud storage buckets get-iam-policy "gs://${rag_docs_bucket}" \
+      --format="value(bindings[].members)" 2>/dev/null | grep -q "${VERTEX_AI_SA}" && echo "yes" || echo "no")
+    
+    if [[ "$has_access" == "yes" ]]; then
+      echo -e "${GREEN}[infra] Vertex AI SA already has access to bucket${NC}"
+    else
+      echo -e "${BLUE}[infra] Granting Vertex AI SA access to RAG documents bucket...${NC}"
+      # Try gcloud first (more reliable)
+      gcloud storage buckets add-iam-policy-binding "gs://${rag_docs_bucket}" \
+        --member="serviceAccount:${VERTEX_AI_SA}" \
+        --role="roles/storage.objectViewer" 2>/dev/null || {
+        # Fallback to gsutil
+        gsutil iam ch "serviceAccount:${VERTEX_AI_SA}:objectViewer" "gs://${rag_docs_bucket}" || {
+          echo -e "${YELLOW}[infra] Warning: Failed to grant bucket access (may need manual setup)${NC}"
+          echo -e "${YELLOW}[infra] Run manually: gcloud storage buckets add-iam-policy-binding gs://${rag_docs_bucket} --member='serviceAccount:${VERTEX_AI_SA}' --role='roles/storage.objectViewer'${NC}"
+        }
+      }
+    fi
+  else
+    echo -e "${YELLOW}[infra] Warning: Could not determine project number, skipping Vertex AI SA setup${NC}"
+  fi
+  
+  # Grant backend service account access to Vertex AI Search
+  echo -e "${BLUE}[infra] Granting backend SA access to Vertex AI Search...${NC}"
+  # Note: roles/discoveryengine.user allows API access, viewer is read-only
+  for role in roles/discoveryengine.viewer roles/discoveryengine.user; do
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:${SA_BACKEND}" \
+      --role="$role" \
+      --condition=None 2>/dev/null || {
+      echo -e "${YELLOW}[infra] Warning: Failed to grant $role (may already exist)${NC}"
+    }
+  done
+  
+  # Try to list existing data stores to check if one exists
+  # Note: gcloud CLI doesn't support discoveryengine commands, so we use REST API
+  echo -e "${BLUE}[infra] Checking for existing Vertex AI Search Data Stores...${NC}"
+  local datastore_id=""
+  # Try to get data stores via REST API (requires gcloud auth)
+  local access_token=$(gcloud auth print-access-token 2>/dev/null || echo "")
+  if [[ -n "$access_token" ]]; then
+    local api_response=$(curl -s -H "Authorization: Bearer ${access_token}" \
+      "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/${REGION}/dataStores" 2>/dev/null || echo "")
+    # Check if response contains data stores (not an error)
+    if echo "$api_response" | grep -q "\"name\"" && ! echo "$api_response" | grep -q "\"error\""; then
+      # Extract first data store ID from response
+      datastore_id=$(echo "$api_response" | grep -o '"name":"[^"]*"' | head -1 | sed 's/.*dataStores\/\([^"]*\)".*/\1/' || echo "")
+    fi
+  fi
+  
+  if [[ -n "$datastore_id" ]]; then
+    echo -e "${GREEN}[infra] Found existing Data Store:${NC} $datastore_id"
+    echo -e "${BLUE}[infra] Updating Cloud Run service with Data Store ID...${NC}"
+    # Update Cloud Run service with Data Store ID if API service exists
+    if gcloud run services describe sanskrite-api --region="$REGION" >/dev/null 2>&1; then
+      gcloud run services update sanskrite-api --region="$REGION" \
+        --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id" \
+        --quiet >/dev/null 2>&1 && \
+        echo -e "${GREEN}[infra] Updated Cloud Run service with VERTEX_SEARCH_DATA_STORE_ID=$datastore_id${NC}" || \
+        echo -e "${YELLOW}[infra] Warning: Failed to update Cloud Run service (may need manual update)${NC}"
+    else
+      echo -e "${YELLOW}[infra] Cloud Run service not found, set manually: VERTEX_SEARCH_DATA_STORE_ID=$datastore_id${NC}"
+    fi
+  else
+    echo -e "${YELLOW}[infra] No existing Data Store found or API not accessible${NC}"
+    echo -e "${YELLOW}[infra] Create Data Store manually:${NC}"
+    echo -e "${YELLOW}  Console: https://console.cloud.google.com/gen-app-builder/data-stores${NC}"
+    echo -e "${YELLOW}  Bucket: gs://${rag_docs_bucket}${NC}"
+    echo -e "${YELLOW}  Location: ${REGION}${NC}"
+    echo -e "${BLUE}[infra] Synchronization settings:${NC}"
+    echo -e "${BLUE}  - Documents are automatically saved to GCS when created/updated${NC}"
+    echo -e "${BLUE}  - Vertex AI Search can sync automatically: daily, every 3 days, or every 5 days${NC}"
+    echo -e "${BLUE}  - First sync happens ~1 hour after Data Store creation${NC}"
+    echo -e "${BLUE}  - Configure sync frequency in Data Store settings${NC}"
+    echo -e "${YELLOW}  After creation, set VERTEX_SEARCH_DATA_STORE_ID env var${NC}"
+  fi
+  
+  # 3.8 Setup BigQuery for documents analytics
+  echo -e "${BLUE}[infra] Setting up BigQuery for documents analytics...${NC}"
+  if command -v bq >/dev/null 2>&1; then
+    local dataset="${PROJECT_ID}_documents"
+    if bq ls --dataset --project_id="$PROJECT_ID" "$dataset" >/dev/null 2>&1; then
+      echo -e "${GREEN}[infra] BigQuery dataset exists:${NC} ${dataset}"
+    else
+      echo -e "${BLUE}[infra] Creating BigQuery dataset...${NC}"
+      bq mk --dataset --location=US --project_id="$PROJECT_ID" "$dataset" >/dev/null 2>&1 && \
+        echo -e "${GREEN}[infra] Created BigQuery dataset:${NC} ${dataset}" || \
+        echo -e "${YELLOW}[infra] Warning: Failed to create BigQuery dataset${NC}"
+    fi
+    
+    # Create metadata table if not exists
+    if bq ls --table --project_id="$PROJECT_ID" "${dataset}.documents_metadata" >/dev/null 2>&1; then
+      echo -e "${GREEN}[infra] BigQuery metadata table exists${NC}"
+    else
+      echo -e "${BLUE}[infra] Creating BigQuery metadata table...${NC}"
+      bq mk --table --project_id="$PROJECT_ID" \
+        "${dataset}.documents_metadata" \
+        "id:STRING,tenantId:STRING,sourceId:STRING,externalId:STRING,title:STRING,url:STRING,documentPath:STRING,storagePath:STRING,status:STRING,contentType:STRING,documentType:STRING,language:STRING,contentHash:STRING,ingestedAt:TIMESTAMP,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" >/dev/null 2>&1 && \
+        echo -e "${GREEN}[infra] Created BigQuery metadata table${NC}" || \
+        echo -e "${YELLOW}[infra] Warning: Failed to create metadata table${NC}"
+    fi
+  else
+    echo -e "${YELLOW}[infra] bq CLI not found, skipping BigQuery setup${NC}"
+    echo -e "${YELLOW}[infra] Run scripts/setup_bigquery.sh manually${NC}"
   fi
   
   # 4. Ensure Pub/Sub topics exist
@@ -399,7 +531,7 @@ deploy_api() {
     --max-instances=3 \
     --cpu=1 \
     --memory=512Mi \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false" \
+    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=${REGION},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false" \
     --set-secrets "$paypal_secrets" \
     --project "$PROJECT_ID" \
     --quiet

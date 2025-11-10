@@ -368,7 +368,24 @@ func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []
 			return nil, errors.New("grok not configured")
 		}
 		// Grok structured outputs via function calling (strict by tool/parameters)
-		r, err := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
+		// Add return_structured tool with jsonSchema if provided
+		t := append([]Tool{}, tools...)
+		// Deduplicate return_structured if already present
+		hasReturn := false
+		for _, tt := range t {
+			if strings.EqualFold(strings.TrimSpace(tt.Name), "return_structured") {
+				hasReturn = true
+				break
+			}
+		}
+		if !hasReturn && len(jsonSchema) > 0 {
+			t = append(t, Tool{Name: "return_structured", Description: "Return strictly by schema", Parameters: jsonSchema})
+		}
+		o := c.normalizeOptionsForGrok(opts)
+		if !strings.Contains(strings.ToLower(o.SystemInstruction), "only by calling the function") && len(jsonSchema) > 0 {
+			o.SystemInstruction = strings.TrimSpace(o.SystemInstruction + "\nReturn the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.")
+		}
+		r, err := c.gr.Generate(ctx, prompt, toGrokTools(t), o)
 		if err != nil {
 			return nil, err
 		}

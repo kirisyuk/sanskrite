@@ -26,6 +26,9 @@
     "fullText": {
       "type": "string"
     },
+    "storagePath": {
+      "type": "string"
+    },
     "status": {
       "type": "string"
     },

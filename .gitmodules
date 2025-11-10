@@ -1,0 +1,3 @@
+[submodule "temp-repos/EtigramAzure"]
+	path = temp-repos/EtigramAzure
+	url = https://github.com/kirisyuk/EtigramAzure

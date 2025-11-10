@@ -1,0 +1,10 @@
+{
+  "collectionGroupId": "rag_documents",
+  "datasetId": "sanskrite_documents",
+  "tableId": "documents_metadata",
+  "location": "US",
+  "useNewSchema": true,
+  "useDeletes": true,
+  "useBackfill": true
+}
+

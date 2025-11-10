@@ -33,6 +33,8 @@ type DiscoveryHandler struct {
 	sourceProjectsRepo *repo.SourceProjectsRepository
 	chunksRepo         *repo.ChunksRepository
 	firestoreClient    *firestore.Client
+	// Vertex AI Search client
+	vertexSearchClient *ai.VertexAISearchClient
 }
 
 // NewDiscoveryHandler creates a new DiscoveryHandler
@@ -81,6 +83,12 @@ func (h *DiscoveryHandler) WithChunks(cr *repo.ChunksRepository) *DiscoveryHandl
 // WithFirestoreClient wires Firestore client for native vector search
 func (h *DiscoveryHandler) WithFirestoreClient(client *firestore.Client) *DiscoveryHandler {
 	h.firestoreClient = client
+	return h
+}
+
+// WithVertexSearch wires Vertex AI Search client
+func (h *DiscoveryHandler) WithVertexSearch(client *ai.VertexAISearchClient) *DiscoveryHandler {
+	h.vertexSearchClient = client
 	return h
 }
 
@@ -1209,4 +1217,79 @@ func (h *DiscoveryHandler) ChatMessage(w http.ResponseWriter, r *http.Request) {
 func generateCorrelationID() string {
 	// Simple implementation for now
 	return fmt.Sprintf("disc_%d", time.Now().UnixNano())
+}
+
+// VertexAISearchRequest for POST /api/v1/projects/{id}/vertex-search
+type VertexAISearchRequest struct {
+	Query     string `json:"query"`
+	PageSize  int    `json:"pageSize,omitempty"`
+	PageToken string `json:"pageToken,omitempty"`
+	Filter    string `json:"filter,omitempty"`
+}
+
+// VertexAISearch performs search using Vertex AI Search API
+func (h *DiscoveryHandler) VertexAISearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+	if _, err := h.projectsRepo.Get(r.Context(), projectID); err != nil {
+		WriteNotFound(w, "Project not found")
+		return
+	}
+	if h.vertexSearchClient == nil || !h.vertexSearchClient.IsConfigured() {
+		WriteInternalError(w, "Vertex AI Search is not configured")
+		return
+	}
+	var body VertexAISearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Query) == "" {
+		WriteBadRequest(w, "INVALID_JSON", "query is required")
+		return
+	}
+	if body.PageSize <= 0 {
+		body.PageSize = 10
+	}
+	searchReq := &ai.SearchRequest{
+		Query:    body.Query,
+		PageSize: body.PageSize,
+	}
+	if body.PageToken != "" {
+		searchReq.PageToken = body.PageToken
+	}
+	if body.Filter != "" {
+		searchReq.Filter = body.Filter
+	}
+	searchResp, err := h.vertexSearchClient.Search(r.Context(), searchReq)
+	if err != nil {
+		h.logger.Printf("Vertex AI Search error: %v", err)
+		WriteInternalError(w, "Search failed")
+		return
+	}
+	// Log search event if repository is available
+	if h.searchRepo != nil {
+		var docIDs []string
+		for _, result := range searchResp.Results {
+			if result.Document.ID != "" {
+				docIDs = append(docIDs, result.Document.ID)
+			}
+		}
+		_, _ = h.searchRepo.Create(r.Context(), &models.SearchEvent{
+			TenantID:     auth.TenantID,
+			ProjectID:    projectID,
+			Query:        body.Query,
+			ResultsDocIDs: docIDs,
+		})
+	}
+	WriteJSON(w, http.StatusOK, searchResp)
 }

@@ -48,6 +48,8 @@ export interface LocalInteraction {
   language?: string;
   generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean };
   highRisk?: { level: 'High'|'Medium'|'Low'; score: number; rationale?: string; triggers?: string[] };
+  roles?: Array<{ role: string; confidence: number; rationale: string }>;
+  industries?: Array<{ industry: string; confidence: number; rationale: string }>;
   evaluations?: Record<string, any>;
   coreDocIds?: string[];
   metadata?: { pinned?: boolean; notes?: string[] };
@@ -469,6 +471,45 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           await generateDiscussionFlowAnalysis(projectId, chatMessages, null, undefined);
         } catch (e) {
           console.warn('[hydrateInteractions] Failed to generate discussion flow analysis', e);
+        }
+      })();
+      
+      // Check if user stance analysis exists, generate if missing
+      (async () => {
+        try {
+          if (!projectId || projectId === 'local-unfold') return;
+          
+          // Wait a bit for state to settle, then check
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          const state = get();
+          
+          // Check if analysis already exists
+          const existingAnalysisInteraction = state.interactions.find((it) => 
+            it.subkind === 'eval.stance' && it.projectId === projectId && !it.replyTo
+          );
+          
+          if (existingAnalysisInteraction) {
+            return;
+          }
+          
+          // Get all chat messages (user, assistant) from current state
+          const chatMessages = state.interactions
+            .filter((it) => it.kind === 'user' || it.kind === 'assistant')
+            .map((it) => ({
+              role: it.kind === 'user' ? 'user' : 'assistant',
+              content: it.content || '',
+            }));
+          
+          // Only generate if we have at least 2 messages (user + assistant)
+          if (chatMessages.length < 2) {
+            return;
+          }
+          
+          const { generateUserStanceAnalysis } = await import('../lib/userStanceAnalysis');
+          await generateUserStanceAnalysis(projectId, chatMessages, null, undefined);
+        } catch (e) {
+          console.warn('[hydrateInteractions] Failed to generate user stance analysis', e);
         }
       })();
     } catch (e: any) {
@@ -2185,9 +2226,17 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             }
             const res = await api.createProjectInteraction(projectId, payload);
             set((st) => {
+              // FIXED: Only update if id actually changed to prevent unnecessary re-renders
+              const idx = st.interactions.findIndex((it) => it.id === id);
+              if (idx < 0) return {} as any; // Interaction not found, skip update
+              
+              const currentItem = st.interactions[idx];
+              // Skip update if id is already the same (already persisted)
+              if (currentItem.id === res.id) return {} as any;
+              
+              // Update in place without creating new array if possible
               const items = [...st.interactions];
-              const idx = items.findIndex((it) => it.id === id);
-              if (idx >= 0) { (items[idx] as any).id = res.id; }
+              (items[idx] as any).id = res.id;
               const m = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
               m[id] = res.id;
               m[lastAssistant.id] = res.id;
@@ -2367,6 +2416,73 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             );
           } catch (e) {
             console.warn('[DiscussionFlowAnalysis] generation failed', e);
+          }
+        })();
+
+        // Generate user stance analysis (How you engage)
+        (async () => {
+          try {
+            if (!projectId || projectId === 'local-unfold') return;
+            const { generateUserStanceAnalysis } = await import('../lib/userStanceAnalysis');
+            const interactions = get().interactions;
+            const messages = get().messages;
+            
+            // Get all chat messages (user, assistant, agent)
+            let chatMessages: Array<{ role: string; content: string }> = interactions
+              .filter((it) => 
+                it.kind === 'user' || it.kind === 'assistant'
+              )
+              .map((it) => ({
+                role: it.kind === 'user' ? 'user' : 'assistant',
+                content: it.content || '',
+                ...((it as any).agentProfile ? { agentProfile: (it as any).agentProfile } : {}),
+              }));
+            
+            // If no messages from interactions, fallback to messages array
+            if (chatMessages.length === 0 && messages.length > 0) {
+              chatMessages = messages.map((m) => ({
+                role: m.role,
+                content: m.content || '',
+              }));
+            }
+            
+            if (chatMessages.length === 0) return;
+            
+            // Check if analysis already exists
+            const existingAnalysisInteraction = interactions.find((it) => 
+              it.subkind === 'eval.stance' && it.projectId === projectId && !it.replyTo
+            );
+            
+            let existingAnalysis: any = null;
+            if (existingAnalysisInteraction && existingAnalysisInteraction.content) {
+              try {
+                existingAnalysis = JSON.parse(existingAnalysisInteraction.content || '{}');
+              } catch {}
+            }
+            
+            // Get last pair for incremental update
+            let lastPair: Array<{ role: string; content: string }> | undefined = undefined;
+            if (existingAnalysis && lastAssistant && lastAssistant.content.trim()) {
+              // Find last user message before this assistant response
+              const lastUserInteraction = interactions
+                .filter((it) => it.kind === 'user')
+                .reverse()[0];
+              if (lastUserInteraction && lastUserInteraction.content) {
+                lastPair = [
+                  { role: 'user', content: lastUserInteraction.content },
+                  { role: 'assistant', content: lastAssistant.content }
+                ];
+              }
+            }
+            
+            await generateUserStanceAnalysis(
+              projectId,
+              chatMessages,
+              existingAnalysis,
+              lastPair
+            );
+          } catch (e) {
+            console.warn('[UserStanceAnalysis] generation failed', e);
           }
         })();
 

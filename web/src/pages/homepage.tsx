@@ -30,15 +30,17 @@ export default function Homepage() {
 
   return (
     <div
-      className="min-h-screen"
       style={{
         backgroundColor: 'var(--bg-body)',
+        height: '100svh', /* Small viewport height - accounts for browser UI (address bar, tabs) */
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      <div className="max-w-6xl mx-auto px-4 min-h-screen flex items-center">
-        <div className="w-full flex gap-8" style={{ alignItems: 'flex-start' }}>
+      <div className="max-w-6xl mx-auto px-4 py-4 flex-1 flex items-center overflow-y-auto" style={{ minHeight: 0 }}>
+        <div className="w-full flex flex-col md:flex-row gap-4 md:gap-8" style={{ alignItems: 'flex-start' }}>
           {/* Left column */}
-          <div style={{ flex: '0 0 35%', marginTop: '24px', display: 'flex', justifyContent: 'flex-end' }}>
+          <div className="w-full md:w-auto md:flex-[0_0_35%] flex justify-start md:justify-end" style={{ marginTop: '24px' }}>
             <div
               style={{
                 backgroundColor: theme === 'dark' ? '#FFFFFF' : '#0A0A0F',
@@ -54,17 +56,17 @@ export default function Homepage() {
           </div>
 
           {/* Right column */}
-          <div style={{ flex: '0 0 65%', width: 'fit-content', maxWidth: '100%' }}>
+          <div className="w-full md:flex-[0_0_65%]">
             <div
               className="font-semibold"
-              style={{ color: 'var(--text-primary)', fontSize: 'clamp(52px, 8vw, 96px)', lineHeight: 1.02, marginBottom: '32px' }}
+              style={{ color: 'var(--text-primary)', fontSize: 'clamp(32px, 8vw, 96px)', lineHeight: 1.02, marginBottom: 'clamp(16px, 4vw, 32px)' }}
             >
               <span style={{ display: 'block' }}>A Whole</span>
               <span style={{ display: 'block' }}>Different</span>
               <span style={{ display: 'block' }}>Beast</span>
             </div>
             {/* Copy block */}
-            <div className="mt-4" style={{ backgroundColor: 'var(--bg-elevated)', padding: '14px 16px', borderRadius: 8, marginBottom: '32px', width: 'fit-content' }}>
+            <div className="mt-4" style={{ backgroundColor: 'var(--bg-elevated)', padding: 'clamp(12px, 2vw, 14px) clamp(14px, 2vw, 16px)', borderRadius: 8, marginBottom: 'clamp(16px, 4vw, 32px)', width: 'fit-content', maxWidth: '100%' }}>
               <div className="space-y-2">
                 <div className="text-13" style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{t('homepage.reclaimMind')}</div>
                 <div className="text-13" style={{ color: 'var(--text-secondary)' }}>{t('homepage.tagline')}</div>
@@ -75,7 +77,7 @@ export default function Homepage() {
             </div>
 
             {/* CTA Row */}
-            <div className="mt-4 flex items-center gap-3">
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
                 className="rounded text-13"
                 style={{ padding: '10px 16px', backgroundColor: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)' }}

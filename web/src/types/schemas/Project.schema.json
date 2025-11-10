@@ -64,6 +64,9 @@
     },
     "aiguided": {
       "type": "boolean"
+    },
+    "verifiedCode": {
+      "type": "string"
     }
   },
   "additionalProperties": false,
