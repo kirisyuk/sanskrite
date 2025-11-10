@@ -2,9 +2,6 @@ import React, { useState, useEffect, useRef, startTransition } from 'react';
 import ReactMarkdown, { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import Settings from '../components/Settings';
-import Account from '../components/Account';
-import AdminAccess from '../components/AdminAccess';
 import TermsOfUsage from './TermsOfUsage';
 import PrivacyNotice from './PrivacyNotice';
 import { useProjectsStore } from '../stores/projectsStore';
@@ -99,6 +96,12 @@ import { useProjectsManagement } from '../hooks/useProjectsManagement';
 import { usePanelsManagement } from '../hooks/usePanelsManagement';
 import { useAnalysisManagement } from '../hooks/useAnalysisManagement';
 import { useChatManagement } from '../hooks/useChatManagement';
+import { useArtifactsAnalysis } from '../hooks/useArtifactsAnalysis';
+import { useTextEditing } from '../hooks/useTextEditing';
+import { useModals } from '../hooks/useModals';
+import { useChatTimers } from '../hooks/useChatTimers';
+import { useAdvancedAutoScroll } from '../hooks/useAutoScroll';
+import { useWebSocketConnection } from '../hooks/useWebSocketConnection';
 import { RightPanelButtons } from '../components/RightPanelButtons';
 import { MetricOverlay } from '../components/MetricOverlay';
 import { MessageActions } from '../components/MessageActions';
@@ -111,6 +114,19 @@ import { applyEditHighlight } from '../lib/editHighlight';
 import { replaceTextInMarkdown } from '../lib/markdownNormalizer';
 import { MarkdownRenderer, markdownComponents } from '../lib/markdownComponents';
 import { OpponentAgentsPalette } from '../components/OpponentAgentsPalette';
+import { MessageItem } from '../components/MessageItem';
+import { useTextSelection } from '../hooks/useTextSelection';
+import { handleEditTextDirect } from '../lib/textEditHandler';
+import { FloatingActionButtons } from '../components/FloatingActionButtons';
+import { EditStatusIndicator } from '../components/EditStatusIndicator';
+import { ToolCallsDisplay } from '../components/ToolCallsDisplay';
+import { AttributionsDisplay } from '../components/AttributionsDisplay';
+import { RiskBanner } from '../components/RiskBanner';
+import { ThinkingPlaceholder } from '../components/ThinkingPlaceholder';
+import { SettingsModal } from '../components/SettingsModal';
+import { AccountModal } from '../components/AccountModal';
+import { AdminModal } from '../components/AdminModal';
+import { TelegramAddModal } from '../components/TelegramAddModal';
 
 const DiscoveryPage: React.FC = () => {
   const { t, i18n } = useTranslation();
@@ -126,6 +142,13 @@ const DiscoveryPage: React.FC = () => {
   const panelsManagement = usePanelsManagement();
   const analysisManagement = useAnalysisManagement();
   const chatManagement = useChatManagement();
+  const artifactsAnalysis = useArtifactsAnalysis();
+  const textEditing = useTextEditing();
+  const modals = useModals();
+  const chatTimers = useChatTimers();
+  
+  // Initialize WebSocket connection
+  useWebSocketConnection();
   
   // Destructure for easier access
   const {
@@ -202,10 +225,6 @@ const DiscoveryPage: React.FC = () => {
   const [sideOpen, setSideOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
-  const [genaiThinkingSeconds, setGenaiThinkingSeconds] = useState(0);
-  const [averageTimingSeconds, setAverageTimingSeconds] = useState<
-    number | null
-  >(null);
   const [entitiesAnalyzing, setEntitiesAnalyzing] = useState(false);
   const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives'>(
     'chat',
@@ -217,16 +236,24 @@ const DiscoveryPage: React.FC = () => {
   const unfoldRequestRef = React.useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
-  const genaiThinkingIntervalRef = useRef<number | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showAccount, setShowAccount] = useState(false);
-  const [showAdmin, setShowAdmin] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [staticPage, setStaticPage] = useState<null | 'privacy' | 'terms'>(
-    null,
-  );
+  
+  // Destructure modals hook
+  const {
+    showSettings,
+    showAccount,
+    showAdmin,
+    staticPage,
+    setStaticPage,
+    isAdmin,
+    openSettings,
+    openAccount,
+    openAdmin,
+    closeAllModals,
+  } = modals;
+  
+  // Destructure chat timers hook
+  const { genaiThinkingSeconds, averageTimingSeconds } = chatTimers;
   const correlationRef = useRef<string | null>(null);
-  const wsInitialized = useRef(false);
   const lastDocEvent = useDiscoveryStore((s: any) => (s as any).lastDocEvent);
   React.useEffect(() => {
     try {
@@ -718,134 +745,29 @@ const DiscoveryPage: React.FC = () => {
   }, []);
 
 
-  // Analysis handlers for artifacts panel
-  const waitForWsSubscribed = React.useCallback(
-    async (projectId: string, timeoutMs = 1500) => {
-      const start = Date.now();
-      while (true) {
-        try {
-          const ws = (await import('../stores/wsStore')).useWsStore.getState();
-          if (ws.connected && ws.subscribedProjectId === projectId) break;
-        } catch {}
-        if (Date.now() - start > timeoutMs) break;
-        await new Promise((r) => setTimeout(r, 60));
-      }
-    },
-    [],
-  );
-
-  const handleAnalyzeEntities = React.useCallback(async () => {
-    try {
-      const pid = await genaiChat.ensureProject();
-      try {
-        if ((window as any).wsSubscribeProject && pid) {
-          (window as any).wsSubscribeProject(pid);
-          await waitForWsSubscribed(pid);
-        }
-      } catch {}
-      const res = await (await import('../lib/api')).api.analyzeEntities(pid, '');
-      try {
-        console.log('[AnalyzeEntities] queued:', res);
-      } catch {}
-    } catch {}
-  }, [genaiChat, waitForWsSubscribed]);
-
-  const handleAnalyzeFacts = React.useCallback(async () => {
-    try {
-      const pid = await genaiChat.ensureProject();
-      try {
-        if ((window as any).wsSubscribeProject && pid) {
-          (window as any).wsSubscribeProject(pid);
-          await waitForWsSubscribed(pid);
-        }
-      } catch {}
-      const res = await (await import('../lib/api')).api.analyzeFacts(pid, '');
-      try {
-        console.log('[AnalyzeFacts] queued:', res);
-      } catch {}
-    } catch {}
-  }, [genaiChat, waitForWsSubscribed]);
-
-  const handleAnalyzeEvents = React.useCallback(async () => {
-    try {
-      const pid = await genaiChat.ensureProject();
-      try {
-        if ((window as any).wsSubscribeProject && pid) {
-          (window as any).wsSubscribeProject(pid);
-          await waitForWsSubscribed(pid);
-        }
-      } catch {}
-      const res = await (await import('../lib/api')).api.analyzeEvents(pid, '');
-      try {
-        console.log('[AnalyzeEvents] queued:', res);
-      } catch {}
-    } catch {}
-  }, [genaiChat, waitForWsSubscribed]);
-
-  const handleAnalyzeMetrics = React.useCallback(async () => {
-    try {
-      const pid = await genaiChat.ensureProject();
-      try {
-        if ((window as any).wsSubscribeProject && pid) {
-          (window as any).wsSubscribeProject(pid);
-          await waitForWsSubscribed(pid);
-        }
-      } catch {}
-      const res = await (await import('../lib/api')).api.analyzeMetrics(pid, '');
-      try {
-        console.log('[AnalyzeMetrics] queued:', res);
-      } catch {}
-    } catch {}
-  }, [genaiChat, waitForWsSubscribed]);
-
-  const handleAnalyzeDecisions = React.useCallback(async () => {
-    try {
-      const pid = await genaiChat.ensureProject();
-      try {
-        if ((window as any).wsSubscribeProject && pid) {
-          (window as any).wsSubscribeProject(pid);
-          await waitForWsSubscribed(pid);
-        }
-      } catch {}
-      const res = await (await import('../lib/api')).api.analyzeDecisions(pid, '');
-      try {
-        console.log('[AnalyzeDecisions] queued:', res);
-      } catch {}
-    } catch {}
-  }, [genaiChat, waitForWsSubscribed]);
-
-  // Floating selection button state (position in viewport)
-  const selectionBtnRef = useRef<HTMLButtonElement | null>(null);
-  const isSelectingRef = useRef<boolean>(false);
-  const selectionMenuRef = useRef<HTMLDivElement | null>(null);
-  const [frozenEdits, setFrozenEdits] = React.useState<Record<string, boolean>>(
-    {},
-  );
-  const [editErrors, setEditErrors] = React.useState<
-    Record<string, string | null>
-  >({});
-  const [editCtx, setEditCtx] = React.useState<null | {
-    interactionId: string;
-    selectedText: string;
-  }>(null);
-  const [editLast, setEditLast] = React.useState<
-    Record<string, { selected: string; request: string }>
-  >({});
-  const [editSeconds, setEditSeconds] = React.useState(0);
-  const [editHighlight, setEditHighlight] = React.useState<
-    Record<string, { start: number; end: number }>
-  >({});
-  React.useEffect(() => {
-    const anyFrozen = Object.values(frozenEdits).some(Boolean);
-    if (!anyFrozen) {
-      setEditSeconds(0);
-      return;
-    }
-    const id = window.setInterval(() => setEditSeconds((s) => s + 1), 1000);
-    return () => {
-      window.clearInterval(id);
-    };
-  }, [frozenEdits]);
+  // Analysis handlers for artifacts panel - handled by useArtifactsAnalysis hook
+  const {
+    handleAnalyzeEntities,
+    handleAnalyzeFacts,
+    handleAnalyzeEvents,
+    handleAnalyzeMetrics,
+    handleAnalyzeDecisions,
+  } = artifactsAnalysis;
+  
+  // Text editing state - handled by useTextEditing hook
+  const {
+    frozenEdits,
+    editErrors,
+    editLast,
+    editSeconds,
+    editHighlight,
+    setEditHighlight,
+    handleEditStart,
+    handleEditFinish,
+    handleEditError,
+    handleEditUpdate,
+    handleSaveRequest,
+  } = textEditing;
 
   useEffect(() => {
     fetchProjects('discovery');
@@ -900,42 +822,9 @@ const DiscoveryPage: React.FC = () => {
     } catch {}
   }, [genaiChat.interactions.length]);
 
-  // Background-load user preferred language (does not block UI). Do not change UI language or <html lang> here.
-  useEffect(() => {
-    const loadLang = async () => {
-      try {
-        const uid = currentUser?.uid;
-        if (!uid) return;
-        const user = await api.getUser(uid);
-        try {
-          const role = (user as any)?.role || '';
-          setIsAdmin(
-            typeof role === 'string' && role.toLowerCase() === 'admin',
-          );
-        } catch {}
-        const code = (
-          user?.preferredLanguage ||
-          localStorage.getItem('preferredLanguage') ||
-          'EN'
-        ).toUpperCase();
-        if (code && code.length === 2) {
-          localStorage.setItem('preferredLanguage', code);
-        }
-      } catch {}
-    };
-    loadLang();
-  }, [currentUser?.uid]);
+  // User language and admin status are handled by useModals hook
 
-  // Separate effect for WebSocket to prevent duplicate connections
-  useEffect(() => {
-    if (wsInitialized.current) return;
-    
-    const tenantId = currentUser?.email || '';
-    if (tenantId) {
-      wsInitialized.current = true;
-      connectWs(tenantId);
-    }
-  }, [currentUser?.email, connectWs]);
+  // WebSocket connection is handled by useWebSocketConnection hook
 
   // Centralized function to reset chat state (used for New Chat, deleting current chat, and switching chats)
   // Note: This function uses resetChatState from projectsManagement hook but adds additional cleanup
@@ -997,784 +886,18 @@ const DiscoveryPage: React.FC = () => {
     }
   }, [running, currentProject?.id]);
 
-  // Auto-scroll to bottom on new messages
-  // FIXED: Combined logic to prevent multiple scrolls and only scroll when needed
-  const lastScrollInteractionLength = React.useRef<number>(0);
-  const lastScrollStreamingState = React.useRef<boolean>(false);
-
-  // Auto-scroll to bottom when switching to another chat/project
-  const lastProjectIdRef = React.useRef<string | null>(null);
-  React.useEffect(() => {
-    const currentProjectId = genaiChat.projectId;
-    if (currentProjectId && currentProjectId !== lastProjectIdRef.current) {
-      // Project changed - scroll to bottom after a short delay to ensure DOM is updated
-      lastProjectIdRef.current = currentProjectId;
-      // Reset scroll position tracking for new project
-      lastScrollInteractionLength.current = 0;
-      setTimeout(() => {
-        if (messagesRef.current) {
-          messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-        }
-      }, 100);
-    }
-  }, [genaiChat.projectId]);
-
-  // Auto-scroll to bottom after hydration completes (when interactions are loaded)
-  React.useEffect(() => {
-    if (!genaiChat.hydrating && genaiChatInteractionsLength > 0 && messagesRef.current) {
-      // Small delay to ensure DOM has rendered
-      setTimeout(() => {
-        if (messagesRef.current) {
-          messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-        }
-      }, 50);
-    }
-  }, [genaiChat.hydrating, genaiChatInteractionsLength]);
+  // Auto-scroll is handled by useAdvancedAutoScroll hook
+  useAdvancedAutoScroll(messagesRef);
   
-  useEffect(() => {
-    if (!messagesRef.current) return;
-    
-    const currentLength = genaiChatInteractionsLength;
-    const currentStreaming = genaiChatStreaming;
-    
-    // Scroll when new interaction is added (length increased)
-    if (currentLength > lastScrollInteractionLength.current) {
-      lastScrollInteractionLength.current = currentLength;
-      requestAnimationFrame(() => {
-        if (messagesRef.current) {
-          messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-        }
-      });
-      return;
-    }
-    
-    // Scroll when streaming completes (was streaming, now stopped)
-    if (
-      lastScrollStreamingState.current &&
-      !currentStreaming &&
-      currentLength > 0
-    ) {
-      lastScrollStreamingState.current = currentStreaming;
-      // Small delay to ensure DOM has updated after streaming completes
-      setTimeout(() => {
-        if (messagesRef.current && !genaiChatStreaming) {
-          messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-        }
-      }, 50);
-      return;
-    }
-    
-    lastScrollStreamingState.current = currentStreaming;
-  }, [genaiChatInteractionsLength, genaiChatStreaming]);
   // Track text selection within assistant markdown and position a floating action button
-  useEffect(() => {
-    const container = messagesRef.current;
-    if (!container) return;
-    const containerEl = container as HTMLElement;
-
-    function isNodeInside(el: Node | null, root: HTMLElement): boolean {
-      if (!el) return false;
-      const element =
-        el.nodeType === 3
-          ? (el.parentElement as HTMLElement | null)
-          : (el as HTMLElement);
-      return !!element && (element === root || root.contains(element));
-    }
-
-    // Ensure floating button element exists once
-    if (!selectionBtnRef.current) {
-      const btn = document.createElement('button');
-      btn.setAttribute('type', 'button');
-      btn.setAttribute('aria-label', 'Selection action');
-      btn.setAttribute('title', 'Selection action');
-      btn.tabIndex = -1;
-      Object.assign(btn.style, {
-        position: 'fixed',
-        width: '28px',
-        height: '28px',
-        borderRadius: '9999px',
-        backgroundColor: 'var(--bg-elevated)',
-        border: '1px solid var(--overlay-line-90)',
-        color: 'var(--text-heading)',
-        display: 'none',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: '60',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
-        userSelect: 'none',
-      } as CSSStyleDeclaration);
-      btn.innerHTML =
-        '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14" stroke-width="2" stroke-linecap="round"/></svg>';
-      btn.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-      });
-      btn.addEventListener('mouseenter', () => {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.backgroundColor = 'var(--white-10)';
-      });
-      btn.addEventListener('mouseleave', () => {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.backgroundColor = 'var(--bg-elevated)';
-      });
-      document.body.appendChild(btn);
-      selectionBtnRef.current = btn as HTMLButtonElement;
-    }
-
-    // Ensure floating menu exists once
-    if (!selectionMenuRef.current) {
-      const menu = document.createElement('div');
-      Object.assign(menu.style, {
-        position: 'fixed',
-        display: 'none',
-        gap: '6px',
-        padding: '6px',
-        borderRadius: '10px',
-        backgroundColor: 'var(--bg-elevated)',
-        border: '1px solid var(--overlay-line-90)',
-        boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
-        zIndex: '61',
-        alignItems: 'center',
-      } as CSSStyleDeclaration);
-
-      const mkBtn = (label: string, icon: 'edit' | 'note') => {
-        const b = document.createElement('button');
-        b.setAttribute('type', 'button');
-        Object.assign(b.style, {
-          fontSize: '12px',
-          lineHeight: '18px',
-          padding: '4px 8px',
-          borderRadius: '8px',
-          background: 'transparent',
-          color: 'var(--text-heading)',
-          border: '1px solid var(--overlay-line-90)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '6px',
-        } as CSSStyleDeclaration);
-        // Build icon using SVG namespace (reliable rendering)
-        const ns = 'http://www.w3.org/2000/svg';
-        const svg = document.createElementNS(ns, 'svg');
-        svg.setAttribute('viewBox', '0 0 24 24');
-        svg.setAttribute('width', '14');
-        svg.setAttribute('height', '14');
-        svg.setAttribute('fill', 'none');
-        svg.setAttribute('stroke', 'currentColor');
-        svg.setAttribute('stroke-width', '2');
-        svg.setAttribute('stroke-linecap', 'round');
-        svg.setAttribute('stroke-linejoin', 'round');
-        if (icon === 'edit') {
-          const p1 = document.createElementNS(ns, 'path');
-          p1.setAttribute('d', 'M3 21l3-1 11-11-2-2L4 18l-1 3z');
-          const p2 = document.createElementNS(ns, 'path');
-          p2.setAttribute('d', 'M14 4l2 2');
-          svg.appendChild(p1);
-          svg.appendChild(p2);
-        } else {
-          const rect = document.createElementNS(ns, 'rect');
-          rect.setAttribute('x', '4');
-          rect.setAttribute('y', '3');
-          rect.setAttribute('width', '16');
-          rect.setAttribute('height', '18');
-          rect.setAttribute('rx', '2');
-          const p1 = document.createElementNS(ns, 'path');
-          p1.setAttribute('d', 'M12 8v8');
-          const p2 = document.createElementNS(ns, 'path');
-          p2.setAttribute('d', 'M8 12h8');
-          svg.appendChild(rect);
-          svg.appendChild(p1);
-          svg.appendChild(p2);
-        }
-        const labelSpan = document.createElement('span');
-        labelSpan.textContent = label;
-        b.appendChild(svg);
-        b.appendChild(labelSpan);
-        // Keep selection while pressing menu buttons
-        b.addEventListener('mousedown', (e) => {
-          e.preventDefault();
-        });
-        // Handle actions
-        if (icon === 'edit') {
-          b.addEventListener('click', async () => {
-            try {
-              const sel = window.getSelection();
-              if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-              const range = sel.getRangeAt(0);
-              const startEl = (
-                range.startContainer.nodeType === 3
-                  ? range.startContainer.parentElement
-                  : (range.startContainer as Element)
-              ) as Element | null;
-              if (!startEl) return;
-              const markdownRoot = startEl.closest(
-                '.markdown',
-              ) as HTMLElement | null;
-              if (!markdownRoot) return;
-              const interId =
-                markdownRoot.getAttribute('data-interaction-id') || '';
-              const selectedText = sel.toString();
-              const inter = useGenaiChatStore
-                .getState()
-                .interactions.find((it) => it.id === interId);
-              const full = (
-                inter?.contentSanitized ||
-                inter?.content ||
-                ''
-              ).toString();
-              const displayed = (markdownRoot.innerText || '').toString();
-              const meta = useGenaiChatStore.getState().messageMeta[interId];
-              const agentName = meta?.headerText || 'agent';
-              const prof = meta?.agentProfile;
-              const preferredLang = getPreferredLanguage();
-              // Open AgentPalette in edit mode anchored to input area
-              const anchor = getAnchorRect();
-              const ctxNode = (
-                <div>
-                  <div>
-                    <b>Fragment:</b> {selectedText.slice(0, 200)}
-                    {selectedText.length > 200 ? '…' : ''}
-                  </div>
-                  <div style={{ marginTop: 4 }}>
-                    <b>Answer (head):</b> {(full || '').slice(0, 160)}
-                    {full.length > 160 ? '…' : ''}
-                  </div>
-                </div>
-              );
-              const submit = async (request: string) => {
-                if (!request.trim()) return;
-                setFrozenEdits((s) => ({ ...s, [interId]: true }));
-                // Plain text instruction: return only updated fragment, no formatting wrappers
-                const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. We provide the full assistant answer (FULL_ANSWER) and a specific fragment (SELECTED_FRAGMENT) the user wants to modify. The user request is (USER_REQUEST).\n\nReturn ONLY the updated fragment. Preserve the fragment's existing formatting and structure where possible, and use Markdown appropriately (headings ###, lists, emphasis, blank lines) if it helps readability and does not contradict the request. Do not add any preface, labels, or explanations. Do not wrap the result in code fences. Do NOT return JSON.\n\nFULL_ANSWER:\n${full}\n\nSELECTED_FRAGMENT:\n${selectedText}\n\nUSER_REQUEST:\n${request}\n`;
-                const settings = useGenAISettings.getState();
-                const useModel = prof?.model || settings.model;
-                const sxSystemInstruction = getSxSystemInstructionShort();
-                const options: any = {
-                  profile: /_quality$/i.test(useModel || '')
-                    ? 'quality'
-                    : 'fast',
-                  modelOverride: useModel,
-                  groundingEnabled: settings.groundingEnabled,
-                  temperature: settings.temperature,
-                  maxOutputTokens: Math.max(
-                    512,
-                    settings.maxOutputTokens || 1024,
-                  ),
-                  systemInstruction:
-                    [
-                      settings.systemInstruction || '',
-                      HATL_ONE_INSTRUCTIONS,
-                      sxSystemInstruction,
-                    ]
-                      .filter(Boolean)
-                      .join('\n\n')
-                      .trim() || undefined,
-                };
-                try {
-                  const started = performance.now();
-                  const originalIndex = displayed.indexOf(selectedText);
-                  const small = selectedText.length < 200;
-                  console.log('[EditSelected] sending', {
-                    provider: prof?.provider,
-                    model: useModel,
-                    promptChars: prompt.length,
-                    fragmentChars: selectedText.length,
-                    answerChars: full.length,
-                    originalIndex,
-                    requestPreview: small
-                      ? request
-                      : `${request.slice(0, 120)}${request.length > 120 ? '…' : ''}`,
-                    fragmentPreview: small
-                      ? selectedText
-                      : `${selectedText.slice(0, 120)}…${selectedText.slice(-120)}`,
-                  });
-                  const res = await api.genaiGenerate({
-                    model: useModel,
-                    prompt,
-                    strictJSONEnabled: false,
-                    maxOutputTokens: options.maxOutputTokens,
-                    webSearchEnabled: false,
-                    systemInstruction: options.systemInstruction,
-                  });
-                  // Normalize output: strip code fences/quotes; if JSON detected, take first field value
-                  const stripFences = (s: string) => {
-                    let t = s.trim();
-                    t = t
-                      .replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1')
-                      .trim();
-                    t = t
-                      .replace(/^```[\s\S]*?```$/m, (m) =>
-                        m
-                          .replace(/^```[a-zA-Z]*\n?/, '')
-                          .replace(/\n?```$/, ''),
-                      )
-                      .trim();
-                    if (
-                      (t.startsWith('"') && t.endsWith('"')) ||
-                      (t.startsWith("'") && t.endsWith("'"))
-                    ) {
-                      t = t.slice(1, -1);
-                    }
-                    return t.trim();
-                  };
-                  const rawOut = (res?.content || '').toString();
-                  let cleaned = stripFences(rawOut);
-                  let updated = cleaned;
-                  let outFormat: 'json' | 'plain' = 'plain';
-                  try {
-                    const obj = JSON.parse(cleaned);
-                    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-                      const k = Object.keys(obj)[0];
-                      if (k) {
-                        updated = String((obj as any)[k] ?? '').trim();
-                        outFormat = 'json';
-                      }
-                    }
-                  } catch {}
-                  updated = stripFences(updated);
-                  if (!updated) throw new Error('Empty model response');
-                  // Equality / head-tail previews and char delta
-                  const eq = updated === selectedText;
-                  const headFrom = selectedText.slice(0, 120);
-                  const tailFrom =
-                    selectedText.length > 240
-                      ? selectedText.slice(-120)
-                      : selectedText.slice(
-                          Math.max(0, selectedText.length - 120),
-                        );
-                  const headTo = updated.slice(0, 120);
-                  const tailTo =
-                    updated.length > 240
-                      ? updated.slice(-120)
-                      : updated.slice(Math.max(0, updated.length - 120));
-                  const delta = Math.abs(updated.length - selectedText.length);
-                  let newContentSanitized = '';
-                  try {
-                    // Prefer replacing inside original markdown to preserve formatting
-                    const md = (
-                      inter?.contentSanitized ||
-                      inter?.content ||
-                      ''
-                    ).toString();
-                    newContentSanitized = replaceTextInMarkdown(
-                      md,
-                      selectedText,
-                      updated,
-                    );
-                  } catch {
-                    newContentSanitized = displayed.replace(
-                      selectedText,
-                      updated,
-                    );
-                  }
-                  useGenaiChatStore.setState(
-                    (s) =>
-                      ({
-                        interactions: s.interactions.map((x) =>
-                          x.id === interId
-                            ? { ...x, contentSanitized: newContentSanitized }
-                            : x,
-                        ),
-                      }) as any,
-                  );
-                  const finished = performance.now();
-                  console.log('[EditSelected] result', {
-                    ms: Math.max(1, Math.round(finished - started)),
-                    updatedChars: updated.length,
-                    eq,
-                    delta,
-                    headFrom,
-                    tailFrom,
-                    headTo,
-                    tailTo,
-                    replacedOnce: true,
-                    fullIndex: originalIndex,
-                    outFormat,
-                    insertedPreview:
-                      updated.length < 200
-                        ? updated
-                        : `${updated.slice(0, 120)}…${updated.slice(-80)}`,
-                  });
-                  if (eq) {
-                    setEditErrors((s) => ({
-                      ...s,
-                      [interId]:
-                        'No change produced. Try clarifying the edit request.',
-                    }));
-                  } else {
-                    setEditErrors((s) => ({ ...s, [interId]: null }));
-                  }
-                } catch (e: any) {
-                  console.error('[EditSelected] error', {
-                    error: e?.message || String(e),
-                  });
-                  setEditErrors((s) => ({
-                    ...s,
-                    [interId]: e?.message || 'Edit failed',
-                  }));
-                } finally {
-                  setFrozenEdits((s) => ({ ...s, [interId]: false }));
-                }
-              };
-              // Mount AgentPalette (edit)
-              const mount = document.createElement('div');
-              document.body.appendChild(mount);
-              const rootMod = await import('react-dom/client');
-              const root = rootMod.createRoot(mount);
-              const onClose = () => {
-                try {
-                  root.unmount();
-                  mount.remove();
-                } catch {}
-              };
-              root.render(
-                React.createElement(AgentPalette as any, {
-                  mode: 'edit',
-                  visible: true,
-                  title: 'Edit selected fragment',
-                  subtitle: agentName,
-                  anchorRect: anchor,
-                  contextNode: ctxNode,
-                  submitLabel: 'Apply',
-                  onClose,
-                  onSubmitAsk: (t: string) => {
-                    onClose();
-                    submit(t);
-                  },
-                }),
-              );
-            } catch (e: any) {
-              console.warn('Edit selection failed', e);
-              try {
-                const sel = window.getSelection();
-                const range = sel?.getRangeAt(0);
-                const startEl = range
-                  ? ((range.startContainer.nodeType === 3
-                      ? range.startContainer.parentElement
-                      : (range.startContainer as Element)) as Element | null)
-                  : null;
-                const interId =
-                  startEl
-                    ?.closest('.markdown')
-                    ?.getAttribute('data-interaction-id') || '';
-                if (interId)
-                  setEditErrors((s) => ({
-                    ...s,
-                    [interId]: e?.message || 'Edit failed',
-                  }));
-                if (interId)
-                  setFrozenEdits((s) => ({ ...s, [interId]: false }));
-              } catch {}
-            }
-          });
-        } else {
-          b.addEventListener('click', (e) => {
-            e.preventDefault();
-          });
-        }
-        return b;
-      };
-      const editBtn = mkBtn('Ask to edit selected', 'edit');
-      const notesBtn = mkBtn('Add to Notes', 'note');
-      // Wire Add to Notes: pin if needed + append selected text to metadata.notes
-      if (notesBtn) {
-        notesBtn.addEventListener('click', async (e) => {
-          e.preventDefault();
-          try {
-            const sel = window.getSelection?.()?.toString()?.trim() || '';
-            if (!sel) {
-              console.warn('[AddToNotes] No selection found');
-              return;
-            }
-            const range = document.getSelection()?.getRangeAt(0);
-            const startEl = range
-              ? ((range.startContainer.nodeType === 3
-                  ? range.startContainer.parentElement
-                  : (range.startContainer as Element)) as Element | null)
-              : null;
-            const interId =
-              startEl
-                ?.closest('.markdown')
-                ?.getAttribute('data-interaction-id') || '';
-            if (!interId) {
-              console.warn('[AddToNotes] No interaction ID found');
-              return;
-            }
-            const store = useGenaiChatStore.getState();
-            const it = store.interactions.find((x: any) => x.id === interId);
-            if (!it) {
-              console.warn('[AddToNotes] Interaction not found', {
-                interId,
-                availableIds: store.interactions
-                  .map((x: any) => x.id)
-                  .slice(0, 5),
-              });
-              return;
-            }
-            const projectId = store.projectId;
-            if (!projectId || projectId === 'local-unfold') {
-              console.warn('[AddToNotes] Invalid project ID', { projectId });
-              return;
-            }
-            // Resolve server ID if local ID is mapped
-            const map = (store as any).persistedByLocalId || {};
-            const serverId = map[it.id] || it.id;
-            const meta = it.metadata || {};
-            const notes = Array.isArray(meta.notes) ? [...meta.notes] : [];
-            notes.push(sel);
-            await api.updateProjectInteraction(projectId, serverId, {
-              metadata: { pinned: true, notes },
-            });
-            await store.hydrateInteractions();
-            // Hide selection UI and clear selection after successful add
-            if (selectionMenuRef.current)
-              selectionMenuRef.current.style.display = 'none';
-            if (selectionBtnRef.current)
-              selectionBtnRef.current.style.display = 'none';
-            setTimeout(() => {
-              const s = window.getSelection && window.getSelection();
-              if (s && s.removeAllRanges) s.removeAllRanges();
-            }, 100);
-          } catch (err) {
-            console.warn('[AddToNotes] failed', err);
-          }
-        });
-      }
-      menu.appendChild(editBtn);
-      menu.appendChild(notesBtn);
-      // Prevent selection clearing when starting interaction with the menu
-      menu.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-      });
-      document.body.appendChild(menu);
-      selectionMenuRef.current = menu;
-    }
-
-    // Throttle selection handling to avoid work during fast typing/caret moves
-    let selectionThrottle = 0 as any;
-    function handleSelectionChange() {
-      // Skip if typing in inputs/textareas/contenteditable to reduce background work
-      const ae = document.activeElement as HTMLElement | null;
-      if (
-        ae &&
-        (ae.tagName === 'TEXTAREA' ||
-          ae.tagName === 'INPUT' ||
-          ae.isContentEditable)
-      ) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        if (selectionMenuRef.current)
-          selectionMenuRef.current.style.display = 'none';
-        return;
-      }
-      // Basic throttle (~60fps max)
-      const now = performance.now();
-      if (selectionThrottle && now - selectionThrottle < 16) return;
-      selectionThrottle = now;
-      if (isSelectingRef.current) {
-        // Do not show the button while user is dragging to select text
-        return;
-      }
-      const sel = document.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        if (selectionMenuRef.current)
-          selectionMenuRef.current.style.display = 'none';
-        return;
-      }
-      const range = sel.getRangeAt(0);
-      if (!range) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        return;
-      }
-      // Ensure selection is within assistant markdown content in this view
-      const startEl = (
-        range.startContainer.nodeType === 3
-          ? range.startContainer.parentElement
-          : (range.startContainer as Element)
-      ) as Element | null;
-      const endEl = (
-        range.endContainer.nodeType === 3
-          ? range.endContainer.parentElement
-          : (range.endContainer as Element)
-      ) as Element | null;
-      if (!startEl || !endEl) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        return;
-      }
-      if (
-        !isNodeInside(startEl, containerEl) ||
-        !isNodeInside(endEl, containerEl)
-      ) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        return;
-      }
-      // Require that at least one side sits inside a .markdown (assistant bubble)
-      const inMarkdown = !!(
-        startEl.closest('.markdown') || endEl.closest('.markdown')
-      );
-      if (!inMarkdown) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        return;
-      }
-
-      const rects = range.getClientRects();
-      const rect = rects.length > 0 ? rects : [range.getBoundingClientRect()];
-      if (!rect || rect.length === 0) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        return;
-      }
-      let minTop = Number.POSITIVE_INFINITY;
-      let maxBottom = Number.NEGATIVE_INFINITY;
-      for (let i = 0; i < rect.length; i++) {
-        const r = rect[i];
-        if (!r) continue;
-        minTop = Math.min(minTop, r.top);
-        maxBottom = Math.max(maxBottom, r.bottom);
-      }
-      if (!isFinite(minTop) || !isFinite(maxBottom)) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        return;
-      }
-      const containerRect = containerEl.getBoundingClientRect();
-      const buttonSize = 28;
-      const gap = 8;
-      const top = Math.min(
-        Math.max((minTop + maxBottom) / 2 - buttonSize / 2, 4),
-        window.innerHeight - buttonSize - 4,
-      );
-      const leftCandidate = (containerRect?.left || 0) - gap - buttonSize;
-      const left = Math.max(4, leftCandidate);
-      if (selectionBtnRef.current) {
-        selectionBtnRef.current.style.top = `${top}px`;
-        selectionBtnRef.current.style.left = `${left}px`;
-        selectionBtnRef.current.style.display = 'flex';
-        selectionBtnRef.current.style.pointerEvents = 'none';
-        window.setTimeout(() => {
-          if (selectionBtnRef.current)
-            selectionBtnRef.current.style.pointerEvents = 'auto';
-        }, 180);
-      }
-      // Position menu to the right of the main button
-      if (selectionMenuRef.current) {
-        selectionMenuRef.current.style.top = `${Math.round(top - 2)}px`;
-        selectionMenuRef.current.style.left = `${Math.round(left + buttonSize + 8)}px`;
-      }
-    }
-
-    const onScrollOrResize = () => {
-      // Recompute while selection exists; otherwise hide
-      const sel = document.getSelection();
-      if (!sel || sel.isCollapsed) {
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-      } else {
-        handleSelectionChange();
-      }
-    };
-
-    const onPointerDown = (e: MouseEvent) => {
-      const btn = selectionBtnRef.current;
-      const menu = selectionMenuRef.current;
-      if (btn && (e.target === btn || btn.contains(e.target as Node))) {
-        // Keep selection while interacting with the button
-        e.preventDefault();
-        // Toggle menu visibility
-        if (menu) {
-          const visible = menu.style.display !== 'none';
-          if (!visible) {
-            // Ensure menu aligns to current button position
-            const rect = btn.getBoundingClientRect();
-            const top = rect.top;
-            const left = rect.right + 8;
-            menu.style.top = `${Math.round(top - 2)}px`;
-            menu.style.left = `${Math.round(left)}px`;
-            menu.style.display = 'flex';
-          } else {
-            menu.style.display = 'none';
-          }
-        }
-        return;
-      }
-      if (menu && (e.target === menu || menu.contains(e.target as Node))) {
-        // Interactions inside the menu should not close it or clear selection
-        e.preventDefault();
-        return;
-      }
-      // Let selection clear naturally; we'll hide on selectionchange
-      // Also close menu on any outside click
-      if (menu) menu.style.display = 'none';
-      setTimeout(() => handleSelectionChange(), 0);
-    };
-
-    const onContainerPointerDown = () => {
-      isSelectingRef.current = true;
-      if (selectionBtnRef.current)
-        selectionBtnRef.current.style.display = 'none';
-      if (selectionMenuRef.current)
-        selectionMenuRef.current.style.display = 'none';
-    };
-    const onDocumentPointerUp = () => {
-      if (isSelectingRef.current) {
-        isSelectingRef.current = false;
-        // Show the button once selection is finalized
-        setTimeout(() => handleSelectionChange(), 0);
-      }
-    };
-
-    document.addEventListener('selectionchange', handleSelectionChange);
-    window.addEventListener('scroll', onScrollOrResize, true);
-    window.addEventListener('resize', onScrollOrResize);
-    document.addEventListener('pointerdown', onPointerDown, true);
-    containerEl.addEventListener('pointerdown', onContainerPointerDown, true);
-    document.addEventListener('pointerup', onDocumentPointerUp, true);
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (selectionMenuRef.current)
-          selectionMenuRef.current.style.display = 'none';
-        if (selectionBtnRef.current)
-          selectionBtnRef.current.style.display = 'none';
-        const sel = document.getSelection();
-        if (sel) sel.removeAllRanges();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('selectionchange', handleSelectionChange);
-      window.removeEventListener('scroll', onScrollOrResize, true);
-      window.removeEventListener('resize', onScrollOrResize);
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      containerEl.removeEventListener(
-        'pointerdown',
-        onContainerPointerDown,
-        true,
-      );
-      document.removeEventListener('pointerup', onDocumentPointerUp, true);
-      document.removeEventListener('keydown', onKeyDown, true);
-      // Cleanup button element
-      if (selectionBtnRef.current && selectionBtnRef.current.parentElement) {
-        try {
-          selectionBtnRef.current.parentElement.removeChild(
-            selectionBtnRef.current,
-          );
-        } catch {}
-        selectionBtnRef.current = null;
-      }
-      if (selectionMenuRef.current && selectionMenuRef.current.parentElement) {
-        try {
-          selectionMenuRef.current.parentElement.removeChild(
-            selectionMenuRef.current,
-          );
-        } catch {}
-        selectionMenuRef.current = null;
-      }
-    };
-  }, [messagesRef]); // Use ref object instead of .current to avoid re-running on every message change
+  useTextSelection({
+    containerRef: messagesRef,
+    onEditStart: handleEditStart,
+    onEditFinish: handleEditFinish,
+    onEditError: handleEditError,
+    onEditUpdate: handleEditUpdate,
+    onSaveRequest: handleSaveRequest,
+  });
 
   // Highlight notes in message content
   useEffect(() => {
@@ -1812,69 +935,15 @@ const DiscoveryPage: React.FC = () => {
     };
   }, [genaiChat.interactions, rightPanelType]);
 
-  // GenAI thinking seconds timer: runs until first chunk arrives
-  useEffect(() => {
-    const msgs = useGenaiChatStore.getState().messages;
-    const last = msgs[msgs.length - 1];
-    // Check if we're waiting for the first chunk: streaming is active, last message is assistant, and content is empty
-    const awaitingFirstChunk = !!(
-      genaiChatStreaming &&
-      last &&
-      last.role === 'assistant' &&
-      !last.content
-    );
-    
-    if (awaitingFirstChunk) {
-      // Start timer if not already running
-      if (!genaiThinkingIntervalRef.current) {
-        setGenaiThinkingSeconds(0);
-        genaiThinkingIntervalRef.current = window.setInterval(() => {
-          setGenaiThinkingSeconds((s) => s + 1);
-        }, 1000) as unknown as number;
-        
-        // Fetch average timing estimate (without token count) - cached for 30 minutes
-        const modelMapping = mapAliasToModel(genaiSettings.model);
-        
-        if (modelMapping) {
-          getAverageTiming(modelMapping.provider, modelMapping.model)
-            .then((timing) => {
-              setAverageTimingSeconds(timing);
-            })
-            .catch((err) => {
-              console.error(
-                '[DiscoveryPage] Failed to get average timing:',
-                err,
-              );
-              setAverageTimingSeconds(null);
-            });
-        } else {
-          console.warn(
-            '[DiscoveryPage] No mapping found for model alias:',
-            genaiSettings.model,
-          );
-          setAverageTimingSeconds(null);
-        }
-      }
-    } else {
-      // Stop timer when first chunk arrives or streaming stops
-      if (genaiThinkingIntervalRef.current) {
-        console.log('[DiscoveryPage] Stopping thinking timer');
-        window.clearInterval(genaiThinkingIntervalRef.current);
-        genaiThinkingIntervalRef.current = null;
-        // Don't reset averageTimingSeconds here - keep it until next request
-      }
-    }
-  }, [genaiChatStreaming, genaiChat.messages.length, genaiSettings.model]);
-
-  // Cleanup genai thinking timer on unmount
-  useEffect(() => {
-    return () => {
-      if (genaiThinkingIntervalRef.current) {
-        window.clearInterval(genaiThinkingIntervalRef.current);
-        genaiThinkingIntervalRef.current = null;
-      }
-    };
-  }, []);
+  // Track text selection within assistant markdown and position a floating action button
+  useTextSelection({
+    containerRef: messagesRef,
+    onEditStart: handleEditStart,
+    onEditFinish: handleEditFinish,
+    onEditError: handleEditError,
+    onEditUpdate: handleEditUpdate,
+    onSaveRequest: handleSaveRequest,
+  });
 
   // Handle Apply button from perspective analysis - sends key point to chat
   const handleApplyKeyPoint = React.useCallback(async (keyPoint: string) => {
@@ -2005,14 +1074,13 @@ const DiscoveryPage: React.FC = () => {
     const handler = (e: any) => {
       const kind = e?.detail?.kind as 'privacy' | 'terms';
       if (kind === 'privacy' || kind === 'terms') {
-        setShowSettings(false);
-        setShowAccount(false);
+        closeAllModals();
         setStaticPage(kind);
       }
     };
     window.addEventListener('ui.openPage', handler as any);
     return () => window.removeEventListener('ui.openPage', handler as any);
-  }, []);
+  }, [closeAllModals]);
   return (
     <div
       className="flex h-full"
@@ -2029,24 +1097,9 @@ const DiscoveryPage: React.FC = () => {
           resetChatStateWithCleanup();
           setLeftPanel(null);
         }}
-        onShowSettings={() => {
-          setShowSettings(true);
-          setShowAccount(false);
-          setShowAdmin(false);
-          setStaticPage(null);
-        }}
-        onShowAccount={() => {
-          setShowAccount(true);
-          setShowSettings(false);
-          setShowAdmin(false);
-          setStaticPage(null);
-        }}
-        onShowAdmin={() => {
-          setShowAdmin(true);
-          setShowSettings(false);
-          setShowAccount(false);
-          setStaticPage(null);
-        }}
+        onShowSettings={openSettings}
+        onShowAccount={openAccount}
+        onShowAdmin={openAdmin}
         editingProjectId={editingProjectId}
         editingProjectName={editingProjectName}
         editingInputRef={editingInputRef}
@@ -2058,98 +1111,13 @@ const DiscoveryPage: React.FC = () => {
       />
 
       {/* Floating Account and Settings buttons (visible only when sidebar is hidden) */}
-      {!sideOpen && !showSettings && !showAccount && (
-        <>
-          {/* Account button */}
-          <button
-            type="button"
-            aria-label="Account"
-            onClick={() => {
-              setShowAccount(true);
-              setShowSettings(false);
-              setShowAdmin(false);
-              setStaticPage(null);
-            }}
-            className="rounded-lg transition-colors flex items-center justify-center"
-            style={{
-              position: 'fixed',
-              left: 8,
-              bottom: 88,
-              width: 32,
-              height: 32,
-              backgroundColor: 'transparent',
-              color: 'var(--text-heading)',
-              border: 'none',
-              zIndex: 40,
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                'var(--white-10)';
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                'transparent';
-            }}
-          >
-            <svg
-              className="w-4 h-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
-            </svg>
-          </button>
-          {/* Settings button */}
-          <button
-            type="button"
-            aria-label="Settings"
-            onClick={() => {
-              setShowSettings(true);
-              setShowAccount(false);
-              setShowAdmin(false);
-              setStaticPage(null);
-            }}
-            className="rounded-lg transition-colors flex items-center justify-center"
-            style={{
-              position: 'fixed',
-              left: 8,
-              bottom: 48,
-              width: 32,
-              height: 32,
-              backgroundColor: 'transparent',
-              color: 'var(--text-heading)',
-              border: 'none',
-              zIndex: 40,
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                'var(--white-10)';
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                'transparent';
-            }}
-          >
-            <svg
-              className="w-4 h-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </button>
-        </>
-      )}
+      <FloatingActionButtons
+        sideOpen={sideOpen}
+        showSettings={showSettings}
+        showAccount={showAccount}
+        onOpenAccount={openAccount}
+        onOpenSettings={openSettings}
+      />
 
       {/* Main content area: 5% margin + chat + drawer */}
       <div
@@ -2215,146 +1183,20 @@ const DiscoveryPage: React.FC = () => {
           }}
         >
         {showAccount ? (
-              <div
-                className="w-full px-6 mt-2 mb-2"
-                style={{ maxWidth: '100%' }}
-              >
-            <div className="mb-2 flex items-center">
-              <button
-                onClick={() => setShowAccount(false)}
-                className="p-2 rounded-lg transition-colors"
-                    style={{
-                      backgroundColor: 'var(--white-10)',
-                      color: 'var(--text-heading)',
-                    }}
-                    onMouseEnter={(e) => {
-                      (
-                        e.currentTarget as HTMLButtonElement
-                      ).style.backgroundColor = 'var(--white-20)';
-                    }}
-                    onMouseLeave={(e) => {
-                      (
-                        e.currentTarget as HTMLButtonElement
-                      ).style.backgroundColor = 'var(--white-10)';
-                    }}
-                aria-label={t('unfold.sections.back')}
-              >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M15 19l-7-7 7-7"
-                      />
-                </svg>
-              </button>
-                  <div
-                    className="ml-2 text-13"
-                    style={{ color: 'var(--text-heading)' }}
-                  >
-                    {t('unfold.sections.account')}
-                  </div>
-            </div>
-            <Account />
-          </div>
+          <AccountModal
+            isOpen={showAccount}
+            onClose={closeAllModals}
+          />
         ) : showSettings ? (
-              <div
-                className="w-full px-6 mt-2 mb-2"
-                style={{ maxWidth: '100%' }}
-              >
-            <div className="mb-2 flex items-center">
-              <button
-                onClick={() => setShowSettings(false)}
-                className="p-2 rounded-lg transition-colors"
-                    style={{
-                      backgroundColor: 'var(--white-10)',
-                      color: 'var(--text-heading)',
-                    }}
-                    onMouseEnter={(e) => {
-                      (
-                        e.currentTarget as HTMLButtonElement
-                      ).style.backgroundColor = 'var(--white-20)';
-                    }}
-                    onMouseLeave={(e) => {
-                      (
-                        e.currentTarget as HTMLButtonElement
-                      ).style.backgroundColor = 'var(--white-10)';
-                    }}
-                aria-label={t('unfold.sections.back')}
-              >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M15 19l-7-7 7-7"
-                      />
-                </svg>
-              </button>
-                  <div
-                    className="ml-2 text-13"
-                    style={{ color: 'var(--text-heading)' }}
-                  >
-                    {t('unfold.sections.settings')}
-                  </div>
-            </div>
-            <Settings />
-          </div>
+          <SettingsModal
+            isOpen={showSettings}
+            onClose={closeAllModals}
+          />
         ) : showAdmin ? (
-          <div className="w-full px-4 mt-2 mb-2">
-            <div className="mb-2 flex items-center">
-              <button
-                onClick={() => setShowAdmin(false)}
-                className="p-2 rounded-lg transition-colors"
-                    style={{
-                      backgroundColor: 'var(--white-10)',
-                      color: 'var(--text-heading)',
-                    }}
-                    onMouseEnter={(e) => {
-                      (
-                        e.currentTarget as HTMLButtonElement
-                      ).style.backgroundColor = 'var(--white-20)';
-                    }}
-                    onMouseLeave={(e) => {
-                      (
-                        e.currentTarget as HTMLButtonElement
-                      ).style.backgroundColor = 'var(--white-10)';
-                    }}
-                aria-label={t('unfold.sections.back')}
-              >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M15 19l-7-7 7-7"
-                      />
-                </svg>
-              </button>
-                  <div
-                    className="ml-2 text-13"
-                    style={{ color: 'var(--text-heading)' }}
-                  >
-                    {t('unfold.sections.adminAccess')}
-                  </div>
-            </div>
-            <AdminAccess />
-          </div>
+          <AdminModal
+            isOpen={showAdmin}
+            onClose={closeAllModals}
+          />
         ) : staticPage ? (
           <div className="w-full h-full flex flex-col overflow-hidden">
             <div className="px-4 mt-2 mb-2 flex items-center flex-shrink-0">
@@ -2632,453 +1474,29 @@ const DiscoveryPage: React.FC = () => {
                   return mergedMessages.map((item) => {
                     if (item.type === 'message') {
                       const m = item.data;
-                                  return (function () {
-                  const isUser = m.role === 'user';
-                                    const isAssistantPlaceholder =
-                                      !isUser &&
-                                      genaiChat.streaming &&
-                                      !m.content;
-                                    const isAssistantError =
-                                      !isUser &&
-                                      !genaiChat.streaming &&
-                                      !m.content &&
-                                      !!genaiChat.error;
-                  
-                  if (isAssistantPlaceholder) {
-                    return null;
-                  }
-                  return (
-                    <ChatMessage
-                      key={m.id}
-                      role={isUser ? 'user' : 'assistant'}
-                      align={isUser ? 'right' : 'left'}
-                      isThinking={isAssistantPlaceholder}
-                      thinkingSeconds={genaiThinkingSeconds}
-                                        averageTimingSeconds={
-                                          averageTimingSeconds
-                                        }
-                      isError={isAssistantError}
-                                        headerText={
-                                          !isUser
-                                            ? genaiChat.messageMeta?.[m.id]
-                                                ?.headerText || 'assistant'
-                                            : undefined
-                                        }
-                                        leftAccent={
-                                          !isUser
-                                            ? !!genaiChat.messageMeta?.[m.id]
-                                                ?.leftAccent
-                                            : false
-                                        }
-                                        footer={
-                                          isUser &&
-                                          genaiChat.preStanceLatency &&
-                                          genaiChat.preStanceLatency[m.id] ? (
-                                            <span
-                                              className="text-[10px]"
-                                              style={{
-                                                color:
-                                                  'var(--text-tertiary-weak)',
-                                              }}
-                                            >
-                                              stance:{' '}
-                                              {(
-                                                genaiChat.preStanceLatency[
-                                                  m.id
-                                                ] / 1000
-                                              ).toFixed(2)}
-                                              s
-                        </span>
-                                          ) : undefined
-                                        }
-                    >
-                      {isAssistantPlaceholder ? (
-                        <div className="space-y-1">
-                                            <div
-                                              style={{
-                                                width: 160,
-                                                height: 10,
-                                                borderRadius: 4,
-                                                background: 'var(--white-06)',
-                                                position: 'relative',
-                                                overflow: 'hidden',
-                                              }}
-                                            >
-                                              <div
-                                                style={{
-                                                  position: 'absolute',
-                                                  inset: 0,
-                                                  background:
-                                                    'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                                  animation:
-                                                    'etg-shimmer 2s infinite',
-                                                }}
-                                              />
-                          </div>
-                                            <div
-                                              style={{
-                                                width: 220,
-                                                height: 10,
-                                                borderRadius: 4,
-                                                background: 'var(--white-06)',
-                                                position: 'relative',
-                                                overflow: 'hidden',
-                                              }}
-                                            >
-                                              <div
-                                                style={{
-                                                  position: 'absolute',
-                                                  inset: 0,
-                                                  background:
-                                                    'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                                  animation:
-                                                    'etg-shimmer 2s infinite',
-                                                }}
-                                              />
-                          </div>
-                          {(() => {
-                                              const isQuality =
-                                                genaiSettings.strength ===
-                                                  'quality' ||
-                                                /_quality$/.test(
-                                                  genaiSettings.model || '',
-                                                );
-                            if (!isQuality) return null;
-                                              const threshold =
-                                                genaiSettings.groundingEnabled
-                                                  ? 35
-                                                  : 20;
-                                              if (
-                                                (genaiThinkingSeconds || 0) <
-                                                threshold
-                                              )
-                                                return null;
-                                              const msg =
-                                                genaiSettings.groundingEnabled
-                                                  ? t(
-                                                      'unfold.status.modelUpdatingAnalysis',
-                                                    )
-                                                  : t(
-                                                      'unfold.status.modelComplexReasoning',
-                                                    );
-                            return (
-                                                <div
-                                                  className="text-[11px]"
-                                                  style={{
-                                                    color:
-                                                      'var(--text-secondary-strong)',
-                                                  }}
-                                                >
-                                {msg}
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      ) : (
-                        <>
-                          {isUser ? (
-                            <CollapsibleText maxLines={7}>
-                                                <div
-                                                  className="text-13 markdown"
-                                                  style={{
-                                                    color:
-                                                      'var(--text-heading)',
-                                                  }}
-                                                >
-                                <ReactMarkdown
-                                  remarkPlugins={[remarkGfm]}
-                                  components={markdownComponents}
-                                >
-                                  {m.content}
-                                </ReactMarkdown>
-                              </div>
-                            </CollapsibleText>
-                          ) : (
-                                              <div
-                                                className="text-13 markdown"
-                                                style={{
-                                                  color: 'var(--text-heading)',
-                                                }}
-                                              >
-                              <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                components={markdownComponents}
-                              >
-                                {(() => {
-                                  try {
-                                    // Prefer matching by originalMessageId to keep markdown and sanitizer consistent
-                                    const inter =
-                                      useGenaiChatStore
-                                        .getState()
-                                        .interactions.find(
-                                          (it) =>
-                                            it.kind ===
-                                              'assistant' &&
-                                            (it as any)
-                                              .originalMessageId ===
-                                              m.id,
-                                        );
-                                    if (
-                                      inter &&
-                                      typeof inter.contentSanitized ===
-                                        'string' &&
-                                      inter.contentSanitized
-                                        .length > 0
-                                    )
-                                      return inter.contentSanitized;
-                                    return m.content;
-                                  } catch {
-                                    return m.content;
-                                  }
-                                })()}
-                              </ReactMarkdown>
-                            </div>
-                          )}
-                          {/* Action row: shows bias if available, else only buttons (assistant only) */}
-                          {!isUser && (
-                                              <ActionRow
-                                                messageId={m.id}
-                                                isAssistant={!isUser}
-                                                content={m.content}
-                                              />
-                          )}
-                          {/* Show bias for user messages if available */}
-                                            {isUser &&
-                                              genaiChat.evaluations[m.id] && (
-                                                <EvaluationDetails
-                                                  messageId={m.id}
-                                                />
-                          )}
-                          {/* Tags row: per-message chips (stable by messageId) with global fallback */}
-                          {(() => {
-                            try {
-                                                const store =
-                                                  useGenaiChatStore.getState() as any;
-                                                let inter =
-                                                  store.interactions.find(
-                                                    (it: any) =>
-                                                      it.kind === 'assistant' &&
-                                                      (it as any)
-                                                        .originalMessageId ===
-                                                        m.id,
-                                                  ) as any;
-                              if (!inter) {
-                                                  const map: Record<
-                                                    string,
-                                                    string
-                                                  > =
-                                                    store.persistedByLocalId ||
-                                                    {};
-                                const serverId = map[m.id];
-                                if (serverId) {
-                                                    inter =
-                                                      store.interactions.find(
-                                                        (it: any) =>
-                                                          it.id === serverId,
-                                                      );
-                                                  }
-                                                }
-                                                const perQ = Array.isArray(
-                                                  inter?.searchQueries,
-                                                )
-                                                  ? inter.searchQueries.filter(
-                                                      Boolean,
-                                                    )
-                                                  : [];
-                                                const perS = Array.isArray(
-                                                  inter?.sources,
-                                                )
-                                                  ? inter.sources.filter(
-                                                      Boolean,
-                                                    )
-                                                  : [];
-                              const qs = perQ.slice(0, 4);
-                                                const attrs =
-                                                  perS.length > 0
-                                                    ? perS
-                                                        .map((url: string) => ({
-                                                          url,
-                                                        }))
-                                                        .slice(0, 4)
-                                                    : [];
-                                                if (
-                                                  qs.length === 0 &&
-                                                  attrs.length === 0
-                                                )
-                                                  return null;
-                              return (
-                                <div className="mt-1 flex flex-wrap gap-1">
-                                                    {qs.map(
-                                                      (
-                                                        q: string,
-                                                        i: number,
-                                                      ) => {
-                                    const chipId = `${m.id}-q-${i}`;
-                                                        const isExpanded =
-                                                          expandedChip ===
-                                                          chipId;
-                                                        const words = String(
-                                                          q || '',
-                                                        )
-                                                          .trim()
-                                                          .split(/\s+/);
-                                                        const short =
-                                                          words.length > 3
-                                                            ? words
-                                                                .slice(0, 3)
-                                                                .join(' ') + '…'
-                                                            : String(q || '');
-                                                        const needsExpand =
-                                                          words.length > 3;
-                                    return (
-                                      <button
-                                        key={`q-${i}`}
-                                        type="button"
-                                        className="px-2 py-0.5 rounded-full text-[10px] transition-colors"
-                                                            style={{
-                                                              backgroundColor:
-                                                                isExpanded
-                                                                  ? 'var(--white-20)'
-                                                                  : 'var(--white-10)',
-                                                              color:
-                                                                'var(--text-secondary-strong)',
-                                                              border: 'none',
-                                                              cursor:
-                                                                needsExpand
-                                                                  ? 'pointer'
-                                                                  : 'default',
-                                                            }}
-                                                            onClick={() =>
-                                                              needsExpand &&
-                                                              setExpandedChip(
-                                                                isExpanded
-                                                                  ? null
-                                                                  : chipId,
-                                                              )
-                                                            }
-                                                            onMouseEnter={(
-                                                              e,
-                                                            ) => {
-                                                              if (needsExpand)
-                                                                (
-                                                                  e.currentTarget as HTMLButtonElement
-                                                                ).style.backgroundColor =
-                                                                  isExpanded
-                                                                    ? 'var(--white-25)'
-                                                                    : 'var(--white-15)';
-                                                            }}
-                                                            onMouseLeave={(
-                                                              e,
-                                                            ) => {
-                                                              if (needsExpand)
-                                                                (
-                                                                  e.currentTarget as HTMLButtonElement
-                                                                ).style.backgroundColor =
-                                                                  isExpanded
-                                                                    ? 'var(--white-20)'
-                                                                    : 'var(--white-10)';
-                                                            }}
-                                                          >
-                                                            {isExpanded
-                                                              ? String(q || '')
-                                                              : short}
-                                      </button>
-                                    );
-                                                      },
-                                                    )}
-                                                    {attrs.map(
-                                                      (a: any, i: number) => {
-                                    const chipId = `${m.id}-src-${i}`;
-                                                        const isExpanded =
-                                                          expandedChip ===
-                                                          chipId;
-                                                        const raw = String(
-                                                          (a as any).url || '',
-                                                        ).replace(
-                                                          /^https?:\/\//i,
-                                                          '',
-                                                        );
-                                                        const parts =
-                                                          raw.split('/');
-                                                        const host =
-                                                          parts[0] || '';
-                                                        const tail = parts[1]
-                                                          ? `/${parts[1]}`
-                                                          : '';
-                                                        const label =
-                                                          host + tail ||
-                                                          (a as any).title ||
-                                                          'link';
-                                                        const needsExpand =
-                                                          raw.length >
-                                                          (host + tail).length;
-                                    return (
-                                      <a
-                                        key={`src-${i}`}
-                                                            href={
-                                                              (a as any).url
-                                                            }
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="px-2 py-0.5 rounded-full text-[10px] underline transition-colors"
-                                                            style={{
-                                                              backgroundColor:
-                                                                isExpanded
-                                                                  ? 'var(--white-20)'
-                                                                  : 'var(--white-10)',
-                                                              color:
-                                                                'var(--text-secondary-strong)',
-                                                            }}
-                                                            onClick={(e) => {
-                                                              if (needsExpand) {
-                                                                e.preventDefault();
-                                                                setExpandedChip(
-                                                                  isExpanded
-                                                                    ? null
-                                                                    : chipId,
-                                                                );
-                                                              }
-                                                            }}
-                                                            onMouseEnter={(
-                                                              e,
-                                                            ) => {
-                                                              (
-                                                                e.currentTarget as HTMLAnchorElement
-                                                              ).style.backgroundColor =
-                                                                isExpanded
-                                                                  ? 'var(--white-25)'
-                                                                  : 'var(--white-15)';
-                                                            }}
-                                                            onMouseLeave={(
-                                                              e,
-                                                            ) => {
-                                                              (
-                                                                e.currentTarget as HTMLAnchorElement
-                                                              ).style.backgroundColor =
-                                                                isExpanded
-                                                                  ? 'var(--white-20)'
-                                                                  : 'var(--white-10)';
-                                                            }}
-                                                          >
-                                                            {isExpanded
-                                                              ? raw
-                                                              : label}
-                                      </a>
-                                    );
-                                                      },
-                                                    )}
-                                </div>
-                              );
-                                              } catch {
-                                                return null;
-                                              }
-                          })()}
-                        </>
-                      )}
-                    </ChatMessage>
-                  );
-                                  })();
-                                } else {
+                      return (
+                        <MessageItem
+                          key={m.id}
+                          message={m}
+                          genaiChat={{
+                            streaming: genaiChat.streaming,
+                            error: genaiChat.error,
+                            messageMeta: genaiChat.messageMeta,
+                            preStanceLatency: genaiChat.preStanceLatency,
+                            evaluations: genaiChat.evaluations,
+                          }}
+                          genaiThinkingSeconds={genaiThinkingSeconds}
+                          averageTimingSeconds={averageTimingSeconds}
+                          genaiSettings={{
+                            strength: genaiSettings.strength,
+                            model: genaiSettings.model,
+                            groundingEnabled: genaiSettings.groundingEnabled,
+                          }}
+                          expandedChip={expandedChip}
+                          onExpandChip={setExpandedChip}
+                        />
+                      );
+                    } else {
                                   // item.type === 'interaction'
                       const it = item.data;
                       // Render section markers
@@ -3306,7 +1724,6 @@ const DiscoveryPage: React.FC = () => {
                                                                       last.request;
                                                                     const selText =
                                                                       last.selected;
-                                            // reuse local submit logic by triggering palette-less path
                                                                     const markdownRoot =
                                                                       document.querySelector(
                                                                         `[data-interaction-id="${it.id}"]`,
@@ -3323,12 +1740,15 @@ const DiscoveryPage: React.FC = () => {
                                                                             x.id ===
                                                                             it.id,
                                                                         );
+                                                                    if (!inter) return;
                                                                     const full =
                                                                       (
                                                                         inter?.contentSanitized ||
                                                                         inter?.content ||
                                                                         ''
                                                                       ).toString();
+                                                                    const displayed =
+                                                                      (markdownRoot.innerText || '').toString();
                                                                     const meta =
                                                                       useGenaiChatStore.getState()
                                                                         .messageMeta[
@@ -3339,587 +1759,27 @@ const DiscoveryPage: React.FC = () => {
                                                                       'agent';
                                                                     const prof =
                                                                       meta?.agentProfile;
-                                                                    const preferredLang =
-                                                                      getPreferredLanguage();
-                                                                    const settings =
-                                                                      useGenAISettings.getState();
-                                                                    const useModel =
-                                                                      prof?.model ||
-                                                                      settings.model;
-                                                                    const sxSystemInstruction =
-                                                                      getSxSystemInstructionShort();
-                                                                    const options: any =
-                                                                      {
-                                                                        profile:
-                                                                          /_quality$/i.test(
-                                                                            useModel ||
-                                                                              '',
-                                                                          )
-                                                                            ? 'quality'
-                                                                            : 'fast',
-                                                                        modelOverride:
-                                                                          useModel,
-                                                                        groundingEnabled:
-                                                                          settings.groundingEnabled,
-                                                                        temperature:
-                                                                          settings.temperature,
-                                                                        maxOutputTokens:
-                                                                          Math.max(
-                                                                            512,
-                                                                            settings.maxOutputTokens ||
-                                                                              1024,
-                                                                          ),
-                                                                        systemInstruction:
-                                                                          [
-                                                                            settings.systemInstruction ||
-                                                                              '',
-                                                                            HATL_ONE_INSTRUCTIONS,
-                                                                            sxSystemInstruction,
-                                                                          ]
-                                                                            .filter(
-                                                                              Boolean,
-                                                                            )
-                                                                            .join(
-                                                                              '\n\n',
-                                                                            )
-                                                                            .trim() ||
-                                                                          undefined,
-                                            };
-                                            const prompt = `User requirement: you should create your answer in ${preferredLang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are ${agentName}. We provide the full assistant answer (FULL_ANSWER) and a specific fragment (SELECTED_FRAGMENT) the user wants to modify. The user request is (USER_REQUEST).\n\nReturn ONLY the updated fragment. Preserve the fragment's existing formatting and structure where possible, and use Markdown appropriately (headings ###, lists, emphasis, blank lines) if it helps readability and does not contradict the request. Do not add any preface, labels, or explanations. Do not wrap the result in code fences. Do NOT return JSON.\n\nFULL_ANSWER:\n${full}\n\nSELECTED_FRAGMENT:\n${selText}\n\nUSER_REQUEST:\n${req}\n`;
-                                                                    setFrozenEdits(
-                                                                      (s) => ({
-                                                                        ...s,
-                                                                        [it.id]: true,
-                                                                      }),
-                                                                    );
-                                                                    try {
-                                                                      const res =
-                                                                        await api.genaiGenerate(
-                                                                          {
-                                                                            model:
-                                                                              useModel,
-                                                                            prompt,
-                                                                            strictJSONEnabled: false,
-                                                                            maxOutputTokens:
-                                                                              options.maxOutputTokens,
-                                                                            webSearchEnabled: false,
-                                                                            systemInstruction:
-                                                                              options.systemInstruction,
-                                                                          },
-                                                                        );
-                                                                      const rawOut =
-                                                                        (
-                                                                          res?.content ||
-                                                                          ''
-                                                                        ).toString();
-                                                                      const stripFences =
-                                                                        (
-                                                                          s: string,
-                                                                        ) => {
-                                                                          let t =
-                                                                            s.trim();
-                                                                          t = t
-                                                                            .replace(
-                                                                              /^```[a-zA-Z]*\n([\s\S]*?)\n```$/m,
-                                                                              '$1',
-                                                                            )
-                                                                            .trim();
-                                                                          t = t
-                                                                            .replace(
-                                                                              /^```[\s\S]*?```$/m,
-                                                                              (
-                                                                                m,
-                                                                              ) =>
-                                                                                m
-                                                                                  .replace(
-                                                                                    /^```[a-zA-Z]*\n?/,
-                                                                                    '',
-                                                                                  )
-                                                                                  .replace(
-                                                                                    /\n?```$/,
-                                                                                    '',
-                                                                                  ),
-                                                                            )
-                                                                            .trim();
-                                                                          if (
-                                                                            (t.startsWith(
-                                                                              '"',
-                                                                            ) &&
-                                                                              t.endsWith(
-                                                                                '"',
-                                                                              )) ||
-                                                                            (t.startsWith(
-                                                                              "'",
-                                                                            ) &&
-                                                                              t.endsWith(
-                                                                                "'",
-                                                                              ))
-                                                                          ) {
-                                                                            t =
-                                                                              t.slice(
-                                                                                1,
-                                                                                -1,
-                                                                              );
-                                                                          }
-                                                                          return t.trim();
-                                                                        };
-                                                                      let cleaned =
-                                                                        stripFences(
-                                                                          rawOut,
-                                                                        );
-                                                                      try {
-                                                                        const obj =
-                                                                          JSON.parse(
-                                                                            cleaned,
-                                                                          );
-                                                                        if (
-                                                                          obj &&
-                                                                          typeof obj ===
-                                                                            'object' &&
-                                                                          !Array.isArray(
-                                                                            obj,
-                                                                          )
-                                                                        ) {
-                                                                          const k =
-                                                                            Object.keys(
-                                                                              obj,
-                                                                            )[0];
-                                                                          if (k)
-                                                                            cleaned =
-                                                                              String(
-                                                                                (
-                                                                                  obj as any
-                                                                                )[
-                                                                                  k
-                                                                                ] ??
-                                                                                  '',
-                                                                              ).trim();
-                                                                        }
-                                                                      } catch {}
-                                                                      const updated =
-                                                                        stripFences(
-                                                                          cleaned,
-                                                                        );
-                                                                      if (
-                                                                        !updated
-                                                                      )
-                                                                        throw new Error(
-                                                                          'Empty model response',
-                                                                        );
-                                              // Use markdown-preserving path
-                                                                      const md =
-                                                                        (
-                                                                          inter?.contentSanitized ||
-                                                                          inter?.content ||
-                                                                          ''
-                                                                        ).toString();
-                                                                      const normalized: string[] =
-                                                                        [];
-                                                                      const mapIdx: number[] =
-                                                                        [];
-                                                                      const len =
-                                                                        md.length;
-                                                                      let i = 0;
-                                                                      let atLineStart = true;
-                                                                      const pushChar =
-                                                                        (
-                                                                          ch: string,
-                                                                          origIdx: number,
-                                                                        ) => {
-                                                                          normalized.push(
-                                                                            ch,
-                                                                          );
-                                                                          mapIdx.push(
-                                                                            origIdx,
-                                                                          );
-                                                                          atLineStart =
-                                                                            ch ===
-                                                                            '\n';
-                                                                        };
-                                                                      while (
-                                                                        i < len
-                                                                      ) {
-                                                                        const ch =
-                                                                          md[i];
-                                                                        const nxt =
-                                                                          md[
-                                                                            i +
-                                                                              1
-                                                                          ];
-                                                                        if (
-                                                                          atLineStart
-                                                                        ) {
-                                                                          if (
-                                                                            ch ===
-                                                                            '#'
-                                                                          ) {
-                                                                            while (
-                                                                              i <
-                                                                                len &&
-                                                                              md[
-                                                                                i
-                                                                              ] ===
-                                                                                '#'
-                                                                            )
-                                                                              i++;
-                                                                            while (
-                                                                              i <
-                                                                                len &&
-                                                                              md[
-                                                                                i
-                                                                              ] ===
-                                                                                ' '
-                                                                            )
-                                                                              i++;
-                                                                            continue;
-                                                                          }
-                                                                          if (
-                                                                            ch ===
-                                                                            '>'
-                                                                          ) {
-                                                                            i++;
-                                                                            if (
-                                                                              md[
-                                                                                i
-                                                                              ] ===
-                                                                              ' '
-                                                                            )
-                                                                              i++;
-                                                                            continue;
-                                                                          }
-                                                                          if (
-                                                                            ch ===
-                                                                              '-' &&
-                                                                            md[
-                                                                              i +
-                                                                                1
-                                                                            ] ===
-                                                                              ' '
-                                                                          ) {
-                                                                            i += 2;
-                                                                            continue;
-                                                                          }
-                                                                        }
-                                                                        if (
-                                                                          (ch ===
-                                                                            '*' &&
-                                                                            nxt ===
-                                                                              '*') ||
-                                                                          (ch ===
-                                                                            '_' &&
-                                                                            nxt ===
-                                                                              '_')
-                                                                        ) {
-                                                                          i += 2;
-                                                                          continue;
-                                                                        }
-                                                                        if (
-                                                                          ch ===
-                                                                            '*' ||
-                                                                          ch ===
-                                                                            '_' ||
-                                                                          ch ===
-                                                                            '~'
-                                                                        ) {
-                                                                          i++;
-                                                                          continue;
-                                                                        }
-                                                                        if (
-                                                                          ch ===
-                                                                          '`'
-                                                                        ) {
-                                                                          i++;
-                                                                          while (
-                                                                            i <
-                                                                              len &&
-                                                                            md[
-                                                                              i
-                                                                            ] !==
-                                                                              '`'
-                                                                          ) {
-                                                                            pushChar(
-                                                                              md[
-                                                                                i
-                                                                              ],
-                                                                              i,
-                                                                            );
-                                                                            i++;
-                                                                          }
-                                                                          if (
-                                                                            i <
-                                                                              len &&
-                                                                            md[
-                                                                              i
-                                                                            ] ===
-                                                                              '`'
-                                                                          )
-                                                                            i++;
-                                                                          continue;
-                                                                        }
-                                                                        if (
-                                                                          ch ===
-                                                                          '['
-                                                                        ) {
-                                                                          i++;
-                                                                          while (
-                                                                            i <
-                                                                              len &&
-                                                                            md[
-                                                                              i
-                                                                            ] !==
-                                                                              ']'
-                                                                          ) {
-                                                                            pushChar(
-                                                                              md[
-                                                                                i
-                                                                              ],
-                                                                              i,
-                                                                            );
-                                                                            i++;
-                                                                          }
-                                                                          if (
-                                                                            i <
-                                                                              len &&
-                                                                            md[
-                                                                              i
-                                                                            ] ===
-                                                                              ']'
-                                                                          )
-                                                                            i++;
-                                                                          if (
-                                                                            i <
-                                                                              len &&
-                                                                            md[
-                                                                              i
-                                                                            ] ===
-                                                                              '('
-                                                                          ) {
-                                                                            while (
-                                                                              i <
-                                                                                len &&
-                                                                              md[
-                                                                                i
-                                                                              ] !==
-                                                                                ')'
-                                                                            )
-                                                                              i++;
-                                                                            if (
-                                                                              i <
-                                                                                len &&
-                                                                              md[
-                                                                                i
-                                                                              ] ===
-                                                                                ')'
-                                                                            )
-                                                                              i++;
-                                                                          }
-                                                                          continue;
-                                                                        }
-                                                                        if (
-                                                                          ch ===
-                                                                            '!' &&
-                                                                          md[
-                                                                            i +
-                                                                              1
-                                                                          ] ===
-                                                                            '['
-                                                                        ) {
-                                                                          i += 2;
-                                                                          while (
-                                                                            i <
-                                                                              len &&
-                                                                            md[
-                                                                              i
-                                                                            ] !==
-                                                                              ']'
-                                                                          )
-                                                                            i++;
-                                                                          if (
-                                                                            i <
-                                                                              len &&
-                                                                            md[
-                                                                              i
-                                                                            ] ===
-                                                                              ']'
-                                                                          )
-                                                                            i++;
-                                                                          if (
-                                                                            i <
-                                                                              len &&
-                                                                            md[
-                                                                              i
-                                                                            ] ===
-                                                                              '('
-                                                                          ) {
-                                                                            while (
-                                                                              i <
-                                                                                len &&
-                                                                              md[
-                                                                                i
-                                                                              ] !==
-                                                                                ')'
-                                                                            )
-                                                                              i++;
-                                                                            if (
-                                                                              i <
-                                                                                len &&
-                                                                              md[
-                                                                                i
-                                                                              ] ===
-                                                                                ')'
-                                                                            )
-                                                                              i++;
-                                                                          }
-                                                                          continue;
-                                                                        }
-                                                                        if (
-                                                                          ch ===
-                                                                            '\n' ||
-                                                                          ch ===
-                                                                            '\r'
-                                                                        ) {
-                                                                          pushChar(
-                                                                            '\n',
-                                                                            i,
-                                                                          );
-                                                                          i++;
-                                                                          continue;
-                                                                        }
-                                                                        pushChar(
-                                                                          ch,
-                                                                          i,
-                                                                        );
-                                                                        i++;
-                                                                      }
-                                                                      const normStr =
-                                                                        normalized
-                                                                          .join(
-                                                                            '',
-                                                                          )
-                                                                          .replace(
-                                                                            /[\u00A0\u202F]/g,
-                                                                            ' ',
-                                                                          )
-                                                                          .replace(
-                                                                            /\r/g,
-                                                                            '',
-                                                                          )
-                                                                          .replace(
-                                                                            /\s+/g,
-                                                                            ' ',
-                                                                          );
-                                                                      const selNorm =
-                                                                        selText
-                                                                          .replace(
-                                                                            /[\u00A0\u202F]/g,
-                                                                            ' ',
-                                                                          )
-                                                                          .replace(
-                                                                            /\r/g,
-                                                                            '',
-                                                                          )
-                                                                          .replace(
-                                                                            /\s+/g,
-                                                                            ' ',
-                                                                          )
-                                                                          .trim();
-                                                                      const pos =
-                                                                        normStr.indexOf(
-                                                                          selNorm,
-                                                                        );
-                                                                      let newContentSanitized =
-                                                                        '';
-                                                                      if (
-                                                                        pos >= 0
-                                                                      ) {
-                                                                        const startOrig =
-                                                                          mapIdx[
-                                                                            pos
-                                                                          ];
-                                                                        const endMapIdx =
-                                                                          mapIdx[
-                                                                            pos +
-                                                                              selNorm.length -
-                                                                              1
-                                                                          ];
-                                                                        const endOrig =
-                                                                          typeof endMapIdx ===
-                                                                          'number'
-                                                                            ? endMapIdx +
-                                                                              1
-                                                                            : startOrig +
-                                                                              selText.length;
-                                                                        newContentSanitized =
-                                                                          md.slice(
-                                                                            0,
-                                                                            startOrig,
-                                                                          ) +
-                                                                          updated +
-                                                                          md.slice(
-                                                                            endOrig,
-                                                                          );
-                                                                      } else {
-                                                                        newContentSanitized =
-                                                                          (
-                                                                            inter?.contentSanitized ||
-                                                                            inter?.content ||
-                                                                            ''
-                                                                          )
-                                                                            .toString()
-                                                                            .replace(
-                                                                              selText,
-                                                                              updated,
-                                                                            );
-                                                                      }
-                                                                      useGenaiChatStore.setState(
-                                                                        (s) =>
-                                                                          ({
-                                                                            interactions:
-                                                                              s.interactions.map(
-                                                                                (
-                                                                                  x,
-                                                                                ) =>
-                                                                                  x.id ===
-                                                                                  it.id
-                                                                                    ? {
-                                                                                        ...x,
-                                                                                        contentSanitized:
-                                                                                          newContentSanitized,
-                                                                                      }
-                                                                                    : x,
-                                                                              ),
-                                                                          }) as any,
-                                                                      );
-                                                                      setEditErrors(
-                                                                        (
-                                                                          s,
-                                                                        ) => ({
-                                                                          ...s,
-                                                                          [it.id]:
-                                                                            null,
-                                                                        }),
-                                                                      );
-                                            } catch (err: any) {
-                                                                      setEditErrors(
-                                                                        (
-                                                                          s,
-                                                                        ) => ({
-                                                                          ...s,
-                                                                          [it.id]:
-                                                                            err?.message ||
-                                                                            'Edit failed',
-                                                                        }),
-                                                                      );
-                                            } finally {
-                                                                      setFrozenEdits(
-                                                                        (
-                                                                          s,
-                                                                        ) => ({
-                                                                          ...s,
-                                                                          [it.id]: false,
-                                                                        }),
-                                                                      );
-                                            }
+                                                                    await handleEditTextDirect({
+                                                                      interactionId: it.id,
+                                                                      selectedText: selText,
+                                                                      fullText: full,
+                                                                      displayedText: displayed,
+                                                                      agentName,
+                                                                      agentProfile: prof,
+                                                                      request: req,
+                                                                      onUpdate: (id, newContent) => {
+                                                                        handleEditUpdate(id, newContent);
+                                                                      },
+                                                                      onError: (id, error) => {
+                                                                        handleEditError(id, error);
+                                                                      },
+                                                                      onStart: (id) => {
+                                                                        handleEditStart(id);
+                                                                      },
+                                                                      onFinish: (id) => {
+                                                                        handleEditFinish(id);
+                                                                      },
+                                                                    });
                                           })();
                                         }
                                                               }}
@@ -3933,13 +1793,7 @@ const DiscoveryPage: React.FC = () => {
                                                                   'var(--text-secondary-strong)',
                                                               }}
                                                               onClick={() =>
-                                                                setEditErrors(
-                                                                  (s) => ({
-                                                                    ...s,
-                                                                    [it.id]:
-                                                                      null,
-                                                                  }),
-                                                                )
+                                                                handleEditError(it.id, null as any)
                                                               }
                                                             >
                                                               Cancel
@@ -4255,111 +2109,14 @@ const DiscoveryPage: React.FC = () => {
                     // Don't show placeholder if message has content (streaming has started producing content)
                                   if (m.content && m.content.trim())
                                     return null;
-                    // Don't show placeholder if this message is already in interactions (streaming completed)
-                    // Check by originalMessageId which is set when interaction is created from message
-                                  const alreadyInInteractions =
-                                    genaiChat.interactions.some(
-                                      (it) =>
-                                        it.kind === 'assistant' &&
-                                        (it.id === m.id ||
-                                          (it as any).originalMessageId ===
-                                            m.id),
-                    );
-                    if (alreadyInInteractions) {
-                                    console.log(
-                                      '[ThinkingPlaceholder] Hiding placeholder - already in interactions',
-                                      { messageId: m.id },
-                                    );
-                      return null;
-                    }
-                                  const header =
-                                    genaiChat.messageMeta?.[m.id]?.headerText ||
-                                    'assistant';
-                                  const leftAccent =
-                                    !!genaiChat.messageMeta?.[m.id]?.leftAccent;
-                                  const isQuality =
-                                    genaiSettings.strength === 'quality' ||
-                                    /_quality$/.test(genaiSettings.model || '');
-                                  const threshold =
-                                    genaiSettings.groundingEnabled ? 35 : 20;
-                                  const showInfo =
-                                    (genaiThinkingSeconds || 0) >= threshold &&
-                                    isQuality;
-                    const infoMsg = genaiSettings.groundingEnabled
-                      ? t('unfold.status.modelUpdatingAnalysis')
-                      : t('unfold.status.modelComplexReasoning');
                     
                     return (
-                      <ChatMessage
+                      <ThinkingPlaceholder
                         key={m.id}
-                        role="assistant"
-                        align="left"
-                        isThinking={true}
-                        thinkingSeconds={genaiThinkingSeconds}
-                        isError={false}
-                        headerText={header}
-                        leftAccent={leftAccent}
-                        footer={undefined}
-                                      averageTimingSeconds={
-                                        averageTimingSeconds
-                                      }
-                      >
-                        <div className="space-y-1">
-                                        <div
-                                          style={{
-                                            width: 160,
-                                            height: 10,
-                                            borderRadius: 4,
-                                            background: 'var(--white-06)',
-                                            position: 'relative',
-                                            overflow: 'hidden',
-                                          }}
-                                        >
-                                          <div
-                                            style={{
-                                              position: 'absolute',
-                                              inset: 0,
-                                              background:
-                                                'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                              animation:
-                                                'etg-shimmer 2s infinite',
-                                            }}
-                                          />
-                          </div>
-                                        <div
-                                          style={{
-                                            width: 220,
-                                            height: 10,
-                                            borderRadius: 4,
-                                            background: 'var(--white-06)',
-                                            position: 'relative',
-                                            overflow: 'hidden',
-                                          }}
-                                        >
-                                          <div
-                                            style={{
-                                              position: 'absolute',
-                                              inset: 0,
-                                              background:
-                                                'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                              animation:
-                                                'etg-shimmer 2s infinite',
-                                            }}
-                                          />
-                          </div>
-                          {showInfo && (
-                                          <div
-                                            className="text-[11px]"
-                                            style={{
-                                              color:
-                                                'var(--text-secondary-strong)',
-                                            }}
-                                          >
-                              {infoMsg}
-                            </div>
-                          )}
-                        </div>
-                      </ChatMessage>
+                        messageId={m.id}
+                        genaiThinkingSeconds={genaiThinkingSeconds}
+                        averageTimingSeconds={averageTimingSeconds}
+                      />
                     );
                                 } catch {
                                   return null;
@@ -4371,151 +2128,23 @@ const DiscoveryPage: React.FC = () => {
             </div>
             {/* Edit status indicator */}
             {Object.values(frozenEdits).some(Boolean) && (
-              <div className="px-1 pb-2">
-                        <div
-                          className="text-xs flex items-center gap-2"
-                          style={{
-                            textAlign: 'left',
-                            color: 'var(--text-secondary-strong)',
-                          }}
-                        >
-                          <span
-                            className="animate-pulse"
-                            style={{
-                              width: '8px',
-                              height: '8px',
-                              borderRadius: '9999px',
-                              backgroundColor: 'var(--text-secondary-strong)',
-                            }}
-                          />
-                  <span>Applying edit… {editSeconds}s</span>
-                </div>
-              </div>
+              <EditStatusIndicator editSeconds={editSeconds} />
             )}
             {/* Floating selection action button is mounted imperatively in effect to avoid rerendering content and losing selection */}
             {/* Tool calls / results */}
-                    {(genaiChat.toolCalls.length > 0 ||
-                      genaiChat.toolResults.length > 0) && (
-              <div className="px-1 pb-2">
-                {genaiChat.toolCalls.length > 0 && (
-                          <div
-                            className="text-[11px] mb-1"
-                            style={{ color: 'var(--text-secondary-strong)' }}
-                          >
-                    Tool calls:
-                    <ul className="list-disc ml-4">
-                      {genaiChat.toolCalls.map((c, i) => (
-                        <li key={`tc-${i}`}>{c.name}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {genaiChat.toolResults.length > 0 && (
-                          <div
-                            className="text-[11px]"
-                            style={{ color: 'var(--text-secondary-strong)' }}
-                          >
-                    Tool results:
-                    <ul className="list-disc ml-4">
-                      {genaiChat.toolResults.map((c, i) => (
-                                <li key={`tr-${i}`}>
-                                  <span className="font-mono">{c.name}</span>
-                                </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
+            <ToolCallsDisplay />
             {/* Thinking indicator moved inside assistant bubble during streaming */}
             {/* Usage and attributions after completion */}
-                    {!genaiChat.streaming &&
-                      genaiChat.attributions.length > 0 && (
-              <div className="px-1 pb-2 space-y-1">
-                {genaiChat.attributions.length > 0 && (
-                            <div
-                              className="text-[11px]"
-                              style={{ color: 'var(--text-secondary-strong)' }}
-                            >
-                    Sources:
-                    <ul className="list-disc ml-4">
-                      {genaiChat.attributions.map((a, i) => (
-                                  <li key={`att-${i}`}>
-                                    <a
-                                      href={a.url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="underline"
-                                    >
-                                      {a.title || a.url}
-                                    </a>
-                                  </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
+            <AttributionsDisplay />
             {/* High-risk banner (if any) */}
-            {(() => {
-                      const isHigh =
-                        riskBanner?.visible && riskBanner?.level === 'High';
-              if (!isHigh) return null;
-              return (
-                        <div
-                          className="rounded-lg border p-2 mb-2"
-                          style={{
-                            borderColor: 'rgba(220,20,60,0.5)',
-                            background: 'rgba(255,0,0,0.06)',
-                            color: 'var(--text-heading)',
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 8,
-                          }}
-                        >
-                  <div style={{ flex: 1 }}>
-                            <div
-                              className="text-12"
-                              style={{ color: '#cc3344', fontWeight: 600 }}
-                            >
-                              High-risk conversation
-                            </div>
-                    {riskBanner?.rationale && (
-                              <div
-                                className="text-[11px]"
-                                style={{
-                                  color: 'var(--text-secondary-strong)',
-                                }}
-                              >
-                                {riskBanner.rationale}
-                              </div>
-                    )}
-                  </div>
-                  <button
-                    aria-label="Dismiss high-risk banner"
-                    title="Dismiss"
-                    className="rounded"
-                            onClick={() =>
-                              setRiskBanner((prev) =>
-                                prev ? { ...prev, visible: false } : null,
-                              )
-                            }
-                            style={{
-                              background: 'transparent',
-                              color: 'var(--text-secondary-strong)',
-                            }}
-                          >
-                            <svg className="w-4 h-4" viewBox="0 0 24 24">
-                              <path
-                                d="M6 6l12 12M18 6L6 18"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                              />
-                            </svg>
-                  </button>
-                </div>
-              );
-            })()}
+            <RiskBanner
+              riskBanner={riskBanner}
+              onDismiss={() =>
+                setRiskBanner((prev) =>
+                  prev ? { ...prev, visible: false } : null,
+                )
+              }
+            />
             {/* Analysis status banner unified in UnfoldRequest; duplicate removed here */}
             {/* Text Tasks Panel */}
             {textTasks.length > 0 && (
@@ -5057,143 +2686,15 @@ const DiscoveryPage: React.FC = () => {
         )}
 
         {/* Add Telegram modal */}
-        {showAddTelegramModal && (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Add Telegram Channel"
-            className="fixed inset-0 flex items-center justify-center"
-            style={{ zIndex: 50 }}
-          >
-            <div
-              className="absolute inset-0"
-              style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-                      onClick={() =>
-                        !tgSubmitting && setShowAddTelegramModal(false)
-                      }
-            />
-            <div
-              className="relative rounded-xl shadow-xl w-full max-w-sm"
-                      style={{
-                        backgroundColor: 'var(--bg-elevated)',
-                        border: '1px solid var(--overlay-line-90)',
-                      }}
-                    >
-                      <div
-                        className="px-4 py-3"
-                        style={{
-                          borderBottom: '1px solid var(--overlay-line-90)',
-                        }}
-                      >
-                        <div
-                          className="text-13 font-medium"
-                          style={{ color: 'var(--text-heading)' }}
-                        >
-                          Add Telegram Channel
-                        </div>
-              </div>
-              <div className="p-4 space-y-3">
-                        <div
-                          className="text-xs"
-                          style={{ color: 'var(--text-secondary-strong)' }}
-                        >
-                  Enter @username or a link like t.me/username
-                </div>
-                <div className="flex items-center gap-2">
-                  <div
-                    className="flex items-center justify-center rounded-lg"
-                            style={{
-                              width: 32,
-                              height: 32,
-                              background:
-                                'linear-gradient(135deg, #2AABEE 0%, #229ED9 100%)',
-                              color: 'white',
-                            }}
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              width={16}
-                              height={16}
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                d="M3 11l18-7-7 18-4-8-7-3z"
-                                stroke="currentColor"
-                              />
-                    </svg>
-                  </div>
-                  <input
-                    type="text"
-                    value={tgInput}
-                    onChange={(e) => setTgInput(e.target.value)}
-                    placeholder="@channel or t.me/channel"
-                    className="flex-1 bg-transparent outline-none text-sm"
-                    style={{ color: 'var(--text-heading)' }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                addTelegramSource();
-                              }
-                            }}
-                    autoFocus
-                  />
-                </div>
-                {tgError && (
-                          <div
-                            className="text-xs"
-                            style={{ color: 'var(--accent-danger)' }}
-                          >
-                            {tgError}
-                          </div>
-                )}
-              </div>
-                      <div
-                        className="px-4 py-3 flex items-center justify-end gap-2"
-                        style={{
-                          borderTop: '1px solid var(--overlay-line-90)',
-                        }}
-                      >
-                <button
-                  type="button"
-                  className="px-3 py-1.5 rounded-lg text-xs transition-colors"
-                  onClick={() => setShowAddTelegramModal(false)}
-                  disabled={tgSubmitting}
-                          style={{
-                            backgroundColor: 'transparent',
-                            color: 'var(--text-heading)',
-                          }}
-                          onMouseEnter={(e) => {
-                            (
-                              e.currentTarget as HTMLButtonElement
-                            ).style.backgroundColor = 'var(--white-10)';
-                          }}
-                          onMouseLeave={(e) => {
-                            (
-                              e.currentTarget as HTMLButtonElement
-                            ).style.backgroundColor = 'transparent';
-                          }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="px-3 py-1.5 rounded-lg text-xs"
-                  onClick={addTelegramSource}
-                  disabled={tgSubmitting}
-                          style={{
-                            backgroundColor: '#2AABEE',
-                            color: 'white',
-                            opacity: tgSubmitting ? 0.7 : 1,
-                          }}
-                        >
-                          {tgSubmitting ? 'Adding…' : 'Add'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <TelegramAddModal
+          isOpen={showAddTelegramModal}
+          onClose={() => setShowAddTelegramModal(false)}
+          input={tgInput}
+          onInputChange={setTgInput}
+          onSubmit={addTelegramSource}
+          isSubmitting={tgSubmitting}
+          error={tgError}
+        />
         </>
         )}
         </div>
