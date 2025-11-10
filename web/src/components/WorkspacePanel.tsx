@@ -7,7 +7,7 @@ import WorkspaceLibrary from './WorkspaceLibrary';
 interface WorkspacePanelProps {
   sources: any[];
   currentProjectId: string | null;
-  addMenuRef: React.RefObject<HTMLDivElement>;
+  addMenuRef: React.RefObject<HTMLDivElement | null>;
   showAddSourceMenu: boolean;
   onShowAddSourceMenuChange: (value: boolean) => void;
   onShowAddTelegramModalChange: (value: boolean) => void;

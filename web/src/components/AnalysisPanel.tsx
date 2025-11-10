@@ -11,7 +11,7 @@ interface AnalysisPanelProps {
   onRiskUpdate: (r: any) => void;
   onFirstResultDiscussionFlow: () => void;
   onAddTextTask: (task: TextTask) => void;
-  onRemoveTextTask: (index: number) => void;
+  onRemoveTextTask: (taskId: string) => void;
   textTasks: TextTask[];
 }
 

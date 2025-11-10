@@ -1,53 +1,77 @@
+/**
+ * Утилиты для работы с bidirectional mapping между local и server IDs
+ */
+
 import { api } from './api';
 
 /**
- * Toggle the pinned status of an interaction
- * @param projectId - Project ID
- * @param interactionId - Interaction ID
- * @param currentlyPinned - Current pinned status
- * @returns Promise with success status
+ * Создает reverse map для поиска local IDs по server ID
+ */
+export function createReverseMap(
+  persistedByLocalId: Record<string, string>,
+): Record<string, string[]> {
+  const reverseMap: Record<string, string[]> = {};
+  Object.entries(persistedByLocalId).forEach(([local, server]) => {
+    const serverKey = server as string;
+    if (!reverseMap[serverKey]) {
+      reverseMap[serverKey] = [];
+    }
+    reverseMap[serverKey].push(local);
+  });
+  return reverseMap;
+}
+
+/**
+ * Находит все local IDs для данного server ID
+ */
+export function getLocalIdsForServerId(
+  serverId: string,
+  persistedByLocalId: Record<string, string>,
+): string[] {
+  const reverseMap = createReverseMap(persistedByLocalId);
+  return reverseMap[serverId] || [];
+}
+
+/**
+ * Находит eval.bias interaction для данного message ID
+ */
+export function findEvalBiasInteraction(
+  messageId: string,
+  interactions: any[],
+  persistedByLocalId: Record<string, string>,
+): any | null {
+  const localIds = getLocalIdsForServerId(messageId, persistedByLocalId);
+  
+  return (
+    [...interactions]
+      .reverse()
+      .find(
+        (n) =>
+          n.subkind === 'eval.bias' &&
+          (n.replyTo === messageId || localIds.includes(n.replyTo || '')),
+      ) || null
+  );
+}
+
+/**
+ * Проверяет, закреплено ли взаимодействие
+ */
+export function isInteractionPinned(interaction: any): boolean {
+  return !!interaction?.metadata?.pinned;
+}
+
+/**
+ * Переключает статус закрепления взаимодействия
  */
 export async function toggleInteractionPin(
   projectId: string,
   interactionId: string,
-  currentlyPinned: boolean = false
-): Promise<{ success: boolean }> {
-  if (currentlyPinned) {
-    // Unpin: also clear notes
-    return api.updateProjectInteraction(projectId, interactionId, {
-      metadata: { pinned: false, notes: [] }
-    });
-  } else {
-    // Pin
-    return api.updateProjectInteraction(projectId, interactionId, {
-      metadata: { pinned: true }
-    });
-  }
-}
-
-/**
- * Set the pinned status of an interaction
- * @param projectId - Project ID
- * @param interactionId - Interaction ID
- * @param pinned - New pinned status
- * @returns Promise with success status
- */
-export async function setInteractionPin(
-  projectId: string,
-  interactionId: string,
-  pinned: boolean
-): Promise<{ success: boolean }> {
-  return api.updateProjectInteraction(projectId, interactionId, {
-    metadata: { pinned, notes: pinned ? undefined as any : [] }
+  currentlyPinned: boolean,
+): Promise<void> {
+  await api.updateProjectInteraction(projectId, interactionId, {
+    metadata: {
+      pinned: !currentlyPinned,
+    },
   });
-}
-
-/**
- * Check if interaction is pinned
- * @param interaction - Interaction object
- * @returns True if pinned
- */
-export function isInteractionPinned(interaction: { metadata?: { pinned?: boolean } }): boolean {
-  return interaction.metadata?.pinned === true;
 }
 

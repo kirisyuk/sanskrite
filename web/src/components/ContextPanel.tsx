@@ -4,7 +4,7 @@ import { findFirstRange } from '../lib/textHighlight';
 interface ContextPanelProps {
   sectionStarts: any[];
   pinnedInteractions: any[];
-  messagesRef: React.RefObject<HTMLDivElement>;
+  messagesRef: React.RefObject<HTMLDivElement | null>;
   scrollToInteraction: (id: string) => void;
   truncateCenterWords: (s: string, headWords?: number, tailWords?: number) => string;
   onRemoveNote: (interactionId: string, noteIndex: number) => Promise<void>;
@@ -171,7 +171,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({
             {Array.isArray(it?.metadata?.notes) &&
               it.metadata!.notes!.length > 0 && (
                 <div className="mt-2 space-y-1">
-                  {it.metadata!.notes!.map((note, idx) => (
+                  {it.metadata!.notes!.map((note: string, idx: number) => (
                     <div
                       key={idx}
                       className="flex items-start justify-between gap-2 p-1 rounded"

@@ -14,7 +14,7 @@ interface SidebarPanelProps {
   onShowAdmin: () => void;
   editingProjectId: string | null;
   editingProjectName: string;
-  editingInputRef: React.RefObject<HTMLInputElement>;
+  editingInputRef: React.RefObject<HTMLInputElement | null>;
   onEditingProjectIdChange: (id: string | null) => void;
   onEditingProjectNameChange: (name: string) => void;
   onDeleteChat: (projectId: string, projectName: string) => void;

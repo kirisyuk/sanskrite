@@ -26,8 +26,6 @@ import { getAverageTiming } from '../lib/timingCache';
 import { mapAliasToModel } from '../lib/modelMapping';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { useTranslation } from 'react-i18next';
-import { AGENT_PRESETS } from '../lib/agentPresets';
-import { buildContext } from '../lib/contextBuilder';
 import { HATL_ONE_INSTRUCTIONS } from '../lib/hatlInstructions';
 import DocumentViewer from '../components/DocumentViewer';
 import FindingsPanel from '../components/FindingsPanel';
@@ -56,6 +54,7 @@ import {
 import {
   toggleInteractionPin,
   isInteractionPinned,
+  findEvalBiasInteraction,
 } from '../lib/interactionHelpers';
 import {
   highlightNotes,
@@ -100,6 +99,18 @@ import { useProjectsManagement } from '../hooks/useProjectsManagement';
 import { usePanelsManagement } from '../hooks/usePanelsManagement';
 import { useAnalysisManagement } from '../hooks/useAnalysisManagement';
 import { useChatManagement } from '../hooks/useChatManagement';
+import { RightPanelButtons } from '../components/RightPanelButtons';
+import { MetricOverlay } from '../components/MetricOverlay';
+import { MessageActions } from '../components/MessageActions';
+import { useMergedMessages } from '../hooks/useMergedMessages';
+import { SectionMarker } from '../components/SectionMarker';
+import { ActionInteraction } from '../components/ActionInteraction';
+import { BringInIndicator } from '../components/BringInIndicator';
+import { parseGraphData } from '../lib/graphDataParser';
+import { applyEditHighlight } from '../lib/editHighlight';
+import { replaceTextInMarkdown } from '../lib/markdownNormalizer';
+import { MarkdownRenderer, markdownComponents } from '../lib/markdownComponents';
+import { OpponentAgentsPalette } from '../components/OpponentAgentsPalette';
 
 const DiscoveryPage: React.FC = () => {
   const { t, i18n } = useTranslation();
@@ -203,16 +214,7 @@ const DiscoveryPage: React.FC = () => {
     useState<string>('consulting');
   const [isAnalysisClosed, setIsAnalysisClosed] = useState(false);
   const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph'>('text');
-  const [showOpponentPalette, setShowOpponentPalette] = React.useState(false);
-  const [showOpponentAgents, setShowOpponentAgents] = React.useState(false);
-  const [expandedAgentId, setExpandedAgentId] = React.useState<string | null>(
-    null,
-  );
-  const opponentAgentsRef = React.useRef<HTMLDivElement | null>(null);
   const unfoldRequestRef = React.useRef<HTMLDivElement | null>(null);
-  const opponentButtonRef = React.useRef<HTMLDivElement | null>(null);
-  const [opponentButtonBottom, setOpponentButtonBottom] =
-    React.useState<number>(120);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
   const genaiThinkingIntervalRef = useRef<number | null>(null);
@@ -272,36 +274,7 @@ const DiscoveryPage: React.FC = () => {
   // PERFORMANCE FIX: Subscribe only to specific values for critical paths, keep genaiChat for compatibility
   const genaiChat = useGenaiChatStore();
   const genaiChatProjectId = useGenaiChatStore((state) => state.projectId);
-  // Close opponent agents list on outside click
-  React.useEffect(() => {
-    if (!showOpponentAgents) return;
-    
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (
-        opponentButtonRef.current && 
-        opponentButtonRef.current.contains(target)
-      ) {
-        return; // Click on button itself - handled by onClick
-      }
-      if (
-        opponentAgentsRef.current && 
-        opponentAgentsRef.current.contains(target)
-      ) {
-        return; // Click inside agents list
-      }
-      setShowOpponentAgents(false);
-    };
-    
-    document.addEventListener('mousedown', handleClickOutside, {
-      capture: true,
-    });
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside, {
-        capture: true,
-      } as any);
-    };
-  }, [showOpponentAgents]);
+  const mergedMessages = useMergedMessages();
   
   const genaiChatInteractionsLength = useGenaiChatStore(
     (state) => state.interactions.length,
@@ -321,71 +294,6 @@ const DiscoveryPage: React.FC = () => {
     (s: any) => (s as any).lastAnalysisStatus,
   );
   const notifiedAnalysesRef = React.useRef<Set<string>>(new Set());
-
-  // Track UnfoldRequest container position for opponent button positioning
-  React.useEffect(() => {
-    if (unfoldSubView === 'perspectives') return;
-    
-    const updatePosition = () => {
-      const container = document.getElementById('unfold-request-container');
-      if (!container) return;
-      
-      // Find parent container with position: relative (the chat container)
-      const parentContainer = container.closest(
-        '[style*="position: relative"]',
-      ) as HTMLElement;
-      if (!parentContainer) return;
-      
-      // Calculate distance from bottom of parent container to top of UnfoldRequest
-      const parentHeight = parentContainer.offsetHeight;
-      const containerTop = container.offsetTop;
-      const distanceFromBottom = parentHeight - containerTop;
-      
-      // Position button 0.5rem (8px) above UnfoldRequest
-      setOpponentButtonBottom(distanceFromBottom + 8);
-    };
-    
-    // Initial position with small delay to ensure DOM is ready
-    const timeoutId = setTimeout(updatePosition, 0);
-    
-    // Use ResizeObserver to track size changes of UnfoldRequest
-    const container = document.getElementById('unfold-request-container');
-    if (!container) {
-      clearTimeout(timeoutId);
-      return;
-    }
-    
-    const resizeObserver = new ResizeObserver(() => {
-      updatePosition();
-    });
-    
-    resizeObserver.observe(container);
-    
-    // Also observe parent container for size changes
-    const parentContainer = container.closest(
-      '[style*="position: relative"]',
-    ) as HTMLElement;
-    if (parentContainer) {
-      resizeObserver.observe(parentContainer);
-      
-      // Update on scroll (in case parent scrolls)
-      parentContainer.addEventListener('scroll', updatePosition, {
-        passive: true,
-      });
-    }
-    
-    // Update on window resize
-    window.addEventListener('resize', updatePosition, { passive: true });
-    
-    return () => {
-      clearTimeout(timeoutId);
-      resizeObserver.disconnect();
-      if (parentContainer) {
-        parentContainer.removeEventListener('scroll', updatePosition);
-      }
-      window.removeEventListener('resize', updatePosition);
-    };
-  }, [unfoldSubView, genaiChatInteractionsLength, genaiChatMessagesLength]);
 
   // Auto-switch to Chat tab when switching chats/New Chat
   React.useEffect(() => {
@@ -627,15 +535,6 @@ const DiscoveryPage: React.FC = () => {
     }
   }, [getInteractions, genaiChatInteractionsLength]);
   const hasSections = sectionStarts.length > 0;
-  // Auto-open Context Navigation panel when pinned messages or notes appear
-  React.useEffect(() => {
-    if ((hasPinned || hasSections) && rightPanelType !== 'context') {
-      // Only auto-open if no other panel is open
-      if (rightPanelType === null) {
-        setRightPanelType('context');
-      }
-    }
-  }, [hasPinned, hasSections, rightPanelType]);
   
   // Auto-switch to documents tab if context tab has no content (removed - context is now separate panel)
   // Ensure interactions are loaded on chat load to detect pinned items
@@ -1455,128 +1354,11 @@ const DiscoveryPage: React.FC = () => {
                       inter?.content ||
                       ''
                     ).toString();
-                    // Build normalized plain string from markdown with index mapping
-                    const normalized: string[] = [];
-                    const mapIdx: number[] = [];
-                    const len = md.length;
-                    let i = 0;
-                    let atLineStart = true;
-                    const pushChar = (ch: string, origIdx: number) => {
-                      normalized.push(ch);
-                      mapIdx.push(origIdx);
-                      atLineStart = ch === '\n';
-                    };
-                    while (i < len) {
-                      const ch = md[i];
-                      const nxt = md[i + 1];
-                      // Skip heading markers at line start (###, ##, #, >, - )
-                      if (atLineStart) {
-                        if (ch === '#') {
-                          while (i < len && md[i] === '#') i++;
-                          while (i < len && md[i] === ' ') i++;
-                          continue;
-                        }
-                        if (ch === '>') {
-                          i++;
-                          if (md[i] === ' ') i++;
-                          continue;
-                        }
-                        if (ch === '-' && md[i + 1] === ' ') {
-                          i += 2;
-                          continue;
-                        }
-                      }
-                      // Bold/italic markers
-                      if (
-                        (ch === '*' && nxt === '*') ||
-                        (ch === '_' && nxt === '_')
-                      ) {
-                        i += 2;
-                        continue;
-                      }
-                      if (ch === '*' || ch === '_' || ch === '~') {
-                        i++;
-                        continue;
-                      }
-                      // Inline code fences
-                      if (ch === '`') {
-                        i++;
-                        while (i < len && md[i] !== '`') {
-                          pushChar(md[i], i);
-                          i++;
-                        }
-                        if (i < len && md[i] === '`') i++;
-                        continue;
-                      }
-                      // Links [text](url)
-                      if (ch === '[') {
-                        // collect link text
-                        i++;
-                        while (i < len && md[i] !== ']') {
-                          pushChar(md[i], i);
-                          i++;
-                        }
-                        if (i < len && md[i] === ']') i++;
-                        if (i < len && md[i] === '(') {
-                          while (i < len && md[i] !== ')') i++;
-                          if (i < len && md[i] === ')') i++;
-                        }
-                        continue;
-                      }
-                      // Images ![alt](url): skip entirely
-                      if (ch === '!' && md[i + 1] === '[') {
-                        i += 2;
-                        while (i < len && md[i] !== ']') i++;
-                        if (i < len && md[i] === ']') i++;
-                        if (i < len && md[i] === '(') {
-                          while (i < len && md[i] !== ')') i++;
-                          if (i < len && md[i] === ')') i++;
-                        }
-                        continue;
-                      }
-                      // Newlines pass through
-                      if (ch === '\n' || ch === '\r') {
-                        pushChar('\n', i);
-                        i++;
-                        continue;
-                      }
-                      // Otherwise keep char
-                      pushChar(ch, i);
-                      i++;
-                    }
-                    // Collapse whitespace in normalized for searching
-                    const normStr = normalized
-                      .join('')
-                      .replace(/[\u00A0\u202F]/g, ' ')
-                      .replace(/\r/g, '')
-                      .replace(/\s+/g, ' ');
-                    const selNorm = selectedText
-                      .replace(/[\u00A0\u202F]/g, ' ')
-                      .replace(/\r/g, '')
-                      .replace(/\s+/g, ' ')
-                      .trim();
-                    let pos = normStr.indexOf(selNorm);
-                    if (pos >= 0) {
-                      const startOrig = mapIdx[pos];
-                      // find endOrig by advancing selNorm length in normStr and mapping
-                      const endMapIdx = mapIdx[pos + selNorm.length - 1];
-                      const endOrig =
-                        typeof endMapIdx === 'number'
-                          ? endMapIdx + 1
-                          : startOrig + selectedText.length;
-                      const before = md.slice(0, startOrig);
-                      const after = md.slice(endOrig);
-                      newContentSanitized = before + updated + after;
-                    } else {
-                      // Fallback: replace in displayed text only (may lose formatting)
-                      console.warn(
-                        '[EditSelected] mapping fallback: using displayed.replace',
-                      );
-                      newContentSanitized = displayed.replace(
-                        selectedText,
-                        updated,
-                      );
-                    }
+                    newContentSanitized = replaceTextInMarkdown(
+                      md,
+                      selectedText,
+                      updated,
+                    );
                   } catch {
                     newContentSanitized = displayed.replace(
                       selectedText,
@@ -2655,117 +2437,7 @@ const DiscoveryPage: React.FC = () => {
               />
             )}
             {/* Metric overlay - replaces chat area when open */}
-            {(() => {
-              const openKey = genaiChat.metricOverlayOpenKey || null;
-              if (!openKey) return null;
-              const cache = genaiChat.metricOverlayCache[openKey];
-                      const loading =
-                        !!genaiChat.metricOverlayLoading && !cache?.content;
-              const content = cache?.content || '';
-              return (
-                        <div
-                          className="absolute inset-0 z-30 rounded-xl"
-                          style={{
-                            background: 'var(--bg-elevated)',
-                            border: '1px solid var(--overlay-line-90)',
-                            overflow: 'hidden',
-                          }}
-                        >
-                          <div
-                            className="flex items-center justify-between px-3 py-2"
-                            style={{
-                              borderBottom: '1px solid var(--overlay-line-90)',
-                            }}
-                          >
-                            <div
-                              className="text-13"
-                              style={{ color: 'var(--text-heading)' }}
-                            >
-                              {cache?.metric?.metricName ||
-                                (cache?.metric as any)?.name ||
-                                cache?.metric?.id ||
-                                t('unfold.sections.metric')}
-                            </div>
-                    <button
-                      type="button"
-                      className="rounded-lg transition-colors"
-                      aria-label={t('unfold.sections.close')}
-                      title={t('unfold.sections.close')}
-                      onClick={() => {
-                        try {
-                          genaiChat.closeMetricOverlay();
-                        } catch (e) {
-                                  console.error(
-                                    '[MetricOverlay] Error closing overlay:',
-                                    e,
-                                  );
-                                }
-                              }}
-                              style={{
-                                backgroundColor: 'transparent',
-                                color: 'var(--text-heading)',
-                              }}
-                              onMouseEnter={(e) => {
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.backgroundColor = 'var(--white-10)';
-                              }}
-                              onMouseLeave={(e) => {
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.backgroundColor = 'transparent';
-                              }}
-                            >
-                              <svg
-                                className="w-4 h-4"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                              >
-                                <path
-                                  d="M6 6l12 12M18 6L6 18"
-                                  strokeWidth={2}
-                                />
-                              </svg>
-                    </button>
-                  </div>
-                  <div className="absolute inset-0 pt-[38px]">
-                    <div className="w-full h-full overflow-y-auto px-4 py-3">
-                      {loading ? (
-                                <div
-                                  className="text-12"
-                                  style={{
-                                    color: 'var(--text-secondary-strong)',
-                                  }}
-                                >
-                                  {t('unfold.status.loadingMetricAnalysis')}
-                                </div>
-                      ) : content ? (
-                                <div
-                                  className="markdown text-13"
-                                  style={{ color: 'var(--text-heading)' }}
-                                >
-                                  <ReactMarkdown
-                                    remarkPlugins={[remarkGfm]}
-                                    rehypePlugins={[rehypeRaw]}
-                                  >
-                                    {content}
-                                  </ReactMarkdown>
-                        </div>
-                      ) : (
-                                <div
-                                  className="text-12"
-                                  style={{ color: 'var(--text-secondary)' }}
-                                >
-                                  {t('unfold.status.noContent')}
-                                </div>
-                      )}
-                      {/* TODO: создавать документ на базе метрики; создавать графики на базе анализа метрики */}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
+            <MetricOverlay />
             {/* Unfold subview toggle */}
             <div className="w-fit self-start mb-3">
               <div 
@@ -2957,149 +2629,7 @@ const DiscoveryPage: React.FC = () => {
                     )}
                     {(() => {
                   // Merge messages and interactions, sort by timestamp to ensure correct order
-                              type MergedItem = {
-                                type: 'message' | 'interaction';
-                                data: any;
-                                timestamp: number;
-                              };
-                  const merged: MergedItem[] = [];
-
-                  // Add interactions first (user, assistant, and section markers)
-                  // This ensures interactions are processed before messages during streaming
-                  // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
-                  genaiChat.interactions
-                    .filter((it) => {
-                      // Exclude perspective interactions
-                                  if (
-                                    it.kind === 'note' &&
-                                    typeof it.subkind === 'string' &&
-                                    it.subkind.startsWith('perspective.')
-                                  ) {
-                        return false;
-                      }
-                      // Exclude perspective analysis interactions
-                                  if (
-                                    it.kind === 'system' &&
-                                    typeof it.subkind === 'string' &&
-                                    it.subkind.startsWith('perspective.') &&
-                                    it.subkind.endsWith('.analysis')
-                                  ) {
-                        return false;
-                      }
-                      // Exclude document attachments (they are context, not chat content)
-                      if (it.subkind === 'document.attach') {
-                        return false;
-                      }
-                                  return (
-                                    it.kind === 'user' ||
-                                    it.kind === 'assistant' ||
-                                    it.kind === 'action' ||
-                                    it.kind === 'section_start' ||
-                                    it.kind === 'section_end'
-                                  );
-                    })
-                    .forEach((it) => {
-                      let ts = 0;
-                      // First, try to get timestamp from originalMessageId (for messages created during streaming)
-                      // This ensures user and assistant messages from the same stream have consistent timestamps
-                      try {
-                                    const originalMsgId = (it as any)
-                                      .originalMessageId;
-                                    if (
-                                      originalMsgId &&
-                                      typeof originalMsgId === 'string'
-                                    ) {
-                                      const parsedTs = parseInt(
-                                        originalMsgId.split('-')[0],
-                                      );
-                                      if (
-                                        !Number.isNaN(parsedTs) &&
-                                        parsedTs > 0
-                                      ) {
-                            ts = parsedTs;
-                          }
-                        }
-                      } catch {}
-                      // Fallback to createdAt if originalMessageId timestamp not available
-                      if (ts === 0) {
-                        try {
-                          const ca: any = (it as any).createdAt;
-                                      if (
-                                        ca &&
-                                        typeof ca.seconds === 'number'
-                                      ) {
-                            ts = ca.seconds * 1000;
-                          } else if (typeof ca === 'string') {
-                            const d = Date.parse(ca);
-                            if (!Number.isNaN(d)) ts = d;
-                          } else if (typeof ca === 'number') {
-                            ts = ca;
-                          }
-                        } catch {}
-                      }
-                                  merged.push({
-                                    type: 'interaction',
-                                    data: it,
-                                    timestamp: ts,
-                                  });
-                    });
-
-                  // Add filtered messages (only during streaming, and not already in interactions)
-                  // These are typically assistant messages that are being streamed
-                  if (genaiChat.streaming) {
-                    genaiChat.messages.forEach((m) => {
-                                  const hasInteraction =
-                                    genaiChat.interactions.some(
-                                      (it) =>
-                                        (it as any).originalMessageId ===
-                                          m.id || it.id === m.id,
-                      );
-                      if (!hasInteraction) {
-                        // Parse timestamp from id (format: "timestamp-role")
-                        // Use Date.now() as fallback to ensure new messages appear at the end, not at the beginning
-                                    const parsedTs = parseInt(
-                                      m.id.split('-')[0],
-                                    );
-                                    const ts =
-                                      !Number.isNaN(parsedTs) && parsedTs > 0
-                                        ? parsedTs
-                                        : Date.now();
-                                    merged.push({
-                                      type: 'message',
-                                      data: m,
-                                      timestamp: ts,
-                                    });
-                      }
-                    });
-                  }
-
-                  // Sort by timestamp; on ties, ensure user appears before assistant/other
-                  const priority = (item: MergedItem) => {
-                    try {
-                      if (item.type === 'interaction') {
-                                    const k = String(
-                                      item.data?.kind || '',
-                                    ).toLowerCase();
-                        if (k === 'user') return 1;
-                        if (k === 'assistant') return 3;
-                        return 2; // section markers, action
-                      } else {
-                                    const r = String(
-                                      item.data?.role || '',
-                                    ).toLowerCase();
-                        return r === 'user' ? 1 : 3;
-                      }
-                                } catch {
-                                  return 2;
-                                }
-                  };
-                  merged.sort((a, b) => {
-                                if (a.timestamp !== b.timestamp)
-                                  return a.timestamp - b.timestamp;
-                    return priority(a) - priority(b);
-                  });
-
-                  return merged.map((item) => {
+                  return mergedMessages.map((item) => {
                     if (item.type === 'message') {
                       const m = item.data;
                                   return (function () {
@@ -3257,131 +2787,7 @@ const DiscoveryPage: React.FC = () => {
                                                 >
                                 <ReactMarkdown
                                   remarkPlugins={[remarkGfm]}
-                                                    components={
-                                                      {
-                                                        p: (
-                                                          props: React.DetailedHTMLProps<
-                                                            React.HTMLAttributes<HTMLParagraphElement>,
-                                                            HTMLParagraphElement
-                                                          >,
-                                                        ) => (
-                                                          <div
-                                                            {...props}
-                                                            className="md-p"
-                                                          />
-                                                        ),
-                                                        a: (
-                                                          props: React.DetailedHTMLProps<
-                                                            React.AnchorHTMLAttributes<HTMLAnchorElement>,
-                                                            HTMLAnchorElement
-                                                          >,
-                                                        ) => (
-                                                          <a
-                                                            {...props}
-                                                            target="_blank"
-                                                            rel="noreferrer"
-                                                            className="underline"
-                                                          />
-                                    ),
-                                    code: (
-                                      props: {
-                                        inline?: boolean;
-                                        className?: string;
-                                        children?: React.ReactNode;
-                                                          } & React.DetailedHTMLProps<
-                                                            React.HTMLAttributes<HTMLElement>,
-                                                            HTMLElement
-                                                          >,
-                                                        ) => {
-                                                          const {
-                                                            inline,
-                                                            className,
-                                                            children,
-                                                            ...rest
-                                                          } = props;
-                                      // Treat short single-line code blocks as inline chips
-                                                          const text =
-                                                            typeof children ===
-                                                            'string'
-                                                              ? children
-                                                              : Array.isArray(
-                                                                    children,
-                                                                  )
-                                                                ? children.join(
-                                                                    '',
-                                                                  )
-                                                                : String(
-                                                                    children ??
-                                                                      '',
-                                                                  );
-                                                          const isSingleLineBlock =
-                                                            !inline &&
-                                                            !/\n/.test(text) &&
-                                                            text.trim().length >
-                                                              0 &&
-                                                            text.trim()
-                                                              .length <= 80;
-                                                          if (
-                                                            inline ||
-                                                            isSingleLineBlock
-                                                          ) {
-                                        return (
-                                                              <code
-                                                                {...rest}
-                                                                style={{
-                                                                  backgroundColor:
-                                                                    'var(--white-10)',
-                                                                  padding:
-                                                                    '0 3px',
-                                                                  borderRadius: 4,
-                                                                }}
-                                                              >
-                                            {text}
-                                          </code>
-                                        );
-                                      }
-                                      // For code blocks, ReactMarkdown already wraps in <pre>, just return <code>
-                                                          return (
-                                                            <code
-                                                              {...rest}
-                                                              className={
-                                                                className
-                                                              }
-                                                            >
-                                                              {children}
-                                                            </code>
-                                                          );
-                                                        },
-                                                        ul: (
-                                                          props: React.DetailedHTMLProps<
-                                                            React.HTMLAttributes<HTMLUListElement>,
-                                                            HTMLUListElement
-                                                          >,
-                                                        ) => (
-                                                          <ul
-                                                            {...props}
-                                                            style={{
-                                                              paddingLeft:
-                                                                '1.25rem',
-                                                            }}
-                                                          />
-                                                        ),
-                                                        ol: (
-                                                          props: React.DetailedHTMLProps<
-                                                            React.OlHTMLAttributes<HTMLOListElement>,
-                                                            HTMLOListElement
-                                                          >,
-                                                        ) => (
-                                                          <ol
-                                                            {...props}
-                                                            style={{
-                                                              paddingLeft:
-                                                                '1.25rem',
-                                                            }}
-                                                          />
-                                                        ),
-                                                      } as Components
-                                                    }
+                                  components={markdownComponents}
                                 >
                                   {m.content}
                                 </ReactMarkdown>
@@ -3396,158 +2802,34 @@ const DiscoveryPage: React.FC = () => {
                                               >
                               <ReactMarkdown
                                 remarkPlugins={[remarkGfm]}
-                                                  components={
-                                                    {
-                                                      p: (
-                                                        props: React.DetailedHTMLProps<
-                                                          React.HTMLAttributes<HTMLParagraphElement>,
-                                                          HTMLParagraphElement
-                                                        >,
-                                                      ) => (
-                                                        <div
-                                                          {...props}
-                                                          className="md-p"
-                                                        />
-                                                      ),
-                                                      a: (
-                                                        props: React.DetailedHTMLProps<
-                                                          React.AnchorHTMLAttributes<HTMLAnchorElement>,
-                                                          HTMLAnchorElement
-                                                        >,
-                                                      ) => (
-                                                        <a
-                                                          {...props}
-                                                          target="_blank"
-                                                          rel="noreferrer"
-                                                          className="underline"
-                                                        />
-                                  ),
-                                  code: (
-                                    props: {
-                                      inline?: boolean;
-                                      className?: string;
-                                      children?: React.ReactNode;
-                                                        } & React.DetailedHTMLProps<
-                                                          React.HTMLAttributes<HTMLElement>,
-                                                          HTMLElement
-                                                        >,
-                                                      ) => {
-                                                        const {
-                                                          inline,
-                                                          className,
-                                                          children,
-                                                          ...rest
-                                                        } = props;
-                                    // Treat short single-line code blocks as inline chips
-                                                        const text =
-                                                          typeof children ===
-                                                          'string'
-                                                            ? children
-                                                            : Array.isArray(
-                                                                  children,
-                                                                )
-                                                              ? children.join(
-                                                                  '',
-                                                                )
-                                                              : String(
-                                                                  children ??
-                                                                    '',
-                                                                );
-                                                        const isSingleLineBlock =
-                                                          !inline &&
-                                                          !/\n/.test(text) &&
-                                                          text.trim().length >
-                                                            0 &&
-                                                          text.trim().length <=
-                                                            80;
-                                                        if (
-                                                          inline ||
-                                                          isSingleLineBlock
-                                                        ) {
-                                      return (
-                                                            <code
-                                                              {...rest}
-                                                              style={{
-                                                                backgroundColor:
-                                                                  'var(--white-10)',
-                                                                padding:
-                                                                  '0 3px',
-                                                                borderRadius: 4,
-                                                              }}
-                                                            >
-                                          {text}
-                                        </code>
-                                      );
-                                    }
-                                    // For code blocks, ReactMarkdown already wraps in <pre>, just return <code>
-                                                        return (
-                                                          <code
-                                                            {...rest}
-                                                            className={
-                                                              className
-                                                            }
-                                                          >
-                                                            {children}
-                                                          </code>
-                                                        );
-                                                      },
-                                                      ul: (
-                                                        props: React.DetailedHTMLProps<
-                                                          React.HTMLAttributes<HTMLUListElement>,
-                                                          HTMLUListElement
-                                                        >,
-                                                      ) => (
-                                                        <ul
-                                                          {...props}
-                                                          style={{
-                                                            paddingLeft:
-                                                              '1.25rem',
-                                                          }}
-                                                        />
-                                                      ),
-                                                      ol: (
-                                                        props: React.DetailedHTMLProps<
-                                                          React.OlHTMLAttributes<HTMLOListElement>,
-                                                          HTMLOListElement
-                                                        >,
-                                                      ) => (
-                                                        <ol
-                                                          {...props}
-                                                          style={{
-                                                            paddingLeft:
-                                                              '1.25rem',
-                                                          }}
-                                                        />
-                                                      ),
-                                                    } as Components
-                                                  }
+                                components={markdownComponents}
                               >
                                 {(() => {
                                   try {
                                     // Prefer matching by originalMessageId to keep markdown and sanitizer consistent
-                                                      const inter =
-                                                        useGenaiChatStore
-                                                          .getState()
-                                                          .interactions.find(
-                                                            (it) =>
-                                                              it.kind ===
-                                                                'assistant' &&
-                                                              (it as any)
-                                                                .originalMessageId ===
-                                                                m.id,
-                                                          );
-                                                      if (
-                                                        inter &&
-                                                        typeof inter.contentSanitized ===
-                                                          'string' &&
-                                                        inter.contentSanitized
-                                                          .length > 0
-                                                      )
-                                                        return inter.contentSanitized;
+                                    const inter =
+                                      useGenaiChatStore
+                                        .getState()
+                                        .interactions.find(
+                                          (it) =>
+                                            it.kind ===
+                                              'assistant' &&
+                                            (it as any)
+                                              .originalMessageId ===
+                                              m.id,
+                                        );
+                                    if (
+                                      inter &&
+                                      typeof inter.contentSanitized ===
+                                        'string' &&
+                                      inter.contentSanitized
+                                        .length > 0
+                                    )
+                                      return inter.contentSanitized;
                                     return m.content;
-                                                    } catch {
-                                                      return m.content;
-                                                    }
+                                  } catch {
+                                    return m.content;
+                                  }
                                 })()}
                               </ReactMarkdown>
                             </div>
@@ -3800,135 +3082,33 @@ const DiscoveryPage: React.FC = () => {
                                   // item.type === 'interaction'
                       const it = item.data;
                       // Render section markers
-                                  if (
-                                    it.kind === 'section_start' ||
-                                    it.kind === 'section_end'
-                                  ) {
-                                    const sid = (it.sectionId ||
-                                      it.id) as string;
-                        if (it.kind === 'section_start') {
-                                      const collapsed =
-                                        !!collapsedSections[sid];
-                          return (
-                            <div
-                              key={it.id}
-                              data-interaction-id={it.id}
-                              className="my-2 sticky top-0 z-10"
-                              style={{
-                                background: 'var(--surface-700)',
-                                            border:
-                                              '1px dashed var(--accent-research)',
-                                borderRadius: 10,
-                                padding: '6px 8px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                          }}
-                                        >
-                                          <div
-                                            className="text-12 font-medium"
-                                            style={{
-                                              color: 'var(--text-heading)',
-                                            }}
-                                          >
-                                {it.content || 'Section'}
-                              </div>
-                              <button
-                                type="button"
-                                className="px-2 py-1 rounded text-11"
-                                            style={{
-                                              background: 'transparent',
-                                              color:
-                                                'var(--text-secondary-strong)',
-                                            }}
-                                            onClick={() =>
-                                              setCollapsedSections((s) => ({
-                                                ...s,
-                                                [sid]: !collapsed,
-                                              }))
-                                            }
-                                            aria-label={
-                                              collapsed
-                                                ? 'Expand section'
-                                                : 'Collapse section'
-                                            }
-                                            title={
-                                              collapsed
-                                                ? 'Expand section'
-                                                : 'Collapse section'
-                                            }
-                              >
-                                {collapsed ? 'Expand' : 'Collapse'}
-                              </button>
-                            </div>
-                          );
-                        }
-                        // section_end divider
+                      if (
+                        it.kind === 'section_start' ||
+                        it.kind === 'section_end'
+                      ) {
                         return (
-                                      <div
-                                        key={it.id}
-                                        className="my-2"
-                                        style={{
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          gap: 8,
-                                        }}
-                                      >
-                                        <div
-                                          style={{
-                                            height: 1,
-                                            background:
-                                              'var(--overlay-line-90)',
-                                            flex: 1,
-                                          }}
-                                        />
-                                        <div
-                                          className="text-[10px]"
-                                          style={{
-                                            color: 'var(--accent-research)',
-                                          }}
-                                        >
-                                          end of section
-                                        </div>
-                                        <div
-                                          style={{
-                                            height: 1,
-                                            background:
-                                              'var(--overlay-line-90)',
-                                            flex: 1,
-                                          }}
-                                        />
-                          </div>
+                          <SectionMarker
+                            key={it.id}
+                            interaction={it}
+                            collapsedSections={collapsedSections}
+                            onToggleCollapse={(sid) =>
+                              setCollapsedSections((s) => ({
+                                ...s,
+                                [sid]: !s[sid],
+                              }))
+                            }
+                          />
                         );
                       }
                       
                       // Special rendering for action interactions
                       if (it.kind === 'action') {
-                        // Respect collapsed sections
-                        try {
-                                      const sid = (it as any).sectionId as
-                                        | string
-                                        | undefined;
-                                      if (sid && collapsedSections[sid])
-                                        return null;
-                        } catch {}
                         return (
-                                      <div
-                                        key={it.id}
-                                        className="my-2 p-3 rounded"
-                                        style={{
-                                          background:
-                                            'var(--accent-research-10)',
-                                          color: 'var(--accent-research)',
-                                        }}
-                                      >
-                                        <div className="text-12 font-medium">
-                                          Executing command:
-                                        </div>
-                                        <div className="text-12 font-mono mt-1">
-                                          {it.content}
-                                        </div>
-                          </div>
+                          <ActionInteraction
+                            key={it.id}
+                            interaction={it}
+                            collapsedSections={collapsedSections}
+                          />
                         );
                       }
                       
@@ -3943,50 +3123,15 @@ const DiscoveryPage: React.FC = () => {
                       } catch {}
                       
                       // Special rendering for action.bring_in indicator messages
-                                  if (
-                                    isUser &&
-                                    it.subkind === 'action.bring_in'
-                                  ) {
+                      if (
+                        isUser &&
+                        it.subkind === 'action.bring_in'
+                      ) {
                         return (
-                                      <div
-                                        key={it.id}
-                                        className="my-1.5 flex justify-end"
-                                      >
-                                        <div
-                                          className="px-3 py-1.5 rounded-lg text-[12px] inline-flex items-center gap-2"
-                                          style={{
-                                            background:
-                                              'var(--accent-research-10)',
-                              color: 'var(--accent-research)',
-                                            border:
-                                              '1px solid var(--accent-research-20)',
-                                            maxWidth: '80%',
-                                          }}
-                                        >
-                                          <svg
-                                            className="w-3.5 h-3.5 flex-shrink-0"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                          >
-                                            <path
-                                              d="M12 7a3 3 0 1 1 0 6a3 3 0 0 1 0-6"
-                                              strokeWidth="2"
-                                            />
-                                            <path
-                                              d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6"
-                                              strokeWidth="2"
-                                              strokeLinecap="round"
-                                            />
-                                            <path
-                                              d="M18 7v4M16 9h4"
-                                              strokeWidth="2"
-                                              strokeLinecap="round"
-                                            />
-                              </svg>
-                              <span>{it.content}</span>
-                            </div>
-                          </div>
+                          <BringInIndicator
+                            key={it.id}
+                            interaction={it}
+                          />
                         );
                       }
                       
@@ -4000,149 +3145,13 @@ const DiscoveryPage: React.FC = () => {
                                     ? (meta?.leftAccent ?? !!it.agentProfile)
                                     : false;
                       
-                      const handleDelete = async () => {
-                                    const targetName = isUser
-                                      ? 'user message'
-                                      : 'assistant response';
-                                    if (
-                                      window.confirm(
-                                        `Delete this ${targetName}?`,
-                                      )
-                                    ) {
-                                      try {
-                                        await genaiChat.deleteInteraction(
-                                          it.id,
-                                        );
-                          } catch (e) {
-                                        alert(
-                                          'Failed to delete message. Please try again.',
-                                        );
-                            console.error('[Delete] Error:', e);
-                          }
-                        }
-                      };
-                      
-                                  const isPinned =
-                                    !isUser && isInteractionPinned(it);
-                      const handlePinToggle = async () => {
-                        if (isUser) return; // Only for assistant messages
-                        try {
-                                      await toggleInteractionPin(
-                                        genaiChat.projectId,
-                                        it.id,
-                                        isPinned,
-                                      );
-                          // Refresh interactions to update pin state
-                          await genaiChat.hydrateInteractions();
-                        } catch (e) {
-                                      alert(
-                                        'Failed to toggle pin. Please try again.',
-                                      );
-                          console.error('[Pin] Error:', e);
-                        }
-                      };
-                      
                       return (
                         <div key={it.id} className="group relative">
-                          {/* Pin button - appears on hover for assistant messages only */}
-                          {!isUser && (
-                            <button
-                              type="button"
-                                          aria-label={
-                                            isPinned
-                                              ? 'Unpin message'
-                                              : 'Pin message'
-                                          }
-                              className="absolute top-2 right-10 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                                          style={{
-                                            backgroundColor: 'transparent',
-                                          }}
-                              onClick={handlePinToggle}
-                                          onMouseEnter={(e) => {
-                                            (
-                                              e.currentTarget as HTMLButtonElement
-                                            ).style.backgroundColor =
-                                              'var(--white-10)';
-                                          }}
-                                          onMouseLeave={(e) => {
-                                            (
-                                              e.currentTarget as HTMLButtonElement
-                                            ).style.backgroundColor =
-                                              'transparent';
-                                          }}
-                            >
-                              {isPinned ? (
-                                            <svg
-                                              className="w-3.5 h-3.5"
-                                              viewBox="0 0 24 24"
-                                              fill="currentColor"
-                                              style={{
-                                                color: 'var(--accent-research)',
-                                              }}
-                                            >
-                                  <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                                </svg>
-                              ) : (
-                                            <svg
-                                              className="w-3.5 h-3.5"
-                                              viewBox="0 0 24 24"
-                                              fill="none"
-                                              stroke="currentColor"
-                                              style={{
-                                                color:
-                                                  'var(--text-secondary-strong)',
-                                              }}
-                                            >
-                                              <path
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                strokeWidth={2}
-                                                d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
-                                              />
-                                </svg>
-                              )}
-                            </button>
-                          )}
-                          {/* Delete button - appears on hover */}
-                          <button
-                            type="button"
-                            aria-label="Delete message"
-                            className="absolute top-2 right-2 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                                        style={{
-                                          backgroundColor: 'transparent',
-                                        }}
-                            onClick={handleDelete}
-                                        onMouseEnter={(e) => {
-                                          (
-                                            e.currentTarget as HTMLButtonElement
-                                          ).style.backgroundColor =
-                                            'var(--white-10)';
-                                        }}
-                                        onMouseLeave={(e) => {
-                                          (
-                                            e.currentTarget as HTMLButtonElement
-                                          ).style.backgroundColor =
-                                            'transparent';
-                                        }}
-                                      >
-                                        <svg
-                                          className="w-3.5 h-3.5"
-                                          viewBox="0 0 24 24"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          style={{
-                                            color:
-                                              'var(--text-secondary-strong)',
-                                          }}
-                                        >
-                                          <path
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            strokeWidth={2}
-                                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                                          />
-                            </svg>
-                          </button>
+                          <MessageActions
+                            interactionId={it.id}
+                            isUser={isUser}
+                            interaction={it}
+                          />
                                       <ChatMessage
                                         role={isUser ? 'user' : 'assistant'}
                                         align={isUser ? 'right' : 'left'}
@@ -4156,479 +3165,74 @@ const DiscoveryPage: React.FC = () => {
                           {isUser ? (
                             <>
                               <CollapsibleText maxLines={7}>
-                                              <div
-                                                className="text-13 markdown"
-                                                style={{
-                                                  color: 'var(--text-heading)',
-                                                  whiteSpace: 'pre-wrap',
-                                                }}
-                                              >
-                                                <ReactMarkdown
-                                                  remarkPlugins={[remarkGfm]}
-                                                  components={
-                                                    {
-                                                      p: (
-                                                        props: React.DetailedHTMLProps<
-                                                          React.HTMLAttributes<HTMLParagraphElement>,
-                                                          HTMLParagraphElement
-                                                        >,
-                                                      ) => (
-                                                        <div
-                                                          {...props}
-                                                          className="md-p"
-                                                        />
-                                                      ),
-                                                      a: (
-                                                        props: React.DetailedHTMLProps<
-                                                          React.AnchorHTMLAttributes<HTMLAnchorElement>,
-                                                          HTMLAnchorElement
-                                                        >,
-                                                      ) => (
-                                                        <a
-                                                          {...props}
-                                                          target="_blank"
-                                                          rel="noreferrer"
-                                                          className="underline"
-                                                        />
-                                                      ),
-                                                      code: (
-                                                        props: {
-                                                          inline?: boolean;
-                                                          className?: string;
-                                                          children?: React.ReactNode;
-                                                        } & React.DetailedHTMLProps<
-                                                          React.HTMLAttributes<HTMLElement>,
-                                                          HTMLElement
-                                                        >,
-                                                      ) => {
-                                                        const {
-                                                          inline,
-                                                          className,
-                                                          children,
-                                                          ...rest
-                                                        } = props;
-                                                        const text =
-                                                          typeof children ===
-                                                          'string'
-                                                            ? children
-                                                            : Array.isArray(
-                                                                  children,
-                                                                )
-                                                              ? children.join(
-                                                                  '',
-                                                                )
-                                                              : String(
-                                                                  children ??
-                                                                    '',
-                                                                );
-                                                        const isSingleLineBlock =
-                                                          !inline &&
-                                                          !/\n/.test(text) &&
-                                                          text.trim().length >
-                                                            0 &&
-                                                          text.trim().length <=
-                                                            80;
-                                                        if (
-                                                          inline ||
-                                                          isSingleLineBlock
-                                                        ) {
-                                                          return (
-                                                            <code
-                                                              {...rest}
-                                                              style={{
-                                                                backgroundColor:
-                                                                  'var(--white-10)',
-                                                                padding:
-                                                                  '0 3px',
-                                                                borderRadius: 4,
-                                                              }}
-                                                            >
-                                                              {text}
-                                                            </code>
-                                                          );
-                                                        }
-                                                        return (
-                                                          <code
-                                                            {...rest}
-                                                            className={
-                                                              className
-                                                            }
-                                                          >
-                                                            {children}
-                                                          </code>
-                                                        );
-                                                      },
-                                                      ul: (
-                                                        props: React.DetailedHTMLProps<
-                                                          React.HTMLAttributes<HTMLUListElement>,
-                                                          HTMLUListElement
-                                                        >,
-                                                      ) => (
-                                                        <ul
-                                                          {...props}
-                                                          style={{
-                                                            paddingLeft:
-                                                              '1.25rem',
-                                                          }}
-                                                        />
-                                                      ),
-                                                      ol: (
-                                                        props: React.DetailedHTMLProps<
-                                                          React.OlHTMLAttributes<HTMLOListElement>,
-                                                          HTMLOListElement
-                                                        >,
-                                                      ) => (
-                                                        <ol
-                                                          {...props}
-                                                          style={{
-                                                            paddingLeft:
-                                                              '1.25rem',
-                                                          }}
-                                                        />
-                                                      ),
-                                                    } as Components
-                                                  }
-                                                >
-                                    {it.content}
-                                  </ReactMarkdown>
-                                </div>
+                                <MarkdownRenderer
+                                  content={it.content}
+                                  className="text-13 markdown"
+                                  style={{
+                                    color: 'var(--text-heading)',
+                                    whiteSpace: 'pre-wrap',
+                                  }}
+                                />
                               </CollapsibleText>
                               {/* Lightweight action row for USER: only evaluation, no buttons */}
                               {(() => {
                                 try {
-                                  // Find eval.bias with bidirectional mapping support
-                                                const map =
-                                                  (genaiChat as any)
-                                                    .persistedByLocalId || {};
-                                                const reverseMap: Record<
-                                                  string,
-                                                  string[]
-                                                > = {};
-                                                Object.entries(map).forEach(
-                                                  ([local, server]) => {
-                                                    if (
-                                                      !reverseMap[
-                                                        server as string
-                                                      ]
-                                                    )
-                                                      reverseMap[
-                                                        server as string
-                                                      ] = [];
-                                                    reverseMap[
-                                                      server as string
-                                                    ].push(local);
-                                                  },
-                                                );
-                                                const localIds =
-                                                  reverseMap[it.id] || [];
-                                                const evalNode = [
-                                                  ...genaiChat.interactions,
-                                                ]
-                                                  .reverse()
-                                                  .find(
-                                                    (n) =>
-                                                      n.subkind ===
-                                                        'eval.bias' &&
-                                                      (n.replyTo === it.id ||
-                                                        localIds.includes(
-                                                          n.replyTo || '',
-                                                        )),
+                                  const evalNode = findEvalBiasInteraction(
+                                    it.id,
+                                    genaiChat.interactions,
+                                    (genaiChat as any).persistedByLocalId || {},
                                   );
                                   if (!evalNode) return null;
                                   return (
                                     <div className="mt-1">
-                                                    <EvaluationDetails
-                                                      messageId={it.id}
-                                                    />
-              </div>
+                                      <EvaluationDetails messageId={it.id} />
+                                    </div>
                                   );
-                                              } catch {
-                                                return null;
-                                              }
+                                } catch {
+                                  return null;
+                                }
                               })()}
                             </>
                           ) : (
                             <>
                               {/* Graph message rendering */}
                               {(() => {
-                                              let gd = it.graphData as
-                                                | undefined
-                                                | {
-                                                    chartTitle: string;
-                                                    chartType?: string;
-                                                    table: (
-                                                      | string
-                                                      | number
-                                                    )[][];
-                                                    sources: string[];
-                                                  };
-                                              if (
-                                                !gd &&
-                                                it.subkind === 'graph'
-                                              ) {
-                                                try {
-                                                  let content = String(
-                                                    it.contentSanitized ||
-                                                      it.content ||
-                                                      '',
-                                                  ).trim();
-                                                  content = content
-                                                    .replace(
-                                                      /^```[a-zA-Z]*\n([\s\S]*?)\n```$/m,
-                                                      '$1',
-                                                    )
-                                                    .trim();
-                                    let parsed: any = null;
-                                                  if (
-                                                    content.startsWith('{') ||
-                                                    content.startsWith('[')
-                                                  ) {
-                                                    parsed =
-                                                      JSON.parse(content);
-                                    } else {
-                                                    const m =
-                                                      content.match(
-                                                        /\{[\s\S]*\}/,
-                                                      );
-                                                    if (m && m[0])
-                                                      parsed = JSON.parse(m[0]);
-                                                  }
-                                                  if (
-                                                    parsed &&
-                                                    typeof parsed ===
-                                                      'object' &&
-                                                    typeof parsed.chartTitle ===
-                                                      'string' &&
-                                                    Array.isArray(
-                                                      parsed.table,
-                                                    ) &&
-                                                    Array.isArray(
-                                                      parsed.sources,
-                                                    )
-                                                  ) {
-                                                    const allowedTypes = [
-                                                      'line',
-                                                      'bar',
-                                                      'area',
-                                                      'stackedBar',
-                                                      'stackedArea',
-                                                      'composed',
-                                                    ];
-                                                    const chartType =
-                                                      typeof parsed.chartType ===
-                                                        'string' &&
-                                                      allowedTypes.includes(
-                                                        parsed.chartType,
-                                                      )
-                                                        ? parsed.chartType
-                                                        : 'line';
-                                                    gd = {
-                                                      chartTitle:
-                                                        parsed.chartTitle,
-                                                      chartType: chartType,
-                                                      table: parsed.table,
-                                                      sources: parsed.sources,
-                                                    };
-                                    }
-                                  } catch {}
-                                }
+                                const gd = parseGraphData(it);
                                 if (gd) {
                                   return (
-                                                  <div
-                                                    data-interaction-id={it.id}
-                                                  >
+                                    <div data-interaction-id={it.id}>
                                       <ChatGraphMessage
                                         chartTitle={gd.chartTitle}
-                                                      chartType={
-                                                        gd.chartType || 'line'
-                                                      }
+                                        chartType={gd.chartType || 'line'}
                                         table={gd.table}
                                         sources={gd.sources}
                                       />
                                     </div>
                                   );
                                 }
+                                const contentWithHighlight = applyEditHighlight(
+                                  (it.contentSanitized || it.content) as string,
+                                  editHighlight[it.id],
+                                );
+                                
                                 return (
-                                                <div
-                                                  className="text-13 markdown"
-                                                  data-interaction-id={it.id}
-                                                  style={{
-                                                    color:
-                                                      'var(--text-heading)',
-                                                    position: 'relative',
-                                                    opacity: frozenEdits[it.id]
-                                                      ? 0.6
-                                                      : 1,
-                                                    pointerEvents: frozenEdits[
-                                                      it.id
-                                                    ]
-                                                      ? ('none' as any)
-                                                      : 'auto',
-                                                  }}
-                                                >
-                                                  <ReactMarkdown
-                                                    remarkPlugins={[remarkGfm]}
-                                                    rehypePlugins={[rehypeRaw]}
-                                                    components={
-                                                      {
-                                                        p: (
-                                                          props: React.DetailedHTMLProps<
-                                                            React.HTMLAttributes<HTMLParagraphElement>,
-                                                            HTMLParagraphElement
-                                                          >,
-                                                        ) => (
-                                                          <div
-                                                            {...props}
-                                                            className="md-p"
-                                                          />
-                                                        ),
-                                                        a: (
-                                                          props: React.DetailedHTMLProps<
-                                                            React.AnchorHTMLAttributes<HTMLAnchorElement>,
-                                                            HTMLAnchorElement
-                                                          >,
-                                                        ) => (
-                                                          <a
-                                                            {...props}
-                                                            target="_blank"
-                                                            rel="noreferrer"
-                                                            className="underline"
-                                                          />
-                                                        ),
-                                                        code: (
-                                                          props: {
-                                                            inline?: boolean;
-                                                            className?: string;
-                                                            children?: React.ReactNode;
-                                                          } & React.DetailedHTMLProps<
-                                                            React.HTMLAttributes<HTMLElement>,
-                                                            HTMLElement
-                                                          >,
-                                                        ) => {
-                                                          const {
-                                                            inline,
-                                                            className,
-                                                            children,
-                                                            ...rest
-                                                          } = props;
-                                                          const text =
-                                                            typeof children ===
-                                                            'string'
-                                                              ? children
-                                                              : Array.isArray(
-                                                                    children,
-                                                                  )
-                                                                ? children.join(
-                                                                    '',
-                                                                  )
-                                                                : String(
-                                                                    children ??
-                                                                      '',
-                                                                  );
-                                                          const isSingleLineBlock =
-                                                            !inline &&
-                                                            !/\n/.test(text) &&
-                                                            text.trim().length >
-                                                              0 &&
-                                                            text.trim()
-                                                              .length <= 80;
-                                                          if (
-                                                            inline ||
-                                                            isSingleLineBlock
-                                                          ) {
-                                                            return (
-                                                              <code
-                                                                {...rest}
-                                                                style={{
-                                                                  backgroundColor:
-                                                                    'var(--white-10)',
-                                                                  padding:
-                                                                    '0 3px',
-                                                                  borderRadius: 4,
-                                                                }}
-                                                              >
-                                                                {text}
-                                                              </code>
-                                                            );
-                                  }
-                                  // For multi-line code blocks ReactMarkdown provides the <pre> wrapper; return only <code>
-                                                          return (
-                                                            <code
-                                                              {...rest}
-                                                              className={
-                                                                className
-                                                              }
-                                                            >
-                                                              {children}
-                                                            </code>
-                                                          );
-                                                        },
-                                                        ul: (
-                                                          props: React.DetailedHTMLProps<
-                                                            React.HTMLAttributes<HTMLUListElement>,
-                                                            HTMLUListElement
-                                                          >,
-                                                        ) => (
-                                                          <ul
-                                                            {...props}
-                                                            style={{
-                                                              paddingLeft:
-                                                                '1.25rem',
-                                                            }}
-                                                          />
-                                                        ),
-                                                        ol: (
-                                                          props: React.DetailedHTMLProps<
-                                                            React.OlHTMLAttributes<HTMLOListElement>,
-                                                            HTMLOListElement
-                                                          >,
-                                                        ) => (
-                                                          <ol
-                                                            {...props}
-                                                            style={{
-                                                              paddingLeft:
-                                                                '1.25rem',
-                                                            }}
-                                                          />
-                                                        ),
-                                                      } as Components
-                                                    }
-                                                  >
-                                {(() => {
-                                                      const base =
-                                                        (it.contentSanitized ||
-                                                          it.content) as string;
-                                                      const hl =
-                                                        editHighlight[it.id];
-                                                      if (
-                                                        hl &&
-                                                        typeof hl.start ===
-                                                          'number' &&
-                                                        typeof hl.end ===
-                                                          'number' &&
-                                                        hl.start >= 0 &&
-                                                        hl.end > hl.start &&
-                                                        hl.end <= base.length
-                                                      ) {
-                                                        const pre = base.slice(
-                                                          0,
-                                                          hl.start,
-                                                        );
-                                                        const mid = base.slice(
-                                                          hl.start,
-                                                          hl.end,
-                                                        );
-                                                        const post = base.slice(
-                                                          hl.end,
-                                                        );
-                                                        const span = `<span class="etg-edit-hl" style="background: rgba(255, 230, 150, 0.6); padding: 0 2px; border-radius: 3px;">${mid.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>`;
-                                                        return (
-                                                          pre + span + post
-                                                        );
-                                  }
-                                  return base;
-                                })()}
-                              </ReactMarkdown>
+                                  <div
+                                    className="text-13 markdown"
+                                    data-interaction-id={it.id}
+                                    style={{
+                                      color: 'var(--text-heading)',
+                                      position: 'relative',
+                                      opacity: frozenEdits[it.id] ? 0.6 : 1,
+                                      pointerEvents: frozenEdits[it.id]
+                                        ? ('none' as any)
+                                        : 'auto',
+                                    }}
+                                  >
+                                    <MarkdownRenderer
+                                      content={contentWithHighlight}
+                                      useRaw={true}
+                                      skipWrapper={true}
+                                    />
                               {/* Top-right status chip */}
                                                   {(frozenEdits[it.id] ||
                                                     editErrors[it.id]) && (
@@ -5923,328 +4527,11 @@ const DiscoveryPage: React.FC = () => {
               />
             )}
             {/* Opponent button and agents list - overlay above input, aligned to right edge */}
-                    {unfoldSubView !== 'perspectives' &&
-                      (genaiChatInteractionsLength > 0 ||
-                        genaiChatMessagesLength > 0) && (
-              <div
-                ref={opponentButtonRef}
-                className="absolute"
-                style={{
-                  bottom: `${opponentButtonBottom}px`, // Dynamically calculated from UnfoldRequest top
-                  right: '1rem', // Align to right edge (same padding as px-4 = 1rem)
-                  zIndex: 10,
-                  pointerEvents: 'auto',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                }}
-              >
-                {/* Agents list - appears to the left */}
-                {showOpponentAgents && (
-                  <div
-                    ref={opponentAgentsRef}
-                    className="flex items-center gap-2"
-                    style={{
-                      animation: 'fadeInScale 0.2s ease-out',
-                      transformOrigin: 'right center',
-                    }}
-                  >
-                    {AGENT_PRESETS.map((preset) => {
-                                const isExpanded =
-                                  expandedAgentId === preset.id;
-                      
-                      return (
-                        <div
-                          key={preset.id}
-                          className="flex items-center gap-2"
-                          style={{
-                            transition: 'all 0.2s ease',
-                          }}
-                        >
-                          <button
-                            type="button"
-                            aria-label={preset.displayName}
-                            title={preset.description}
-                            onClick={async () => {
-                              // If already expanded, launch the agent
-                              if (isExpanded) {
-                                setShowOpponentAgents(false);
-                                setExpandedAgentId(null);
-                                
-                                try {
-                                            const pid =
-                                              await genaiChat.ensureProject();
-                                            const preferredLang =
-                                              getPreferredLanguage();
-                                  
-                                  // Build context using unified function (70% of context window)
-                                  const context = buildContext({
-                                    modelAlias: preset.modelAlias,
-                                    contextPercentage: 0.7,
-                                    includeAgents: true,
-                                  });
-                                  
-                                            console.log(
-                                              '[Opponent] Context built:',
-                                              {
-                                                messagesCount:
-                                                  context.messages.length,
-                                    tokenCount: context.tokenCount,
-                                    maxTokens: context.maxTokens,
-                                    charCount: context.charCount,
-                                              },
-                                            );
-                                  
-                                  // Build prompt for agent discussion
-                                  // Use agent's system instruction if available, otherwise use default prompt
-                                            const basePrompt = preset.params
-                                              ?.systemInstruction
-                                    ? `${preset.params.systemInstruction}\n\nContext from the discussion:\n${context.transcript}\n\nRespond in ${getLanguageName(preferredLang)} language.`
-                                    : `You are participating in a discussion as an opponent, providing a counterpoint or alternative perspective.
-
-Your role:
-- Challenge assumptions and provide alternative viewpoints
-- Identify potential weaknesses or gaps in the arguments presented
-- Offer constructive criticism and different perspectives
-- Maintain respectful and productive discourse
-- Focus on substantive arguments rather than personal attacks
-
-Context from the discussion:
-${context.transcript}
-
-Your response should:
-1. Acknowledge the key points made in the discussion
-2. Present alternative perspectives or counterarguments
-3. Identify any assumptions, gaps, or potential weaknesses
-4. Contribute constructively to the discussion
-
-Respond in ${getLanguageName(preferredLang)} language.`;
-                                  
-                                  const prompt = basePrompt;
-
-                                  // Get model and options
-                                            const modelMapping =
-                                              mapAliasToModel(
-                                                preset.modelAlias,
-                                              );
-                                  if (!modelMapping) {
-                                              console.error(
-                                                '[Opponent] Failed to map model alias:',
-                                                preset.modelAlias,
-                                              );
-                                    return;
-                                  }
-                                            const tools = preset.capabilities
-                                              ?.tools
-                                              ? genaiSettings.enableTelegramTool
-                                                ? [TelegramFetchUpdatesTool]
-                                                : undefined
-                                              : undefined;
-                                  const options: any = {
-                                              profile:
-                                                preset.modelAlias.includes(
-                                                  'quality',
-                                                )
-                                                  ? 'quality'
-                                                  : 'fast',
-                                              temperature:
-                                                preset.params?.temperature ??
-                                                0.7,
-                                              systemInstruction:
-                                                preset.params
-                                                  ?.systemInstruction,
-                                    __lang: preferredLang,
-                                  };
-
-                                  // Create indicator message
-                                  const indicatorContent = `${t('unfold.actions.opponentInvoked')} ${preset.displayName}`;
-                                            await genaiChat.createIndicatorMessage(
-                                              indicatorContent,
-                                              'action.opponent',
-                                              undefined,
-                                              {
-                                    agentProfile: {
-                                                  provider:
-                                                    modelMapping.provider,
-                                      model: modelMapping.model,
-                                      capabilities: {
-                                                    tools:
-                                                      !!preset.capabilities
-                                                        ?.tools,
-                                                    webSearch:
-                                                      !!preset.capabilities
-                                                        ?.webSearch,
-                                                    reasoning:
-                                                      !!preset.capabilities
-                                                        ?.reasoning,
-                                      },
-                                      params: preset.params,
-                                    },
-                                              },
-                                            );
-
-                                  // Start stream with context
-                                  await genaiChat.startStream({
-                                    prompt,
-                                    tools,
-                                    options,
-                                    agentMeta: {
-                                      displayName: preset.displayName,
-                                      agentProfile: {
-                                                  provider:
-                                                    modelMapping.provider,
-                                        model: modelMapping.model,
-                                        capabilities: {
-                                                    tools:
-                                                      !!preset.capabilities
-                                                        ?.tools,
-                                                    webSearch:
-                                                      !!preset.capabilities
-                                                        ?.webSearch,
-                                                    reasoning:
-                                                      !!preset.capabilities
-                                                        ?.reasoning,
-                                        },
-                                        params: preset.params,
-                                      },
-                                      subkind: 'agent.opponent',
-                                    },
-                                    suppressUserEcho: true,
-                                  });
-                                } catch (err) {
-                                            console.error(
-                                              '[Opponent] Failed to start opponent discussion',
-                                              err,
-                                            );
-                                }
-                              } else {
-                                // Expand this agent (collapse others)
-                                setExpandedAgentId(preset.id);
-                              }
-                            }}
-                            className="flex items-center justify-center rounded-full transition-all shadow-lg"
-                            style={{
-                              width: isExpanded ? 'auto' : '32px',
-                              height: '32px',
-                                        backgroundColor: isExpanded
-                                          ? 'var(--white-15)'
-                                          : 'var(--bg-elevated)',
-                              color: 'var(--text-heading)',
-                                        border:
-                                          '1px solid var(--overlay-line-90)',
-                              backdropFilter: 'blur(8px)',
-                              opacity: 0.95,
-                              padding: isExpanded ? '0 12px' : '0',
-                              gap: isExpanded ? '8px' : '0',
-                            }}
-                            onMouseEnter={(e) => {
-                                        (
-                                          e.currentTarget as HTMLButtonElement
-                                        ).style.opacity = '1';
-                              if (!isExpanded) {
-                                          (
-                                            e.currentTarget as HTMLButtonElement
-                                          ).style.backgroundColor =
-                                            'var(--white-15)';
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                                        (
-                                          e.currentTarget as HTMLButtonElement
-                                        ).style.opacity = '0.95';
-                              if (!isExpanded) {
-                                          (
-                                            e.currentTarget as HTMLButtonElement
-                                          ).style.backgroundColor =
-                                            'var(--bg-elevated)';
-                              }
-                            }}
-                          >
-                            {preset.icon || (
-                                        <svg
-                                          className="w-4 h-4"
-                                          viewBox="0 0 24 24"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          strokeWidth="2"
-                                        >
-                                <circle cx="12" cy="12" r="10" />
-                                <path d="M12 16v-4M12 8h.01" />
-                              </svg>
-                            )}
-                            {isExpanded && (
-                                        <span className="text-xs font-medium whitespace-nowrap">
-                                          {preset.displayName}
-                                        </span>
-                            )}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                
-                {/* Main ? button */}
-                <button
-                  type="button"
-                  aria-label={t('unfold.request.opponent')}
-                  title={t('unfold.request.opponentExplain')}
-                  onClick={() => {
-                    setShowOpponentAgents(!showOpponentAgents);
-                    if (showOpponentAgents) {
-                      setExpandedAgentId(null); // Reset expanded state when closing
-                    }
-                  }}
-                  className="flex items-center justify-center rounded-full transition-all shadow-lg"
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                              backgroundColor: showOpponentAgents
-                                ? 'var(--white-15)'
-                                : 'var(--bg-elevated)',
-                    color: 'var(--text-heading)',
-                    border: '1px solid var(--overlay-line-90)',
-                    backdropFilter: 'blur(8px)',
-                    opacity: showOpponentAgents ? 1 : 0.95,
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!showOpponentAgents) {
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.opacity = '1';
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.backgroundColor = 'var(--white-15)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!showOpponentAgents) {
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.opacity = '0.95';
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.backgroundColor = 'var(--bg-elevated)';
-                              }
-                            }}
-                          >
-                            <svg
-                              className="w-4 h-4"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                            >
-                    <circle cx="12" cy="12" r="10" />
-                              <path
-                                d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"
-                                strokeLinecap="round"
-                              />
-                  </svg>
-                </button>
-              </div>
-            )}
-            {/* Opponent Palette - keep for compatibility but not used */}
+            <OpponentAgentsPalette
+              unfoldSubView={unfoldSubView}
+              genaiChatInteractionsLength={genaiChatInteractionsLength}
+              genaiChatMessagesLength={genaiChatMessagesLength}
+            />
             {/* Input */}
             {unfoldSubView !== 'perspectives' && (
             <div ref={unfoldRequestRef}>
@@ -7227,320 +5514,13 @@ Respond in ${getLanguageName(preferredLang)} language.`;
         )}
 
         {/* Right buttons column - always visible */}
-        <div
-          className="flex flex-col items-center gap-2"
-          style={{
-            width: '48px',
-            minWidth: '48px',
-            flexShrink: 0,
-            paddingTop: '76px',
-          }}
-        >
-          {/* Workspace Library button */}
-                    <button
-                      type="button"
-            aria-label={t('unfold.sections.toggleWorkspaceLibrary')}
-            title={t('unfold.sections.toggleWorkspaceLibrary')}
-            className="mirror-doc-btn rounded-lg flex items-center justify-center transition-all duration-300"
-            style={{
-              width: 32,
-              height: 32,
-              backgroundColor:
-                rightPanelType === 'workspace'
-                  ? 'var(--accent-primary)'
-                  : 'var(--newchat-bg)',
-              color:
-                rightPanelType === 'workspace'
-                  ? 'var(--text-on-accent)'
-                  : 'var(--text-heading)',
-            }}
-            onClick={() => {
-              const startTime = performance.now();
-              console.log(
-                '[RightPanel] Click at',
-                startTime,
-                'toggle',
-                rightPanelType !== 'workspace',
-              );
-              setRightPanelType((v) =>
-                v === 'workspace' ? null : 'workspace',
-              );
-                const endTime = performance.now();
-              console.log(
-                '[RightPanel] setState called at',
-                endTime,
-                'delay:',
-                endTime - startTime,
-                'ms',
-              );
-            }}
-            onMouseEnter={(e) => { 
-              if (rightPanelType !== 'workspace') {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--newchat-bg-hover)';
-              }
-            }}
-            onMouseLeave={(e) => { 
-              if (rightPanelType !== 'workspace') {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--newchat-bg)';
-              }
-            }}
-          >
-            <svg
-              className="w-4 h-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              aria-hidden="true"
-            >
-              {/* Folder with documents - более понятно для Workspace */}
-              <path
-                d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.5L13 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M8 10h8M8 14h6"
-                strokeWidth={2}
-                strokeLinecap="round"
-              />
-                      </svg>
-                    </button>
-
-          {/* Context Navigation button - отдельная панель */}
-          {(hasPinned || hasSections) && (
-            <button
-              type="button"
-              aria-label={t('unfold.sections.contextNavigation')}
-              title={t('unfold.sections.contextNavigation')}
-              onClick={() => {
-                setRightPanelType((v) =>
-                  v === 'context' ? null : 'context',
-                );
-              }}
-              className="rounded-lg flex items-center justify-center transition-all duration-300"
-              style={{
-                width: 32,
-                height: 32,
-                backgroundColor:
-                  rightPanelType === 'context'
-                    ? 'var(--accent-primary)'
-                    : 'var(--newchat-bg)',
-                color:
-                  rightPanelType === 'context'
-                    ? 'var(--text-on-accent)'
-                    : 'var(--text-heading)',
-              }}
-              onMouseEnter={(e) => {
-                if (rightPanelType !== 'context') {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                    'var(--newchat-bg-hover)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (rightPanelType !== 'context') {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                    'var(--newchat-bg)';
-                }
-              }}
-            >
-              <svg
-                className="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-              >
-                {/* Navigation/Map pin - более понятно для Context Navigation */}
-                <path
-                  d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <circle cx="12" cy="10" r="3" strokeWidth={2} />
-              </svg>
-            </button>
-          )}
-                
-          {/* Workspace Artifacts button */}
-                    <button
-            id="btn-artifacts"
-                      type="button"
-            aria-label={t('unfold.sections.workspaceArtifacts')}
-            title={t('unfold.sections.workspaceArtifacts')}
-            onClick={() => {
-              setRightPanelType((v) =>
-                v === 'artifacts' ? null : 'artifacts',
-              );
-              try {
-                const btn = document.getElementById('btn-artifacts');
-                if (btn) btn.classList.remove('etg-glow-blue');
-              } catch {}
-            }}
-            className="rounded-lg flex items-center justify-center transition-all duration-300"
-            style={{
-              width: 32,
-              height: 32,
-              backgroundColor:
-                rightPanelType === 'artifacts'
-                  ? 'var(--accent-primary)'
-                  : 'var(--newchat-bg)',
-              color:
-                rightPanelType === 'artifacts'
-                  ? 'var(--text-on-accent)'
-                  : 'var(--text-heading)',
-            }}
-            onMouseEnter={(e) => { 
-              if (rightPanelType !== 'artifacts') {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--newchat-bg-hover)';
-              }
-            }}
-            onMouseLeave={(e) => { 
-              if (rightPanelType !== 'artifacts') {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--newchat-bg)';
-              }
-            }}
-          >
-            <svg
-              className="w-4 h-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-            >
-              {/* Lightbulb/Insight - более понятно для Artifacts/Findings */}
-              <path
-                d="M9 21h6M12 3a6 6 0 0 1 6 6c0 2.5-1.5 4.5-3 6l-1 1H9l-1-1c-1.5-1.5-3-3.5-3-6a6 6 0 0 1 6-6z"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M9 8h6M9 12h4"
-                strokeWidth={2}
-                strokeLinecap="round"
-              />
-                      </svg>
-                    </button>
-
-          {/* Analysis button (User Analysis + Discussion Flow) */}
-          {availUserAnalysis && (
-                    <button
-                      type="button"
-              aria-label={t('unfold.sections.analysis', {
-                defaultValue: 'Analysis',
-              })}
-              title={t('unfold.sections.analysis', {
-                defaultValue: 'Analysis',
-              })}
-              onClick={() => {
-                setRightPanelType((v) =>
-                  v === 'analysis' ? null : 'analysis',
-                );
-              }}
-              className="rounded-lg flex items-center justify-center transition-all duration-300"
-              style={{
-                width: 32,
-                height: 32,
-                backgroundColor:
-                  rightPanelType === 'analysis'
-                    ? 'var(--accent-primary)'
-                    : 'var(--newchat-bg)',
-                color:
-                  rightPanelType === 'analysis'
-                    ? 'var(--text-on-accent)'
-                    : 'var(--text-heading)',
-              }}
-              onMouseEnter={(e) => { 
-                if (rightPanelType !== 'analysis') {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                    'var(--newchat-bg-hover)';
-                }
-              }}
-              onMouseLeave={(e) => { 
-                if (rightPanelType !== 'analysis') {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                    'var(--newchat-bg)';
-                }
-              }}
-            >
-              <svg
-                className="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                {/* Bar chart/Analytics - более понятно для Analysis */}
-                <line x1="12" y1="20" x2="12" y2="10" />
-                <line x1="18" y1="20" x2="18" y2="4" />
-                <line x1="6" y1="20" x2="6" y2="16" />
-                      </svg>
-                    </button>
-          )}
-
-          {/* Experimental Response button */}
-          <button
-            type="button"
-            aria-label="Experimental Response"
-            title="Experimental Response"
-            onClick={() => {
-              setRightPanelType((v) =>
-                v === 'experimental' ? null : 'experimental',
-              );
-            }}
-            className="rounded-lg flex items-center justify-center transition-all duration-300"
-            style={{
-              width: 32,
-              height: 32,
-              backgroundColor:
-                rightPanelType === 'experimental'
-                  ? 'var(--accent-primary)'
-                  : 'var(--newchat-bg)',
-              color:
-                rightPanelType === 'experimental'
-                  ? 'var(--text-on-accent)'
-                  : 'var(--text-heading)',
-            }}
-            onMouseEnter={(e) => { 
-              if (rightPanelType !== 'experimental') {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--newchat-bg-hover)';
-              }
-            }}
-            onMouseLeave={(e) => { 
-              if (rightPanelType !== 'experimental') {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--newchat-bg)';
-              }
-            }}
-          >
-            <svg
-              className="w-4 h-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-            >
-              {/* Flask/Beaker - более понятно для Experimental */}
-              <path
-                d="M9 2v6l-3 3v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-8l-3-3V2"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M9 2h6M12 10v4"
-                strokeWidth={2}
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
-          </div>
+        <RightPanelButtons
+          rightPanelType={rightPanelType}
+          onPanelTypeChange={setRightPanelType}
+          hasPinned={hasPinned}
+          hasSections={hasSections}
+          availUserAnalysis={availUserAnalysis}
+        />
       </div>
     </div>
   );
