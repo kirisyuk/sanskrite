@@ -1,3 +1,6 @@
 [submodule "temp-repos/EtigramAzure"]
 	path = temp-repos/EtigramAzure
 	url = https://github.com/kirisyuk/EtigramAzure
+[submodule "temp-repos/gpt-researcher"]
+	path = temp-repos/gpt-researcher
+	url = https://github.com/assafelovic/gpt-researcher.git

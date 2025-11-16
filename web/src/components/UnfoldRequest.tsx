@@ -591,6 +591,74 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   // Context usage calculation
   const interactions = useGenaiChatStore((s) => s.interactions);
   const currentUsage = useGenaiChatStore((s) => s.usage);
+  const pendingAttachedDocIds = useGenaiChatStore((s) => s.pendingAttachedDocIds);
+  
+  // Track pending documents size for context calculation
+  const [pendingDocsTokens, setPendingDocsTokens] = React.useState<number>(0);
+  
+  // Load pending documents and calculate their token size
+  React.useEffect(() => {
+    if (!pendingAttachedDocIds || pendingAttachedDocIds.length === 0 || !currentProjectId || currentProjectId === 'local-unfold') {
+      setPendingDocsTokens(0);
+      return;
+    }
+    
+    let cancelled = false;
+    
+    const loadDocs = async () => {
+      try {
+        const docs = await api.docsList(currentProjectId);
+        if (cancelled) return;
+        
+        // Calculate total tokens from pending documents
+        let totalChars = 0;
+        
+        // Process each pending document
+        for (const docId of pendingAttachedDocIds) {
+          const doc = docs.find((d: any) => d.id === docId);
+          if (!doc) continue;
+          
+          let docText = '';
+          
+          // First, try to use extractedText if available
+          if (doc.extractedText) {
+            docText = doc.extractedText;
+          } else {
+            // For artifact documents (entities.json, facts.json, etc.), 
+            // content might be stored in StoragePath and needs to be downloaded
+            try {
+              const blob = await api.docsDownload(currentProjectId, docId);
+              if (cancelled) return;
+              docText = await new Response(blob).text();
+            } catch (downloadErr) {
+              console.warn('[UnfoldRequest] Failed to download document content', { docId, error: downloadErr });
+              // Continue with next document if download fails
+              continue;
+            }
+          }
+          
+          totalChars += docText.length;
+        }
+        
+        // Convert chars to tokens (rough estimate: ~4 chars per token)
+        const tokens = Math.ceil(totalChars / 4);
+        if (!cancelled) {
+          setPendingDocsTokens(tokens);
+        }
+      } catch (err) {
+        console.warn('[UnfoldRequest] Failed to load pending documents for context calculation', err);
+        if (!cancelled) {
+          setPendingDocsTokens(0);
+        }
+      }
+    };
+    
+    loadDocs();
+    
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingAttachedDocIds, currentProjectId]);
   
   const contextUsage = React.useMemo(() => {
     // Get current model and its context window
@@ -623,6 +691,9 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       totalTokens += currentUsage.totalTokens;
     }
     
+    // Add pending documents tokens
+    totalTokens += pendingDocsTokens;
+    
     const percentage = Math.min(100, (totalTokens / contextWindow) * 100);
     
     return {
@@ -630,7 +701,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       total: contextWindow,
       percentage,
     };
-  }, [interactions, currentUsage, settings.provider, settings.strength]);
+  }, [interactions, currentUsage, settings.provider, settings.strength, pendingDocsTokens]);
 
   // Context usage ring component
   const ContextUsageRing: React.FC<{ percentage: number; size?: number }> = ({ percentage, size = 24 }) => {
@@ -1025,6 +1096,53 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                 <circle cx="12" cy="12" r="9" strokeWidth={2} />
                 <path d="M3 12h18" strokeWidth={2} />
                 <path d="M12 3a15 15 0 010 18M12 3a15 15 0 000 18" strokeWidth={2} />
+              </svg>
+            </button>
+            {/* Tool usage toggle (mutually exclusive with web search) */}
+            <button
+              type="button"
+              aria-label={t('unfold.request.toolUsage')}
+              aria-pressed={settings.toolUsageEnabled}
+              title={t('unfold.request.toolUsage')}
+              disabled={!providerCapabilities[settings.provider].tools}
+              onClick={() => settings.setToolUsage(!settings.toolUsageEnabled)}
+              className="text-xs rounded flex items-center gap-1"
+              style={{
+                padding: '4px 8px',
+                border: '1px solid var(--overlay-line-90)',
+                background: settings.toolUsageEnabled ? 'var(--white-10)' : 'transparent',
+                color: 'var(--text-heading)',
+                opacity: !providerCapabilities[settings.provider].tools ? 0.5 : 1,
+              }}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+              </svg>
+            </button>
+            {/* Research toggle (mutually exclusive with web search and tool usage) */}
+            <button
+              type="button"
+              aria-label={t('unfold.request.research')}
+              aria-pressed={settings.researchEnabled}
+              title={t('unfold.request.research')}
+              onClick={() => settings.setResearch(!settings.researchEnabled)}
+              className="text-xs rounded flex items-center gap-1"
+              style={{
+                padding: '4px 8px',
+                border: '1px solid var(--overlay-line-90)',
+                background: settings.researchEnabled ? 'var(--white-10)' : 'transparent',
+                color: 'var(--text-heading)',
+              }}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                {/* Simple molecule: two atoms connected */}
+                <circle cx="8" cy="12" r="2.5" fill="currentColor" />
+                <circle cx="16" cy="12" r="2.5" fill="currentColor" />
+                {/* Connection line */}
+                <line x1="10.5" y1="12" x2="13.5" y2="12" strokeWidth={2} />
+                {/* Just a couple of small particles */}
+                <circle cx="4" cy="12" r="1" fill="currentColor" opacity={0.6} />
+                <circle cx="20" cy="12" r="1" fill="currentColor" opacity={0.6} />
               </svg>
             </button>
             {/* Context usage indicator */}

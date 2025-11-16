@@ -22,14 +22,15 @@ export type GenAIModel =
 export interface GenAICapabilities {
   grounding: boolean;
   tools: boolean;
+  streamingWithTools: boolean; // Whether the provider supports streaming with tool calling
 }
 
 export const providerCapabilities: Record<GenAIProvider, GenAICapabilities> = {
-  gemini: { grounding: true, tools: true },
-  openai: { grounding: true, tools: true },
-  grok:   { grounding: true, tools: true },
-  claude: { grounding: false, tools: true },
-  deepseek: { grounding: false, tools: true },
+  gemini: { grounding: true, tools: true, streamingWithTools: false }, // Gemini doesn't support function calling in streaming mode
+  openai: { grounding: true, tools: true, streamingWithTools: true },
+  grok:   { grounding: true, tools: true, streamingWithTools: true },
+  claude: { grounding: false, tools: true, streamingWithTools: true },
+  deepseek: { grounding: false, tools: true, streamingWithTools: true },
 };
 
 export function mapProviderStrengthToModel(provider: GenAIProvider, strength: GenAIStrength): GenAIModel {
@@ -100,6 +101,8 @@ export interface GenAISettingsState {
   stanceStrength?: GenAIStrength;
   stanceModel?: GenAIModel; // default gemini_fast
   groundingEnabled: boolean;
+  toolUsageEnabled: boolean;
+  researchEnabled: boolean;
   temperature: number;
   maxOutputTokens: number;
   systemInstruction: string;
@@ -111,6 +114,8 @@ export interface GenAISettingsState {
   setStanceStrength: (s: GenAIStrength) => void;
   setStanceModel: (m: GenAIModel) => void;
   setGrounding: (v: boolean) => void;
+  setToolUsage: (v: boolean) => void;
+  setResearch: (v: boolean) => void;
   setTemperature: (v: number) => void;
   setMaxOutputTokens: (v: number) => void;
   setSystemInstruction: (v: string) => void;
@@ -138,7 +143,7 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
     persisted.stanceStrength = 'balanced';
   }
 
-  const initial: Omit<GenAISettingsState, 'setProvider' | 'setStrength' | 'setStanceProvider' | 'setStanceStrength' | 'setStanceModel' | 'setGrounding' | 'setTemperature' | 'setMaxOutputTokens' | 'setSystemInstruction' | 'setEnableTelegramTool' | 'save'> = {
+  const initial: Omit<GenAISettingsState, 'setProvider' | 'setStrength' | 'setStanceProvider' | 'setStanceStrength' | 'setStanceModel' | 'setGrounding' | 'setToolUsage' | 'setResearch' | 'setTemperature' | 'setMaxOutputTokens' | 'setSystemInstruction' | 'setEnableTelegramTool' | 'save'> = {
     provider: (persisted as any)?.provider || 'gemini',
     strength: (persisted as any)?.strength || 'fast',
     model: (persisted?.model as GenAIModel) || 'gemini_fast',
@@ -146,6 +151,8 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
     stanceStrength: (persisted as any)?.stanceStrength || 'fast',
     stanceModel: (persisted?.stanceModel as GenAIModel) || 'gemini_fast',
     groundingEnabled: typeof persisted?.groundingEnabled === 'boolean' ? !!persisted?.groundingEnabled : true,
+    toolUsageEnabled: typeof persisted?.toolUsageEnabled === 'boolean' ? !!persisted?.toolUsageEnabled : false,
+    researchEnabled: typeof persisted?.researchEnabled === 'boolean' ? !!persisted?.researchEnabled : false,
     temperature: typeof persisted?.temperature === 'number' ? (persisted?.temperature as number) : 0.2,
     // Default to 8192 if not previously set
     maxOutputTokens: typeof persisted?.maxOutputTokens === 'number' ? (persisted?.maxOutputTokens as number) : 8192,
@@ -165,6 +172,7 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
         provider: p,
         model: alias,
         groundingEnabled: caps.grounding ? current.groundingEnabled : false,
+        toolUsageEnabled: caps.tools ? current.toolUsageEnabled : false,
         enableTelegramTool: caps.tools ? current.enableTelegramTool : false,
       });
       try { get().save(); } catch {}
@@ -192,7 +200,33 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
       try { get().save(); } catch {}
     },
     setStanceModel: (m) => set({ stanceModel: m }),
-    setGrounding: (v) => set({ groundingEnabled: v }),
+    setGrounding: (v) => {
+      // If enabling grounding, disable tool usage and research
+      set({ 
+        groundingEnabled: v, 
+        toolUsageEnabled: v ? false : get().toolUsageEnabled,
+        researchEnabled: v ? false : get().researchEnabled,
+      });
+      try { get().save(); } catch {}
+    },
+    setToolUsage: (v) => {
+      // If enabling tool usage, disable grounding and research
+      set({ 
+        toolUsageEnabled: v, 
+        groundingEnabled: v ? false : get().groundingEnabled,
+        researchEnabled: v ? false : get().researchEnabled,
+      });
+      try { get().save(); } catch {}
+    },
+    setResearch: (v) => {
+      // If enabling research, disable grounding and tool usage
+      set({ 
+        researchEnabled: v, 
+        groundingEnabled: v ? false : get().groundingEnabled,
+        toolUsageEnabled: v ? false : get().toolUsageEnabled,
+      });
+      try { get().save(); } catch {}
+    },
     setTemperature: (v) => set({ temperature: v }),
     setMaxOutputTokens: (v) => set({ maxOutputTokens: v }),
     setSystemInstruction: (v) => set({ systemInstruction: v }),
@@ -208,6 +242,8 @@ export const useGenAISettings = create<GenAISettingsState>((set, get) => {
           stanceStrength: s.stanceStrength,
           stanceModel: s.stanceModel,
           groundingEnabled: s.groundingEnabled,
+          toolUsageEnabled: s.toolUsageEnabled,
+          researchEnabled: s.researchEnabled,
           temperature: s.temperature,
           maxOutputTokens: s.maxOutputTokens,
           systemInstruction: s.systemInstruction,
