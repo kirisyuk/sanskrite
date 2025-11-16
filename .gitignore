@@ -24,6 +24,7 @@ desktop.ini
 # Go
 backend/bin/
 backend/build/
+backend/server
 *.exe
 *.exe~
 *.dll
