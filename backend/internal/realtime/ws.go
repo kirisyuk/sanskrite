@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -76,21 +77,47 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 	go func() {
 		defer func() { h.removeConn(tenantID, c); _ = c.Close() }()
 		c.SetReadLimit(1024)
-		c.SetReadDeadline(time.Now().Add(60 * time.Second))
-		c.SetPongHandler(func(string) error { c.SetReadDeadline(time.Now().Add(60 * time.Second)); return nil })
+		readDeadline := time.Now().Add(60 * time.Second)
+		c.SetReadDeadline(readDeadline)
+		c.SetPongHandler(func(string) error {
+			readDeadline = time.Now().Add(60 * time.Second)
+			c.SetReadDeadline(readDeadline)
+			return nil
+		})
 		for {
 			mt, msg, err := c.ReadMessage()
 			if err != nil {
 				return
 			}
+			// CRITICAL: Update read deadline on every successful read to prevent premature timeout
+			// This ensures connection stays alive as long as client is sending messages
+			readDeadline = time.Now().Add(60 * time.Second)
+			c.SetReadDeadline(readDeadline)
 			// Process subscribe messages (text frames with small JSON)
 			if mt == websocket.TextMessage && len(msg) > 0 {
 				// minimal parsing without extra deps
 				// expect {"type":"subscribe","projectId":"..."} or {"type":"subscribe","verifiedCode":"..."}
 				if bytesIndex := indexOfSubscribe(msg); bytesIndex {
+					if h.logger != nil {
+						h.logger.Printf("ws: detected subscribe message conn=%s tenant=%s raw=%s", h.getConnID(c), tenantID, truncateForLog(msg, 256))
+					}
 					if pid := extractProjectID(msg); pid != "" {
-						h.addProjectSubscription(tenantID, pid, c)
-						// send ack back
+						if h.logger != nil {
+							h.logger.Printf("ws: extracted projectId=%s from subscribe message conn=%s tenant=%s", pid, h.getConnID(c), tenantID)
+						}
+						if err := h.addProjectSubscription(tenantID, pid, c); err != nil {
+							if h.logger != nil {
+								h.logger.Printf("ws: addProjectSubscription error conn=%s tenant=%s project=%s raw=%s err=%v", h.getConnID(c), tenantID, pid, truncateForLog(msg, 256), err)
+							}
+							continue
+						}
+						if h.logger != nil {
+							h.logger.Printf("ws: addProjectSubscription returned successfully, preparing ACK conn=%s tenant=%s project=%s", h.getConnID(c), tenantID, pid)
+						}
+						if h.logger != nil {
+							h.logger.Printf("ws: preparing subscribe ack conn=%s tenant=%s project=%s raw=%s", h.getConnID(c), tenantID, pid, truncateForLog(msg, 256))
+						}
+						// send ack back using writeJSONWithRetry to avoid timeout issues
 						ack := map[string]interface{}{
 							"type": "ws.subscribed",
 							"data": map[string]interface{}{
@@ -100,20 +127,31 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 								"ts":        time.Now().UnixMilli(),
 							},
 						}
-						if err := c.WriteJSON(ack); err != nil {
+						if h.logger != nil {
+							h.logger.Printf("ws: sending subscribe ack conn=%s tenant=%s project=%s", h.getConnID(c), tenantID, pid)
+						}
+						if err := h.writeJSONWithRetry(c, ack); err != nil {
 							if h.logger != nil {
-								h.logger.Printf("ws: failed to send subscribe ack conn=%s tenant=%s project=%s err=%v", h.getConnID(c), tenantID, pid, err)
+								h.logger.Printf("ws: failed to send subscribe ack after retries conn=%s tenant=%s project=%s err=%v", h.getConnID(c), tenantID, pid, err)
 							}
 							h.removeConn(tenantID, c)
 							_ = c.Close()
 							return
 						}
 						if h.logger != nil {
-							h.logger.Printf("ws: subscribed conn=%s tenant=%s project=%s", h.getConnID(c), tenantID, pid)
+							h.logger.Printf("ws: subscribe ack delivered conn=%s tenant=%s project=%s", h.getConnID(c), tenantID, pid)
 						}
 					} else if vcode := extractVerifiedCode(msg); vcode != "" {
-						h.addVerifiedSubscription(vcode, c)
-						// send ack back
+						if err := h.addVerifiedSubscription(vcode, c); err != nil {
+							if h.logger != nil {
+								h.logger.Printf("ws: addVerifiedSubscription error conn=%s tenant=%s code=%s raw=%s err=%v", h.getConnID(c), tenantID, vcode, truncateForLog(msg, 256), err)
+							}
+							continue
+						}
+						if h.logger != nil {
+							h.logger.Printf("ws: preparing verified subscribe ack conn=%s tenant=%s code=%s raw=%s", h.getConnID(c), tenantID, vcode, truncateForLog(msg, 256))
+						}
+						// send ack back using writeJSONWithRetry to avoid timeout issues
 						ack := map[string]interface{}{
 							"type": "ws.subscribed",
 							"data": map[string]interface{}{
@@ -122,9 +160,19 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 								"ts":           time.Now().UnixMilli(),
 							},
 						}
-						_ = c.WriteJSON(ack)
 						if h.logger != nil {
-							h.logger.Printf("ws: subscribed conn=%s verifiedCode=%s", h.getConnID(c), vcode)
+							h.logger.Printf("ws: sending verified subscribe ack conn=%s tenant=%s code=%s", h.getConnID(c), tenantID, vcode)
+						}
+						if err := h.writeJSONWithRetry(c, ack); err != nil {
+							if h.logger != nil {
+								h.logger.Printf("ws: failed to send verified subscribe ack after retries conn=%s tenant=%s code=%s err=%v", h.getConnID(c), tenantID, vcode, err)
+							}
+							h.removeConn(tenantID, c)
+							_ = c.Close()
+							return
+						}
+						if h.logger != nil {
+							h.logger.Printf("ws: subscribe ack delivered conn=%s verifiedCode=%s", h.getConnID(c), vcode)
 						}
 					}
 				}
@@ -137,7 +185,7 @@ func (h *Hub) removeConn(tenantID string, c *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	connID := h.connIDs[c]
-	
+
 	// Log which projects this connection was subscribed to
 	var subscribedProjects []string
 	if pm, ok := h.projConns[tenantID]; ok {
@@ -147,7 +195,7 @@ func (h *Hub) removeConn(tenantID string, c *websocket.Conn) {
 			}
 		}
 	}
-	
+
 	if set, ok := h.conns[tenantID]; ok {
 		delete(set, c)
 		if len(set) == 0 {
@@ -173,7 +221,7 @@ func (h *Hub) removeConn(tenantID string, c *websocket.Conn) {
 		}
 	}
 	delete(h.connIDs, c)
-	
+
 	// Log removal for debugging
 	if h.logger != nil && len(subscribedProjects) > 0 {
 		h.logger.Printf("ws: removed conn=%s tenant=%s projects=%v", connID, tenantID, subscribedProjects)
@@ -203,55 +251,189 @@ func (h *Hub) BroadcastJSON(tenantID string, v interface{}) {
 	}
 
 	for c := range set {
-		if err := c.WriteJSON(v); err != nil {
-			h.logger.Printf("ws write error: %v", err)
+		if err := h.writeJSONWithRetry(c, v); err != nil {
+			h.logger.Printf("ws: write error after retries tenant=%s conn=%s: %v", tenantID, h.getConnID(c), err)
 			h.removeConn(tenantID, c)
 			_ = c.Close()
 		}
 	}
 }
 
+// writeJSONWithRetry writes JSON to WebSocket connection with retry mechanism
+func (h *Hub) writeJSONWithRetry(c *websocket.Conn, v interface{}) error {
+	writeDeadline := time.Now().Add(5 * time.Second)
+	if err := c.SetWriteDeadline(writeDeadline); err != nil {
+		return fmt.Errorf("failed to set write deadline: %w", err)
+	}
+	defer func() {
+		// Clear the write deadline so subsequent writes aren't impacted
+		_ = c.SetWriteDeadline(time.Time{})
+	}()
+
+	// Try write with retry (up to 2 retries for transient errors)
+	var writeErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		writeErr = c.WriteJSON(v)
+		if writeErr == nil {
+			return nil
+		}
+		// Check if error is transient (timeout, temporary network issue)
+		if attempt < 2 && (websocket.IsUnexpectedCloseError(writeErr, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) ||
+			strings.Contains(writeErr.Error(), "timeout") || strings.Contains(writeErr.Error(), "broken pipe")) {
+			// Brief delay before retry
+			time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+			// Reset deadline for retry
+			if err := c.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				return fmt.Errorf("failed to reset write deadline: %w", err)
+			}
+			continue
+		}
+		break
+	}
+	return writeErr
+}
+
 // BroadcastJSONProject sends payload only to clients of tenant subscribed to projectId
 func (h *Hub) BroadcastJSONProject(tenantID, projectID string, v interface{}) {
+	// CRITICAL FIX: Get connections list atomically and verify each connection still exists before sending
+	// This prevents race condition where connection is removed between getting list and sending
 	h.mu.RLock()
 	pm := h.projConns[tenantID]
-	var set map[*websocket.Conn]struct{}
+	var connections []*websocket.Conn
+	projConnsCount := 0
 	if pm != nil {
-		set = pm[projectID]
+		if set := pm[projectID]; set != nil {
+			projConnsCount = len(set)
+			// Copy connections to slice while holding lock
+			for c := range set {
+				// Verify connection still exists in main conns map (double-check)
+				if tenantConns, ok := h.conns[tenantID]; ok {
+					if _, exists := tenantConns[c]; exists {
+						connections = append(connections, c)
+					} else {
+						// Connection removed from main map but still in projConns - cleanup needed
+						if h.logger != nil {
+							h.logger.Printf("ws: BroadcastJSONProject found orphaned connection in projConns tenant=%s project=%s conn=%s - will cleanup", tenantID, projectID, h.getConnIDUnsafe(c))
+						}
+						// Schedule cleanup (can't do it here because we hold RLock)
+						go func(orphanedConn *websocket.Conn) {
+							h.mu.Lock()
+							defer h.mu.Unlock()
+							// Double-check it's still orphaned
+							if tenantConns, ok := h.conns[tenantID]; ok {
+								if _, exists := tenantConns[orphanedConn]; exists {
+									// Connection restored, skip cleanup
+									return
+								}
+							}
+							// Cleanup orphaned connection from projConns
+							if pm, ok := h.projConns[tenantID]; ok {
+								if set, ok2 := pm[projectID]; ok2 {
+									delete(set, orphanedConn)
+									if len(set) == 0 {
+										delete(pm, projectID)
+									}
+									if len(pm) == 0 {
+										delete(h.projConns, tenantID)
+									}
+									if h.logger != nil {
+										h.logger.Printf("ws: cleaned up orphaned connection from projConns tenant=%s project=%s conn=%s", tenantID, projectID, h.getConnIDUnsafe(orphanedConn))
+									}
+								}
+							}
+						}(c)
+					}
+				}
+			}
+		}
 	}
-	connCount := len(set)
+	// Get total tenant connections count for diagnostics
+	totalTenantConns := 0
+	if tenantConns, ok := h.conns[tenantID]; ok {
+		totalTenantConns = len(tenantConns)
+	}
+	connCount := len(connections)
 	h.mu.RUnlock()
+
 	if connCount == 0 {
-		// Log for genai.stream events to diagnose missing subscriptions
+		// Enhanced logging for genai.stream events to diagnose missing subscriptions
 		if env, ok := v.(map[string]interface{}); ok {
 			if t, hasType := env["type"].(string); hasType && strings.HasPrefix(t, "genai.stream") {
 				if h.logger != nil {
-					h.logger.Printf("ws: BroadcastJSONProject skipped (no connections) tenant=%s project=%s type=%s", tenantID, projectID, t)
+					h.logger.Printf("ws: BroadcastJSONProject skipped (no connections) tenant=%s project=%s type=%s projConnsCount=%d totalTenantConns=%d", tenantID, projectID, t, projConnsCount, totalTenantConns)
 				}
 			}
 		}
 		return
 	}
-	// Log for genai.stream events
+	// Log for genai.stream and interaction events
 	if env, ok := v.(map[string]interface{}); ok {
-		if t, hasType := env["type"].(string); hasType && strings.HasPrefix(t, "genai.stream") {
-			if h.logger != nil {
-				h.logger.Printf("ws: BroadcastJSONProject sending to %d connection(s) tenant=%s project=%s type=%s", connCount, tenantID, projectID, t)
+		if t, hasType := env["type"].(string); hasType {
+			if strings.HasPrefix(t, "genai.stream") || t == "interaction.created" || t == "interaction.updated" {
+				if h.logger != nil {
+					h.logger.Printf("ws: BroadcastJSONProject sending to %d connection(s) tenant=%s project=%s type=%s", connCount, tenantID, projectID, t)
+				}
 			}
 		}
 	}
-	for c := range set {
-		if err := c.WriteJSON(v); err != nil {
-			h.logger.Printf("ws write error: %v", err)
+	// Send to verified connections
+	for _, c := range connections {
+		// Double-check connection still exists before sending (defensive)
+		h.mu.RLock()
+		stillExists := false
+		if tenantConns, ok := h.conns[tenantID]; ok {
+			_, stillExists = tenantConns[c]
+		}
+		connID := h.getConnIDUnsafe(c) // Get connID while lock is held
+		h.mu.RUnlock()
+
+		if !stillExists {
+			if h.logger != nil {
+				h.logger.Printf("ws: BroadcastJSONProject skipping removed connection tenant=%s project=%s conn=%s", tenantID, projectID, connID)
+			}
+			continue
+		}
+
+		// Log right before writing to connection
+		if h.logger != nil {
+			if env, ok := v.(map[string]interface{}); ok {
+				if t, hasType := env["type"].(string); hasType && (strings.HasPrefix(t, "genai.stream") || t == "interaction.created" || t == "interaction.updated") {
+					h.logger.Printf("ws: BroadcastJSONProject writing to conn=%s tenant=%s project=%s type=%s", connID, tenantID, projectID, t)
+				}
+			}
+		}
+
+		if err := h.writeJSONWithRetry(c, v); err != nil {
+			h.logger.Printf("ws: write error after retries tenant=%s conn=%s: %v", tenantID, h.getConnID(c), err)
 			h.removeConn(tenantID, c)
 			_ = c.Close()
 		}
 	}
 }
 
-func (h *Hub) addProjectSubscription(tenantID, projectID string, c *websocket.Conn) {
+func (h *Hub) addProjectSubscription(tenantID, projectID string, c *websocket.Conn) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Log the intent to add a subscription
+	if h.logger != nil {
+		h.logger.Printf("ws: addProjectSubscription attempting for conn=%s tenant=%s project=%s", h.getConnIDUnsafe(c), tenantID, projectID)
+	}
+
+	// CRITICAL: Verify connection still exists in main conns map before adding to projConns
+	// This prevents orphaned subscriptions when connection is removed but subscription message arrives late
+	if tenantConns, ok := h.conns[tenantID]; !ok {
+		if h.logger != nil {
+			h.logger.Printf("ws: addProjectSubscription skipped - tenant not found tenant=%s project=%s conn=%s", tenantID, projectID, h.getConnIDUnsafe(c))
+		}
+		return fmt.Errorf("tenant missing for subscription")
+	} else if _, exists := tenantConns[c]; !exists {
+		if h.logger != nil {
+			h.logger.Printf("ws: addProjectSubscription skipped - connection not found in tenant conns tenant=%s project=%s conn=%s", tenantID, projectID, h.getConnIDUnsafe(c))
+		}
+		return fmt.Errorf("connection missing in tenant map")
+	}
+
 	if _, ok := h.projConns[tenantID]; !ok {
 		h.projConns[tenantID] = make(map[string]map[*websocket.Conn]struct{})
 	}
@@ -259,15 +441,33 @@ func (h *Hub) addProjectSubscription(tenantID, projectID string, c *websocket.Co
 		h.projConns[tenantID][projectID] = make(map[*websocket.Conn]struct{})
 	}
 	h.projConns[tenantID][projectID][c] = struct{}{}
+
+	// Log the successful addition to projConns with current counts for diagnostics
+	// CRITICAL: Don't use RLock here - we already hold Lock() from line 412
+	projConnsCount := 0
+	if pm, ok := h.projConns[tenantID]; ok {
+		if set, ok2 := pm[projectID]; ok2 {
+			projConnsCount = len(set)
+		}
+	}
+	tenantConnsCount := 0
+	if tc, ok := h.conns[tenantID]; ok {
+		tenantConnsCount = len(tc)
+	}
+	if h.logger != nil {
+		h.logger.Printf("ws: addProjectSubscription success tenant=%s project=%s conn=%s projConns=%d tenantConns=%d", tenantID, projectID, h.getConnIDUnsafe(c), projConnsCount, tenantConnsCount)
+	}
+	return nil
 }
 
-func (h *Hub) addVerifiedSubscription(verifiedCode string, c *websocket.Conn) {
+func (h *Hub) addVerifiedSubscription(verifiedCode string, c *websocket.Conn) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.verifiedConns[verifiedCode]; !ok {
 		h.verifiedConns[verifiedCode] = make(map[*websocket.Conn]struct{})
 	}
 	h.verifiedConns[verifiedCode][c] = struct{}{}
+	return nil
 }
 
 // naive helpers to avoid json unmarshalling for tiny control frames
@@ -346,12 +546,27 @@ func extractVerifiedCode(b []byte) string {
 }
 
 // GetProjectConnCount returns number of connections subscribed for a given tenant/project
+// CRITICAL: Only counts connections that exist in both projConns AND conns (no orphaned connections)
 func (h *Hub) GetProjectConnCount(tenantID, projectID string) int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+
+	// Get tenant connections map
+	tenantConns, hasTenantConns := h.conns[tenantID]
+	if !hasTenantConns {
+		return 0
+	}
+
+	// Count only connections that exist in both maps
 	if pm, ok := h.projConns[tenantID]; ok {
 		if set, ok2 := pm[projectID]; ok2 {
-			return len(set)
+			count := 0
+			for c := range set {
+				if _, exists := tenantConns[c]; exists {
+					count++
+				}
+			}
+			return count
 		}
 	}
 	return 0
@@ -360,10 +575,25 @@ func (h *Hub) GetProjectConnCount(tenantID, projectID string) int {
 func (h *Hub) getConnID(c *websocket.Conn) string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	return h.getConnIDUnsafe(c)
+}
+
+// getConnIDUnsafe gets connection ID without locking (caller must hold lock)
+func (h *Hub) getConnIDUnsafe(c *websocket.Conn) string {
+	if h.connIDs == nil {
+		return "unknown-map-nil"
+	}
 	if id, ok := h.connIDs[c]; ok {
 		return id
 	}
-	return ""
+	return "unknown"
+}
+
+func truncateForLog(b []byte, limit int) string {
+	if len(b) <= limit {
+		return string(b)
+	}
+	return string(b[:limit]) + "...(truncated)"
 }
 
 // BroadcastVerified sends payload to clients subscribed to a specific verified code

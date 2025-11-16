@@ -9,7 +9,7 @@ import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { getPreferredLanguage, getLanguageName } from '../lib/uiUtils';
 
 interface OpponentAgentsPaletteProps {
-  unfoldSubView: 'chat' | 'perspectives';
+  unfoldSubView: 'chat' | 'perspectives' | 'models' | 'pages';
   genaiChatInteractionsLength: number;
   genaiChatMessagesLength: number;
 }
@@ -126,9 +126,11 @@ export const OpponentAgentsPalette: React.FC<OpponentAgentsPaletteProps> = ({
     };
   }, [unfoldSubView, genaiChatInteractionsLength, genaiChatMessagesLength]);
 
-  // Don't render if in perspectives view or no messages
+  // Don't render if in perspectives/models/pages view or no messages
   if (
     unfoldSubView === 'perspectives' ||
+    unfoldSubView === 'models' ||
+    unfoldSubView === 'pages' ||
     (genaiChatInteractionsLength === 0 && genaiChatMessagesLength === 0)
   ) {
     return null;

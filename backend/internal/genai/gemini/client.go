@@ -189,7 +189,7 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 			fdecls = append(fdecls, map[string]interface{}{
 				"name":        t.Name,
 				"description": t.Description,
-				"parameters":  t.Parameters,
+				"parameters":  sanitizeSchema(t.Parameters),
 			})
 		}
 		toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
@@ -593,6 +593,86 @@ type StreamEvent struct {
 	Error         string        `json:"error,omitempty"`
 }
 
+// GenerateConversation performs non-streaming generation with arbitrary contents history (for tool follow-ups)
+func (c *Client) GenerateConversation(ctx context.Context, contents []map[string]interface{}, tools []Tool, opts Options) (*GenerateResponse, error) {
+	model := c.modelFrom(opts)
+	reqBody := map[string]interface{}{
+		"contents": contents,
+	}
+	if opts.SystemInstruction != "" {
+		reqBody["system_instruction"] = map[string]interface{}{
+			"parts": []map[string]interface{}{{"text": opts.SystemInstruction}},
+		}
+	}
+	if opts.MaxOutputTokens > 0 || opts.ResponseFormat != "" || opts.Temperature > 0 {
+		gc := map[string]interface{}{}
+		if opts.MaxOutputTokens > 0 {
+			gc["max_output_tokens"] = opts.MaxOutputTokens
+		}
+		if opts.Temperature > 0 {
+			gc["temperature"] = opts.Temperature
+		}
+		switch opts.ResponseFormat {
+		case "json":
+			gc["response_mime_type"] = "application/json"
+		case "text":
+			gc["response_mime_type"] = "text/plain"
+		}
+		if len(gc) > 0 {
+			reqBody["generationConfig"] = gc
+		}
+	}
+	toolsPayload := make([]map[string]interface{}, 0)
+	if len(tools) > 0 {
+		fdecls := make([]map[string]interface{}, 0, len(tools))
+		for _, t := range tools {
+			fdecls = append(fdecls, map[string]interface{}{
+				"name":        t.Name,
+				"description": t.Description,
+				"parameters":  sanitizeSchema(t.Parameters),
+			})
+		}
+		toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
+	}
+	if opts.GroundingEnabled || opts.Profile == ProfileQuality {
+		toolsPayload = append(toolsPayload, map[string]interface{}{"google_search": map[string]interface{}{}})
+	}
+	if len(toolsPayload) > 0 {
+		reqBody["tools"] = toolsPayload
+	}
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	// Use v1beta for consistency with StreamConversation
+	apiVersion := "v1beta"
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/%s/models/%s:generateContent", apiVersion, model)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-goog-api-key", c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		rb, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("gemini generate error %d: %s", resp.StatusCode, string(rb))
+	}
+	rb, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var root map[string]interface{}
+	if err := json.Unmarshal(rb, &root); err != nil {
+		return nil, err
+	}
+	return c.parseGenerateRoot(root, model)
+}
+
 // StreamConversation streams with arbitrary contents history (for tool follow-ups)
 func (c *Client) StreamConversation(ctx context.Context, contents []map[string]interface{}, tools []Tool, opts Options, onEvent func(StreamEvent) error) error {
 	model := c.modelFrom(opts)
@@ -612,9 +692,10 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 		if opts.Temperature > 0 {
 			gc["temperature"] = opts.Temperature
 		}
-		if opts.ResponseFormat == "json" {
+		switch opts.ResponseFormat {
+		case "json":
 			gc["response_mime_type"] = "application/json"
-		} else if opts.ResponseFormat == "text" {
+		case "text":
 			gc["response_mime_type"] = "text/plain"
 		}
 		if len(gc) > 0 {

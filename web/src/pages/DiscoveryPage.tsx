@@ -17,6 +17,7 @@ import PerspectivesPanel from '../components/PerspectivesPanel';
 import PerspectiveAnalysisPanel from '../components/PerspectiveAnalysisPanel';
 import AgentPalette from '../components/AgentPalette';
 import WorkspaceLibrary from '../components/WorkspaceLibrary';
+import { PagesPanel } from '../components/PagesPanel';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
 import { getAverageTiming } from '../lib/timingCache';
@@ -228,7 +229,7 @@ const DiscoveryPage: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const [entitiesAnalyzing, setEntitiesAnalyzing] = useState(false);
-  const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives'>(
+  const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives' | 'models' | 'pages'>(
     'chat',
   );
   const [currentPerspectivePreset, setCurrentPerspectivePreset] =
@@ -454,12 +455,13 @@ const DiscoveryPage: React.FC = () => {
     setExperimentalResponse,
     experimentalLoading,
     setExperimentalLoading,
+    queuedTasks,
     textTasks,
-    setTextTasks,
     textTasksApplying,
     handleAddTextTask,
     handleRemoveTextTask,
     handleApplyTextTasks,
+    handleApplyTasks,
   } = chatManagement;
   
   // Bottom slot min height to align its top with chat input top
@@ -501,6 +503,8 @@ const DiscoveryPage: React.FC = () => {
     contentType?: string;
     sizeBytes?: number;
     parseStatus?: string;
+    docType?: string;
+    artifactConfig?: any;
   }>(null);
   
   // PERFORMANCE FIX: Use selector to get interactions only when needed, not subscribe to entire array
@@ -525,7 +529,6 @@ const DiscoveryPage: React.FC = () => {
   // Ensure interactions are loaded on chat load to detect pinned items
   // Only hydrate once per projectId, not on every store update
   const projectId = useGenaiChatStore((s) => s.projectId);
-  const hydrateInteractions = useGenaiChatStore((s) => s.hydrateInteractions);
   const interactionsLoadedRef = React.useRef<string | null>(null);
   
   React.useEffect(() => {
@@ -535,13 +538,28 @@ const DiscoveryPage: React.FC = () => {
         projectId !== 'local-unfold' &&
         interactionsLoadedRef.current !== projectId
       ) {
+        console.log('[DiscoveryPage] Calling hydrateInteractions', { 
+          projectId, 
+          currentRef: interactionsLoadedRef.current 
+        });
         interactionsLoadedRef.current = projectId;
-        hydrateInteractions();
+        // Use getState() to get stable reference to function
+        const store = useGenaiChatStore.getState();
+        // Don't set hydrating here - let hydrateInteractions set it
+        // This prevents the "Already hydrating" check from skipping the call
+        console.log('[DiscoveryPage] Calling hydrateInteractions', { 
+          projectId,
+          currentHydrating: store.hydrating,
+          hydratingProjectId: (store as any).hydratingProjectId
+        });
+        store.hydrateInteractions();
       } else if (!projectId || projectId === 'local-unfold') {
         interactionsLoadedRef.current = null;
       }
-    } catch {}
-  }, [projectId, hydrateInteractions]);
+    } catch (e) {
+      console.error('[DiscoveryPage] Error in hydrateInteractions effect', e);
+    }
+  }, [projectId]); // Removed hydrateInteractions from dependencies - use getState() instead
 
 
   // Track new user messages and generate experimental response when panel is open
@@ -628,6 +646,14 @@ const DiscoveryPage: React.FC = () => {
           it.kind === 'note' &&
           typeof it.subkind === 'string' &&
           it.subkind.startsWith('perspective.')
+        ) {
+          return false;
+        }
+        // Exclude queued tasks interactions (they are metadata, not chat content)
+        if (
+          it.kind === 'note' &&
+          typeof it.subkind === 'string' &&
+          it.subkind === 'queued.tasks'
         ) {
           return false;
         }
@@ -845,29 +871,126 @@ const DiscoveryPage: React.FC = () => {
     [resetChatState, clearSources],
   );
 
+  // Track last loaded projectId to prevent duplicate calls
+  const lastLoadedProjectRef = React.useRef<string | null>(null);
+  
   useEffect(() => {
-    const pid = currentProject?.id;
-    if (pid) {
-      try {
-        const st = useGenaiChatStore.getState();
-        const wasDifferentProject = st.projectId !== pid;
-        if (wasDifferentProject) {
-          // Clear local UI states when switching to a different project
-          resetChatStateWithCleanup(false);
-          // Set new project ID (this clears chat state in store)
-          st.setProjectId(pid);
-        }
-      } catch {}
-      fetchProjectSources(pid);
-      fetchProjectInteractions(pid);
-      try {
-        const st = useGenaiChatStore.getState();
-        st.hydrateInteractions();
-      } catch {}
-    } else {
-      clearSources();
+    const rawPid = currentProject?.id;
+    if (!rawPid) {
+      // Clear ref when no project selected
+      lastLoadedProjectRef.current = null;
+      return;
     }
-  }, [currentProject?.id, resetChatStateWithCleanup, fetchProjectSources, fetchProjectInteractions, clearSources]);
+    
+    // Ensure projectId is always a string (handle cases where id might be an object)
+    const pid = typeof rawPid === 'string' ? rawPid : String(rawPid);
+    
+    // Skip if this is the same project we already loaded (prevent unnecessary re-processing)
+    if (lastLoadedProjectRef.current === pid && currentProject?.id === pid) {
+      return;
+    }
+    
+    try {
+      const st = useGenaiChatStore.getState();
+      const wasDifferentProject = st.projectId !== pid;
+      
+      console.log('[DiscoveryPage] currentProject changed', { 
+        currentProjectId: pid,
+        genaiChatProjectId: st.projectId,
+        wasDifferent: wasDifferentProject,
+        lastLoaded: lastLoadedProjectRef.current
+      });
+      
+      // Always update projectId when currentProject changes to a different project
+      // This ensures switching between projects works correctly
+      // CRITICAL: Skip if projectId already matches (prevents race condition when project is just created)
+      // This can happen when ensureProject sets projectId and then sets currentProject
+      if (wasDifferentProject) {
+        // Double-check projectId hasn't changed since we read it (race condition protection)
+        const currentPid = useGenaiChatStore.getState().projectId;
+        if (currentPid === pid) {
+          console.log('[DiscoveryPage] ProjectId already matches, skipping update (race condition protection)', { 
+            projectId: pid 
+          });
+          // Still update lastLoadedProjectRef to prevent duplicate fetches
+          if (lastLoadedProjectRef.current !== pid) {
+            lastLoadedProjectRef.current = pid;
+          }
+          return;
+        }
+        
+        console.log('[DiscoveryPage] Switching project', { 
+          from: st.projectId, 
+          to: pid,
+          currentPid: currentPid
+        });
+        
+        // When switching to a different project, always clear messages and interactions
+        // to prevent showing old messages from previous project
+        const hasActiveContent = st.messages.length > 0 || st.interactions.length > 0 || st.streaming;
+        
+        if (hasActiveContent) {
+          // If there's active content, clear it when switching projects
+          // This prevents showing old messages from previous project
+          console.log('[DiscoveryPage] Clearing active content when switching projects', { 
+            messagesCount: st.messages.length, 
+            interactionsCount: st.interactions.length,
+            streaming: st.streaming,
+            fromProject: st.projectId,
+            toProject: pid
+          });
+          // Update projectId, clear interactions and messages (they're from old project), and set hydrating to show skeleton
+          // CRITICAL: Clear currentStreamId when switching projects to avoid filtering events from wrong project
+          useGenaiChatStore.setState({ 
+            projectId: pid, 
+            interactions: [], // Clear interactions from old project
+            messages: [], // Clear messages from old project
+            hydrating: true, 
+            hydratingProjectId: pid,
+            currentStreamId: undefined, // Clear stream tracking when switching projects
+            streaming: false, // Stop streaming when switching projects
+          } as any);
+        } else {
+          // Clear local UI states when switching to a different project with no active content
+          // Set new project ID (this clears chat state in store and sets hydrating: false)
+          // hydrateInteractions will set hydrating: true when it starts loading
+          st.setProjectId(pid);
+          // Don't call resetChatStateWithCleanup here as it calls setCurrentProject(null)
+          // Just clear local state manually
+          const discoveryStore = useDiscoveryStore.getState();
+          discoveryStore.clearSources();
+        }
+        
+        // Reset last loaded ref when switching projects to allow reload
+        lastLoadedProjectRef.current = null;
+      }
+      
+      // Only fetch if we haven't already loaded this project
+      if (lastLoadedProjectRef.current !== pid) {
+        console.log('[DiscoveryPage] Fetching project data', { pid });
+        
+        // Mark as loading to prevent duplicate calls
+        lastLoadedProjectRef.current = pid;
+        
+        // Use getState() to get stable references to functions
+        const discoveryStore = useDiscoveryStore.getState();
+        discoveryStore.fetchProjectSources(pid);
+        discoveryStore.fetchProjectInteractions(pid);
+        // hydrateInteractions is already called in the other useEffect above, no need to duplicate
+      }
+    } catch (e) {
+      console.error('[DiscoveryPage] Error switching project', e);
+    }
+  }, [currentProject?.id, resetChatStateWithCleanup]); // Removed function dependencies - use getState() instead
+
+  // Handle case when currentProject is cleared
+  useEffect(() => {
+    if (!currentProject?.id) {
+      lastLoadedProjectRef.current = null;
+      const discoveryStore = useDiscoveryStore.getState();
+      discoveryStore.clearSources();
+    }
+  }, [currentProject?.id, resetChatStateWithCleanup]); // Removed function dependencies - use getState() instead
 
   // Timer for chat "Thinking..." state
   useEffect(() => {
@@ -1000,7 +1123,9 @@ const DiscoveryPage: React.FC = () => {
     
     try {
       // If no currentProject, backend will create one automatically
-      const projectId = currentProject?.id || '';
+      const rawProjectId = currentProject?.id;
+      // Ensure projectId is always a string (handle cases where id might be an object)
+      const projectId = rawProjectId ? (typeof rawProjectId === 'string' ? rawProjectId : String(rawProjectId)) : '';
       
       console.log('[Discovery] Executing with projectId:', projectId);
       const lang = getPreferredLanguage();
@@ -1070,6 +1195,17 @@ const DiscoveryPage: React.FC = () => {
 
   React.useEffect(() => {
     const handler = (e: any) => {
+      const mode = e?.detail?.mode as 'chat' | 'perspectives' | 'models' | 'pages';
+      if (mode && ['chat', 'perspectives', 'models', 'pages'].includes(mode)) {
+        setUnfoldSubView(mode);
+      }
+    };
+    window.addEventListener('ui.switchMode', handler as any);
+    return () => window.removeEventListener('ui.switchMode', handler as any);
+  }, []);
+
+  React.useEffect(() => {
+    const handler = (e: any) => {
       const kind = e?.detail?.kind as 'privacy' | 'terms';
       if (kind === 'privacy' || kind === 'terms') {
         closeAllModals();
@@ -1106,6 +1242,9 @@ const DiscoveryPage: React.FC = () => {
         onDeleteChat={handleDeleteChat}
         onRenameChat={handleRenameChat}
         onStartEditingProject={startEditingProject}
+        currentMode={unfoldSubView}
+        projectId={genaiChat.projectId}
+        onOpenDocument={setActiveDoc}
       />
 
       {/* Floating Account and Settings buttons (visible only when sidebar is hidden) */}
@@ -1325,12 +1464,68 @@ const DiscoveryPage: React.FC = () => {
                 >
                   {t('unfold.sections.perspectives')}
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={unfoldSubView === 'models'}
+                  aria-controls="unfold-models-panel"
+                  onClick={() => setUnfoldSubView('models')}
+                  className="px-2 py-1 text-12 rounded"
+                  style={{
+                            background:
+                              unfoldSubView === 'models'
+                                ? 'var(--white-10)'
+                                : 'transparent',
+                            color: 'var(--text-heading)',
+                  }}
+                >
+                  Models
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={unfoldSubView === 'pages'}
+                  aria-controls="unfold-pages-panel"
+                  onClick={() => setUnfoldSubView('pages')}
+                  className="px-2 py-1 text-12 rounded"
+                  style={{
+                            background:
+                              unfoldSubView === 'pages'
+                                ? 'var(--white-10)'
+                                : 'transparent',
+                            color: 'var(--text-heading)',
+                  }}
+                >
+                  Pages
+                </button>
               </div>
             </div>
             {/* Perspectives content (full column) */}
             {unfoldSubView === 'perspectives' && (
                       <PerspectivesPanel
                         onPresetChange={setCurrentPerspectivePreset}
+                      />
+            )}
+            {/* Models content (placeholder) */}
+            {unfoldSubView === 'models' && (
+              <div className="flex-1 flex items-center justify-center">
+                <div
+                  className="text-13 text-center"
+                  style={{ color: 'var(--text-secondary-strong)' }}
+                >
+                  Models mode coming soon
+                </div>
+              </div>
+            )}
+            {/* Pages content */}
+            {unfoldSubView === 'pages' && (
+              <PagesPanel
+                projectId={genaiChat.projectId}
+                onOpenDocument={setActiveDoc}
+                onCreateFromTemplate={(templateId) => {
+                  // TODO: Implement template-based artifact creation
+                  console.log('[PagesPanel] Create from template', templateId);
+                }}
                       />
             )}
             {/* GenAI chat history */}
@@ -1341,13 +1536,15 @@ const DiscoveryPage: React.FC = () => {
                         contentVisibility: 'auto',
                         containIntrinsicSize: '800px 600px',
                         display:
-                          unfoldSubView === 'perspectives' ? 'none' : undefined,
+                          unfoldSubView === 'perspectives' || unfoldSubView === 'models' || unfoldSubView === 'pages' ? 'none' : undefined,
                       }}
                     >
               {(() => {
                 // Check if chat is empty (not hydrating and no messages/interactions)
-                        const isEmpty =
+                // Don't show empty state if streaming (user just sent a message)
+                const isEmpty =
                           !genaiChat.hydrating &&
+                          !genaiChat.streaming &&
                           genaiChat.interactions.length === 0 &&
                           genaiChat.messages.length === 0;
                 
@@ -1528,10 +1725,12 @@ const DiscoveryPage: React.FC = () => {
               }
             />
             {/* Analysis status banner unified in UnfoldRequest; duplicate removed here */}
-            {/* Text Tasks Panel */}
-            {textTasks.length > 0 && (
+            {/* Text Tasks Panel - hide when Pending Actions drawer is open */}
+            {queuedTasks && 
+             queuedTasks.filter((t) => t.type === 'text' && !t.applied).length > 0 &&
+             rightPanelType !== 'pending-actions' && (
               <TextTasksPanel
-                tasks={textTasks}
+                tasks={queuedTasks}
                 onRemove={handleRemoveTextTask}
                 onApply={handleApplyTextTasks}
                 isApplying={textTasksApplying}
@@ -1544,7 +1743,7 @@ const DiscoveryPage: React.FC = () => {
               genaiChatMessagesLength={genaiChatMessagesLength}
             />
             {/* Input */}
-            {unfoldSubView !== 'perspectives' && (
+            {unfoldSubView !== 'perspectives' && unfoldSubView !== 'models' && unfoldSubView !== 'pages' && (
             <div ref={unfoldRequestRef}>
             <UnfoldRequest
               dangerTint={isHighRisk}
@@ -1596,38 +1795,12 @@ const DiscoveryPage: React.FC = () => {
                     setEntitiesAnalyzing(true); // show status immediately
                     const pid = await genaiChat.ensureProject();
                     try {
-                                  if (
-                                    (window as any).wsSubscribeProject &&
-                                    pid
-                                  ) {
-                        (window as any).wsSubscribeProject(pid);
-                                    const waitForWsSubscribed = async (
-                                      projectId: string,
-                                      timeoutMs = 1500,
-                                    ) => {
-                          const start = Date.now();
-                          // eslint-disable-next-line no-constant-condition
-                          while (true) {
-                            try {
-                                          const ws = (
-                                            await import('../stores/wsStore')
-                                          ).useWsStore.getState();
-                                          if (
-                                            ws.connected &&
-                                            ws.subscribedProjectId === projectId
-                                          )
-                                            break;
-                            } catch {}
-                                        if (Date.now() - start > timeoutMs)
-                                          break;
-                                        await new Promise((r) =>
-                                          setTimeout(r, 60),
-                                        );
-                          }
-                        };
-                        await waitForWsSubscribed(pid);
+                      if ((window as any).wsSubscribeProject && pid) {
+                        await (window as any).wsSubscribeProject(pid, { timeoutMs: 2500 });
                       }
-                    } catch {}
+                    } catch (err) {
+                      console.warn('[SlashCommand] wsSubscribeProject failed', err);
+                          }
                                 const prompt =
                                   raw.replace(
                                     /^\s*\/analyze\s+entities\b\s*/i,
@@ -2038,12 +2211,15 @@ const DiscoveryPage: React.FC = () => {
             onChange={setQueryText}
             onSubmit={async () => {
               if (running || !queryText.trim()) return;
-              if (currentProject?.id) {
+              const rawProjectId = currentProject?.id;
+              if (rawProjectId) {
+                // Ensure projectId is always a string (handle cases where id might be an object)
+                const projectId = typeof rawProjectId === 'string' ? rawProjectId : String(rawProjectId);
                 const lang = getPreferredLanguage();
                 setRunning(true);
                 try {
                             await sendChatMessage(
-                              currentProject.id,
+                              projectId,
                               queryText,
                               lang,
                             );
@@ -2133,6 +2309,9 @@ const DiscoveryPage: React.FC = () => {
           onAddTextTask={handleAddTextTask}
           onRemoveTextTask={handleRemoveTextTask}
           textTasks={textTasks}
+          queuedTasks={queuedTasks}
+          onApplyTasks={handleApplyTasks}
+          textTasksApplying={textTasksApplying}
           experimentalResponse={experimentalResponse}
           experimentalLoading={experimentalLoading}
           sectionStarts={sectionStarts}
@@ -2150,6 +2329,7 @@ const DiscoveryPage: React.FC = () => {
           hasPinned={hasPinned}
           hasSections={hasSections}
           availUserAnalysis={availUserAnalysis}
+          hasQueuedTasks={queuedTasks && queuedTasks.some((t) => !t.applied)}
           availDiscussionFlow={availDiscussionFlow}
         />
       </div>

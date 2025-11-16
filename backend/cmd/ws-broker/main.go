@@ -106,6 +106,9 @@ func main() {
 		string(realtime.EventArtifactGenerationError),
 		string(realtime.EventAgentUpdate),
 		string(realtime.EventVerifiedStream),
+		// Interaction events (e.g., when LLM creates/updates graphs via tools)
+		string(realtime.EventInteractionCreated),
+		string(realtime.EventInteractionUpdated),
 	)
 
 	srv := &http.Server{Addr: ":" + addr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 5 * time.Second}

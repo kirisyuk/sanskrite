@@ -559,21 +559,22 @@ type ArtifactConfig struct {
 
 // ArtifactSection defines a section of the artifact with its generation config
 type ArtifactSection struct {
-	ID               string                  `json:"id" firestore:"id"`
-	Title            string                  `json:"title" firestore:"title"`
-	Order            int                     `json:"order" firestore:"order"`
-	Prompt           string                  `json:"prompt" firestore:"prompt"`                                         // prompt for generating this section
-	Model            *string                 `json:"model,omitempty" firestore:"model,omitempty"`                       // override default model
-	ContextOverride  *ArtifactContextSources `json:"contextOverride,omitempty" firestore:"contextOverride,omitempty"`   // override context sources
-	Content          *string                 `json:"content,omitempty" firestore:"content,omitempty"`                   // current content (from current version)
-	GeneratedAt      *time.Time              `json:"generatedAt,omitempty" firestore:"generatedAt,omitempty"`           // when this section was last generated
-	TokensUsed       *int                    `json:"tokensUsed,omitempty" firestore:"tokensUsed,omitempty"`             // tokens used for generation
-	Description      *string                 `json:"description,omitempty" firestore:"description,omitempty"`           // what this section should contain
-	Required         bool                    `json:"required" firestore:"required"`                                     // is this section required
-	Editable         bool                    `json:"editable" firestore:"editable"`                                     // can user edit/delete this section
-	DependsOn        []string                `json:"dependsOn,omitempty" firestore:"dependsOn,omitempty"`               // IDs of sections that must be generated first
-	GenerationStatus *string                 `json:"generationStatus,omitempty" firestore:"generationStatus,omitempty"` // "pending" | "generating" | "completed" | "failed" | "skipped"
-	PromptHistory    []PromptVersion         `json:"promptHistory,omitempty" firestore:"promptHistory,omitempty"`       // history of prompt changes
+	ID                string                  `json:"id" firestore:"id"`
+	Title             string                  `json:"title" firestore:"title"`
+	Order             int                     `json:"order" firestore:"order"`
+	Prompt            string                  `json:"prompt" firestore:"prompt"`                                         // prompt for generating this section
+	Model             *string                 `json:"model,omitempty" firestore:"model,omitempty"`                       // override default model
+	ContextOverride   *ArtifactContextSources `json:"contextOverride,omitempty" firestore:"contextOverride,omitempty"`   // override context sources
+	Content           *string                 `json:"content,omitempty" firestore:"content,omitempty"`                   // current content (from current version)
+	GeneratedAt       *time.Time              `json:"generatedAt,omitempty" firestore:"generatedAt,omitempty"`           // when this section was last generated
+	TokensUsed        *int                    `json:"tokensUsed,omitempty" firestore:"tokensUsed,omitempty"`             // tokens used for generation
+	Description       *string                 `json:"description,omitempty" firestore:"description,omitempty"`           // what this section should contain
+	Required          bool                    `json:"required" firestore:"required"`                                     // is this section required
+	Editable          bool                    `json:"editable" firestore:"editable"`                                     // can user edit/delete this section
+	AutoUpdateEnabled bool                    `json:"autoUpdateEnabled" firestore:"autoUpdateEnabled"`                   // enable auto-updates for this section
+	DependsOn         []string                `json:"dependsOn,omitempty" firestore:"dependsOn,omitempty"`               // IDs of sections that must be generated first
+	GenerationStatus  *string                 `json:"generationStatus,omitempty" firestore:"generationStatus,omitempty"` // "pending" | "generating" | "completed" | "failed" | "skipped"
+	PromptHistory     []PromptVersion         `json:"promptHistory,omitempty" firestore:"promptHistory,omitempty"`       // history of prompt changes
 }
 
 // ArtifactContextSources defines what context to use for generation

@@ -34,6 +34,9 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   const [documents, setDocuments] = React.useState<Document[]>([]);
   const [sources, setSources] = React.useState<Source[]>([]);
   const [loading, setLoading] = React.useState(false);
+  const [editingDocId, setEditingDocId] = React.useState<string | null>(null);
+  const [editingDocName, setEditingDocName] = React.useState<string>('');
+  const editingDocInputRef = React.useRef<HTMLInputElement>(null);
   const pendingAttachedDocIds = useGenaiChatStore((state) => state.pendingAttachedDocIds);
   const setPendingAttachedDocIds = useGenaiChatStore((state) => state.setPendingAttachedDocIds);
 
@@ -46,6 +49,14 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
       console.log('[WorkspaceLibrary] Component unmounted at', unmountTime, 'lifetime:', unmountTime - mountTime, 'ms');
     };
   }, []);
+
+  // Focus input when editing starts
+  React.useEffect(() => {
+    if (editingDocId && editingDocInputRef.current) {
+      editingDocInputRef.current.focus();
+      editingDocInputRef.current.select();
+    }
+  }, [editingDocId]);
 
   // Load documents when projectId changes
   React.useEffect(() => {
@@ -263,7 +274,11 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
                   {/* Icon and file info - clickable to open */}
                   <div
                     className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
-                    onClick={() => onOpenDocument?.(doc)}
+                    onClick={() => {
+                      if (editingDocId !== doc.id) {
+                        onOpenDocument?.(doc);
+                      }
+                    }}
                   >
                     {/* Icon */}
                     <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
@@ -272,29 +287,107 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
 
                     {/* File info */}
                     <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium truncate" style={{ color: 'var(--text-heading)' }} title={doc.filename}>
-                        {getDocumentDisplayName(doc.filename)}
-                      </div>
-                      <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                        {formatSize(doc.sizeBytes)}
-                        {doc.parseStatus && ` • ${doc.parseStatus}`}
-                      </div>
+                      {editingDocId === doc.id ? (
+                        <input
+                          ref={editingDocInputRef}
+                          type="text"
+                          value={editingDocName}
+                          onChange={(e) => setEditingDocName(e.target.value)}
+                          onKeyDown={async (e) => {
+                            if (e.key === 'Enter') {
+                              e.stopPropagation();
+                              if (!projectId || projectId === 'local-unfold') return;
+                              const newName = editingDocName.trim();
+                              if (newName && newName !== doc.filename) {
+                                try {
+                                  await api.docsUpdate(projectId, doc.id, { filename: newName });
+                                  const docs = await api.docsList(projectId);
+                                  setDocuments(docs || []);
+                                } catch (err) {
+                                  console.error('[WorkspaceLibrary] Failed to rename document', err);
+                                  alert('Failed to rename document');
+                                }
+                              }
+                              setEditingDocId(null);
+                              setEditingDocName('');
+                            } else if (e.key === 'Escape') {
+                              e.stopPropagation();
+                              setEditingDocId(null);
+                              setEditingDocName('');
+                            }
+                          }}
+                          onBlur={async () => {
+                            if (!projectId || projectId === 'local-unfold') return;
+                            const newName = editingDocName.trim();
+                            if (newName && newName !== doc.filename) {
+                              try {
+                                await api.docsUpdate(projectId, doc.id, { filename: newName });
+                                const docs = await api.docsList(projectId);
+                                setDocuments(docs || []);
+                              } catch (err) {
+                                console.error('[WorkspaceLibrary] Failed to rename document', err);
+                                alert('Failed to rename document');
+                              }
+                            }
+                            setEditingDocId(null);
+                            setEditingDocName('');
+                          }}
+                          className="text-xs font-medium px-1 py-0.5 rounded"
+                          style={{
+                            backgroundColor: 'var(--bg-input, #1A1A1A)',
+                            color: 'var(--text-heading)',
+                            border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                            width: '100%',
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div className="text-xs font-medium truncate" style={{ color: 'var(--text-heading)' }} title={doc.filename}>
+                          {getDocumentDisplayName(doc.filename)}
+                        </div>
+                      )}
+                      {editingDocId !== doc.id && (
+                        <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                          {formatSize(doc.sizeBytes)}
+                          {doc.parseStatus && ` • ${doc.parseStatus}`}
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Delete button */}
-                  <button
-                    type="button"
-                    onClick={(e) => handleDocumentDelete(doc, e)}
-                    className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-all"
-                    style={{ color: 'var(--text-secondary)' }}
-                    aria-label="Delete document"
-                    title="Delete document"
-                  >
-                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </button>
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingDocId(doc.id);
+                        setEditingDocName(doc.filename);
+                        setTimeout(() => editingDocInputRef.current?.focus(), 0);
+                      }}
+                      className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/10 transition-all"
+                      style={{ color: 'var(--text-secondary)' }}
+                      aria-label="Rename document"
+                      title="Rename document"
+                    >
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleDocumentDelete(doc, e)}
+                      className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/10 transition-all"
+                      style={{ color: 'var(--text-secondary)' }}
+                      aria-label="Delete document"
+                      title="Delete document"
+                    >
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               );
             })}

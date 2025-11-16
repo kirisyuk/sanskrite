@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 
-export type RightPanelType = 'workspace' | 'context' | 'artifacts' | 'analysis' | 'experimental' | null;
+export type RightPanelType = 'workspace' | 'context' | 'artifacts' | 'analysis' | 'experimental' | 'pending-actions' | null;
 export type LeftPanelType = 'user' | 'flow' | null;
 export type AnalysisTabType = 'user' | 'flow';
 

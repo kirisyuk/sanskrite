@@ -7,11 +7,27 @@
 ## Ключевые возможности
 
 ### 1. BigQuery Object Tables
-Прямое чтение файлов из GCS как обычных таблиц:
+Прямое чтение файлов из GCS как обычных таблиц. Поддерживаются все форматы документов системы:
+
+**RAG Documents** (всегда `.txt`):
+- Путь: `gs://{project}-rag-documents/{tenantId}/{sourceId}/{docId}.txt`
+- Формат: текстовые файлы с извлеченным контентом
+
+**CoreDocs** (разные форматы):
+- Текстовые: `.txt`, `.md`, `.csv`, `.tsv`
+- JSON: `.json` (decisions.json, facts.json, events.json и т.д.)
+- PDF: `.pdf` (application/pdf)
+- Word: `.docx` (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+- Другие бинарные форматы
+
 ```sql
--- Читаем документы из GCS напрямую
+-- Читаем текстовые документы из GCS напрямую
 SELECT * FROM `sanskrite.sanskrite_documents.documents_object_table`
 WHERE uri LIKE '%tenant123%'
+
+-- Читаем JSON документы
+SELECT * FROM `sanskrite.sanskrite_documents.core_docs_json_table`
+WHERE uri LIKE '%.json'
 ```
 
 ### 2. BigQuery ML с Vertex AI
@@ -29,21 +45,92 @@ SELECT
 FROM documents_metadata
 ```
 
-### 3. Структурирование на лету
-Один SQL-запрос для извлечения и анализа:
+### 3. Динамическое создание таблиц
+BigQuery может создавать таблицы динамически из результатов запросов:
+
+**CREATE TABLE AS SELECT (CTAS):**
 ```sql
--- Пример: Извлечь баллы GTI из PDF-отчетов и связать с продажами
+-- Создать таблицу с результатами анализа
+CREATE TABLE `sanskrite.sanskrite_documents.document_analysis_results` AS
+SELECT 
+  documentType,
+  COUNT(*) as count,
+  AVG(LENGTH(extractedText)) as avg_length
+FROM `sanskrite.sanskrite_documents.documents_metadata`
+GROUP BY documentType
+```
+
+**WITH clauses (CTEs) - временные таблицы в запросе:**
+```sql
+WITH filtered_docs AS (
+  SELECT * FROM `sanskrite.sanskrite_documents.documents_metadata`
+  WHERE createdAt > '2024-01-01'
+),
+aggregated AS (
+  SELECT documentType, COUNT(*) as count
+  FROM filtered_docs
+  GROUP BY documentType
+)
+SELECT * FROM aggregated ORDER BY count DESC
+```
+
+### 4. Структурирование на лету
+Один SQL-запрос для извлечения и анализа всех типов документов:
+
+**Пример 1: Анализ текстовых документов (RAG и CoreDocs)**
+```sql
 WITH document_insights AS (
   SELECT 
     m.id,
     m.storagePath,
+    m.contentType,
     ML.GENERATE_TEXT(
       MODEL `sanskrite.sanskrite_documents.gemini_model`,
-      (SELECT content FROM documents_object_table WHERE uri = m.storagePath),
-      STRUCT('Extract GTI score and product name from this pharmaceutical report' AS prompt)
+      (SELECT data FROM documents_object_table WHERE uri = REPLACE(m.storagePath, 'gs://', '')),
+      STRUCT('Extract key entities, sentiment, and main topics' AS prompt)
     ) AS insights
   FROM documents_metadata m
-  WHERE m.documentType = 'pharmaceutical_report'
+  WHERE m.status = 'processed'
+),
+```
+
+**Пример 2: Анализ JSON документов (decisions, facts, events)**
+```sql
+WITH json_analysis AS (
+  SELECT 
+    m.id,
+    m.filename,
+    m.projectId,
+    -- Используем извлеченный текст или анализируем JSON структуру
+    ML.GENERATE_TEXT(
+      MODEL `sanskrite.sanskrite_documents.gemini_model`,
+      COALESCE(m.extractedText, CAST(j.data AS STRING)),
+      STRUCT('Summarize key decisions and their impact' AS prompt)
+    ) AS summary
+  FROM core_docs_metadata m
+  LEFT JOIN core_docs_json_table j 
+    ON j.uri = REPLACE(m.storagePath, 'gs://', '')
+  WHERE m.contentType = 'application/json'
+    AND m.filename LIKE '%decisions.json'
+),
+```
+
+**Пример 3: Извлечение данных из PDF и DOCX через метаданные**
+```sql
+-- PDF и DOCX файлы доступны через extractedText в метаданных
+WITH pdf_insights AS (
+  SELECT 
+    m.id,
+    m.filename,
+    m.storagePath,
+    ML.GENERATE_TEXT(
+      MODEL `sanskrite.sanskrite_documents.gemini_model`,
+      m.extractedText,  -- Используем извлеченный текст из PDF
+      STRUCT('Extract GTI score and product name from this pharmaceutical report' AS prompt)
+    ) AS insights
+  FROM core_docs_metadata m
+  WHERE m.contentType = 'application/pdf'
+    AND m.extractedText IS NOT NULL
 ),
 parsed_insights AS (
   SELECT 
@@ -72,7 +159,7 @@ ORDER BY toxicity_weighted_sales DESC
 bq mk --connection --location=US --connection_type=GCS \
   --project_id=sanskrite gcs-connection
 
-# Создать Object Table
+# Создать Object Table для RAG документов (текстовые файлы)
 bq query --use_legacy_sql=false <<EOF
 CREATE OR REPLACE EXTERNAL TABLE \`sanskrite.sanskrite_documents.documents_object_table\`
 WITH CONNECTION \`sanskrite.us.gcs-connection\`
@@ -80,6 +167,37 @@ OPTIONS (
   object_metadata = 'SIMPLE',
   uris = ['gs://sanskrite-rag-documents/**/*.txt']
 )
+EOF
+
+# Создать Object Table для CoreDocs - текстовые форматы
+bq query --use_legacy_sql=false <<EOF
+CREATE OR REPLACE EXTERNAL TABLE \`sanskrite.sanskrite_documents.core_docs_text_table\`
+WITH CONNECTION \`sanskrite.us.gcs-connection\`
+OPTIONS (
+  object_metadata = 'SIMPLE',
+  uris = [
+    'gs://sanskrite-core-docs/**/*.txt',
+    'gs://sanskrite-core-docs/**/*.md',
+    'gs://sanskrite-core-docs/**/*.csv',
+    'gs://sanskrite-core-docs/**/*.tsv'
+  ]
+)
+EOF
+
+# Создать Object Table для CoreDocs - JSON файлы
+bq query --use_legacy_sql=false <<EOF
+CREATE OR REPLACE EXTERNAL TABLE \`sanskrite.sanskrite_documents.core_docs_json_table\`
+WITH CONNECTION \`sanskrite.us.gcs-connection\`
+OPTIONS (
+  object_metadata = 'SIMPLE',
+  uris = ['gs://sanskrite-core-docs/**/*.json'],
+  format = 'JSON'
+)
+EOF
+
+# Примечание: PDF и DOCX файлы доступны через метаданные (storagePath)
+# Для анализа их контента используйте BigQuery ML функции с Vertex AI,
+# которые могут читать бинарные форматы через API
 EOF
 ```
 

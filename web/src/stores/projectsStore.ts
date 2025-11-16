@@ -7,6 +7,7 @@ interface ProjectsState {
   currentProject: Project | null;
   loading: boolean;
   error: string | null;
+  deletingProjectIds: string[]; // Track projects being deleted for visual feedback
   
   // Actions
   fetchProjects: (view?: string) => Promise<void>;
@@ -21,6 +22,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   currentProject: null,
   loading: false,
   error: null,
+  deletingProjectIds: [],
 
   fetchProjects: async (view?: string) => {
     set({ loading: true, error: null });
@@ -81,26 +83,41 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   deleteProject: async (projectId) => {
-    set({ loading: true, error: null });
+    // Mark project as being deleted for visual feedback
+    set((state) => ({
+      deletingProjectIds: [...state.deletingProjectIds, projectId],
+      loading: true,
+      error: null,
+    }));
+    
     try {
       await api.deleteProject(projectId);
       set((state) => ({
         projects: state.projects.filter((p) => p.id !== projectId),
         currentProject: state.currentProject?.id === projectId ? null : state.currentProject,
         loading: false,
+        deletingProjectIds: state.deletingProjectIds.filter((id) => id !== projectId),
       }));
     } catch (error: any) {
-      // Network errors are handled by the global error interceptor
-      if (error.response) {
-        set({ error: error.message, loading: false });
-      } else {
-        set({ loading: false });
-      }
+      // Remove from deleting array on error too
+      set((state) => {
+        const newDeletingIds = state.deletingProjectIds.filter((id) => id !== projectId);
+        // Network errors are handled by the global error interceptor
+        if (error.response) {
+          return { error: error.message, loading: false, deletingProjectIds: newDeletingIds };
+        } else {
+          return { loading: false, deletingProjectIds: newDeletingIds };
+        }
+      });
       throw error;
     }
   },
 
   setCurrentProject: (project) => {
+    console.log('[ProjectsStore] setCurrentProject called', { 
+      projectId: project?.id, 
+      projectName: project?.displayName 
+    });
     set({ currentProject: project });
   },
 }));

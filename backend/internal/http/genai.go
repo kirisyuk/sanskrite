@@ -28,6 +28,14 @@ type GenAIHandler struct {
 	publisher        Publisher
 	usageMetricsRepo *repo.UsageMetricsRepository
 	modelManager     *ai.AIModelManager
+	// CoreDocs tool dependencies (optional, wired via WithCoreDocsTools)
+	coreDocs     *repo.CoreDocsRepo
+	interactions *repo.InteractionsRepository
+	docsRepo     *repo.DocumentsRepository
+	chunksRepo   *repo.ChunksRepository
+	emb          ai.EmbeddingProvider
+	// Graph tool dependencies (optional, wired via WithGraphTools)
+	graphEnabled bool
 }
 
 // Publisher is a small interface for realtime publisher used here
@@ -62,6 +70,28 @@ func (h *GenAIHandler) WithUsageMetrics(repo *repo.UsageMetricsRepository) *GenA
 // WithModelManager wires AI model manager for cost calculation
 func (h *GenAIHandler) WithModelManager(mm *ai.AIModelManager) *GenAIHandler {
 	h.modelManager = mm
+	return h
+}
+
+// WithCoreDocsTools wires repositories needed for CoreDocs tool execution
+func (h *GenAIHandler) WithCoreDocsTools(
+	coreDocs *repo.CoreDocsRepo,
+	interactions *repo.InteractionsRepository,
+	docsRepo *repo.DocumentsRepository,
+	chunksRepo *repo.ChunksRepository,
+	emb ai.EmbeddingProvider,
+) *GenAIHandler {
+	h.coreDocs = coreDocs
+	h.interactions = interactions
+	h.docsRepo = docsRepo
+	h.chunksRepo = chunksRepo
+	h.emb = emb
+	return h
+}
+
+// WithGraphTools enables graph tool execution (uses interactions repo from WithCoreDocsTools)
+func (h *GenAIHandler) WithGraphTools(enabled bool) *GenAIHandler {
+	h.graphEnabled = enabled
 	return h
 }
 
@@ -401,6 +431,13 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	// Determine routing context
 	projectID := strings.TrimSpace(req.ProjectID)
 	streamID := strings.TrimSpace(req.StreamID)
+
+	// CRITICAL: Validate projectID is present (required for proper event routing)
+	if projectID == "" {
+		log.Printf("[GenAI Stream] WARNING: Empty projectID in request! This may cause events to be broadcast to all tenant connections instead of specific project")
+		// Don't fail the request, but log warning for debugging
+	}
+
 	// Diagnostics: log model override and key options to verify routing
 	log.Printf("genai.stream: options modelOverride=%q grounding=%v temp=%.2f maxTok=%d", strings.TrimSpace(req.Options.ModelOverride), req.Options.GroundingEnabled, req.Options.Temperature, req.Options.MaxOutputTokens)
 	if streamID == "" {
@@ -451,35 +488,69 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		case "chunk":
 			// increment local chunk counter
 			chunks++
-			return h.publisher.PublishJSON(ctx, "genai.stream.chunk", auth.TenantID, map[string]any{
-				"projectId": projectID,
-				"streamId":  streamID,
-				"text":      e.Text,
+			textLen := len(e.Text)
+			log.Printf("[GenAI Stream] Publishing genai.stream.chunk event (projectId=%s streamId=%s textLength=%d chunks=%d)", projectID, streamID, textLen, chunks)
+			err := h.publisher.PublishJSON(ctx, "genai.stream.chunk", auth.TenantID, map[string]any{
+				"projectId":  projectID,
+				"streamId":   streamID,
+				"text":       e.Text,
+				"chunkIndex": chunks, // Add sequence number for client-side ordering
 			})
+			if err != nil {
+				// CRITICAL: Don't return error here - it would stop the stream!
+				// Log the error but continue streaming to avoid losing chunks
+				log.Printf("[GenAI Stream] ERROR publishing chunk event (non-fatal, continuing stream): %v (projectId=%s streamId=%s chunks=%d)", err, projectID, streamID, chunks)
+			} else {
+				log.Printf("[GenAI Stream] Successfully published chunk event (projectId=%s streamId=%s chunks=%d)", projectID, streamID, chunks)
+			}
+			// Always return nil to continue streaming even if publish failed
+			return nil
 		case "tool_call":
-			return h.publisher.PublishJSON(ctx, "genai.stream.tool_call", auth.TenantID, map[string]any{
+			err := h.publisher.PublishJSON(ctx, "genai.stream.tool_call", auth.TenantID, map[string]any{
 				"projectId": projectID,
 				"streamId":  streamID,
 				"toolCalls": e.ToolCalls,
 			})
+			if err != nil {
+				// Log error but don't stop stream - tool_call events are not critical
+				log.Printf("[GenAI Stream] ERROR publishing tool_call event (non-fatal): %v", err)
+			}
+			// Continue stream even if publish failed
+			return nil
 		case "tool_result":
-			return h.publisher.PublishJSON(ctx, "genai.stream.tool_result", auth.TenantID, map[string]any{
+			err := h.publisher.PublishJSON(ctx, "genai.stream.tool_result", auth.TenantID, map[string]any{
 				"projectId": projectID,
 				"streamId":  streamID,
 				"toolCalls": e.ToolCalls,
 			})
+			if err != nil {
+				// Log error but don't stop stream - tool_result events are not critical
+				log.Printf("[GenAI Stream] ERROR publishing tool_result event (non-fatal): %v", err)
+			}
+			// Continue stream even if publish failed
+			return nil
 		case "error":
-			return h.publisher.PublishJSON(ctx, "genai.stream.error", auth.TenantID, map[string]any{
+			log.Printf("[GenAI Stream] Stream error received: %s (projectId=%s streamId=%s)", e.Error, projectID, streamID)
+			err := h.publisher.PublishJSON(ctx, "genai.stream.error", auth.TenantID, map[string]any{
 				"projectId": projectID,
 				"streamId":  streamID,
 				"error":     e.Error,
 			})
+			if err != nil {
+				log.Printf("[GenAI Stream] ERROR publishing error event: %v", err)
+			}
+			return err
 		case "done":
 			// include usage/attributions/searchQueries/sources if accumulated
 			payload := map[string]any{
-				"ts":        time.Now().UnixMilli(),
-				"projectId": projectID,
-				"streamId":  streamID,
+				"ts":          time.Now().UnixMilli(),
+				"projectId":   projectID,
+				"streamId":    streamID,
+				"totalChunks": chunks, // Add total chunk count for validation
+			}
+			log.Printf("[GenAI Stream] Publishing genai.stream.done event (projectId=%s streamId=%s chunks=%d)", projectID, streamID, chunks)
+			if chunks == 0 {
+				log.Printf("[GenAI Stream] WARNING: done event with zero chunks! This may indicate streaming is not working (projectId=%s streamId=%s)", projectID, streamID)
 			}
 			// Diagnostics: log grounded counts for visibility
 			log.Printf("genai.stream: grounded counts queries=%d sources=%d", len(e.SearchQueries), len(e.Sources))
@@ -519,6 +590,9 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 			// Log per-stream diagnostics: chunks and latency
 			log.Printf("genai.stream: completed tenantId=%s projectId=%s streamId=%s chunks=%d elapsedMs=%d", auth.TenantID, projectID, streamID, chunks, time.Since(started).Milliseconds())
+			if chunks == 0 {
+				log.Printf("genai.stream: WARNING - stream completed with zero chunks! This may indicate a problem with streaming (tenantId=%s projectId=%s streamId=%s)", auth.TenantID, projectID, streamID)
+			}
 			// Fire telemetry (best-effort)
 			go func() {
 				_ = persistGenAITelemetry(r.Context(), auth.TenantID, map[string]any{
@@ -577,13 +651,137 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var err error
-	if len(req.Tools) > 0 {
+	// Check if tool usage is enabled:
+	// - If tools is explicitly [] (empty array), frontend signals to enable tool registration
+	// - If tools is nil/undefined, frontend signals to disable tool registration
+	// - If tools has items, use them as-is
+	// We only enable backend tool registration when tools is explicitly [] (empty array), not just when projectID is present
+	toolUsageEnabled := req.Tools != nil && len(req.Tools) == 0
+	if toolUsageEnabled {
+		log.Printf("[GenAI Stream] Tool usage enabled (empty tools array): projectID=%s", projectID)
 		reg := gen_gemini.NewSimpleRegistry()
+
+		// Register CoreDocs tools if tool usage is enabled and dependencies are available
+		// We detect tool usage mode by checking if projectID is present
+		if projectID != "" && h.coreDocs != nil && h.interactions != nil && h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+			// Create CoreDocs tool executor
+			coreDocsExecutor := NewCoreDocsToolExecutor(
+				h.coreDocs,
+				h.interactions,
+				h.docsRepo,
+				h.chunksRepo,
+				h.emb,
+				h.publisher,
+				auth.TenantID,
+				projectID,
+				streamID,
+				log.New(os.Stdout, "[CoreDocsTools] ", log.LstdFlags),
+			)
+
+			// Register CoreDocs tools in registry
+			reg.Register("search_coredocs", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+				return coreDocsExecutor.Execute(ctx, "search_coredocs", args)
+			})
+			reg.Register("create_coredoc", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+				return coreDocsExecutor.Execute(ctx, "create_coredoc", args)
+			})
+			reg.Register("update_coredoc", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+				return coreDocsExecutor.Execute(ctx, "update_coredoc", args)
+			})
+			reg.Register("update_coredoc_fragment", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+				return coreDocsExecutor.Execute(ctx, "update_coredoc_fragment", args)
+			})
+			reg.Register("list_coredocs", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+				return coreDocsExecutor.Execute(ctx, "list_coredocs", args)
+			})
+			reg.Register("get_coredoc", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+				return coreDocsExecutor.Execute(ctx, "get_coredoc", args)
+			})
+
+			// Add CoreDocs tool schemas to req.Tools if not already present
+			toolNames := make(map[string]bool)
+			for _, t := range req.Tools {
+				toolNames[t.Name] = true
+			}
+
+			coreDocsTools := getCoreDocsToolSchemas()
+			for _, tool := range coreDocsTools {
+				if !toolNames[tool.Name] {
+					req.Tools = append(req.Tools, tool)
+				}
+			}
+
+			// Cleanup edit sessions when stream completes
+			defer func() {
+				coreDocsExecutor.CleanupEditSessions(ctx)
+			}()
+		}
+
+		// Register Graph tools if enabled and interactions repo is available
+		if projectID != "" && h.graphEnabled && h.interactions != nil {
+			// Create Graph tool executor
+			graphExecutor := NewGraphToolExecutor(
+				h.interactions,
+				h.publisher,
+				auth.TenantID,
+				projectID,
+				streamID,
+				log.New(os.Stdout, "[GraphTools] ", log.LstdFlags),
+			)
+
+			// Register Graph tools in registry
+			reg.Register("create_graph", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+				return graphExecutor.Execute(ctx, "create_graph", args)
+			})
+			reg.Register("update_graph", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+				return graphExecutor.Execute(ctx, "update_graph", args)
+			})
+
+			// Add Graph tool schemas to req.Tools if not already present
+			toolNames := make(map[string]bool)
+			for _, t := range req.Tools {
+				toolNames[t.Name] = true
+			}
+
+			graphTools := getGraphToolSchemas()
+			for _, tool := range graphTools {
+				if !toolNames[tool.Name] {
+					req.Tools = append(req.Tools, tool)
+				}
+			}
+		}
+
+		// Register Web Search tool (uses Tavily API)
+		webSearchExecutor := NewWebSearchToolExecutor(
+			log.New(os.Stdout, "[WebSearchTools] ", log.LstdFlags),
+		)
+
+		// Register Web Search tool in registry
+		reg.Register("web_search", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+			return webSearchExecutor.Execute(ctx, "web_search", args)
+		})
+
+		// Add Web Search tool schema to req.Tools if not already present
+		toolNames := make(map[string]bool)
+		for _, t := range req.Tools {
+			toolNames[t.Name] = true
+		}
+
+		webSearchTools := getWebSearchToolSchemas()
+		for _, tool := range webSearchTools {
+			if !toolNames[tool.Name] {
+				req.Tools = append(req.Tools, tool)
+			}
+		}
+
+		log.Printf("[GenAI Stream] Starting stream with tools (projectId=%s streamId=%s toolsCount=%d)", projectID, streamID, len(req.Tools))
 		err = h.client.StreamWithTools(ctx, req.Prompt, req.Tools, reg, req.Options, onEvt)
 	} else {
+		log.Printf("[GenAI Stream] Starting stream without tools (projectId=%s streamId=%s)", projectID, streamID)
 		err = h.client.Stream(ctx, req.Prompt, req.Tools, req.Options, onEvt)
 	}
 	if err != nil {
+		log.Printf("[GenAI Stream] Stream returned error: %v (projectId=%s streamId=%s chunks=%d)", err, projectID, streamID, chunks)
 		status, code, msg, details := parseUpstreamError(err)
 		_ = h.publisher.PublishJSON(ctx, "genai.stream.error", auth.TenantID, map[string]any{
 			"projectId": projectID,

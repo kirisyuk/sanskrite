@@ -15,6 +15,7 @@ API_DIR="$ROOT_DIR/backend"
 TARGET_WEB=1
 TARGET_API=1
 TARGET_WS=0
+TARGET_HATLONE_WS=0
 TARGET_VERIFIED_PROXY=0
 TARGET_CHECK_INFRA=0
 
@@ -29,14 +30,15 @@ fi
 SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws] [--verified-proxy] [--check-infra]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws] [--hatlone-ws] [--verified-proxy] [--check-infra]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
   echo "  --web           Deploy frontend only"
   echo "  --api           Deploy backend API only (skips infra checks)"
   echo "  --py            Deploy Telegram service only (skips infra checks)"
-  echo "  --ws            Deploy WS broker only (skips infra checks)"
+  echo "  --ws            Deploy legacy WS broker only (skips infra checks)"
+  echo "  --hatlone-ws    Deploy new hatlone WS broker only (skips infra checks)"
   echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
   echo "  --check-infra   Run infrastructure checks only (no deployments)"
 }
@@ -47,9 +49,10 @@ while [[ $# -gt 0 ]]; do
     --web) TARGET_API=0 ;;
     --api) TARGET_WEB=0; TARGET_CHECK_INFRA=0 ;;
     --py) TARGET_WEB=0; TARGET_API=0; TARGET_CHECK_INFRA=0 ;;
-    --ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=1; TARGET_CHECK_INFRA=0 ;;
-    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
-    --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
+    --ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=1; TARGET_HATLONE_WS=0; TARGET_CHECK_INFRA=0 ;;
+    --hatlone-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=1; TARGET_CHECK_INFRA=0 ;;
+    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
+    --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
   esac
@@ -90,6 +93,9 @@ enable_api bigqueryconnection.googleapis.com  # BigQuery Connections API (for Ob
 enable_api apikeys.googleapis.com
 enable_api cloudscheduler.googleapis.com
 enable_api cloudresourcemanager.googleapis.com
+enable_api redis.googleapis.com
+enable_api vpcaccess.googleapis.com
+enable_api compute.googleapis.com
 
 deploy_web() {
   echo -e "${BLUE}[web] Starting frontend deployment...${NC}"
@@ -105,9 +111,12 @@ deploy_web() {
   # Try to resolve ws-broker URL for Vite env
   local WS_URL="${WS_URL:-}"
   if [[ -z "$WS_URL" ]]; then
-    if gcloud run services describe sanskrite-ws --region "$REGION" >/dev/null 2>&1; then
+    if gcloud run services describe hatlone-ws --region "$REGION" >/dev/null 2>&1; then
+      WS_URL=$(gcloud run services describe hatlone-ws --region "$REGION" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found hatlone ws URL:${NC} $WS_URL"
+    elif gcloud run services describe sanskrite-ws --region "$REGION" >/dev/null 2>&1; then
       WS_URL=$(gcloud run services describe sanskrite-ws --region "$REGION" --format='value(status.url)')
-      echo -e "${GREEN}[web] Found ws-broker URL:${NC} $WS_URL"
+      echo -e "${YELLOW}[web] hatlone-ws not found, falling back to sanskrite-ws URL:${NC} $WS_URL"
     else
       echo -e "${YELLOW}[web] ws-broker service not found (will use default from env if set)${NC}"
     fi
@@ -228,7 +237,7 @@ setup_infrastructure() {
   
   # 3. Ensure secrets exist (create if missing with placeholder)
   echo -e "${BLUE}[infra] Ensuring secrets exist...${NC}"
-  for secret in VERTEX_API_KEY openai_api_key anthropic_api_key deepseek_api_key grok_api_key; do
+  for secret in VERTEX_API_KEY openai_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key; do
     if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
       echo "PLACEHOLDER_UPDATE_ME" | gcloud secrets create "$secret" --data-file=-
       echo -e "${YELLOW}  ⚠${NC} Created placeholder for: $secret (update with real value!)"
@@ -372,6 +381,147 @@ setup_infrastructure() {
     echo -e "${YELLOW}[infra] Run scripts/setup_bigquery.sh manually${NC}"
   fi
   
+  # 3.9 Setup Redis (Memorystore)
+  echo -e "${BLUE}[infra] Setting up Redis (Memorystore)...${NC}"
+  local redis_instance="sanskrite-redis"
+  local redis_tier="BASIC"
+  local redis_size="1"
+  # Use lowercase value expected by gcloud: redis_7_0
+  local redis_version="redis_7_0"
+  
+  # Check if Redis instance already exists
+  if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
+    local redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
+    local redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
+    echo -e "${GREEN}[infra] Redis instance exists:${NC} $redis_instance"
+    echo -e "${BLUE}[infra] Redis host:${NC} $redis_host:$redis_port"
+    
+    # Update Cloud Run services with Redis connection info if they exist
+    if gcloud run services describe sanskrite-api --region="$REGION" >/dev/null 2>&1; then
+      gcloud run services update sanskrite-api --region="$REGION" \
+        --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port" \
+        --quiet >/dev/null 2>&1 && \
+        echo -e "${GREEN}[infra] Updated sanskrite-api with Redis connection info${NC}" || \
+        echo -e "${YELLOW}[infra] Warning: Failed to update sanskrite-api with Redis info${NC}"
+    fi
+    # Note: sanskrite-ws does NOT use Redis, so skip Redis env vars update
+    # WS broker only uses Pub/Sub, Firestore, and Firebase Auth (all accessible without VPC)
+  else
+    echo -e "${BLUE}[infra] Creating Redis instance (this may take 10-20 minutes)...${NC}"
+    
+    # Ensure VPC network exists (use default if available, or create one)
+    local vpc_network="default"
+    if ! gcloud compute networks describe "$vpc_network" >/dev/null 2>&1; then
+      echo -e "${BLUE}[infra] Creating VPC network: $vpc_network${NC}"
+      gcloud compute networks create "$vpc_network" --subnet-mode=auto --quiet || {
+        echo -e "${YELLOW}[infra] Warning: Failed to create VPC network, using existing${NC}"
+        # Try to find an existing network
+        vpc_network=$(gcloud compute networks list --format='value(name)' --limit=1 2>/dev/null | head -1 || echo "default")
+        echo -e "${BLUE}[infra] Using VPC network: $vpc_network${NC}"
+      }
+    fi
+    
+    # Create Redis instance
+    # Note: Memorystore requires a specific IP range that doesn't conflict with VPC
+    # Try to find an available IP range by checking existing subnets
+    local redis_reserved_range=""
+    # Get all existing subnet ranges
+    local existing_ranges=$(gcloud compute networks subnets list --network="$vpc_network" --format='value(ipCidrRange)' 2>/dev/null || echo "")
+    
+    # Try different IP ranges until we find one that doesn't conflict
+    local candidate_ranges=("10.1.0.0/29" "10.2.0.0/29" "10.3.0.0/29" "10.4.0.0/29" "10.5.0.0/29")
+    redis_reserved_range=""
+    
+    for candidate in "${candidate_ranges[@]}"; do
+      local conflicts=false
+      for existing in $existing_ranges; do
+        # Simple check: if candidate range overlaps with existing (simplified check)
+        # In production, should use proper IP range calculation
+        if [[ -n "$existing" ]]; then
+          # Extract base IP from ranges (simplified - just check if they're different)
+          local candidate_base=$(echo "$candidate" | cut -d'/' -f1)
+          local existing_base=$(echo "$existing" | cut -d'/' -f1)
+          # If they're the same base network, might conflict
+          if [[ "$candidate_base" == "$existing_base" ]]; then
+            conflicts=true
+            break
+          fi
+        fi
+      done
+      if [[ "$conflicts" == false ]]; then
+        redis_reserved_range="$candidate"
+        break
+      fi
+    done
+    
+    # Fallback to first candidate if no non-conflicting range found
+    if [[ -z "$redis_reserved_range" ]]; then
+      redis_reserved_range="${candidate_ranges[0]}"
+      echo -e "${YELLOW}[infra] Warning: Could not verify IP range availability, using: $redis_reserved_range${NC}"
+      echo -e "${YELLOW}[infra] If creation fails due to IP conflict, manually specify a different range${NC}"
+    fi
+    
+    echo -e "${BLUE}[infra] Creating Redis instance with reserved IP range: $redis_reserved_range${NC}"
+    if gcloud redis instances create "$redis_instance" \
+      --region="$REGION" \
+      --tier="$redis_tier" \
+      --size="$redis_size" \
+      --network="projects/$PROJECT_ID/global/networks/$vpc_network" \
+      --redis-version="$redis_version" \
+      --reserved-ip-range="$redis_reserved_range" \
+      --quiet; then
+      echo -e "${GREEN}[infra] Redis instance created successfully${NC}"
+      echo -e "${BLUE}[infra] Waiting for Redis to be ready (this may take a few minutes)...${NC}"
+      
+      # Wait for Redis to be ready
+      local max_wait=600  # 10 minutes
+      local waited=0
+      while [[ $waited -lt $max_wait ]]; do
+        local redis_state=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(state)' 2>/dev/null || echo "")
+        if [[ "$redis_state" == "READY" ]]; then
+          break
+        fi
+        echo -e "${BLUE}[infra] Redis state: $redis_state, waiting...${NC}"
+        sleep 10
+        waited=$((waited + 10))
+      done
+      
+      local redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
+      local redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
+      
+      if [[ -n "$redis_host" ]]; then
+        echo -e "${GREEN}[infra] Redis is ready${NC}"
+        echo -e "${BLUE}[infra] Redis host:${NC} $redis_host:$redis_port"
+        
+        # Update Cloud Run API service с новыми env (VPC не используем)
+        if gcloud run services describe sanskrite-api --region="$REGION" >/dev/null 2>&1; then
+          gcloud run services update sanskrite-api --region="$REGION" \
+            --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port" \
+            --quiet >/dev/null 2>&1 && \
+            echo -e "${GREEN}[infra] Updated sanskrite-api with Redis connection info${NC}" || \
+            echo -e "${YELLOW}[infra] Warning: Failed to update sanskrite-api (may need manual update)${NC}"
+        fi
+        # Note: sanskrite-ws does NOT use Redis, so no VPC connector needed
+        # WS broker only uses Pub/Sub, Firestore, and Firebase Auth (all accessible without VPC)
+        
+        echo -e "${GREEN}[infra] Redis setup completed successfully${NC}"
+        echo -e "${BLUE}[infra] Connection string:${NC} $redis_host:$redis_port"
+        echo -e "${BLUE}[infra] Use REDIS_HOST and REDIS_PORT environment variables in your services${NC}"
+      else
+        echo -e "${YELLOW}[infra] Warning: Redis created but host not available yet${NC}"
+        echo -e "${YELLOW}[infra] Check status: gcloud redis instances describe $redis_instance --region=$REGION${NC}"
+      fi
+    else
+      echo -e "${RED}[infra] Failed to create Redis instance${NC}"
+      echo -e "${YELLOW}[infra] Common issues:${NC}"
+      echo -e "${YELLOW}  - IP range conflicts with existing VPC subnets${NC}"
+      echo -e "${YELLOW}  - Insufficient permissions${NC}"
+      echo -e "${YELLOW}  - Quota limits${NC}"
+      echo -e "${YELLOW}[infra] Create manually:${NC}"
+      echo -e "${YELLOW}  gcloud redis instances create $redis_instance --region=$REGION --tier=$redis_tier --size=$redis_size --network=projects/$PROJECT_ID/global/networks/$vpc_network${NC}"
+    fi
+  fi
+  
   # 4. Ensure Pub/Sub topics exist
   echo -e "${BLUE}[infra] Ensuring Pub/Sub topics...${NC}"
   for topic in \
@@ -507,7 +657,7 @@ deploy_api() {
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
-  local paypal_secrets="VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest"
+  local paypal_secrets="VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest"
   if gcloud secrets describe paypal_client_id >/dev/null 2>&1 && gcloud secrets describe paypal_secret >/dev/null 2>&1; then
     paypal_secrets="$paypal_secrets,PAYPAL_CLIENT_ID=paypal_client_id:latest,PAYPAL_SECRET=paypal_secret:latest"
     if gcloud secrets describe paypal_webhook_id >/dev/null 2>&1; then
@@ -521,6 +671,24 @@ deploy_api() {
     --tag "$image" \
     --quiet
 
+  # Check if Redis exists and get connection info
+  local redis_host=""
+  local redis_port="6379"
+  local redis_instance="sanskrite-redis"
+  if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
+    redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
+    redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
+  fi
+  
+  # Build env vars string
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=${REGION},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false"
+  
+  # Add Redis env vars if available
+  if [[ -n "$redis_host" ]]; then
+    env_vars="$env_vars,REDIS_HOST=$redis_host,REDIS_PORT=$redis_port"
+    echo -e "${BLUE}[api] Using Redis:${NC} $redis_host:$redis_port"
+  fi
+  
   echo -e "${BLUE}[api] Deploying to Cloud Run from image...${NC}"
   gcloud run deploy "$service" \
     --image "$image" \
@@ -531,8 +699,9 @@ deploy_api() {
     --max-instances=3 \
     --cpu=1 \
     --memory=512Mi \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=${REGION},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false" \
+    --set-env-vars "$env_vars" \
     --set-secrets "$paypal_secrets" \
+    --clear-vpc-connector \
     --project "$PROJECT_ID" \
     --quiet
 
@@ -681,6 +850,24 @@ deploy_ws() {
     --project "$PROJECT_ID" \
     --quiet
 
+  # Check if Redis exists and get connection info
+  local redis_host=""
+  local redis_port="6379"
+  local redis_instance="sanskrite-redis"
+  if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
+    redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
+    redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
+  fi
+  
+  # Build env vars string
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+  
+  # Add Redis env vars if available
+  if [[ -n "$redis_host" ]]; then
+    env_vars="$env_vars,REDIS_HOST=$redis_host,REDIS_PORT=$redis_port"
+    echo -e "${BLUE}[ws] Using Redis:${NC} $redis_host:$redis_port"
+  fi
+  
   echo -e "${BLUE}[ws] Deploying ws-broker to Cloud Run...${NC}"
   gcloud run deploy "$service" \
     --image "$image" \
@@ -688,11 +875,12 @@ deploy_ws() {
     --allow-unauthenticated \
     --service-account "$SA_BACKEND" \
     --min-instances=1 \
-    --max-instances=2 \
+    --max-instances=1 \
     --cpu=1 \
     --memory=256Mi \
     --timeout=3600s \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
+    --set-env-vars "$env_vars" \
+    --clear-vpc-connector \
     --project "$PROJECT_ID" \
     --quiet
 
@@ -705,6 +893,42 @@ deploy_ws() {
   WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[ws] Deployed successfully${NC}"
   echo -e "${BLUE}[ws] URL:${NC} $WS_URL"
+}
+
+deploy_hatlone_ws() {
+  echo -e "${BLUE}[hatlone-ws] Building image...${NC}"
+  local service="hatlone-ws"
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/sanskrite/hatlone-ws:latest"
+
+  gcloud builds submit "$API_DIR" \
+    --config="$API_DIR/cloudbuild.hatlone-ws.yaml" \
+    --project "$PROJECT_ID" \
+    --quiet
+
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+
+  echo -e "${BLUE}[hatlone-ws] Deploying to Cloud Run...${NC}"
+  gcloud run deploy "$service" \
+    --image "$image" \
+    --region "$REGION" \
+    --allow-unauthenticated \
+    --service-account "$SA_BACKEND" \
+    --min-instances=1 \
+    --max-instances=2 \
+    --cpu=1 \
+    --memory=256Mi \
+    --timeout=3600s \
+    --set-env-vars "$env_vars" \
+    --clear-vpc-connector \
+    --project "$PROJECT_ID" \
+    --quiet
+
+  gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet
+  cleanup_old_revisions "$service" "$REGION" 10
+
+  HATLONE_WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${GREEN}[hatlone-ws] Deployed successfully${NC}"
+  echo -e "${BLUE}[hatlone-ws] URL:${NC} $HATLONE_WS_URL"
 }
 
 deploy_py() {
@@ -954,6 +1178,10 @@ if [[ "$TARGET_WS" -eq 1 ]]; then
   deploy_ws
 fi
 
+if [[ "$TARGET_HATLONE_WS" -eq 1 ]]; then
+  deploy_hatlone_ws
+fi
+
 if [[ "$TARGET_PY" -eq 1 ]]; then
   deploy_py
 fi
@@ -984,6 +1212,9 @@ if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]] && [[ -n "${VERIFIED_PROXY_URL:-}" ]]; t
 fi
 if [[ "$TARGET_WS" -eq 1 ]] && [[ -n "${WS_URL:-}" ]]; then
   echo -e "${BLUE}WS Broker:${NC} $WS_URL"
+fi
+if [[ "$TARGET_HATLONE_WS" -eq 1 ]] && [[ -n "${HATLONE_WS_URL:-}" ]]; then
+  echo -e "${BLUE}hatlone WS:${NC} $HATLONE_WS_URL"
 fi
 if [[ "$TARGET_PY" -eq 1 ]] && [[ -n "${TG_URL:-}" ]]; then
   echo -e "${BLUE}Telegram Service:${NC} $TG_URL"

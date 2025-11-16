@@ -2,6 +2,8 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../lib/api';
+import { isArtifact, type Artifact } from '../types/artifact';
+import type { CoreDoc } from '../types/generated';
 
 export interface CoreDocMeta {
   id: string;
@@ -9,6 +11,8 @@ export interface CoreDocMeta {
   contentType?: string;
   sizeBytes?: number;
   parseStatus?: string;
+  docType?: string;
+  artifactConfig?: any;
 }
 
 interface DocumentViewerProps {
@@ -24,8 +28,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [exporting, setExporting] = React.useState(false);
+  const [fullDoc, setFullDoc] = React.useState<CoreDoc | null>(null);
 
   const isEntities = (doc.filename || '').toLowerCase() === 'entities.json';
+  const isArtifactDoc = doc.docType === 'dynamic_artifact' && doc.artifactConfig;
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -33,7 +39,30 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Load full document if it's an artifact
   React.useEffect(() => {
+    if (isArtifactDoc) {
+      (async () => {
+        try {
+          const docs = await api.docsList(projectId);
+          const foundDoc = docs.find((d: CoreDoc) => d.id === doc.id);
+          if (foundDoc && isArtifact(foundDoc)) {
+            setFullDoc(foundDoc);
+          }
+        } catch (e) {
+          console.error('[DocumentViewer] Failed to load full document', e);
+        }
+      })();
+    }
+  }, [projectId, doc.id, isArtifactDoc]);
+
+  React.useEffect(() => {
+    // Skip loading blob for artifacts - we'll render structured view
+    if (isArtifactDoc) {
+      setLoading(false);
+      return;
+    }
+
     let revoked: string | null = null;
     (async () => {
       setLoading(true); setError(null);
@@ -61,7 +90,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
       }
     })();
     return () => { if (revoked) { try { URL.revokeObjectURL(revoked); } catch {} } };
-  }, [projectId, doc.id]);
+  }, [projectId, doc.id, isArtifactDoc]);
 
   const headerTitle = isEntities ? 'Entities container' : (doc.filename || 'document');
   const fileExt = (doc.filename.split('.').pop() || '').toLowerCase();
@@ -119,6 +148,82 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
     );
   };
 
+  const renderArtifactStructure = () => {
+    if (!fullDoc || !isArtifact(fullDoc)) {
+      return <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Loading artifact structure...</div>;
+    }
+
+    const artifact = fullDoc as Artifact;
+    const sections = [...(artifact.artifactConfig.structure || [])].sort((a, b) => a.order - b.order);
+
+    return (
+      <div className="p-3 space-y-4">
+        {sections.length === 0 ? (
+          <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>No sections yet.</div>
+        ) : (
+          sections.map((section) => (
+            <div
+              key={section.id}
+              className="rounded-lg"
+              style={{
+                backgroundColor: 'var(--toolbar-bg)',
+                border: '1px solid var(--overlay-line-90)',
+              }}
+            >
+              <div
+                className="px-4 py-3 border-b"
+                style={{ borderColor: 'var(--overlay-line-90)' }}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">
+                    <h3
+                      className="text-sm font-medium"
+                      style={{ color: 'var(--text-heading)' }}
+                    >
+                      {section.title}
+                      {section.required && (
+                        <span
+                          className="ml-2 text-xs"
+                          style={{ color: 'var(--text-tertiary-weak)' }}
+                        >
+                          (required)
+                        </span>
+                      )}
+                    </h3>
+                    {section.description && (
+                      <p
+                        className="text-xs mt-1"
+                        style={{ color: 'var(--text-secondary-strong)' }}
+                      >
+                        {section.description}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="px-4 py-3">
+                {section.content ? (
+                  <div className="markdown text-xs" style={{ color: 'var(--text-heading)' }}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {section.content}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <div
+                    className="text-xs py-2"
+                    style={{ color: 'var(--text-tertiary-weak)' }}
+                  >
+                    *[Section not generated yet]*
+                  </div>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    );
+  };
+
   const renderText = () => {
     if (loading) return <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>Loading…</div>;
     if (error) return <div className="text-12" style={{ color: 'var(--accent-danger)' }}>{error}</div>;
@@ -152,6 +257,8 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
   const isTextLike = isMarkdown || ct.startsWith('text/') || /(json|csv|tsv)/.test(ct) || /(md|txt|csv|tsv|json)$/i.test(fileExt);
 
   const renderBody = () => {
+    // Render structured view for artifacts
+    if (isArtifactDoc) return renderArtifactStructure();
     if (isEntities) return renderEntities();
     if (isImage && blobUrl) return <img src={blobUrl} alt={doc.filename} style={{ maxWidth: '100%', height: 'auto' }} />;
     if (isPdf && blobUrl) return (
@@ -172,7 +279,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
       <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>
         <div className="text-13" style={{ color: 'var(--text-heading)' }} title={doc.filename}>{headerTitle}</div>
         <div className="flex items-center gap-2">
-          {isMarkdown && (
+          {(isMarkdown || isArtifactDoc) && (
             <button 
               type="button" 
               className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors shrink-0 flex items-center gap-1"

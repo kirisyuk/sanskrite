@@ -12,6 +12,16 @@ export default function Homepage() {
   const [email, setEmail] = React.useState('');
   const [note, setNote] = React.useState('');
   const [sending, setSending] = React.useState(false);
+  const [isWideScreen, setIsWideScreen] = React.useState(window.innerWidth >= 1024);
+
+  // Handle window resize
+  React.useEffect(() => {
+    const handleResize = () => {
+      setIsWideScreen(window.innerWidth >= 1024);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Handle ESC key to close modals
   React.useEffect(() => {
@@ -38,9 +48,24 @@ export default function Homepage() {
       }}
     >
       <div className="max-w-6xl mx-auto px-4 py-4 flex-1 flex items-center overflow-y-auto" style={{ minHeight: 0 }}>
-        <div className="w-full flex flex-col md:flex-row gap-4 md:gap-8" style={{ alignItems: 'flex-start' }}>
+        <div 
+          className="w-full flex" 
+          style={{ 
+            flexDirection: isWideScreen ? 'row' : 'column',
+            gap: isWideScreen ? '32px' : '16px',
+            alignItems: 'flex-start' 
+          }}
+        >
           {/* Left column */}
-          <div className="w-full md:w-auto md:flex-[0_0_35%] flex justify-start md:justify-end" style={{ marginTop: '24px' }}>
+          <div 
+            className="flex" 
+            style={{ 
+              width: isWideScreen ? 'auto' : '100%',
+              flex: isWideScreen ? '0 0 35%' : 'none',
+              justifyContent: isWideScreen ? 'flex-end' : 'flex-start',
+              marginTop: '24px' 
+            }}
+          >
             <div
               style={{
                 backgroundColor: theme === 'dark' ? '#FFFFFF' : '#0A0A0F',
@@ -56,7 +81,12 @@ export default function Homepage() {
           </div>
 
           {/* Right column */}
-          <div className="w-full md:flex-[0_0_65%]">
+          <div 
+            style={{ 
+              width: '100%',
+              flex: isWideScreen ? '0 0 65%' : 'none'
+            }}
+          >
             <div
               className="font-semibold"
               style={{ color: 'var(--text-primary)', fontSize: 'clamp(32px, 8vw, 96px)', lineHeight: 1.02, marginBottom: 'clamp(16px, 4vw, 32px)' }}

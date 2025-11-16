@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 
 /**
@@ -7,21 +7,6 @@ import { useGenaiChatStore } from '../stores/genaiChatStore';
 export function useArtifactsAnalysis() {
   const genaiChat = useGenaiChatStore();
 
-  const waitForWsSubscribed = useCallback(
-    async (projectId: string, timeoutMs = 1500) => {
-      const start = Date.now();
-      while (true) {
-        try {
-          const ws = (await import('../stores/wsStore')).useWsStore.getState();
-          if (ws.connected && ws.subscribedProjectId === projectId) break;
-        } catch {}
-        if (Date.now() - start > timeoutMs) break;
-        await new Promise((r) => setTimeout(r, 60));
-      }
-    },
-    [],
-  );
-
   const createAnalyzeHandler = useCallback(
     (type: 'entities' | 'facts' | 'events' | 'metrics' | 'decisions') => {
       return async () => {
@@ -29,10 +14,12 @@ export function useArtifactsAnalysis() {
           const pid = await genaiChat.ensureProject();
           try {
             if ((window as any).wsSubscribeProject && pid) {
-              (window as any).wsSubscribeProject(pid);
-              await waitForWsSubscribed(pid);
+              await (window as any).wsSubscribeProject(pid, { timeoutMs: 2500 });
             }
-          } catch {}
+          } catch (err) {
+            console.error(`[Analyze${type}] wsSubscribeProject failed`, err);
+            throw err;
+          }
           
           const api = (await import('../lib/api')).api;
           let res;
@@ -63,7 +50,7 @@ export function useArtifactsAnalysis() {
         }
       };
     },
-    [genaiChat, waitForWsSubscribed],
+    [genaiChat],
   );
 
   return {
@@ -74,4 +61,5 @@ export function useArtifactsAnalysis() {
     handleAnalyzeDecisions: createAnalyzeHandler('decisions'),
   };
 }
+
 

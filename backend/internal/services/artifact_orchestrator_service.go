@@ -9,12 +9,18 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
+// ArtifactStorageSaver interface for saving artifacts to storage
+type ArtifactStorageSaver interface {
+	SaveArtifactToStorage(ctx context.Context, tenantID, projectID string, artifact *models.CoreDoc) error
+}
+
 // ArtifactOrchestratorService coordinates artifact generation process
 type ArtifactOrchestratorService struct {
 	sessionsRepo *repo.GenerationSessionsRepository
 	coreDocsRepo *repo.CoreDocsRepo
 	executor     *ArtifactExecutorService
 	contextSvc   *ArtifactContextService
+	storageSaver ArtifactStorageSaver // optional storage saver
 }
 
 // NewArtifactOrchestratorService creates a new orchestrator service
@@ -30,6 +36,12 @@ func NewArtifactOrchestratorService(
 		executor:     executor,
 		contextSvc:   contextSvc,
 	}
+}
+
+// WithStorageSaver sets the storage saver for artifact updates
+func (s *ArtifactOrchestratorService) WithStorageSaver(saver ArtifactStorageSaver) *ArtifactOrchestratorService {
+	s.storageSaver = saver
+	return s
 }
 
 // StartGenerationRequest contains parameters for starting generation
@@ -222,6 +234,11 @@ func (s *ArtifactOrchestratorService) GenerateSection(
 	}
 	_ = s.coreDocsRepo.Upsert(ctx, artifact)
 
+	// Save assembled document to storage if saver is configured
+	if s.storageSaver != nil {
+		_ = s.storageSaver.SaveArtifactToStorage(ctx, req.TenantID, req.ProjectID, artifact)
+	}
+
 	// Update progress
 	completed := len(session.SectionResults) + 1
 	total := len(artifact.ArtifactConfig.Structure)
@@ -398,6 +415,11 @@ func (s *ArtifactOrchestratorService) SaveVersion(
 	// Save artifact
 	if err := s.coreDocsRepo.Upsert(ctx, artifact); err != nil {
 		return nil, fmt.Errorf("failed to save version: %w", err)
+	}
+
+	// Save assembled document to storage if saver is configured
+	if s.storageSaver != nil {
+		_ = s.storageSaver.SaveArtifactToStorage(ctx, artifact.TenantID, artifact.ProjectID, artifact)
 	}
 
 	// Mark session as completed

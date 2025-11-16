@@ -63,7 +63,7 @@ type Client struct {
 
 func NewClient(apiKey string) *Client {
 	key := strings.Trim(strings.TrimSpace(apiKey), "\"'")
-    return &Client{apiKey: key, httpClient: &http.Client{Timeout: 240 * time.Second}}
+	return &Client{apiKey: key, httpClient: &http.Client{Timeout: 240 * time.Second}}
 }
 
 func (c *Client) modelFrom(opts Options) string {
@@ -108,15 +108,62 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 				params = map[string]interface{}{"type": "object"}
 			}
 			params["additionalProperties"] = false
+			// Normalize schema for OpenAI: ensure all properties in 'properties' are either in 'required' or have default
+			// Also fix array types - OpenAI doesn't support type arrays like ["string", "number"]
 			if propsRaw, ok := params["properties"].(map[string]interface{}); ok {
+				requiredRaw, hasRequired := params["required"].([]interface{})
+				requiredSet := make(map[string]bool)
+				if hasRequired {
+					for _, r := range requiredRaw {
+						if s, ok := r.(string); ok {
+							requiredSet[s] = true
+						}
+					}
+				}
+				// Build required array with all properties that don't have defaults
+				requiredList := make([]string, 0)
 				for k, v := range propsRaw {
 					if m, ok := v.(map[string]interface{}); ok {
+						// Fix array types - OpenAI doesn't support type arrays
+						if typeVal, hasType := m["type"]; hasType {
+							if typeArr, ok := typeVal.([]interface{}); ok && len(typeArr) > 0 {
+								// Convert array type to first type (usually string or number)
+								// This is a limitation of OpenAI's strict schema validation
+								m["type"] = typeArr[0]
+							}
+						}
 						if _, has := m["type"]; !has {
 							m["type"] = "string"
+						}
+						// Recursively fix nested items (for arrays)
+						if items, hasItems := m["items"]; hasItems {
+							if itemsMap, ok := items.(map[string]interface{}); ok {
+								if itemType, hasItemType := itemsMap["type"]; hasItemType {
+									if itemTypeArr, ok := itemType.([]interface{}); ok && len(itemTypeArr) > 0 {
+										itemsMap["type"] = itemTypeArr[0]
+									}
+								}
+								if _, hasItemType := itemsMap["type"]; !hasItemType {
+									itemsMap["type"] = "string"
+								}
+								m["items"] = itemsMap
+							}
+						}
+						// If property doesn't have default and is not already required, add it to required
+						// OpenAI requires all properties to be in 'required' array
+						if _, hasDefault := m["default"]; !hasDefault {
+							if !requiredSet[k] {
+								requiredList = append(requiredList, k)
+							}
 						}
 						propsRaw[k] = m
 					}
 				}
+				// Merge with existing required
+				for k := range requiredSet {
+					requiredList = append(requiredList, k)
+				}
+				params["required"] = requiredList
 			}
 			tdefs = append(tdefs, map[string]interface{}{
 				"type":        "function",
@@ -187,7 +234,8 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 			if m, ok := it.(map[string]interface{}); ok {
 				out.OutputRaw = append(out.OutputRaw, m)
 				typ, _ := m["type"].(string)
-				if typ == "function_call" {
+				switch typ {
+				case "function_call":
 					name, _ := m["name"].(string)
 					var argsJSON string
 					if obj, ok := m["arguments"].(map[string]interface{}); ok {
@@ -202,7 +250,7 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 					}
 					callID, _ := m["call_id"].(string)
 					out.ToolCalls = append(out.ToolCalls, ToolCall{Name: name, Arguments: argsJSON, CallID: callID})
-				} else if typ == "message" {
+				case "message":
 					if content, ok := m["content"].([]interface{}); ok {
 						for _, c := range content {
 							if cm, ok := c.(map[string]interface{}); ok {
@@ -259,15 +307,62 @@ func (c *Client) Respond(ctx context.Context, input []map[string]interface{}, to
 				params = map[string]interface{}{"type": "object"}
 			}
 			params["additionalProperties"] = false
+			// Normalize schema for OpenAI: ensure all properties in 'properties' are either in 'required' or have default
+			// Also fix array types - OpenAI doesn't support type arrays like ["string", "number"]
 			if propsRaw, ok := params["properties"].(map[string]interface{}); ok {
+				requiredRaw, hasRequired := params["required"].([]interface{})
+				requiredSet := make(map[string]bool)
+				if hasRequired {
+					for _, r := range requiredRaw {
+						if s, ok := r.(string); ok {
+							requiredSet[s] = true
+						}
+					}
+				}
+				// Build required array with all properties that don't have defaults
+				requiredList := make([]string, 0)
 				for k, v := range propsRaw {
 					if m, ok := v.(map[string]interface{}); ok {
+						// Fix array types - OpenAI doesn't support type arrays
+						if typeVal, hasType := m["type"]; hasType {
+							if typeArr, ok := typeVal.([]interface{}); ok && len(typeArr) > 0 {
+								// Convert array type to first type (usually string or number)
+								// This is a limitation of OpenAI's strict schema validation
+								m["type"] = typeArr[0]
+							}
+						}
 						if _, has := m["type"]; !has {
 							m["type"] = "string"
+						}
+						// Recursively fix nested items (for arrays)
+						if items, hasItems := m["items"]; hasItems {
+							if itemsMap, ok := items.(map[string]interface{}); ok {
+								if itemType, hasItemType := itemsMap["type"]; hasItemType {
+									if itemTypeArr, ok := itemType.([]interface{}); ok && len(itemTypeArr) > 0 {
+										itemsMap["type"] = itemTypeArr[0]
+									}
+								}
+								if _, hasItemType := itemsMap["type"]; !hasItemType {
+									itemsMap["type"] = "string"
+								}
+								m["items"] = itemsMap
+							}
+						}
+						// If property doesn't have default and is not already required, add it to required
+						// OpenAI requires all properties to be in 'required' array
+						if _, hasDefault := m["default"]; !hasDefault {
+							if !requiredSet[k] {
+								requiredList = append(requiredList, k)
+							}
 						}
 						propsRaw[k] = m
 					}
 				}
+				// Merge with existing required
+				for k := range requiredSet {
+					requiredList = append(requiredList, k)
+				}
+				params["required"] = requiredList
 			}
 			tdefs = append(tdefs, map[string]interface{}{"type": "function", "name": t.Name, "description": t.Description, "parameters": params, "strict": true})
 		}
@@ -319,33 +414,36 @@ func (c *Client) Respond(ctx context.Context, input []map[string]interface{}, to
 	if arr, ok := root["output"].([]interface{}); ok {
 		for _, it := range arr {
 			if m, ok := it.(map[string]interface{}); ok {
-				if m["type"] == "function_call" {
-					name, _ := m["name"].(string)
-					args, _ := m["arguments"].(string)
-					callID, _ := m["call_id"].(string)
-					out.ToolCalls = append(out.ToolCalls, ToolCall{Name: name, Arguments: args, CallID: callID})
-				} else if m["type"] == "message" {
-					if content, ok := m["content"].([]interface{}); ok {
-						for _, c := range content {
-							if cm, ok := c.(map[string]interface{}); ok {
-								if txt, _ := cm["text"].(string); txt != "" {
-									out.Content += txt
-									var tmp map[string]interface{}
-									if json.Unmarshal([]byte(txt), &tmp) == nil {
-										if q, ok := tmp["query"].(string); ok && q != "" {
-											appendUnique(&out.SearchQueries, q)
-										}
-										if srcs, ok := tmp["sources"].([]interface{}); ok {
-											for _, s := range srcs {
-												if sm, ok := s.(map[string]interface{}); ok {
-													if u, ok := sm["url"].(string); ok && u != "" {
-														appendUnique(&out.Sources, u)
+				if typ, ok := m["type"].(string); ok {
+					switch typ {
+					case "function_call":
+						name, _ := m["name"].(string)
+						args, _ := m["arguments"].(string)
+						callID, _ := m["call_id"].(string)
+						out.ToolCalls = append(out.ToolCalls, ToolCall{Name: name, Arguments: args, CallID: callID})
+					case "message":
+						if content, ok := m["content"].([]interface{}); ok {
+							for _, c := range content {
+								if cm, ok := c.(map[string]interface{}); ok {
+									if txt, _ := cm["text"].(string); txt != "" {
+										out.Content += txt
+										var tmp map[string]interface{}
+										if json.Unmarshal([]byte(txt), &tmp) == nil {
+											if q, ok := tmp["query"].(string); ok && q != "" {
+												appendUnique(&out.SearchQueries, q)
+											}
+											if srcs, ok := tmp["sources"].([]interface{}); ok {
+												for _, s := range srcs {
+													if sm, ok := s.(map[string]interface{}); ok {
+														if u, ok := sm["url"].(string); ok && u != "" {
+															appendUnique(&out.Sources, u)
+														}
 													}
 												}
 											}
 										}
+										extractURLsFromText(txt, &out.Sources)
 									}
-									extractURLsFromText(txt, &out.Sources)
 								}
 							}
 						}
@@ -553,7 +651,69 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 	if len(tools) > 0 {
 		tdefs := make([]map[string]interface{}, 0, len(tools))
 		for _, t := range tools {
-			tdefs = append(tdefs, map[string]interface{}{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters, "strict": true})
+			params := t.Parameters
+			if params == nil {
+				params = map[string]interface{}{"type": "object"}
+			}
+			params["additionalProperties"] = false
+			// Normalize schema for OpenAI: ensure all properties in 'properties' are either in 'required' or have default
+			// Also fix array types - OpenAI doesn't support type arrays like ["string", "number"]
+			if propsRaw, ok := params["properties"].(map[string]interface{}); ok {
+				requiredRaw, hasRequired := params["required"].([]interface{})
+				requiredSet := make(map[string]bool)
+				if hasRequired {
+					for _, r := range requiredRaw {
+						if s, ok := r.(string); ok {
+							requiredSet[s] = true
+						}
+					}
+				}
+				// Build required array with all properties that don't have defaults
+				requiredList := make([]string, 0)
+				for k, v := range propsRaw {
+					if m, ok := v.(map[string]interface{}); ok {
+						// Fix array types - OpenAI doesn't support type arrays
+						if typeVal, hasType := m["type"]; hasType {
+							if typeArr, ok := typeVal.([]interface{}); ok && len(typeArr) > 0 {
+								// Convert array type to first type (usually string or number)
+								// This is a limitation of OpenAI's strict schema validation
+								m["type"] = typeArr[0]
+							}
+						}
+						if _, has := m["type"]; !has {
+							m["type"] = "string"
+						}
+						// Recursively fix nested items (for arrays)
+						if items, hasItems := m["items"]; hasItems {
+							if itemsMap, ok := items.(map[string]interface{}); ok {
+								if itemType, hasItemType := itemsMap["type"]; hasItemType {
+									if itemTypeArr, ok := itemType.([]interface{}); ok && len(itemTypeArr) > 0 {
+										itemsMap["type"] = itemTypeArr[0]
+									}
+								}
+								if _, hasItemType := itemsMap["type"]; !hasItemType {
+									itemsMap["type"] = "string"
+								}
+								m["items"] = itemsMap
+							}
+						}
+						// If property doesn't have default and is not already required, add it to required
+						// OpenAI requires all properties to be in 'required' array
+						if _, hasDefault := m["default"]; !hasDefault {
+							if !requiredSet[k] {
+								requiredList = append(requiredList, k)
+							}
+						}
+						propsRaw[k] = m
+					}
+				}
+				// Merge with existing required
+				for k := range requiredSet {
+					requiredList = append(requiredList, k)
+				}
+				params["required"] = requiredList
+			}
+			tdefs = append(tdefs, map[string]interface{}{"type": "function", "name": t.Name, "description": t.Description, "parameters": params, "strict": true})
 		}
 		if opts.GroundingEnabled {
 			tdefs = append(tdefs, map[string]interface{}{"type": "web_search"})
@@ -591,7 +751,7 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 			// best-effort: ignore non-JSON
 			return nil
 		}
-		
+
 		// Parse usage from any event that contains it (especially response.completed)
 		if u, ok := m["usage"].(map[string]interface{}); ok {
 			if v, ok := u["input_tokens"].(float64); ok {
@@ -618,7 +778,7 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 				log.Printf("[OpenAI Stream] Received response.completed event")
 			}
 		}
-		
+
 		// Heuristics for Responses SSE: prefer output_text.delta
 		// CRITICAL: Only call onDelta once per event to avoid duplicate chunks
 		var textToSend string
@@ -692,22 +852,22 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 	}
 	// flush any remaining
 	_ = flushEvent()
-	
+
 	// Calculate TotalTokens if not set
 	if accUsage.TotalTokens == 0 && (accUsage.PromptTokens > 0 || accUsage.OutputTokens > 0) {
 		accUsage.TotalTokens = accUsage.PromptTokens + accUsage.OutputTokens
 		log.Printf("[OpenAI Stream] Calculated total_tokens: %d (prompt: %d + output: %d)", accUsage.TotalTokens, accUsage.PromptTokens, accUsage.OutputTokens)
 	}
-	
+
 	// Log final usage before returning
 	log.Printf("[OpenAI Stream] Final usage before return: promptTokens=%d outputTokens=%d totalTokens=%d reasoningTokens=%d", accUsage.PromptTokens, accUsage.OutputTokens, accUsage.TotalTokens, accUsage.ReasoningTokens)
-	
+
 	// Log final usage for debugging
 	if accUsage.PromptTokens > 0 || accUsage.OutputTokens > 0 {
 		log.Printf("[OpenAI Stream] Final usage: promptTokens=%d outputTokens=%d totalTokens=%d", accUsage.PromptTokens, accUsage.OutputTokens, accUsage.TotalTokens)
 	} else {
 		log.Printf("[OpenAI Stream] Warning: No usage data found in stream (promptTokens=%d outputTokens=%d)", accUsage.PromptTokens, accUsage.OutputTokens)
 	}
-	
+
 	return accUsage, queries, sources, nil
 }

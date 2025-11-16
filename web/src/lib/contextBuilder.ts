@@ -80,6 +80,11 @@ export function buildContext(options: BuildContextOptions = {}): {
   interactions.forEach((it: any) => {
     if (!it) return;
     
+    // Exclude queued tasks interactions (they are metadata, not chat content)
+    if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind === 'queued.tasks') {
+      return;
+    }
+    
     // Check exclusions
     const shouldExclude = excludeKinds.some(excl => {
       if (it.kind !== excl.kind) return false;

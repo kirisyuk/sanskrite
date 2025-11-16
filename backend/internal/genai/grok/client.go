@@ -106,6 +106,17 @@ func (c *Client) modelFrom(opts Options) string {
 	return "grok-4-0709"
 }
 
+// GenerateWithMessages generates a response with custom message history
+func (c *Client) GenerateWithMessages(ctx context.Context, messages []map[string]interface{}, tools []Tool, opts Options) (*GenerateResponse, error) {
+	model := c.modelFrom(opts)
+	msgs := make([]map[string]interface{}, 0, len(messages)+1)
+	if opts.SystemInstruction != "" {
+		msgs = append(msgs, map[string]interface{}{"role": "system", "content": opts.SystemInstruction})
+	}
+	msgs = append(msgs, messages...)
+	return c.generateWithMessages(ctx, model, msgs, tools, opts)
+}
+
 // Generate against xAI Chat Completions API with function tools and optional web search tool
 func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts Options) (*GenerateResponse, error) {
 	model := c.modelFrom(opts)
@@ -114,6 +125,11 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 		msgs = append(msgs, map[string]interface{}{"role": "system", "content": opts.SystemInstruction})
 	}
 	msgs = append(msgs, map[string]interface{}{"role": "user", "content": prompt})
+	return c.generateWithMessages(ctx, model, msgs, tools, opts)
+}
+
+// generateWithMessages is the internal implementation
+func (c *Client) generateWithMessages(ctx context.Context, model string, msgs []map[string]interface{}, tools []Tool, opts Options) (*GenerateResponse, error) {
 	p := map[string]interface{}{
 		"model":    model,
 		"messages": msgs,
@@ -199,7 +215,8 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 					extractURLsFromText(content, &out.Sources)
 				}
 				if tcs, ok := msg["tool_calls"].([]interface{}); ok {
-					for _, tc := range tcs {
+					log.Printf("[Grok Generate] Found %d tool_calls in response", len(tcs))
+					for i, tc := range tcs {
 						if m, ok := tc.(map[string]interface{}); ok {
 							if f, ok := m["function"].(map[string]interface{}); ok {
 								name, _ := f["name"].(string)
@@ -213,10 +230,12 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 									extractURLsFromMap(obj, &out.Sources)
 								}
 								id, _ := m["id"].(string)
+								log.Printf("[Grok Generate] Tool call %d: name=%s, callID=%s, argsLength=%d", i+1, name, id, len(args))
 								out.ToolCalls = append(out.ToolCalls, ToolCall{Name: name, Arguments: args, CallID: id})
 							}
 						}
 					}
+					log.Printf("[Grok Generate] Total tool calls parsed: %d", len(out.ToolCalls))
 				}
 			}
 		}

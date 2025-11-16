@@ -5,7 +5,46 @@
 -- 1. Базовые запросы к метаданным документов
 -- ============================================
 
--- Количество документов по типам
+-- Работа с RAG документами (текстовые файлы)
+SELECT 
+  uri,
+  content_type,
+  size,
+  last_modified
+FROM `sanskrite.sanskrite_documents.documents_object_table`
+WHERE uri LIKE '%tenant123%'
+LIMIT 10;
+
+-- Работа с CoreDocs - текстовые форматы
+SELECT 
+  uri,
+  content_type,
+  size,
+  last_modified
+FROM `sanskrite.sanskrite_documents.core_docs_text_table`
+WHERE uri LIKE '%.md' OR uri LIKE '%.txt'
+LIMIT 10;
+
+-- Работа с CoreDocs - JSON файлы
+SELECT 
+  uri,
+  JSON_EXTRACT_SCALAR(data, '$.decisions') as decisions_data
+FROM `sanskrite.sanskrite_documents.core_docs_json_table`
+WHERE uri LIKE '%decisions.json'
+LIMIT 10;
+
+-- Анализ метаданных CoreDocs по типам контента
+SELECT 
+  contentType,
+  COUNT(*) as count,
+  SUM(sizeBytes) as total_size_bytes,
+  COUNT(DISTINCT tenantId) as unique_tenants,
+  COUNT(DISTINCT projectId) as unique_projects
+FROM `sanskrite.sanskrite_documents.core_docs_metadata`
+GROUP BY contentType
+ORDER BY count DESC;
+
+-- Количество RAG документов по типам
 SELECT 
   documentType,
   COUNT(*) as count,
@@ -13,6 +52,16 @@ SELECT
   COUNT(DISTINCT sourceId) as unique_sources
 FROM `sanskrite.sanskrite_documents.documents_metadata`
 GROUP BY documentType
+ORDER BY count DESC;
+
+-- Количество CoreDocs по типам контента
+SELECT 
+  contentType,
+  COUNT(*) as count,
+  COUNT(DISTINCT tenantId) as unique_tenants,
+  COUNT(DISTINCT projectId) as unique_projects
+FROM `sanskrite.sanskrite_documents.core_docs_metadata`
+GROUP BY contentType
 ORDER BY count DESC;
 
 -- Документы по датам создания
@@ -129,7 +178,7 @@ WHERE language != ''
 GROUP BY language, month
 ORDER BY month DESC, count DESC;
 
--- Use case: Статусы документов
+-- Use case: Статусы RAG документов
 SELECT 
   status,
   COUNT(*) as count,
@@ -138,4 +187,75 @@ SELECT
 FROM `sanskrite.sanskrite_documents.documents_metadata`
 GROUP BY status
 ORDER BY count DESC;
+
+-- Use case: Статусы парсинга CoreDocs
+SELECT 
+  parseStatus,
+  COUNT(*) as count,
+  COUNT(DISTINCT tenantId) as tenants,
+  COUNT(DISTINCT projectId) as projects
+FROM `sanskrite.sanskrite_documents.core_docs_metadata`
+GROUP BY parseStatus
+ORDER BY count DESC;
+
+-- ============================================
+-- 6. Работа с разными форматами документов
+-- ============================================
+
+-- Анализ JSON документов (decisions, facts, events)
+SELECT 
+  m.filename,
+  m.contentType,
+  m.projectId,
+  m.createdAt,
+  -- Извлекаем данные из JSON через Object Table
+  j.data as json_content
+FROM `sanskrite.sanskrite_documents.core_docs_metadata` m
+JOIN `sanskrite.sanskrite_documents.core_docs_json_table` j
+  ON j.uri = REPLACE(m.storagePath, 'gs://', '')
+WHERE m.contentType = 'application/json'
+  AND m.filename LIKE '%.json'
+LIMIT 10;
+
+-- Анализ текстовых документов (markdown, plain text)
+SELECT 
+  m.filename,
+  m.contentType,
+  m.projectId,
+  m.createdAt,
+  -- Читаем контент из Object Table
+  t.data as text_content
+FROM `sanskrite.sanskrite_documents.core_docs_metadata` m
+JOIN `sanskrite.sanskrite_documents.core_docs_text_table` t
+  ON t.uri = REPLACE(m.storagePath, 'gs://', '')
+WHERE m.contentType LIKE 'text/%'
+LIMIT 10;
+
+-- Комбинированный анализ: RAG документы + CoreDocs
+WITH rag_stats AS (
+  SELECT 
+    tenantId,
+    COUNT(*) as rag_count,
+    COUNT(DISTINCT sourceId) as rag_sources
+  FROM `sanskrite.sanskrite_documents.documents_metadata`
+  GROUP BY tenantId
+),
+core_stats AS (
+  SELECT 
+    tenantId,
+    COUNT(*) as core_count,
+    COUNT(DISTINCT projectId) as core_projects
+  FROM `sanskrite.sanskrite_documents.core_docs_metadata`
+  GROUP BY tenantId
+)
+SELECT 
+  COALESCE(r.tenantId, c.tenantId) as tenantId,
+  COALESCE(r.rag_count, 0) as rag_documents,
+  COALESCE(r.rag_sources, 0) as rag_sources,
+  COALESCE(c.core_count, 0) as core_documents,
+  COALESCE(c.core_projects, 0) as core_projects,
+  COALESCE(r.rag_count, 0) + COALESCE(c.core_count, 0) as total_documents
+FROM rag_stats r
+FULL OUTER JOIN core_stats c ON r.tenantId = c.tenantId
+ORDER BY total_documents DESC;
 

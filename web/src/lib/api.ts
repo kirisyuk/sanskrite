@@ -458,6 +458,11 @@ class ApiClient {
     return res.data as any;
   }
 
+  async docsUpdate(projectId: string, docId: string, data: { filename?: string; description?: string }) {
+    const res = await this.client.patch(`/api/v1/projects/${projectId}/docs/${docId}`, data);
+    return res.data as any;
+  }
+
   async docsDownload(projectId: string, docId: string): Promise<Blob> {
     try {
       const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/download`, { responseType: 'blob' });

@@ -26,6 +26,7 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const [shareBusy, setShareBusy] = React.useState(false);
   const [shareOpen, setShareOpen] = React.useState(false);
   const [shareUrl, setShareUrl] = React.useState<string | null>(null);
+  const [shareUrlProjectId, setShareUrlProjectId] = React.useState<string | null>(null); // Track which project the share URL is for
   const [copied, setCopied] = React.useState(false);
   const shareRef = React.useRef<HTMLDivElement | null>(null);
   const isChat = React.useMemo(() => {
@@ -61,36 +62,99 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   }, [i18n, setUiLanguage]);
 
   const selectedUi = uiLanguage === 'kk' ? 'kz' : (uiLanguage || 'en');
+  
+  // Determine which project ID to use for sharing
+  // Always prioritize currentProject?.id (the project explicitly selected in sidebar)
+  // This ensures that when user switches projects in sidebar, the correct project is shared
+  // Fallback to genaiChatProjectId only if currentProject is not set
+  const shareProjectId = React.useMemo(() => {
+    if (currentProject?.id && currentProject.id !== 'local-unfold') {
+      return currentProject.id;
+    }
+    // Otherwise, fallback to genaiChatProjectId (the active chat project)
+    return genaiChatProjectId;
+  }, [currentProject?.id, genaiChatProjectId]);
+  
   const canShare = React.useMemo(() => {
     try {
       if (!currentUser) return false;
-      // Use currentProject?.id if available, otherwise fallback to genaiChatProjectId
-      const projectId = currentProject?.id || genaiChatProjectId;
-      if (!projectId || projectId === 'local-unfold') return false;
+      if (!shareProjectId || shareProjectId === 'local-unfold') return false;
       return genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0;
     } catch { return false; }
-  }, [currentProject?.id, genaiChatProjectId, genaiChatInteractionsLength, genaiChatMessagesLength, currentUser]);
+  }, [shareProjectId, genaiChatInteractionsLength, genaiChatMessagesLength, currentUser]);
 
   const createShare = React.useCallback(async () => {
     try {
       if (shareBusy) return;
       setShareBusy(true);
-      // Use currentProject?.id if available (most reliable), otherwise fallback to genaiChatProjectId
-      const pid = (currentProject?.id || genaiChatProjectId) as string;
-      if (!pid || pid === 'local-unfold') { setShareBusy(false); return; }
+      // Get currentProject directly from store at call time (not from closure)
+      // This ensures we always use the latest selected project
+      const projectsStore = useProjectsStore.getState();
+      const currentProj = projectsStore.currentProject;
+      const genaiChatStore = useGenaiChatStore.getState();
+      const genaiChatPid = genaiChatStore.projectId;
+      
+      // Determine project ID: prioritize currentProject?.id if set, otherwise use genaiChatProjectId
+      let pid: string | null = null;
+      if (currentProj?.id && currentProj.id !== 'local-unfold') {
+        pid = typeof currentProj.id === 'string' ? currentProj.id : String(currentProj.id);
+      } else if (genaiChatPid && genaiChatPid !== 'local-unfold') {
+        pid = typeof genaiChatPid === 'string' ? genaiChatPid : String(genaiChatPid);
+      }
+      
+      if (!pid) { 
+        setShareBusy(false); 
+        return; 
+      }
+      
+      console.log('[TopBar] Creating share for project', { 
+        projectId: pid, 
+        currentProjectId: currentProj?.id,
+        genaiChatProjectId: genaiChatPid
+      });
+      
       // default: 7 days from now
       const exp = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
       const res = await api.shareCreate(pid, exp);
       const rel = res?.shareToken ? `/shared/${res.shareToken}` : null;
       setShareUrl(rel);
+      setShareUrlProjectId(pid); // Store which project this URL is for
       setShareOpen(true);
     } catch {
       setShareUrl(null);
+      setShareUrlProjectId(null);
       setShareOpen(true);
     } finally {
       setShareBusy(false);
     }
-  }, [currentProject?.id, genaiChatProjectId, shareBusy]);
+  }, [shareBusy]);
+  
+  // Clear share URL when project changes (so we don't show old URL for new project)
+  React.useEffect(() => {
+    const projectsStore = useProjectsStore.getState();
+    const currentProj = projectsStore.currentProject;
+    const genaiChatStore = useGenaiChatStore.getState();
+    const genaiChatPid = genaiChatStore.projectId;
+    
+    // Determine current project ID
+    let currentPid: string | null = null;
+    if (currentProj?.id && currentProj.id !== 'local-unfold') {
+      currentPid = typeof currentProj.id === 'string' ? currentProj.id : String(currentProj.id);
+    } else if (genaiChatPid && genaiChatPid !== 'local-unfold') {
+      currentPid = typeof genaiChatPid === 'string' ? genaiChatPid : String(genaiChatPid);
+    }
+    
+    // If project changed and we have a share URL for a different project, clear it
+    if (shareUrlProjectId && currentPid && shareUrlProjectId !== currentPid) {
+      console.log('[TopBar] Project changed, clearing share URL', { 
+        oldProjectId: shareUrlProjectId, 
+        newProjectId: currentPid 
+      });
+      setShareUrl(null);
+      setShareUrlProjectId(null);
+      setShareOpen(false);
+    }
+  }, [currentProject?.id, genaiChatProjectId, shareUrlProjectId]);
 
   React.useEffect(() => {
     const onDocClick = (e: MouseEvent) => {

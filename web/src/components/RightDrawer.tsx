@@ -7,9 +7,10 @@ import { AnalysisPanel } from './AnalysisPanel';
 import FindingsPanel from './FindingsPanel';
 import { ExperimentalPanel } from './ExperimentalPanel';
 import { ContextPanel } from './ContextPanel';
+import { PendingActionsPanel } from './PendingActionsPanel';
 
 interface RightDrawerProps {
-  rightPanelType: 'workspace' | 'artifacts' | 'experimental' | 'analysis' | 'context' | null;
+  rightPanelType: 'workspace' | 'artifacts' | 'experimental' | 'analysis' | 'context' | 'pending-actions' | null;
   viewMode: string;
   showAccount: boolean;
   showSettings: boolean;
@@ -41,6 +42,9 @@ interface RightDrawerProps {
   onAddTextTask: (task: any) => void;
   onRemoveTextTask: (taskId: string) => void;
   textTasks: any[];
+  queuedTasks?: any[];
+  onApplyTasks?: (taskIds: string[]) => void;
+  textTasksApplying?: boolean;
   // Experimental panel props
   experimentalResponse: any;
   experimentalLoading: boolean;
@@ -84,6 +88,9 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
   onAddTextTask,
   onRemoveTextTask,
   textTasks,
+  queuedTasks = [],
+  onApplyTasks,
+  textTasksApplying = false,
   experimentalResponse,
   experimentalLoading,
   sectionStarts,
@@ -283,7 +290,11 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                           ? t('unfold.sections.contextNavigation', {
                               defaultValue: 'Context Navigation',
                             })
-                          : 'Workspace'}
+                          : rightPanelType === 'pending-actions'
+                            ? t('unfold.sections.pendingActions', {
+                                defaultValue: 'Pending Actions',
+                              })
+                            : 'Workspace'}
                 </h3>
                 <button
                   type="button"
@@ -400,6 +411,18 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                       scrollToInteraction={scrollToInteraction}
                       truncateCenterWords={truncateCenterWords}
                       onRemoveNote={onRemoveNote}
+                    />
+                  </div>
+                )}
+
+                {/* Pending Actions Panel */}
+                {rightPanelType === 'pending-actions' && (
+                  <div style={getPanelVisibilityStyles(true)}>
+                    <PendingActionsPanel
+                      tasks={queuedTasks}
+                      onRemove={onRemoveTextTask}
+                      onApply={onApplyTasks || (() => {})}
+                      isApplying={textTasksApplying}
                     />
                   </div>
                 )}

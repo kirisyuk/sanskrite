@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -109,33 +110,88 @@ func (c *Client) ExecuteWithTools(ctx context.Context, prompt string, toolDecls 
 }
 
 // StreamWithTools performs real-time streaming with tool-calling support (single turn + one tools round-trip)
+// Note: Gemini does not support function calling in streaming mode (streamGenerateContent),
+// so we use non-streaming Generate for the first request with tools, then stream the continuation
 func (c *Client) StreamWithTools(ctx context.Context, prompt string, toolDecls []Tool, exec ToolExecutor, opts Options, onEvent func(StreamEvent) error) error {
 	var pendingCalls []ToolCall
-	// first: stream until we either complete or receive tool calls
-	err := c.Stream(ctx, prompt, toolDecls, opts, func(e StreamEvent) error {
-		switch e.Type {
-		case "chunk":
-			return onEvent(e)
-		case "tool_call":
-			pendingCalls = append(pendingCalls, e.ToolCalls...)
-			return onEvent(e)
-		case "start", "done":
-			return onEvent(e)
-		case "error":
-			return onEvent(e)
-		default:
-			return onEvent(e)
+
+	// Gemini doesn't support function calling in streaming mode, so use non-streaming Generate first
+	if len(toolDecls) > 0 {
+		_ = onEvent(StreamEvent{Type: "start"})
+		// Use non-streaming Generate for first request with tools
+		resp, err := c.Generate(ctx, prompt, toolDecls, opts)
+		if err != nil {
+			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+			return err
 		}
-	})
-	if err != nil {
-		return err
-	}
-	if len(pendingCalls) == 0 {
-		return nil
+
+		// Emit text content if any
+		if resp.Content != "" {
+			_ = onEvent(StreamEvent{Type: "chunk", Text: resp.Content})
+		}
+
+		// Collect tool calls
+		if len(resp.ToolCalls) > 0 {
+			pendingCalls = resp.ToolCalls
+			_ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: pendingCalls})
+		} else {
+			// No tool calls, emit done and return
+			_ = onEvent(StreamEvent{Type: "done", Usage: resp.Usage, Model: resp.Model})
+			return nil
+		}
+	} else {
+		// No tools, use regular streaming
+		err := c.Stream(ctx, prompt, toolDecls, opts, func(e StreamEvent) error {
+			switch e.Type {
+			case "chunk":
+				return onEvent(e)
+			case "tool_call":
+				pendingCalls = append(pendingCalls, e.ToolCalls...)
+				return onEvent(e)
+			case "start", "done":
+				return onEvent(e)
+			case "error":
+				return onEvent(e)
+			default:
+				return onEvent(e)
+			}
+		})
+		if err != nil {
+			return err
+		}
+		if len(pendingCalls) == 0 {
+			return nil
+		}
 	}
 
 	// Execute tools and continue
-	results := make([]map[string]interface{}, 0, len(pendingCalls))
+	// Build contents: user prompt, model response with tool calls, tool results
+	contents := []map[string]interface{}{
+		{"role": "user", "parts": []map[string]interface{}{{"text": prompt}}},
+	}
+
+	// Add model response with tool calls (from Generate response)
+	modelParts := make([]map[string]interface{}, 0)
+	for _, call := range pendingCalls {
+		// Parse arguments to get function call structure
+		var argsMap map[string]interface{}
+		if err := json.Unmarshal([]byte(call.Arguments), &argsMap); err != nil {
+			// If not JSON, treat as string
+			argsMap = map[string]interface{}{"raw": call.Arguments}
+		}
+		modelParts = append(modelParts, map[string]interface{}{
+			"functionCall": map[string]interface{}{
+				"name": call.Name,
+				"args": argsMap,
+			},
+		})
+	}
+	contents = append(contents, map[string]interface{}{
+		"role":  "model",
+		"parts": modelParts,
+	})
+
+	// Add tool results as user messages with functionResponse
 	for _, call := range pendingCalls {
 		if !exec.IsAllowed(call.Name) {
 			return errors.New("tool not allowed: " + call.Name)
@@ -144,16 +200,56 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, toolDecls [
 		if err != nil {
 			return err
 		}
+		// Log tool result for debugging
+		log.Printf("[Gemini StreamWithTools] Tool executed: name=%s, resultLength=%d, resultPreview=%s", call.Name, len(out), func() string {
+			if len(out) > 200 {
+				return string(out[:200]) + "..."
+			}
+			return string(out)
+		}())
 		_ = onEvent(StreamEvent{Type: "tool_result", ToolCalls: []ToolCall{{Name: call.Name, Arguments: string(out)}}})
-		results = append(results, map[string]interface{}{"role": "tool", "parts": []map[string]interface{}{{"text": string(out)}}})
+
+		// Parse function response
+		// According to Gemini API docs, functionResponse.response should be a JSON object
+		// We parse it to ensure it's valid JSON, then pass as object
+		var responseObj interface{}
+		if err := json.Unmarshal(out, &responseObj); err != nil {
+			// If not valid JSON, wrap as string result
+			responseObj = map[string]interface{}{"result": string(out)}
+		}
+
+		// Find the function call name for this result
+		callName := call.Name
+		contents = append(contents, map[string]interface{}{
+			"role": "user",
+			"parts": []map[string]interface{}{
+				{
+					"functionResponse": map[string]interface{}{
+						"name":     callName,
+						"response": responseObj,
+					},
+				},
+			},
+		})
 	}
 
-	// Continue streaming with tool results appended as contents
-	contents := []map[string]interface{}{
-		{"role": "user", "parts": []map[string]interface{}{{"text": prompt}}},
+	// Use non-streaming Generate for continuation instead of StreamConversation
+	// This avoids streaming for tool calls - just get the final answer
+	resp2, err := c.GenerateConversation(ctx, contents, toolDecls, opts)
+	if err != nil {
+		_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+		return err
 	}
-	contents = append(contents, results...)
-	return c.StreamConversation(ctx, contents, toolDecls, opts, onEvent)
+
+	// Emit content as single chunk (non-streaming)
+	if resp2.Content != "" {
+		_ = onEvent(StreamEvent{Type: "chunk", Text: resp2.Content})
+	} else {
+		// Emit empty chunk to signal completion without text response
+		_ = onEvent(StreamEvent{Type: "chunk", Text: ""})
+	}
+	_ = onEvent(StreamEvent{Type: "done", Usage: resp2.Usage, Model: resp2.Model})
+	return nil
 }
 
 // normalizeTelegramChannel converts @name or t.me/name[/...] to username

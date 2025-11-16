@@ -91,11 +91,14 @@ func (s *ArtifactExecutorService) GenerateSection(
 	// Build prompt with context
 	prompt := s.buildSectionPrompt(req.Section, req.Context, req.GenerationSettings)
 
+	// Build enhanced system instruction with date and professional requirements
+	systemInstruction := s.buildSystemInstruction(req.GenerationSettings.SystemPrompt, req.GenerationSettings.PreferredLanguage)
+
 	// Prepare GenAI request
 	genReq := gen_combined.GenAIRequest{
 		Model:             req.Model,
 		Prompt:            prompt,
-		SystemInstruction: req.GenerationSettings.SystemPrompt,
+		SystemInstruction: systemInstruction,
 		Temperature:       0.7,
 		MaxOutputTokens:   4096,
 	}
@@ -149,10 +152,13 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 	// Build prompt
 	prompt := s.buildSectionPrompt(req.Section, req.Context, req.GenerationSettings)
 
+	// Build enhanced system instruction with date and professional requirements
+	systemInstruction := s.buildSystemInstruction(req.GenerationSettings.SystemPrompt, req.GenerationSettings.PreferredLanguage)
+
 	// Prepare options for streaming
 	opts := gen_combined.Options{
 		ModelOverride:     req.Model,
-		SystemInstruction: req.GenerationSettings.SystemPrompt,
+		SystemInstruction: systemInstruction,
 		Temperature:       0.7,
 		MaxOutputTokens:   4096,
 	}
@@ -251,6 +257,66 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 	}
 
 	return result, nil
+}
+
+// buildSystemInstruction constructs the enhanced system instruction with date and professional requirements
+func (s *ArtifactExecutorService) buildSystemInstruction(basePrompt string, preferredLanguage string) string {
+	currentDate := time.Now().UTC().Format("January 2, 2006")
+
+	// Map language codes to language names
+	langNames := map[string]string{
+		"en": "English",
+		"ru": "Russian",
+		"es": "Spanish",
+		"fr": "French",
+		"de": "German",
+		"it": "Italian",
+		"pt": "Portuguese",
+		"zh": "Chinese",
+		"ja": "Japanese",
+		"ko": "Korean",
+		"ar": "Arabic",
+		"hi": "Hindi",
+	}
+	langName := langNames[preferredLanguage]
+	if langName == "" {
+		langName = "English" // Default fallback
+	}
+
+	var builder strings.Builder
+	if basePrompt != "" {
+		builder.WriteString(basePrompt)
+		builder.WriteString("\n\n")
+	}
+
+	builder.WriteString("You are preparing a section of a professional document (or complete document). Your task is to generate the actual content, not to comment on it or discuss it.\n\n")
+
+	builder.WriteString("You MUST produce all output strictly in ")
+	builder.WriteString(langName)
+	builder.WriteString(" language. Use English only for technical terms or code if they are standard industry terms.\n\n")
+
+	builder.WriteString("Current date: ")
+	builder.WriteString(currentDate)
+	builder.WriteString("\n\n")
+
+	builder.WriteString("CRITICAL REQUIREMENTS:\n")
+	builder.WriteString("- You are preparing a document section (or complete document). Output ONLY the actual content, not meta-commentary or conversational phrases\n")
+	builder.WriteString("- ABSOLUTELY FORBIDDEN phrases: \"Отлично, теперь мы сделаем...\", \"Согласен, ...\", \"Хорошо, ...\", \"Excellent, now we will...\", \"I agree, ...\", \"Let's...\", \"We will now...\", or any similar conversational or meta-commentary phrases\n")
+	builder.WriteString("- Do NOT address the user, reader, or any person directly in the document or sections\n")
+	builder.WriteString("- Do NOT use second person (\"you\", \"your\") or first person plural (\"we\", \"our\") unless referring to a specific entity mentioned in the context\n")
+	builder.WriteString("- Do NOT use phrases that suggest you are in a conversation or responding to someone (e.g., \"As requested...\", \"As you can see...\", \"Let me explain...\")\n")
+	builder.WriteString("- Prepare content exclusively as professional, standalone documentation that reads as if it was written directly, not generated\n")
+	builder.WriteString("- Write in an objective, third-person style appropriate for formal documentation\n")
+	builder.WriteString("- Start directly with the content. Do not introduce it with phrases like \"This section covers...\" unless that is the actual document structure\n")
+	builder.WriteString("- Focus on factual, informative content without personal references, direct appeals, or conversational elements\n\n")
+	builder.WriteString("FORMAT REQUIREMENTS:\n")
+	builder.WriteString("- Output MUST be strictly in Markdown format only\n")
+	builder.WriteString("- If a section requires examples, code snippets, data structures, JSON, XML, or any structured content, it MUST be placed inside Markdown code fences (triple backticks with language identifier)\n")
+	builder.WriteString("- NEVER output raw JSON, XML, or other structured formats outside of code fences\n")
+	builder.WriteString("- Use proper Markdown syntax: headers (#), lists (- or *), bold (**text**), italic (*text*), links, tables, etc.\n")
+	builder.WriteString("- Code examples must use appropriate language identifiers in code fences (e.g., ```json, ```python, ```yaml)")
+
+	return builder.String()
 }
 
 // buildSectionPrompt constructs the full prompt for section generation
@@ -443,11 +509,14 @@ func (s *ArtifactExecutorService) AssembleDocument(
 	builder.WriteString("5. Adds a brief introduction and conclusion if appropriate\n\n")
 	builder.WriteString("Return the complete assembled document.")
 
+	// Build enhanced system instruction with date and professional requirements
+	systemInstruction := s.buildSystemInstruction(config.GenerationSettings.SystemPrompt, config.GenerationSettings.PreferredLanguage)
+
 	// Use orchestrator model
 	genReq := gen_combined.GenAIRequest{
 		Model:             config.OrchestratorModel,
 		Prompt:            builder.String(),
-		SystemInstruction: config.GenerationSettings.SystemPrompt,
+		SystemInstruction: systemInstruction,
 		Temperature:       0.5,
 		MaxOutputTokens:   8192,
 	}

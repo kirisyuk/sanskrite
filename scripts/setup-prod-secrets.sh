@@ -4,6 +4,7 @@ set -euo pipefail
 # Usage:
 #   export ANTHROPIC_API_KEY=...
 #   export DEEPSEEK_API_KEY=...
+#   export TAVILY_API_KEY=...
 #   ./scripts/setup-prod-secrets.sh [-p|--project sanskrite]
 
 PROJECT="sanskrite"
@@ -55,6 +56,7 @@ upsert_secret_from_env() {
 # Production secrets
 upsert_secret_from_env ANTHROPIC_API_KEY
 upsert_secret_from_env DEEPSEEK_API_KEY
+upsert_secret_from_env TAVILY_API_KEY
 
 # Also upsert lowercase alias secrets expected by deploy script
 if [[ -n "${ANTHROPIC_API_KEY-}" ]]; then
@@ -66,6 +68,11 @@ if [[ -n "${DEEPSEEK_API_KEY-}" ]]; then
   create_if_missing deepseek_api_key
   add_version deepseek_api_key "$DEEPSEEK_API_KEY"
   echo "[ok]   deepseek_api_key updated"
+fi
+if [[ -n "${TAVILY_API_KEY-}" ]]; then
+	create_if_missing tavily_api_key
+	add_version tavily_api_key "$TAVILY_API_KEY"
+	echo "[ok]   tavily_api_key updated"
 fi
 
 echo "Done."

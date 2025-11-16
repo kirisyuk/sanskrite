@@ -13,6 +13,7 @@ interface RightPanelButtonsProps {
   hasSections: boolean;
   availUserAnalysis: boolean;
   availDiscussionFlow: boolean;
+  hasQueuedTasks?: boolean; // Show button if there are queued tasks
 }
 
 export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
@@ -22,6 +23,7 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
   hasSections,
   availUserAnalysis,
   availDiscussionFlow,
+  hasQueuedTasks = false,
 }) => {
   const { t } = useTranslation();
 
@@ -225,6 +227,33 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
           />
         </svg>
       </button>
+
+      {/* Pending Actions button - shows if there are queued tasks */}
+      {hasQueuedTasks && (
+        <button
+          type="button"
+          aria-label={t('unfold.sections.pendingActions', { defaultValue: 'Pending Actions' })}
+          title={t('unfold.sections.pendingActions', { defaultValue: 'Pending Actions' })}
+          onClick={() => handleButtonClick('pending-actions')}
+          className="rounded-lg flex items-center justify-center transition-all duration-300"
+          style={getRightPanelButtonStyle(rightPanelType === 'pending-actions')}
+          onMouseEnter={(e) => handleMouseEnter(e, rightPanelType === 'pending-actions')}
+          onMouseLeave={(e) => handleMouseLeave(e, rightPanelType === 'pending-actions')}
+        >
+          <svg
+            className="w-4 h-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M9 11l3 3L22 4" />
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 };

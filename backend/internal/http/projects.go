@@ -11,14 +11,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
-	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 )
 
 // ProjectsHandler handles project-related HTTP requests
@@ -383,12 +384,14 @@ func (h *ProjectsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) 
 
 // CreateCoreDocRequest is minimal metadata; upload flow handled separately (Storage signed URL or multipart in future)
 type CreateCoreDocRequest struct {
-	Filename    string                 `json:"filename"`
-	ContentType string                 `json:"contentType"`
-	Description *string                `json:"description,omitempty"`
-	SizeBytes   *int64                 `json:"sizeBytes,omitempty"`
-	StoragePath *string                `json:"storagePath,omitempty"`
-	External    *models.ExternalDocRef `json:"external,omitempty"`
+	Filename       string                 `json:"filename"`
+	ContentType    string                 `json:"contentType"`
+	Description    *string                `json:"description,omitempty"`
+	SizeBytes      *int64                 `json:"sizeBytes,omitempty"`
+	StoragePath    *string                `json:"storagePath,omitempty"`
+	External       *models.ExternalDocRef `json:"external,omitempty"`
+	DocType        *string                `json:"docType,omitempty"`
+	ArtifactConfig *models.ArtifactConfig `json:"artifactConfig,omitempty"`
 }
 
 // CreateProjectDoc handles POST /api/v1/projects/{id}/docs
@@ -433,17 +436,19 @@ func (h *ProjectsHandler) CreateProjectDoc(w http.ResponseWriter, r *http.Reques
 
 	now := time.Now().UTC()
 	doc := &models.CoreDoc{
-		TenantID:    authInfo.TenantID,
-		ProjectID:   projectID,
-		Filename:    req.Filename,
-		ContentType: req.ContentType,
-		Description: req.Description,
-		SizeBytes:   req.SizeBytes,
-		StoragePath: req.StoragePath,
-		External:    req.External,
-		CreatedBy:   &authInfo.UID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		TenantID:       authInfo.TenantID,
+		ProjectID:      projectID,
+		Filename:       req.Filename,
+		ContentType:    req.ContentType,
+		Description:    req.Description,
+		SizeBytes:      req.SizeBytes,
+		StoragePath:    req.StoragePath,
+		External:       req.External,
+		DocType:        req.DocType,
+		ArtifactConfig: req.ArtifactConfig,
+		CreatedBy:      &authInfo.UID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	id, err := h.coreDocs.Create(r.Context(), doc)
 	if err != nil {
@@ -452,6 +457,12 @@ func (h *ProjectsHandler) CreateProjectDoc(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	doc.ID = id
+	// Index CoreDoc for vector search if ExtractedText is available
+	if doc.ExtractedText != nil && h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+		if err := h.indexCoreDoc(r.Context(), authInfo.TenantID, doc); err != nil {
+			h.logger.Printf("Warning: failed to index CoreDoc %s: %v", doc.ID, err)
+		}
+	}
 	WriteJSON(w, http.StatusCreated, doc)
 }
 
@@ -554,6 +565,12 @@ func (h *ProjectsHandler) CreateProjectDocFromText(w http.ResponseWriter, r *htt
 			"chars":     len(req.Text),
 			"ts":        time.Now().UnixMilli(),
 		})
+	}
+	// Index CoreDoc for vector search
+	if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+		if err := h.indexCoreDoc(r.Context(), authInfo.TenantID, doc); err != nil {
+			h.logger.Printf("Warning: failed to index CoreDoc %s: %v", doc.ID, err)
+		}
 	}
 	WriteJSON(w, http.StatusCreated, doc)
 }
@@ -804,6 +821,37 @@ func sanitizeFilename(name string) string {
 	return string(b)
 }
 
+// assembleArtifactMarkdownFromConfig assembles markdown document from artifact sections
+// This is a copy of the function from artifacts.go to avoid circular dependencies
+func assembleArtifactMarkdownFromConfig(config *models.ArtifactConfig) string {
+	if config == nil || len(config.Structure) == 0 {
+		return ""
+	}
+
+	// Sort sections by order
+	sections := make([]models.ArtifactSection, len(config.Structure))
+	copy(sections, config.Structure)
+	sort.Slice(sections, func(i, j int) bool {
+		return sections[i].Order < sections[j].Order
+	})
+
+	var builder strings.Builder
+
+	// Add each section
+	for _, section := range sections {
+		builder.WriteString(fmt.Sprintf("## %s\n\n", section.Title))
+
+		if section.Content != nil && *section.Content != "" {
+			builder.WriteString(*section.Content)
+			builder.WriteString("\n\n")
+		} else {
+			builder.WriteString("*[Section not generated yet]*\n\n")
+		}
+	}
+
+	return builder.String()
+}
+
 // StorageClient abstracts cloud storage upload/delete for easier testing
 type StorageClient interface {
 	UploadBytes(ctx context.Context, bucket, object string, data []byte, contentType string, metadata map[string]string) error
@@ -892,6 +940,38 @@ func (h *ProjectsHandler) DownloadProjectDoc(w http.ResponseWriter, r *http.Requ
 		WriteNotFound(w, "Document not found")
 		return
 	}
+
+	// Handle dynamic artifacts: assemble from sections if no storage
+	if cd.DocType != nil && *cd.DocType == "dynamic_artifact" && cd.ArtifactConfig != nil {
+		var data []byte
+		if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") && h.storage != nil {
+			// Try to read from storage first
+			bucket, object := splitGsPath(*cd.StoragePath)
+			var readErr error
+			data, readErr = h.storage.ReadObject(r.Context(), bucket, object)
+			if readErr != nil {
+				// Fallback: assemble from sections
+				markdownContent := assembleArtifactMarkdownFromConfig(cd.ArtifactConfig)
+				data = []byte(markdownContent)
+			}
+		} else {
+			// No storage, assemble from sections
+			markdownContent := assembleArtifactMarkdownFromConfig(cd.ArtifactConfig)
+			data = []byte(markdownContent)
+		}
+
+		if cd.ContentType != "" {
+			w.Header().Set("Content-Type", cd.ContentType)
+		} else {
+			w.Header().Set("Content-Type", "text/markdown")
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", sanitizeFilename(cd.Filename)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+		return
+	}
+
+	// Regular documents: require storage
 	if cd.StoragePath == nil || !strings.HasPrefix(*cd.StoragePath, "gs://") {
 		WriteBadRequest(w, "NO_STORAGE", "Document has no storagePath")
 		return
@@ -926,7 +1006,7 @@ func (h *ProjectsHandler) ExportDocToDocx(w http.ResponseWriter, r *http.Request
 		WriteUnauthorized(w, "Authentication required")
 		return
 	}
-	
+
 	// Parse path: /api/v1/projects/{id}/docs/{docId}/export
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) < 7 {
@@ -934,26 +1014,33 @@ func (h *ProjectsHandler) ExportDocToDocx(w http.ResponseWriter, r *http.Request
 		return
 	}
 	projectID, docID := parts[3], parts[5]
-	
+
 	// Verify project access
 	project, err := h.repo.Get(r.Context(), projectID)
 	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
 		WriteForbidden(w, "Access denied")
 		return
 	}
-	
+
 	// Get the document
 	cd, err := h.coreDocs.Get(r.Context(), docID)
 	if err != nil || cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
 		WriteNotFound(w, "Document not found")
 		return
 	}
-	
+
 	// Get markdown content
 	var markdownContent string
-	if cd.ExtractedText != nil && *cd.ExtractedText != "" {
+	if cd.DocType != nil && *cd.DocType == "dynamic_artifact" && cd.ArtifactConfig != nil {
+		// For artifacts, assemble from sections
+		markdownContent = assembleArtifactMarkdownFromConfig(cd.ArtifactConfig)
+		if markdownContent == "" {
+			WriteBadRequest(w, "NO_CONTENT", "Artifact has no content")
+			return
+		}
+	} else if cd.ExtractedText != nil && *cd.ExtractedText != "" {
 		markdownContent = *cd.ExtractedText
-	} else if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") {
+	} else if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") && h.storage != nil {
 		// Try to read from storage
 		bucket, object := splitGsPath(*cd.StoragePath)
 		data, err := h.storage.ReadObject(r.Context(), bucket, object)
@@ -966,7 +1053,7 @@ func (h *ProjectsHandler) ExportDocToDocx(w http.ResponseWriter, r *http.Request
 		WriteBadRequest(w, "NO_CONTENT", "Document has no readable content")
 		return
 	}
-	
+
 	// Convert markdown to DOCX using Pandoc
 	docxData, err := convertMarkdownToDocx(markdownContent)
 	if err != nil {
@@ -974,14 +1061,14 @@ func (h *ProjectsHandler) ExportDocToDocx(w http.ResponseWriter, r *http.Request
 		WriteInternalError(w, "Failed to convert document to DOCX")
 		return
 	}
-	
+
 	// Determine output filename
 	baseName := strings.TrimSuffix(cd.Filename, filepath.Ext(cd.Filename))
 	if baseName == "" {
 		baseName = "exported"
 	}
 	outputFilename := baseName + ".docx"
-	
+
 	// Set response headers
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", sanitizeFilename(outputFilename)))
@@ -999,13 +1086,13 @@ func convertMarkdownToDocx(markdown string) ([]byte, error) {
 	}
 	defer os.Remove(tmpMD.Name())
 	defer tmpMD.Close()
-	
+
 	tmpDOCX, err := os.CreateTemp("", "export-*.docx")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp docx file: %w", err)
 	}
 	defer os.Remove(tmpDOCX.Name())
-	
+
 	// Write markdown to temp file
 	if _, err := tmpMD.WriteString(markdown); err != nil {
 		return nil, fmt.Errorf("failed to write markdown: %w", err)
@@ -1013,7 +1100,7 @@ func convertMarkdownToDocx(markdown string) ([]byte, error) {
 	if err := tmpMD.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close markdown file: %w", err)
 	}
-	
+
 	// Run Pandoc to convert markdown to DOCX
 	// Using --wrap=none to preserve line breaks, --standalone for proper document structure
 	cmd := exec.Command("pandoc",
@@ -1023,19 +1110,19 @@ func convertMarkdownToDocx(markdown string) ([]byte, error) {
 		"--standalone",
 		"--from=markdown",
 		"--to=docx")
-	
+
 	var out bytes.Buffer
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("pandoc execution failed: %w, stderr: %s", err, out.String())
 	}
-	
+
 	// Read the generated DOCX file
 	docxData, err := os.ReadFile(tmpDOCX.Name())
 	if err != nil {
 		return nil, fmt.Errorf("failed to read generated DOCX: %w", err)
 	}
-	
+
 	return docxData, nil
 }
 
@@ -1151,8 +1238,13 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 			Verifier:        ai.NewMapVerifier([]string{"entities"}, nil),
 			EnableTelemetry: true,
 			TenantID:        tenantID,
-			UserID:          func() string { if authInfo != nil { return authInfo.UID }; return "" }(),
-			Project:         pid,
+			UserID: func() string {
+				if authInfo != nil {
+					return authInfo.UID
+				}
+				return ""
+			}(),
+			Project: pid,
 		}
 		parsed, err := h.exec.ExecuteStructuredTask(ctx, task)
 		if err != nil {
@@ -2110,7 +2202,7 @@ func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd 
 		doc := &models.Document{
 			TenantID:     tenantID,
 			SourceID:     virtualSourceID,
-			ExternalID:    externalID,
+			ExternalID:   externalID,
 			Title:        cd.Filename,
 			DocumentPath: fmt.Sprintf("coredoc/%s/%s", cd.ProjectID, cd.ID),
 			FullText:     text,
@@ -2122,8 +2214,8 @@ func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd 
 			CreatedAt:    now,
 			UpdatedAt:    now,
 			Attrs: map[string]any{
-				"coreDocId":  cd.ID,
-				"projectId":  cd.ProjectID,
+				"coreDocId":    cd.ID,
+				"projectId":    cd.ProjectID,
 				"documentType": "coredoc",
 			},
 		}

@@ -610,6 +610,13 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 				_ = onEvent(StreamEvent{Type: "error", Error: execErr.Error()})
 				return execErr
 			}
+			// Log tool result for debugging
+			log.Printf("[Combined StreamWithTools OpenAI] Tool executed: name=%s, callID=%s, resultLength=%d, resultPreview=%s", tc.Name, tc.CallID, len(out), func() string {
+				if len(out) > 200 {
+					return string(out[:200]) + "..."
+				}
+				return string(out)
+			}())
 			// Emit tool_result (use Arguments field to carry result payload for consistency with Gemini)
 			_ = onEvent(StreamEvent{Type: "tool_result", ToolCalls: []g.ToolCall{{Name: tc.Name, Arguments: string(out), CallID: tc.CallID}}})
 			input = append(input, map[string]interface{}{
@@ -619,13 +626,26 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 			})
 		}
 		// Step 2: respond with function_call_output appended
+		log.Printf("[Combined StreamWithTools OpenAI] Sending follow-up Respond request with %d input items", len(input))
 		r2, err := c.oa.Respond(ctx, input, toOATools(tools), c.normalizeOptionsForOpenAI(opts))
 		if err != nil {
 			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
 			return err
 		}
+		// Log response for debugging
+		log.Printf("[Combined StreamWithTools OpenAI] Follow-up Respond response: contentLength=%d, contentPreview=%s, hasToolCalls=%v", len(r2.Content), func() string {
+			if len(r2.Content) > 200 {
+				return r2.Content[:200] + "..."
+			}
+			return r2.Content
+		}(), len(r2.ToolCalls) > 0)
 		if r2.Content != "" {
 			_ = onEvent(StreamEvent{Type: "chunk", Text: r2.Content})
+		} else {
+			// Emit empty chunk to signal completion without text response
+			// This happens when model only executes tools without generating text
+			log.Printf("[Combined StreamWithTools OpenAI] Content is empty after tool execution, emitting empty chunk")
+			_ = onEvent(StreamEvent{Type: "chunk", Text: ""})
 		}
 		// Merge SearchQueries and Sources from both calls with deduplication
 		mergedQueries := mergeUniqueStrings(r.SearchQueries, r2.SearchQueries)
@@ -637,7 +657,7 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 			return errors.New("grok not configured")
 		}
 		_ = onEvent(StreamEvent{Type: "start"})
-		// Single-step call to Grok
+		// Step 1: request with tools
 		r, err := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
 		if err != nil {
 			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
@@ -650,9 +670,168 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 			_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r.Usage), SearchQueries: r.SearchQueries, Sources: r.Sources})
 			return nil
 		}
-		// Emit tool_call(s). For now, do not perform follow-up Respond for Grok.
+		// Emit tool_call event(s)
+		log.Printf("[Combined StreamWithTools Grok] First request returned %d tool calls: %v", len(r.ToolCalls), func() []string {
+			names := make([]string, 0, len(r.ToolCalls))
+			for _, tc := range r.ToolCalls {
+				names = append(names, tc.Name)
+			}
+			return names
+		}())
 		_ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(r.ToolCalls)})
-		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r.Usage)})
+		// Execute tools and build follow-up messages
+		msgs := make([]map[string]interface{}, 0, 3)
+		msgs = append(msgs, map[string]interface{}{"role": "user", "content": prompt})
+		// Add assistant message with tool calls
+		toolCallsPayload := make([]map[string]interface{}, 0, len(r.ToolCalls))
+		for _, tc := range r.ToolCalls {
+			toolCallsPayload = append(toolCallsPayload, map[string]interface{}{
+				"id":       tc.CallID,
+				"type":     "function",
+				"function": map[string]interface{}{"name": tc.Name, "arguments": tc.Arguments},
+			})
+		}
+		msgs = append(msgs, map[string]interface{}{
+			"role":       "assistant",
+			"content":    nil,
+			"tool_calls": toolCallsPayload,
+		})
+		// Add tool results
+		for _, tc := range r.ToolCalls {
+			out, execErr := reg.Execute(ctx, tc.Name, []byte(tc.Arguments))
+			if execErr != nil {
+				_ = onEvent(StreamEvent{Type: "error", Error: execErr.Error()})
+				return execErr
+			}
+			// Log tool result for debugging
+			log.Printf("[Combined StreamWithTools Grok] Tool executed: name=%s, callID=%s, resultLength=%d, resultPreview=%s", tc.Name, tc.CallID, len(out), func() string {
+				if len(out) > 200 {
+					return string(out[:200]) + "..."
+				}
+				return string(out)
+			}())
+			// Emit tool_result
+			_ = onEvent(StreamEvent{Type: "tool_result", ToolCalls: []g.ToolCall{{Name: tc.Name, Arguments: string(out), CallID: tc.CallID}}})
+			msgs = append(msgs, map[string]interface{}{
+				"role":         "tool",
+				"content":      string(out),
+				"tool_call_id": tc.CallID,
+			})
+		}
+		// Step 2: continue with tool results using GenerateWithMessages
+		log.Printf("[Combined StreamWithTools Grok] Sending follow-up request with %d messages", len(msgs))
+		r2, err := c.gr.GenerateWithMessages(ctx, msgs, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
+		if err != nil {
+			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+			return err
+		}
+		// Log response for debugging
+		log.Printf("[Combined StreamWithTools Grok] Follow-up response: contentLength=%d, contentPreview=%s, hasToolCalls=%v, toolCalls=%v", len(r2.Content), func() string {
+			if len(r2.Content) > 200 {
+				return r2.Content[:200] + "..."
+			}
+			return r2.Content
+		}(), len(r2.ToolCalls) > 0, func() []string {
+			names := make([]string, 0, len(r2.ToolCalls))
+			for _, tc := range r2.ToolCalls {
+				names = append(names, tc.Name)
+			}
+			return names
+		}())
+		// Check if there are tool calls in follow-up response (agent wants to call more tools)
+		if len(r2.ToolCalls) > 0 {
+			log.Printf("[Combined StreamWithTools Grok] Follow-up response has %d tool calls, executing them: %v", len(r2.ToolCalls), func() []string {
+				names := make([]string, 0, len(r2.ToolCalls))
+				for _, tc := range r2.ToolCalls {
+					names = append(names, tc.Name)
+				}
+				return names
+			}())
+			// Emit tool_call events
+			_ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(r2.ToolCalls)})
+			// Execute the tools
+			for _, tc := range r2.ToolCalls {
+				out, execErr := reg.Execute(ctx, tc.Name, []byte(tc.Arguments))
+				if execErr != nil {
+					log.Printf("[Combined StreamWithTools Grok] Tool execution failed: name=%s, error=%v", tc.Name, execErr)
+					_ = onEvent(StreamEvent{Type: "error", Error: execErr.Error()})
+					return execErr
+				}
+				log.Printf("[Combined StreamWithTools Grok] Follow-up tool executed: name=%s, callID=%s, resultLength=%d", tc.Name, tc.CallID, len(out))
+				_ = onEvent(StreamEvent{Type: "tool_result", ToolCalls: []g.ToolCall{{Name: tc.Name, Arguments: string(out), CallID: tc.CallID}}})
+				// Add tool result to messages for potential third round-trip
+				msgs = append(msgs, map[string]interface{}{
+					"role":         "tool",
+					"content":      string(out),
+					"tool_call_id": tc.CallID,
+				})
+			}
+			// Do one more round-trip to allow model to process tool results and potentially call more tools (e.g., create_graph)
+			// Limit to max 3 round-trips total (initial + 2 follow-ups) to avoid infinite loops
+			log.Printf("[Combined StreamWithTools Grok] Doing third round-trip after follow-up tool execution")
+			r3, err := c.gr.GenerateWithMessages(ctx, msgs, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
+			if err != nil {
+				log.Printf("[Combined StreamWithTools Grok] Third round-trip failed: %v", err)
+				_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+				return err
+			}
+			log.Printf("[Combined StreamWithTools Grok] Third round-trip response: contentLength=%d, hasToolCalls=%v, toolCalls=%v", len(r3.Content), len(r3.ToolCalls) > 0, func() []string {
+				names := make([]string, 0, len(r3.ToolCalls))
+				for _, tc := range r3.ToolCalls {
+					names = append(names, tc.Name)
+				}
+				return names
+			}())
+			// If model wants to call more tools in third round-trip, execute them but don't do another round-trip
+			if len(r3.ToolCalls) > 0 {
+				log.Printf("[Combined StreamWithTools Grok] Third round-trip has %d tool calls, executing them: %v", len(r3.ToolCalls), func() []string {
+					names := make([]string, 0, len(r3.ToolCalls))
+					for _, tc := range r3.ToolCalls {
+						names = append(names, tc.Name)
+					}
+					return names
+				}())
+				_ = onEvent(StreamEvent{Type: "tool_call", ToolCalls: toGemToolsFromGrok(r3.ToolCalls)})
+				for _, tc := range r3.ToolCalls {
+					out, execErr := reg.Execute(ctx, tc.Name, []byte(tc.Arguments))
+					if execErr != nil {
+						log.Printf("[Combined StreamWithTools Grok] Third round-trip tool execution failed: name=%s, error=%v", tc.Name, execErr)
+						_ = onEvent(StreamEvent{Type: "error", Error: execErr.Error()})
+						return execErr
+					}
+					log.Printf("[Combined StreamWithTools Grok] Third round-trip tool executed: name=%s, callID=%s, resultLength=%d", tc.Name, tc.CallID, len(out))
+					_ = onEvent(StreamEvent{Type: "tool_result", ToolCalls: []g.ToolCall{{Name: tc.Name, Arguments: string(out), CallID: tc.CallID}}})
+				}
+				log.Printf("[Combined StreamWithTools Grok] Third round-trip tool calls executed, stopping here (max 3 round-trips)")
+			}
+			// Use r3 for final content and usage
+			if r3.Content != "" {
+				_ = onEvent(StreamEvent{Type: "chunk", Text: r3.Content})
+			} else {
+				log.Printf("[Combined StreamWithTools Grok] Third round-trip content is empty")
+				_ = onEvent(StreamEvent{Type: "chunk", Text: ""})
+			}
+			// Merge sources from all calls
+			mergedSources := mergeUniqueStrings(mergeUniqueStrings(r.Sources, r2.Sources), r3.Sources)
+			mergedQueries := mergeUniqueStrings(mergeUniqueStrings(r.SearchQueries, r2.SearchQueries), r3.SearchQueries)
+			_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r3.Usage), Model: r3.Model, SearchQueries: mergedQueries, Sources: mergedSources})
+			return nil
+		}
+
+		// Emit content as chunk (even if empty, to avoid "Empty reply" on frontend)
+		// If content is empty but tool was executed, that's fine - the tool result is the response
+		if r2.Content != "" {
+			_ = onEvent(StreamEvent{Type: "chunk", Text: r2.Content})
+		} else {
+			// Emit empty chunk to signal completion without text response
+			// This happens when model only executes tools without generating text
+			log.Printf("[Combined StreamWithTools Grok] Content is empty, emitting empty chunk")
+			_ = onEvent(StreamEvent{Type: "chunk", Text: ""})
+		}
+		// Merge sources from both calls
+		mergedSources := mergeUniqueStrings(r.Sources, r2.Sources)
+		mergedQueries := mergeUniqueStrings(r.SearchQueries, r2.SearchQueries)
+		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsageFromGrok(r2.Usage), Model: r2.Model, SearchQueries: mergedQueries, Sources: mergedSources})
 		return nil
 	case "claude":
 		if c.cl == nil {

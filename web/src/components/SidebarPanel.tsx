@@ -1,6 +1,9 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectsStore } from '../stores/projectsStore';
+import { api } from '../lib/api';
+import { isArtifact, type Artifact } from '../types/artifact';
+import type { CoreDoc } from '../types/generated';
 
 interface SidebarPanelProps {
   isOpen: boolean;
@@ -20,6 +23,9 @@ interface SidebarPanelProps {
   onDeleteChat: (projectId: string, projectName: string) => void;
   onRenameChat: (projectId: string, newName: string) => void;
   onStartEditingProject: (projectId: string, currentName: string) => void;
+  currentMode?: 'chat' | 'perspectives' | 'models' | 'pages';
+  projectId?: string | null;
+  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
 }
 
 export const SidebarPanel: React.FC<SidebarPanelProps> = ({
@@ -40,11 +46,81 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   onDeleteChat,
   onRenameChat,
   onStartEditingProject,
+  currentMode,
+  projectId,
+  onOpenDocument,
 }) => {
   const { t } = useTranslation();
   const projects = useProjectsStore((s) => s.projects);
   const currentProject = useProjectsStore((s) => s.currentProject);
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
+  const deletingProjectIdsArray = useProjectsStore((s) => s.deletingProjectIds);
+  const deletingProjectIds = React.useMemo(() => new Set(deletingProjectIdsArray), [deletingProjectIdsArray]);
+  const [pages, setPages] = React.useState<Artifact[]>([]);
+  const [pagesLoading, setPagesLoading] = React.useState(false);
+  const [editingPageId, setEditingPageId] = React.useState<string | null>(null);
+  const [editingPageName, setEditingPageName] = React.useState<string>('');
+  const editingPageInputRef = React.useRef<HTMLInputElement>(null);
+  const showPages = currentMode === 'pages';
+  
+  // Find project by projectId if currentProject doesn't match
+  const displayProject = React.useMemo(() => {
+    if (!projectId || projectId === 'local-unfold') return null;
+    // First check if currentProject matches
+    if (currentProject && currentProject.id === projectId) {
+      return currentProject;
+    }
+    // Otherwise find in projects list
+    return projects.find(p => p.id === projectId) || null;
+  }, [projectId, currentProject, projects]);
+
+  // Load pages function
+  const loadPages = React.useCallback(async () => {
+    if (!showPages || !projectId || projectId === 'local-unfold') {
+      setPages([]);
+      return;
+    }
+
+    setPagesLoading(true);
+    try {
+      const docs = await api.docsList(projectId);
+      const artifactsList = docs.filter((doc: CoreDoc) => isArtifact(doc)) as Artifact[];
+      setPages(artifactsList);
+    } catch (err) {
+      console.error('[SidebarPanel] Failed to load pages', err);
+      setPages([]);
+    } finally {
+      setPagesLoading(false);
+    }
+  }, [showPages, projectId]);
+
+  // Load pages when in pages mode or projectId changes
+  React.useEffect(() => {
+    loadPages();
+  }, [loadPages]);
+
+  // Listen for pages.updated event to refresh list
+  React.useEffect(() => {
+    const handlePagesUpdated = (event: CustomEvent) => {
+      // Only refresh if the event is for the current project
+      if (event.detail?.projectId === projectId && showPages) {
+        loadPages();
+      }
+    };
+
+    window.addEventListener('pages.updated', handlePagesUpdated as EventListener);
+    return () => {
+      window.removeEventListener('pages.updated', handlePagesUpdated as EventListener);
+    };
+  }, [projectId, showPages, loadPages]);
+
+  // Focus input when editing starts
+  React.useEffect(() => {
+    if (editingPageId && editingPageInputRef.current) {
+      editingPageInputRef.current.focus();
+      editingPageInputRef.current.select();
+    }
+  }, [editingPageId]);
 
   if (!isOpen) {
     return (
@@ -157,12 +233,61 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       >
         <div className="p-6 h-full flex flex-col">
           <div className="flex items-center justify-between mb-6">
+            {currentMode === 'pages' ? (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    // Switch back to chat mode via callback prop
+                    // Parent component should handle mode switching
+                    if (onOpenDocument) {
+                      // Trigger mode switch by dispatching event that parent listens to
+                      window.dispatchEvent(new CustomEvent('ui.switchMode', { detail: { mode: 'chat' } }));
+                    }
+                  }}
+                  className="p-1 rounded transition-colors"
+                  style={{
+                    backgroundColor: 'transparent',
+                    color: 'var(--text-secondary-strong)',
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                      'var(--white-10)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                      'transparent';
+                  }}
+                  title="Back to chats"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M15 19l-7-7 7-7"
+                    />
+                  </svg>
+                </button>
+                <h3
+                  className="text-13 font-medium"
+                  style={{ color: 'var(--text-heading)' }}
+                >
+                  Pages
+                </h3>
+              </div>
+            ) : (
             <h3
               className="text-13 font-medium"
               style={{ color: 'var(--text-heading)' }}
             >
               {t('unfold.sections.navigation')}
             </h3>
+            )}
             <button
               onClick={onClose}
               className="p-2 rounded-lg transition-colors"
@@ -195,58 +320,76 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             </button>
           </div>
 
-          {/* New Chat action */}
+          {/* New Chat action or Project name in Pages mode */}
           <div className="mb-3">
-            <button
-              type="button"
-              aria-label={t('unfold.sections.newChat')}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
-              style={{
-                backgroundColor: 'transparent',
-                color: 'var(--text-heading)',
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--white-10)';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'transparent';
-              }}
-              onClick={() => {
-                onResetChat();
-                if (isMobile) {
-                  onClose();
-                }
-              }}
-            >
-              <svg
-                className="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
+            {showPages ? (
+              <div
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg"
+                style={{
+                  backgroundColor: 'transparent',
+                  color: 'var(--text-heading)',
+                }}
               >
-                <rect
-                  x="3.5"
-                  y="3.5"
-                  width="17"
-                  height="17"
-                  rx="3"
-                  strokeWidth={2}
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeWidth={2}
-                  d="M12 8v8M8 12h8"
-                />
-              </svg>
-              <span
-                className="text-13 font-medium"
-                style={{ color: 'var(--text-heading)' }}
+                <span
+                  className="text-13 font-medium flex-1 truncate"
+                  style={{ color: 'var(--text-heading)' }}
+                  title={displayProject?.displayName || ''}
+                >
+                  {displayProject?.displayName || 'Untitled Project'}
+                </span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                aria-label={t('unfold.sections.newChat')}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                style={{
+                  backgroundColor: 'transparent',
+                  color: 'var(--text-heading)',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                    'var(--white-10)';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                    'transparent';
+                }}
+                onClick={() => {
+                  onResetChat();
+                  if (isMobile) {
+                    onClose();
+                  }
+                }}
               >
-                {t('unfold.sections.newChat')}
-              </span>
-            </button>
+                <svg
+                  className="w-4 h-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                >
+                  <rect
+                    x="3.5"
+                    y="3.5"
+                    width="17"
+                    height="17"
+                    rx="3"
+                    strokeWidth={2}
+                  />
+                  <path
+                    strokeLinecap="round"
+                    strokeWidth={2}
+                    d="M12 8v8M8 12h8"
+                  />
+                </svg>
+                <span
+                  className="text-13 font-medium"
+                  style={{ color: 'var(--text-heading)' }}
+                >
+                  {t('unfold.sections.newChat')}
+                </span>
+              </button>
+            )}
           </div>
 
           {/* Scrollable Chats section */}
@@ -254,6 +397,191 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             className="mb-4 flex-1 min-h-0 overflow-y-auto"
             style={{ scrollbarGutter: 'stable' }}
           >
+            {showPages ? (
+              <>
+                <div
+                  className="text-[11px] uppercase tracking-wide mb-2"
+                  style={{ color: 'var(--text-tertiary-weak)' }}
+                >
+                  Pages ({pages.length})
+                </div>
+                {pagesLoading ? (
+                  <div
+                    className="text-xs"
+                    style={{ color: 'var(--text-secondary-strong)' }}
+                  >
+                    Loading...
+                  </div>
+                ) : pages.length === 0 ? (
+                  <div
+                    className="text-xs"
+                    style={{ color: 'var(--text-secondary-strong)' }}
+                  >
+                    No pages yet
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {pages.map((page) => (
+                      <div
+                        key={page.id}
+                        className="px-2 py-1 rounded text-xs flex items-center gap-2 group"
+                        title={page.filename}
+                        style={{
+                          backgroundColor: 'transparent',
+                        }}
+                        onMouseEnter={(e) => {
+                          (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                            'var(--white-10)';
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                            'transparent';
+                        }}
+                      >
+                        <div
+                          className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
+                          onClick={() => {
+                            if (editingPageId !== page.id) {
+                              onOpenDocument?.(page);
+                              if (isMobile) {
+                                onClose();
+                              }
+                            }
+                          }}
+                        >
+                          <svg
+                            className="w-3 h-3"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            style={{ color: 'var(--text-secondary)' }}
+                          >
+                            <path
+                              d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                            <path
+                              d="M14 2v6h6M16 13H8M16 17H8M10 9H8"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                          {editingPageId === page.id ? (
+                            <input
+                              ref={editingPageInputRef}
+                              type="text"
+                              value={editingPageName}
+                              onChange={(e) => setEditingPageName(e.target.value)}
+                              onKeyDown={async (e) => {
+                                if (e.key === 'Enter') {
+                                  e.stopPropagation();
+                                  if (!projectId || projectId === 'local-unfold') return;
+                                  const newName = editingPageName.trim();
+                                  if (newName && newName !== page.filename) {
+                                    try {
+                                      await api.docsUpdate(projectId, page.id, { filename: newName });
+                                      loadPages();
+                                      window.dispatchEvent(new CustomEvent('pages.updated', { detail: { projectId } }));
+                                    } catch (err) {
+                                      console.error('[SidebarPanel] Failed to rename page', err);
+                                      alert('Failed to rename page');
+                                    }
+                                  }
+                                  setEditingPageId(null);
+                                  setEditingPageName('');
+                                } else if (e.key === 'Escape') {
+                                  e.stopPropagation();
+                                  setEditingPageId(null);
+                                  setEditingPageName('');
+                                }
+                              }}
+                              onBlur={async () => {
+                                if (!projectId || projectId === 'local-unfold') return;
+                                const newName = editingPageName.trim();
+                                if (newName && newName !== page.filename) {
+                                  try {
+                                    await api.docsUpdate(projectId, page.id, { filename: newName });
+                                    loadPages();
+                                    window.dispatchEvent(new CustomEvent('pages.updated', { detail: { projectId } }));
+                                  } catch (err) {
+                                    console.error('[SidebarPanel] Failed to rename page', err);
+                                    alert('Failed to rename page');
+                                  }
+                                }
+                                setEditingPageId(null);
+                                setEditingPageName('');
+                              }}
+                              className="flex-1 px-1 py-0.5 rounded text-xs"
+                              style={{
+                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                color: 'var(--text-heading)',
+                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <span
+                              className="flex-1 truncate"
+                              style={{ color: 'var(--text-heading)' }}
+                            >
+                              {page.filename}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingPageId(page.id);
+                              setEditingPageName(page.filename);
+                              setTimeout(() => editingPageInputRef.current?.focus(), 0);
+                            }}
+                            className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded-full hover:bg-white/10 transition-all"
+                            style={{ color: 'var(--text-secondary)' }}
+                            aria-label="Rename page"
+                            title="Rename page"
+                          >
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!projectId || projectId === 'local-unfold') return;
+                              if (!confirm(`Delete "${page.filename}"?`)) return;
+                              try {
+                                await api.docsDelete(projectId, page.id);
+                                loadPages();
+                                window.dispatchEvent(new CustomEvent('pages.updated', { detail: { projectId } }));
+                              } catch (err) {
+                                console.error('[SidebarPanel] Failed to delete page', err);
+                                alert('Failed to delete page');
+                              }
+                            }}
+                            className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded-full hover:bg-white/10 transition-all"
+                            style={{ color: 'var(--text-secondary)' }}
+                            aria-label="Delete page"
+                            title="Delete page"
+                          >
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                              <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
             <div
               className="text-[11px] uppercase tracking-wide mb-2"
               style={{ color: 'var(--text-tertiary-weak)' }}
@@ -270,13 +598,20 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               </div>
             ) : (
               <div className="space-y-1">
-                {projects.map((project) => (
+                {projects.map((project) => {
+                  const isDeleting = deletingProjectIds.has(project.id);
+                  return (
                   <div
                     key={project.id}
                     className="px-2 py-1 rounded text-xs flex items-center gap-2 group cursor-pointer"
                     title={project.displayName}
                     onClick={() => {
-                      if (editingProjectId !== project.id) {
+                      if (editingProjectId !== project.id && !isDeleting) {
+                        console.log('[SidebarPanel] Clicked on project', { 
+                          projectId: project.id, 
+                          projectName: project.displayName,
+                          currentProjectId: currentProject?.id 
+                        });
                         setCurrentProject(project);
                         if (isMobile) {
                           onClose();
@@ -288,11 +623,14 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                         currentProject?.id === project.id
                           ? 'var(--white-10)'
                           : 'transparent',
+                      opacity: isDeleting ? 0.5 : 1,
+                      cursor: isDeleting ? 'default' : 'pointer',
                     }}
                     onMouseEnter={(e) => {
                       if (
                         currentProject?.id !== project.id &&
-                        editingProjectId !== project.id
+                        editingProjectId !== project.id &&
+                        !isDeleting
                       )
                         (e.currentTarget as HTMLDivElement).style.backgroundColor =
                           'var(--white-10)';
@@ -343,81 +681,95 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                       <>
                         <span
                           className="flex-1 truncate"
-                          style={{ color: 'var(--text-heading)' }}
+                          style={{ 
+                            color: isDeleting 
+                              ? 'var(--text-tertiary-weak)' 
+                              : 'var(--text-heading)',
+                            textDecoration: isDeleting 
+                              ? 'line-through' 
+                              : 'none',
+                          }}
                         >
                           {project.displayName}
                         </span>
-                        <button
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
-                          title={t('unfold.sections.renameChat')}
-                          style={{ backgroundColor: 'transparent' }}
-                          onMouseEnter={(e) => {
-                            (
-                              e.currentTarget as HTMLButtonElement
-                            ).style.backgroundColor = 'var(--white-10)';
-                          }}
-                          onMouseLeave={(e) => {
-                            (
-                              e.currentTarget as HTMLButtonElement
-                            ).style.backgroundColor = 'transparent';
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onStartEditingProject(project.id, project.displayName);
-                          }}
-                        >
-                          <svg
-                            className="w-3.5 h-3.5"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                            />
-                          </svg>
-                        </button>
-                        <button
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
-                          title={t('unfold.sections.deleteChat')}
-                          style={{ backgroundColor: 'transparent' }}
-                          onMouseEnter={(e) => {
-                            (
-                              e.currentTarget as HTMLButtonElement
-                            ).style.backgroundColor = 'var(--white-10)';
-                          }}
-                          onMouseLeave={(e) => {
-                            (
-                              e.currentTarget as HTMLButtonElement
-                            ).style.backgroundColor = 'transparent';
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteChat(project.id, project.displayName);
-                          }}
-                        >
-                          <svg
-                            className="w-3.5 h-3.5"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
-                            />
-                          </svg>
-                        </button>
+                        {!isDeleting && (
+                          <>
+                            <button
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
+                              title={t('unfold.sections.renameChat')}
+                              style={{ backgroundColor: 'transparent' }}
+                              onMouseEnter={(e) => {
+                                (
+                                  e.currentTarget as HTMLButtonElement
+                                ).style.backgroundColor = 'var(--white-10)';
+                              }}
+                              onMouseLeave={(e) => {
+                                (
+                                  e.currentTarget as HTMLButtonElement
+                                ).style.backgroundColor = 'transparent';
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onStartEditingProject(project.id, project.displayName);
+                              }}
+                            >
+                              <svg
+                                className="w-3.5 h-3.5"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                />
+                              </svg>
+                            </button>
+                            <button
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
+                              title={t('unfold.sections.deleteChat')}
+                              style={{ backgroundColor: 'transparent' }}
+                              onMouseEnter={(e) => {
+                                (
+                                  e.currentTarget as HTMLButtonElement
+                                ).style.backgroundColor = 'var(--white-10)';
+                              }}
+                              onMouseLeave={(e) => {
+                                (
+                                  e.currentTarget as HTMLButtonElement
+                                ).style.backgroundColor = 'transparent';
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteChat(project.id, project.displayName);
+                              }}
+                            >
+                              <svg
+                                className="w-3.5 h-3.5"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
+                                />
+                              </svg>
+                            </button>
+                          </>
+                        )}
                       </>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
+                )}
+              </>
             )}
           </div>
 

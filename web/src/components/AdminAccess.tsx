@@ -1,5 +1,6 @@
 import React from 'react';
 import { api } from '../lib/api';
+import { useWsStore } from '../stores/wsStore';
 
 type Voucher = {
   id: string;
@@ -18,7 +19,7 @@ type Voucher = {
 };
 
 const AdminAccess: React.FC = () => {
-  const [tab, setTab] = React.useState<'waitlist' | 'vouchers'>('waitlist');
+  const [tab, setTab] = React.useState<'waitlist' | 'vouchers' | 'ws'>('waitlist');
   const [statusFilter, setStatusFilter] = React.useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
   const [items, setItems] = React.useState<Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }>>([]);
   const [loading, setLoading] = React.useState(false);
@@ -102,6 +103,13 @@ const AdminAccess: React.FC = () => {
         >
           Vouchers
         </button>
+        <button
+          className="px-3 py-1 rounded text-12"
+          style={{ backgroundColor: tab === 'ws' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
+          onClick={() => setTab('ws')}
+        >
+          WebSocket
+        </button>
       </div>
 
       {tab === 'waitlist' && (
@@ -177,6 +185,8 @@ const AdminAccess: React.FC = () => {
           onEdit={setEditingVoucher}
         />
       )}
+
+      {tab === 'ws' && <WsDiagnosticsTab />}
     </div>
   );
 };
@@ -589,6 +599,73 @@ const VouchersTab: React.FC<{
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+};
+
+const WsDiagnosticsTab: React.FC = () => {
+  const { health, getDiagnostics } = useWsStore();
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-13" style={{ color: 'var(--text-heading)' }}>WebSocket diagnostics</div>
+        <div className="flex items-center gap-2">
+          <div
+            style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor:
+                health === 'ok'
+                  ? 'var(--accent-primary)'
+                  : health === 'degraded'
+                    ? 'var(--accent-warning)'
+                    : 'var(--accent-danger)',
+            }}
+            title={health === 'ok' ? 'Connected' : health === 'degraded' ? 'Degraded' : 'Disconnected'}
+          />
+          <span className="text-12" style={{ color: 'var(--text-secondary)' }}>
+            {health === 'ok' ? 'Connected' : health === 'degraded' ? 'Degraded' : 'Disconnected'}
+          </span>
+        </div>
+      </div>
+
+      <div className="rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)' }}>
+        <div className="p-3">
+          <label htmlFor="ws-diagnostics-textarea" className="sr-only">WebSocket diagnostics information</label>
+          <textarea 
+            id="ws-diagnostics-textarea"
+            name="ws-diagnostics"
+            readOnly 
+            value={getDiagnostics()} 
+            style={{ 
+              width: '100%', 
+              height: 400, 
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace', 
+              fontSize: 12, 
+              lineHeight: 1.4, 
+              background: 'var(--bg)', 
+              color: 'var(--text-primary)', 
+              border: '1px solid var(--border)', 
+              borderRadius: 6, 
+              padding: 8 
+            }} 
+          />
+          <div className="flex items-center justify-end gap-2" style={{ marginTop: 8 }}>
+            <button 
+              className="btn btn-primary text-12"
+              onClick={() => { 
+                try { 
+                  navigator.clipboard.writeText(getDiagnostics()); 
+                } catch {} 
+              }}
+            >
+              Copy
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

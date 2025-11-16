@@ -24,19 +24,68 @@ echo "Creating dataset..."
 bq mk --dataset --location="$REGION" --project_id="$PROJECT_ID" "$DATASET" 2>/dev/null || \
   echo "Dataset already exists"
 
-# Note: Object Tables для текстовых файлов требуют специальной настройки
-# Пока используем метаданные в BigQuery, контент доступен через storagePath
-# Для анализа контента можно использовать BigQuery ML функции когда модель настроена
-echo "Note: Object Tables setup skipped - requires specific configuration"
-echo "      Content analysis will use BigQuery ML functions when model is configured"
+# Setup Object Tables for different document formats
+CORE_DOCS_BUCKET="${PROJECT_ID}-core-docs"
 
-# Create table for document metadata (streaming from Firestore)
-echo "Creating table for document metadata..."
+echo "Setting up Object Tables for document formats..."
+
+# RAG Documents Object Table (text files)
+echo "Creating Object Table for RAG documents (text)..."
+bq query --use_legacy_sql=false --project_id="$PROJECT_ID" <<EOF 2>/dev/null || echo "RAG documents table may already exist"
+CREATE OR REPLACE EXTERNAL TABLE \`${PROJECT_ID}.${DATASET}.documents_object_table\`
+WITH CONNECTION \`${PROJECT_ID}.us.gcs-connection\`
+OPTIONS (
+  object_metadata = 'SIMPLE',
+  uris = ['gs://${BUCKET}/**/*.txt']
+)
+EOF
+
+# CoreDocs Text Object Table
+echo "Creating Object Table for CoreDocs text formats..."
+bq query --use_legacy_sql=false --project_id="$PROJECT_ID" <<EOF 2>/dev/null || echo "CoreDocs text table may already exist"
+CREATE OR REPLACE EXTERNAL TABLE \`${PROJECT_ID}.${DATASET}.core_docs_text_table\`
+WITH CONNECTION \`${PROJECT_ID}.us.gcs-connection\`
+OPTIONS (
+  object_metadata = 'SIMPLE',
+  uris = [
+    'gs://${CORE_DOCS_BUCKET}/**/*.txt',
+    'gs://${CORE_DOCS_BUCKET}/**/*.md',
+    'gs://${CORE_DOCS_BUCKET}/**/*.csv',
+    'gs://${CORE_DOCS_BUCKET}/**/*.tsv'
+  ]
+)
+EOF
+
+# CoreDocs JSON Object Table
+echo "Creating Object Table for CoreDocs JSON files..."
+bq query --use_legacy_sql=false --project_id="$PROJECT_ID" <<EOF 2>/dev/null || echo "CoreDocs JSON table may already exist"
+CREATE OR REPLACE EXTERNAL TABLE \`${PROJECT_ID}.${DATASET}.core_docs_json_table\`
+WITH CONNECTION \`${PROJECT_ID}.us.gcs-connection\`
+OPTIONS (
+  object_metadata = 'SIMPLE',
+  uris = ['gs://${CORE_DOCS_BUCKET}/**/*.json'],
+  format = 'JSON'
+)
+EOF
+
+echo "Note: PDF and DOCX files are accessible via metadata (storagePath)"
+echo "      For content analysis, use BigQuery ML functions with Vertex AI"
+
+# Create table for RAG document metadata (streaming from Firestore)
+echo "Creating table for RAG document metadata..."
 bq mk --table \
   --project_id="$PROJECT_ID" \
   "${DATASET}.documents_metadata" \
   "id:STRING,tenantId:STRING,sourceId:STRING,externalId:STRING,title:STRING,url:STRING,documentPath:STRING,storagePath:STRING,status:STRING,contentType:STRING,documentType:STRING,language:STRING,contentHash:STRING,ingestedAt:TIMESTAMP,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" 2>/dev/null || \
   echo "Table documents_metadata may already exist"
+
+# Create table for CoreDocs metadata (streaming from Firestore)
+echo "Creating table for CoreDocs metadata..."
+bq mk --table \
+  --project_id="$PROJECT_ID" \
+  "${DATASET}.core_docs_metadata" \
+  "id:STRING,tenantId:STRING,projectId:STRING,filename:STRING,contentType:STRING,description:STRING,sizeBytes:INT64,storagePath:STRING,extractedText:STRING,parseStatus:STRING,parseMeta:JSON,pageCount:INT64,docType:STRING,createdBy:STRING,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" 2>/dev/null || \
+  echo "Table core_docs_metadata may already exist"
 
 # Note: ML model creation requires correct remote_service_type
 # Will be configured when BigQuery ML remote models are fully set up
@@ -78,8 +127,12 @@ echo "Dataset: ${PROJECT_ID}.${DATASET}"
 echo ""
 echo "Modern capabilities enabled:"
 echo "  ✅ Object Tables - Direct access to GCS files as tables"
+echo "    - RAG documents (text files)"
+echo "    - CoreDocs text formats (.txt, .md, .csv, .tsv)"
+echo "    - CoreDocs JSON files (.json)"
 echo "  ✅ BigQuery ML - Vertex AI models accessible via SQL"
 echo "  ✅ Structured extraction - Extract data from unstructured content"
+echo "  ✅ Multi-format support - All document types created by the system"
 echo ""
 echo "Example advanced queries:"
 echo ""

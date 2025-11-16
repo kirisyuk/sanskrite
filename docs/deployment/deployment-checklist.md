@@ -35,6 +35,11 @@ gcloud pubsub topics create discovery.status
 gcloud pubsub topics create discovery.profile
 gcloud pubsub topics create discovery.answer
 gcloud pubsub topics create discovery.project
+# Interaction events (for tool usage - graphs, etc.)
+gcloud pubsub topics create interaction.created
+gcloud pubsub topics create interaction.updated
+# Or use the setup script:
+./scripts/setup-interaction-topics.sh
 ```
 
 ### 2. Pre-Deployment Validation

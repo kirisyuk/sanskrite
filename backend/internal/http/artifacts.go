@@ -1,9 +1,13 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -12,10 +16,109 @@ import (
 // ArtifactsHandler manages CRUD for artifacts (CoreDoc with docType = dynamic_artifact)
 type ArtifactsHandler struct {
 	coreDocs *repo.CoreDocsRepo
+	storage  StorageClient
+	bucket   string
 }
 
 func NewArtifactsHandler(core *repo.CoreDocsRepo) *ArtifactsHandler {
 	return &ArtifactsHandler{coreDocs: core}
+}
+
+// WithStorage sets storage client and bucket for artifact handler
+func (h *ArtifactsHandler) WithStorage(storage StorageClient, bucket string) *ArtifactsHandler {
+	h.storage = storage
+	h.bucket = bucket
+	return h
+}
+
+// assembleArtifactMarkdown assembles markdown document from artifact sections
+func assembleArtifactMarkdown(config *models.ArtifactConfig) string {
+	if config == nil || len(config.Structure) == 0 {
+		return ""
+	}
+
+	// Sort sections by order
+	sections := make([]models.ArtifactSection, len(config.Structure))
+	copy(sections, config.Structure)
+	sort.Slice(sections, func(i, j int) bool {
+		return sections[i].Order < sections[j].Order
+	})
+
+	var builder strings.Builder
+
+	// Add each section
+	for _, section := range sections {
+		builder.WriteString(fmt.Sprintf("## %s\n\n", section.Title))
+
+		if section.Content != nil && *section.Content != "" {
+			builder.WriteString(*section.Content)
+			builder.WriteString("\n\n")
+		} else {
+			builder.WriteString("*[Section not generated yet]*\n\n")
+		}
+	}
+
+	return builder.String()
+}
+
+// SaveArtifactToStorage saves assembled artifact document to storage and updates StoragePath
+// Implements ArtifactStorageSaver interface
+func (h *ArtifactsHandler) SaveArtifactToStorage(ctx context.Context, tenantID, projectID string, artifact *models.CoreDoc) error {
+	return h.saveArtifactToStorage(ctx, tenantID, projectID, artifact)
+}
+
+// saveArtifactToStorage saves assembled artifact document to storage and updates StoragePath
+func (h *ArtifactsHandler) saveArtifactToStorage(ctx context.Context, tenantID, projectID string, artifact *models.CoreDoc) error {
+	if h.storage == nil || h.bucket == "" {
+		return nil // Storage not configured, skip
+	}
+
+	if artifact.ArtifactConfig == nil {
+		return nil // Not an artifact
+	}
+
+	// Assemble markdown from sections
+	markdownContent := assembleArtifactMarkdown(artifact.ArtifactConfig)
+	if markdownContent == "" {
+		return nil // No content to save
+	}
+
+	// Delete old file if exists
+	if artifact.StoragePath != nil && strings.HasPrefix(*artifact.StoragePath, "gs://") {
+		bucket, object := splitGsPath(*artifact.StoragePath)
+		_ = h.storage.DeleteObject(ctx, bucket, object) // Ignore errors - old file might not exist
+	}
+
+	// Generate object path
+	objectPath := fmt.Sprintf("%s/%s/%d-%s", tenantID, projectID, time.Now().UnixNano(), sanitizeFilename(artifact.Filename))
+
+	// Upload to storage
+	if err := h.storage.UploadBytes(ctx, h.bucket, objectPath, []byte(markdownContent), artifact.ContentType, map[string]string{
+		"tenantId":  tenantID,
+		"projectId": projectID,
+		"filename":  artifact.Filename,
+		"docType":   "dynamic_artifact",
+	}); err != nil {
+		return fmt.Errorf("failed to upload artifact to storage: %w", err)
+	}
+
+	// Update StoragePath
+	storagePath := fmt.Sprintf("gs://%s/%s", h.bucket, objectPath)
+	artifact.StoragePath = &storagePath
+
+	// Update ExtractedText for compatibility
+	artifact.ExtractedText = &markdownContent
+
+	// Update size
+	size := int64(len([]byte(markdownContent)))
+	artifact.SizeBytes = &size
+
+	// Update artifact in database with new StoragePath
+	if err := h.coreDocs.Upsert(ctx, artifact); err != nil {
+		// Log but don't fail - storage is updated
+	}
+
+	return nil
 }
 
 // CreateArtifact creates a new artifact in a project
@@ -50,8 +153,8 @@ func (h *ArtifactsHandler) CreateArtifact(w http.ResponseWriter, r *http.Request
 		req.ArtifactConfig = &models.ArtifactConfig{
 			Format:             "text",
 			Focus:              "analysis",
-			OrchestratorModel:  "gemini-quality",
-			DefaultModel:       "gemini-quality",
+			OrchestratorModel:  "gemini-fast",
+			DefaultModel:       "gemini-fast",
 			ReviewPrompt:       "Review and refine for clarity, consistency, and completeness.",
 			Structure:          []models.ArtifactSection{},
 			ContextSources:     models.ArtifactContextSources{},
@@ -67,6 +170,21 @@ func (h *ArtifactsHandler) CreateArtifact(w http.ResponseWriter, r *http.Request
 		WriteInternalError(w, "Failed to create artifact")
 		return
 	}
+	req.ID = id
+
+	// Save assembled document to storage if sections have content
+	if err := h.saveArtifactToStorage(r.Context(), auth.TenantID, projectID, &req); err != nil {
+		// Log error but don't fail creation
+		// Artifact is created, storage is optional
+	}
+
+	// Update artifact with StoragePath if it was set
+	if req.StoragePath != nil {
+		if err := h.coreDocs.Upsert(r.Context(), &req); err != nil {
+			// Log but don't fail
+		}
+	}
+
 	WriteJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 
@@ -151,6 +269,10 @@ func (h *ArtifactsHandler) UpdateArtifact(w http.ResponseWriter, r *http.Request
 	}
 	if patch.ArtifactConfig != nil {
 		existing.ArtifactConfig = patch.ArtifactConfig
+		// Reassemble and save to storage when config changes
+		if err := h.saveArtifactToStorage(r.Context(), auth.TenantID, existing.ProjectID, existing); err != nil {
+			// Log error but don't fail update
+		}
 	}
 	if err := h.coreDocs.Upsert(r.Context(), existing); err != nil {
 		WriteInternalError(w, "Failed to update artifact")

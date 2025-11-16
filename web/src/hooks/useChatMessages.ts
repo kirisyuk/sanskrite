@@ -26,6 +26,10 @@ export function useChatMessages() {
         if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
           return false;
         }
+        // Exclude queued tasks interactions (they are metadata, not chat content)
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind === 'queued.tasks') {
+          return false;
+        }
         // Exclude perspective analysis interactions
         if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
           return false;

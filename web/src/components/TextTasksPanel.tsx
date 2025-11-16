@@ -1,5 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import type { QueuedTask } from '../types/queuedTasks';
+import { QueuedTasksList } from './QueuedTasksList';
 
 export interface TextTask {
   id: string;
@@ -8,7 +10,7 @@ export interface TextTask {
 }
 
 interface TextTasksPanelProps {
-  tasks: TextTask[];
+  tasks: QueuedTask[]; // Now accepts QueuedTask array
   onRemove: (taskId: string) => void;
   onApply: () => void;
   isApplying?: boolean;
@@ -17,7 +19,10 @@ interface TextTasksPanelProps {
 export const TextTasksPanel: React.FC<TextTasksPanelProps> = ({ tasks, onRemove, onApply, isApplying = false }) => {
   const { t } = useTranslation();
 
-  if (tasks.length === 0) return null;
+  // Filter only unapplied text tasks
+  const unappliedTextTasks = tasks.filter((t) => t.type === 'text' && !t.applied);
+
+  if (unappliedTextTasks.length === 0) return null;
 
   return (
     <div className="mb-3 rounded-lg border p-3" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--overlay-line-90)' }}>
@@ -67,41 +72,12 @@ export const TextTasksPanel: React.FC<TextTasksPanelProps> = ({ tasks, onRemove,
           )}
         </button>
       </div>
-      <ul className="space-y-1.5" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-        {tasks.map((task, idx) => (
-          <li key={task.id} className="flex items-center gap-2">
-            <span className="text-12 shrink-0" style={{ color: 'var(--text-secondary-strong)', width: '16px' }}>
-              {idx + 1}.
-            </span>
-            <span className="text-12 flex-1" style={{ color: 'var(--text-heading)', lineHeight: '1.5' }}>
-              {task.prompt}
-            </span>
-            <button
-              type="button"
-              onClick={() => onRemove(task.id)}
-              className="p-1 rounded shrink-0"
-              style={{
-                background: 'transparent',
-                color: 'var(--text-secondary-strong)',
-                cursor: 'pointer',
-                border: 'none'
-              }}
-              title={t('unfold.discussionFlow.removeTask', { defaultValue: 'Remove task' })}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-              }}
-            >
-              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          </li>
-        ))}
-      </ul>
+      <QueuedTasksList
+        tasks={tasks}
+        onRemove={onRemove}
+        filterType="text"
+        showOnlyUnapplied={true}
+      />
     </div>
   );
 };

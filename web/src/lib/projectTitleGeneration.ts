@@ -64,7 +64,16 @@ export async function generateProjectTitle(params: {
   generatingTitle.add(projectId);
 
   try {
+    // Verify projectId is still current before proceeding (race condition protection)
     const genaiChat = useGenaiChatStore.getState();
+    if (genaiChat.projectId !== projectId) {
+      console.warn('[ProjectTitle] Project changed before generation, aborting', { 
+        expectedProjectId: projectId, 
+        currentProjectId: genaiChat.projectId 
+      });
+      generatingTitle.delete(projectId);
+      return;
+    }
     
     // Build messages from interactions for better signal (use summary if available)
     const userInteractions = genaiChat.interactions.filter((it) => it.kind === 'user');
@@ -102,6 +111,20 @@ export async function generateProjectTitle(params: {
 
     const transcript = messages.map((m) => `- ${m.role}: ${m.text}`).join('\n');
 
+    // Use the same fast model as bias evaluation
+    const { useGenAISettings } = await import('../stores/genaiSettingsStore');
+    const settings = useGenAISettings.getState();
+    const evalModel = (settings.stanceModel && settings.stanceModel.trim()) ? settings.stanceModel : 'gemini_fast';
+
+    const schema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        title: { type: 'string', minLength: 1, maxLength: 80 }
+      },
+      required: ['title']
+    } as any;
+
     const prompt = `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
 
 You are generating a concise, descriptive title for a chat project based on its conversation.
@@ -120,29 +143,53 @@ Return strictly JSON only, no markdown/code fences, matching this shape: { "titl
 
 Example: {"title": "Climate Change Policies"}`;
 
-    console.log('[ProjectTitle] Calling aiStructured', { projectId });
-    const res = await api.aiStructured({
+    const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
+
+    console.log('[ProjectTitle] Calling genaiGenerate with fast model', { projectId, model: evalModel });
+    const res = await api.genaiGenerate({
+      model: evalModel,
       prompt,
-      minCapabilityScore: 6,
-      maxOutputSize: 512,
+      strictJSONEnabled: true,
+      jsonSchema: schema,
+      maxOutputTokens: 512,
+      webSearchEnabled: false,
+      systemInstruction: langDirective,
     });
-    console.log('[ProjectTitle] Received response from aiStructured', { 
+    console.log('[ProjectTitle] Received response from genaiGenerate', { 
       projectId, 
-      ok: res?.ok,
-      hasResult: !!res?.result,
-      result: res?.result
+      hasContent: !!res?.content,
+      hasRawJSON: !!(res as any)?.rawJSON
     });
 
-    // Parse response - aiStructured returns already parsed JSON in result field
+    // Parse response - same approach as bias evaluation
     let parsed: any = null;
-    if (res?.ok && res?.result && typeof res.result === 'object') {
-      parsed = res.result;
-      console.log('[ProjectTitle] Using result from aiStructured', { parsed });
-    } else {
-      console.warn('[ProjectTitle] aiStructured returned invalid response', { res });
+    try {
+      if (typeof res?.content === 'string') {
+        const s = res.content.trim();
+        if (s.startsWith('{') || s.startsWith('[')) parsed = JSON.parse(s);
+      }
+      const rawJSON = (res as any)?.rawJSON;
+      if (!parsed && typeof rawJSON === 'string') {
+        const s2 = rawJSON.trim();
+        if (s2.startsWith('{') || s2.startsWith('[')) parsed = JSON.parse(s2);
+      }
+      if (!parsed && typeof res?.content === 'string') {
+        const m = res.content.match(/\{[\s\S]*\}/);
+        if (m && m[0]) {
+          parsed = JSON.parse(m[0]);
+        }
+      }
+    } catch (pe) {
+      console.warn('[ProjectTitle] Parse failed', pe, { contentPreview: (res?.content || '').slice(0, 200) });
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      console.warn('[ProjectTitle] No valid JSON parsed, skipping', { res });
       generatingTitle.delete(projectId);
       return;
     }
+
+    console.log('[ProjectTitle] Using parsed result', { parsed });
 
     if (!parsed || typeof parsed !== 'object' || !parsed.title || typeof parsed.title !== 'string') {
       console.log('[ProjectTitle] No valid title parsed, skipping', { parsed });
@@ -202,11 +249,13 @@ Example: {"title": "Climate Change Policies"}`;
       useProjectsStore.setState((prev) => {
         const exists = prev.projects.some((p) => p.id === projectId);
         const updated = { ...updatedProject, id: projectId, displayName: sanitizedTitle, view: 'discovery' } as any;
+        // Only update currentProject if it's the same project (avoid triggering unnecessary re-renders)
+        const shouldUpdateCurrentProject = prev.currentProject?.id === projectId;
         return {
           projects: exists
             ? prev.projects.map((p) => (p.id === projectId ? updated : p))
             : [updated, ...prev.projects],
-          currentProject: updated,
+          currentProject: shouldUpdateCurrentProject ? updated : prev.currentProject,
         } as any;
       });
 

@@ -11,6 +11,163 @@ let isConnecting = false; // Prevent multiple simultaneous connection attempts
 let listenersAttached = false; // Track if event listeners are already attached
 let projectsStoreUnsubscribe: (() => void) | null = null; // Store unsubscribe function to prevent memory leaks
 let windowEventListeners: { visibilitychange: () => void; online: () => void } | null = null; // Store listeners for cleanup
+let lastSubscribedProjectId: string | undefined = undefined; // Track last subscribed projectId to restore on reconnect
+
+type SubscriptionWaiter = {
+  timeoutId: number;
+  resolve: () => void;
+  reject: (err: Error) => void;
+};
+
+type SubscriptionOptions = {
+  timeoutMs?: number;
+  force?: boolean;
+};
+
+const subscriptionWaiters = new Map<string, SubscriptionWaiter[]>();
+const pendingSubscriptions = new Map<string, Promise<void>>();
+
+function addSubscriptionWaiter(projectId: string, waiter: SubscriptionWaiter) {
+  const waiters = subscriptionWaiters.get(projectId) || [];
+  waiters.push(waiter);
+  subscriptionWaiters.set(projectId, waiters);
+}
+
+function removeSubscriptionWaiter(projectId: string, waiter: SubscriptionWaiter) {
+  const waiters = subscriptionWaiters.get(projectId);
+  if (!waiters) return;
+  const next = waiters.filter((w) => w !== waiter);
+  if (next.length === 0) {
+    subscriptionWaiters.delete(projectId);
+  } else {
+    subscriptionWaiters.set(projectId, next);
+  }
+}
+
+function resolveSubscriptionWaiters(projectId: string) {
+  const waiters = subscriptionWaiters.get(projectId);
+  if (!waiters) return;
+  subscriptionWaiters.delete(projectId);
+  waiters.forEach((waiter) => {
+    window.clearTimeout(waiter.timeoutId);
+    try {
+      waiter.resolve();
+    } catch (err) {
+      console.error('[WS] Subscription waiter resolve error', err);
+    }
+  });
+}
+
+function rejectAllSubscriptionWaiters(message: string) {
+  const reason = new Error(message);
+  subscriptionWaiters.forEach((waiters, projectId) => {
+    subscriptionWaiters.delete(projectId);
+    waiters.forEach((waiter) => {
+      window.clearTimeout(waiter.timeoutId);
+      try {
+        waiter.reject(reason);
+      } catch (err) {
+        console.error('[WS] Subscription waiter reject error', err);
+      }
+    });
+  });
+}
+
+async function waitForWsOpen(timeoutMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (true) {
+    if (wsRef && wsRef.readyState === WebSocket.OPEN) {
+      return;
+    }
+    if (Date.now() - start >= timeoutMs) {
+      throw new Error('WebSocket connection timeout');
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+}
+
+async function requestProjectSubscription(projectId: string, options?: SubscriptionOptions): Promise<void> {
+  const pid = projectId?.trim();
+  if (!pid) return;
+  const timeoutMs = options?.timeoutMs ?? 6000;
+  const force = !!options?.force;
+
+  if (!force && lastSubscribedProjectId === pid) {
+    return;
+  }
+
+  const existing = pendingSubscriptions.get(pid);
+  if (!force && existing) {
+    return existing;
+  }
+
+  const subscriptionPromise = (async () => {
+    await waitForWsOpen(Math.max(timeoutMs, 4000));
+
+    if (!force && lastSubscribedProjectId === pid) {
+      return;
+    }
+
+    let attempt = 0;
+    const maxAttempts = force ? 1 : 2;
+    let lastError: Error | null = null;
+
+    while (attempt < maxAttempts) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const waiter: SubscriptionWaiter = {
+            timeoutId: 0,
+            resolve: () => {},
+            reject: () => {},
+          };
+
+          waiter.resolve = () => {
+            window.clearTimeout(waiter.timeoutId);
+            resolve();
+          };
+          waiter.reject = (err: Error) => {
+            window.clearTimeout(waiter.timeoutId);
+            reject(err);
+          };
+          waiter.timeoutId = window.setTimeout(() => {
+            removeSubscriptionWaiter(pid, waiter);
+            reject(new Error(`Timeout waiting for ws.subscribed (${pid})`));
+          }, timeoutMs);
+
+          addSubscriptionWaiter(pid, waiter);
+
+          try {
+            const subscribeMsg = { type: 'subscribe', projectId: pid, force: attempt > 0 || force };
+            const msgStr = JSON.stringify(subscribeMsg);
+            wsRef?.send(msgStr);
+            console.log('[WS] Requested subscription', { projectId: pid, timeoutMs, force: attempt > 0 || force, message: msgStr });
+          } catch (err) {
+            removeSubscriptionWaiter(pid, waiter);
+            reject(err instanceof Error ? err : new Error('Failed to send subscribe request'));
+          }
+        });
+        return;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        attempt += 1;
+        if (attempt >= maxAttempts) {
+          throw lastError;
+        }
+        console.warn('[WS] Retrying subscription after timeout', { projectId: pid, attempt });
+      }
+    }
+  })();
+
+  pendingSubscriptions.set(pid, subscriptionPromise);
+  try {
+    await subscriptionPromise;
+  } finally {
+    const current = pendingSubscriptions.get(pid);
+    if (current === subscriptionPromise) {
+      pendingSubscriptions.delete(pid);
+    }
+  }
+}
 
 function clearReconnectTimer() {
   if (reconnectTimer !== null) {
@@ -60,6 +217,10 @@ export function cleanupDiscoveryStore() {
     } catch {}
     wsRef = null;
   }
+  
+  // Reset subscription tracking on cleanup
+  lastSubscribedProjectId = undefined;
+  rejectAllSubscriptionWaiters('Discovery store cleanup');
   
   isManuallyClosed = true;
   isConnecting = false;
@@ -132,12 +293,12 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
   fetchProjectSources: async (projectId) => {
     const state = get();
     // Защита от множественных одновременных вызовов
-    if (state.loading) {
+    if (state.loading && (state as any).lastFetchedProjectId === projectId) {
       console.log('[fetchProjectSources] Already loading, skipping duplicate call');
       return;
     }
     
-    set({ loading: true, error: null });
+    set({ loading: true, error: null, lastFetchedProjectId: projectId } as any);
     try {
       const sources = await api.getProjectSources(projectId);
       // Merge pending sources with fetched sources (pending take precedence if status is 'fetching')
@@ -159,9 +320,9 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
     } catch (error: any) {
       // Network errors are handled by the global error interceptor
       if (error.response) {
-        set({ error: error.message, loading: false });
+        set({ error: error.message, loading: false } as any);
       } else {
-        set({ loading: false });
+        set({ loading: false } as any);
       }
     }
   },
@@ -170,12 +331,12 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
     // Защита от множественных одновременных вызовов для одного projectId
     // Используем отдельный флаг для отслеживания загрузки interactions
     const state = get();
-    if ((state as any).fetchingInteractions) {
+    if ((state as any).fetchingInteractions && (state as any).lastFetchedInteractionsProjectId === projectId) {
       console.log('[fetchProjectInteractions] Already fetching, skipping duplicate call');
       return;
     }
     
-    set({ fetchingInteractions: true } as any);
+    set({ fetchingInteractions: true, lastFetchedInteractionsProjectId: projectId } as any);
     try {
       const items = await api.getProjectInteractions(projectId);
       set({ interactions: items, fetchingInteractions: false } as any);
@@ -292,14 +453,23 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
           import('./wsStore').then(({ useWsStore }) => {
             useWsStore.getState().setOpen(wsRef?.readyState);
           }).catch(() => {});
-          // Subscribe to current project for server-side routing (best-effort)
+          // Always restore subscription to current project on reconnect
+          // This ensures subscription is restored even if project didn't change
+          // Critical: backend loses subscription state on WS disconnect, so we must resubscribe
           try {
-            import('./projectsStore').then(({ useProjectsStore }) => {
+            import('./projectsStore').then(async ({ useProjectsStore }) => {
               const current = useProjectsStore.getState().currentProject as any;
               const pid = current?.id;
               if (pid && wsRef && wsRef.readyState === WebSocket.OPEN) {
-                wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid }));
-                // State will be updated when we receive ws.subscribed ACK
+                try {
+                  await requestProjectSubscription(pid, { timeoutMs: 6000, force: true });
+                console.log('[WS] Restored subscription on reconnect', { 
+                  projectId: pid, 
+                  wasSubscribed: pid === lastSubscribedProjectId 
+                });
+                } catch (err) {
+                  console.warn('[WS] Failed to restore subscription on reconnect', err);
+                }
               }
             }).catch(() => {});
           } catch {}
@@ -308,6 +478,8 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
         const scheduleReconnect = () => {
           isConnecting = false;
           if (isManuallyClosed) return;
+          lastSubscribedProjectId = undefined;
+          rejectAllSubscriptionWaiters('WebSocket disconnected');
           import('./wsStore').then(({ useWsStore }) => {
             useWsStore.getState().setClosed(undefined, wsRef?.readyState);
           }).catch(() => {});
@@ -325,6 +497,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
         wsRef.onmessage = (evt) => {
           try {
             const msg = JSON.parse(evt.data);
+            console.log('[WS] Received message', { type: msg?.type, hasData: !!msg?.data, rawLength: evt.data?.length });
             import('./wsStore').then(({ useWsStore }) => {
               try { useWsStore.getState().noteMessage(msg?.type, msg?.data); } catch {}
             }).catch(() => {});
@@ -343,9 +516,15 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
 
             // Handle subscription ack to reflect connId and ts in diagnostics
             if (msg?.type === 'ws.subscribed' && msg?.data?.projectId) {
+              lastSubscribedProjectId = msg.data.projectId;
+              resolveSubscriptionWaiters(msg.data.projectId);
               import('./wsStore').then(({ useWsStore }) => {
                 useWsStore.getState().setSubscribed(msg.data.projectId, msg.data.connId, msg.data.ts);
               }).catch(() => {});
+              console.log('[WS] Received subscription ACK', { 
+                projectId: msg.data.projectId, 
+                connId: msg.data.connId 
+              });
             }
 
             if (msg?.type === 'discovery.profile' && msg.data?.profile) {
@@ -427,17 +606,75 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
             if (typeof msg?.type === 'string' && msg.type.startsWith('genai.stream.')) {
               import('./genaiChatStore').then(({ useGenaiChatStore }) => {
                 const st = useGenaiChatStore.getState();
-                // Filter: must match current project if provided
+                const eventStreamId = msg?.data?.streamId;
+                const currentStreamId = st.currentStreamId;
+                const currentPid = st.projectId;
+                const eventPid = msg?.data?.projectId;
+                
+                // CRITICAL: Check if this event belongs to the active stream by streamId
+                // If streamId matches currentStreamId, accept the event even if projectId doesn't match
+                // This handles the case when user switches projects during an active stream
+                const isActiveStream = eventStreamId && currentStreamId && eventStreamId === currentStreamId;
+                
                 try {
-                  const currentPid = st.projectId;
-                  if (msg?.data?.projectId && currentPid && msg.data.projectId !== currentPid) return;
-                } catch {}
+                  // If store has no projectId but event has one, set it (helps with newly created projects)
+                  if (!currentPid || currentPid === 'local-unfold') {
+                    if (eventPid && typeof eventPid === 'string') {
+                      st.setProjectId(eventPid);
+                      console.log('[DiscoveryStore] Auto-set projectId from stream event', { projectId: eventPid, eventType: msg.type });
+                    }
+                  } else if (eventPid && currentPid && eventPid !== currentPid && !isActiveStream) {
+                    // Project mismatch and not an active stream - filter out
+                    // But if it's an active stream (by streamId), accept it anyway
+                    console.warn('[DiscoveryStore] Stream event projectId mismatch (not active stream)', { 
+                      storeProjectId: currentPid, 
+                      eventProjectId: eventPid, 
+                      eventType: msg.type,
+                      streamId: eventStreamId,
+                      currentStreamId: currentStreamId
+                    });
+                    return; // Filter out mismatched projects that are not active streams
+                  } else if (eventPid && currentPid && eventPid !== currentPid && isActiveStream) {
+                    // Active stream but projectId mismatch - accept anyway but log warning
+                    console.warn('[DiscoveryStore] Stream event projectId mismatch but accepting (active stream)', { 
+                      storeProjectId: currentPid, 
+                      eventProjectId: eventPid, 
+                      eventType: msg.type,
+                      streamId: eventStreamId,
+                      currentStreamId: currentStreamId
+                    });
+                    // Continue processing - don't return
+                  }
+                } catch (e) {
+                  console.error('[DiscoveryStore] Error checking projectId filter', e);
+                }
                 switch (msg.type) {
                   case 'genai.stream.start':
+                    // Save streamId from event if not already set (handles race condition)
+                    if (eventStreamId && !currentStreamId) {
+                      useGenaiChatStore.setState({ currentStreamId: eventStreamId } as any);
+                    }
+                    console.log('[DiscoveryStore] Received genai.stream.start', { 
+                      projectId: msg.data?.projectId, 
+                      streamId: msg.data?.streamId,
+                      storeProjectId: st.projectId,
+                      currentStreamId: currentStreamId || eventStreamId
+                    });
                     st.onStart();
                     break;
                   case 'genai.stream.chunk':
-                    if (msg.data?.text) st.onChunk(msg.data.text);
+                    if (msg.data?.text) {
+                      console.log('[DiscoveryStore] Received genai.stream.chunk', { 
+                        textLength: msg.data.text.length,
+                        chunkIndex: msg.data?.chunkIndex,
+                        projectId: msg.data?.projectId, 
+                        streamId: msg.data?.streamId,
+                        storeProjectId: st.projectId 
+                      });
+                      st.onChunk(msg.data.text);
+                    } else {
+                      console.warn('[DiscoveryStore] genai.stream.chunk missing text', msg.data);
+                    }
                     break;
                   case 'genai.stream.tool_call':
                     if (Array.isArray(msg.data?.toolCalls)) st.onToolCall(msg.data.toolCalls);
@@ -458,6 +695,13 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                       // Clean up after 5 minutes to prevent memory leak
                       setTimeout(() => processedDoneEvents.delete(doneEventKey), 5 * 60 * 1000);
                     }
+                    console.log('[DiscoveryStore] Received genai.stream.done', { 
+                      projectId: msg.data?.projectId, 
+                      streamId: streamId,
+                      storeProjectId: st.projectId,
+                      usage: msg.data?.usage,
+                      totalChunks: msg.data?.totalChunks
+                    });
                     // CRITICAL: onDoneMeta must run BEFORE onDone so that usage/searchQueries/sources are in state when creating Interaction
                     st.onDoneMeta({ 
                       usage: msg.data?.usage, 
@@ -514,6 +758,29 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                 import('./agentsStore').then(({ useAgentsStore }) => {
                   useAgentsStore.getState().handleUpdate(update);
                 }).catch((e) => console.error('[WS] Failed to handle agent.update:', e));
+              }
+            }
+
+            // Interaction created/updated events (e.g., when LLM creates graph via tool)
+            if (msg?.type === 'interaction.created' || msg?.type === 'interaction.updated') {
+              const projectId = msg?.data?.projectId;
+              const interactionId = msg?.data?.interactionId;
+              if (projectId && interactionId) {
+                console.log('[WS] Interaction event received:', msg.type, { projectId, interactionId, subkind: msg.data?.subkind });
+                // Add or update the specific interaction (more efficient than reloading all)
+                import('./genaiChatStore').then(({ useGenaiChatStore }) => {
+                  const st = useGenaiChatStore.getState();
+                  // Only update if this is for the current project
+                  if (st.projectId === projectId) {
+                    st.addOrUpdateInteraction(interactionId).catch((e) => {
+                      console.error('[WS] Failed to add/update interaction after', msg.type, e);
+                      // Fallback: try hydrateInteractions if addOrUpdateInteraction fails
+                      st.hydrateInteractions().catch((e2) => {
+                        console.error('[WS] Failed to refresh interactions after', msg.type, e2);
+                      });
+                    });
+                  }
+                }).catch((e) => console.error('[WS] Failed to handle interaction event:', e));
               }
             }
             
@@ -593,15 +860,19 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
     }
     try {
       import('./projectsStore').then(({ useProjectsStore }) => {
-        let lastPid: string | undefined;
         const unsubscribe = useProjectsStore.subscribe((st) => {
           const pid = (st as any)?.currentProject?.id as string | undefined;
-          if (!pid || pid === lastPid) return;
-          lastPid = pid;
-          if (wsRef && wsRef.readyState === WebSocket.OPEN) {
-            try { wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid })); } catch {}
-            // State will be updated when we receive ws.subscribed ACK
+          if (!pid) return;
+          if (pendingSubscriptions.has(pid) || lastSubscribedProjectId === pid) {
+            return;
           }
+          requestProjectSubscription(pid)
+            .then(() => {
+              console.log('[WS] Ensured subscription for project change', { projectId: pid });
+            })
+            .catch((err) => {
+              console.warn('[WS] Failed to ensure subscription on project change', { projectId: pid, err });
+            });
         });
         projectsStoreUnsubscribe = unsubscribe;
       }).catch(() => {});
@@ -609,13 +880,11 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
 
     // Expose a minimal helper for on-demand subscription (used by chat store before stream)
     try {
-      (window as any).wsSubscribeProject = (pid: string) => {
-        try {
-          if (wsRef && wsRef.readyState === WebSocket.OPEN && pid) {
-            wsRef.send(JSON.stringify({ type: 'subscribe', projectId: pid }));
-            // State will be updated when we receive ws.subscribed ACK
+      (window as any).wsSubscribeProject = (pid: string, opts?: SubscriptionOptions) => {
+        if (!pid) {
+          return Promise.resolve();
           }
-        } catch {}
+        return requestProjectSubscription(pid, opts);
       };
     } catch {}
   },

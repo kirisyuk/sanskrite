@@ -2,6 +2,13 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { generateExperimentalResponse, ExperimentalResponse } from '../lib/experimentalResponse';
 import { TextTask } from '../components/TextTasksPanel';
+import type { QueuedTask } from '../types/queuedTasks';
+import {
+  loadQueuedTasks,
+  addQueuedTask as addQueuedTaskAPI,
+  removeQueuedTask as removeQueuedTaskAPI,
+  markTasksApplied,
+} from '../lib/queuedTasks';
 
 export function useAnalysisManagement() {
   const [showUserAnalysis, setShowUserAnalysis] = useState(false);
@@ -126,8 +133,9 @@ export function useChatManagement() {
   const [experimentalResponse, setExperimentalResponse] = useState<ExperimentalResponse | null>(null);
   const [experimentalLoading, setExperimentalLoading] = useState(false);
   const lastUserMessageIdRef = useRef<string | null>(null);
-  const [textTasks, setTextTasks] = useState<TextTask[]>([]);
+  const [queuedTasks, setQueuedTasks] = useState<QueuedTask[]>([]);
   const [textTasksApplying, setTextTasksApplying] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(false);
   
   const genaiChat = useGenaiChatStore();
   const projectId = useGenaiChatStore((s) => s.projectId);
@@ -141,14 +149,60 @@ export function useChatManagement() {
     [],
   );
 
-  // Clear text tasks and experimental response when project changes
+  // Load queued tasks from interactions when project changes
   useEffect(() => {
-    setTextTasks([]);
-    setTextTasksApplying(false);
+    if (!projectId || projectId === 'local-unfold') {
+      setQueuedTasks([]);
+      setTextTasksApplying(false);
+      setExperimentalResponse(null);
+      setExperimentalLoading(false);
+      lastUserMessageIdRef.current = null;
+      return;
+    }
+
+    setTasksLoading(true);
+    loadQueuedTasks(projectId)
+      .then((tasks) => {
+        setQueuedTasks(tasks);
+      })
+      .catch((e) => {
+        console.warn('[useChatManagement] Failed to load queued tasks', e);
+        setQueuedTasks([]);
+      })
+      .finally(() => {
+        setTasksLoading(false);
+      });
+
     setExperimentalResponse(null);
     setExperimentalLoading(false);
     lastUserMessageIdRef.current = null;
   }, [projectId]);
+
+  // Sync queued tasks when interactions change (in case queued.tasks interaction was updated externally)
+  const interactionsLength = useGenaiChatStore((state) => state.interactions.length);
+  useEffect(() => {
+    if (!projectId || projectId === 'local-unfold') return;
+    
+    const queuedTasksInteraction = genaiChat.interactions.find(
+      (it) => it.kind === 'note' && it.subkind === 'queued.tasks'
+    );
+    
+    if (queuedTasksInteraction) {
+      try {
+        const data = JSON.parse(queuedTasksInteraction.content);
+        setQueuedTasks(data.tasks || []);
+      } catch (e) {
+        console.warn('[useChatManagement] Failed to parse queued tasks from interaction', e);
+        setQueuedTasks([]);
+      }
+    } else {
+      // If interaction doesn't exist, clear tasks (might have been deleted)
+      // But only if we're not in the middle of loading
+      if (!tasksLoading) {
+        setQueuedTasks([]);
+      }
+    }
+  }, [projectId, interactionsLength, genaiChat.interactions, tasksLoading]);
 
   // Track new user messages and generate experimental response when panel is open
   useEffect(() => {
@@ -189,21 +243,81 @@ export function useChatManagement() {
       });
   }, [userInteractionsCount, getInteractions]);
 
-  const handleAddTextTask = useCallback((task: TextTask) => {
-    setTextTasks((prev) => {
-      if (prev.some((t) => t.id === task.id)) {
+  const handleAddTextTask = useCallback(async (task: TextTask) => {
+    if (!projectId || projectId === 'local-unfold') return;
+    
+    const queuedTask: QueuedTask = {
+      id: task.id,
+      type: 'text',
+      title: task.title,
+      prompt: task.prompt,
+      createdAt: Date.now(),
+      applied: false,
+    };
+
+    // Optimistic update - immediately update UI
+    setQueuedTasks((prev) => {
+      // Check if task already exists
+      if (prev.some((t) => t.id === queuedTask.id)) {
         return prev;
       }
-      return [...prev, task];
+      return [...prev, queuedTask];
     });
-  }, []);
 
-  const handleRemoveTextTask = useCallback((taskId: string) => {
-    setTextTasks((prev) => prev.filter((t) => t.id !== taskId));
-  }, []);
+    // Sync with server in background
+    try {
+      await addQueuedTaskAPI(projectId, queuedTask);
+      // Update interactions in store to sync with server state
+      await genaiChat.hydrateInteractions();
+      // Reload tasks to ensure consistency (in case of conflicts)
+      const updated = await loadQueuedTasks(projectId);
+      setQueuedTasks(updated);
+    } catch (e) {
+      console.warn('[useChatManagement] Failed to add queued task', e);
+      // Revert optimistic update on error
+      setQueuedTasks((prev) => prev.filter((t) => t.id !== queuedTask.id));
+    }
+  }, [projectId, genaiChat]);
 
-  const handleApplyTextTasks = useCallback(() => {
-    if (textTasks.length === 0) return;
+  const handleRemoveTextTask = useCallback(async (taskId: string) => {
+    if (!projectId || projectId === 'local-unfold') return;
+    
+    // Store task for potential revert
+    const taskToRemove = queuedTasks.find((t) => t.id === taskId);
+    
+    // Optimistic update - immediately update UI
+    setQueuedTasks((prev) => prev.filter((t) => t.id !== taskId));
+
+    // Sync with server in background
+    try {
+      await removeQueuedTaskAPI(projectId, taskId);
+      // Update interactions in store to sync with server state
+      await genaiChat.hydrateInteractions();
+      // Reload tasks to ensure consistency (in case of conflicts)
+      const updated = await loadQueuedTasks(projectId);
+      setQueuedTasks(updated);
+    } catch (e) {
+      console.warn('[useChatManagement] Failed to remove queued task', e);
+      // Revert optimistic update on error
+      if (taskToRemove) {
+        setQueuedTasks((prev) => {
+          if (prev.some((t) => t.id === taskId)) {
+            return prev; // Already exists
+          }
+          return [...prev, taskToRemove];
+        });
+      }
+    }
+  }, [projectId, genaiChat, queuedTasks]);
+
+  const handleApplyTextTasks = useCallback(async () => {
+    // Filter only unapplied text tasks
+    const unappliedTextTasks = queuedTasks.filter(
+      (t) => t.type === 'text' && !t.applied
+    );
+    
+    if (unappliedTextTasks.length === 0) return;
+    
     setTextTasksApplying(true);
     try {
       const container = document.getElementById('unfold-request-container');
@@ -212,7 +326,7 @@ export function useChatManagement() {
           'textarea',
         ) as HTMLTextAreaElement;
         if (textarea) {
-          const numberedList = textTasks
+          const numberedList = unappliedTextTasks
             .map((task, idx) => `${idx + 1}. ${task.prompt}`)
             .join('\n');
           
@@ -236,25 +350,152 @@ export function useChatManagement() {
           }, 0);
         }
       }
-      setTextTasks([]);
+      
+      // Mark tasks as applied
+      if (projectId && projectId !== 'local-unfold') {
+        const taskIds = unappliedTextTasks.map((t) => t.id);
+        const now = Date.now();
+        
+        // Optimistic update - immediately update UI
+        setQueuedTasks((prev) =>
+          prev.map((t) =>
+            taskIds.includes(t.id)
+              ? { ...t, applied: true, appliedAt: now }
+              : t
+          )
+        );
+
+        // Sync with server in background
+        try {
+          await markTasksApplied(projectId, taskIds);
+          // Update interactions in store to sync with server state
+          await genaiChat.hydrateInteractions();
+          // Reload tasks to ensure consistency (in case of conflicts)
+          const updated = await loadQueuedTasks(projectId);
+          setQueuedTasks(updated);
+        } catch (e) {
+          console.warn('[useChatManagement] Failed to mark tasks as applied', e);
+          // Revert optimistic update on error
+          setQueuedTasks((prev) =>
+            prev.map((t) =>
+              taskIds.includes(t.id)
+                ? { ...t, applied: false, appliedAt: undefined }
+                : t
+            )
+          );
+        }
+      }
     } catch (e) {
-      console.warn('[DiscoveryPage] Failed to apply text tasks', e);
+      console.warn('[useChatManagement] Failed to apply text tasks', e);
     } finally {
       setTextTasksApplying(false);
     }
-  }, [textTasks]);
+  }, [queuedTasks, projectId, genaiChat]);
+
+  // Handler for applying multiple tasks (used by PendingActionsPanel)
+  const handleApplyTasks = useCallback(async (taskIds: string[]) => {
+    if (taskIds.length === 0) return;
+    
+    const tasksToApply = queuedTasks.filter((t) => taskIds.includes(t.id));
+    if (tasksToApply.length === 0) return;
+    
+    setTextTasksApplying(true);
+    try {
+      const container = document.getElementById('unfold-request-container');
+      if (container) {
+        const textarea = container.querySelector(
+          'textarea',
+        ) as HTMLTextAreaElement;
+        if (textarea) {
+          const numberedList = tasksToApply
+            .map((task, idx) => `${idx + 1}. ${task.prompt}`)
+            .join('\n');
+          
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLTextAreaElement.prototype,
+            'value',
+          )?.set;
+          if (nativeInputValueSetter) {
+            nativeInputValueSetter.call(textarea, numberedList);
+          } else {
+            textarea.value = numberedList;
+          }
+          const inputEvent = new Event('input', { bubbles: true });
+          textarea.dispatchEvent(inputEvent);
+          textarea.focus();
+          setTimeout(() => {
+            textarea.setSelectionRange(
+              textarea.value.length,
+              textarea.value.length,
+            );
+          }, 0);
+        }
+      }
+      
+      // Mark tasks as applied
+      if (projectId && projectId !== 'local-unfold') {
+        const now = Date.now();
+        
+        // Optimistic update - immediately update UI
+        setQueuedTasks((prev) =>
+          prev.map((t) =>
+            taskIds.includes(t.id)
+              ? { ...t, applied: true, appliedAt: now }
+              : t
+          )
+        );
+
+        // Sync with server in background
+        try {
+          await markTasksApplied(projectId, taskIds);
+          // Update interactions in store to sync with server state
+          await genaiChat.hydrateInteractions();
+          // Reload tasks to ensure consistency (in case of conflicts)
+          const updated = await loadQueuedTasks(projectId);
+          setQueuedTasks(updated);
+        } catch (e) {
+          console.warn('[useChatManagement] Failed to mark tasks as applied', e);
+          // Revert optimistic update on error
+          setQueuedTasks((prev) =>
+            prev.map((t) =>
+              taskIds.includes(t.id)
+                ? { ...t, applied: false, appliedAt: undefined }
+                : t
+            )
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('[useChatManagement] Failed to apply tasks', e);
+    } finally {
+      setTextTasksApplying(false);
+    }
+  }, [queuedTasks, projectId, genaiChat]);
+
+  // Filter text tasks for backward compatibility
+  const textTasks: TextTask[] = useMemo(() => {
+    return queuedTasks
+      .filter((t) => t.type === 'text')
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        prompt: t.prompt,
+      }));
+  }, [queuedTasks]);
 
   return {
     experimentalResponse,
     setExperimentalResponse,
     experimentalLoading,
     setExperimentalLoading,
-    textTasks,
-    setTextTasks,
+    queuedTasks,
+    textTasks, // Filtered text tasks for backward compatibility
     textTasksApplying,
+    tasksLoading,
     handleAddTextTask,
     handleRemoveTextTask,
     handleApplyTextTasks,
+    handleApplyTasks, // New handler for applying multiple tasks
   };
 }
 

@@ -7,7 +7,6 @@ import type { AnalyzeInteractionRef, AnalyzeRequest } from '../types/stance';
 import type { GenaiToolCall } from './genaiStore';
 import { useGenAISettings, mapProviderStrengthToModel, getModelContextWindow } from './genaiSettingsStore';
 import { useProjectsStore } from './projectsStore';
-import { useWsStore } from './wsStore';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -141,6 +140,7 @@ interface GenaiChatState {
   setProjectId: (id: string) => void;
   ensureProject: () => Promise<string>;
   hydrateInteractions: () => Promise<void>;
+  addOrUpdateInteraction: (interactionId: string) => Promise<void>;
   deleteInteraction: (interactionId: string) => Promise<void>;
   createIndicatorMessage: (content: string, subkind: string, replyTo?: string, metadata?: Record<string, any>) => Promise<void>;
 
@@ -152,6 +152,8 @@ interface GenaiChatState {
 
   // Hydration loading state
   hydrating: boolean;
+  // Active stream tracking (for filtering events by streamId)
+  currentStreamId?: string;
 }
 
 export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
@@ -179,13 +181,15 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   stanceLoading: false,
   pendingAttachedDocIds: [],
   hydrating: false,
+  currentStreamId: undefined,
 
-  reset: () => set({ messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [] }),
+  reset: () => set({ projectId: 'local-unfold', messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [], hydrating: false, currentStreamId: undefined }),
   
   setPendingAttachedDocIds: (ids) => set({ pendingAttachedDocIds: ids }),
 
   setProjectId: (id) => {
-    const newProjectId = id || 'local-unfold';
+    // Ensure projectId is always a string
+    const newProjectId = id ? (typeof id === 'string' ? id : String(id)) : 'local-unfold';
     
     set({
       projectId: newProjectId,
@@ -202,50 +206,153 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       metricOverlayLoading: false,
       error: null,
       streaming: false,
+      currentStreamId: undefined, // Clear stream tracking when switching projects
       stanceAggregate: undefined,
       stanceLoading: false,
       pendingAttachedDocIds: [],
       hydrating: false,
-    });
+      hydratingProjectId: undefined,
+    } as any);
   },
 
   ensureProject: async () => {
+    // Check if project already exists
     let pid = get().projectId;
-    if (!pid || pid === 'local-unfold') {
+    if (pid && pid !== 'local-unfold') {
+      console.log('[Chat] ensureProject: using existing project', pid);
+      return pid;
+    }
+    
+    // Check if another call is already creating a project (race condition protection)
+    const state = get();
+    const ensuringProject = (state as any).ensuringProject as Promise<string> | undefined;
+    if (ensuringProject) {
+      console.log('[Chat] ensureProject: waiting for concurrent project creation');
+      return await ensuringProject;
+    }
+    
+    // Create a promise to track this creation and prevent duplicates
+    let creationPromise: Promise<string>;
+    let lockCleared = false;
+    
+    creationPromise = (async () => {
       try {
-        console.log('[Chat] ensureProject: creating Draft project');
-        const res = await api.createProject({ displayName: 'Draft', view: 'draft' });
-        pid = res.id as unknown as string;
-        set({ projectId: pid });
+        console.log('[Chat] ensureProject: creating project');
+        // Double-check after acquiring lock (another call might have created it)
+        const currentPid = get().projectId;
+        if (currentPid && currentPid !== 'local-unfold') {
+          console.log('[Chat] ensureProject: project was created by concurrent call', currentPid);
+          if (!lockCleared) {
+            set({ ensuringProject: undefined } as any);
+            lockCleared = true;
+          }
+          return currentPid;
+        }
+        
+        // Use 'discovery' view to match what DiscoveryPage uses for sidebar
+        // This ensures the new project appears in the sidebar list
+        const res = await api.createProject({ displayName: 'Draft', view: 'discovery' });
+        // Ensure projectId is a string (handle cases where id might be an object)
+        pid = typeof res.id === 'string' ? res.id : String(res.id);
+        // CRITICAL: Set projectId immediately so stream events are not filtered out
+        set({ projectId: pid } as any);
+        console.log('[Chat] ensureProject: set projectId in store', { projectId: pid });
         // Reflect immediately in projects store as current chat
         try {
+          // Ensure res.id is a string for consistency
+          const projectWithStringId = {
+            ...res,
+            id: typeof res.id === 'string' ? res.id : String(res.id)
+          };
+          
           useProjectsStore.setState((prev) => ({
-            projects: [res as any, ...prev.projects.filter((p) => p.id !== (res as any).id)],
-            currentProject: res as any,
+            projects: [projectWithStringId as any, ...prev.projects.filter((p) => {
+              const pId = typeof p.id === 'string' ? p.id : String(p.id);
+              const resId = typeof res.id === 'string' ? res.id : String(res.id);
+              return pId !== resId;
+            })],
+            currentProject: projectWithStringId as any,
           }));
-        } catch {}
-        console.log('[Chat] ensureProject: project created', { projectId: pid });
+          
+          // Refresh projects list to ensure sidebar shows the new project
+          // After fetchProjects, restore currentProject to the newly created project
+          useProjectsStore.getState().fetchProjects('discovery').then(() => {
+            // Restore currentProject after fetchProjects (which may have cleared it)
+            // Find the project in the fetched list or use the one we just created
+            const state = useProjectsStore.getState();
+            const foundProject = state.projects.find((p) => {
+              const pId = typeof p.id === 'string' ? p.id : String(p.id);
+              return pId === pid;
+            });
+            useProjectsStore.setState({ 
+              currentProject: foundProject || projectWithStringId as any 
+            });
+          }).catch((err) => {
+            console.warn('[ensureProject] Failed to refresh projects list', err);
+          });
+        } catch (_) {}
+        console.log('[Chat] ensureProject: project created', pid);
+        return pid;
       } catch (e) {
-        console.error('[ensureProject] failed to create draft project', e);
+        console.error('[ensureProject] failed to create project', e);
         throw e;
+      } finally {
+        // Clear the lock after completion (success or error)
+        if (!lockCleared) {
+          set({ ensuringProject: undefined } as any);
+          lockCleared = true;
+        }
       }
+    })();
+    
+    // Store the promise to prevent concurrent creations (must be after promise creation)
+    set({ ensuringProject: creationPromise } as any);
+    
+    try {
+      return await creationPromise;
+    } catch (e) {
+      // If creation failed, check if projectId was set by another call
+      const finalPid = get().projectId;
+      if (finalPid && finalPid !== 'local-unfold') {
+        console.log('[Chat] ensureProject: using project set during failed creation', finalPid);
+        return finalPid;
+      }
+      throw e;
     }
-    console.log('[Chat] ensureProject: using project', { projectId: pid });
-    return pid;
   },
 
   hydrateInteractions: async () => {
     const projectId = get().projectId;
     if (!projectId || projectId === 'local-unfold') return;
     
-    // Защита от множественных одновременных вызовов
+    // Защита от множественных одновременных вызовов для того же projectId
+    // Но только если interactions уже загружены (не пустой массив) И hydratingProjectId совпадает
     const state = get();
-    if (state.hydrating) {
-      console.log('[hydrateInteractions] Already hydrating, skipping duplicate call');
+    const currentHydratingProjectId = (state as any).hydratingProjectId;
+    
+    // Skip only if we're already hydrating the SAME project AND interactions are loaded
+    if (state.hydrating && currentHydratingProjectId === projectId && state.interactions.length > 0) {
+      console.log('[hydrateInteractions] Already hydrating same project with interactions loaded, skipping duplicate call', {
+        projectId,
+        hydratingProjectId: currentHydratingProjectId,
+        interactionsCount: state.interactions.length
+      });
       return;
     }
     
-    set({ hydrating: true });
+    // If hydrating but for different project, or interactions are empty, continue to load
+    if (state.hydrating && currentHydratingProjectId !== projectId) {
+      console.log('[hydrateInteractions] Hydrating different project, clearing and reloading', {
+        currentHydratingProjectId,
+        newProjectId: projectId
+      });
+      // Clear interactions and messages from old project
+      set({ interactions: [], messages: [] } as any);
+    } else if (state.hydrating && currentHydratingProjectId === projectId && state.interactions.length === 0) {
+      console.log('[hydrateInteractions] Already hydrating but interactions empty, continuing to load');
+    }
+    
+    set({ hydrating: true, hydratingProjectId: projectId } as any);
     try {
       const serverItems = await api.getProjectInteractions(projectId);
       // Check if projectId is still current before applying results (race condition guard)
@@ -431,7 +538,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           searchQueries: [],
           sources: [],
           messageMeta: restoredMeta,
-          hydrating: false
+          hydrating: false,
+          hydratingProjectId: undefined,
         } as any;
       });
       
@@ -520,7 +628,130 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       } else {
         console.error('[hydrateInteractions] Failed to load interactions', { projectId, status, error: e });
       }
-      set({ hydrating: false });
+      set({ hydrating: false, hydratingProjectId: undefined } as any);
+    }
+  },
+
+  // Add or update a specific interaction by fetching it from server
+  // Used when interaction.created/updated event is received via WebSocket
+  addOrUpdateInteraction: async (interactionId: string) => {
+    const projectId = get().projectId;
+    if (!projectId || projectId === 'local-unfold') return;
+    
+    try {
+      console.log('[addOrUpdateInteraction] Fetching interaction', { projectId, interactionId });
+      // Fetch all interactions and find the one we need
+      const serverItems = await api.getProjectInteractions(projectId);
+      const interaction = (serverItems as any[]).find((it: any) => it.id === interactionId);
+      
+      if (!interaction) {
+        console.warn('[addOrUpdateInteraction] Interaction not found', { interactionId });
+        return;
+      }
+      
+      // Check if projectId is still current before applying results
+      set((s) => {
+        if (s.projectId !== projectId) {
+          return s;
+        }
+        
+        // Process the interaction (same logic as in hydrateInteractions)
+        const processedServerItems = [interaction].map((it: any) => {
+          let updated = it;
+          
+          // Обработка contentSanitized
+          if (it.kind === 'assistant' && it.content && !it.contentSanitized) {
+            updated = { ...updated, contentSanitized: it.content };
+          }
+          
+          // Обработка graphData - добавляем chartType если отсутствует или невалиден
+          if (it.kind === 'assistant' && (it.subkind === 'graph' || it.graphData)) {
+            let graphData = it.graphData;
+            
+            // Если graphData отсутствует, но есть subkind === 'graph', пытаемся распарсить из content
+            if (!graphData && it.subkind === 'graph' && (it.contentSanitized || it.content)) {
+              try {
+                let content = String(it.contentSanitized || it.content || '').trim();
+                content = content.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim();
+                let parsed: any = null;
+                if (content.startsWith('{') || content.startsWith('[')) {
+                  parsed = JSON.parse(content);
+                } else {
+                  const m = content.match(/\{[\s\S]*\}/);
+                  if (m && m[0]) parsed = JSON.parse(m[0]);
+                }
+                if (parsed && typeof parsed === 'object' && typeof parsed.chartTitle === 'string' && Array.isArray(parsed.table) && Array.isArray(parsed.sources)) {
+                  const allowedTypes = ['line', 'bar', 'area', 'stackedBar', 'stackedArea', 'composed'];
+                  const chartType = typeof parsed.chartType === 'string' && allowedTypes.includes(parsed.chartType) ? parsed.chartType : 'line';
+                  graphData = { chartTitle: parsed.chartTitle, chartType: chartType, table: parsed.table, sources: parsed.sources };
+                }
+              } catch {}
+            }
+            
+            // Если graphData есть, но нет chartType или он невалиден - добавляем/исправляем
+            if (graphData && typeof graphData === 'object' && typeof graphData.chartTitle === 'string') {
+              const allowedTypes = ['line', 'bar', 'area', 'stackedBar', 'stackedArea', 'composed'];
+              const chartType = typeof graphData.chartType === 'string' && allowedTypes.includes(graphData.chartType)
+                ? graphData.chartType
+                : 'line';
+              updated = { ...updated, graphData: { ...graphData, chartType } };
+            }
+          }
+          
+          return updated;
+        });
+        
+        const processedInteraction = processedServerItems[0];
+        
+        // Check if interaction already exists (by ID or by graph data for graphs to avoid duplicates)
+        const existingIndex = s.interactions.findIndex((it) => {
+          if (it.id === interactionId) return true;
+          // For graphs, also check by graphData to avoid duplicates when tool result creates local interaction
+          if (it.subkind === 'graph' && processedInteraction.subkind === 'graph') {
+            const existingGraph = it.graphData;
+            const newGraph = processedInteraction.graphData;
+            if (existingGraph && newGraph && 
+                existingGraph.chartTitle === newGraph.chartTitle &&
+                JSON.stringify(existingGraph.table) === JSON.stringify(newGraph.table)) {
+              return true;
+            }
+          }
+          return false;
+        });
+        
+        if (existingIndex >= 0) {
+          // Update existing interaction (merge data, prefer server data but keep local graphData if server doesn't have it)
+          const updated = [...s.interactions];
+          const existing = updated[existingIndex];
+          // Merge: keep local graphData if server doesn't have it, but prefer server data
+          if (existing.subkind === 'graph' && existing.graphData && !processedInteraction.graphData) {
+            updated[existingIndex] = { ...processedInteraction, graphData: existing.graphData } as LocalInteraction;
+          } else {
+            updated[existingIndex] = processedInteraction as LocalInteraction;
+          }
+          console.log('[addOrUpdateInteraction] Updated existing interaction', { interactionId, subkind: processedInteraction.subkind });
+          return { interactions: updated } as any;
+        } else {
+          // Add new interaction (insert at appropriate position based on createdAt)
+          const updated = [...s.interactions];
+          const insertIndex = updated.findIndex((it) => {
+            const itTime = new Date(it.createdAt).getTime();
+            const newTime = new Date(processedInteraction.createdAt).getTime();
+            return itTime > newTime;
+          });
+          
+          if (insertIndex >= 0) {
+            updated.splice(insertIndex, 0, processedInteraction as LocalInteraction);
+          } else {
+            updated.push(processedInteraction as LocalInteraction);
+          }
+          
+          console.log('[addOrUpdateInteraction] Added new interaction', { interactionId, insertIndex, subkind: processedInteraction.subkind });
+          return { interactions: updated } as any;
+        }
+      });
+    } catch (e) {
+      console.error('[addOrUpdateInteraction] Failed to add/update interaction', { interactionId, error: e });
     }
   },
 
@@ -783,33 +1014,81 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   },
 
   startStream: async ({ prompt, tools, options, agentMeta, suppressUserEcho }) => {
-    if (get().streaming) return;
-    // ensure we have a real project id (create Draft on demand)
-    try { await get().ensureProject(); } catch {}
-    // Ensure WS subscription is active before starting stream to avoid missing early chunks
-    try {
-      const pid = get().projectId;
-      if ((window as any).wsSubscribeProject && pid) {
-        (window as any).wsSubscribeProject(pid);
-        // Wait for ws.subscribed ACK (best-effort, short timeout)
-        const waitForWsSubscribed = async (projectId: string, timeoutMs = 1500) => {
-          const start = Date.now();
-          // eslint-disable-next-line no-constant-condition
-          while (true) {
-            try {
-              const ws = useWsStore.getState();
-              if (ws.connected && ws.subscribedProjectId === projectId) return;
-            } catch {}
-            if (Date.now() - start > timeoutMs) return;
-            await new Promise((r) => setTimeout(r, 60));
-          }
-        };
-        await waitForWsSubscribed(pid);
+    const currentState = get();
+    if (currentState.streaming) {
+      console.warn('[Chat] startStream: Already streaming, blocking new request', {
+        projectId: currentState.projectId,
+        messagesCount: currentState.messages.length
+      });
+      return;
+    }
+    
+    // CRITICAL: Жесткая синхронизация - получаем projectId ДО отправки сообщения
+    // Это гарантирует отсутствие гонок при создании нового проекта
+    let projectId: string;
+    try { 
+      // Шаг 1: Вызываем ensureProject и ждем завершения
+      projectId = await get().ensureProject();
+      
+      // Шаг 2: Проверяем, что получили валидный projectId
+      if (!projectId || projectId === 'local-unfold') {
+        console.error('[Chat] startStream: Failed to get valid projectId after ensureProject', { projectId });
+        set({ streaming: false, error: 'Failed to create or get project' });
+        return;
       }
-    } catch {}
-    try { console.log('[Chat] startStream: project id', { projectId: get().projectId }); } catch {}
+      
+      // Шаг 3: Убеждаемся, что projectId установлен в store (может быть гонка)
+      let storePid = get().projectId;
+      if (!storePid || storePid === 'local-unfold') {
+        console.warn('[Chat] startStream: projectId not in store after ensureProject, setting it', { 
+          projectId, 
+          storePid 
+        });
+        set({ projectId: projectId } as any);
+        storePid = projectId;
+      }
+      
+      // Шаг 4: Проверяем, что projectId в store совпадает с полученным
+      // Если не совпадает, используем тот, что в store (может быть более свежий)
+      if (storePid !== projectId) {
+        console.warn('[Chat] startStream: projectId mismatch, using store value', { 
+          ensureProjectResult: projectId, 
+          storeValue: storePid 
+        });
+        projectId = storePid;
+      }
+      
+      // Шаг 5: Финальная проверка перед продолжением
+      if (!projectId || projectId === 'local-unfold') {
+        console.error('[Chat] startStream: Invalid projectId after all checks', { projectId });
+        set({ streaming: false, error: 'Failed to get valid projectId' });
+        return;
+      }
+      
+      console.log('[Chat] startStream: projectId confirmed before stream', { projectId });
+    } catch (e) {
+      console.error('[Chat] startStream: ensureProject failed', e);
+      set({ streaming: false, error: 'Failed to create project' });
+      return;
+    }
+    
+    // Теперь projectId гарантированно установлен - можно продолжать
+    // Ensure WS subscription is active before starting stream to avoid missing early chunks
+    // Используем уже проверенный projectId из переменной выше
+      if ((window as any).wsSubscribeProject && projectId) {
+      try {
+        await (window as any).wsSubscribeProject(projectId, { timeoutMs: 6000, force: true });
+    } catch (e) {
+        console.error('[Chat] startStream: WS subscription confirmation failed', e);
+        set({ streaming: false, error: 'Не удалось подключиться к realtime каналу. Попробуйте снова.' });
+        return;
+      }
+    } else {
+      console.warn('[Chat] startStream: wsSubscribeProject helper missing', { hasHelper: !!(window as any).wsSubscribeProject, projectId });
+    }
+    
+    // Используем уже проверенный projectId - не читаем из store снова
     const now = Date.now().toString();
-    const projectId = get().projectId;
     const createdAt = new Date().toISOString();
     // add user message and a placeholder assistant message
     set((s) => {
@@ -841,6 +1120,80 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         ...(suppressUserEcho ? [] : [{ id: now + '-iu', projectId, kind: 'user' as InteractionKind, content: prompt, createdAt, originalMessageId: now + '-u' } as LocalInteraction]),
       ],
     }) as any;});
+    
+    // Generate project title immediately after first user message (don't wait for assistant response)
+    // Capture projectId in closure to ensure stability
+    if (!suppressUserEcho && projectId && projectId !== 'local-unfold') {
+      const capturedProjectId = projectId; // Capture projectId to prevent race conditions
+      (async () => {
+        try {
+          // Verify projectId is still current before proceeding
+          const currentState = get();
+          if (currentState.projectId !== capturedProjectId) {
+            console.log('[ProjectTitle] Project changed, skipping title generation', { 
+              capturedProjectId, 
+              currentProjectId: currentState.projectId 
+            });
+            return;
+          }
+          
+          // Check if project already has a title (not Draft)
+          const currentProject = useProjectsStore.getState().currentProject;
+          // Ensure both IDs are strings for comparison
+          const currentProjectId = currentProject?.id ? (typeof currentProject.id === 'string' ? currentProject.id : String(currentProject.id)) : null;
+          // Verify we're still working with the same project
+          if (currentProjectId !== capturedProjectId) {
+            console.log('[ProjectTitle] Project mismatch in store, skipping', { 
+              capturedProjectId, 
+              storeProjectId: currentProjectId 
+            });
+            return;
+          }
+          
+          const projectName = (currentProject?.displayName || '').trim();
+          const hasTitle = projectName && projectName.toLowerCase() !== 'draft' && projectName.length > 0;
+          
+          // Check if title was already finalized (localStorage check)
+          const titleFinalized = typeof window !== 'undefined' && 
+            window.localStorage.getItem(`chatTitleFinal:${capturedProjectId}`) === '1';
+          
+          // Get current user messages count
+          const state = get();
+          // Double-check projectId hasn't changed
+          if (state.projectId !== capturedProjectId) {
+            console.log('[ProjectTitle] Project changed during check, skipping', { 
+              capturedProjectId, 
+              currentProjectId: state.projectId 
+            });
+            return;
+          }
+          
+          const userMessagesFromInteractions = state.interactions.filter((it) => it.kind === 'user');
+          const userMessagesFromMessages = state.messages.filter((m) => m.role === 'user');
+          const totalUserMessages = Math.max(userMessagesFromInteractions.length, userMessagesFromMessages.length);
+          
+          console.log('[ProjectTitle] Checking conditions in startStream', { 
+            projectId: capturedProjectId, 
+            totalUserMessages,
+            hasTitle,
+            titleFinalized
+          });
+          
+          // Generate title if:
+          // - This is the first user message (totalUserMessages === 1 after adding this message)
+          // - Project doesn't have a title yet (or is Draft)
+          // - Title hasn't been finalized yet
+          if (totalUserMessages === 1 && !hasTitle && !titleFinalized) {
+            const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+            const { generateProjectTitle } = await import('../lib/projectTitleGeneration');
+            console.log('[ProjectTitle] Calling generateProjectTitle from startStream', { projectId: capturedProjectId, preferredLang });
+            await generateProjectTitle({ projectId: capturedProjectId, preferredLang });
+          }
+        } catch (e) {
+          console.warn('[ProjectTitle] Title generation failed in startStream', e);
+        }
+      })();
+    }
     
     // Direct command detection from prompt (before LLM call to avoid unnecessary latency)
     // Check if prompt starts with a known command
@@ -1817,6 +2170,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
           return false;
         }
+        // Exclude queued tasks interactions (they are metadata, not chat content)
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind === 'queued.tasks') {
+          return false;
+        }
         // Exclude perspective analysis interactions (kind='system' with subkind starting with 'perspective.' and ending with '.analysis')
         if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
           return false;
@@ -1840,6 +2197,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const llmContextInteractions = interactions.filter((it) => {
         // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
         if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+          return false;
+        }
+        // Exclude queued tasks interactions (they are metadata, not chat content)
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind === 'queued.tasks') {
           return false;
         }
         // Exclude perspective analysis interactions (kind='system' with subkind starting with 'perspective.' and ending with '.analysis')
@@ -1991,11 +2352,32 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const promptTokens = Math.ceil(prompt.length / 4);
       messages.push({ role: 'user', text: prompt });
       totalTokens += promptTokens;
+      // Финальная проверка projectId перед отправкой API запроса
+      // Используем локальную переменную projectId, которая была проверена выше
+      if (!projectId || projectId === 'local-unfold') {
+        console.error('[Chat] startStream: projectId became invalid before API call', { projectId });
+        set({ streaming: false, currentStreamId: undefined, error: 'Project ID lost before stream start' });
+        return;
+      }
+      
       // Generate per-stream UUID for FE-side filtering
       const streamId = (crypto && 'randomUUID' in crypto) ? (crypto as any).randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
-      await api.genaiStream({ prompt, tools, options, messages, projectId, streamId });
+      
+      // CRITICAL: Save streamId immediately so events can be filtered correctly
+      // This must be set before API call to avoid race condition
+      set({ currentStreamId: streamId } as any);
+      
+      // If toolUsageEnabled is true, pass empty tools array [] to signal backend should register its tools
+      // If toolUsageEnabled is false, pass undefined/null to signal backend should NOT register tools
+      // Backend distinguishes: [] = enable tool registration, undefined/null = disable tool registration
+      const finalTools = currentSettings.toolUsageEnabled ? (tools || []) : (tools !== undefined ? tools : undefined);
+      
+      // CRITICAL: Используем проверенный projectId из локальной переменной
+      // Не читаем из store, чтобы избежать гонок
+      console.log('[Chat] startStream: Sending API request', { projectId, streamId });
+      await api.genaiStream({ prompt, tools: finalTools, options, messages, projectId, streamId });
     } catch (e: any) {
-      set({ streaming: false, error: e?.message || 'Stream start failed' });
+      set({ streaming: false, currentStreamId: undefined, error: e?.message || 'Stream start failed' });
     }
   },
 
@@ -2017,7 +2399,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       toolResults: [], 
       attributions: [], 
       usage: undefined,
-      messages: msgs 
+      messages: msgs,
+      // Keep currentStreamId if already set (from startStream)
+      // If not set, it will be set when stream.start event arrives
     } as any;
   }),
   onChunk: (text: string) => {
@@ -2071,6 +2455,26 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             existingInteractionId: existingInteraction.id 
           });
           return {} as any; // Return empty update to prevent duplicate
+        }
+        
+        // Check if a graph interaction was already created from tool result for this stream
+        // If graph exists, we should still create the text interaction but ensure graph is visible
+        const hasGraphFromToolResult = s.interactions.some((it) => 
+          it.kind === 'assistant' && 
+          it.subkind === 'graph' && 
+          (it as any).author?.kind === 'tool' &&
+          // Check if graph was created recently (within last 10 seconds)
+          new Date(it.createdAt).getTime() > Date.now() - 10000
+        );
+        
+        // If graph was created via tool and assistant message is empty or very short, skip text interaction
+        // This prevents empty text messages from hiding the graph
+        if (hasGraphFromToolResult && (!lastAssistant.content.trim() || lastAssistant.content.trim().length < 30)) {
+          console.log('[onDone] Graph was created via tool result, skipping empty/confirmatory text interaction', { 
+            contentLength: lastAssistant.content.trim().length,
+            hasGraph: true 
+          });
+          return {} as any;
         }
         
         const id = Date.now().toString() + '-ia';
@@ -2248,44 +2652,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         })();
 
-        // Generate project title after first assistant response
-        (async () => {
-          try {
-            if (!projectId || projectId === 'local-unfold') return;
-            // Only generate title after first assistant response (exactly one assistant message)
-            // Use nextInteractions for assistant messages, but also check messages for user messages
-            // since user messages might not be in interactions yet if they were just sent
-            const assistantMessages = nextInteractions.filter((it) => it.kind === 'assistant');
-            const userMessagesFromInteractions = nextInteractions.filter((it) => it.kind === 'user');
-            
-            // Also check messages array for user messages (in case they're not in interactions yet)
-            const userMessagesFromMessages = s.messages.filter((m) => m.role === 'user');
-            const totalUserMessages = Math.max(userMessagesFromInteractions.length, userMessagesFromMessages.length);
-            
-            console.log('[ProjectTitle] Checking conditions', { 
-              projectId, 
-              userMessagesFromInteractions: userMessagesFromInteractions.length,
-              userMessagesFromMessages: userMessagesFromMessages.length,
-              totalUserMessages,
-              assistantMessagesCount: assistantMessages.length 
-            });
-            // Skip if no user messages or if already has multiple exchanges
-            if (totalUserMessages === 0 || assistantMessages.length !== 1) {
-              console.log('[ProjectTitle] Skipping - conditions not met', { 
-                totalUserMessages,
-                assistantMessagesCount: assistantMessages.length 
-              });
-              return;
-            }
-            
-            const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
-            const { generateProjectTitle } = await import('../lib/projectTitleGeneration');
-            console.log('[ProjectTitle] Calling generateProjectTitle', { projectId, preferredLang });
-            await generateProjectTitle({ projectId, preferredLang });
-          } catch (e) {
-            console.warn('[ProjectTitle] Title generation failed', e);
-          }
-        })();
+        // Title generation is now handled in startStream immediately after first user message
+        // No need to generate here in onDone - it would be redundant
 
         // Trigger meta-analysis only for standard USER→ASSISTANT exchanges on server-backed projects
         // DISABLED: temporarily disabled to reduce LLM API calls
@@ -2576,7 +2944,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         })();
 
-        return { streaming: false, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: nextInteractions, artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
+        return { streaming: false, currentStreamId: undefined, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: nextInteractions, artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
       }
       // If we are here, assistant produced no chunks and content is empty.
       // Remove the trailing empty placeholder and create a stub interaction so the user sees the outcome.
@@ -2614,7 +2982,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         nextMeta[id] = { headerText: meta.displayName, leftAccent: true, refineEnabled: !!meta?.agentProfile?.capabilities?.refinePrevious, agentProfile: meta?.agentProfile };
       }
       console.warn('[GenAI Stream] done without chunks: created empty reply stub');
-      return { streaming: false, messages: msgs, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: [...s.interactions, base] } as any;
+      return { streaming: false, currentStreamId: undefined, messages: msgs, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: [...s.interactions, base] } as any;
     }),
   onError: (err) => {
     try {
@@ -2637,10 +3005,186 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     if (pruned.length > 0 && pruned[pruned.length - 1].role === 'assistant' && (!pruned[pruned.length - 1].content || pruned[pruned.length - 1].content.trim().length === 0)) {
       pruned.pop();
     }
-    set({ streaming: false, messages: pruned, error: err || 'Stream error', pendingAssistantMeta: undefined, pendingAssistantOptions: get().pendingAssistantOptions, pendingAssistantPrompt: get().pendingAssistantPrompt, pendingAssistantTools: get().pendingAssistantTools });
+    set({ streaming: false, currentStreamId: undefined, messages: pruned, error: err || 'Stream error', pendingAssistantMeta: undefined, pendingAssistantOptions: get().pendingAssistantOptions, pendingAssistantPrompt: get().pendingAssistantPrompt, pendingAssistantTools: get().pendingAssistantTools });
   },
   onToolCall: (calls) => set({ toolCalls: calls || [] }),
-  onToolResult: (calls) => set((s) => ({ toolResults: [...s.toolResults, ...(calls || [])] })),
+  onToolResult: (calls) => {
+    const toolCalls = calls || [];
+    set((s) => {
+      const projectId = s.projectId;
+      if (!projectId || projectId === 'local-unfold') {
+        return { toolResults: [...s.toolResults, ...toolCalls] } as any;
+      }
+      
+      // Process tool results and create interactions for graph creation
+      const newInteractions: LocalInteraction[] = [];
+      const graphSummaries: string[] = [];
+      const now = Date.now().toString();
+      
+      for (const call of toolCalls) {
+        if (!call || typeof call !== 'object') continue;
+        
+        const toolName = call.name || '';
+        const toolArgs = call.arguments || '';
+        
+        // Handle create_graph tool result
+        if (toolName === 'create_graph') {
+          try {
+            let parsedResult: any = null;
+            if (typeof toolArgs === 'string') {
+              try {
+                parsedResult = JSON.parse(toolArgs);
+              } catch (parseErr) {
+                console.warn('[onToolResult] Failed to parse create_graph result JSON', { toolArgs: toolArgs.substring(0, 200), error: parseErr });
+                continue;
+              }
+            } else if (typeof toolArgs === 'object' && toolArgs !== null) {
+              parsedResult = toolArgs;
+            }
+            
+            // Check if result contains graph data (interactionId indicates graph was created)
+            // Tool result format: { interactionId, chartTitle, chartType, table, sources, status }
+            if (parsedResult && typeof parsedResult === 'object') {
+              const interactionId = parsedResult.interactionId;
+              const chartTitle = parsedResult.chartTitle;
+              const chartType = parsedResult.chartType;
+              const table = parsedResult.table;
+              const sources = parsedResult.sources;
+              
+              if (interactionId && chartTitle && Array.isArray(table) && Array.isArray(sources)) {
+                // Graph was created - create local interaction immediately
+                const allowedTypes = ['line', 'bar', 'area', 'stackedBar', 'stackedArea', 'composed'];
+                const validChartType = typeof chartType === 'string' && allowedTypes.includes(chartType) ? chartType : 'line';
+                
+                const graphInteraction: LocalInteraction = {
+                  id: interactionId, // Use server ID from tool result
+                  projectId,
+                  kind: 'assistant',
+                  subkind: 'graph',
+                  content: JSON.stringify({ chartTitle, chartType: validChartType, table, sources }),
+                  contentSanitized: JSON.stringify({ chartTitle, chartType: validChartType, table, sources }),
+                  graphData: {
+                    chartTitle,
+                    chartType: validChartType,
+                    table,
+                    sources,
+                  },
+                  createdAt: new Date().toISOString(),
+                  author: { participantId: 'tool:create_graph', kind: 'tool', displayName: 'Graph Tool' },
+                };
+                
+                // Check if interaction already exists (by ID or by checking if we already have this graph)
+                const exists = s.interactions.find((it) => 
+                  it.id === interactionId || 
+                  (it.subkind === 'graph' && it.graphData?.chartTitle === chartTitle && 
+                   JSON.stringify(it.graphData?.table) === JSON.stringify(table))
+                );
+                
+                if (!exists) {
+                  newInteractions.push(graphInteraction);
+                  const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                  const summary =
+                    preferredLang === 'ru'
+                      ? `Готово: построил график «${chartTitle}». Посмотри визуализацию ниже.`
+                      : `Done: built the chart “${chartTitle}”. See the visualization below.`;
+                  graphSummaries.push(summary);
+                  console.log('[onToolResult] Created local graph interaction from tool result', { 
+                    interactionId, 
+                    chartTitle, 
+                    tableRows: table.length,
+                    sourcesCount: sources.length,
+                    graphData: graphInteraction.graphData,
+                    subkind: graphInteraction.subkind,
+                    kind: graphInteraction.kind
+                  });
+                } else {
+                  console.log('[onToolResult] Graph interaction already exists, skipping', { interactionId });
+                }
+              } else {
+                console.warn('[onToolResult] create_graph result missing required fields', { 
+                  hasInteractionId: !!interactionId,
+                  hasChartTitle: !!chartTitle,
+                  hasTable: Array.isArray(table),
+                  hasSources: Array.isArray(sources),
+                  parsedResult 
+                });
+              }
+            }
+          } catch (e) {
+            console.warn('[onToolResult] Failed to process create_graph result', { error: e, toolArgs: typeof toolArgs === 'string' ? toolArgs.substring(0, 200) : toolArgs });
+          }
+        }
+      }
+      
+      let updatedInteractions: LocalInteraction[] | undefined;
+      if (newInteractions.length > 0) {
+        updatedInteractions = [...s.interactions];
+        for (const newIt of newInteractions) {
+          if (newIt.subkind === 'graph' && (newIt as any).author?.kind === 'tool') {
+            const exists = updatedInteractions.find((it) => 
+              it.id === newIt.id || 
+              (it.subkind === 'graph' && it.graphData?.chartTitle === newIt.graphData?.chartTitle)
+            );
+            if (!exists) {
+              updatedInteractions.push(newIt);
+              console.log('[onToolResult] Added graph interaction to end of list', { interactionId: newIt.id, chartTitle: newIt.graphData?.chartTitle });
+            }
+          } else {
+            const insertIndex = updatedInteractions.findIndex((it) => {
+              const itTime = new Date(it.createdAt).getTime();
+              const newTime = new Date(newIt.createdAt).getTime();
+              return itTime > newTime;
+            });
+            
+            if (insertIndex >= 0) {
+              updatedInteractions.splice(insertIndex, 0, newIt);
+            } else {
+              updatedInteractions.push(newIt);
+            }
+          }
+        }
+      }
+
+      let updatedMessages: ChatMessage[] | undefined;
+      if (graphSummaries.length > 0) {
+        const summary = graphSummaries[graphSummaries.length - 1];
+        const messages = [...s.messages];
+        let lastUserIndex = -1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'user') {
+            lastUserIndex = i;
+            break;
+          }
+        }
+        let assistantIndex = -1;
+        for (let i = messages.length - 1; i > lastUserIndex; i--) {
+          if (messages[i].role === 'assistant') {
+            assistantIndex = i;
+            break;
+          }
+        }
+        if (assistantIndex >= 0) {
+          const existing = messages[assistantIndex].content?.trim();
+          if (!existing) {
+            messages[assistantIndex] = { ...messages[assistantIndex], content: summary };
+          } else {
+            const id = Date.now().toString() + '-graph-summary';
+            messages.splice(assistantIndex + 1, 0, { id, role: 'assistant', content: summary });
+          }
+        } else {
+          const id = Date.now().toString() + '-graph-summary';
+          messages.push({ id, role: 'assistant', content: summary });
+        }
+        updatedMessages = messages;
+      }
+      
+      return { 
+        toolResults: [...s.toolResults, ...toolCalls],
+        interactions: updatedInteractions || s.interactions,
+        messages: updatedMessages || s.messages,
+      } as any;
+    });
+  },
   onDoneMeta: (meta) => set((s) => {
     // Replace (not merge) queries/sources for current stream to avoid accumulation across messages
     const incomingQueries = Array.isArray(meta.searchQueries) ? meta.searchQueries.filter(Boolean) : [];

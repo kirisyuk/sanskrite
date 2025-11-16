@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"context"
@@ -54,6 +54,11 @@ func main() {
 	}
 
 	projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
+	// bucket name env or default (used for both projects handler and artifacts handler)
+	bucket := os.Getenv("CORE_DOCS_BUCKET")
+	if bucket == "" {
+		bucket = projectID + "-core-docs"
+	}
 	fbApp, err := firebase.NewApp(ctx, &firebase.Config{
 		ProjectID: projectID,
 	}, opts...)
@@ -112,6 +117,7 @@ func main() {
 	var metaHandler *httphandlers.MetaHandler
 	var agentsHandler *httphandlers.AgentsHandler
 	var verifiedHandler *httphandlers.VerifiedHandler
+	var bigqueryHandler *httphandlers.BigQueryHandler
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger)
 	searchEventsRepo := repo.NewSearchEventsRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
@@ -122,10 +128,6 @@ func main() {
 	// Wire orchestrator (AITaskExecutor + ModelManager + Vertex service)
 	modelManager := ai.NewAIModelManager()
 
-	// Initialize GenAI handler with usage metrics after modelManager is created
-	genaiHandler = httphandlers.NewGenAIHandler().
-		WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
-		WithModelManager(modelManager)
 	// For brevity, only Vertex provider is wired here; additional providers can be added
 	{
 		aiServices := []ai.AIService{}
@@ -176,11 +178,25 @@ func main() {
 		openaiAPIKey := os.Getenv("OPENAI_API_KEY")
 		genaiClient := gen_combined.NewClient(geminiClient, openaiAPIKey)
 
+		// Initialize BigQuery client and AI service
+		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "sanskrite_documents")
+		if bqClient, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID, opts...); err == nil {
+			bigqueryAIService := services.NewBigQueryAIService(bqClient, genaiClient, logger)
+			bigqueryHandler = httphandlers.NewBigQueryHandler(bigqueryAIService, logger)
+			logger.Printf("BigQuery AI service enabled: project=%s, dataset=%s", projectID, bigqueryDatasetID)
+			// Note: BigQuery client will be closed when server shuts down
+		} else {
+			logger.Printf("BigQuery AI service disabled: %v", err)
+		}
+
 		artifactExecutorService := services.NewArtifactExecutorService(genaiClient, artifactContextService, pub).
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()), modelManager)
 
 		generationSessionsRepo := repo.NewGenerationSessionsRepository(fsClient.Client())
 		artifactOrchestratorService := services.NewArtifactOrchestratorService(generationSessionsRepo, coreDocsRepo, artifactExecutorService, artifactContextService)
+		// Wire storage saver for artifacts (use artifacts handler as saver)
+		artifactsHandlerForSaver := httphandlers.NewArtifactsHandler(coreDocsRepo).WithStorage(gcsClient, bucket)
+		artifactOrchestratorService = artifactOrchestratorService.WithStorageSaver(artifactsHandlerForSaver)
 		artifactGenerationHandler = httphandlers.NewArtifactGenerationHandler(artifactOrchestratorService)
 		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger).WithProfiles(s.sprofs).WithSourceProjects(sourceProjectsRepo)
 		// Provider registry
@@ -190,8 +206,16 @@ func main() {
 		emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 		_ = emb // wired into orchestrator when ingest endpoints are added
 		orchestrator = orchestrator.WithRAG(reg, docsRepo, chunksRepo).WithEmbedding(emb)
+
+		// Initialize GenAI handler with usage metrics and CoreDocs tools after all dependencies are ready
+		genaiHandler = httphandlers.NewGenAIHandler().
+			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
+			WithModelManager(modelManager).
+			WithCoreDocsTools(coreDocsRepo, interactionsRepo, docsRepo, chunksRepo, emb).
+			WithGraphTools(true) // Enable graph tools
+
 		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo).WithFirestoreClient(fsClient.Client())
-		
+
 		// Initialize Vertex AI Search client if configured
 		vertexSearchProjectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
 		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "us-central1")
@@ -327,11 +351,6 @@ func main() {
 		)
 		// Core docs repo
 		coreDocsRepo := repo.NewCoreDocsRepo(fsClient.Client())
-		// bucket name env or default
-		bucket := os.Getenv("CORE_DOCS_BUCKET")
-		if bucket == "" {
-			bucket = projectID + "-core-docs"
-		}
 		s.projectsHandler = s.projectsHandler.WithCoreDocs(coreDocsRepo).WithStorage(gcsClient, bucket).WithAIExecutor(exec)
 		// Wire RAG dependencies for CoreDoc indexing
 		if emb != nil {
@@ -420,29 +439,7 @@ func main() {
 			psClient, err := pubsub.NewClient(ctx, projectID)
 			if err == nil {
 				sub := realtime.NewSubscriber(psClient, hub, logger)
-				_ = sub.Start(ctx,
-					string(realtime.EventDiscoveryStatus),
-					string(realtime.EventDiscoveryProfile),
-					string(realtime.EventDiscoveryAnswer),
-					string(realtime.EventDiscoveryProject),
-					// Core document processing updates (entities/facts/events/metrics/decisions)
-					string(realtime.EventDocProcess),
-					// Unified analysis status updates
-					string(realtime.EventAnalysisStatus),
-					// Subscribe WS hub to GenAI streaming topics
-					string(realtime.EventGenAIStream),
-					// Subscribe WS hub to Artifact generation topics
-					string(realtime.EventArtifactGenerationStarted),
-					string(realtime.EventArtifactSectionGenerating),
-					string(realtime.EventArtifactSectionChunk),
-					string(realtime.EventArtifactSectionCompleted),
-					string(realtime.EventArtifactAssemblyStarted),
-					string(realtime.EventArtifactAssemblyChunk),
-					string(realtime.EventArtifactAssemblyCompleted),
-					string(realtime.EventArtifactGenerationCompleted),
-					string(realtime.EventArtifactGenerationError),
-					string(realtime.EventAgentUpdate),
-				)
+				_ = sub.Start(ctx, realtime.AggregatedTopics...)
 			} else {
 				log.Printf("ws subscriber: pubsub client init error: %v", err)
 			}
@@ -687,7 +684,7 @@ func main() {
 		}
 		// Artifacts CRUD: /projects/{id}/artifacts
 		if strings.HasSuffix(r.URL.Path, "/artifacts") {
-			ah := httphandlers.NewArtifactsHandler(coreDocsRepo)
+			ah := httphandlers.NewArtifactsHandler(coreDocsRepo).WithStorage(gcsClient, bucket)
 			switch r.Method {
 			case http.MethodGet:
 				ah.ListArtifacts(w, r)
@@ -698,7 +695,7 @@ func main() {
 			}
 		}
 		if strings.Contains(r.URL.Path, "/artifacts/") {
-			ah := httphandlers.NewArtifactsHandler(coreDocsRepo)
+			ah := httphandlers.NewArtifactsHandler(coreDocsRepo).WithStorage(gcsClient, bucket)
 			if r.Method == http.MethodGet {
 				ah.GetArtifact(w, r)
 				return
@@ -742,6 +739,12 @@ func main() {
 
 	// Webhooks
 	mux.Handle("/api/v1/webhooks/", http.HandlerFunc(webhooksHandler.Handle))
+
+	// BigQuery AI query endpoint
+	if bigqueryHandler != nil {
+		mux.Handle("/api/v1/bigquery/query", authMiddleware(http.HandlerFunc(bigqueryHandler.Query)))
+		logger.Printf("BigQuery query endpoint registered: /api/v1/bigquery/query")
+	}
 
 	// Subscription billing endpoint (for Cloud Scheduler)
 	// Accepts x-functions-key header or Cloud Scheduler requests (User-Agent: Google-Cloud-Scheduler)

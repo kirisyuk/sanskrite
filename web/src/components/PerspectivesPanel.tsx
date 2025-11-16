@@ -601,7 +601,7 @@ Constraints:
         if (runTimerRef.current) { clearInterval(runTimerRef.current as any); runTimerRef.current = null; }
       } catch {}
     }
-    }, [buildTranscript, presetToInstruction, genaiSettings.model, genaiSettings.systemInstruction, genaiSettings.temperature, genaiSettings.maxOutputTokens, genaiSettings.groundingEnabled, t, prefLangCode, projectId, ensureProject, perspectives]);
+    }, [buildTranscript, presetToInstruction, genaiSettings.model, genaiSettings.systemInstruction, genaiSettings.temperature, genaiSettings.maxOutputTokens, genaiSettings.groundingEnabled, genaiSettings.toolUsageEnabled, t, prefLangCode, projectId, ensureProject, perspectives]);
 
   // Run only manually on selection (no auto reruns on chat updates)
 

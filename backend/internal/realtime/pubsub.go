@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/pubsub"
@@ -21,8 +22,6 @@ const (
 	EventGroundRefresh    EventType = "ground.refresh"
 	EventSourcePoll       EventType = "source.poll"
 	EventSourcePollDue    EventType = "source.poll.due"
-	// GenAI streaming: all events go to a single topic for ordering
-	EventGenAIStream EventType = "genai.stream"
 	// Artifact generation events
 	EventArtifactGenerationStarted   EventType = "artifact.generation.started"
 	EventArtifactSectionGenerating   EventType = "artifact.section.generating"
@@ -37,31 +36,56 @@ const (
 	EventAnalysisStatus EventType = "analysis.status"
 	// Agent execution updates
 	EventAgentUpdate EventType = "agent.update"
+	// Interaction events (created/updated via tools)
+	EventInteractionCreated EventType = "interaction.created"
+	EventInteractionUpdated EventType = "interaction.updated"
 	// Verified URL analysis streaming: all events go to a single topic for ordering
 	EventVerifiedStream EventType = "verified.stream"
 )
+
+// Aggregated Pub/Sub topic names for the hatlone broker
+const (
+	TopicGenAIStreams      = "hatlone.genai.streams"
+	TopicDiscoveryEvents   = "hatlone.discovery.events"
+	TopicArtifactEvents    = "hatlone.artifact.events"
+	TopicInteractionEvents = "hatlone.interaction.events"
+	TopicAnalysisEvents    = "hatlone.analysis.events"
+	TopicVerifiedStreams   = "hatlone.verified.streams"
+	TopicOperationsEvents  = "hatlone.operations.events"
+)
+
+// AggregatedTopics enumerates topics the new broker listens to (exported for cmds)
+var AggregatedTopics = []string{
+	TopicGenAIStreams,
+	TopicDiscoveryEvents,
+	TopicArtifactEvents,
+	TopicInteractionEvents,
+	TopicAnalysisEvents,
+	TopicVerifiedStreams,
+	TopicOperationsEvents,
+}
 
 var genaiStreamEventTypes = map[EventType]bool{
 	"genai.stream.start":       true,
 	"genai.stream.chunk":       true,
 	"genai.stream.tool_call":   true,
-	"genai.stream.tool_result":  true,
-	"genai.stream.done":         true,
-	"genai.stream.error":        true,
+	"genai.stream.tool_result": true,
+	"genai.stream.done":        true,
+	"genai.stream.error":       true,
 }
 
 var verifiedStreamEventTypes = map[EventType]bool{
-	"verified.stream.fetch_start":      true,
-	"verified.stream.fetch_success":    true,
-	"verified.stream.fetch_failed":     true,
-	"verified.stream.analysis_start":   true,
+	"verified.stream.fetch_start":       true,
+	"verified.stream.fetch_success":     true,
+	"verified.stream.fetch_failed":      true,
+	"verified.stream.analysis_start":    true,
 	"verified.stream.analysis_complete": true,
-	"verified.stream.analysis_failed":  true,
+	"verified.stream.analysis_failed":   true,
 }
 
 type Publisher struct {
 	client *pubsub.Client
-	topics map[EventType]*pubsub.Topic
+	topics map[string]*pubsub.Topic
 }
 
 func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
@@ -70,35 +94,8 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 		return nil, err
 	}
 
-	p := &Publisher{client: client, topics: map[EventType]*pubsub.Topic{}}
-	// Ensure topics exist
-	for _, et := range []EventType{
-		EventDiscoveryStatus,
-		EventDiscoveryProfile,
-		EventDiscoveryAnswer,
-		EventDiscoveryProject,
-		EventDocProcess,
-		EventGroundRefresh,
-		EventSourcePoll,
-		EventSourcePollDue,
-		// GenAI stream topic
-		EventGenAIStream,
-		// Artifact generation topics
-		EventArtifactGenerationStarted,
-		EventArtifactSectionGenerating,
-		EventArtifactSectionChunk,
-		EventArtifactSectionCompleted,
-		EventArtifactAssemblyStarted,
-		EventArtifactAssemblyChunk,
-		EventArtifactAssemblyCompleted,
-		EventArtifactGenerationCompleted,
-		EventArtifactGenerationError,
-		EventAnalysisStatus,
-		EventAgentUpdate,
-		// Verified stream topic
-		EventVerifiedStream,
-	} {
-		name := string(et)
+	p := &Publisher{client: client, topics: map[string]*pubsub.Topic{}}
+	for _, name := range AggregatedTopics {
 		t := client.Topic(name)
 		exists, err := t.Exists(ctx)
 		if err != nil {
@@ -111,61 +108,24 @@ func NewPublisher(ctx context.Context, projectID string) (*Publisher, error) {
 				// continue with non-fatal; attempt to publish may fail later
 			}
 		}
-		p.topics[et] = t
+		p.topics[name] = t
 	}
 
-	// Ensure ordering is enabled per-topic for GenAI stream topics
-	if t, ok := p.topics[EventGenAIStream]; ok && t != nil {
-		t.EnableMessageOrdering = true
+	enableOrdering := []string{
+		TopicGenAIStreams,
+		TopicArtifactEvents,
+		TopicVerifiedStreams,
 	}
-
-	// Also enable ordering for artifact topics (stream-like)
-	if t, ok := p.topics[EventArtifactGenerationStarted]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	if t, ok := p.topics[EventArtifactSectionGenerating]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	if t, ok := p.topics[EventArtifactSectionChunk]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	if t, ok := p.topics[EventArtifactSectionCompleted]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	if t, ok := p.topics[EventArtifactAssemblyStarted]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	if t, ok := p.topics[EventArtifactAssemblyChunk]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	if t, ok := p.topics[EventArtifactAssemblyCompleted]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	if t, ok := p.topics[EventArtifactGenerationCompleted]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	if t, ok := p.topics[EventArtifactGenerationError]; ok && t != nil {
-		t.EnableMessageOrdering = true
-	}
-	// Enable ordering for verified stream topic
-	if t, ok := p.topics[EventVerifiedStream]; ok && t != nil {
-		t.EnableMessageOrdering = true
+	for _, name := range enableOrdering {
+		if t, ok := p.topics[name]; ok && t != nil {
+			t.EnableMessageOrdering = true
+		}
 	}
 	return p, nil
 }
 
 func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID string, payload interface{}) error {
-	var topicToUse EventType
-	// Reroute all genai.stream.* events to the single EventGenAIStream topic for ordering
-	if _, isGenaiStream := genaiStreamEventTypes[et]; isGenaiStream {
-		topicToUse = EventGenAIStream
-	} else if _, isVerifiedStream := verifiedStreamEventTypes[et]; isVerifiedStream {
-		// Reroute all verified.stream.* events to the single EventVerifiedStream topic for ordering
-		topicToUse = EventVerifiedStream
-	} else {
-		topicToUse = et
-	}
-
+	topicToUse := routeTopicName(et)
 	t, ok := p.topics[topicToUse]
 	if !ok || t == nil {
 		return fmt.Errorf("topic not initialized: %s (routed from %s)", topicToUse, et)
@@ -183,17 +143,9 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 		log.Printf("publisher: publishing %s for tenantId=%s, payload=%s", et, tenantID, string(b))
 	}
 	// Determine whether to use ordering key for this topic (only for stream-like topics)
-	requireOrdering := (topicToUse == EventGenAIStream ||
-		topicToUse == EventArtifactGenerationStarted ||
-		topicToUse == EventArtifactSectionGenerating ||
-		topicToUse == EventArtifactSectionChunk ||
-		topicToUse == EventArtifactSectionCompleted ||
-		topicToUse == EventArtifactAssemblyStarted ||
-		topicToUse == EventArtifactAssemblyChunk ||
-		topicToUse == EventArtifactAssemblyCompleted ||
-		topicToUse == EventArtifactGenerationCompleted ||
-		topicToUse == EventArtifactGenerationError ||
-		topicToUse == EventVerifiedStream)
+	requireOrdering := topicToUse == TopicGenAIStreams ||
+		topicToUse == TopicArtifactEvents ||
+		topicToUse == TopicVerifiedStreams
 
 	// Derive optional routing context from payload if present
 	orderingKey := ""
@@ -230,17 +182,71 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 			}
 		}
 	}
-	res := t.Publish(ctx, &pubsub.Message{
-		Data:        b,
-		Attributes:  attrs,
-		OrderingKey: orderingKey,
-	})
-	_, err = res.Get(ctx)
-	if err != nil && et == EventAnalysisStatus {
-		log.Printf("publisher: ERROR publishing %s: %v", et, err)
+	// Retry mechanism for critical events (genai.stream, analysis.status)
+	maxRetries := 1
+	if et == EventAnalysisStatus || strings.HasPrefix(string(et), "genai.stream") {
+		maxRetries = 3
 	}
-	return err
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		res := t.Publish(ctx, &pubsub.Message{
+			Data:        b,
+			Attributes:  attrs,
+			OrderingKey: orderingKey,
+		})
+		_, err = res.Get(ctx)
+		if err == nil {
+			// Success - log for genai.stream events
+			if strings.HasPrefix(string(et), "genai.stream") {
+				log.Printf("publisher: published %s tenant=%s project=%s stream=%s (attempt %d)", et, tenantID, attrs["projectId"], attrs["streamId"], attempt+1)
+			}
+			return nil
+		}
+		lastErr = err
+
+		// Log error for important event types
+		if et == EventAnalysisStatus || strings.HasPrefix(string(et), "genai.stream") {
+			log.Printf("publisher: ERROR publishing %s tenant=%s project=%s stream=%s (attempt %d/%d): %v", et, tenantID, attrs["projectId"], attrs["streamId"], attempt+1, maxRetries+1, err)
+		}
+
+		// Retry with exponential backoff (only if not last attempt)
+		if attempt < maxRetries {
+			backoff := time.Duration(attempt+1) * 100 * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+				// Continue retry
+			}
+		}
+	}
+
+	// All retries failed - critical error for genai.stream events
+	if strings.HasPrefix(string(et), "genai.stream") {
+		log.Printf("publisher: CRITICAL ERROR - failed to publish %s after %d attempts tenant=%s project=%s stream=%s: %v", et, maxRetries+1, tenantID, attrs["projectId"], attrs["streamId"], lastErr)
+	}
+	return lastErr
 }
 
 // Client exposes the underlying pubsub.Client for subscriber wiring
 func (p *Publisher) Client() *pubsub.Client { return p.client }
+
+func routeTopicName(et EventType) string {
+	switch {
+	case genaiStreamEventTypes[et] || strings.HasPrefix(string(et), "genai.stream."):
+		return TopicGenAIStreams
+	case strings.HasPrefix(string(et), "discovery."):
+		return TopicDiscoveryEvents
+	case strings.HasPrefix(string(et), "artifact.") || et == EventDocProcess:
+		return TopicArtifactEvents
+	case strings.HasPrefix(string(et), "interaction.") || et == EventAgentUpdate:
+		return TopicInteractionEvents
+	case et == EventAnalysisStatus:
+		return TopicAnalysisEvents
+	case verifiedStreamEventTypes[et] || strings.HasPrefix(string(et), "verified.stream."):
+		return TopicVerifiedStreams
+	default:
+		return TopicOperationsEvents
+	}
+}
