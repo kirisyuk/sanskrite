@@ -130,7 +130,7 @@ Return strictly JSON:
       case 'entities':
         return `Extract named entities and relations.
 Return strictly JSON:
-{"entities": [{"name": "string", "type": "person|group_of_persons|organization_or_platform|project_or_product|classifier_or_standard|classification_code|regulatory_document|government_agency|contract_document|location|other", "relations"?: [{"type": "string", "target": "string"}]}]}`;
+{"entities": [{"name": "string", "type": "Person|Organization|Location|Product|Document|Facility|Other", "relations"?: [{"type": "string", "target": "string"}]}]}`;
       case 'risks_decisions':
         return `Task: Identify ALL decisions and risks discussed in the conversation and present the findings in an academic, neutral tone (no subjective praise/critique). Focus strictly on what is actually discussed; avoid speculation.
 

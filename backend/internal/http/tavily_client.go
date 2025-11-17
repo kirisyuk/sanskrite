@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -62,6 +63,17 @@ func NewTavilyClient(apiKey string) *TavilyClient {
 		},
 		baseURL: "https://api.tavily.com",
 	}
+}
+
+// GetTavilyClientFromEnv creates a Tavily client from environment variables
+// This is the single source of truth for Tavily client initialization
+// Checks TAVILY_API_KEY first, then TAVILY_API_KEY_TEST as fallback
+func GetTavilyClientFromEnv() *TavilyClient {
+	apiKey := strings.Trim(strings.TrimSpace(os.Getenv("TAVILY_API_KEY")), "\"'")
+	if apiKey == "" {
+		apiKey = strings.Trim(strings.TrimSpace(os.Getenv("TAVILY_API_KEY_TEST")), "\"'")
+	}
+	return NewTavilyClient(apiKey)
 }
 
 // Search performs a web search using Tavily API

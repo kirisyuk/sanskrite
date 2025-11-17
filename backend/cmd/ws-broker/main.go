@@ -94,7 +94,6 @@ func main() {
 		string(realtime.EventDiscoveryProject),
 		string(realtime.EventDocProcess),
 		string(realtime.EventAnalysisStatus),
-		string(realtime.EventGenAIStream),
 		string(realtime.EventArtifactGenerationStarted),
 		string(realtime.EventArtifactSectionGenerating),
 		string(realtime.EventArtifactSectionChunk),

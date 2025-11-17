@@ -154,7 +154,7 @@ class ApiClient {
     return response.data.items;
   }
 
-  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'|'action'; content: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; roles?: Array<{ role: string; confidence: number; rationale: string }>; industries?: Array<{ industry: string; confidence: number; rationale: string }>; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean } }): Promise<{ id: string }> {
+  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'|'action'|'research'; content: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; roles?: Array<{ role: string; confidence: number; rationale: string }>; industries?: Array<{ industry: string; confidence: number; rationale: string }>; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean }; researchQuery?: string; researchProgress?: { stage: 'planning'|'searching'|'generating'; status: 'in_progress'|'completed'; subQueries?: string[]; sourcesCount?: number }; subQueries?: string[]; researchSources?: Array<{ title: string; url: string; score?: number }> }): Promise<{ id: string }> {
     const response = await this.client.post<{ id: string }>(`/api/v1/projects/${projectId}/interactions`, data);
     return response.data;
   }
@@ -235,14 +235,17 @@ class ApiClient {
     maxOutputTokens?: number;
     webSearchEnabled?: boolean;
     toolCallingEnabled?: boolean;
+    researchEnabled?: boolean;
     strictJSONEnabled?: boolean;
     jsonSchema?: any;
     tools?: Array<{ name: string; description?: string; parameters: any }>;
     toolChoice?: 'auto'|'required';
     parallelToolCalls?: boolean;
+    projectId?: string;
+    streamId?: string;
   }): Promise<{ content?: string; model: string; usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; sources?: string[]; attributions?: Array<{ title?: string; url?: string }>; rawJSON?: string; }>
   {
-    const body = {
+    const body: any = {
       model: data.model,
       prompt: data.prompt,
       systemInstruction: data.systemInstruction,
@@ -250,12 +253,20 @@ class ApiClient {
       maxOutputTokens: data.maxOutputTokens,
       webSearchEnabled: !!data.webSearchEnabled,
       toolCallingEnabled: !!data.toolCallingEnabled,
+      researchEnabled: !!data.researchEnabled,
       strictJSONEnabled: !!data.strictJSONEnabled,
       jsonSchema: data.jsonSchema,
       tools: data.tools,
       toolChoice: data.toolChoice,
       parallelToolCalls: data.parallelToolCalls,
     };
+    // Add projectId and streamId for WebSocket events (used in Research mode)
+    if (data.projectId) {
+      body.projectId = data.projectId;
+    }
+    if (data.streamId) {
+      body.streamId = data.streamId;
+    }
     const response = await this.client.post(`/api/v1/genai/generate`, body);
     return response.data;
   }
@@ -416,9 +427,15 @@ class ApiClient {
     messages?: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>;
     projectId?: string;
     streamId?: string;
+    researchEnabled?: boolean;
   }) {
+    // Extract researchEnabled from options if present and add to top level
+    const body: any = { ...data };
+    if (data.options?.researchEnabled !== undefined) {
+      body.researchEnabled = data.options.researchEnabled;
+    }
     // Fire-and-forget HTTP 200 triggers Pub/Sub/WS stream events
-    const response = await this.client.post(`/api/v1/genai/stream`, data);
+    const response = await this.client.post(`/api/v1/genai/stream`, body);
     return response.data;
   }
 

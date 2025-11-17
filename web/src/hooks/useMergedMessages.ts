@@ -11,16 +11,24 @@ export type MergedItem = {
  * Хук для подготовки объединенного списка сообщений и взаимодействий
  */
 export function useMergedMessages() {
-  const genaiChat = useGenaiChatStore();
-  const streaming = genaiChat.streaming;
+  // Subscribe to lengths to trigger recalculation only when needed
+  const interactionsLength = useGenaiChatStore((state) => state.interactions.length);
+  const messagesLength = useGenaiChatStore((state) => state.messages.length);
+  const streaming = useGenaiChatStore((state) => state.streaming);
+  // Subscribe to _lastUpdate to detect when interactions are updated (not just added)
+  const lastUpdate = useGenaiChatStore((state) => (state as any)._lastUpdate || 0);
+  
+  // Get actual data using getState() inside useMemo to avoid stale closures
+  const getState = useGenaiChatStore.getState;
 
   return useMemo(() => {
+    const { interactions, messages: stateMessages } = getState();
     const merged: MergedItem[] = [];
 
     // Add interactions first (user, assistant, and section markers)
     // This ensures interactions are processed before messages during streaming
     // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
-    genaiChat.interactions
+    interactions
       .filter((it) => {
         // Exclude perspective interactions
         if (
@@ -55,6 +63,7 @@ export function useMergedMessages() {
           it.kind === 'user' ||
           it.kind === 'assistant' ||
           it.kind === 'action' ||
+          it.kind === 'research' ||
           it.kind === 'section_start' ||
           it.kind === 'section_end'
         );
@@ -96,8 +105,8 @@ export function useMergedMessages() {
     // Add filtered messages (only during streaming, and not already in interactions)
     // These are typically assistant messages that are being streamed
     if (streaming) {
-      genaiChat.messages.forEach((m) => {
-        const hasInteraction = genaiChat.interactions.some(
+      stateMessages.forEach((m: any) => {
+        const hasInteraction = interactions.some(
           (it) =>
             (it as any).originalMessageId === m.id || it.id === m.id,
         );
@@ -139,9 +148,10 @@ export function useMergedMessages() {
 
     return merged;
   }, [
-    genaiChat.interactions,
-    genaiChat.messages,
+    interactionsLength,
+    messagesLength,
     streaming,
+    lastUpdate, // Include lastUpdate to trigger recalculation when interactions are updated
   ]);
 }
 

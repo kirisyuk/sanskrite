@@ -86,6 +86,20 @@ func main() {
 	s.projs = repo.NewProjectsRepository(fsClient.Client())
 	s.dsrcs = repo.NewDataSourcesRepository(fsClient.Client())
 	s.sprofs = repo.NewSourceProfilesRepository(fsClient.Client())
+	// Ontology repositories
+	_ = repo.NewEntityRepository(fsClient.Client())
+	_ = repo.NewEventRepository(fsClient.Client())
+	_ = repo.NewRelationRepository(fsClient.Client())
+	_ = repo.NewClaimRepository(fsClient.Client())
+	_ = repo.NewConceptRepository(fsClient.Client())
+	_ = repo.NewMetricStateRepository(fsClient.Client())
+	_ = repo.NewTrendRepository(fsClient.Client())
+	_ = repo.NewCausalLinkRepository(fsClient.Client())
+	_ = repo.NewScenarioRepository(fsClient.Client())
+	_ = repo.NewActionableItemRepository(fsClient.Client())
+	_ = repo.NewSourceRepository(fsClient.Client())
+	_ = repo.NewTrustRepository(fsClient.Client())
+	_ = repo.NewUncertaintyModelRepository(fsClient.Client())
 	// RAG repos
 	ragDocsBucket := getEnv("RAG_DOCUMENTS_BUCKET", "")
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
@@ -213,6 +227,26 @@ func main() {
 			WithModelManager(modelManager).
 			WithCoreDocsTools(coreDocsRepo, interactionsRepo, docsRepo, chunksRepo, emb).
 			WithGraphTools(true) // Enable graph tools
+
+		// Initialize Tavily client (shared for both Research mode and Web Search tools)
+		// Single source of truth: initialized once and reused
+		tavilyClient := httphandlers.GetTavilyClientFromEnv()
+		if tavilyClient != nil {
+			genaiHandler = genaiHandler.WithTavilyClient(tavilyClient)
+			logger.Printf("Tavily client initialized (shared for Research mode and Web Search tools)")
+		} else {
+			logger.Printf("Tavily client disabled: TAVILY_API_KEY not set (Research mode and Web Search will not work)")
+		}
+
+		// Initialize Wikidata client (for Knowledge Search tool)
+		// Wikidata doesn't require API key - uses public API
+		wikidataClient := httphandlers.GetWikidataClientFromEnv()
+		if wikidataClient != nil {
+			genaiHandler = genaiHandler.WithWikidataClient(wikidataClient)
+			logger.Printf("Wikidata client initialized (Knowledge Search tool enabled)")
+		} else {
+			logger.Printf("Wikidata client disabled: initialization failed")
+		}
 
 		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo).WithFirestoreClient(fsClient.Client())
 

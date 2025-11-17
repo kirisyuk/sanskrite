@@ -8,7 +8,7 @@ export type GenAIModel =
   | 'gemini_quality' // gemini-2.5-pro
   | 'gemini_fast'    // gemini-2.5-flash-lite
   | 'gemini_balanced'// gemini-2.5-flash
-  | 'gpt_quality'    // gpt-5
+  | 'gpt_quality'    // gpt-5.1
   | 'gpt_balanced'   // gpt-5-mini
   | 'gpt_fast'       // gpt-5-nano
   | 'grok_quality'   // grok-4-0709
@@ -70,7 +70,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<GenAIModel, number> = {
   // OpenAI models
   'gpt_fast': 400_000,           // gpt-5-nano
   'gpt_balanced': 400_000,       // gpt-5-mini
-  'gpt_quality': 400_000,        // gpt-5
+  'gpt_quality': 400_000,        // gpt-5.1
   
   // Grok models
   'grok_fast': 2_000_000,        // grok-4-fast-non-reasoning

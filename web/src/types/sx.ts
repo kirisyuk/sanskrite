@@ -11,7 +11,9 @@ export interface SxBase {
 
 export interface SxEntityMark extends SxBase {
   type: 'entity_mark';
-  kind: 'person' | 'org' | 'product' | 'location' | 'event' | 'other';
+  kind: 'Person' | 'Organization' | 'Location' | 'Product' | 'Document' | 'Facility' | 'EventEntity' | 'Other' | 
+         // Legacy types for backward compatibility
+         'person' | 'org' | 'product' | 'location' | 'event' | 'other';
   name: string;
   description: string;
   aliases?: string[];

@@ -24,7 +24,7 @@ export interface StartStreamArgs {
   suppressUserEcho?: boolean;
 }
 
-type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action';
+type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action' | 'research';
 export interface LocalInteraction {
   id: string;
   projectId: string; // temporary local id binding
@@ -57,6 +57,20 @@ export interface LocalInteraction {
   searchQueries?: string[];
   sources?: string[];
   createdAt: string;
+  // Research-specific fields
+  researchQuery?: string;
+  researchProgress?: {
+    stage: 'planning' | 'searching' | 'generating';
+    status: 'in_progress' | 'completed';
+    subQueries?: string[];
+    sourcesCount?: number;
+  };
+  subQueries?: string[];
+  researchSources?: Array<{
+    title: string;
+    url: string;
+    score?: number;
+  }>;
 }
 
 interface GenaiChatState {
@@ -415,6 +429,37 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 : 'line';
               updated = { ...updated, graphData: { ...graphData, chartType } };
             }
+          }
+          
+          // Нормализация researchSources для research interactions
+          if (it.kind === 'research' && it.researchSources) {
+            const normalizedSources = Array.isArray(it.researchSources) 
+              ? it.researchSources.map((src: any) => {
+                  // Если это уже объект с title/url, нормализуем его
+                  if (src && typeof src === 'object' && ('title' in src || 'url' in src)) {
+                    return {
+                      title: String(src.title || src.url || 'Unknown source'),
+                      url: String(src.url || ''),
+                      score: typeof src.score === 'number' ? src.score : undefined,
+                    };
+                  }
+                  // Если это строка (URL), конвертируем в объект
+                  if (typeof src === 'string') {
+                    return {
+                      title: src,
+                      url: src,
+                      score: undefined,
+                    };
+                  }
+                  // Fallback
+                  return {
+                    title: 'Unknown source',
+                    url: '',
+                    score: undefined,
+                  };
+                })
+              : [];
+            updated = { ...updated, researchSources: normalizedSources };
           }
           
           return updated;
@@ -2270,7 +2315,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               ? text.slice(0, maxChars - 50) + '\n... [truncated]'
               : text;
             pinnedMessages.push({
-              role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
+              role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
               text: it.subkind === 'document.attach' 
                 ? `[ATTACHED DOCUMENT]\n${truncated}` 
                 : truncated,
@@ -2283,7 +2328,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         }
         
         pinnedMessages.push({
-          role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
+          role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
           text: it.subkind === 'document.attach' 
             ? `[ATTACHED DOCUMENT]\n${text}` 
             : text,
@@ -2317,7 +2362,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               ? text.slice(0, maxChars - 50) + '\n... [truncated]'
               : text;
             regularMessages.push({
-              role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
+              role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
               text: it.subkind === 'document.attach' 
                 ? `[ATTACHED DOCUMENT]\n${truncated}` 
                 : truncated,
@@ -2330,7 +2375,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         }
         
         regularMessages.push({
-          role: (it.kind === 'assistant' || it.kind === 'system') ? (it.kind as 'assistant'|'system') : (it.kind === 'note' ? 'note' : 'user'),
+          role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
           text: it.subkind === 'document.attach' 
             ? `[ATTACHED DOCUMENT]\n${text}` 
             : text,
@@ -2384,12 +2429,29 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   onStart: () => set((s) => {
     // Ensure we have an assistant message placeholder for streaming
     const msgs = [...s.messages];
-    const hasAssistant = msgs.some(m => m.role === 'assistant');
+    // Find the last assistant message (if any)
+    let lastAssistantIndex = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') {
+        lastAssistantIndex = i;
+        break;
+      }
+    }
     
-    if (!hasAssistant) {
-      // After hot-reload, create assistant message placeholder
+    // If no assistant message exists, create one
+    if (lastAssistantIndex === -1) {
       const id = Date.now().toString() + '-a';
       msgs.push({ id, role: 'assistant', content: '' });
+    } else {
+      // Ensure the last assistant message has empty content (for thinking placeholder)
+      const lastAssistant = msgs[lastAssistantIndex];
+      if (lastAssistant.content && lastAssistant.content.trim()) {
+        // If last assistant has content, don't modify it - streaming has started
+        // But still ensure streaming flag is set
+      } else {
+        // Last assistant is empty - ensure it stays empty for thinking placeholder
+        msgs[lastAssistantIndex] = { ...lastAssistant, content: '' };
+      }
     }
     
     return { 

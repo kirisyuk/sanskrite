@@ -184,6 +184,485 @@ function computeBackoffDelay(attempt: number): number {
   return Math.max(1000, Math.floor(exp + jitter));
 }
 
+// Handle Research mode WebSocket events
+function handleResearchEvent(
+  msg: any,
+  st: any,
+  eventPid: string | undefined,
+  eventStreamId: string | undefined,
+  currentPid: string | undefined,
+  isActiveStream: boolean
+) {
+  const researchStage = msg.type.replace('genai.stream.research.', '');
+  console.log('[DiscoveryStore] Received research event', { 
+    stage: researchStage,
+    projectId: eventPid, 
+    streamId: eventStreamId,
+    data: msg.data
+  });
+
+  // Filter by project/stream if needed
+  if (eventPid && currentPid && eventPid !== currentPid && !isActiveStream) {
+    return; // Filter out mismatched projects
+  }
+
+  // Import genaiChatStore to update interactions
+  import('./genaiChatStore').then(({ useGenaiChatStore }) => {
+    // Get fresh state each time to avoid stale closures
+    const getCurrentState = () => useGenaiChatStore.getState();
+    const currentState = getCurrentState();
+    const interactions = currentState.interactions || [];
+    const progressInteractionId = eventStreamId ? `research-${eventStreamId}-progress` : null;
+    
+    // Find existing progress interaction
+    let progressInteraction = progressInteractionId 
+      ? interactions.find((it: any) => it.id === progressInteractionId)
+      : null;
+
+    switch (researchStage) {
+      case 'start':
+        // Create new research.progress interaction (only if doesn't exist to prevent duplicates)
+        if (progressInteractionId && eventPid) {
+          if (!progressInteraction) {
+            const newProgress: any = {
+              id: progressInteractionId,
+              projectId: eventPid,
+              kind: 'research',
+              subkind: 'research.progress',
+              researchQuery: msg.data?.query || '',
+              researchProgress: {
+                stage: 'planning',
+                status: 'in_progress',
+              },
+              createdAt: new Date().toISOString(),
+              replyTo: msg.data?.userInteractionId,
+            };
+            // Get fresh state to avoid race conditions
+            const freshState = getCurrentState();
+            const newInteractions = [...freshState.interactions, newProgress];
+            useGenaiChatStore.setState({ 
+              interactions: newInteractions,
+              _lastUpdate: Date.now() // Force re-render
+            } as any);
+          } else {
+            // Update existing progress interaction if start event received again
+            const updated = {
+              ...progressInteraction,
+              researchQuery: msg.data?.query || progressInteraction.researchQuery,
+              researchProgress: {
+                ...progressInteraction.researchProgress,
+                stage: 'planning',
+                status: 'in_progress',
+              },
+            };
+            const freshState = getCurrentState();
+            useGenaiChatStore.setState({
+              interactions: freshState.interactions.map((it: any) => 
+                it.id === progressInteractionId ? updated : it
+              )
+            } as any);
+          }
+        }
+        break;
+
+      case 'planning':
+        // Update progress interaction (create if doesn't exist)
+        if (progressInteractionId && eventPid) {
+          if (!progressInteraction) {
+            // Create progress interaction if it doesn't exist (handles race condition)
+            const newProgress: any = {
+              id: progressInteractionId,
+              projectId: eventPid,
+              kind: 'research',
+              subkind: 'research.progress',
+              researchQuery: msg.data?.query || '',
+              researchProgress: {
+                stage: 'planning',
+                status: msg.data?.status || 'in_progress',
+                subQueries: msg.data?.subQueries || [],
+              },
+              createdAt: new Date().toISOString(),
+              replyTo: msg.data?.userInteractionId,
+            };
+            const freshState = getCurrentState();
+            useGenaiChatStore.setState({ interactions: [...freshState.interactions, newProgress] } as any);
+          } else if (msg.data?.status) {
+            const updated = {
+              ...progressInteraction,
+              researchProgress: {
+                stage: 'planning',
+                status: msg.data.status,
+                subQueries: msg.data.subQueries || progressInteraction.researchProgress?.subQueries,
+              },
+            };
+            const freshState = getCurrentState();
+            const updatedInteractions = freshState.interactions.map((it: any) => 
+              it.id === progressInteractionId ? updated : it
+            );
+            useGenaiChatStore.setState({
+              interactions: updatedInteractions
+            } as any);
+            // Force re-render by updating a timestamp
+            useGenaiChatStore.setState({ _lastUpdate: Date.now() } as any);
+          }
+        }
+        break;
+
+      case 'searching':
+        // Update progress interaction (create if doesn't exist)
+        if (progressInteractionId && eventPid) {
+          if (!progressInteraction) {
+            // Create progress interaction if it doesn't exist (handles race condition)
+            const sourcesCount = Array.isArray(msg.data?.sources) 
+              ? msg.data.sources.length 
+              : (typeof msg.data?.sources === 'number' ? msg.data.sources : 0);
+            const newProgress: any = {
+              id: progressInteractionId,
+              projectId: eventPid,
+              kind: 'research',
+              subkind: 'research.progress',
+              researchQuery: msg.data?.query || '',
+              researchProgress: {
+                stage: 'searching',
+                status: msg.data?.status || 'in_progress',
+                sourcesCount,
+              },
+              createdAt: new Date().toISOString(),
+              replyTo: msg.data?.userInteractionId,
+            };
+            const freshState = getCurrentState();
+            useGenaiChatStore.setState({ interactions: [...freshState.interactions, newProgress] } as any);
+          } else if (msg.data?.status) {
+            const sourcesCount = Array.isArray(msg.data.sources) 
+              ? msg.data.sources.length 
+              : (typeof msg.data.sources === 'number' ? msg.data.sources : progressInteraction.researchProgress?.sourcesCount);
+            const updated = {
+              ...progressInteraction,
+              researchProgress: {
+                ...progressInteraction.researchProgress,
+                stage: 'searching',
+                status: msg.data.status,
+                sourcesCount,
+              },
+            };
+            const freshState = getCurrentState();
+            const updatedInteractions = freshState.interactions.map((it: any) => 
+              it.id === progressInteractionId ? updated : it
+            );
+            useGenaiChatStore.setState({
+              interactions: updatedInteractions
+            } as any);
+            // Force re-render by updating a timestamp
+            useGenaiChatStore.setState({ _lastUpdate: Date.now() } as any);
+          }
+        }
+        break;
+
+      case 'generating':
+        // Update progress interaction (create if doesn't exist)
+        if (progressInteractionId && eventPid) {
+          if (!progressInteraction) {
+            // Create progress interaction if it doesn't exist (handles race condition)
+            const newProgress: any = {
+              id: progressInteractionId,
+              projectId: eventPid,
+              kind: 'research',
+              subkind: 'research.progress',
+              researchQuery: msg.data?.query || '',
+              researchProgress: {
+                stage: 'generating',
+                status: msg.data?.status || 'in_progress',
+              },
+              createdAt: new Date().toISOString(),
+              replyTo: msg.data?.userInteractionId,
+            };
+            const freshState = getCurrentState();
+            useGenaiChatStore.setState({ interactions: [...freshState.interactions, newProgress] } as any);
+          } else if (msg.data?.status) {
+            const updated = {
+              ...progressInteraction,
+              researchProgress: {
+                ...progressInteraction.researchProgress,
+                stage: 'generating',
+                status: msg.data.status,
+              },
+            };
+            const freshState = getCurrentState();
+            const updatedInteractions = freshState.interactions.map((it: any) => 
+              it.id === progressInteractionId ? updated : it
+            );
+            useGenaiChatStore.setState({
+              interactions: updatedInteractions
+            } as any);
+            // Force re-render by updating a timestamp
+            useGenaiChatStore.setState({ _lastUpdate: Date.now() } as any);
+          }
+        }
+        break;
+
+      case 'balancing':
+        // Update progress interaction (create if doesn't exist)
+        if (progressInteractionId && eventPid) {
+          if (!progressInteraction) {
+            // Create progress interaction if it doesn't exist (handles race condition)
+            const newProgress: any = {
+              id: progressInteractionId,
+              projectId: eventPid,
+              kind: 'research',
+              subkind: 'research.progress',
+              researchQuery: msg.data?.query || '',
+              researchProgress: {
+                stage: 'balancing',
+                status: msg.data?.status || 'in_progress',
+              },
+              createdAt: new Date().toISOString(),
+              replyTo: msg.data?.userInteractionId,
+            };
+            const freshState = getCurrentState();
+            useGenaiChatStore.setState({ interactions: [...freshState.interactions, newProgress] } as any);
+          } else if (msg.data?.status) {
+            const updated = {
+              ...progressInteraction,
+              researchProgress: {
+                ...progressInteraction.researchProgress,
+                stage: 'balancing',
+                status: msg.data.status,
+              },
+            };
+            const freshState = getCurrentState();
+            const updatedInteractions = freshState.interactions.map((it: any) => 
+              it.id === progressInteractionId ? updated : it
+            );
+            useGenaiChatStore.setState({
+              interactions: updatedInteractions
+            } as any);
+            // Force re-render by updating a timestamp
+            useGenaiChatStore.setState({ _lastUpdate: Date.now() } as any);
+          }
+        }
+        break;
+
+      case 'synthesizing':
+        // Update progress interaction (create if doesn't exist)
+        if (progressInteractionId && eventPid) {
+          if (!progressInteraction) {
+            // Create progress interaction if it doesn't exist (handles race condition)
+            const newProgress: any = {
+              id: progressInteractionId,
+              projectId: eventPid,
+              kind: 'research',
+              subkind: 'research.progress',
+              researchQuery: msg.data?.query || '',
+              researchProgress: {
+                stage: 'synthesizing',
+                status: msg.data?.status || 'in_progress',
+              },
+              createdAt: new Date().toISOString(),
+              replyTo: msg.data?.userInteractionId,
+            };
+            const freshState = getCurrentState();
+            useGenaiChatStore.setState({ interactions: [...freshState.interactions, newProgress] } as any);
+          } else if (msg.data?.status) {
+            const updated = {
+              ...progressInteraction,
+              researchProgress: {
+                ...progressInteraction.researchProgress,
+                stage: 'synthesizing',
+                status: msg.data.status,
+              },
+            };
+            const freshState = getCurrentState();
+            const updatedInteractions = freshState.interactions.map((it: any) => 
+              it.id === progressInteractionId ? updated : it
+            );
+            useGenaiChatStore.setState({
+              interactions: updatedInteractions
+            } as any);
+            // Force re-render by updating a timestamp
+            useGenaiChatStore.setState({ _lastUpdate: Date.now() } as any);
+          }
+        }
+        break;
+
+      case 'done':
+        // Create research.result interaction and remove progress
+        if (eventStreamId && eventPid) {
+          const resultId = `research-${eventStreamId}-result`;
+          const sources = Array.isArray(msg.data?.sources) 
+            ? msg.data.sources 
+            : [];
+          const researchSources = sources.map((src: any, idx: number) => ({
+            title: src?.title || `Source ${idx + 1}`,
+            url: src?.url || '',
+            score: src?.score,
+          }));
+          
+          const resultInteraction: any = {
+            id: resultId,
+            projectId: eventPid,
+            kind: 'research',
+            subkind: 'research.result',
+            content: msg.data?.synthesis || msg.data?.report || '', // Use synthesis as final content
+            researchQuery: msg.data?.query || '',
+            subQueries: msg.data?.subQueries || [],
+            researchSources,
+            model: msg.data?.model,
+            usage: msg.data?.usage,
+            // Store all three reports for potential display
+            researchReport: msg.data?.report || '',
+            researchCounterPosition: msg.data?.counterPosition || '',
+            researchSynthesis: msg.data?.synthesis || '',
+            createdAt: new Date().toISOString(),
+            replyTo: msg.data?.userInteractionId,
+          };
+          
+          // Remove progress interaction and add result
+          // Get fresh state to avoid race conditions
+          const freshState = getCurrentState();
+          const newInteractions = freshState.interactions
+            .filter((it: any) => it.id !== progressInteractionId)
+            .concat([resultInteraction]);
+          useGenaiChatStore.setState({
+            interactions: newInteractions,
+            _lastUpdate: Date.now() // Force re-render
+          } as any);
+          
+          // CRITICAL: Persist research.result to server so it survives page reload
+          import('../lib/api').then(({ api }) => {
+            api.createProjectInteraction(eventPid, {
+              kind: 'research',
+              subkind: 'research.result',
+              content: msg.data?.synthesis || msg.data?.report || '', // Use synthesis as final content
+              researchQuery: msg.data?.query || '',
+              subQueries: msg.data?.subQueries || [],
+              researchSources,
+              model: msg.data?.model,
+              usage: msg.data?.usage,
+              // Store all three reports for potential display
+              researchReport: msg.data?.report || '',
+              researchCounterPosition: msg.data?.counterPosition || '',
+              researchSynthesis: msg.data?.synthesis || '',
+              replyTo: msg.data?.userInteractionId,
+            } as any).then((res) => {
+              // Update local interaction with server ID
+              const updatedState = getCurrentState();
+              useGenaiChatStore.setState({
+                interactions: updatedState.interactions.map((it: any) =>
+                  it.id === resultId ? { ...it, id: res.id } : it
+                )
+              } as any);
+              
+              // Trigger bias evaluation for research result (same as for assistant messages)
+              (async () => {
+                try {
+                  const { evaluateBias } = await import('../lib/biasEvaluation');
+                  const { useGenAISettings } = await import('../stores/genaiSettingsStore');
+                  
+                  const settingsStateEval = useGenAISettings.getState();
+                  const evalModel = (settingsStateEval.stanceModel && settingsStateEval.stanceModel.trim()) 
+                    ? settingsStateEval.stanceModel 
+                    : 'gemini_fast';
+                  
+                  // Evaluate synthesis if available, otherwise report
+                  const textToEvaluate = (msg.data?.synthesis || msg.data?.report || '').trim();
+                  if (!textToEvaluate) return;
+                  
+                  const preferredLang = (typeof window !== 'undefined' 
+                    ? (window.localStorage.getItem('preferredLanguage') || 'EN') 
+                    : 'EN').toLowerCase();
+                  
+                  // Find previous USER message as context (research query)
+                  let prevUserText: string | null = null;
+                  try {
+                    const { useGenaiChatStore: genaiStore } = await import('./genaiChatStore');
+                    const allInts = genaiStore.getState().interactions;
+                    const idx = allInts.findIndex((it) => it.id === res.id);
+                    if (idx > 0) {
+                      for (let i = idx - 1; i >= 0; i--) {
+                        if (allInts[i].kind === 'user' && allInts[i].content && (allInts[i].content as string).trim()) {
+                          prevUserText = allInts[i].content as string;
+                          break;
+                        }
+                      }
+                    }
+                    // Fallback to research query if no user message found
+                    if (!prevUserText && msg.data?.query) {
+                      prevUserText = msg.data.query;
+                    }
+                  } catch {}
+                  
+                  // Call unified evaluation function
+                  await evaluateBias({
+                    messageId: res.id,
+                    messageRole: 'assistant',
+                    textToEvaluate,
+                    contextText: prevUserText || undefined,
+                    evalModel,
+                    preferredLang,
+                  });
+                } catch (e) {
+                  console.warn('[ResearchEvent] Bias evaluation failed', e);
+                }
+              })().catch((err) => {
+                console.warn('[ResearchEvent] Bias evaluation error', err);
+              });
+            }).catch((err) => {
+              console.error('[ResearchEvent] Failed to persist research.result', err);
+            });
+          }).catch((err) => {
+            console.error('[ResearchEvent] Failed to import api', err);
+          });
+          
+          // CRITICAL: Stop streaming to remove "thinking" placeholder
+          // Don't call onDone() for research - it would create empty assistant stub
+          // Only clear streaming state
+          st.onDoneMeta({ 
+            usage: msg.data?.usage, 
+            attributions: [], // Empty - research sources are in the interaction itself
+            searchQueries: msg.data?.searchQueries,
+            sources: [],
+          });
+          // Clear streaming state without creating assistant interaction
+          const currentState = getCurrentState();
+          if (currentState.streaming) {
+            useGenaiChatStore.setState({ 
+              streaming: false, 
+              currentStreamId: undefined,
+              pendingAssistantMeta: undefined,
+              pendingAssistantOptions: undefined,
+              pendingAssistantPrompt: undefined,
+              pendingAssistantTools: undefined,
+            } as any);
+          }
+        }
+        break;
+
+      case 'error':
+        // Update progress interaction with error
+        if (progressInteraction) {
+          const updated = {
+            ...progressInteraction,
+            researchProgress: {
+              ...progressInteraction.researchProgress,
+              status: 'error' as any,
+            },
+            content: `Research error: ${msg.data?.error || 'Unknown error'}`,
+          };
+          // Get fresh state to avoid race conditions
+          const freshState = getCurrentState();
+          useGenaiChatStore.setState({
+            interactions: freshState.interactions.map((it: any) => 
+              it.id === progressInteractionId ? updated : it
+            )
+          } as any);
+        }
+        break;
+    }
+  }).catch((err) => {
+    console.error('[DiscoveryStore] Failed to handle research event:', err);
+  });
+}
+
 // Cleanup function to remove all event listeners and subscriptions (for testing/debugging)
 export function cleanupDiscoveryStore() {
   // Clear reconnect timer
@@ -616,6 +1095,11 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                 // This handles the case when user switches projects during an active stream
                 const isActiveStream = eventStreamId && currentStreamId && eventStreamId === currentStreamId;
                 
+                // CRITICAL: For genai.stream.chunk, always accept if projectId matches (even without streamId match)
+                // This ensures chunks are displayed even if streamId tracking has issues
+                const isChunkEvent = msg.type === 'genai.stream.chunk';
+                const projectMatches = eventPid && currentPid && eventPid === currentPid;
+                
                 try {
                   // If store has no projectId but event has one, set it (helps with newly created projects)
                   if (!currentPid || currentPid === 'local-unfold') {
@@ -623,28 +1107,31 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                       st.setProjectId(eventPid);
                       console.log('[DiscoveryStore] Auto-set projectId from stream event', { projectId: eventPid, eventType: msg.type });
                     }
-                  } else if (eventPid && currentPid && eventPid !== currentPid && !isActiveStream) {
-                    // Project mismatch and not an active stream - filter out
-                    // But if it's an active stream (by streamId), accept it anyway
-                    console.warn('[DiscoveryStore] Stream event projectId mismatch (not active stream)', { 
-                      storeProjectId: currentPid, 
-                      eventProjectId: eventPid, 
-                      eventType: msg.type,
-                      streamId: eventStreamId,
-                      currentStreamId: currentStreamId
-                    });
-                    return; // Filter out mismatched projects that are not active streams
-                  } else if (eventPid && currentPid && eventPid !== currentPid && isActiveStream) {
-                    // Active stream but projectId mismatch - accept anyway but log warning
-                    console.warn('[DiscoveryStore] Stream event projectId mismatch but accepting (active stream)', { 
-                      storeProjectId: currentPid, 
-                      eventProjectId: eventPid, 
-                      eventType: msg.type,
-                      streamId: eventStreamId,
-                      currentStreamId: currentStreamId
-                    });
-                    // Continue processing - don't return
+                  } else if (eventPid && currentPid && eventPid !== currentPid) {
+                    // Project mismatch - check if it's an active stream or a chunk event
+                    if (isActiveStream) {
+                      // Active stream but projectId mismatch - accept anyway but log warning
+                      console.warn('[DiscoveryStore] Stream event projectId mismatch but accepting (active stream)', { 
+                        storeProjectId: currentPid, 
+                        eventProjectId: eventPid, 
+                        eventType: msg.type,
+                        streamId: eventStreamId,
+                        currentStreamId: currentStreamId
+                      });
+                      // Continue processing - don't return
+                    } else {
+                      // Project mismatch and not an active stream - filter out
+                      console.warn('[DiscoveryStore] Stream event projectId mismatch (not active stream)', { 
+                        storeProjectId: currentPid, 
+                        eventProjectId: eventPid, 
+                        eventType: msg.type,
+                        streamId: eventStreamId,
+                        currentStreamId: currentStreamId
+                      });
+                      return; // Filter out mismatched projects that are not active streams
+                    }
                   }
+                  // If projectId matches, always accept (regardless of streamId)
                 } catch (e) {
                   console.error('[DiscoveryStore] Error checking projectId filter', e);
                 }
@@ -663,13 +1150,28 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                     st.onStart();
                     break;
                   case 'genai.stream.chunk':
+                    // CRITICAL: Ensure streaming is enabled before processing chunks
+                    // If onStart wasn't called (e.g., due to race condition), enable streaming now
+                    if (!st.streaming) {
+                      console.warn('[DiscoveryStore] genai.stream.chunk received but streaming not enabled, enabling now', {
+                        projectId: msg.data?.projectId,
+                        streamId: msg.data?.streamId,
+                        storeProjectId: st.projectId
+                      });
+                      st.onStart();
+                    }
+                    // CRITICAL: Ensure currentStreamId is set from chunk event if not already set
+                    if (eventStreamId && !currentStreamId) {
+                      useGenaiChatStore.setState({ currentStreamId: eventStreamId } as any);
+                    }
                     if (msg.data?.text) {
                       console.log('[DiscoveryStore] Received genai.stream.chunk', { 
                         textLength: msg.data.text.length,
                         chunkIndex: msg.data?.chunkIndex,
                         projectId: msg.data?.projectId, 
                         streamId: msg.data?.streamId,
-                        storeProjectId: st.projectId 
+                        storeProjectId: st.projectId,
+                        streaming: st.streaming
                       });
                       st.onChunk(msg.data.text);
                     } else {
@@ -715,6 +1217,10 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                     st.onError(msg.data?.error || 'Stream error');
                     break;
                   default:
+                    // Handle Research mode events (genai.stream.research.*)
+                    if (msg.type.startsWith('genai.stream.research.')) {
+                      handleResearchEvent(msg, st, eventPid, eventStreamId, currentPid, isActiveStream);
+                    }
                     break;
                 }
               }).catch(() => {});

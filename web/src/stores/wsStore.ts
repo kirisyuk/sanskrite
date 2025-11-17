@@ -93,10 +93,10 @@ export const useWsStore = create<WsState>((set, get) => ({
       const lg = { ...(get().lastGenai || {}) } as LastStreamDiag;
       if (data?.projectId && typeof data.projectId === 'string') lg.projectId = data.projectId;
       if (data?.streamId && typeof data.streamId === 'string') lg.streamId = data.streamId;
-      if (key === 'genai.stream.start') lg.lastStartAt = now;
+      if (key === 'genai.stream.start' || key === 'genai.stream.research.start') lg.lastStartAt = now;
       if (key === 'genai.stream.chunk') { lg.lastChunkAt = now; lg.chunks = (lg.chunks || 0) + 1; }
-      if (key === 'genai.stream.done') lg.lastDoneAt = now;
-      if (key === 'genai.stream.error') lg.errors = (lg.errors || 0) + 1;
+      if (key === 'genai.stream.done' || key === 'genai.stream.research.done') lg.lastDoneAt = now;
+      if (key === 'genai.stream.error' || key === 'genai.stream.research.error') lg.errors = (lg.errors || 0) + 1;
       next.lastGenai = lg;
     }
     if (key.startsWith('artifact.')) {

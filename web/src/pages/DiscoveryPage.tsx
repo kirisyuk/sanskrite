@@ -121,7 +121,6 @@ import { handleEditTextDirect } from '../lib/textEditHandler';
 import { FloatingActionButtons } from '../components/FloatingActionButtons';
 import { EditStatusIndicator } from '../components/EditStatusIndicator';
 import { ToolCallsDisplay } from '../components/ToolCallsDisplay';
-import { AttributionsDisplay } from '../components/AttributionsDisplay';
 import { RiskBanner } from '../components/RiskBanner';
 import { ThinkingPlaceholder } from '../components/ThinkingPlaceholder';
 import { SettingsModal } from '../components/SettingsModal';
@@ -1713,8 +1712,6 @@ const DiscoveryPage: React.FC = () => {
             {/* Tool calls / results */}
             <ToolCallsDisplay />
             {/* Thinking indicator moved inside assistant bubble during streaming */}
-            {/* Usage and attributions after completion */}
-            <AttributionsDisplay />
             {/* High-risk banner (if any) */}
             <RiskBanner
               riskBanner={riskBanner}
@@ -1806,7 +1803,7 @@ const DiscoveryPage: React.FC = () => {
                                     /^\s*\/analyze\s+entities\b\s*/i,
                                     '',
                                   ) +
-                                  "\n\nConstraints:\n- Only include concrete, named entities (no abstract categories).\n- Allowed types: person | group_of_persons | organization_or_platform | project_or_product | classifier_or_standard | classification_code | regulatory_document | government_agency | contract_document | location | other.\n- Reject generic words like 'technical regulation', 'open databases', 'contracts' without identifiers.";
+                                  "\n\nConstraints:\n- Only include concrete, named entities (no abstract categories).\n- Allowed types: Person | Organization | Location | Product | Document | Facility | Other.\n- Reject generic words like 'technical regulation', 'open databases', 'contracts' without identifiers.";
                                 const res = await api.analyzeEntities(
                                   pid,
                                   prompt,
@@ -1917,6 +1914,7 @@ const DiscoveryPage: React.FC = () => {
                                 model === 'gemini_quality' ? 'quality' : 'fast',
                   modelOverride: model,
                   groundingEnabled: genaiSettings.groundingEnabled,
+                  researchEnabled: genaiSettings.researchEnabled,
                   temperature: genaiSettings.temperature,
                   maxOutputTokens: genaiSettings.maxOutputTokens,
                   systemInstruction: combinedSystemInstruction,

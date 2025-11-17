@@ -60,7 +60,7 @@ export function getSxSystemInstructionFull(): string {
     `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
     `- JSON must be valid and match v: "1" with one of types: entity_mark, monitor_metric, watchlist_add, link_reference.\n` +
     `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
-    `- Examples: <!-- @sx:{"v":"1","type":"entity_mark","id":"ent-001","kind":"person","name":"…","description":"…"} -->`
+    `- Examples: <!-- @sx:{"v":"1","type":"entity_mark","id":"ent-001","kind":"Person","name":"…","description":"…"} -->`
   );
 }
 

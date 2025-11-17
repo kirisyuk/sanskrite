@@ -331,11 +331,11 @@ type Document struct {
 	Title             string           `json:"title,omitempty" firestore:"title"`
 	URL               string           `json:"url,omitempty" firestore:"url"`
 	DocumentPath      string           `json:"documentPath" firestore:"documentPath"`
-	FullText          string           `json:"fullText" firestore:"fullText"`                 // Kept for backward compatibility, but content should be in GCS
+	FullText          string           `json:"fullText" firestore:"fullText"`                           // Kept for backward compatibility, but content should be in GCS
 	StoragePath       *string          `json:"storagePath,omitempty" firestore:"storagePath,omitempty"` // gs://bucket/path to content in GCS
-	Status            string           `json:"status" firestore:"status"`                       // new → embedded → processing → processed; error:*
-	ContentType       string           `json:"contentType,omitempty" firestore:"contentType"`   // plainText, html, markdown, binary
-	DocumentType      string           `json:"documentType,omitempty" firestore:"documentType"` // post, article, pdf, word
+	Status            string           `json:"status" firestore:"status"`                               // new → embedded → processing → processed; error:*
+	ContentType       string           `json:"contentType,omitempty" firestore:"contentType"`           // plainText, html, markdown, binary
+	DocumentType      string           `json:"documentType,omitempty" firestore:"documentType"`         // post, article, pdf, word
 	Language          string           `json:"language,omitempty" firestore:"language"`
 	Authors           []string         `json:"authors,omitempty" firestore:"authors"`
 	SourceMeta        map[string]any   `json:"sourceMeta,omitempty" firestore:"sourceMeta"`
@@ -487,7 +487,7 @@ type Project struct {
 	EnableRiskProfileSuggestions *bool   `json:"enableRiskProfileSuggestions,omitempty" firestore:"enableRiskProfileSuggestions"`
 	AiGuided                     *bool   `json:"aiguided,omitempty" firestore:"aiguided"`
 	// Verified project code (for /verified/{code} URLs)
-	VerifiedCode                 *string `json:"verifiedCode,omitempty" firestore:"verifiedCode,omitempty"`
+	VerifiedCode *string `json:"verifiedCode,omitempty" firestore:"verifiedCode,omitempty"`
 }
 
 // --- Core project documents (user-uploaded or externally linked) ---
@@ -779,38 +779,8 @@ type GenerationError struct {
 }
 
 // ---- System-level extracted analysis types ----
-
-// Entity represents a discovered entity in the system
-type Entity struct {
-	ID          string   `json:"id" firestore:"id"`
-	Name        string   `json:"name" firestore:"name"`
-	Type        string   `json:"type" firestore:"type"`
-	Aliases     []string `json:"aliases,omitempty" firestore:"aliases,omitempty"`
-	Description string   `json:"description,omitempty" firestore:"description,omitempty"`
-	Excluded    bool     `json:"excluded,omitempty" firestore:"excluded,omitempty"`
-}
-
-// Fact is a normalized factual statement
-type Fact struct {
-	Statement  string   `json:"statement" firestore:"statement"`
-	Evidence   []string `json:"evidence,omitempty" firestore:"evidence,omitempty"`
-	SourceIDs  []string `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
-	Confidence float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
-}
-
-// Event is a normalized event item with time and severity (0..1)
-type Event struct {
-	ID         string   `json:"id,omitempty" firestore:"id,omitempty"`
-	Ts         string   `json:"ts" firestore:"ts"`
-	Title      string   `json:"title" firestore:"title"`
-	Summary    string   `json:"summary,omitempty" firestore:"summary,omitempty"`
-	Actors     []string `json:"actors,omitempty" firestore:"actors,omitempty"`
-	Tags       []string `json:"tags,omitempty" firestore:"tags,omitempty"`
-	Evidence   []string `json:"evidence,omitempty" firestore:"evidence,omitempty"`
-	SourceIDs  []string `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
-	Severity   float64  `json:"severity,omitempty" firestore:"severity,omitempty"`
-	Confidence float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
-}
+// NOTE: Entity and Event types are now defined in ontology.go
+// Use models.Entity and models.Event from ontology.go for all new code
 
 // Metric describes a measurable indicator with methodology
 type Metric struct {

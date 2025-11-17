@@ -30,6 +30,21 @@ type InteractionMetadata struct {
 	Notes  []string `json:"notes,omitempty" firestore:"notes,omitempty"`
 }
 
+// ResearchProgress represents progress state for research interactions
+type ResearchProgress struct {
+	Stage       string   `json:"stage" firestore:"stage"`       // planning|searching|generating
+	Status      string   `json:"status" firestore:"status"`     // in_progress|completed
+	SubQueries  []string `json:"subQueries,omitempty" firestore:"subQueries,omitempty"`
+	SourcesCount *int    `json:"sourcesCount,omitempty" firestore:"sourcesCount,omitempty"`
+}
+
+// ResearchSource represents a research source with metadata
+type ResearchSource struct {
+	Title string   `json:"title" firestore:"title"`
+	URL   string   `json:"url" firestore:"url"`
+	Score *float64 `json:"score,omitempty" firestore:"score,omitempty"`
+}
+
 type Interaction struct {
 	ID               string  `json:"id" firestore:"id"`
 	TenantID         string  `json:"tenantId" firestore:"tenantId"`
@@ -83,6 +98,11 @@ type Interaction struct {
 	CoreDocIDs        []string  `json:"coreDocIds,omitempty" firestore:"coreDocIds,omitempty"`
 	SearchQueries     []string  `json:"searchQueries,omitempty" firestore:"searchQueries,omitempty"`
 	Sources           []string  `json:"sources,omitempty" firestore:"sources,omitempty"`
+	// Research-specific fields (optional, for research interactions)
+	ResearchQuery    *string           `json:"researchQuery,omitempty" firestore:"researchQuery,omitempty"`
+	ResearchProgress *ResearchProgress  `json:"researchProgress,omitempty" firestore:"researchProgress,omitempty"`
+	SubQueries       []string          `json:"subQueries,omitempty" firestore:"subQueries,omitempty"` // For research.result
+	ResearchSources  []ResearchSource   `json:"researchSources,omitempty" firestore:"researchSources,omitempty"` // For research.result
 	CreatedAt         time.Time `json:"createdAt" firestore:"createdAt"`
 }
 

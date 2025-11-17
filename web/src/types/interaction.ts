@@ -95,7 +95,46 @@ export interface Interaction {
   searchQueries?: string[];
   sources?: string[];
   createdAt: string;
+  // Research-specific fields
+  researchQuery?: string;
+  researchProgress?: {
+    stage: 'planning' | 'searching' | 'generating';
+    status: 'in_progress' | 'completed';
+    subQueries?: string[];
+    sourcesCount?: number;
+  };
+  subQueries?: string[];
+  researchSources?: Array<{
+    title: string;
+    url: string;
+    score?: number;
+  }>;
 }
 
-export type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action';
+export interface ResearchProgressInteraction extends Interaction {
+  kind: 'research';
+  subkind: 'research.progress';
+  researchQuery: string;
+  researchProgress: {
+    stage: 'planning' | 'searching' | 'generating';
+    status: 'in_progress' | 'completed';
+    subQueries?: string[];
+    sourcesCount?: number;
+  };
+}
+
+export interface ResearchResultInteraction extends Interaction {
+  kind: 'research';
+  subkind: 'research.result';
+  researchQuery: string;
+  content: string;
+  subQueries: string[];
+  researchSources: Array<{
+    title: string;
+    url: string;
+    score?: number;
+  }>;
+}
+
+export type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action' | 'research';
 

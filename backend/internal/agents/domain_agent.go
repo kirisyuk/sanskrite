@@ -70,7 +70,7 @@ type ExtractedKnowledge struct {
 type KnowledgeEntity struct {
 	ID            string                 `json:"id"`
 	CanonicalName string                 `json:"canonicalName"`
-	Type          string                 `json:"type"` // "person", "organization", "location", "concept"
+	Type          string                 `json:"type"` // "Person", "Organization", "Location", "Product", "Document", "Facility", "Other" (ontology EntityType)
 	Aliases       []string               `json:"aliases,omitempty"`
 	Attributes    map[string]interface{} `json:"attributes,omitempty"`
 	Confidence    float64                `json:"confidence"`

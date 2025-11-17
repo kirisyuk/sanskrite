@@ -1213,10 +1213,10 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 
 		// Compose prompt
 		instructions := `You are extracting unique, concretely identifiable entities from the chat transcript.
-        Return STRICT JSON with shape: { "entities": [ { "id": string, "name": string, "type": "person"|"group_of_persons"|"organization_or_platform"|"project_or_product"|"classifier_or_standard"|"classification_code"|"regulatory_document"|"government_agency"|"contract_document"|"location"|"other", "aliases"?: string[], "description"?: string } ] }.
+        Return STRICT JSON with shape: { "entities": [ { "id": string, "name": string, "type": "Person"|"Organization"|"Location"|"Product"|"Document"|"Facility"|"Other", "aliases"?: string[], "description"?: string } ] }.
         Rules:
         - ONLY include concrete, named items (no abstract categories). Examples of ALLOWED vs REJECTED:
-          • ALLOWED: "GS1" (classifier_or_standard), "OKTRU" (classifier_or_standard), "OKTRU 01.11.11.110" (classification_code), "GTIN 04891234567890" (classification_code), "SPK" (organization_or_platform), "Agromarket" (organization_or_platform), "Contract No. 45/2024" (contract_document), "NK RK 14-2024" (regulatory_document), "Atyrau Region" (location).
+          • ALLOWED: "GS1" (Organization), "OKTRU" (Organization), "OKTRU 01.11.11.110" (Document), "GTIN 04891234567890" (Document), "SPK" (Organization), "Agromarket" (Organization), "Contract No. 45/2024" (Document), "NK RK 14-2024" (Document), "Atyrau Region" (Location).
           • REJECTED: "technical regulation" (too generic), "open databases" (too generic), "contracts" (no identifier), "buyers", "sellers", technologies like "chat-bot", "OCR" (not entities).
         - Names must be normalized to the official form (for Russian, nominative case) and without quotes.
         - If user prompt provides scope, obey it. If empty, find all relevant entities.

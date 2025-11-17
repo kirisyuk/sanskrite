@@ -410,6 +410,11 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	if err != nil {
 		return err
 	}
+	return o.processProviderDocuments(ctx, tenantID, sourceID, docs, embed)
+}
+
+// processProviderDocuments is a helper to process documents from any provider
+func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, sourceID string, docs []prov.NormalizedDocument, embed ai.EmbeddingProvider) error {
 	// Deduplicate documents by ExternalID within this ingest run
 	seenExt := map[string]struct{}{}
 	for _, nd := range docs {
@@ -488,12 +493,28 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 				EmbeddingVersion: "v1",
 				Attrs:            map[string]any{"language": nd.Language, "documentType": nd.DocumentType},
 				ContentHash:      repo.HashContent(parts[i]),
+				CreatedAt:        time.Now().UTC(),
 			}
 			if _, err := o.chunks.Create(ctx, ch); err != nil {
 				return err
 			}
 		}
-		// mark document embedded and enqueue async processing
+		// Update document status to embedded and enqueue async processing
+		if existing != nil {
+			existing.Status = "embedded"
+			_ = o.docs.Upsert(ctx, existing)
+			// publish to document.process
+			if o.publish != nil {
+				payload := map[string]any{
+					"tenantId":   tenantID,
+					"sourceId":   sourceID,
+					"documentId": existing.ID,
+					"externalId": existing.ExternalID,
+				}
+				_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, payload)
+			}
+		} else {
+			// For new documents, get it back by externalID to publish event
 		if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, nd.ExternalID); d != nil {
 			d.Status = "embedded"
 			_ = o.docs.Upsert(ctx, d)
@@ -506,6 +527,7 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 					"externalId": d.ExternalID,
 				}
 				_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, payload)
+				}
 			}
 		}
 	}

@@ -896,6 +896,11 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		CoreDocIDs        []string `json:"coreDocIds,omitempty"`
 		SearchQueries     []string `json:"searchQueries,omitempty"`
 		Sources           []string `json:"sources,omitempty"`
+		// Research-specific fields (optional, for research interactions)
+		ResearchQuery    *string                `json:"researchQuery,omitempty"`
+		ResearchProgress *repo.ResearchProgress `json:"researchProgress,omitempty"`
+		SubQueries       []string               `json:"subQueries,omitempty"` // For research.result
+		ResearchSources  []repo.ResearchSource   `json:"researchSources,omitempty"` // For research.result
 		// Sections (optional client-provided for future-proofing; server derives when missing)
 		SectionID *string `json:"sectionId,omitempty"`
 	}
@@ -906,14 +911,22 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 	// normalize kind
 	k := strings.ToLower(strings.TrimSpace(body.Kind))
 	switch k {
-	case "user", "assistant", "system", "note", "section_start", "section_end", "action":
+	case "user", "assistant", "system", "note", "section_start", "section_end", "action", "research":
 	default:
 		k = "note"
 	}
 	// validate content presence only for non-section kinds
-	if k != "section_start" && k != "section_end" {
+	// Research progress interactions may have empty content (they show progress, not final content)
+	if k != "section_start" && k != "section_end" && k != "research" {
 		if strings.TrimSpace(body.Content) == "" {
 			WriteBadRequest(w, "INVALID_JSON", "kind and content are required")
+			return
+		}
+	}
+	// For research.result, content is required (it's the final report)
+	if k == "research" && body.Subkind != nil && *body.Subkind == "research.result" {
+		if strings.TrimSpace(body.Content) == "" {
+			WriteBadRequest(w, "INVALID_JSON", "content is required for research.result")
 			return
 		}
 	}
@@ -1038,6 +1051,11 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		CoreDocIDs:               body.CoreDocIDs,
 		SearchQueries:            body.SearchQueries,
 		Sources:                  body.Sources,
+		// Research-specific fields
+		ResearchQuery:            body.ResearchQuery,
+		ResearchProgress:         body.ResearchProgress,
+		SubQueries:               body.SubQueries,
+		ResearchSources:          body.ResearchSources,
 		SectionID:                sectionPtr,
 	})
 	if err != nil {

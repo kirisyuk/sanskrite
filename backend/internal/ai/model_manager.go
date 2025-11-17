@@ -217,6 +217,28 @@ func (mm *AIModelManager) initializeModels() {
 		ToolUseProtocol:               ToolUseProtocolOpenAI,
 	}
 
+	// --------- GPT-5.1 (обновленная версия GPT-5) ----------
+	mm.models["gpt-5.1"] = AIModelCapabilities{
+		Name:                          "gpt-5.1",
+		ContextWindow:                 400000,
+		OutputTokens:                  128000,
+		PricePerInputToken:            0.00000100, // $1.00 / 1M (предположительно, как у gpt-5)
+		PricePerOutputToken:           0.00000800, // $8.00 / 1M (предположительно, как у gpt-5)
+		Provider:                      AIProviderOpenAI,
+		MaxTokensPerMinute:            80000,
+		MaxTokensPerDay:               400000,
+		NearlyRealTime:                false,
+		CapabilityScore:               10,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       true,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolOpenAI,
+	}
+
 	mm.models["gpt-5-mini"] = AIModelCapabilities{
 		Name:                          "gpt-5-mini",
 		ContextWindow:                 400000,

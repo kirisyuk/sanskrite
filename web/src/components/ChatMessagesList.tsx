@@ -9,6 +9,7 @@ import { MessageItem } from './MessageItem';
 import { SectionMarker } from './SectionMarker';
 import { ActionInteraction } from './ActionInteraction';
 import { BringInIndicator } from './BringInIndicator';
+import { ResearchInteraction } from './ResearchInteraction';
 import { MessageActions } from './MessageActions';
 import { CollapsibleText } from './CollapsibleText';
 import { MarkdownRenderer } from '../lib/markdownComponents';
@@ -120,6 +121,17 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
             if (it.kind === 'action') {
               return (
                 <ActionInteraction
+                  key={it.id}
+                  interaction={it}
+                  collapsedSections={collapsedSections}
+                />
+              );
+            }
+            
+            // Special rendering for research interactions
+            if (it.kind === 'research') {
+              return (
+                <ResearchInteraction
                   key={it.id}
                   interaction={it}
                   collapsedSections={collapsedSections}
@@ -698,15 +710,32 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
       {genaiChat.streaming &&
         (() => {
           try {
-            const m =
-              genaiChat.messages[
-                genaiChat.messages.length - 1
-              ];
-            if (!m || m.role !== 'assistant') return null;
+            // Find the last assistant message (check from end of array)
+            const messages = genaiChat.messages || [];
+            let m = null;
+            for (let i = messages.length - 1; i >= 0; i--) {
+              if (messages[i]?.role === 'assistant') {
+                m = messages[i];
+                break;
+              }
+            }
+            
+            if (!m) return null;
+            
             // Don't show placeholder if message has content (streaming has started producing content)
             if (m.content && m.content.trim())
               return null;
             
+            // CRITICAL: Don't show placeholder if research mode is active (research.progress interaction exists)
+            // This check ensures thinking placeholder is hidden during research mode
+            const hasActiveResearch = genaiChat.interactions.some(
+              (it: any) => it.kind === 'research' && it.subkind === 'research.progress'
+            );
+            if (hasActiveResearch) {
+              return null;
+            }
+            
+            // Show thinking placeholder for all other modes (regular chat, agents, etc.)
             return (
               <ThinkingPlaceholder
                 key={m.id}

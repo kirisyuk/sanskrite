@@ -156,7 +156,7 @@ REQUIRED JSON SCHEMA:
   "sentiment": -1.0,
   "categories": [{"label": "1-2 words", "confidence": 0.0}],
   "topics": [{"name": "string", "share": 0.0}],
-  "entities": [{"type": "person|org|location|other", "value": "string", "confidence": 0.0}],
+  "entities": [{"type": "Person|Organization|Location|Product|Document|Facility|Other", "value": "string", "confidence": 0.0}],
   "keyPoints": ["string"],
   "documentType": "article|post|report|announcement|interview|transcript|other",
   "outlinks": [{"url": "string", "kind": "reference|citation|internal|external"}],

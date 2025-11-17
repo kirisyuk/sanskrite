@@ -29,11 +29,15 @@ type GenAIRequest struct {
 	MaxOutputTokens    int                    `json:"maxOutputTokens,omitempty"`
 	WebSearchEnabled   bool                   `json:"webSearchEnabled,omitempty"`
 	ToolCallingEnabled bool                   `json:"toolCallingEnabled,omitempty"`
+	ResearchEnabled    bool                   `json:"researchEnabled,omitempty"`
 	StrictJSONEnabled  bool                   `json:"strictJSONEnabled,omitempty"`
 	JSONSchema         map[string]interface{} `json:"jsonSchema,omitempty"`
 	Tools              []Tool                 `json:"tools,omitempty"`
 	ToolChoice         string                 `json:"toolChoice,omitempty"` // auto|required
 	ParallelToolCalls  bool                   `json:"parallelToolCalls,omitempty"`
+	// Optional: for WebSocket event routing (used in Research mode)
+	ProjectID string `json:"projectId,omitempty"`
+	StreamID  string `json:"streamId,omitempty"`
 }
 
 // GenAIResponse is an alias of unified GenerateResponse
@@ -155,7 +159,7 @@ var ModelContextWindows = map[string]int{
 	// OpenAI models
 	"gpt_fast":     400_000, // gpt-5-nano
 	"gpt_balanced": 400_000, // gpt-5-mini
-	"gpt_quality":  400_000, // gpt-5
+	"gpt_quality":  400_000, // gpt-5.1
 
 	// Grok models
 	"grok_fast":     2_000_000, // grok-4-fast-non-reasoning
@@ -192,7 +196,7 @@ func (c *Client) normalizeOptionsForOpenAI(opts Options) oa.Options {
 	}
 	switch out.ModelOverride {
 	case "gpt_quality":
-		out.ModelOverride = "gpt-5"
+		out.ModelOverride = "gpt-5.1"
 	case "gpt_balanced":
 		out.ModelOverride = "gpt-5-mini"
 	case "gpt_fast":

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
@@ -35,23 +34,20 @@ type WebSearchResponse struct {
 }
 
 // NewWebSearchToolExecutor creates a new executor for web search tools
-func NewWebSearchToolExecutor(logger *log.Logger) *WebSearchToolExecutor {
-	// Try to get Tavily API key from environment (prod first, then test)
-	apiKey := strings.Trim(strings.TrimSpace(os.Getenv("TAVILY_API_KEY")), "\"'")
-	if apiKey == "" {
-		apiKey = strings.Trim(strings.TrimSpace(os.Getenv("TAVILY_API_KEY_TEST")), "\"'")
-	}
-
-	var tavilyClient *TavilyClient
-	if apiKey != "" {
-		tavilyClient = NewTavilyClient(apiKey)
+// If tavilyClient is nil, it will be initialized from environment variables
+func NewWebSearchToolExecutor(logger *log.Logger, tavilyClient *TavilyClient) *WebSearchToolExecutor {
+	// Use provided client or initialize from env (for backward compatibility)
+	if tavilyClient == nil {
+		tavilyClient = GetTavilyClientFromEnv()
 		if logger != nil {
-			logger.Printf("[WebSearch] Tavily client initialized")
+			if tavilyClient != nil {
+				logger.Printf("[WebSearch] Tavily client initialized from environment")
+			} else {
+				logger.Printf("[WebSearch] WARNING: TAVILY_API_KEY not set, web search will fail")
+			}
 		}
-	} else {
-		if logger != nil {
-			logger.Printf("[WebSearch] WARNING: TAVILY_API_KEY not set, web search will fail")
-		}
+	} else if logger != nil {
+		logger.Printf("[WebSearch] Tavily client provided via dependency injection")
 	}
 
 	return &WebSearchToolExecutor{

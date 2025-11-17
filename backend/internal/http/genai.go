@@ -1,8 +1,10 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -12,15 +14,15 @@ import (
 	"strings"
 	"time"
 
-	"bytes"
-
 	"cloud.google.com/go/firestore"
 	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	g "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/research"
 )
 
 type GenAIHandler struct {
@@ -36,6 +38,10 @@ type GenAIHandler struct {
 	emb          ai.EmbeddingProvider
 	// Graph tool dependencies (optional, wired via WithGraphTools)
 	graphEnabled bool
+	// Research mode dependencies (optional, wired via WithTavilyClient)
+	tavilyClient *TavilyClient
+	// Knowledge search dependencies (optional, wired via WithWikidataClient)
+	wikidataClient *WikidataClient
 }
 
 // Publisher is a small interface for realtime publisher used here
@@ -95,6 +101,18 @@ func (h *GenAIHandler) WithGraphTools(enabled bool) *GenAIHandler {
 	return h
 }
 
+// WithTavilyClient wires Tavily client for Research mode
+func (h *GenAIHandler) WithTavilyClient(client *TavilyClient) *GenAIHandler {
+	h.tavilyClient = client
+	return h
+}
+
+// WithWikidataClient wires Wikidata client for Knowledge Search tool
+func (h *GenAIHandler) WithWikidataClient(client *WikidataClient) *GenAIHandler {
+	h.wikidataClient = client
+	return h
+}
+
 // GenerateDirect performs direct GenAI generation without HTTP layer (for internal use)
 func (h *GenAIHandler) GenerateDirect(ctx context.Context, req gen_combined.GenAIRequest) (*gen_combined.GenAIResponse, error) {
 	return h.client.GenAIGenerate(ctx, req)
@@ -122,6 +140,35 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
 	defer cancel()
 	started := time.Now()
+
+	// Check for Research mode - if enabled, use research pipeline instead of regular generation
+	if req.ResearchEnabled {
+		// Extract projectId and streamId from request body (preferred) or query params (fallback)
+		projectID := req.ProjectID
+		if projectID == "" {
+			projectID = r.URL.Query().Get("projectId")
+		}
+		streamID := req.StreamID
+		if streamID == "" {
+			streamID = r.URL.Query().Get("streamId")
+		}
+		if streamID == "" {
+			streamID = uuid.NewString()
+		}
+
+		resp, err := h.executeResearchMode(ctx, req, projectID, streamID)
+		if err != nil {
+			log.Printf("GenAIGenerate research mode error: %v", err)
+			status, code, msg, details := parseUpstreamError(err)
+			_ = WriteError(w, status, code, msg, details)
+			return
+		}
+		// Continue with response handling below
+		_ = WriteJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Regular generation flow (unchanged)
 	resp, err := h.client.GenAIGenerate(ctx, req)
 	if err != nil {
 		// Log upstream error body for diagnostics (e.g., Gemini 400 with details)
@@ -173,8 +220,9 @@ type genaiCompleteRequest struct {
 		Text string `json:"text"`
 	} `json:"messages,omitempty"`
 	// Streaming context
-	ProjectID string `json:"projectId,omitempty"`
-	StreamID  string `json:"streamId,omitempty"`
+	ProjectID       string `json:"projectId,omitempty"`
+	StreamID        string `json:"streamId,omitempty"`
+	ResearchEnabled bool   `json:"researchEnabled,omitempty"`
 }
 
 func (h *GenAIHandler) Complete(w http.ResponseWriter, r *http.Request) {
@@ -436,6 +484,49 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	if projectID == "" {
 		log.Printf("[GenAI Stream] WARNING: Empty projectID in request! This may cause events to be broadcast to all tenant connections instead of specific project")
 		// Don't fail the request, but log warning for debugging
+	}
+
+	// Check for Research mode - if enabled, use research pipeline instead of regular streaming
+	if req.ResearchEnabled {
+		if streamID == "" {
+			streamID = uuid.NewString()
+		}
+		log.Printf("[GenAI Stream] Research mode enabled (projectId=%s streamId=%s)", projectID, streamID)
+
+		// Determine model - use ModelOverride if provided, otherwise fallback to default based on profile
+		model := strings.TrimSpace(req.Options.ModelOverride)
+		if model == "" {
+			// Fallback to default model based on profile (same logic as regular stream)
+			if req.Options.Profile == gen_gemini.ProfileQuality {
+				model = "gemini-2.5-pro" // Default quality model
+			} else {
+				model = "gemini-2.5-flash-lite" // Default fast model
+			}
+		}
+
+		// Convert genaiCompleteRequest to GenAIRequest for research mode
+		genaiReq := gen_combined.GenAIRequest{
+			Model:             model,
+			Prompt:            req.Prompt,
+			SystemInstruction: req.Options.SystemInstruction,
+			Temperature:       req.Options.Temperature,
+			MaxOutputTokens:   req.Options.MaxOutputTokens,
+			ResearchEnabled:   true,
+			ProjectID:         projectID,
+			StreamID:          streamID,
+		}
+
+		// Execute research mode (it will publish events via WebSocket)
+		_, err := h.executeResearchMode(r.Context(), genaiReq, projectID, streamID)
+		if err != nil {
+			log.Printf("[GenAI Stream] Research mode error: %v", err)
+			status, code, msg, details := parseUpstreamError(err)
+			_ = WriteError(w, status, code, msg, details)
+			return
+		}
+		// Return success - events are published via WebSocket
+		_ = WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "researchMode": true})
+		return
 	}
 
 	// Diagnostics: log model override and key options to verify routing
@@ -752,8 +843,14 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Register Web Search tool (uses Tavily API)
+		// Use shared TavilyClient if available, otherwise create from env
+		tavilyClientForTools := h.tavilyClient
+		if tavilyClientForTools == nil {
+			tavilyClientForTools = GetTavilyClientFromEnv()
+		}
 		webSearchExecutor := NewWebSearchToolExecutor(
 			log.New(os.Stdout, "[WebSearchTools] ", log.LstdFlags),
+			tavilyClientForTools,
 		)
 
 		// Register Web Search tool in registry
@@ -761,7 +858,23 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			return webSearchExecutor.Execute(ctx, "web_search", args)
 		})
 
-		// Add Web Search tool schema to req.Tools if not already present
+		// Register Knowledge Search tool (uses Wikidata API)
+		// Use shared WikidataClient if available, otherwise create from env
+		wikidataClientForTools := h.wikidataClient
+		if wikidataClientForTools == nil {
+			wikidataClientForTools = GetWikidataClientFromEnv()
+		}
+		knowledgeSearchExecutor := NewKnowledgeSearchToolExecutor(
+			log.New(os.Stdout, "[KnowledgeSearchTools] ", log.LstdFlags),
+			wikidataClientForTools,
+		)
+
+		// Register Knowledge Search tool in registry
+		reg.Register("knowledge_search", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+			return knowledgeSearchExecutor.Execute(ctx, "knowledge_search", args)
+		})
+
+		// Add Web Search and Knowledge Search tool schemas to req.Tools if not already present
 		toolNames := make(map[string]bool)
 		for _, t := range req.Tools {
 			toolNames[t.Name] = true
@@ -769,6 +882,13 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 
 		webSearchTools := getWebSearchToolSchemas()
 		for _, tool := range webSearchTools {
+			if !toolNames[tool.Name] {
+				req.Tools = append(req.Tools, tool)
+			}
+		}
+
+		knowledgeSearchTools := getKnowledgeSearchToolSchemas()
+		for _, tool := range knowledgeSearchTools {
 			if !toolNames[tool.Name] {
 				req.Tools = append(req.Tools, tool)
 			}
@@ -916,6 +1036,9 @@ func (h *GenAIHandler) calculateFallbackCost(provider, modelName string, inputTo
 		case strings.Contains(modelLower, "gpt-5-mini"):
 			inputPrice = 0.00000025  // $0.25 / 1M
 			outputPrice = 0.00000200 // $2.00 / 1M
+		case strings.Contains(modelLower, "gpt-5.1"):
+			inputPrice = 0.00000100  // $1.00 / 1M
+			outputPrice = 0.00000800 // $8.00 / 1M
 		case strings.Contains(modelLower, "gpt-5"):
 			inputPrice = 0.00000100  // $1.00 / 1M
 			outputPrice = 0.00000800 // $8.00 / 1M
@@ -1043,4 +1166,186 @@ func persistGenAITelemetry(ctx context.Context, tenantID string, data map[string
 	data["createdAt"] = time.Now().UTC()
 	_, _, _ = c.Collection("core_telemetry").Add(ctx, data)
 	return nil
+}
+
+// executeResearchMode handles Research mode requests
+func (h *GenAIHandler) executeResearchMode(ctx context.Context, req gen_combined.GenAIRequest, projectID, streamID string) (*gen_combined.GenAIResponse, error) {
+	if h.tavilyClient == nil {
+		return nil, fmt.Errorf("genini500: Tavily client not configured for research mode")
+	}
+
+	// Create researcher with MVP configuration
+	cfg := research.Config{
+		MaxSources:    10,
+		MaxSubQueries: 5,
+		Model:         req.Model,
+	}
+
+	// Create adapter for TavilyClient to implement TavilySearchClient interface
+	tavilyAdapter := &tavilyClientAdapter{client: h.tavilyClient}
+
+	researcher := research.NewResearcher(
+		req.Prompt,
+		req.Model,
+		tavilyAdapter,
+		h.client,
+		cfg,
+	)
+
+	// Set up progress callback for WebSocket events if publisher is available
+	if h.publisher != nil && projectID != "" && streamID != "" {
+		// Get tenantID from context (if available)
+		auth := GetAuthInfo(ctx)
+		if auth != nil {
+			progressCallback := func(stage string, data map[string]interface{}) {
+				eventType := fmt.Sprintf("genai.stream.research.%s", stage)
+				payload := map[string]interface{}{
+					"ts":        time.Now().UnixMilli(),
+					"projectId": projectID,
+					"streamId":  streamID,
+				}
+				// Merge data into payload
+				for k, v := range data {
+					payload[k] = v
+				}
+				// Best-effort publish (don't block research on WebSocket failures)
+				if err := h.publisher.PublishJSON(ctx, eventType, auth.TenantID, payload); err != nil {
+					log.Printf("[Research] Failed to publish progress event %s: %v", eventType, err)
+				} else {
+					log.Printf("[Research] Published progress event %s (projectId=%s streamId=%s)", eventType, projectID, streamID)
+				}
+			}
+			researcher = researcher.WithProgressCallback(progressCallback)
+
+			// Publish start event
+			_ = h.publisher.PublishJSON(ctx, "genai.stream.research.start", auth.TenantID, map[string]interface{}{
+				"ts":        time.Now().UnixMilli(),
+				"projectId": projectID,
+				"streamId":  streamID,
+				"query":     req.Prompt,
+			})
+		}
+	}
+
+	result, err := researcher.ConductResearch(ctx)
+	if err != nil {
+		// Publish error event if publisher available
+		if h.publisher != nil && projectID != "" && streamID != "" {
+			if auth := GetAuthInfo(ctx); auth != nil {
+				_ = h.publisher.PublishJSON(ctx, "genai.stream.research.error", auth.TenantID, map[string]interface{}{
+					"ts":        time.Now().UnixMilli(),
+					"projectId": projectID,
+					"streamId":  streamID,
+					"error":     err.Error(),
+				})
+			}
+		}
+		return nil, fmt.Errorf("genini500: Research failed: %w", err)
+	}
+
+	// Convert ResearchResult to GenAIResponse
+	var sources []string
+	for _, src := range result.Sources {
+		sources = append(sources, src.URL)
+	}
+
+	// Combine usage from all stages
+	var usage g.Usage
+	if result.Usage != nil {
+		usage = *result.Usage
+	}
+	// Add balancing usage
+	if result.BalancingUsage != nil {
+		usage.PromptTokens += result.BalancingUsage.PromptTokens
+		usage.OutputTokens += result.BalancingUsage.OutputTokens
+		usage.TotalTokens += result.BalancingUsage.TotalTokens
+		if result.BalancingUsage.ReasoningTokens > 0 {
+			usage.ReasoningTokens += result.BalancingUsage.ReasoningTokens
+		}
+	}
+	// Add synthesizing usage
+	if result.SynthesizingUsage != nil {
+		usage.PromptTokens += result.SynthesizingUsage.PromptTokens
+		usage.OutputTokens += result.SynthesizingUsage.OutputTokens
+		usage.TotalTokens += result.SynthesizingUsage.TotalTokens
+		if result.SynthesizingUsage.ReasoningTokens > 0 {
+			usage.ReasoningTokens += result.SynthesizingUsage.ReasoningTokens
+		}
+	}
+
+	// Publish done event if publisher available
+	if h.publisher != nil && projectID != "" && streamID != "" {
+		if auth := GetAuthInfo(ctx); auth != nil {
+			// Convert sources to array of objects with title and url
+			sourceObjects := make([]map[string]interface{}, len(result.Sources))
+			for i, src := range result.Sources {
+				sourceObjects[i] = map[string]interface{}{
+					"title": src.Title,
+					"url":   src.URL,
+					"score": src.Score,
+				}
+			}
+
+			_ = h.publisher.PublishJSON(ctx, "genai.stream.research.done", auth.TenantID, map[string]interface{}{
+				"ts":              time.Now().UnixMilli(),
+				"projectId":       projectID,
+				"streamId":        streamID,
+				"query":           req.Prompt,
+				"report":          result.Report,
+				"counterPosition": result.CounterPosition,
+				"synthesis":       result.Synthesis,
+				"usage":           usage,
+				"sources":         sourceObjects,
+				"subQueries":      result.SubQueries,
+				"model":           req.Model,
+			})
+		}
+	}
+
+	// Use synthesis as the final content if available, otherwise use report
+	finalContent := result.Synthesis
+	if finalContent == "" {
+		finalContent = result.Report
+	}
+
+	response := &gen_combined.GenAIResponse{
+		Content: finalContent,
+		Model:   req.Model,
+		Usage:   usage,
+		Sources: sources,
+	}
+
+	return response, nil
+}
+
+// tavilyClientAdapter adapts http.TavilyClient to research.TavilySearchClient interface
+type tavilyClientAdapter struct {
+	client *TavilyClient
+}
+
+func (a *tavilyClientAdapter) Search(ctx context.Context, query string, maxResults int) (*research.TavilySearchResponse, error) {
+	resp, err := a.client.Search(ctx, query, maxResults)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert http.TavilySearchResponse to research.TavilySearchResponse
+	results := make([]research.TavilySearchResult, len(resp.Results))
+	for i, r := range resp.Results {
+		results[i] = research.TavilySearchResult{
+			Title:         r.Title,
+			URL:           r.URL,
+			Content:       r.Content,
+			Score:         r.Score,
+			RawContent:    r.RawContent,
+			PublishedDate: r.PublishedDate,
+		}
+	}
+
+	return &research.TavilySearchResponse{
+		Query:        resp.Query,
+		Results:      results,
+		Answer:       resp.Answer,
+		ResponseTime: resp.ResponseTime,
+	}, nil
 }

@@ -462,7 +462,7 @@ Return JSON in the following format:
     {
       "originalName": "Original name",
       "canonicalName": "Canonical name",
-      "type": "person|organization|location|event|concept",
+      "type": "Person|Organization|Location|EventEntity|Concept|Product|Document|Facility|Other",
       "aliases": ["alias 1", "alias 2"],
       "basicInfo": {
         "description": "Description",
@@ -598,7 +598,7 @@ Return JSON:
     {
       "originalName": "Original name",
       "canonicalName": "Canonical name",
-      "type": "person|organization|location|event|concept",
+      "type": "Person|Organization|Location|EventEntity|Concept|Product|Document|Facility|Other",
       "details": {
         "fullDescription": "Full description",
         "keyAttributes": ["attribute 1", "attribute 2"],
@@ -784,7 +784,7 @@ Return JSON in final result format:
     {
       "id": "entity_id",
       "name": "Canonical name",
-      "type": "person|organization|location|event|concept",
+      "type": "Person|Organization|Location|EventEntity|Concept|Product|Document|Facility|Other",
       "aliases": ["alias 1"],
       "details": {...},
       "attributes": {...},
