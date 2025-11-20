@@ -110,7 +110,7 @@ const (
 ```
 
 ### Конфигурация/ENV
-- `VERTEX_API_KEY` — API-ключ Gemini (как у существующего контура)
+- `GEMINI_API_KEY` — API-ключ Gemini (публичный Gemini API через Google AI Studio)
 - `GCP_PROJECT_ID` / `GOOGLE_CLOUD_PROJECT` — проект
 - `VERTEX_LOCATION` — регион (по умолчанию `us-central1`)
 - `GENAI_FAST_MODEL` — override для fast-модели (опционально)

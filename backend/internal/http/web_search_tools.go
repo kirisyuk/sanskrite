@@ -6,14 +6,17 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
+	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 // WebSearchToolExecutor executes web search tools for AI
 type WebSearchToolExecutor struct {
-	logger       *log.Logger
-	tavilyClient *TavilyClient
+	logger          *log.Logger
+	tavilyClient    *TavilyClient
+	usageMetricsRepo *repo.UsageMetricsRepository
 }
 
 // SearchResult represents a single search result
@@ -35,7 +38,8 @@ type WebSearchResponse struct {
 
 // NewWebSearchToolExecutor creates a new executor for web search tools
 // If tavilyClient is nil, it will be initialized from environment variables
-func NewWebSearchToolExecutor(logger *log.Logger, tavilyClient *TavilyClient) *WebSearchToolExecutor {
+// usageMetricsRepo is optional - if provided, usage metrics will be tracked
+func NewWebSearchToolExecutor(logger *log.Logger, tavilyClient *TavilyClient, usageMetricsRepo *repo.UsageMetricsRepository) *WebSearchToolExecutor {
 	// Use provided client or initialize from env (for backward compatibility)
 	if tavilyClient == nil {
 		tavilyClient = GetTavilyClientFromEnv()
@@ -51,8 +55,9 @@ func NewWebSearchToolExecutor(logger *log.Logger, tavilyClient *TavilyClient) *W
 	}
 
 	return &WebSearchToolExecutor{
-		logger:       logger,
-		tavilyClient: tavilyClient,
+		logger:          logger,
+		tavilyClient:    tavilyClient,
+		usageMetricsRepo: usageMetricsRepo,
 	}
 }
 
@@ -99,6 +104,9 @@ func (e *WebSearchToolExecutor) webSearch(ctx context.Context, args json.RawMess
 		e.logger.Printf("[WebSearch] Searching for: %s (limit: %d)", params.Query, params.Limit)
 	}
 
+	// Track start time for duration calculation
+	startTime := time.Now()
+
 	// Use Tavily Search API
 	results, err := e.searchWithTavily(ctx, params.Query, params.Limit)
 	if err != nil {
@@ -123,6 +131,9 @@ func (e *WebSearchToolExecutor) webSearch(ctx context.Context, args json.RawMess
 	if e.logger != nil {
 		e.logger.Printf("[WebSearch] Found %d results", len(results))
 	}
+
+	// Save usage metric after successful search
+	e.saveTavilyUsageMetric(ctx, params.Query, len(results), time.Since(startTime))
 
 	return b, nil
 }
@@ -186,6 +197,69 @@ func (e *WebSearchToolExecutor) extractTitleFromURL(urlStr string) string {
 		return domain
 	}
 	return urlStr
+}
+
+// saveTavilyUsageMetric saves usage metric for Tavily search
+// Tavily pricing: $0.008 per basic search (1 credit)
+func (e *WebSearchToolExecutor) saveTavilyUsageMetric(ctx context.Context, query string, resultCount int, duration time.Duration) {
+	if e.usageMetricsRepo == nil {
+		return
+	}
+
+	// Get auth info from context
+	auth := GetAuthInfo(ctx)
+	if auth == nil || auth.TenantID == "" || auth.UID == "" {
+		// No auth context available, skip metric saving
+		return
+	}
+
+	// Tavily pricing: $0.008 per basic search (1 credit)
+	// We use "basic" search depth, so cost is $0.008 per search
+	const tavilyCostPerSearch = 0.008
+
+	// Calculate input tokens (approximate: use query length / 4 as rough estimate)
+	inputTokens := len(query) / 4
+	if inputTokens == 0 {
+		inputTokens = 1 // At least 1 token
+	}
+
+	// Calculate output tokens (approximate: use result count * average tokens per result)
+	// Rough estimate: ~100 tokens per result
+	outputTokens := resultCount * 100
+	if outputTokens == 0 {
+		outputTokens = 1 // At least 1 token
+	}
+
+	durationMs := int(duration.Milliseconds())
+	taskType := "tool.web_search"
+
+	// Save metric asynchronously to avoid blocking
+	go func() {
+		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		_, err := e.usageMetricsRepo.CreateMetric(
+			metricCtx,
+			auth.TenantID,
+			auth.UID,
+			"tavily",                    // provider
+			"tavily-search-basic",       // model
+			inputTokens,
+			outputTokens,
+			tavilyCostPerSearch,          // cost: $0.008 per search
+			&taskType,
+			nil,                          // projectID (not available in tool context)
+			&durationMs,
+		)
+
+		if err != nil {
+			if e.logger != nil {
+				e.logger.Printf("[WebSearch] Failed to save usage metric: %v", err)
+			}
+		} else if e.logger != nil {
+			e.logger.Printf("[WebSearch] Saved usage metric: cost=$%.4f, query=%s, results=%d", tavilyCostPerSearch, query, resultCount)
+		}
+	}()
 }
 
 // getWebSearchToolSchema returns JSON Schema definition for web_search tool

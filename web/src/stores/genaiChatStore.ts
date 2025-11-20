@@ -2497,7 +2497,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         msgs.push({ id, role: 'assistant', content: text });
       }
       
-      return { messages: msgs } as any;
+      // CRITICAL: Update _lastUpdate to force UI re-render when messages content changes
+      // This ensures useMergedMessages recalculates even if messages.length doesn't change
+      return { messages: msgs, _lastUpdate: Date.now() } as any;
     });
   },
   onDone: () =>

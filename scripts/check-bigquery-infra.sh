@@ -42,10 +42,10 @@ echo ""
 
 # 2. Проверка секретов
 echo "2. Проверка секретов..."
-if gcloud secrets describe VERTEX_API_KEY --project="$PROJECT_ID" >/dev/null 2>&1; then
-  echo "  ✅ VERTEX_API_KEY существует"
+if gcloud secrets describe gemini_api_key --project="$PROJECT_ID" >/dev/null 2>&1; then
+  echo "  ✅ gemini_api_key существует"
 else
-  echo "  ❌ VERTEX_API_KEY не найден"
+  echo "  ❌ gemini_api_key не найден"
 fi
 
 echo ""
@@ -157,7 +157,7 @@ echo "7. Рекомендуемые переменные окружения:"
 echo "  - GCP_PROJECT_ID=$PROJECT_ID"
 echo "  - GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
 echo "  - BIGQUERY_DATASET_ID=sanskrite_documents (опционально, по умолчанию)"
-echo "  - VERTEX_API_KEY (из Secret Manager)"
+echo "  - GEMINI_API_KEY (из Secret Manager)"
 echo "  - VERTEX_LOCATION=us-central1 (опционально)"
 echo "  - RAG_DOCUMENTS_BUCKET=$PROJECT_ID-rag-documents"
 echo "  - CORE_DOCS_BUCKET=$PROJECT_ID-core-docs"

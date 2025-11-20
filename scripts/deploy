@@ -237,7 +237,7 @@ setup_infrastructure() {
   
   # 3. Ensure secrets exist (create if missing with placeholder)
   echo -e "${BLUE}[infra] Ensuring secrets exist...${NC}"
-  for secret in VERTEX_API_KEY openai_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key; do
+  for secret in gemini_api_key openai_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key; do
     if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
       echo "PLACEHOLDER_UPDATE_ME" | gcloud secrets create "$secret" --data-file=-
       echo -e "${YELLOW}  ⚠${NC} Created placeholder for: $secret (update with real value!)"
@@ -266,6 +266,46 @@ setup_infrastructure() {
   
   # 3.7 Setup Vertex AI Search permissions and Data Store
   echo -e "${BLUE}[infra] Setting up Vertex AI Search...${NC}"
+  
+  # Verify Vertex AI APIs are enabled
+  echo -e "${BLUE}[infra] Verifying Vertex AI APIs...${NC}"
+  local discovery_api_enabled=$(gcloud services list --enabled --filter="name:discoveryengine.googleapis.com" --format="value(name)" --project="$PROJECT_ID" 2>/dev/null | grep -q "discoveryengine" && echo "yes" || echo "no")
+  local aiplatform_api_enabled=$(gcloud services list --enabled --filter="name:aiplatform.googleapis.com" --format="value(name)" --project="$PROJECT_ID" 2>/dev/null | grep -q "aiplatform" && echo "yes" || echo "no")
+  
+  if [[ "$discovery_api_enabled" == "yes" ]]; then
+    echo -e "${GREEN}[infra] Discovery Engine API is enabled${NC}"
+  else
+    echo -e "${YELLOW}[infra] Warning: Discovery Engine API not enabled, enabling...${NC}"
+    gcloud services enable discoveryengine.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true
+  fi
+  
+  if [[ "$aiplatform_api_enabled" == "yes" ]]; then
+    echo -e "${GREEN}[infra] Vertex AI Platform API is enabled${NC}"
+  else
+    echo -e "${YELLOW}[infra] Warning: Vertex AI Platform API not enabled, enabling...${NC}"
+    gcloud services enable aiplatform.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true
+  fi
+  
+  # Check Vertex AI API keys (for Vertex AI Platform, not public endpoints)
+  echo -e "${BLUE}[infra] Checking Vertex AI API keys...${NC}"
+  local vertex_keys=$(gcloud services api-keys list --project="$PROJECT_ID" \
+    --filter="restrictions.apiTargets.service:aiplatform.googleapis.com OR restrictions.apiTargets.service:discoveryengine.googleapis.com" \
+    --format="value(name)" 2>/dev/null | wc -l | tr -d ' ')
+  
+  if [[ "$vertex_keys" -gt 0 ]]; then
+    echo -e "${GREEN}[infra] Found ${vertex_keys} Vertex AI Platform API key(s)${NC}"
+  else
+    echo -e "${YELLOW}[infra] Note: No Vertex AI Platform API keys found${NC}"
+    echo -e "${YELLOW}[infra] Note: Vertex AI Platform typically uses service account auth, not API keys${NC}"
+    echo -e "${YELLOW}[infra] API keys are used for public endpoints (Gemini API), not Vertex AI Platform${NC}"
+  fi
+  
+  # Verify GEMINI_API_KEY secret exists (for Gemini/public endpoints)
+  if gcloud secrets describe gemini_api_key --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] GEMINI_API_KEY secret exists (for Gemini/public endpoints)${NC}"
+  else
+    echo -e "${YELLOW}[infra] Warning: gemini_api_key secret not found${NC}"
+  fi
   
   # Get project number for Vertex AI service account
   local PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || echo "")
@@ -309,28 +349,166 @@ setup_infrastructure() {
     }
   done
   
-  # Try to list existing data stores to check if one exists
-  # Note: gcloud CLI doesn't support discoveryengine commands, so we use REST API
+  # Check and create Vertex AI Search Data Store if needed
   echo -e "${BLUE}[infra] Checking for existing Vertex AI Search Data Stores...${NC}"
   local datastore_id=""
-  # Try to get data stores via REST API (requires gcloud auth)
-  local access_token=$(gcloud auth print-access-token 2>/dev/null || echo "")
-  if [[ -n "$access_token" ]]; then
-    local api_response=$(curl -s -H "Authorization: Bearer ${access_token}" \
-      "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/${REGION}/dataStores" 2>/dev/null || echo "")
-    # Check if response contains data stores (not an error)
-    if echo "$api_response" | grep -q "\"name\"" && ! echo "$api_response" | grep -q "\"error\""; then
-      # Extract first data store ID from response
-      datastore_id=$(echo "$api_response" | grep -o '"name":"[^"]*"' | head -1 | sed 's/.*dataStores\/\([^"]*\)".*/\1/' || echo "")
+  local datastore_display_name="RAG Documents Store"
+  local datastore_id_value="rag-documents-store"
+  local use_gcloud_cli=false
+  
+  # Try to use gcloud CLI first (if available)
+  if gcloud discovery-engine data-stores list --location=global --project="$PROJECT_ID" --format="value(name)" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Using gcloud CLI for Discovery Engine${NC}"
+    use_gcloud_cli=true
+    local existing_stores=$(gcloud discovery-engine data-stores list --location=global --project="$PROJECT_ID" --format="value(name)" 2>/dev/null || echo "")
+    # Extract store ID from full path (format: projects/.../dataStores/rag-documents-store)
+    if echo "$existing_stores" | grep -q "rag-documents-store"; then
+      datastore_id="$datastore_id_value"
+    fi
+  else
+    echo -e "${BLUE}[infra] gcloud discovery-engine commands not available, using REST API${NC}"
+    local access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
+    
+    if [[ -z "$access_token" ]]; then
+      echo -e "${YELLOW}[infra] Warning: Could not get access token, skipping Data Store check${NC}"
+    else
+      # Try to get data stores via REST API (use global region for Discovery Engine)
+      local api_response=$(curl -s -H "Authorization: Bearer ${access_token}" \
+        -H "X-Goog-User-Project: ${PROJECT_ID}" \
+        "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores" 2>/dev/null || echo "")
+    
+      # Check if response contains data stores
+      if echo "$api_response" | grep -q "\"name\"" && ! echo "$api_response" | grep -q "\"error\""; then
+        # Extract data store ID from response (look for our specific store or use first one)
+        datastore_id=$(echo "$api_response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    stores = data.get('dataStores', [])
+    if stores:
+        # Try to find our store by ID or use first one
+        for store in stores:
+            name = store.get('name', '')
+            if 'rag-documents-store' in name or 'rag' in name.lower():
+                print(name.split('/')[-1])
+                break
+        else:
+            print(stores[0]['name'].split('/')[-1])
+except:
+    pass
+" 2>/dev/null || echo "")
+      fi
     fi
   fi
   
   if [[ -n "$datastore_id" ]]; then
     echo -e "${GREEN}[infra] Found existing Data Store:${NC} $datastore_id"
+    # Note: Import is not triggered for existing stores to avoid unnecessary re-imports
+    # If you need to re-import, do it manually or set FORCE_REIMPORT=true
+  else
+    echo -e "${YELLOW}[infra] No existing Data Store found, creating new one...${NC}"
+    
+    if [[ "$use_gcloud_cli" == "true" ]]; then
+      # Try to create using gcloud CLI
+      if gcloud discovery-engine data-stores create "$datastore_id_value" \
+        --project="$PROJECT_ID" \
+        --location="global" \
+        --display-name="$datastore_display_name" \
+        --industry-vertical="GENERIC" \
+        --solution-types="SOLUTION_TYPE_SEARCH" \
+        --content-config="CONTENT_REQUIRED" 2>/dev/null; then
+        datastore_id="$datastore_id_value"
+        echo -e "${GREEN}[infra] Created Data Store using gcloud CLI:${NC} $datastore_id"
+      else
+        echo -e "${YELLOW}[infra] gcloud CLI creation failed, falling back to REST API${NC}"
+        use_gcloud_cli=false
+      fi
+    fi
+    
+    if [[ "$use_gcloud_cli" == "false" ]]; then
+      local access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
+      if [[ -z "$access_token" ]]; then
+        echo -e "${YELLOW}[infra] Cannot create Data Store: access token unavailable${NC}"
+        echo -e "${YELLOW}[infra] Create manually: https://console.cloud.google.com/gen-app-builder/data-stores${NC}"
+      else
+        # Create Data Store via REST API
+        local create_response=$(curl -X POST -s -H "Authorization: Bearer ${access_token}" \
+          -H "X-Goog-User-Project: ${PROJECT_ID}" \
+          -H "Content-Type: application/json" \
+          "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores?dataStoreId=${datastore_id_value}" \
+          -d "{
+            \"displayName\": \"${datastore_display_name}\",
+            \"industryVertical\": \"GENERIC\",
+            \"solutionTypes\": [\"SOLUTION_TYPE_SEARCH\"],
+            \"contentConfig\": \"CONTENT_REQUIRED\"
+          }" 2>/dev/null || echo "")
+      
+        if echo "$create_response" | grep -q "\"name\"" && ! echo "$create_response" | grep -q "\"error\""; then
+          datastore_id="$datastore_id_value"
+          echo -e "${GREEN}[infra] Created Data Store via REST API:${NC} $datastore_id"
+        else
+          echo -e "${YELLOW}[infra] Failed to create Data Store via REST API:${NC}"
+          echo "$create_response" | grep -o '"message":"[^"]*"' | head -1 | sed 's/"message":"\(.*\)"/\1/' || echo "Unknown error"
+          echo -e "${YELLOW}[infra] Create manually: https://console.cloud.google.com/gen-app-builder/data-stores${NC}"
+        fi
+      fi
+    fi
+    
+    # Import documents from GCS bucket (if Data Store was created)
+    if [[ -n "$datastore_id" ]]; then
+      echo -e "${BLUE}[infra] Importing documents from GCS bucket...${NC}"
+      
+      if [[ "$use_gcloud_cli" == "true" ]]; then
+        # Try using gcloud CLI for import
+        if gcloud discovery-engine documents import \
+          --project="$PROJECT_ID" \
+          --location="global" \
+          --data-store="$datastore_id" \
+          --gcs-source="gs://${rag_docs_bucket}/**" \
+          --reconciliation-mode="INCREMENTAL" 2>/dev/null; then
+          echo -e "${GREEN}[infra] GCS import initiated via gcloud CLI${NC}"
+        else
+          echo -e "${YELLOW}[infra] gcloud import failed, falling back to REST API${NC}"
+          use_gcloud_cli=false
+        fi
+      fi
+      
+      if [[ "$use_gcloud_cli" == "false" ]]; then
+        # Use REST API for import
+        local access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
+        if [[ -n "$access_token" ]]; then
+          local import_response=$(curl -X POST -s -H "Authorization: Bearer ${access_token}" \
+            -H "X-Goog-User-Project: ${PROJECT_ID}" \
+            -H "Content-Type: application/json" \
+            "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores/${datastore_id}/branches/default_branch/documents:import" \
+            -d "{
+              \"gcsSource\": {
+                \"inputUris\": [\"gs://${rag_docs_bucket}/**\"],
+                \"dataSchema\": \"document\"
+              },
+              \"reconciliationMode\": \"INCREMENTAL\"
+            }" 2>/dev/null || echo "")
+          
+          if echo "$import_response" | grep -q "\"name\"" && ! echo "$import_response" | grep -q "\"error\""; then
+            echo -e "${GREEN}[infra] GCS import initiated via REST API${NC}"
+            local operation_name=$(echo "$import_response" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('name', ''))" 2>/dev/null || echo "")
+            if [[ -n "$operation_name" ]]; then
+              echo -e "${BLUE}[infra] Import operation:${NC} $operation_name"
+            fi
+          else
+            echo -e "${YELLOW}[infra] Note: GCS import may require manual configuration${NC}"
+            echo -e "${YELLOW}[infra] Configure in console: https://console.cloud.google.com/gen-app-builder/data-stores?project=${PROJECT_ID}${NC}"
+          fi
+        fi
+      fi
+    fi
+  fi
+  
+  # Update Cloud Run service with Data Store ID if we have one
+  if [[ -n "$datastore_id" ]]; then
     echo -e "${BLUE}[infra] Updating Cloud Run service with Data Store ID...${NC}"
-    # Update Cloud Run service with Data Store ID if API service exists
-    if gcloud run services describe sanskrite-api --region="$REGION" >/dev/null 2>&1; then
-      gcloud run services update sanskrite-api --region="$REGION" \
+    if gcloud run services describe sanskrite-api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      gcloud run services update sanskrite-api --region="$REGION" --project="$PROJECT_ID" \
         --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id" \
         --quiet >/dev/null 2>&1 && \
         echo -e "${GREEN}[infra] Updated Cloud Run service with VERTEX_SEARCH_DATA_STORE_ID=$datastore_id${NC}" || \
@@ -338,18 +516,20 @@ setup_infrastructure() {
     else
       echo -e "${YELLOW}[infra] Cloud Run service not found, set manually: VERTEX_SEARCH_DATA_STORE_ID=$datastore_id${NC}"
     fi
-  else
-    echo -e "${YELLOW}[infra] No existing Data Store found or API not accessible${NC}"
-    echo -e "${YELLOW}[infra] Create Data Store manually:${NC}"
-    echo -e "${YELLOW}  Console: https://console.cloud.google.com/gen-app-builder/data-stores${NC}"
-    echo -e "${YELLOW}  Bucket: gs://${rag_docs_bucket}${NC}"
-    echo -e "${YELLOW}  Location: ${REGION}${NC}"
-    echo -e "${BLUE}[infra] Synchronization settings:${NC}"
-    echo -e "${BLUE}  - Documents are automatically saved to GCS when created/updated${NC}"
-    echo -e "${BLUE}  - Vertex AI Search can sync automatically: daily, every 3 days, or every 5 days${NC}"
-    echo -e "${BLUE}  - First sync happens ~1 hour after Data Store creation${NC}"
-    echo -e "${BLUE}  - Configure sync frequency in Data Store settings${NC}"
-    echo -e "${YELLOW}  After creation, set VERTEX_SEARCH_DATA_STORE_ID env var${NC}"
+    
+    # Optional: Create Cloud Scheduler job for automatic sync (if enabled)
+    # Note: This creates a scheduled job that runs import API call periodically
+    if [[ "${ENABLE_VERTEX_SEARCH_SYNC:-}" == "true" ]]; then
+      echo -e "${BLUE}[infra] Setting up Cloud Scheduler for automatic sync...${NC}"
+      local scheduler_job="vertex-search-sync-${datastore_id}"
+      local schedule_cron="${VERTEX_SEARCH_SYNC_SCHEDULE:-0 2 * * *}"  # Default: daily at 2 AM
+      
+      # Create Cloud Scheduler job that calls import API via HTTP
+      # Note: This requires creating a Cloud Function or using Workflows
+      echo -e "${YELLOW}[infra] Automatic sync via Cloud Scheduler requires Cloud Function/Workflows setup${NC}"
+      echo -e "${YELLOW}[infra] For now, use console to configure sync schedule:${NC}"
+      echo -e "${YELLOW}[infra] https://console.cloud.google.com/gen-app-builder/data-stores?project=${PROJECT_ID}${NC}"
+    fi
   fi
   
   # 3.8 Setup BigQuery for documents analytics
@@ -657,7 +837,7 @@ deploy_api() {
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
-  local paypal_secrets="VERTEX_API_KEY=VERTEX_API_KEY:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest"
+  local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest"
   if gcloud secrets describe paypal_client_id >/dev/null 2>&1 && gcloud secrets describe paypal_secret >/dev/null 2>&1; then
     paypal_secrets="$paypal_secrets,PAYPAL_CLIENT_ID=paypal_client_id:latest,PAYPAL_SECRET=paypal_secret:latest"
     if gcloud secrets describe paypal_webhook_id >/dev/null 2>&1; then
@@ -681,7 +861,9 @@ deploy_api() {
   fi
   
   # Build env vars string
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=${REGION},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false"
+  # Note: VERTEX_SEARCH_LOCATION must be "global" for Discovery Engine Data Stores
+  # Data Stores are created in "global" region, but search API uses the same location
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false"
   
   # Add Redis env vars if available
   if [[ -n "$redis_host" ]]; then

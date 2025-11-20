@@ -31,19 +31,19 @@ done
 
 ### ❌ Anti-pattern: Несогласованность naming в секретах
 **Что делали**: 
-- Создали секреты: `VERTEX_API_KEY` (uppercase)
-- В Cloud Run binding: `VERTEX_API_KEY=VERTEX_API_KEY:latest`
-- Ошибка: `Secret "VERTEX_API_KEY" was not found`
+- Создали секреты: `GEMINI_API_KEY` (uppercase)
+- В Cloud Run binding: `GEMINI_API_KEY=GEMINI_API_KEY:latest`
+- Ошибка: `Secret "GEMINI_API_KEY" was not found`
 
 **Итог**: 2-3 итерации пока не поняли что GCP требует lowercase имена
 
 **✅ Best practice**:
 ```bash
 # В GCP Secret Manager - ВСЕГДА lowercase_underscore
-gcloud secrets create vertex_api_key
+gcloud secrets create gemini_api_key
 
 # В Cloud Run binding - mapping к UPPERCASE
---set-secrets "VERTEX_API_KEY=vertex_api_key:latest"
+--set-secrets "GEMINI_API_KEY=gemini_api_key:latest"
 ```
 
 **Документация**: Naming convention в [deployment-checklist.md](../deployment/deployment-checklist.md)

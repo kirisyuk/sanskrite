@@ -753,6 +753,7 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 		}
 
 		// Parse usage from any event that contains it (especially response.completed)
+		// CRITICAL: Parse usage BEFORE checking for response.completed to ensure we capture it
 		if u, ok := m["usage"].(map[string]interface{}); ok {
 			if v, ok := u["input_tokens"].(float64); ok {
 				accUsage.PromptTokens = int(v)
@@ -771,23 +772,41 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 			// Log when usage is found for debugging
 			log.Printf("[OpenAI Stream] Found usage in event: promptTokens=%d outputTokens=%d totalTokens=%d", accUsage.PromptTokens, accUsage.OutputTokens, accUsage.TotalTokens)
 		}
-		// Also check for usage at top level (some API versions)
-		if typ, _ := m["type"].(string); typ != "" {
-			if strings.Contains(strings.ToLower(typ), "response.completed") {
+
+		// Check for usage at top level (some API versions may put usage directly in event)
+		// Also check for usage in response.completed event specifically
+		typ, _ := m["type"].(string)
+		if typ != "" {
+			lt := strings.ToLower(typ)
+			if strings.Contains(lt, "response.completed") {
 				// Log event type for debugging
 				log.Printf("[OpenAI Stream] Received response.completed event")
+				// Try to extract usage from top-level fields if not found in usage object
+				if accUsage.PromptTokens == 0 && accUsage.OutputTokens == 0 {
+					// Some API versions may put usage fields directly in the event
+					if v, ok := m["input_tokens"].(float64); ok {
+						accUsage.PromptTokens = int(v)
+						log.Printf("[OpenAI Stream] Found input_tokens at top level: %d", accUsage.PromptTokens)
+					}
+					if v, ok := m["output_tokens"].(float64); ok {
+						accUsage.OutputTokens = int(v)
+						log.Printf("[OpenAI Stream] Found output_tokens at top level: %d", accUsage.OutputTokens)
+					}
+					if v, ok := m["total_tokens"].(float64); ok {
+						accUsage.TotalTokens = int(v)
+						log.Printf("[OpenAI Stream] Found total_tokens at top level: %d", accUsage.TotalTokens)
+					}
+				}
+				// Return EOF after processing usage
+				return io.EOF
 			}
 		}
 
 		// Heuristics for Responses SSE: prefer output_text.delta
 		// CRITICAL: Only call onDelta once per event to avoid duplicate chunks
 		var textToSend string
-		typ, _ := m["type"].(string)
 		if typ != "" {
 			lt := strings.ToLower(typ)
-			if strings.Contains(lt, "response.completed") {
-				return io.EOF
-			}
 			// Prefer output_text.delta for delta events
 			if strings.Contains(lt, "output_text.delta") {
 				if d, _ := m["delta"].(string); d != "" {

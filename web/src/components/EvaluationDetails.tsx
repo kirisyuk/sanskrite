@@ -133,7 +133,7 @@ export const EvaluationDetails: React.FC<{ messageId: string }> = ({ messageId }
                 const expl = typeof found?.explanation === 'string' ? found.explanation : t(`unfold.bias.descriptions.${selectedTag}`, { defaultValue: '' });
                 return (
                   <div className="mt-2 p-3 rounded-lg" style={{ backgroundColor: 'var(--surface-700)', border: '1px solid var(--overlay-line-90)' }}>
-                    <div className="text-[12px]" style={{ color: '#FFFFFF', lineHeight: '1.5' }}>
+                    <div className="text-[12px]" style={{ color: 'var(--text-primary)', lineHeight: '1.5' }}>
                       {expl}
                     </div>
                   </div>

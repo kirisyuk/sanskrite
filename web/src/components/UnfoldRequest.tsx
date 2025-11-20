@@ -667,32 +667,41 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     
     if (!contextWindow) return null;
     
-    // Calculate tokens used from interactions (prefer actual usage, fallback to char estimate)
+    // Calculate tokens used from interactions (ONLY prompt tokens, never totalTokens which includes completion)
     let totalTokens = 0;
     
-    // Sum up tokens from interactions that have usage data
+    // Sum up prompt tokens from interactions
+    // IMPORTANT: We only count prompt tokens, not totalTokens (which includes completion tokens)
     for (const interaction of interactions) {
       if (interaction.usage?.promptTokens) {
+        // Use actual prompt tokens if available
         totalTokens += interaction.usage.promptTokens;
-      } else if (interaction.usage?.totalTokens) {
-        totalTokens += interaction.usage.totalTokens;
       } else {
         // Fallback: estimate from content (chars / 4)
         // This includes document.attach interactions automatically
+        // We estimate only the prompt size, not completion
         const content = interaction.summary || interaction.content || '';
         totalTokens += Math.ceil(content.length / 4);
       }
+      // DO NOT use totalTokens as fallback - it includes completion tokens which are not part of context
     }
     
-    // Add current stream usage if available
+    // Add current stream usage if available (only prompt tokens)
     if (currentUsage?.promptTokens) {
       totalTokens += currentUsage.promptTokens;
-    } else if (currentUsage?.totalTokens) {
-      totalTokens += currentUsage.totalTokens;
     }
+    // DO NOT use currentUsage.totalTokens - it includes completion tokens
     
-    // Add pending documents tokens
+    // Add pending documents tokens (these will be part of prompt)
     totalTokens += pendingDocsTokens;
+    
+    // Add current user input (value in textarea) - this will be part of prompt
+    const currentInputTokens = Math.ceil((value || '').length / 4);
+    totalTokens += currentInputTokens;
+    
+    // Add system instruction tokens (if present)
+    const systemInstructionTokens = Math.ceil((settings.systemInstruction || '').length / 4);
+    totalTokens += systemInstructionTokens;
     
     const percentage = Math.min(100, (totalTokens / contextWindow) * 100);
     
@@ -701,7 +710,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       total: contextWindow,
       percentage,
     };
-  }, [interactions, currentUsage, settings.provider, settings.strength, pendingDocsTokens]);
+  }, [interactions, currentUsage, settings.provider, settings.strength, settings.systemInstruction, pendingDocsTokens, value]);
 
   // Context usage ring component
   const ContextUsageRing: React.FC<{ percentage: number; size?: number }> = ({ percentage, size = 24 }) => {

@@ -15,7 +15,7 @@ func main() {
 	logger := log.New(os.Stdout, "[Test] ", log.LstdFlags)
 
 	// Create web search executor
-	executor := http.NewWebSearchToolExecutor(logger)
+	executor := http.NewWebSearchToolExecutor(logger, nil, nil) // nil for tavilyClient and usageMetricsRepo in test
 
 	// Test query
 	query := "latest news about AI"

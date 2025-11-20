@@ -41,6 +41,7 @@ export function useAutoScrollDelayed(
  * - Прокрутки после гидратации
  * - Прокрутки при новых взаимодействиях
  * - Прокрутки при завершении стриминга
+ * - Прокрутки во время стриминга при обновлении содержимого (чанки)
  */
 export function useAdvancedAutoScroll(
   containerRef: RefObject<HTMLDivElement | null>,
@@ -54,6 +55,7 @@ export function useAdvancedAutoScroll(
   const lastScrollInteractionLength = useRef<number>(0);
   const lastScrollStreamingState = useRef<boolean>(false);
   const lastProjectIdRef = useRef<string | null>(null);
+  const lastUpdateTimestampRef = useRef<number>(0);
   
   const genaiChat = useGenaiChatStore();
   const genaiChatInteractionsLength = useGenaiChatStore(
@@ -62,6 +64,8 @@ export function useAdvancedAutoScroll(
   const genaiChatStreaming = useGenaiChatStore((state) => state.streaming);
   const genaiChatHydrating = useGenaiChatStore((state) => state.hydrating);
   const genaiChatProjectId = useGenaiChatStore((state) => state.projectId);
+  // Track _lastUpdate timestamp to detect content updates during streaming
+  const lastUpdateTimestamp = useGenaiChatStore((state) => (state as any)._lastUpdate || 0);
 
   const interactionsLength = options?.interactionsLength ?? genaiChatInteractionsLength;
   const streaming = options?.streaming ?? genaiChatStreaming;
@@ -142,5 +146,22 @@ export function useAdvancedAutoScroll(
 
     lastScrollStreamingState.current = currentStreaming;
   }, [interactionsLength, streaming, containerRef]);
+
+  // Auto-scroll during streaming when content updates (chunks arrive)
+  useEffect(() => {
+    if (!containerRef.current) return;
+    if (!streaming) return; // Only scroll during streaming
+
+    // Check if _lastUpdate timestamp changed (indicates content was updated)
+    if (lastUpdateTimestamp > lastUpdateTimestampRef.current) {
+      lastUpdateTimestampRef.current = lastUpdateTimestamp;
+      // Use requestAnimationFrame for smooth scrolling during streaming
+      requestAnimationFrame(() => {
+        if (containerRef.current && streaming) {
+          containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        }
+      });
+    }
+  }, [lastUpdateTimestamp, streaming, containerRef]);
 }
 

@@ -146,7 +146,7 @@ func main() {
 	{
 		aiServices := []ai.AIService{}
 
-		if v := os.Getenv("VERTEX_API_KEY"); v != "" {
+		if v := os.Getenv("GEMINI_API_KEY"); v != "" {
 			aiServices = append(aiServices, ai.NewVertexAIService(v, modelManager))
 		}
 		if k := os.Getenv("OPENAI_API_KEY"); k != "" {
@@ -181,14 +181,14 @@ func main() {
 
 		// Create genaiClient for artifact executor (using combined client)
 		// Import gen_combined and gen_gemini packages at top of file
-		vertexAPIKey := os.Getenv("VERTEX_API_KEY")
+		geminiAPIKey := os.Getenv("GEMINI_API_KEY")
 		vertexLocation := os.Getenv("VERTEX_LOCATION")
 		if vertexLocation == "" {
 			vertexLocation = "us-central1"
 		}
 		fastModel := os.Getenv("GENAI_FAST_MODEL")
 		qualityModel := os.Getenv("GENAI_QUALITY_MODEL")
-		geminiClient := gen_gemini.NewClient(vertexAPIKey, projectID, vertexLocation, fastModel, qualityModel)
+		geminiClient := gen_gemini.NewClient(geminiAPIKey, projectID, vertexLocation, fastModel, qualityModel)
 		openaiAPIKey := os.Getenv("OPENAI_API_KEY")
 		genaiClient := gen_combined.NewClient(geminiClient, openaiAPIKey)
 
@@ -252,15 +252,17 @@ func main() {
 
 		// Initialize Vertex AI Search client if configured
 		vertexSearchProjectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
-		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "us-central1")
+		// Discovery Engine Data Stores are created in "global" region
+		// Default to "global" to match Data Store location
+		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "global")
 		vertexSearchDataStoreID := getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")
-		vertexSearchAPIKey := getEnv("VERTEX_API_KEY", "")
+		vertexSearchAPIKey := getEnv("GEMINI_API_KEY", "")
 		if vertexSearchDataStoreID != "" && vertexSearchAPIKey != "" {
 			vertexSearchClient := ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, vertexSearchAPIKey)
 			s.discoveryHandler = s.discoveryHandler.WithVertexSearch(vertexSearchClient)
 			logger.Printf("Vertex AI Search enabled: project=%s, location=%s, dataStore=%s", vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID)
 		} else {
-			logger.Printf("Vertex AI Search disabled: VERTEX_SEARCH_DATA_STORE_ID or VERTEX_API_KEY not set")
+			logger.Printf("Vertex AI Search disabled: VERTEX_SEARCH_DATA_STORE_ID or GEMINI_API_KEY not set")
 		}
 
 		// Start document processor worker (background)

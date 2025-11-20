@@ -15,7 +15,8 @@ export function useMergedMessages() {
   const interactionsLength = useGenaiChatStore((state) => state.interactions.length);
   const messagesLength = useGenaiChatStore((state) => state.messages.length);
   const streaming = useGenaiChatStore((state) => state.streaming);
-  // Subscribe to _lastUpdate to detect when interactions are updated (not just added)
+  // Subscribe to _lastUpdate to detect when interactions or messages are updated (not just added)
+  // This is critical for streaming chunks - messages content changes but length may not
   const lastUpdate = useGenaiChatStore((state) => (state as any)._lastUpdate || 0);
   
   // Get actual data using getState() inside useMemo to avoid stale closures

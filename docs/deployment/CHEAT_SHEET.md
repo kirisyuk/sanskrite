@@ -73,8 +73,8 @@ gcloud run services describe sanskrite-api --region us-central1 --format="value(
 
 | Component | Format | Example |
 |-----------|--------|---------|
-| GCP Secrets | `lowercase_underscore` | `vertex_api_key` |
-| Env Vars | `UPPERCASE_UNDERSCORE` | `VERTEX_API_KEY` |
+| GCP Secrets | `lowercase_underscore` | `gemini_api_key` |
+| Env Vars | `UPPERCASE_UNDERSCORE` | `GEMINI_API_KEY` |
 | Cloud Run | `lowercase-dash` | `sanskrite-api` |
 | Pub/Sub Topics | `lowercase.dot` | `discovery.status` |
 

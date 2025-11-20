@@ -50,7 +50,7 @@ type Publisher interface {
 }
 
 func NewGenAIHandler() *GenAIHandler {
-	apiKey := os.Getenv("VERTEX_API_KEY")
+	apiKey := os.Getenv("GEMINI_API_KEY")
 	projectID := os.Getenv("GCP_PROJECT_ID")
 	if projectID == "" {
 		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
@@ -851,6 +851,7 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		webSearchExecutor := NewWebSearchToolExecutor(
 			log.New(os.Stdout, "[WebSearchTools] ", log.LstdFlags),
 			tavilyClientForTools,
+			h.usageMetricsRepo, // Pass usage metrics repo for tracking Tavily usage
 		)
 
 		// Register Web Search tool in registry

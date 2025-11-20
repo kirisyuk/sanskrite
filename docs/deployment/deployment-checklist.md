@@ -157,13 +157,13 @@ gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
 ---
 
 ### Проблема 3: Secret Not Found или Invalid Name
-**Симптом**: `Secret "VERTEX_API_KEY" was not found`
+**Симптом**: `Secret "GEMINI_API_KEY" was not found`
 
 **Причина**: Секреты в GCP имеют lowercase имена, но в --set-secrets используется uppercase
 
 **Решение**: 
-- В GCP Secret Manager: `vertex_api_key` (lowercase_underscore)
-- В Cloud Run binding: `VERTEX_API_KEY=vertex_api_key:latest`
+- В GCP Secret Manager: `gemini_api_key` (lowercase_underscore)
+- В Cloud Run binding: `GEMINI_API_KEY=gemini_api_key:latest`
 
 ---
 
@@ -226,7 +226,7 @@ wsl bash scripts/deploy
 | Компонент | Формат | Пример |
 |-----------|--------|--------|
 | GCP Secrets | `lowercase_underscore` | `vertex_api_key` |
-| Env Vars (код) | `UPPERCASE_UNDERSCORE` | `VERTEX_API_KEY` |
+| Env Vars (код) | `UPPERCASE_UNDERSCORE` | `GEMINI_API_KEY` |
 | Cloud Run Services | `lowercase-dash` | `sanskrite-api` |
 | Pub/Sub Topics | `lowercase.dot` | `discovery.status` |
 | Firestore Collections | `lowercase_underscore` | `core_projects` |

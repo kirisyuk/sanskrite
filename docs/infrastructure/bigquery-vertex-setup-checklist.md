@@ -11,8 +11,8 @@
    - ✅ BigQuery Connections API (`bigqueryconnection.googleapis.com`)
 
 2. **Секреты:**
-   - ✅ `VERTEX_API_KEY` - существует в Secret Manager
-   - ✅ `VERTEX_API_KEY_TEST` - существует в Secret Manager
+   - ✅ `gemini_api_key` - существует в Secret Manager
+   - ✅ `gemini_api_key_test` - существует в Secret Manager
 
 3. **BigQuery:**
    - ✅ Dataset `sanskrite_documents` существует
@@ -66,7 +66,7 @@
 # Обязательные
 GCP_PROJECT_ID=sanskrite
 GOOGLE_CLOUD_PROJECT=sanskrite
-VERTEX_API_KEY=<из Secret Manager>
+GEMINI_API_KEY=<из Secret Manager>
 
 # Опциональные (есть значения по умолчанию)
 BIGQUERY_DATASET_ID=sanskrite_documents  # по умолчанию
@@ -92,7 +92,7 @@ CORE_DOCS_BUCKET=sanskrite-core-docs
 
 3. **Проверить доступ к секретам:**
    ```bash
-   gcloud secrets versions access latest --secret="VERTEX_API_KEY" | head -c 20
+   gcloud secrets versions access latest --secret="gemini_api_key" | head -c 20
    ```
 
 ### Команды для настройки:

@@ -453,6 +453,11 @@ export const UsageTab: React.FC = () => {
   const formatModelName = (modelName: string): string => {
     if (!modelName) return modelName;
     
+    // Handle Tavily models: convert "tavily-search-basic" -> "Tavily Search"
+    if (modelName.includes('tavily-')) {
+      return 'Tavily Search';
+    }
+    
     // Handle Claude models: convert "claude-sonnet-4-5-20250929" -> "claude sonnet"
     if (modelName.includes('claude-')) {
       const parts = modelName.split('-');
@@ -521,6 +526,7 @@ export const UsageTab: React.FC = () => {
       anthropic: '#D97757',
       grok: '#FF6B35',
       deepseek: '#6366F1',
+      tavily: '#8B5CF6', // Purple color for Tavily
     };
     return colors[provider] || '#6B7280';
   };

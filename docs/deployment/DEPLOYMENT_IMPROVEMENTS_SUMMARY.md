@@ -87,11 +87,11 @@ deploy_api() {
 
 ### 5. **Unified Secret Naming**
 
-**Было**: Создавали `VERTEX_API_KEY` (uppercase) → Secret not found  
+**Было**: Создавали `GEMINI_API_KEY` (uppercase) → Secret not found  
 **Стало**: Автоматическое создание с правильным naming (lowercase)
 
 ```bash
-for secret in vertex_api_key openai_api_key anthropic_api_key grok_api_key; do
+for secret in gemini_api_key openai_api_key anthropic_api_key grok_api_key; do
   if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
     echo "PLACEHOLDER" | gcloud secrets create "$secret" --data-file=-
   fi

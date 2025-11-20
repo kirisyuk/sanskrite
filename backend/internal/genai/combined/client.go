@@ -479,7 +479,16 @@ func (c *Client) ExecuteWithTools(ctx context.Context, prompt string, tools []To
 			if err != nil {
 				return nil, err
 			}
-			return &GenerateResponse{Content: r2.Content, Model: r2.Model, Usage: toGemUsage(r2.Usage)}, nil
+			// Sum usage from both requests (first request + follow-up request)
+			mergedUsage := g.Usage{
+				PromptTokens:        r.Usage.PromptTokens + r2.Usage.PromptTokens,
+				OutputTokens:        r.Usage.OutputTokens + r2.Usage.OutputTokens,
+				TotalTokens:         r.Usage.TotalTokens + r2.Usage.TotalTokens,
+				ReasoningTokens:     r.Usage.ReasoningTokens + r2.Usage.ReasoningTokens,
+				ToolUsePromptTokens: r.Usage.ToolUsePromptTokens + r2.Usage.ToolUsePromptTokens,
+			}
+			log.Printf("[Combined ExecuteWithTools OpenAI] Merged usage: r.Usage=%+v r2.Usage=%+v merged=%+v", r.Usage, r2.Usage, mergedUsage)
+			return &GenerateResponse{Content: r2.Content, Model: r2.Model, Usage: mergedUsage}, nil
 		}
 		return &GenerateResponse{Content: r.Content, Model: r.Model, Usage: toGemUsage(r.Usage)}, nil
 	}
@@ -495,7 +504,8 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 			return errors.New("openai not configured")
 		}
 		_ = onEvent(StreamEvent{Type: "start"})
-		u, qs, srcs, err := c.oa.StreamWithExtras(ctx, prompt, toOATools(tools), c.normalizeOptionsForOpenAI(opts), func(delta string) error {
+		normalizedOpts := c.normalizeOptionsForOpenAI(opts)
+		u, qs, srcs, err := c.oa.StreamWithExtras(ctx, prompt, toOATools(tools), normalizedOpts, func(delta string) error {
 			return onEvent(StreamEvent{Type: "chunk", Text: delta})
 		})
 		if err != nil {
@@ -505,7 +515,12 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 		log.Printf("[Combined Stream] OpenAI done event received, Usage before conversion: %+v", u)
 		convertedUsage := toGemUsage(u)
 		log.Printf("[Combined Stream] OpenAI done event, Usage after conversion: %+v", convertedUsage)
-		return onEvent(StreamEvent{Type: "done", Usage: convertedUsage, SearchQueries: qs, Sources: srcs})
+		// Use normalized model name (real model ID, not alias) for proper cost calculation
+		modelName := normalizedOpts.ModelOverride
+		if modelName == "" {
+			modelName = "gpt-5" // Default fallback
+		}
+		return onEvent(StreamEvent{Type: "done", Usage: convertedUsage, Model: modelName, SearchQueries: qs, Sources: srcs})
 	case "grok":
 		if c.gr == nil {
 			return errors.New("grok not configured")
@@ -654,7 +669,16 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, tools []Too
 		// Merge SearchQueries and Sources from both calls with deduplication
 		mergedQueries := mergeUniqueStrings(r.SearchQueries, r2.SearchQueries)
 		mergedSources := mergeUniqueStrings(r.Sources, r2.Sources)
-		_ = onEvent(StreamEvent{Type: "done", Usage: toGemUsage(r2.Usage), SearchQueries: mergedQueries, Sources: mergedSources})
+		// Sum usage from both requests (first request + follow-up request)
+		mergedUsage := g.Usage{
+			PromptTokens:        r.Usage.PromptTokens + r2.Usage.PromptTokens,
+			OutputTokens:        r.Usage.OutputTokens + r2.Usage.OutputTokens,
+			TotalTokens:         r.Usage.TotalTokens + r2.Usage.TotalTokens,
+			ReasoningTokens:     r.Usage.ReasoningTokens + r2.Usage.ReasoningTokens,
+			ToolUsePromptTokens: r.Usage.ToolUsePromptTokens + r2.Usage.ToolUsePromptTokens,
+		}
+		log.Printf("[Combined StreamWithTools OpenAI] Merged usage: r.Usage=%+v r2.Usage=%+v merged=%+v", r.Usage, r2.Usage, mergedUsage)
+		_ = onEvent(StreamEvent{Type: "done", Usage: mergedUsage, SearchQueries: mergedQueries, Sources: mergedSources})
 		return nil
 	case "grok":
 		if c.gr == nil {

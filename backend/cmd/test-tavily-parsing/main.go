@@ -74,7 +74,7 @@ func main() {
 
 	// Test WebSearchToolExecutor structure (without actual API call)
 	fmt.Println("Testing WebSearchToolExecutor initialization...")
-	executor := http.NewWebSearchToolExecutor(logger)
+	executor := http.NewWebSearchToolExecutor(logger, nil, nil) // nil for tavilyClient and usageMetricsRepo in test
 	if executor == nil {
 		log.Fatal("Failed to create executor")
 	}

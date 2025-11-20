@@ -76,7 +76,7 @@ func runOnce(client *gen_combined.Client, modelAlias string, prompt string, sche
 	start := time.Now()
 	fmt.Printf("[ %s ] started: %s\n", modelAlias, start.Format(time.RFC3339Nano))
 
-    // For Grok: run 8 scenarios (4 without schema, 4 with strict schema)
+	// For Grok: run 8 scenarios (4 without schema, 4 with strict schema)
 	if strings.HasPrefix(modelAlias, "grok_") {
 		// Use per-scenario context to avoid hitting the overall base timeout across all scenarios
 		perScenario := 45 * time.Second
@@ -139,7 +139,7 @@ func runOnce(client *gen_combined.Client, modelAlias string, prompt string, sche
 		return nil
 	}
 
-    // For OpenAI: run 8 scenarios (4 without schema, 4 with strict schema)
+	// For OpenAI: run 8 scenarios (4 without schema, 4 with strict schema)
 	if strings.HasPrefix(modelAlias, "gpt_") {
 		perScenario := 45 * time.Second
 		if strings.Contains(modelAlias, "balanced") {
@@ -202,7 +202,7 @@ func runOnce(client *gen_combined.Client, modelAlias string, prompt string, sche
 		return nil
 	}
 
-    // For Gemini: run 8 scenarios (4 without schema, 4 with strict schema)
+	// For Gemini: run 8 scenarios (4 without schema, 4 with strict schema)
 	if strings.HasPrefix(modelAlias, "gemini_") {
 		perScenario := 45 * time.Second
 		if strings.Contains(modelAlias, "balanced") {
@@ -265,125 +265,125 @@ func runOnce(client *gen_combined.Client, modelAlias string, prompt string, sche
 		fmt.Printf("[ %s ] finished: %s (duration: %s)\n", modelAlias, end.Format(time.RFC3339Nano), end.Sub(start).Round(time.Millisecond))
 		return nil
 	}
-    // For Claude: run 8 scenarios (4 without schema, 4 with strict schema)
-    if strings.HasPrefix(modelAlias, "claude_") {
-        perScenario := 45 * time.Second
-        if strings.Contains(modelAlias, "balanced") {
-            perScenario = 60 * time.Second
-        }
-        if strings.Contains(modelAlias, "quality") {
-            perScenario = 90 * time.Second
-        }
-        promptBase := prompt
-        promptSearch := prompt + " Use web search and cite sources. Include this URL: https://fr.wikipedia.org/wiki/Ballon_(coiffe)"
-        looseToolSchema := map[string]interface{}{
-            "type": "object",
-            "properties": map[string]interface{}{
-                "summary":   map[string]interface{}{"type": "string"},
-                "keyPoints": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
-            },
-            "required": []string{"summary", "keyPoints"},
-        }
-        scenarios := []struct {
-            name string
-            req  gen_combined.GenAIRequest
-        }{
-            {name: "loose: qa only", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192}},
-            {name: "loose: qa + tool", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192, ToolCallingEnabled: true, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return structured", Parameters: looseToolSchema}}, ToolChoice: "required", ParallelToolCalls: false}},
-            {name: "loose: qa + search", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptSearch, Temperature: 0, MaxOutputTokens: 8192, WebSearchEnabled: true}},
-            {name: "loose: qa + tool + search", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptSearch, Temperature: 0, MaxOutputTokens: 8192, WebSearchEnabled: true, ToolCallingEnabled: true, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return structured", Parameters: looseToolSchema}}, ToolChoice: "required", ParallelToolCalls: false}},
-            {name: "strict: qa only (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, JSONSchema: schema}},
-            {name: "strict: qa + tool (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, SystemInstruction: "Return the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.", Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, ToolCallingEnabled: true, JSONSchema: schema, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return strictly by schema", Parameters: schema}}, ToolChoice: "required", ParallelToolCalls: false}},
-            {name: "strict: qa + search (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptSearch, Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, JSONSchema: schema, WebSearchEnabled: true}},
-            {name: "strict: qa + tool + search (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptSearch, SystemInstruction: "Return the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.", Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, JSONSchema: schema, WebSearchEnabled: true, ToolCallingEnabled: true, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return strictly by schema", Parameters: schema}}, ToolChoice: "required", ParallelToolCalls: false}},
-        }
-        for _, sc := range scenarios {
-            fmt.Printf("\n--- %s ---\n", sc.name)
-            sctx, scancel := context.WithTimeout(context.Background(), perScenario)
-            res, err := client.GenAIGenerate(sctx, sc.req)
-            scancel()
-            if err != nil {
-                fmt.Printf("Error: %v\n", err)
-                continue
-            }
-            fmt.Printf("Model: %s\n", res.Model)
-            fmt.Printf("Usage: prompt=%d output=%d total=%d\n", res.Usage.PromptTokens, res.Usage.OutputTokens, res.Usage.TotalTokens)
-            if len(res.ToolCalls) > 0 {
-                for _, tc := range res.ToolCalls {
-                    fmt.Printf("ToolCall: %s args=%s\n", tc.Name, tc.Arguments)
-                }
-            }
-            if len(res.Sources) > 0 {
-                fmt.Println("Sources:")
-                for _, u := range res.Sources {
-                    fmt.Printf("- %s\n", u)
-                }
-            }
-            if res.RawJSON != "" {
-                fmt.Printf("Raw provider JSON:\n%s\n", prettyJSON(res.RawJSON))
-            }
-        }
-        end := time.Now()
-        fmt.Printf("[ %s ] finished: %s (duration: %s)\n", modelAlias, end.Format(time.RFC3339Nano), end.Sub(start).Round(time.Millisecond))
-        return nil
-    }
+	// For Claude: run 8 scenarios (4 without schema, 4 with strict schema)
+	if strings.HasPrefix(modelAlias, "claude_") {
+		perScenario := 45 * time.Second
+		if strings.Contains(modelAlias, "balanced") {
+			perScenario = 60 * time.Second
+		}
+		if strings.Contains(modelAlias, "quality") {
+			perScenario = 90 * time.Second
+		}
+		promptBase := prompt
+		promptSearch := prompt + " Use web search and cite sources. Include this URL: https://fr.wikipedia.org/wiki/Ballon_(coiffe)"
+		looseToolSchema := map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"summary":   map[string]interface{}{"type": "string"},
+				"keyPoints": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+			},
+			"required": []string{"summary", "keyPoints"},
+		}
+		scenarios := []struct {
+			name string
+			req  gen_combined.GenAIRequest
+		}{
+			{name: "loose: qa only", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192}},
+			{name: "loose: qa + tool", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192, ToolCallingEnabled: true, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return structured", Parameters: looseToolSchema}}, ToolChoice: "required", ParallelToolCalls: false}},
+			{name: "loose: qa + search", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptSearch, Temperature: 0, MaxOutputTokens: 8192, WebSearchEnabled: true}},
+			{name: "loose: qa + tool + search", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptSearch, Temperature: 0, MaxOutputTokens: 8192, WebSearchEnabled: true, ToolCallingEnabled: true, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return structured", Parameters: looseToolSchema}}, ToolChoice: "required", ParallelToolCalls: false}},
+			{name: "strict: qa only (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, JSONSchema: schema}},
+			{name: "strict: qa + tool (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, SystemInstruction: "Return the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.", Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, ToolCallingEnabled: true, JSONSchema: schema, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return strictly by schema", Parameters: schema}}, ToolChoice: "required", ParallelToolCalls: false}},
+			{name: "strict: qa + search (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptSearch, Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, JSONSchema: schema, WebSearchEnabled: true}},
+			{name: "strict: qa + tool + search (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptSearch, SystemInstruction: "Return the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.", Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, JSONSchema: schema, WebSearchEnabled: true, ToolCallingEnabled: true, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return strictly by schema", Parameters: schema}}, ToolChoice: "required", ParallelToolCalls: false}},
+		}
+		for _, sc := range scenarios {
+			fmt.Printf("\n--- %s ---\n", sc.name)
+			sctx, scancel := context.WithTimeout(context.Background(), perScenario)
+			res, err := client.GenAIGenerate(sctx, sc.req)
+			scancel()
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				continue
+			}
+			fmt.Printf("Model: %s\n", res.Model)
+			fmt.Printf("Usage: prompt=%d output=%d total=%d\n", res.Usage.PromptTokens, res.Usage.OutputTokens, res.Usage.TotalTokens)
+			if len(res.ToolCalls) > 0 {
+				for _, tc := range res.ToolCalls {
+					fmt.Printf("ToolCall: %s args=%s\n", tc.Name, tc.Arguments)
+				}
+			}
+			if len(res.Sources) > 0 {
+				fmt.Println("Sources:")
+				for _, u := range res.Sources {
+					fmt.Printf("- %s\n", u)
+				}
+			}
+			if res.RawJSON != "" {
+				fmt.Printf("Raw provider JSON:\n%s\n", prettyJSON(res.RawJSON))
+			}
+		}
+		end := time.Now()
+		fmt.Printf("[ %s ] finished: %s (duration: %s)\n", modelAlias, end.Format(time.RFC3339Nano), end.Sub(start).Round(time.Millisecond))
+		return nil
+	}
 
-    // For DeepSeek: disable search scenarios (provider does not support web search)
-    if strings.HasPrefix(modelAlias, "deepseek_") {
-        perScenario := 45 * time.Second
-        if strings.Contains(modelAlias, "quality") {
-            perScenario = 75 * time.Second
-        }
-        promptBase := prompt
-        looseToolSchema := map[string]interface{}{
-            "type": "object",
-            "properties": map[string]interface{}{
-                "summary":   map[string]interface{}{"type": "string"},
-                "keyPoints": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
-            },
-            "required": []string{"summary", "keyPoints"},
-        }
-        scenarios := []struct {
-            name string
-            req  gen_combined.GenAIRequest
-        }{
-            {name: "loose: qa only", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192}},
-            {name: "loose: qa + tool", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192, ToolCallingEnabled: true, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return structured", Parameters: looseToolSchema}}, ToolChoice: "required", ParallelToolCalls: false}},
-            {name: "strict: qa only (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, JSONSchema: schema}},
-            {name: "strict: qa + tool (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, SystemInstruction: "Return the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.", Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, ToolCallingEnabled: true, JSONSchema: schema, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return strictly by schema", Parameters: schema}}, ToolChoice: "required", ParallelToolCalls: false}},
-        }
-        for _, sc := range scenarios {
-            fmt.Printf("\n--- %s ---\n", sc.name)
-            sctx, scancel := context.WithTimeout(context.Background(), perScenario)
-            res, err := client.GenAIGenerate(sctx, sc.req)
-            scancel()
-            if err != nil {
-                fmt.Printf("Error: %v\n", err)
-                continue
-            }
-            fmt.Printf("Model: %s\n", res.Model)
-            fmt.Printf("Usage: prompt=%d output=%d total=%d\n", res.Usage.PromptTokens, res.Usage.OutputTokens, res.Usage.TotalTokens)
-            if len(res.ToolCalls) > 0 {
-                for _, tc := range res.ToolCalls {
-                    fmt.Printf("ToolCall: %s args=%s\n", tc.Name, tc.Arguments)
-                }
-            }
-            if len(res.Sources) > 0 {
-                fmt.Println("Sources:")
-                for _, u := range res.Sources {
-                    fmt.Printf("- %s\n", u)
-                }
-            }
-            if res.RawJSON != "" {
-                fmt.Printf("Raw provider JSON:\n%s\n", prettyJSON(res.RawJSON))
-            }
-        }
-        end := time.Now()
-        fmt.Printf("[ %s ] finished: %s (duration: %s)\n", modelAlias, end.Format(time.RFC3339Nano), end.Sub(start).Round(time.Millisecond))
-        return nil
-    }
+	// For DeepSeek: disable search scenarios (provider does not support web search)
+	if strings.HasPrefix(modelAlias, "deepseek_") {
+		perScenario := 45 * time.Second
+		if strings.Contains(modelAlias, "quality") {
+			perScenario = 75 * time.Second
+		}
+		promptBase := prompt
+		looseToolSchema := map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"summary":   map[string]interface{}{"type": "string"},
+				"keyPoints": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+			},
+			"required": []string{"summary", "keyPoints"},
+		}
+		scenarios := []struct {
+			name string
+			req  gen_combined.GenAIRequest
+		}{
+			{name: "loose: qa only", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192}},
+			{name: "loose: qa + tool", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192, ToolCallingEnabled: true, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return structured", Parameters: looseToolSchema}}, ToolChoice: "required", ParallelToolCalls: false}},
+			{name: "strict: qa only (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, JSONSchema: schema}},
+			{name: "strict: qa + tool (schema)", req: gen_combined.GenAIRequest{Model: modelAlias, Prompt: promptBase, SystemInstruction: "Return the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call.", Temperature: 0, MaxOutputTokens: 8192, StrictJSONEnabled: true, ToolCallingEnabled: true, JSONSchema: schema, Tools: []gen_gemini.Tool{{Name: "return_structured", Description: "Return strictly by schema", Parameters: schema}}, ToolChoice: "required", ParallelToolCalls: false}},
+		}
+		for _, sc := range scenarios {
+			fmt.Printf("\n--- %s ---\n", sc.name)
+			sctx, scancel := context.WithTimeout(context.Background(), perScenario)
+			res, err := client.GenAIGenerate(sctx, sc.req)
+			scancel()
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				continue
+			}
+			fmt.Printf("Model: %s\n", res.Model)
+			fmt.Printf("Usage: prompt=%d output=%d total=%d\n", res.Usage.PromptTokens, res.Usage.OutputTokens, res.Usage.TotalTokens)
+			if len(res.ToolCalls) > 0 {
+				for _, tc := range res.ToolCalls {
+					fmt.Printf("ToolCall: %s args=%s\n", tc.Name, tc.Arguments)
+				}
+			}
+			if len(res.Sources) > 0 {
+				fmt.Println("Sources:")
+				for _, u := range res.Sources {
+					fmt.Printf("- %s\n", u)
+				}
+			}
+			if res.RawJSON != "" {
+				fmt.Printf("Raw provider JSON:\n%s\n", prettyJSON(res.RawJSON))
+			}
+		}
+		end := time.Now()
+		fmt.Printf("[ %s ] finished: %s (duration: %s)\n", modelAlias, end.Format(time.RFC3339Nano), end.Sub(start).Round(time.Millisecond))
+		return nil
+	}
 
-    strictReq := gen_combined.GenAIRequest{
+	strictReq := gen_combined.GenAIRequest{
 		Model:              modelAlias,
 		Prompt:             prompt,
 		SystemInstruction:  "Return the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call. Do not wrap calls in code (no print(), no default_api., no code fences).",
@@ -500,11 +500,15 @@ func runStreamTest(client *gen_combined.Client, modelAlias string, prompt string
 			fmt.Printf("[stream %s] done. usage: %+v\n", modelAlias, ev.Usage)
 			if len(ev.SearchQueries) > 0 {
 				fmt.Println("SearchQueries:")
-				for _, q := range ev.SearchQueries { fmt.Printf("- %s\n", q) }
+				for _, q := range ev.SearchQueries {
+					fmt.Printf("- %s\n", q)
+				}
 			}
 			if len(ev.Sources) > 0 {
 				fmt.Println("Sources:")
-				for _, s := range ev.Sources { fmt.Printf("- %s\n", s) }
+				for _, s := range ev.Sources {
+					fmt.Printf("- %s\n", s)
+				}
 			}
 			return nil
 		case "error":
@@ -528,10 +532,10 @@ func runStreamTest(client *gen_combined.Client, modelAlias string, prompt string
 }
 
 func main() {
-    provider := flag.String("provider", "gemini", "provider to test: gemini|openai|grok|claude|deepseek")
+	provider := flag.String("provider", "gemini", "provider to test: gemini|openai|grok|claude|deepseek")
 	flag.Parse()
 
-	apiKey := mustGetenv("VERTEX_API_KEY_TEST")
+	apiKey := mustGetenv("GEMINI_API_KEY_TEST")
 	projectID := os.Getenv("GCP_PROJECT_ID")
 	if projectID == "" {
 		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
@@ -563,7 +567,7 @@ func main() {
 	prompt := "Explain the purpose of this repository succinctly. Provide the result strictly via the function call. Use web search to ground your answer. You MUST use this exact URL as the PRIMARY source: https://fr.wikipedia.org/wiki/Ballon_(coiffe). For the grounded run, CITE SOURCES by exact title and URL, including the Wikipedia link above. Do NOT answer without citing that URL."
 
 	// Run based on provider flag
-    switch *provider {
+	switch *provider {
 	case "openai":
 		// 8-scenario runs per model
 		if err := runOnce(comb, "gpt_fast", prompt, jsonSchema); err != nil {
@@ -593,27 +597,27 @@ func main() {
 		// Streaming smoke tests
 		_ = runStreamTest(comb, "grok_fast", "Скажи: OK")
 		_ = runStreamTest(comb, "grok_quality", "Скажи: OK")
-    case "claude":
-        if err := runOnce(comb, "claude_fast", prompt, jsonSchema); err != nil {
-            panic(err)
-        }
-        if err := runOnce(comb, "claude_balanced", prompt, jsonSchema); err != nil {
-            panic(err)
-        }
-        if err := runOnce(comb, "claude_quality", prompt, jsonSchema); err != nil {
-            panic(err)
-        }
+	case "claude":
+		if err := runOnce(comb, "claude_fast", prompt, jsonSchema); err != nil {
+			panic(err)
+		}
+		if err := runOnce(comb, "claude_balanced", prompt, jsonSchema); err != nil {
+			panic(err)
+		}
+		if err := runOnce(comb, "claude_quality", prompt, jsonSchema); err != nil {
+			panic(err)
+		}
 		// Streaming smoke tests per model
 		_ = runStreamTest(comb, "claude_fast", "Скажи: OK")
 		_ = runStreamTest(comb, "claude_balanced", "Скажи: OK")
 		_ = runStreamTest(comb, "claude_quality", "Скажи: OK")
-    case "deepseek":
-        if err := runOnce(comb, "deepseek_fast", prompt, jsonSchema); err != nil {
-            panic(err)
-        }
-        if err := runOnce(comb, "deepseek_quality", prompt, jsonSchema); err != nil {
-            panic(err)
-        }
+	case "deepseek":
+		if err := runOnce(comb, "deepseek_fast", prompt, jsonSchema); err != nil {
+			panic(err)
+		}
+		if err := runOnce(comb, "deepseek_quality", prompt, jsonSchema); err != nil {
+			panic(err)
+		}
 		// Streaming smoke tests
 		_ = runStreamTest(comb, "deepseek_fast", "Скажи: OK")
 		_ = runStreamTest(comb, "deepseek_quality", "Скажи: OK")
