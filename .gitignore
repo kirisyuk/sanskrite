@@ -39,6 +39,7 @@ __pycache__/
 .Python
 python/telegram_service/.telethon/
 venv/
+.venv/
 env/
 
 # IDE
