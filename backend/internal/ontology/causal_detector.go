@@ -1,0 +1,323 @@
+package ontology
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	"github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/repo"
+)
+
+// CausalDetector автоматически обнаруживает причинно-следственные связи между Events
+type CausalDetector struct {
+	eventsRepo     *repo.EventRepository
+	causalLinksRepo *repo.CausalLinkRepository
+	genaiClient    *gen_combined.Client
+	logger         *log.Logger
+}
+
+// NewCausalDetector создает новый детектор причинно-следственных связей
+func NewCausalDetector(
+	eventsRepo *repo.EventRepository,
+	causalLinksRepo *repo.CausalLinkRepository,
+	genaiClient *gen_combined.Client,
+	logger *log.Logger,
+) *CausalDetector {
+	return &CausalDetector{
+		eventsRepo:     eventsRepo,
+		causalLinksRepo: causalLinksRepo,
+		genaiClient:    genaiClient,
+		logger:         logger,
+	}
+}
+
+// DetectCausalLinksForEvent анализирует новый Event на возможные причинно-следственные связи
+func (d *CausalDetector) DetectCausalLinksForEvent(
+	ctx context.Context,
+	tenantID string,
+	newEvent *models.Event,
+) error {
+	// Получаем недавние Events (за последние 30 дней)
+	recentEvents, err := d.getRecentEvents(ctx, tenantID, 30*24*time.Hour)
+	if err != nil {
+		return fmt.Errorf("failed to get recent events: %w", err)
+	}
+
+	// Фильтруем события, которые произошли до нового события
+	var candidateEvents []*models.Event
+	for _, event := range recentEvents {
+		if event.ID == newEvent.ID {
+			continue
+		}
+		if event.OccurredAt != nil && newEvent.OccurredAt != nil {
+			if event.OccurredAt.Before(*newEvent.OccurredAt) {
+				candidateEvents = append(candidateEvents, event)
+			}
+		}
+	}
+
+	if len(candidateEvents) == 0 {
+		return nil // Нет кандидатов для анализа
+	}
+
+	// Используем LLM для анализа причинно-следственных связей
+	causalLinks, err := d.analyzeCausalLinks(ctx, newEvent, candidateEvents)
+	if err != nil {
+		return fmt.Errorf("failed to analyze causal links: %w", err)
+	}
+
+	// Создаем CausalLink объекты
+	for _, link := range causalLinks {
+		if err := d.createCausalLink(ctx, tenantID, link); err != nil {
+			if d.logger != nil {
+				d.logger.Printf("[CausalDetector] Failed to create causal link: %v", err)
+			}
+			continue
+		}
+	}
+
+	if d.logger != nil {
+		d.logger.Printf("[CausalDetector] Detected %d causal links for event %s", len(causalLinks), newEvent.ID)
+	}
+
+	return nil
+}
+
+// getRecentEvents получает недавние события
+func (d *CausalDetector) getRecentEvents(ctx context.Context, tenantID string, duration time.Duration) ([]*models.Event, error) {
+	// Получаем все события за период
+	allEvents, err := d.eventsRepo.ListByTenant(ctx, tenantID, 1000)
+	if err != nil {
+		return nil, err
+	}
+
+	cutoff := time.Now().UTC().Add(-duration)
+	var recentEvents []*models.Event
+
+	for _, event := range allEvents {
+		if event.OccurredAt != nil && event.OccurredAt.After(cutoff) {
+			recentEvents = append(recentEvents, event)
+		} else if event.CreatedAt.After(cutoff) {
+			// Если OccurredAt не указан, используем CreatedAt
+			recentEvents = append(recentEvents, event)
+		}
+	}
+
+	return recentEvents, nil
+}
+
+// CausalLinkCandidate кандидат на причинно-следственную связь
+type CausalLinkCandidate struct {
+	CauseEventID  string
+	EffectEventID string
+	Strength      float64
+	Probability   float64
+	Reasoning     string
+	Sign          models.CausalSign
+}
+
+// analyzeCausalLinks анализирует причинно-следственные связи через LLM
+func (d *CausalDetector) analyzeCausalLinks(
+	ctx context.Context,
+	effectEvent *models.Event,
+	candidateCauses []*models.Event,
+) ([]*CausalLinkCandidate, error) {
+	if len(candidateCauses) == 0 {
+		return nil, nil
+	}
+
+	// Формируем промпт для LLM
+	causesText := ""
+	for i, cause := range candidateCauses {
+		causesText += fmt.Sprintf("%d. %s (at: %s)\n", i+1, cause.Title, formatTime(cause.OccurredAt))
+	}
+
+	prompt := fmt.Sprintf(`Analyze potential causal relationships between events.
+
+EFFECT EVENT (new event):
+Title: %s
+Occurred At: %s
+Description: %s
+
+CANDIDATE CAUSE EVENTS (previous events):
+%s
+
+Task: Identify which candidate events might have caused the effect event. Return JSON with causal links array.
+
+Return JSON strictly matching this schema:
+{
+  "causalLinks": [
+    {
+      "causeEventIndex": 0,
+      "strength": 0.8,
+      "probability": 0.7,
+      "sign": "positive",
+      "reasoning": "Brief explanation of the causal relationship"
+    }
+  ]
+}`,
+		effectEvent.Title,
+		formatTime(effectEvent.OccurredAt),
+		effectEvent.Description,
+		causesText,
+	)
+
+	schema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"causalLinks": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"causeEventIndex": map[string]interface{}{"type": "integer", "minimum": 0},
+						"strength":        map[string]interface{}{"type": "number", "minimum": 0, "maximum": 1},
+						"probability":     map[string]interface{}{"type": "number", "minimum": 0, "maximum": 1},
+						"sign": map[string]interface{}{
+							"type": "string",
+							"enum": []string{"positive", "negative", "neutral"},
+						},
+						"reasoning": map[string]interface{}{"type": "string"},
+					},
+					"required": []string{"causeEventIndex", "strength", "probability", "sign", "reasoning"},
+				},
+			},
+		},
+		"required": []string{"causalLinks"},
+	}
+
+	opts := gen_combined.Options{
+		ModelOverride:     "gemini_fast",
+		GroundingEnabled:  false,
+		SystemInstruction: "You are an expert causal analyst. Identify genuine causal relationships between events. Be conservative - only identify clear, plausible causal links.",
+		Temperature:       0.3,
+		MaxOutputTokens:   2048,
+	}
+
+	resp, err := d.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	if err != nil {
+		return nil, fmt.Errorf("LLM analysis failed: %w", err)
+	}
+
+	// Парсим результат
+	var result struct {
+		CausalLinks []struct {
+			CauseEventIndex int     `json:"causeEventIndex"`
+			Strength        float64 `json:"strength"`
+			Probability     float64 `json:"probability"`
+			Sign            string  `json:"sign"`
+			Reasoning       string  `json:"reasoning"`
+		} `json:"causalLinks"`
+	}
+
+	if err := parseJSONResponse(resp.Content, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	}
+
+	// Преобразуем в CausalLinkCandidate
+	var candidates []*CausalLinkCandidate
+	for _, link := range result.CausalLinks {
+		if link.CauseEventIndex < 0 || link.CauseEventIndex >= len(candidateCauses) {
+			continue
+		}
+
+		causeEvent := candidateCauses[link.CauseEventIndex]
+
+		// Определяем CausalSign
+		var sign models.CausalSign
+		switch link.Sign {
+		case "positive":
+			sign = models.CausalSignPositive
+		case "negative":
+			sign = models.CausalSignNegative
+		default:
+			sign = models.CausalSignPositive // По умолчанию positive
+		}
+
+		candidates = append(candidates, &CausalLinkCandidate{
+			CauseEventID:  causeEvent.ID,
+			EffectEventID: effectEvent.ID,
+			Strength:      link.Strength,
+			Probability:   link.Probability,
+			Reasoning:     link.Reasoning,
+			Sign:          sign,
+		})
+	}
+
+	return candidates, nil
+}
+
+// createCausalLink создает CausalLink объект
+func (d *CausalDetector) createCausalLink(
+	ctx context.Context,
+	tenantID string,
+	candidate *CausalLinkCandidate,
+) error {
+	now := time.Now().UTC()
+
+	causalLink := &models.CausalLink{
+		BaseOntologyFields: models.BaseOntologyFields{
+			TenantID:  tenantID,
+			Version:   1,
+			CreatedAt: now,
+			UpdatedAt: now,
+			CreatedBy: "system",
+			UpdatedBy: "system",
+			Labels:    map[string]string{"en": "Causal relationship"},
+			Status:    "active",
+		},
+		CauseRef: models.CausalRef{
+			ID:   candidate.CauseEventID,
+			Kind: models.CausalRefKindEvent,
+		},
+		EffectRef: models.CausalRef{
+			ID:   candidate.EffectEventID,
+			Kind: models.CausalRefKindEvent,
+		},
+		Sign:       candidate.Sign,
+		Strength:   candidate.Strength,
+		Probability: candidate.Probability,
+		Evidence: models.CausalEvidence{
+			Method: stringPtr("LLM_Analysis"),
+		},
+		Assumptions: []string{candidate.Reasoning},
+	}
+
+	_, err := d.causalLinksRepo.Create(ctx, causalLink)
+	if err != nil {
+		return fmt.Errorf("failed to create causal link: %w", err)
+	}
+
+	return nil
+}
+
+func formatTime(t *time.Time) string {
+	if t == nil {
+		return "Unknown"
+	}
+	return t.Format(time.RFC3339)
+}
+
+func parseJSONResponse(content string, result interface{}) error {
+	// Убираем markdown code fences если есть
+	content = removeMarkdownFences(content)
+	return json.Unmarshal([]byte(content), result)
+}
+
+func removeMarkdownFences(content string) string {
+	// Убираем ```json и ``` если есть
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	return strings.TrimSpace(content)
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
+

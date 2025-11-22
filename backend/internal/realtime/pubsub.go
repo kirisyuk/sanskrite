@@ -39,6 +39,8 @@ const (
 	// Interaction events (created/updated via tools)
 	EventInteractionCreated EventType = "interaction.created"
 	EventInteractionUpdated EventType = "interaction.updated"
+	// Chat ontology processing (async extraction from chat messages)
+	EventChatOntologyProcess EventType = "chat.ontology.process"
 	// Verified URL analysis streaming: all events go to a single topic for ordering
 	EventVerifiedStream EventType = "verified.stream"
 )
@@ -240,7 +242,7 @@ func routeTopicName(et EventType) string {
 		return TopicDiscoveryEvents
 	case strings.HasPrefix(string(et), "artifact.") || et == EventDocProcess:
 		return TopicArtifactEvents
-	case strings.HasPrefix(string(et), "interaction.") || et == EventAgentUpdate:
+	case strings.HasPrefix(string(et), "interaction.") || et == EventAgentUpdate || et == EventChatOntologyProcess:
 		return TopicInteractionEvents
 	case et == EventAnalysisStatus:
 		return TopicAnalysisEvents

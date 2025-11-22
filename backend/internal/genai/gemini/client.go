@@ -867,12 +867,17 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 			if evt.Type == "" && len(evt.ToolCalls) > 0 {
 				evt.Type = "tool_call"
 			}
-			if evt.Type == "" {
+			// Only send chunk event if there's actual text content or tool calls
+			// Don't send empty chunks when only grounding metadata is present
+			if evt.Type == "" && evt.Text != "" {
 				evt.Type = "chunk"
 			}
+			// Only emit event if it has a type and (text content or tool calls)
+			if evt.Type != "" && (evt.Text != "" || len(evt.ToolCalls) > 0) {
 			if onEvent != nil {
 				if err := onEvent(evt); err != nil {
 					_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+					}
 				}
 			}
 			if u, ok := root["usageMetadata"].(map[string]interface{}); ok {

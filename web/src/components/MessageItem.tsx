@@ -56,10 +56,44 @@ export const MessageItem = React.memo<MessageItemProps>(({
     [isUser, genaiChat.streaming, m.content]
   );
   
-  const isAssistantError = useMemo(
-    () => !isUser && !genaiChat.streaming && !m.content && !!genaiChat.error,
-    [isUser, genaiChat.streaming, m.content, genaiChat.error]
-  );
+  // Check if this message is an error by checking interaction subkind or genaiChat.error
+  const isAssistantError = useMemo(() => {
+    if (isUser || genaiChat.streaming) return false;
+    
+    // Check if there's an error interaction for this message
+    try {
+      const store = useGenaiChatStore.getState();
+      const inter = store.interactions.find(
+        (it) =>
+          it.kind === 'assistant' &&
+          ((it as any).originalMessageId === m.id || it.id === m.id) &&
+          it.subkind === 'error'
+      );
+      if (inter) return true;
+    } catch {}
+    
+    // Fallback: check genaiChat.error if message has no content
+    return (!m.content || m.content.trim().length === 0) && !!genaiChat.error;
+  }, [isUser, genaiChat.streaming, m.content, m.id, genaiChat.error]);
+  
+  const errorMessage = useMemo(() => {
+    if (!isAssistantError) return null;
+    
+    // Try to get error message from interaction
+    try {
+      const store = useGenaiChatStore.getState();
+      const inter = store.interactions.find(
+        (it) =>
+          it.kind === 'assistant' &&
+          ((it as any).originalMessageId === m.id || it.id === m.id) &&
+          it.subkind === 'error'
+      );
+      if (inter && inter.content) return inter.content;
+    } catch {}
+    
+    // Fallback to genaiChat.error
+    return genaiChat.error || null;
+  }, [isAssistantError, m.id, genaiChat.error]);
 
   // Получаем contentSanitized для assistant сообщений
   const assistantContent = useMemo(() => {
@@ -161,6 +195,7 @@ export const MessageItem = React.memo<MessageItemProps>(({
       thinkingSeconds={genaiThinkingSeconds}
       averageTimingSeconds={averageTimingSeconds}
       isError={isAssistantError}
+      errorMessage={errorMessage}
       headerText={headerText}
       leftAccent={leftAccent}
       footer={footer}

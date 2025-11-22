@@ -23,9 +23,15 @@ export const ModalWithHeader: React.FC<ModalWithHeaderProps> = ({
 
   return (
     <div
-      className={`w-full px-6 mt-2 mb-2 ${className}`}
-      style={{ maxWidth: '100%' }}
+      className={`w-full h-full flex flex-col ${className}`}
+      style={{ 
+        maxWidth: '100%',
+        maxHeight: '100%',
+        overflow: 'hidden',
+      }}
     >
+      {/* Fixed header */}
+      <div className="px-6 pt-2 pb-2 flex-shrink-0">
       <div className="mb-2 flex items-center">
         <button
           onClick={onClose}
@@ -65,7 +71,17 @@ export const ModalWithHeader: React.FC<ModalWithHeaderProps> = ({
           {title}
         </div>
       </div>
+      </div>
+      {/* Scrollable content */}
+      <div
+        className="flex-1 px-6 pb-2 overflow-y-auto"
+        style={{ 
+          scrollbarGutter: 'stable',
+          minHeight: 0,
+        }}
+      >
       {children}
+      </div>
     </div>
   );
 };

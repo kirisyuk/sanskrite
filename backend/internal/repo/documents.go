@@ -13,10 +13,11 @@ import (
 )
 
 type DocumentsRepository struct {
-	col         *firestore.CollectionRef
-	storage     *gcp.GCSClient
-	bucket      string
-	useGCS      bool
+	col              *firestore.CollectionRef
+	storage          *gcp.GCSClient
+	bucket           string
+	useGCS           bool
+	vertexSearchSync func(ctx context.Context, tenantID string) // Опциональная функция синхронизации с Vertex AI Search
 }
 
 func NewDocumentsRepository(db *firestore.Client) *DocumentsRepository {
@@ -28,6 +29,13 @@ func (r *DocumentsRepository) WithStorage(storage *gcp.GCSClient, bucket string)
 	r.storage = storage
 	r.bucket = bucket
 	r.useGCS = storage != nil && bucket != ""
+	return r
+}
+
+// WithVertexSearchSync настраивает автоматическую синхронизацию с Vertex AI Search
+// syncFn будет вызвана асинхронно после успешной загрузки документа в GCS
+func (r *DocumentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, tenantID string)) *DocumentsRepository {
+	r.vertexSearchSync = syncFn
 	return r
 }
 
@@ -43,6 +51,8 @@ func (r *DocumentsRepository) getStoragePath(d *models.Document) string {
 }
 
 // uploadContent uploads document content to GCS and returns the storage path
+// Если файл уже существует, он будет перезаписан (GCS UploadBytes перезаписывает по умолчанию)
+// Это означает, что обновления документов автоматически синхронизируются с Vertex AI Search
 func (r *DocumentsRepository) uploadContent(ctx context.Context, d *models.Document) (*string, error) {
 	if !r.useGCS || d.FullText == "" {
 		return nil, nil
@@ -105,6 +115,15 @@ func (r *DocumentsRepository) Upsert(ctx context.Context, d *models.Document) er
 		}
 		if storagePath != nil {
 			d.StoragePath = storagePath
+			// Триггерим синхронизацию с Vertex AI Search асинхронно (не блокируем основной поток)
+			if r.vertexSearchSync != nil {
+				go func(tenantID string) {
+					// Используем background context с таймаутом
+					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					r.vertexSearchSync(syncCtx, tenantID)
+				}(d.TenantID)
+			}
 		}
 	}
 	
@@ -131,6 +150,15 @@ func (r *DocumentsRepository) Create(ctx context.Context, d *models.Document) (s
 		}
 		if storagePath != nil {
 			d.StoragePath = storagePath
+			// Триггерим синхронизацию с Vertex AI Search асинхронно (не блокируем основной поток)
+			if r.vertexSearchSync != nil {
+				go func(tenantID string) {
+					// Используем background context с таймаутом
+					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					r.vertexSearchSync(syncCtx, tenantID)
+				}(d.TenantID)
+			}
 		}
 	}
 	
@@ -319,10 +347,18 @@ func (r *DocumentsRepository) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrInvalidDocument
 	}
-	// Get document first to delete content from GCS
+	// Get document first to delete content from GCS and trigger sync
 	doc, err := r.GetByID(ctx, id)
 	if err == nil && doc != nil {
 		_ = r.deleteContent(ctx, doc) // Best effort deletion
+		// Триггерим синхронизацию после удаления (чтобы удалить из Vertex AI Search)
+		if r.vertexSearchSync != nil {
+			go func(tenantID string) {
+				syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				r.vertexSearchSync(syncCtx, tenantID)
+			}(doc.TenantID)
+		}
 	}
 	_, err = r.col.Doc(id).Delete(ctx)
 	return err
@@ -334,6 +370,14 @@ func (r *DocumentsRepository) DeleteWithStorage(ctx context.Context, d *models.D
 		return ErrInvalidDocument
 	}
 	_ = r.deleteContent(ctx, d) // Best effort deletion
+	// Триггерим синхронизацию после удаления (чтобы удалить из Vertex AI Search)
+	if r.vertexSearchSync != nil {
+		go func(tenantID string) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			r.vertexSearchSync(syncCtx, tenantID)
+		}(d.TenantID)
+	}
 	_, err := r.col.Doc(d.ID).Delete(ctx)
 	return err
 }

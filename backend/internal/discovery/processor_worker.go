@@ -13,6 +13,7 @@ import (
 	"cloud.google.com/go/pubsub"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/prompts"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -24,6 +25,7 @@ type DocumentProcessor struct {
 	logger   *log.Logger
 	exec     *ai.AITaskExecutor
 	rules    *repo.RulesRepository
+	extractor *ontology.OntologyExtractor
 }
 
 func ensureSubscription(ps *pubsub.Client, topicName, subID string, logger *log.Logger) (*pubsub.Subscription, error) {
@@ -49,9 +51,9 @@ func ensureSubscription(ps *pubsub.Client, topicName, subID string, logger *log.
 	return created, nil
 }
 
-func NewDocumentProcessor(ps *pubsub.Client, topicName string, docs *repo.DocumentsRepository, rules *repo.RulesRepository, exec *ai.AITaskExecutor, logger *log.Logger) *DocumentProcessor {
+func NewDocumentProcessor(ps *pubsub.Client, topicName string, docs *repo.DocumentsRepository, rules *repo.RulesRepository, exec *ai.AITaskExecutor, extractor *ontology.OntologyExtractor, logger *log.Logger) *DocumentProcessor {
 	sub, _ := ensureSubscription(ps, topicName, topicName+".worker", logger)
-	return &DocumentProcessor{sub: sub, docsRepo: docs, rules: rules, exec: exec, logger: logger}
+	return &DocumentProcessor{sub: sub, docsRepo: docs, rules: rules, exec: exec, extractor: extractor, logger: logger}
 }
 
 func (w *DocumentProcessor) Start(ctx context.Context) error {
@@ -241,41 +243,56 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 							topics = append(topics, map[string]any{"name": t.Name, "share": clamp01(t.Share)})
 						}
 						d.Attrs["topics"] = topics
-						// entities
-						var ents []map[string]any
-						for _, e := range ex.Entities {
-							ents = append(ents, map[string]any{"type": strings.ToLower(e.Type), "value": e.Value, "confidence": clamp01(e.Confidence)})
-						}
-						d.Attrs["entities"] = ents
-						// outlinks
+						// outlinks (оставляем для UI)
 						var outs []map[string]any
 						for _, o := range ex.Outlinks {
 							outs = append(outs, map[string]any{"url": o.URL, "kind": strings.ToLower(o.Kind)})
 						}
 						d.Attrs["outlinks"] = outs
-						// events
-						var evs []map[string]any
+
+						// Извлекаем онтологические объекты через OntologyExtractor
+						if w.extractor != nil {
+							extraction := &ontology.DocumentExtraction{
+								Entities: make([]ontology.ExtractedEntity, 0, len(ex.Entities)),
+								Events:   make([]ontology.ExtractedEvent, 0, len(ex.Events)),
+								Claims:   make([]ontology.ExtractedClaim, 0, len(ex.Claims)),
+							}
+
+							// Преобразуем entities
+							for _, e := range ex.Entities {
+								extraction.Entities = append(extraction.Entities, ontology.ExtractedEntity{
+									Type:       e.Type,
+									Value:      e.Value,
+									Confidence: clamp01(e.Confidence),
+								})
+							}
+
+							// Преобразуем events
 						for _, ev := range ex.Events {
-							m := map[string]any{"title": ev.Title, "dateISO": ev.DateISO}
-							if ev.Context != nil && strings.TrimSpace(*ev.Context) != "" {
-								m["context"] = *ev.Context
-							}
-							evs = append(evs, m)
+								extraction.Events = append(extraction.Events, ontology.ExtractedEvent{
+									Title:   ev.Title,
+									DateISO: ev.DateISO,
+									Context: ev.Context,
+								})
 						}
-						d.Attrs["events"] = evs
-						// claims
-						var cls []map[string]any
+
+							// Преобразуем claims
 						for _, c := range ex.Claims {
-							m := map[string]any{"text": c.Text, "confidence": clamp01(c.Confidence)}
-							if c.Summary != nil && strings.TrimSpace(*c.Summary) != "" {
-								m["summary"] = *c.Summary
+								extraction.Claims = append(extraction.Claims, ontology.ExtractedClaim{
+									Text:         c.Text,
+									Summary:      c.Summary,
+									Confidence:   clamp01(c.Confidence),
+									EvidenceURLs: c.EvidenceURLs,
+								})
 							}
-							if len(c.EvidenceURLs) > 0 {
-								m["evidenceUrls"] = c.EvidenceURLs
+
+							// Извлекаем в онтологическую модель
+							if err := w.extractor.ExtractFromDocument(ctx, payload.TenantID, d, extraction); err != nil {
+								if w.logger != nil {
+									w.logger.Printf("doc processor: failed to extract ontology: %v", err)
+								}
 							}
-							cls = append(cls, m)
 						}
-						d.Attrs["claims"] = cls
 					}
 				}
 			}

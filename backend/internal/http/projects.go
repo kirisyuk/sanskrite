@@ -44,6 +44,8 @@ type ProjectsHandler struct {
 	docsRepo   *repo.DocumentsRepository
 	chunksRepo *repo.ChunksRepository
 	emb        ai.EmbeddingProvider
+	// Vertex AI Search client for checking document indexing status
+	vertexSearchClient *ai.VertexAISearchClient
 }
 
 // NewProjectsHandler creates a new ProjectsHandler
@@ -105,6 +107,12 @@ func (h *ProjectsHandler) WithRAG(docs *repo.DocumentsRepository, chunks *repo.C
 	h.docsRepo = docs
 	h.chunksRepo = chunks
 	h.emb = emb
+	return h
+}
+
+// WithVertexSearch wires Vertex AI Search client for checking document indexing status
+func (h *ProjectsHandler) WithVertexSearch(client *ai.VertexAISearchClient) *ProjectsHandler {
+	h.vertexSearchClient = client
 	return h
 }
 
@@ -907,6 +915,61 @@ func (h *ProjectsHandler) ParseProjectDoc(w http.ResponseWriter, r *http.Request
 		return
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{"id": cd.ID, "status": "parsed"})
+}
+
+// CheckDocumentIndexStatus handles GET /api/v1/projects/{id}/docs/{docId}/index-status
+// Checks if document is indexed in Vertex AI Search
+func (h *ProjectsHandler) CheckDocumentIndexStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	if h.coreDocs == nil {
+		WriteInternalError(w, "Core docs repository is not configured")
+		return
+	}
+	if h.vertexSearchClient == nil || !h.vertexSearchClient.IsConfigured() {
+		// If Vertex Search is not configured, return not indexed
+		WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "vertex_search_not_configured"})
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// /api/v1/projects/{id}/docs/{docId}/index-status
+	if len(parts) < 7 {
+		WriteBadRequest(w, "INVALID_PATH", "Project and document ID are required")
+		return
+	}
+	projectID, docID := parts[3], parts[5]
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	// Get the document
+	cd, err := h.coreDocs.Get(r.Context(), docID)
+	if err != nil || cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
+		WriteNotFound(w, "Document not found")
+		return
+	}
+	// Check if document has storagePath (required for indexing)
+	if cd.StoragePath == nil || *cd.StoragePath == "" {
+		WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "no_storage_path"})
+		return
+	}
+	// Check indexing status via Vertex AI Search
+	indexed, err := h.vertexSearchClient.CheckDocumentStatus(r.Context(), *cd.StoragePath, authInfo.TenantID)
+	if err != nil {
+		h.logger.Printf("Failed to check document index status: %v", err)
+		WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "check_failed", "error": err.Error()})
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"indexed": indexed})
 }
 
 // DownloadProjectDoc handles GET /api/v1/projects/{id}/docs/{docId}/download

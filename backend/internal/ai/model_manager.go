@@ -403,6 +403,28 @@ func (mm *AIModelManager) initializeModels() {
 		ToolUseProtocol:               ToolUseProtocolGemini,
 	}
 
+	mm.models["gemini-3-pro-preview"] = AIModelCapabilities{
+		Name:                          "gemini-3-pro-preview",
+		ContextWindow:                 2000000, // Supports up to 2M tokens
+		OutputTokens:                  2000000,
+		PricePerInputToken:            0.00000200, // $2.00 / 1M (up to 200K), $4.00 / 1M (above 200K)
+		PricePerOutputToken:           0.00001200, // $12.00 / 1M (up to 200K), $18.00 / 1M (above 200K)
+		Provider:                      AIProviderGemini,
+		MaxTokensPerMinute:            4000000,
+		MaxTokensPerDay:               10000000,
+		NearlyRealTime:                false,
+		CapabilityScore:               9, // Higher than 2.5-pro as it's newer
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       true,
+		BuiltInSearchCapability:       false,
+		SearchGroundingCapability:     true,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolGemini,
+	}
+
 	// ------------------------- DeepSeek (без нативного Search) -------------------------
 	mm.models["deepseek-chat"] = AIModelCapabilities{
 		Name:                          "deepseek-chat",
@@ -821,6 +843,23 @@ func (mm *AIModelManager) calculateGeminiCost(modelName string, inputTokens int,
 
 	// Check more specific models first (flash-lite before flash, pro before other)
 	switch {
+	case strings.Contains(modelName, "gemini-3-pro"):
+		// Gemini 3 Pro Preview: tier threshold is 200K (not 128K)
+		// Up to 200K: $2.00 / 1M input, $12.00 / 1M output
+		// Above 200K: $4.00 / 1M input, $18.00 / 1M output
+		const gemini3TierThreshold = 200000 // 200K tokens threshold for Gemini 3 Pro
+		var inputCost, outputCost float64
+		if inputTokens <= gemini3TierThreshold {
+			inputCost = float64(inputTokens) * 0.00000200 // $2.00 / 1M
+		} else {
+			inputCost = float64(gemini3TierThreshold)*0.00000200 + float64(inputTokens-gemini3TierThreshold)*0.00000400
+		}
+		if outputTokens <= gemini3TierThreshold {
+			outputCost = float64(outputTokens) * 0.00001200 // $12.00 / 1M
+		} else {
+			outputCost = float64(gemini3TierThreshold)*0.00001200 + float64(outputTokens-gemini3TierThreshold)*0.00001800
+		}
+		return inputCost + outputCost, nil
 	case strings.Contains(modelName, "gemini-2.5-flash-lite"):
 		// Most specific: flash-lite (cheapest)
 		inputPriceTier1 = 0.00000010   // $0.10 / 1M (from model_manager.go)

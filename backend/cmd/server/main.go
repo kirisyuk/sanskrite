@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -28,6 +29,9 @@ import (
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
+	"github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/domain"
+	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
 )
 
 type server struct {
@@ -87,19 +91,19 @@ func main() {
 	s.dsrcs = repo.NewDataSourcesRepository(fsClient.Client())
 	s.sprofs = repo.NewSourceProfilesRepository(fsClient.Client())
 	// Ontology repositories
-	_ = repo.NewEntityRepository(fsClient.Client())
-	_ = repo.NewEventRepository(fsClient.Client())
-	_ = repo.NewRelationRepository(fsClient.Client())
-	_ = repo.NewClaimRepository(fsClient.Client())
-	_ = repo.NewConceptRepository(fsClient.Client())
-	_ = repo.NewMetricStateRepository(fsClient.Client())
-	_ = repo.NewTrendRepository(fsClient.Client())
-	_ = repo.NewCausalLinkRepository(fsClient.Client())
+	entitiesRepo := repo.NewEntityRepository(fsClient.Client())
+	eventsRepo := repo.NewEventRepository(fsClient.Client())
+	relationsRepo := repo.NewRelationRepository(fsClient.Client())
+	claimsRepo := repo.NewClaimRepository(fsClient.Client())
+	conceptsRepo := repo.NewConceptRepository(fsClient.Client())
+	metricStateRepo := repo.NewMetricStateRepository(fsClient.Client())
+	trendRepo := repo.NewTrendRepository(fsClient.Client())
+	causalLinksRepo := repo.NewCausalLinkRepository(fsClient.Client())
 	_ = repo.NewScenarioRepository(fsClient.Client())
 	_ = repo.NewActionableItemRepository(fsClient.Client())
-	_ = repo.NewSourceRepository(fsClient.Client())
-	_ = repo.NewTrustRepository(fsClient.Client())
-	_ = repo.NewUncertaintyModelRepository(fsClient.Client())
+	sourcesRepo := repo.NewSourceRepository(fsClient.Client())
+	trustRepo := repo.NewTrustRepository(fsClient.Client())
+	uncertaintyRepo := repo.NewUncertaintyModelRepository(fsClient.Client())
 	// RAG repos
 	ragDocsBucket := getEnv("RAG_DOCUMENTS_BUCKET", "")
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
@@ -248,6 +252,73 @@ func main() {
 			logger.Printf("Wikidata client disabled: initialization failed")
 		}
 
+		// Initialize Ontology tools
+		genaiHandler = genaiHandler.WithOntologyTools(
+			entitiesRepo,
+			eventsRepo,
+			claimsRepo,
+			relationsRepo,
+			trendRepo,
+			causalLinksRepo,
+			metricStateRepo,
+			uncertaintyRepo,
+			sourcesRepo,
+			trustRepo,
+			conceptsRepo,
+		)
+		logger.Printf("Ontology tools enabled")
+
+		// ============================================================================
+		// Ontology System Initialization
+		// ============================================================================
+
+		// EntityResolver для разрешения дубликатов entities
+		entityResolver := ontology.NewEntityResolver(entitiesRepo, emb, genaiClient, logger)
+
+		// TrustIntegrator для интеграции Source Trust
+		trustIntegrator := ontology.NewTrustIntegrator(sourcesRepo, claimsRepo, eventsRepo, trustRepo, logger)
+
+		// ConflictDetector для обнаружения конфликтов
+		conflictDetector := ontology.NewConflictDetector(claimsRepo, uncertaintyRepo, trustIntegrator, logger)
+
+		// CausalDetector для обнаружения причинно-следственных связей
+		causalDetector := ontology.NewCausalDetector(eventsRepo, causalLinksRepo, genaiClient, logger)
+
+		// DomainService для работы с доменами
+		domainService := domain.NewDomainService(conceptsRepo, relationsRepo, genaiClient, logger)
+
+		// EntityEnricher для обогащения из Wikidata
+		var entityEnricher *ontology.EntityEnricher
+		if wikidataClient != nil {
+			wikidataAdapter := wikidata.NewAdapter(wikidataClient)
+			entityEnricher = ontology.NewEntityEnricher(entitiesRepo, wikidataAdapter, logger)
+		}
+
+		// OntologyExtractor - главный компонент для извлечения онтологических объектов
+		ontologyExtractor := ontology.NewOntologyExtractor(
+			entitiesRepo,
+			eventsRepo,
+			claimsRepo,
+			relationsRepo,
+			sourcesRepo,
+			entityResolver,
+			entityEnricher,
+			trustIntegrator,
+			conflictDetector,
+			causalDetector,
+			domainService,
+			logger,
+		)
+
+		// Инициализация стандартной иерархии доменов для "system" tenant
+		go func() {
+			if err := domainService.InitializeHierarchy(context.Background(), "system"); err != nil {
+				logger.Printf("WARNING: Failed to initialize domain hierarchy: %v", err)
+			} else {
+				logger.Printf("Domain hierarchy initialized for system tenant")
+			}
+		}()
+
 		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo).WithFirestoreClient(fsClient.Client())
 
 		// Initialize Vertex AI Search client if configured
@@ -257,10 +328,31 @@ func main() {
 		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "global")
 		vertexSearchDataStoreID := getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")
 		vertexSearchAPIKey := getEnv("GEMINI_API_KEY", "")
+		var vertexSearchClient *ai.VertexAISearchClient
 		if vertexSearchDataStoreID != "" && vertexSearchAPIKey != "" {
-			vertexSearchClient := ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, vertexSearchAPIKey)
+			vertexSearchClient = ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, vertexSearchAPIKey)
 			s.discoveryHandler = s.discoveryHandler.WithVertexSearch(vertexSearchClient)
 			logger.Printf("Vertex AI Search enabled: project=%s, location=%s, dataStore=%s", vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID)
+
+			// Настраиваем автоматическую синхронизацию документов с Vertex AI Search
+			// После загрузки документа в GCS автоматически триггерим импорт
+			if ragDocsBucket != "" {
+				docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) {
+					// Импортируем документы конкретного tenant (incremental sync)
+					gcsPath := fmt.Sprintf("gs://%s/%s/**", ragDocsBucket, tenantID)
+					importReq := &ai.ImportDocumentsRequest{
+						GCSPath:            gcsPath,
+						ReconciliationMode: "INCREMENTAL",
+					}
+					operationName, err := vertexSearchClient.ImportDocuments(ctx, importReq)
+					if err != nil {
+						logger.Printf("[VertexAISearch] Failed to trigger sync for tenant %s: %v", tenantID, err)
+					} else {
+						logger.Printf("[VertexAISearch] Sync triggered for tenant %s: operation=%s", tenantID, operationName)
+					}
+				})
+				logger.Printf("Vertex AI Search auto-sync enabled: documents will sync automatically after GCS upload")
+			}
 		} else {
 			logger.Printf("Vertex AI Search disabled: VERTEX_SEARCH_DATA_STORE_ID or GEMINI_API_KEY not set")
 		}
@@ -268,7 +360,8 @@ func main() {
 		// Start document processor worker (background)
 		if pub != nil {
 			psClient := pub.Client()
-			worker := discovery.NewDocumentProcessor(psClient, string(realtime.EventDocProcess), docsRepo, rulesRepo, exec, logger)
+			// Передаем OntologyExtractor в DocumentProcessor
+			worker := discovery.NewDocumentProcessor(psClient, string(realtime.EventDocProcess), docsRepo, rulesRepo, exec, ontologyExtractor, logger)
 			go func() {
 				ctxW, cancelW := context.WithCancel(ctx)
 				defer cancelW()
@@ -325,6 +418,36 @@ func main() {
 						}
 					}
 				}()
+			}
+
+			// ChatOntologyProcessor для асинхронной обработки чата
+			if interactionsRepo != nil {
+				chatOntologyProcessor := ontology.NewChatOntologyProcessor(ontologyExtractor, genaiClient, interactionsRepo, logger)
+				// Создаем подписку на chat.ontology.process события
+				chatTopic := psClient.Topic(string(realtime.TopicInteractionEvents))
+				chatSubID := "chat.ontology.process.worker"
+				chatSub := psClient.Subscription(chatSubID)
+				chatSubExists, _ := chatSub.Exists(ctx)
+				if !chatSubExists {
+					if chatTopicExists, _ := chatTopic.Exists(ctx); chatTopicExists {
+						if createdSub, err := psClient.CreateSubscription(ctx, chatSubID, pubsub.SubscriptionConfig{
+							Topic: chatTopic,
+						}); err == nil {
+							chatSub = createdSub
+							logger.Printf("Created subscription %s for chat ontology processing", chatSubID)
+						}
+					}
+				}
+				if chatSubExists || chatSub != nil {
+					go func() {
+						ctxChat, cancelChat := context.WithCancel(ctx)
+						defer cancelChat()
+						if err := chatOntologyProcessor.Start(ctxChat, chatSub); err != nil {
+							logger.Printf("chat ontology processor stopped: %v", err)
+						}
+					}()
+					logger.Printf("Chat ontology processor started")
+				}
 			}
 
 			// Wire HTTP handler to allow Cloud Scheduler HTTP trigger
@@ -391,6 +514,10 @@ func main() {
 		// Wire RAG dependencies for CoreDoc indexing
 		if emb != nil {
 			s.projectsHandler = s.projectsHandler.WithRAG(docsRepo, chunksRepo, emb)
+		}
+		// Wire Vertex Search client if configured
+		if vertexSearchClient != nil {
+			s.projectsHandler = s.projectsHandler.WithVertexSearch(vertexSearchClient)
 		}
 		// Wire cascade repos to projects handler
 		s.projectsHandler = s.projectsHandler.WithCascade(s.sprofs, interactions)
@@ -676,6 +803,10 @@ func main() {
 		}
 		if strings.HasSuffix(r.URL.Path, "/download") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodGet {
 			s.projectsHandler.DownloadProjectDoc(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/index-status") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodGet {
+			s.projectsHandler.CheckDocumentIndexStatus(w, r)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/export") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodPost {

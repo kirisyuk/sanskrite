@@ -98,7 +98,7 @@ export interface Interaction {
   // Research-specific fields
   researchQuery?: string;
   researchProgress?: {
-    stage: 'planning' | 'searching' | 'generating';
+    stage: 'planning' | 'searching' | 'generating' | 'balancing' | 'synthesizing';
     status: 'in_progress' | 'completed';
     subQueries?: string[];
     sourcesCount?: number;
@@ -116,7 +116,7 @@ export interface ResearchProgressInteraction extends Interaction {
   subkind: 'research.progress';
   researchQuery: string;
   researchProgress: {
-    stage: 'planning' | 'searching' | 'generating';
+    stage: 'planning' | 'searching' | 'generating' | 'balancing' | 'synthesizing';
     status: 'in_progress' | 'completed';
     subQueries?: string[];
     sourcesCount?: number;

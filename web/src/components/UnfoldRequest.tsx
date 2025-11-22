@@ -1083,6 +1083,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               <option value="fast">{t('unfold.request.strengthFast')}</option>
               <option value="balanced" disabled={settings.provider === 'deepseek'}>{t('unfold.request.strengthBalanced')}</option>
               <option value="quality">{t('unfold.request.strengthQuality')}</option>
+              {settings.provider === 'gemini' && <option value="preview">{t('unfold.request.strengthPreview')}</option>}
             </select>
             {/* Web search toggle (synced with modal) */}
             <button
@@ -1287,6 +1288,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                         <option value="fast">{t('unfold.request.strengthFast')}</option>
                         <option value="balanced">{t('unfold.request.strengthBalanced')}</option>
                         <option value="quality">{t('unfold.request.strengthQuality')}</option>
+                        {settings.provider === 'gemini' && <option value="preview">{t('unfold.request.strengthPreview')}</option>}
                       </select>
                     </div>
                   </div>

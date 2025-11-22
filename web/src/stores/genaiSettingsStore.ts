@@ -1,13 +1,14 @@
 import { create } from 'zustand';
 
 export type GenAIProvider = 'gemini' | 'openai' | 'grok' | 'claude' | 'deepseek';
-export type GenAIStrength = 'fast' | 'balanced' | 'quality';
+export type GenAIStrength = 'fast' | 'balanced' | 'quality' | 'preview';
 
 // Backward-compat alias type (kept for minimal refactor use sites)
 export type GenAIModel =
   | 'gemini_quality' // gemini-2.5-pro
   | 'gemini_fast'    // gemini-2.5-flash-lite
   | 'gemini_balanced'// gemini-2.5-flash
+  | 'gemini_preview' // gemini-3-pro-preview
   | 'gpt_quality'    // gpt-5.1
   | 'gpt_balanced'   // gpt-5-mini
   | 'gpt_fast'       // gpt-5-nano
@@ -38,6 +39,7 @@ export function mapProviderStrengthToModel(provider: GenAIProvider, strength: Ge
     case 'gemini':
       if (strength === 'fast') return 'gemini_fast';
       if (strength === 'balanced') return 'gemini_balanced';
+      if (strength === 'preview') return 'gemini_preview';
       return 'gemini_quality';
     case 'openai':
       if (strength === 'fast') return 'gpt_fast';
@@ -66,6 +68,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<GenAIModel, number> = {
   'gemini_fast': 1_000_000,      // gemini-2.5-flash-lite
   'gemini_balanced': 1_000_000,  // gemini-2.5-flash
   'gemini_quality': 2_000_000,   // gemini-2.5-pro
+  'gemini_preview': 2_000_000,   // gemini-3-pro-preview
   
   // OpenAI models
   'gpt_fast': 400_000,           // gpt-5-nano

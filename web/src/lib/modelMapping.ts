@@ -9,6 +9,7 @@ export function mapAliasToModel(alias: string): { provider: string; model: strin
     'gemini_fast': { provider: 'gemini', model: 'gemini-2.5-flash-lite' },
     'gemini_balanced': { provider: 'gemini', model: 'gemini-2.5-flash' },
     'gemini_quality': { provider: 'gemini', model: 'gemini-2.5-pro' },
+    'gemini_preview': { provider: 'gemini', model: 'gemini-3-pro-preview' },
     
     // OpenAI models
     'gpt_fast': { provider: 'openai', model: 'gpt-5-nano' },

@@ -126,6 +126,7 @@ import { ThinkingPlaceholder } from '../components/ThinkingPlaceholder';
 import { SettingsModal } from '../components/SettingsModal';
 import { AccountModal } from '../components/AccountModal';
 import { AdminModal } from '../components/AdminModal';
+import { WorkspaceCanvas } from '../components/WorkspaceCanvas';
 import { TelegramAddModal } from '../components/TelegramAddModal';
 import { ChatMessagesList } from '../components/ChatMessagesList';
 import { RightDrawer } from '../components/RightDrawer';
@@ -244,12 +245,14 @@ const DiscoveryPage: React.FC = () => {
     showSettings,
     showAccount,
     showAdmin,
+    showWorkspace,
     staticPage,
     setStaticPage,
     isAdmin,
     openSettings,
     openAccount,
     openAdmin,
+    openWorkspace,
     closeAllModals,
   } = modals;
   
@@ -1230,6 +1233,7 @@ const DiscoveryPage: React.FC = () => {
           resetChatStateWithCleanup();
           setLeftPanel(null);
         }}
+        onShowWorkspace={openWorkspace}
         onShowSettings={openSettings}
         onShowAccount={openAccount}
         onShowAdmin={openAdmin}
@@ -1316,6 +1320,8 @@ const DiscoveryPage: React.FC = () => {
           style={{ 
             position: 'relative', 
               flex: 1,
+            height: '100%',
+            overflow: 'hidden',
           }}
         >
         {showAccount ? (
@@ -1327,6 +1333,12 @@ const DiscoveryPage: React.FC = () => {
           <SettingsModal
             isOpen={showSettings}
             onClose={closeAllModals}
+          />
+        ) : showWorkspace ? (
+          <WorkspaceCanvas
+            isOpen={showWorkspace}
+            onClose={closeAllModals}
+            onOpenDocument={setActiveDoc}
           />
         ) : showAdmin ? (
           <AdminModal

@@ -196,7 +196,12 @@ func (c *WikidataClient) searchEntities(ctx context.Context, searchQuery string,
 	return results, nil
 }
 
-// getEntityData retrieves full entity data from Wikidata Entity API
+// GetEntityData retrieves full entity data from Wikidata Entity API (public method)
+func (c *WikidataClient) GetEntityData(ctx context.Context, qID string) (*WikidataEntityData, error) {
+	return c.getEntityData(ctx, qID)
+}
+
+// getEntityData retrieves full entity data from Wikidata Entity API (internal)
 func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*WikidataEntityData, error) {
 	entityURL := fmt.Sprintf("https://www.wikidata.org/wiki/Special:EntityData/%s.json", qID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, entityURL, nil)

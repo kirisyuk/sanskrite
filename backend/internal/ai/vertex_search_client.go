@@ -14,15 +14,17 @@ import (
 // VertexAISearchClient клиент для работы с Vertex AI Search API
 // Использует REST API для поиска по документам, индексированным из GCS
 //
-// Синхронизация данных:
+// Автоматическая синхронизация:
 // - Документы автоматически сохраняются в GCS при создании/обновлении через DocumentsRepository
-// - Vertex AI Search синхронизирует данные из GCS с настраиваемой частотой:
-//   * Ежедневно
-//   * Каждые 3 дня
-//   * Каждые 5 дней
-// - Первая синхронизация происходит ~1 час после создания Data Store
-// - Частота синхронизации настраивается при создании Data Store в консоли
-// - Дополнительная настройка синхронизации в коде не требуется
+// - После загрузки в GCS бэкенд автоматически триггерит импорт в Vertex AI Search
+// - Импорт выполняется асинхронно (не блокирует основной поток)
+// - Документы становятся доступны для поиска в течение 1-2 минут
+//
+// Multi-tenancy и изоляция данных:
+// - Документы хранятся в GCS как: gs://bucket/{tenantId}/{sourceId}/{docId}.txt
+// - Metadata включает tenantId для фильтрации
+// - API автоматически применяет фильтр: tenantId:"current_user" OR tenantId:"global"
+// - Тенанты не могут получить доступ к документам друг друга
 type VertexAISearchClient struct {
 	projectID   string
 	location    string
@@ -187,5 +189,136 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 // IsConfigured проверяет, настроен ли клиент
 func (c *VertexAISearchClient) IsConfigured() bool {
 	return c.projectID != "" && c.location != "" && c.dataStoreID != "" && c.apiKey != ""
+}
+
+// ImportDocumentsRequest параметры для импорта документов
+type ImportDocumentsRequest struct {
+	GCSPath          string // gs://bucket/path pattern (например, gs://bucket/tenantId/**)
+	ReconciliationMode string // "INCREMENTAL" или "FULL"
+}
+
+// ImportDocuments импортирует документы из GCS в Vertex AI Search
+// Выполняется асинхронно - возвращает operation name для отслеживания статуса
+func (c *VertexAISearchClient) ImportDocuments(ctx context.Context, req *ImportDocumentsRequest) (string, error) {
+	if c.projectID == "" || c.location == "" || c.dataStoreID == "" {
+		return "", fmt.Errorf("vertex AI search not configured: project, location, or dataStoreID missing")
+	}
+
+	if req.GCSPath == "" {
+		return "", fmt.Errorf("GCS path is required")
+	}
+
+	reconciliationMode := req.ReconciliationMode
+	if reconciliationMode == "" {
+		reconciliationMode = "INCREMENTAL" // По умолчанию инкрементальный импорт
+	}
+
+	// Формируем URL для REST API ImportDocuments
+	// Формат: https://discoveryengine.googleapis.com/v1beta/projects/{project}/locations/{location}/collections/{collection}/dataStores/{dataStore}/branches/{branch}/documents:import
+	url := fmt.Sprintf(
+		"https://discoveryengine.googleapis.com/v1beta/projects/%s/locations/%s/collections/default_collection/dataStores/%s/branches/default_branch/documents:import",
+		c.projectID,
+		c.location,
+		c.dataStoreID,
+	)
+
+	requestBody := map[string]interface{}{
+		"gcsSource": map[string]interface{}{
+			"inputUris": []string{req.GCSPath},
+			"dataSchema": "content", // Для plain text файлов
+		},
+		"reconciliationMode": reconciliationMode,
+	}
+
+	bodyJSON, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.apiKey != "" {
+		httpReq.Header.Set("x-goog-api-key", c.apiKey)
+	} else {
+		return "", fmt.Errorf("API key is required for Vertex AI Search")
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Goog-User-Project", c.projectID)
+
+	log.Printf("[VertexAISearch] Importing documents from: %s", req.GCSPath)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("vertex AI search import API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var importResp map[string]interface{}
+	if err := json.Unmarshal(body, &importResp); err != nil {
+		return "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	operationName, ok := importResp["name"].(string)
+	if !ok {
+		return "", fmt.Errorf("invalid response format: missing operation name")
+	}
+
+	log.Printf("[VertexAISearch] Import operation started: %s", operationName)
+	return operationName, nil
+}
+
+// CheckDocumentStatus проверяет, проиндексирован ли документ в Vertex AI Search
+// Использует поиск по URI документа для проверки его наличия в индексе
+func (c *VertexAISearchClient) CheckDocumentStatus(ctx context.Context, documentURI string, tenantID string) (bool, error) {
+	if c.projectID == "" || c.location == "" || c.dataStoreID == "" {
+		return false, fmt.Errorf("vertex AI search not configured: project, location, or dataStoreID missing")
+	}
+
+	if documentURI == "" {
+		return false, fmt.Errorf("document URI is required")
+	}
+
+	// Используем поиск по URI документа
+	// Формируем фильтр для поиска конкретного документа
+	filter := fmt.Sprintf(`uri:"%s"`, documentURI)
+	if tenantID != "" {
+		// Добавляем фильтр по tenantId для безопасности
+		filter = fmt.Sprintf(`(%s) AND (tenantId:"%s" OR tenantId:"global")`, filter, tenantID)
+	}
+
+	searchReq := &SearchRequest{
+		Query:    documentURI, // Используем URI как query для поиска
+		PageSize: 1,          // Нам нужен только один результат
+		Filter:   filter,
+	}
+
+	searchResp, err := c.Search(ctx, searchReq)
+	if err != nil {
+		// Если поиск вернул ошибку, считаем что документ не проиндексирован
+		return false, nil
+	}
+
+	// Если найден хотя бы один результат с таким URI - документ проиндексирован
+	if len(searchResp.Results) > 0 {
+		for _, result := range searchResp.Results {
+			if result.Document.URI == documentURI {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
 }
 

@@ -12,6 +12,7 @@ interface SidebarPanelProps {
   isMobile: boolean;
   isAdmin: boolean;
   onResetChat: () => void;
+  onShowWorkspace?: () => void;
   onShowSettings: () => void;
   onShowAccount: () => void;
   onShowAdmin: () => void;
@@ -35,6 +36,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   isMobile,
   isAdmin,
   onResetChat,
+  onShowWorkspace,
   onShowSettings,
   onShowAccount,
   onShowAdmin,
@@ -52,6 +54,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 }) => {
   const { t } = useTranslation();
   const projects = useProjectsStore((s) => s.projects);
+  const projectsLoading = useProjectsStore((s) => s.loading);
   const currentProject = useProjectsStore((s) => s.currentProject);
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const deletingProjectIdsArray = useProjectsStore((s) => s.deletingProjectIds);
@@ -339,10 +342,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                 </span>
               </div>
             ) : (
+              <>
               <button
                 type="button"
                 aria-label={t('unfold.sections.newChat')}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
                 style={{
                   backgroundColor: 'transparent',
                   color: 'var(--text-heading)',
@@ -387,8 +391,63 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   style={{ color: 'var(--text-heading)' }}
                 >
                   {t('unfold.sections.newChat')}
+                  </span>
+                </button>
+                {onShowWorkspace && (
+                  <button
+                    type="button"
+                    aria-label={t('unfold.sections.workspace')}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                    style={{
+                      backgroundColor: 'transparent',
+                      color: 'var(--text-heading)',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                        'var(--white-10)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                        'transparent';
+                    }}
+                    onClick={() => {
+                      if (onShowWorkspace) {
+                        onShowWorkspace();
+                      }
+                      if (isMobile) {
+                        onClose();
+                      }
+                    }}
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                      <polyline points="9 22 9 12 15 12 15 22" />
+                    </svg>
+                    <span
+                      className="text-13 font-medium"
+                      style={{ color: 'var(--text-heading)' }}
+                    >
+                      {t('unfold.sections.workspace')}
                 </span>
               </button>
+                )}
+                {/* Divider */}
+                <div
+                  className="mt-3 mb-3"
+                  style={{
+                    height: '1px',
+                    backgroundColor: 'var(--white-10)',
+                  }}
+                />
+              </>
             )}
           </div>
 
@@ -589,7 +648,14 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               {t('unfold.sections.chats')}
             </div>
 
-            {projects.length === 0 ? (
+            {projectsLoading && projects.length === 0 ? (
+              <div
+                className="text-xs"
+                style={{ color: 'var(--text-secondary-strong)' }}
+              >
+                {t('unfold.sections.loadingChats')}
+              </div>
+            ) : projects.length === 0 ? (
               <div
                 className="text-xs"
                 style={{ color: 'var(--text-secondary-strong)' }}

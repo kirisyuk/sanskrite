@@ -60,6 +60,10 @@ export function useMergedMessages() {
         if (it.subkind === 'document.attach') {
           return false;
         }
+        // Include error interactions (subkind === 'error') - they should be displayed in chat
+        if (it.kind === 'assistant' && it.subkind === 'error') {
+          return true;
+        }
         return (
           it.kind === 'user' ||
           it.kind === 'assistant' ||

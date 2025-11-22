@@ -42,6 +42,19 @@ type GenAIHandler struct {
 	tavilyClient *TavilyClient
 	// Knowledge search dependencies (optional, wired via WithWikidataClient)
 	wikidataClient *WikidataClient
+	// Ontology tool dependencies (optional, wired via WithOntologyTools)
+	ontologyEnabled bool
+	entityRepo      *repo.EntityRepository
+	eventRepo       *repo.EventRepository
+	claimRepo       *repo.ClaimRepository
+	relationRepo    *repo.RelationRepository
+	trendRepo       *repo.TrendRepository
+	causalLinkRepo  *repo.CausalLinkRepository
+	metricStateRepo *repo.MetricStateRepository
+	uncertaintyRepo *repo.UncertaintyModelRepository
+	sourceRepo      *repo.SourceRepository
+	trustRepo       *repo.TrustRepository
+	conceptRepo     *repo.ConceptRepository
 }
 
 // Publisher is a small interface for realtime publisher used here
@@ -110,6 +123,35 @@ func (h *GenAIHandler) WithTavilyClient(client *TavilyClient) *GenAIHandler {
 // WithWikidataClient wires Wikidata client for Knowledge Search tool
 func (h *GenAIHandler) WithWikidataClient(client *WikidataClient) *GenAIHandler {
 	h.wikidataClient = client
+	return h
+}
+
+// WithOntologyTools wires ontology repositories for Ontology tools
+func (h *GenAIHandler) WithOntologyTools(
+	entityRepo *repo.EntityRepository,
+	eventRepo *repo.EventRepository,
+	claimRepo *repo.ClaimRepository,
+	relationRepo *repo.RelationRepository,
+	trendRepo *repo.TrendRepository,
+	causalLinkRepo *repo.CausalLinkRepository,
+	metricStateRepo *repo.MetricStateRepository,
+	uncertaintyRepo *repo.UncertaintyModelRepository,
+	sourceRepo *repo.SourceRepository,
+	trustRepo *repo.TrustRepository,
+	conceptRepo *repo.ConceptRepository,
+) *GenAIHandler {
+	h.ontologyEnabled = true
+	h.entityRepo = entityRepo
+	h.eventRepo = eventRepo
+	h.claimRepo = claimRepo
+	h.relationRepo = relationRepo
+	h.trendRepo = trendRepo
+	h.causalLinkRepo = causalLinkRepo
+	h.metricStateRepo = metricStateRepo
+	h.uncertaintyRepo = uncertaintyRepo
+	h.sourceRepo = sourceRepo
+	h.trustRepo = trustRepo
+	h.conceptRepo = conceptRepo
 	return h
 }
 
@@ -546,30 +588,17 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		"streamId":  streamID,
 	})
 	// Optionally enrich system instruction with provided messages (conversation context)
+	// Use the same function as non-streaming to ensure identical behavior
 	if len(req.Messages) > 0 {
-		// Build compact transcript using provided summaries/texts
-		ctxLines := make([]string, 0, len(req.Messages))
+		// Convert genaiCompleteRequest.Messages to gen_combined.Message format
+		messages := make([]gen_combined.Message, 0, len(req.Messages))
 		for _, m := range req.Messages {
-			role := strings.ToLower(strings.TrimSpace(m.Role))
-			if role == "" {
-				role = "user"
-			}
-			text := strings.TrimSpace(m.Text)
-			if text == "" {
-				continue
-			}
-			// keep line shortish (best-effort)
-			ctxLines = append(ctxLines, "- "+role+": "+text)
+			messages = append(messages, gen_combined.Message{
+				Role: m.Role,
+				Text: m.Text,
+			})
 		}
-		if len(ctxLines) > 0 {
-			pre := "You are given the full chat context below. Respond ONLY to the latest user message, taking the prior context into account. Do not restate or summarize the transcript itself."
-			ctx := "\nConversation context (most recent last):\n" + strings.Join(ctxLines, "\n")
-			if strings.TrimSpace(req.Options.SystemInstruction) == "" {
-				req.Options.SystemInstruction = pre + ctx
-			} else {
-				req.Options.SystemInstruction = strings.TrimSpace(req.Options.SystemInstruction) + "\n\n" + pre + ctx
-			}
-		}
+		req.Options.SystemInstruction = gen_combined.EnrichSystemInstructionWithMessages(req.Options.SystemInstruction, messages)
 	}
 
 	// Track per-stream chunk count for diagnostics
@@ -892,6 +921,62 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		for _, tool := range knowledgeSearchTools {
 			if !toolNames[tool.Name] {
 				req.Tools = append(req.Tools, tool)
+			}
+		}
+
+		// Register Ontology tools if enabled and repositories are available
+		if projectID != "" && h.ontologyEnabled && h.entityRepo != nil && h.eventRepo != nil && h.claimRepo != nil {
+			// Create Ontology tool executor
+			ontologyExecutor := NewOntologyToolExecutor(
+				auth.TenantID,
+				h.entityRepo,
+				h.eventRepo,
+				h.claimRepo,
+				h.relationRepo,
+				h.trendRepo,
+				h.causalLinkRepo,
+				h.metricStateRepo,
+				h.uncertaintyRepo,
+				h.sourceRepo,
+				h.trustRepo,
+				h.conceptRepo,
+				log.New(os.Stdout, "[OntologyTools] ", log.LstdFlags),
+			)
+
+			// Register all ontology tools in registry
+			registerOntologyTool := func(name string) {
+				reg.Register(name, func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+					return ontologyExecutor.Execute(ctx, name, args)
+				})
+			}
+			registerOntologyTool("entity_search")
+			registerOntologyTool("entity_profile")
+			registerOntologyTool("event_timeline")
+			registerOntologyTool("event_detail")
+			registerOntologyTool("claim_query")
+			registerOntologyTool("uncertainty_list")
+			registerOntologyTool("relation_graph")
+			registerOntologyTool("causal_links")
+			registerOntologyTool("trend_get")
+			registerOntologyTool("metric_latest")
+			registerOntologyTool("scenario_run")
+			registerOntologyTool("risk_top")
+			registerOntologyTool("source_profile")
+			registerOntologyTool("trust_recalculate")
+			registerOntologyTool("document_search")
+			registerOntologyTool("entity_enrich")
+
+			// Add Ontology tool schemas to req.Tools if not already present
+			toolNames = make(map[string]bool)
+			for _, t := range req.Tools {
+				toolNames[t.Name] = true
+			}
+
+			ontologyTools := GetOntologyToolSchemas()
+			for _, tool := range ontologyTools {
+				if !toolNames[tool.Name] {
+					req.Tools = append(req.Tools, tool)
+				}
 			}
 		}
 

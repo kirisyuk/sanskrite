@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../lib/api';
 
-type ModalType = 'settings' | 'account' | 'admin' | null;
+type ModalType = 'settings' | 'account' | 'admin' | 'workspace' | null;
 type StaticPageType = 'privacy' | 'terms' | null;
 
 /**
@@ -60,16 +60,23 @@ export function useModals() {
     setActiveModal('admin');
   }, [closeAllModals]);
 
+  const openWorkspace = useCallback(() => {
+    closeAllModals();
+    setActiveModal('workspace');
+  }, [closeAllModals]);
+
   return {
     showSettings: activeModal === 'settings',
     showAccount: activeModal === 'account',
     showAdmin: activeModal === 'admin',
+    showWorkspace: activeModal === 'workspace',
     staticPage,
     setStaticPage,
     isAdmin,
     openSettings,
     openAccount,
     openAdmin,
+    openWorkspace,
     closeAllModals,
   };
 }

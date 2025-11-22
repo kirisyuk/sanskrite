@@ -1062,6 +1062,16 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		WriteInternalError(w, "Failed to create interaction")
 		return
 	}
+
+	// Публикуем событие для асинхронной обработки онтологии (только для user и assistant)
+	if (k == "user" || k == "assistant") && h.orchestrator != nil && h.orchestrator.Publish() != nil {
+		_ = h.orchestrator.Publish().PublishJSON(r.Context(), realtime.EventChatOntologyProcess, authInfo.TenantID, map[string]any{
+			"tenantId":     authInfo.TenantID,
+			"projectId":    projectID,
+			"interactionId": id,
+		})
+	}
+
 	WriteJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
@@ -1278,15 +1288,23 @@ func (h *DiscoveryHandler) VertexAISearch(w http.ResponseWriter, r *http.Request
 	if body.PageSize <= 0 {
 		body.PageSize = 10
 	}
+	// Build tenant-aware filter
+	// Allow access to tenant's own documents + global documents
+	tenantFilter := fmt.Sprintf("tenantId:\"%s\" OR tenantId:\"global\"", auth.TenantID)
+	
+	// Combine with user-provided filter if present
+	finalFilter := tenantFilter
+	if body.Filter != "" {
+		finalFilter = fmt.Sprintf("(%s) AND (%s)", tenantFilter, body.Filter)
+	}
+	
 	searchReq := &ai.SearchRequest{
 		Query:    body.Query,
 		PageSize: body.PageSize,
+		Filter:   finalFilter,
 	}
 	if body.PageToken != "" {
 		searchReq.PageToken = body.PageToken
-	}
-	if body.Filter != "" {
-		searchReq.Filter = body.Filter
 	}
 	searchResp, err := h.vertexSearchClient.Search(r.Context(), searchReq)
 	if err != nil {

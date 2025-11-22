@@ -24,6 +24,7 @@ type GenerateResponse = g.GenerateResponse
 type GenAIRequest struct {
 	Model              string                 `json:"model"`
 	Prompt             string                 `json:"prompt"`
+	Messages           []Message              `json:"messages,omitempty"` // Optional message history (same as streaming)
 	SystemInstruction  string                 `json:"systemInstruction,omitempty"`
 	Temperature        float64                `json:"temperature,omitempty"`
 	MaxOutputTokens    int                    `json:"maxOutputTokens,omitempty"`
@@ -38,6 +39,12 @@ type GenAIRequest struct {
 	// Optional: for WebSocket event routing (used in Research mode)
 	ProjectID string `json:"projectId,omitempty"`
 	StreamID  string `json:"streamId,omitempty"`
+}
+
+// Message represents a single message in conversation history (same format as streaming)
+type Message struct {
+	Role string `json:"role"` // "user", "assistant", "system", "note"
+	Text string `json:"text"` // Message content
 }
 
 // GenAIResponse is an alias of unified GenerateResponse
@@ -144,6 +151,8 @@ func (c *Client) normalizeOptionsForGemini(opts Options) Options {
 		opts.ModelOverride = "gemini-2.5-flash-lite"
 	case "gemini_balanced":
 		opts.ModelOverride = "gemini-2.5-flash"
+	case "gemini_preview":
+		opts.ModelOverride = "gemini-3-pro-preview"
 	}
 	return opts
 }
@@ -155,6 +164,7 @@ var ModelContextWindows = map[string]int{
 	"gemini_fast":     1_000_000, // gemini-2.5-flash-lite
 	"gemini_balanced": 1_000_000, // gemini-2.5-flash
 	"gemini_quality":  2_000_000, // gemini-2.5-pro
+	"gemini_preview":  2_000_000, // gemini-3-pro-preview
 
 	// OpenAI models
 	"gpt_fast":     400_000, // gpt-5-nano
@@ -1020,14 +1030,48 @@ func mergeUniqueStrings(a, b []string) []string {
 }
 
 // GenAIGenerate performs a unified generation across providers with optional tools, web search, and strict JSON
+// EnrichSystemInstructionWithMessages adds conversation context from messages to system instruction
+// This is used by both streaming and non-streaming endpoints to ensure identical behavior
+func EnrichSystemInstructionWithMessages(systemInstruction string, messages []Message) string {
+	if len(messages) == 0 {
+		return systemInstruction
+	}
+	// Build compact transcript using provided summaries/texts
+	ctxLines := make([]string, 0, len(messages))
+	for _, m := range messages {
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		if role == "" {
+			role = "user"
+		}
+		text := strings.TrimSpace(m.Text)
+		if text == "" {
+			continue
+		}
+		// keep line shortish (best-effort)
+		ctxLines = append(ctxLines, "- "+role+": "+text)
+	}
+	if len(ctxLines) == 0 {
+		return systemInstruction
+	}
+	pre := "You are given the full chat context below. Respond ONLY to the latest user message, taking the prior context into account. Do not restate or summarize the transcript itself."
+	ctx := "\nConversation context (most recent last):\n" + strings.Join(ctxLines, "\n")
+	if strings.TrimSpace(systemInstruction) == "" {
+		return pre + ctx
+	}
+	return strings.TrimSpace(systemInstruction) + "\n\n" + pre + ctx
+}
+
 func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIResponse, error) {
-	// Build base options
+	// Enrich system instruction with message history (same function as streaming)
+	systemInstruction := EnrichSystemInstructionWithMessages(req.SystemInstruction, req.Messages)
+
+	// Build base options (with enriched system instruction)
 	opts := g.Options{
 		ModelOverride:     canonicalizeAlias(req.Model),
 		Temperature:       req.Temperature,
 		MaxOutputTokens:   req.MaxOutputTokens,
 		GroundingEnabled:  req.WebSearchEnabled,
-		SystemInstruction: req.SystemInstruction,
+		SystemInstruction: systemInstruction,
 	}
 	tools := req.Tools
 
@@ -1105,7 +1149,11 @@ func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIRes
 		// If tools disabled, clear tools slice
 		tools = nil
 	}
-	// Special-case Gemini: tools + web search unsupported together → two-step
+
+	// Note: Message history is now handled via SystemInstruction (same as streaming)
+	// so we don't need special GenerateConversation logic here
+
+	// Special-case Gemini: tools + web search unsupported together → two-step (without history)
 	if provider == "gemini" && req.ToolCallingEnabled && req.WebSearchEnabled {
 		// Step 1: tools only
 		to := opts

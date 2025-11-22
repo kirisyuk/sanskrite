@@ -230,6 +230,7 @@ class ApiClient {
   async genaiGenerate(data: {
     model: string;
     prompt: string;
+    messages?: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>;
     systemInstruction?: string;
     temperature?: number;
     maxOutputTokens?: number;
@@ -260,6 +261,10 @@ class ApiClient {
       toolChoice: data.toolChoice,
       parallelToolCalls: data.parallelToolCalls,
     };
+    // Add message history if provided (for conversation context)
+    if (data.messages && data.messages.length > 0) {
+      body.messages = data.messages;
+    }
     // Add projectId and streamId for WebSocket events (used in Research mode)
     if (data.projectId) {
       body.projectId = data.projectId;
@@ -478,6 +483,11 @@ class ApiClient {
   async docsUpdate(projectId: string, docId: string, data: { filename?: string; description?: string }) {
     const res = await this.client.patch(`/api/v1/projects/${projectId}/docs/${docId}`, data);
     return res.data as any;
+  }
+
+  async docsCheckIndexStatus(projectId: string, docId: string): Promise<{ indexed: boolean; reason?: string; error?: string }> {
+    const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/index-status`);
+    return res.data as { indexed: boolean; reason?: string; error?: string };
   }
 
   async docsDownload(projectId: string, docId: string): Promise<Blob> {

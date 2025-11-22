@@ -10,6 +10,7 @@ interface ChatMessageProps {
   thinkingSeconds?: number;
   isThinking?: boolean;
   isError?: boolean;
+  errorMessage?: string | null;
   bgOverride?: string;
   leftAccent?: boolean;
   averageTimingSeconds?: number | null; // Average response time estimate in seconds
@@ -24,6 +25,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   thinkingSeconds,
   isThinking,
   isError,
+  errorMessage,
   bgOverride,
   leftAccent,
   averageTimingSeconds,
@@ -162,8 +164,8 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       </div>
       <div className="text-13" style={{ color: 'var(--text-heading)' }}>
         {isError ? (
-          <div>
-            {t('chatMessage.errorMessage', { 
+          <div style={{ color: 'var(--accent-danger)' }}>
+            {errorMessage || t('chatMessage.errorMessage', { 
               defaultValue: 'К сожалению, не удалось обработать запрос. Мы зафиксировали техническую неполадку и уже анализируем ситуацию. Пожалуйста, повторите попытку чуть позже.' 
             })}
           </div>

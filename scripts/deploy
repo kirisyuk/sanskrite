@@ -339,8 +339,9 @@ setup_infrastructure() {
   
   # Grant backend service account access to Vertex AI Search
   echo -e "${BLUE}[infra] Granting backend SA access to Vertex AI Search...${NC}"
-  # Note: roles/discoveryengine.user allows API access, viewer is read-only
-  for role in roles/discoveryengine.viewer roles/discoveryengine.user; do
+  # roles/discoveryengine.editor allows import/export operations
+  # roles/discoveryengine.user allows API access (search)
+  for role in roles/discoveryengine.editor roles/discoveryengine.user; do
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
       --member="serviceAccount:${SA_BACKEND}" \
       --role="$role" \
@@ -536,22 +537,24 @@ except:
   echo -e "${BLUE}[infra] Setting up BigQuery for documents analytics...${NC}"
   if command -v bq >/dev/null 2>&1; then
     local dataset="${PROJECT_ID}_documents"
-    if bq ls --dataset --project_id="$PROJECT_ID" "$dataset" >/dev/null 2>&1; then
-      echo -e "${GREEN}[infra] BigQuery dataset exists:${NC} ${dataset}"
+    local dataset_ref="${PROJECT_ID}:${dataset}"
+    if bq show "$dataset_ref" >/dev/null 2>&1; then
+      echo -e "${GREEN}[infra] BigQuery dataset exists:${NC} ${dataset_ref}"
     else
       echo -e "${BLUE}[infra] Creating BigQuery dataset...${NC}"
       bq mk --dataset --location=US --project_id="$PROJECT_ID" "$dataset" >/dev/null 2>&1 && \
-        echo -e "${GREEN}[infra] Created BigQuery dataset:${NC} ${dataset}" || \
+        echo -e "${GREEN}[infra] Created BigQuery dataset:${NC} ${dataset_ref}" || \
         echo -e "${YELLOW}[infra] Warning: Failed to create BigQuery dataset${NC}"
     fi
     
     # Create metadata table if not exists
-    if bq ls --table --project_id="$PROJECT_ID" "${dataset}.documents_metadata" >/dev/null 2>&1; then
+    local table_ref="${dataset_ref}.documents_metadata"
+    if bq show "$table_ref" >/dev/null 2>&1; then
       echo -e "${GREEN}[infra] BigQuery metadata table exists${NC}"
     else
       echo -e "${BLUE}[infra] Creating BigQuery metadata table...${NC}"
       bq mk --table --project_id="$PROJECT_ID" \
-        "${dataset}.documents_metadata" \
+        "$table_ref" \
         "id:STRING,tenantId:STRING,sourceId:STRING,externalId:STRING,title:STRING,url:STRING,documentPath:STRING,storagePath:STRING,status:STRING,contentType:STRING,documentType:STRING,language:STRING,contentHash:STRING,ingestedAt:TIMESTAMP,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" >/dev/null 2>&1 && \
         echo -e "${GREEN}[infra] Created BigQuery metadata table${NC}" || \
         echo -e "${YELLOW}[infra] Warning: Failed to create metadata table${NC}"
@@ -863,7 +866,8 @@ deploy_api() {
   # Build env vars string
   # Note: VERTEX_SEARCH_LOCATION must be "global" for Discovery Engine Data Stores
   # Data Stores are created in "global" region, but search API uses the same location
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false"
+  local vertex_search_ds_id="${VERTEX_SEARCH_DATA_STORE_ID_VALUE:-rag-documents-store}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false"
   
   # Add Redis env vars if available
   if [[ -n "$redis_host" ]]; then

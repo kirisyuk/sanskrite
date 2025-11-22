@@ -379,6 +379,11 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         const map = (s as any).persistedByLocalId || {} as Record<string,string>;
         const keepLocals: any[] = [];
         for (const l of s.interactions) {
+          // Always keep error interactions (subkind === 'error') - they are local-only and should persist
+          if (l.subkind === 'error') {
+            keepLocals.push(l);
+            continue;
+          }
           // Drop local if server already has this id, or local maps to a server id present
           const mapped = map[l.id as any];
           if (byServerId.has(l.id as any)) continue;
@@ -2209,6 +2214,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     try {
       // Build messages from local interactions (summary preferred, else content)
       const interactions = get().interactions;
+      
+      // Debug: log interactions count before filtering
+      console.log('[Chat] Building messages from interactions', {
+        totalInteractions: interactions.length,
+        interactionKinds: interactions.map(it => it.kind).slice(-5), // Last 5 kinds
+        projectId: get().projectId,
+      });
+      
       // Filter out evaluation messages, actions, section markers, and perspectives - they shouldn't be in chat context
       const chatInteractions = interactions.filter((it) => {
         // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
@@ -2419,8 +2432,147 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       
       // CRITICAL: Используем проверенный projectId из локальной переменной
       // Не читаем из store, чтобы избежать гонок
-      console.log('[Chat] startStream: Sending API request', { projectId, streamId });
-      await api.genaiStream({ prompt, tools: finalTools, options, messages, projectId, streamId });
+      
+      // Check if model is gemini_preview - use non-streaming for Gemini 3 Pro Preview
+      // Get model from options.modelOverride or from currentSettings.model
+      const modelOverride = options?.modelOverride || currentSettings.model || '';
+      const isGeminiPreview = modelOverride === 'gemini_preview' || modelOverride === 'gemini-3-pro-preview';
+      
+      if (isGeminiPreview) {
+        // Use non-streaming API for Gemini 3 Pro Preview
+        console.log('[Chat] Using non-streaming API for gemini_preview', { projectId, streamId });
+        
+        // Call onStart to set up UI state (streaming placeholder)
+        get().onStart();
+        
+        // Prepare genaiGenerate request - use same approach as streaming
+        // Pass messages array (excluding current prompt), backend will add to systemInstruction
+        // The last message in 'messages' is the current prompt, so we exclude it for history
+        const historyMessages = messages.length > 1 
+          ? messages.slice(0, -1).map((msg) => ({
+              role: msg.role,
+              text: msg.text,
+            }))
+          : [];
+        
+        const generateRequest: any = {
+          model: 'gemini_preview',
+          prompt: prompt,
+          messages: historyMessages.length > 0 ? historyMessages : undefined, // Backend will add to systemInstruction
+          systemInstruction: options?.systemInstruction,
+          temperature: options?.temperature,
+          maxOutputTokens: options?.maxOutputTokens,
+          webSearchEnabled: options?.groundingEnabled || false,
+          toolCallingEnabled: currentSettings.toolUsageEnabled && finalTools && finalTools.length > 0,
+          tools: finalTools,
+          projectId: projectId,
+          streamId: streamId,
+        };
+        
+        try {
+          // Call non-streaming API
+          const response = await api.genaiGenerate(generateRequest);
+          
+          // Process response as if it came from streaming
+          const content = response?.content || '';
+          const model = response?.model || 'gemini_preview';
+          const usage = response?.usage;
+          const sources = response?.sources || [];
+          const attributions = response?.attributions || [];
+          
+          // Update messages with full content
+          set((s) => {
+            const msgs = [...s.messages];
+            let lastAssistantIndex = -1;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === 'assistant') {
+                lastAssistantIndex = i;
+                break;
+              }
+            }
+            
+            if (lastAssistantIndex >= 0) {
+              msgs[lastAssistantIndex] = { ...msgs[lastAssistantIndex], content };
+            } else {
+              const id = Date.now().toString() + '-a';
+              msgs.push({ id, role: 'assistant', content });
+            }
+            
+            return { 
+              messages: msgs, 
+              streaming: false, 
+              currentStreamId: undefined,
+              usage,
+              error: null,
+            } as any;
+          });
+          
+          // Create interaction with full response
+          const now = Date.now();
+          const assistantLocalId = now + '-ia';
+          const assistantInteraction: LocalInteraction = {
+            id: assistantLocalId,
+            projectId,
+            kind: 'assistant',
+            content,
+            createdAt: new Date().toISOString(),
+            originalMessageId: now + '-a',
+          };
+          
+          // Add sources and attributions if available
+          if (sources.length > 0 || attributions.length > 0) {
+            (assistantInteraction as any).sources = sources;
+            (assistantInteraction as any).attributions = attributions;
+          }
+          
+          // Add to interactions
+          set((s) => ({
+            interactions: [...s.interactions, assistantInteraction],
+          } as any));
+          
+          // Persist on server
+          try {
+            const payload: any = {
+              kind: 'assistant',
+              content,
+              originalMessageId: now + '-a',
+            };
+            if (sources.length > 0) {
+              payload.sources = sources;
+            }
+            if (attributions.length > 0) {
+              payload.attributions = attributions;
+            }
+            if (usage) {
+              payload.usage = usage;
+            }
+            
+            const res = await api.createProjectInteraction(projectId, payload);
+            
+            // Update interaction ID
+            set((s) => {
+              const map = { ...(s.persistedByLocalId || {}) } as Record<string, string>;
+              map[assistantLocalId] = res.id;
+              const items = [...s.interactions];
+              const idx = items.findIndex((it) => it.id === assistantLocalId);
+              if (idx >= 0) {
+                (items[idx] as any).id = res.id;
+              }
+              return { interactions: items, persistedByLocalId: map } as any;
+            });
+          } catch (e) {
+            console.warn('[Chat] Failed to persist non-streaming response', e);
+          }
+          
+        } catch (e: any) {
+          console.error('[Chat] Non-streaming API error', e);
+          set({ streaming: false, currentStreamId: undefined, error: e?.message || 'Non-streaming request failed' });
+        }
+      } else {
+        // Use streaming API for other models
+        console.log('[Chat] startStream: Sending API request', { projectId, streamId });
+        await api.genaiStream({ prompt, tools: finalTools, options, messages, projectId, streamId });
+      }
     } catch (e: any) {
       set({ streaming: false, currentStreamId: undefined, error: e?.message || 'Stream start failed' });
     }
@@ -3051,25 +3203,129 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   onError: (err) => {
     try {
       const st = get();
+      const model = (st.pendingAssistantMeta as any)?.agentProfile?.model || st.pendingAssistantOptions?.modelOverride;
       console.error('[GenAI Stream] error', {
         error: err,
         kind: (st.pendingAssistantMeta as any)?.subkind || 'chat',
         agentName: st.pendingAssistantMeta?.displayName,
         provider: (st.pendingAssistantMeta as any)?.agentProfile?.provider,
-        model: (st.pendingAssistantMeta as any)?.agentProfile?.model || st.pendingAssistantOptions?.modelOverride,
+        model,
         promptChars: (st.pendingAssistantPrompt || '').length,
         lang: st.pendingAssistantOptions?.__lang,
         hasTools: Array.isArray(st.pendingAssistantTools) && st.pendingAssistantTools.length > 0,
         groundingEnabled: !!st.pendingAssistantOptions?.groundingEnabled,
       });
-    } catch {}
-    // Also prune trailing empty assistant placeholder so skeleton doesn't stick
-    const st = get();
-    const pruned = [...st.messages];
-    if (pruned.length > 0 && pruned[pruned.length - 1].role === 'assistant' && (!pruned[pruned.length - 1].content || pruned[pruned.length - 1].content.trim().length === 0)) {
-      pruned.pop();
+      
+      // Parse error message to provide user-friendly explanation
+      let userFriendlyError = err || 'Stream error';
+      try {
+        const errorStr = typeof err === 'string' ? err : JSON.stringify(err);
+        
+        // Try to parse JSON error if it's embedded in the string
+        let parsedError: any = null;
+        try {
+          // Check if error contains JSON array/object
+          const jsonMatch = errorStr.match(/\[({.*})\]|({.*})/s);
+          if (jsonMatch) {
+            parsedError = JSON.parse(jsonMatch[1] || jsonMatch[2]);
+          }
+        } catch {}
+        
+        // Extract error details from parsed JSON or string
+        const errorCode = parsedError?.error?.code || (errorStr.match(/404|401|403|429|500/) || [])[0];
+        const errorMessage = parsedError?.error?.message || errorStr;
+        const errorStatus = parsedError?.error?.status || (errorStr.includes('NOT_FOUND') ? 'NOT_FOUND' : null);
+        
+        // Check for model not found errors (404)
+        if (errorCode === 404 || errorStatus === 'NOT_FOUND' || errorStr.includes('not found') || errorMessage.includes('not found')) {
+          // Check if it's a model-specific error
+          if (errorMessage.includes('gemini-3-pro') || errorStr.includes('gemini-3-pro') || errorStr.includes('gemini_preview') || model === 'gemini_preview' || model === 'gemini-3-pro-preview') {
+            userFriendlyError = 'Модель Gemini 3 Pro Preview временно недоступна. Пожалуйста, выберите другую модель (например, Gemini Quality или Gemini Balanced).';
+          } else if (errorMessage.includes('models/') || errorStr.includes('models/')) {
+            const modelMatch = errorMessage.match(/models\/([^\s"]+)/) || errorStr.match(/models\/([^\s"]+)/);
+            if (modelMatch) {
+              const modelName = modelMatch[1];
+              userFriendlyError = `Модель "${modelName}" не найдена или недоступна. Пожалуйста, выберите другую модель.`;
+            } else {
+              userFriendlyError = 'Выбранная модель недоступна. Пожалуйста, выберите другую модель.';
+            }
+          } else {
+            userFriendlyError = 'Модель не найдена или недоступна. Пожалуйста, выберите другую модель.';
+          }
+        } else if (errorCode === 401 || errorStr.includes('UNAUTHENTICATED')) {
+          userFriendlyError = 'Ошибка аутентификации. Пожалуйста, обновите страницу и попробуйте снова.';
+        } else if (errorCode === 403 || errorStr.includes('PERMISSION_DENIED')) {
+          userFriendlyError = 'Недостаточно прав доступа. Пожалуйста, проверьте настройки доступа.';
+        } else if (errorCode === 429 || errorStr.includes('RESOURCE_EXHAUSTED')) {
+          userFriendlyError = 'Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.';
+        } else if (errorCode === 500 || errorStr.includes('INTERNAL_ERROR')) {
+          userFriendlyError = 'Внутренняя ошибка сервера. Мы уже работаем над исправлением. Пожалуйста, попробуйте позже.';
+        } else if (errorStr.includes('timeout') || errorStr.includes('TIMEOUT')) {
+          userFriendlyError = 'Превышено время ожидания ответа. Пожалуйста, попробуйте снова.';
+        }
+      } catch (parseErr) {
+        // If parsing fails, use original error
+        console.warn('[GenAI Stream] Failed to parse error message', parseErr);
+      }
+      
+      // Also prune trailing empty assistant placeholder so skeleton doesn't stick
+      const pruned = [...st.messages];
+      if (pruned.length > 0 && pruned[pruned.length - 1].role === 'assistant' && (!pruned[pruned.length - 1].content || pruned[pruned.length - 1].content.trim().length === 0)) {
+        pruned.pop();
+      }
+      
+      // Create error message as assistant message if there's no assistant message with content
+      const lastMessage = pruned.length > 0 ? pruned[pruned.length - 1] : null;
+      const needsErrorMessage = !lastMessage || lastMessage.role !== 'assistant' || !lastMessage.content || lastMessage.content.trim().length === 0;
+      
+      const errorMessageId = needsErrorMessage ? (Date.now().toString() + '-error') : null;
+      
+      if (needsErrorMessage && errorMessageId) {
+        pruned.push({
+          id: errorMessageId,
+          role: 'assistant',
+          content: '', // Empty content, error will be shown via isError flag
+        });
+      }
+      
+      // Create error interaction to persist it across hydration
+      // This ensures the error message survives hydrateInteractions
+      const errorInteraction: LocalInteraction | null = errorMessageId ? {
+        id: errorMessageId,
+        projectId: st.projectId || 'local-unfold',
+        kind: 'assistant',
+        subkind: 'error',
+        content: userFriendlyError, // Store error message in content
+        createdAt: new Date().toISOString(),
+        originalMessageId: errorMessageId,
+      } : null;
+      
+      // Add error interaction to interactions list if it doesn't exist
+      const currentInteractions = [...st.interactions];
+      if (errorInteraction && !currentInteractions.find((it) => it.id === errorInteraction.id)) {
+        currentInteractions.push(errorInteraction);
+      }
+      
+      set({ 
+        streaming: false, 
+        currentStreamId: undefined, 
+        messages: pruned, 
+        error: userFriendlyError, 
+        interactions: currentInteractions, // Preserve error interaction
+        pendingAssistantMeta: undefined, 
+        pendingAssistantOptions: get().pendingAssistantOptions, 
+        pendingAssistantPrompt: get().pendingAssistantPrompt, 
+        pendingAssistantTools: get().pendingAssistantTools 
+      });
+    } catch (e) {
+      console.error('[GenAI Stream] Error in onError handler', e);
+      const st = get();
+      const pruned = [...st.messages];
+      if (pruned.length > 0 && pruned[pruned.length - 1].role === 'assistant' && (!pruned[pruned.length - 1].content || pruned[pruned.length - 1].content.trim().length === 0)) {
+        pruned.pop();
+      }
+      set({ streaming: false, currentStreamId: undefined, messages: pruned, error: err || 'Stream error', pendingAssistantMeta: undefined, pendingAssistantOptions: get().pendingAssistantOptions, pendingAssistantPrompt: get().pendingAssistantPrompt, pendingAssistantTools: get().pendingAssistantTools });
     }
-    set({ streaming: false, currentStreamId: undefined, messages: pruned, error: err || 'Stream error', pendingAssistantMeta: undefined, pendingAssistantOptions: get().pendingAssistantOptions, pendingAssistantPrompt: get().pendingAssistantPrompt, pendingAssistantTools: get().pendingAssistantTools });
   },
   onToolCall: (calls) => set({ toolCalls: calls || [] }),
   onToolResult: (calls) => {

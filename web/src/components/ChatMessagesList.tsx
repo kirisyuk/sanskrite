@@ -172,6 +172,10 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
               ? (meta?.leftAccent ?? !!it.agentProfile)
               : false;
             
+            // Check if this is an error interaction
+            const isError = !isUser && it.subkind === 'error';
+            const errorMessage = isError ? (it.content || genaiChat.error) : null;
+            
             return (
               <div key={it.id} className="group relative">
                 <MessageActions
@@ -184,7 +188,8 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                   align={isUser ? 'right' : 'left'}
                   isThinking={false}
                   thinkingSeconds={0}
-                  isError={false}
+                  isError={isError}
+                  errorMessage={errorMessage}
                   headerText={header}
                   leftAccent={leftAccent}
                   footer={undefined}
@@ -221,6 +226,9 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                       })()}
                     </>
                   ) : (
+                    <>
+                      {/* For error interactions, content is already shown via ChatMessage errorMessage prop */}
+                      {!isError && (
                     <>
                       {/* Graph message rendering */}
                       {(() => {
@@ -455,8 +463,10 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                         );
                       })()}
                       {/* End of graph/markdown conditional rendering */}
+                        </>
+                      )}
                       {/* Tags row: per-interaction chips for assistant - BEFORE ActionRow/EvaluationDetails */}
-                      {!isUser &&
+                      {!isUser && !isError &&
                         (() => {
                           try {
                             const perQ = Array.isArray(
@@ -689,7 +699,7 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                             return null;
                           }
                         })()}
-                      {!isUser && (
+                      {!isUser && !isError && (
                         <ActionRow
                           messageId={it.id}
                           isAssistant={!isUser}

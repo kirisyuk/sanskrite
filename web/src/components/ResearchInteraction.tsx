@@ -61,18 +61,27 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
 
   if (!progress) return null;
 
+  // Type assertion to ensure TypeScript knows the full type after null check
+  // Use ResearchProgressInteraction type to get the correct stage union type
+  const typedProgress: {
+    stage: 'planning' | 'searching' | 'generating' | 'balancing' | 'synthesizing';
+    status: 'in_progress' | 'completed';
+    subQueries?: string[];
+    sourcesCount?: number;
+  } = progress;
+
   // Track stage start time for timer (using ref to persist across renders)
   React.useEffect(() => {
-    const currentStage = progress.stage;
+    const currentStage = typedProgress.stage;
     if (currentStage && !stageStartTimeRef.current[currentStage]) {
       stageStartTimeRef.current[currentStage] = Date.now();
     }
-  }, [progress.stage]);
+  }, [typedProgress.stage]);
 
   // Update elapsed time every second
   React.useEffect(() => {
-    if (progress.status === 'in_progress' && progress.stage) {
-      const startTime = stageStartTimeRef.current[progress.stage] || Date.now();
+    if (typedProgress.status === 'in_progress' && typedProgress.stage) {
+      const startTime = stageStartTimeRef.current[typedProgress.stage] || Date.now();
       // Set initial time immediately
       setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
       
@@ -83,7 +92,7 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
     } else {
       setElapsedTime(0);
     }
-  }, [progress.stage, progress.status]);
+  }, [typedProgress.stage, typedProgress.status]);
 
   const formatTime = (seconds: number) => {
     if (seconds < 60) return `${seconds}s`;
@@ -94,16 +103,16 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
 
   // Determine completed stages (for badges)
   const completedStages: string[] = [];
-  if (progress.stage === 'searching' || progress.stage === 'generating' || progress.stage === 'balancing' || progress.stage === 'synthesizing') {
+  if (typedProgress.stage === 'searching' || typedProgress.stage === 'generating' || typedProgress.stage === 'balancing' || typedProgress.stage === 'synthesizing') {
     completedStages.push('planning');
   }
-  if (progress.stage === 'generating' || progress.stage === 'balancing' || progress.stage === 'synthesizing') {
+  if (typedProgress.stage === 'generating' || typedProgress.stage === 'balancing' || typedProgress.stage === 'synthesizing') {
     completedStages.push('searching');
   }
-  if (progress.stage === 'balancing' || progress.stage === 'synthesizing') {
+  if (typedProgress.stage === 'balancing' || typedProgress.stage === 'synthesizing') {
     completedStages.push('generating');
   }
-  if (progress.stage === 'synthesizing') {
+  if (typedProgress.stage === 'synthesizing') {
     completedStages.push('balancing');
   }
 
@@ -163,8 +172,8 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
     }
   };
 
-  const currentStageInfo = getStageInfo(progress.stage);
-  const isActive = progress.status === 'in_progress';
+  const currentStageInfo = getStageInfo(typedProgress.stage);
+  const isActive = typedProgress.status === 'in_progress';
 
   return (
     <div
@@ -217,7 +226,7 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
 
       {/* Current stage with fade transition - always visible when active */}
       <div
-        key={progress.stage}
+        key={typedProgress.stage}
         className="transition-all duration-300 ease-in-out"
         style={{ 
           opacity: 1,
@@ -252,30 +261,30 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
         {/* Stage details (only for active stage) */}
         {isActive && (
           <div className="mt-3 ml-6 text-xs" style={{ color: 'var(--text-secondary, rgba(255, 255, 255, 0.7))' }}>
-            {progress.stage === 'planning' && progress.subQueries && progress.subQueries.length > 0 && (
+            {typedProgress.stage === 'planning' && typedProgress.subQueries && typedProgress.subQueries.length > 0 && (
               <div>
-                <div className="mb-1.5 font-medium">Generated {progress.subQueries.length} sub-queries:</div>
+                <div className="mb-1.5 font-medium">Generated {typedProgress.subQueries.length} sub-queries:</div>
                 <ul className="list-disc list-inside space-y-1 ml-1">
-                  {progress.subQueries.map((q, idx) => (
+                  {typedProgress.subQueries.map((q, idx) => (
                     <li key={idx}>{q}</li>
                   ))}
                 </ul>
               </div>
             )}
             
-            {progress.stage === 'searching' && progress.sourcesCount !== undefined && (
-              <div>Found {progress.sourcesCount} sources</div>
+            {typedProgress.stage === 'searching' && typedProgress.sourcesCount !== undefined && (
+              <div>Found {typedProgress.sourcesCount} sources</div>
             )}
             
-                {progress.stage === 'generating' && (
+                {typedProgress.stage === 'generating' && (
                   <div>Generating report from sources...</div>
                 )}
                 
-                {progress.stage === 'balancing' && (
+                {typedProgress.stage === 'balancing' && (
                   <div>Generating counter-position analysis...</div>
                 )}
                 
-                {progress.stage === 'synthesizing' && (
+                {typedProgress.stage === 'synthesizing' && (
                   <div>Synthesizing reports into final result...</div>
                 )}
           </div>
