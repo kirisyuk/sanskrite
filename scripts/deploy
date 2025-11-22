@@ -832,9 +832,6 @@ deploy_api() {
   }
   echo -e "${GREEN}[api] Go build successful locally${NC}"
 
-  echo -e "${BLUE}[api] Running migration: sourceProjects backfill...${NC}"
-  (cd "$API_DIR" && GCP_PROJECT_ID="$PROJECT_ID" GOOGLE_CLOUD_PROJECT="$PROJECT_ID" go run ./cmd/migrate_sources) || echo -e "${YELLOW}[api] Migration skipped/failed (non-fatal).${NC}"
-  
   echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
   local service="sanskrite-api"
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
