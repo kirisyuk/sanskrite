@@ -28,6 +28,7 @@ interface RightDrawerProps {
   onShowAddTelegramModalChange: (show: boolean) => void;
   onPreviewSource: (source: any) => void;
   onOpenDocument: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string }) => void;
+  onExpandWorkspace?: (projectId: string | null) => void;
   // Analysis panel props
   handleAnalyzeEntities: () => Promise<void>;
   handleAnalyzeFacts: () => Promise<void>;
@@ -69,12 +70,10 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
   getPanelVisibilityStyles,
   sources,
   currentProjectId,
-  addMenuRef,
-  showAddSourceMenu,
-  onShowAddSourceMenuChange,
   onShowAddTelegramModalChange,
   onPreviewSource,
   onOpenDocument,
+  onExpandWorkspace,
   handleAnalyzeEntities,
   handleAnalyzeFacts,
   handleAnalyzeEvents,
@@ -358,12 +357,10 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                     <WorkspacePanel
                       sources={sources}
                       currentProjectId={currentProjectId}
-                      addMenuRef={addMenuRef}
-                      showAddSourceMenu={showAddSourceMenu}
-                      onShowAddSourceMenuChange={onShowAddSourceMenuChange}
                       onShowAddTelegramModalChange={onShowAddTelegramModalChange}
                       onPreviewSource={onPreviewSource}
                       onOpenDocument={onOpenDocument}
+                      onExpandWorkspace={onExpandWorkspace}
                     />
                   </div>
                 )}

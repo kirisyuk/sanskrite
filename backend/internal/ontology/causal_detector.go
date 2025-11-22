@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -18,6 +19,7 @@ type CausalDetector struct {
 	eventsRepo     *repo.EventRepository
 	causalLinksRepo *repo.CausalLinkRepository
 	genaiClient    *gen_combined.Client
+	executor       *ai.AITaskExecutor
 	logger         *log.Logger
 }
 
@@ -26,12 +28,14 @@ func NewCausalDetector(
 	eventsRepo *repo.EventRepository,
 	causalLinksRepo *repo.CausalLinkRepository,
 	genaiClient *gen_combined.Client,
+	executor *ai.AITaskExecutor,
 	logger *log.Logger,
 ) *CausalDetector {
 	return &CausalDetector{
 		eventsRepo:     eventsRepo,
 		causalLinksRepo: causalLinksRepo,
 		genaiClient:    genaiClient,
+		executor:       executor,
 		logger:         logger,
 	}
 }
@@ -156,55 +160,49 @@ Return JSON strictly matching this schema:
       "causeEventIndex": 0,
       "strength": 0.8,
       "probability": 0.7,
-      "sign": "positive",
+      "sign": "positive|negative|neutral",
       "reasoning": "Brief explanation of the causal relationship"
     }
   ]
-}`,
+}
+
+All fields are required.`, 
 		effectEvent.Title,
 		formatTime(effectEvent.OccurredAt),
 		effectEvent.Description,
 		causesText,
 	)
 
-	schema := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"causalLinks": map[string]interface{}{
-				"type": "array",
-				"items": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"causeEventIndex": map[string]interface{}{"type": "integer", "minimum": 0},
-						"strength":        map[string]interface{}{"type": "number", "minimum": 0, "maximum": 1},
-						"probability":     map[string]interface{}{"type": "number", "minimum": 0, "maximum": 1},
-						"sign": map[string]interface{}{
-							"type": "string",
-							"enum": []string{"positive", "negative", "neutral"},
-						},
-						"reasoning": map[string]interface{}{"type": "string"},
-					},
-					"required": []string{"causeEventIndex", "strength", "probability", "sign", "reasoning"},
-				},
-			},
+	// Используем AITaskExecutor с верификатором для проверки JSON десериализации
+	validateFunc := func(data map[string]interface{}) error {
+		return nil
+	}
+	verifier := ai.NewGenericVerifier(validateFunc)
+
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: prompt + "\n\nReturn JSON strictly matching the schema. Do not include markdown code fences.",
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            2048,
+			MinContextWindow:         4000,
 		},
-		"required": []string{"causalLinks"},
+		Verifier: verifier,
 	}
 
-	opts := gen_combined.Options{
-		ModelOverride:     "gemini_fast",
-		GroundingEnabled:  false,
-		SystemInstruction: "You are an expert causal analyst. Identify genuine causal relationships between events. Be conservative - only identify clear, plausible causal links.",
-		Temperature:       0.3,
-		MaxOutputTokens:   2048,
-	}
-
-	resp, err := d.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	parsed, err := d.executor.ExecuteStructuredTask(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("LLM analysis failed: %w", err)
 	}
 
-	// Парсим результат
+	// Преобразуем результат
+	resultMap, ok := parsed.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type: %T", parsed)
+	}
+
+	// Преобразуем map в структуру
 	var result struct {
 		CausalLinks []struct {
 			CauseEventIndex int     `json:"causeEventIndex"`
@@ -215,9 +213,48 @@ Return JSON strictly matching this schema:
 		} `json:"causalLinks"`
 	}
 
-	if err := parseJSONResponse(resp.Content, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	if links, ok := resultMap["causalLinks"].([]interface{}); ok {
+		result.CausalLinks = make([]struct {
+			CauseEventIndex int     `json:"causeEventIndex"`
+			Strength        float64 `json:"strength"`
+			Probability     float64 `json:"probability"`
+			Sign            string  `json:"sign"`
+			Reasoning       string  `json:"reasoning"`
+		}, len(links))
+		for i, link := range links {
+			if linkMap, ok := link.(map[string]interface{}); ok {
+				if idx, ok := linkMap["causeEventIndex"].(float64); ok {
+					result.CausalLinks[i].CauseEventIndex = int(idx)
+				}
+				if strength, ok := linkMap["strength"].(float64); ok {
+					result.CausalLinks[i].Strength = strength
+				}
+				if prob, ok := linkMap["probability"].(float64); ok {
+					result.CausalLinks[i].Probability = prob
+				}
+				if sign, ok := linkMap["sign"].(string); ok {
+					result.CausalLinks[i].Sign = sign
+				}
+				if reason, ok := linkMap["reasoning"].(string); ok {
+					result.CausalLinks[i].Reasoning = reason
+				}
+			}
+		}
 	}
+
+	candidates := d.processCausalLinksResult(&result, candidateCauses, effectEvent)
+	return candidates, nil
+}
+
+func (d *CausalDetector) processCausalLinksResult(result *struct {
+	CausalLinks []struct {
+		CauseEventIndex int     `json:"causeEventIndex"`
+		Strength        float64 `json:"strength"`
+		Probability     float64 `json:"probability"`
+		Sign            string  `json:"sign"`
+		Reasoning       string  `json:"reasoning"`
+	} `json:"causalLinks"`
+}, candidateCauses []*models.Event, effectEvent *models.Event) []*CausalLinkCandidate {
 
 	// Преобразуем в CausalLinkCandidate
 	var candidates []*CausalLinkCandidate
@@ -249,7 +286,7 @@ Return JSON strictly matching this schema:
 		})
 	}
 
-	return candidates, nil
+	return candidates
 }
 
 // createCausalLink создает CausalLink объект

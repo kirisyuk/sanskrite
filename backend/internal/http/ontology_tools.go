@@ -706,7 +706,7 @@ func (e *OntologyToolExecutor) metricLatest(ctx context.Context, args json.RawMe
 }
 
 // scenarioRun runs scenario analysis (placeholder - would need scenario service)
-func (e *OntologyToolExecutor) scenarioRun(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (e *OntologyToolExecutor) scenarioRun(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Input map[string]interface{} `json:"input"`
 	}
@@ -820,7 +820,7 @@ func (e *OntologyToolExecutor) sourceProfile(ctx context.Context, args json.RawM
 }
 
 // trustRecalculate triggers trust recalculation (placeholder)
-func (e *OntologyToolExecutor) trustRecalculate(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (e *OntologyToolExecutor) trustRecalculate(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		SourceID string `json:"sourceId"`
 	}
@@ -844,7 +844,7 @@ func (e *OntologyToolExecutor) trustRecalculate(ctx context.Context, args json.R
 }
 
 // documentSearch searches documents (placeholder - would need document repo)
-func (e *OntologyToolExecutor) documentSearch(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (e *OntologyToolExecutor) documentSearch(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Filter map[string]interface{} `json:"filter,omitempty"`
 		Limit  int                    `json:"limit,omitempty"`
@@ -869,7 +869,7 @@ func (e *OntologyToolExecutor) documentSearch(ctx context.Context, args json.Raw
 }
 
 // knowledgeSearch delegates to KnowledgeSearchToolExecutor (if available)
-func (e *OntologyToolExecutor) knowledgeSearch(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (e *OntologyToolExecutor) knowledgeSearch(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
 	// This would delegate to KnowledgeSearchToolExecutor if available
 	// For now, return not implemented
 	response := map[string]interface{}{

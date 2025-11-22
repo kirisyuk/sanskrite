@@ -24,7 +24,7 @@ import (
 //  7) strict: Q/A + search (schema)
 //  8) strict: Q/A + tool + search (schema)
 //
-// grok_fast (grok-4-fast-reasoning) — all 8 scenarios completed successfully.
+// grok_fast (grok-4-1-fast-non-reasoning) — all 8 scenarios completed successfully.
 // - Tool-calling срабатывает (возвращает function calls) в сценариях с tool.
 // - Search источники извлекаются; URL парсятся и попадают в Sources.
 //

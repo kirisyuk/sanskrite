@@ -13,8 +13,8 @@ export type GenAIModel =
   | 'gpt_balanced'   // gpt-5-mini
   | 'gpt_fast'       // gpt-5-nano
   | 'grok_quality'   // grok-4-0709
-  | 'grok_balanced'  // grok-4-fast-reasoning
-  | 'grok_fast'      // grok-4-fast-non-reasoning
+  | 'grok_balanced'  // grok-4-1-fast-reasoning
+  | 'grok_fast'      // grok-4-1-fast-non-reasoning
   | 'claude_balanced'// claude-sonnet-4-5-20250929 (quality option disabled - too expensive)
   | 'claude_fast'    // claude-haiku-4-5-20251001
   | 'deepseek_quality' // deepseek-reasoner
@@ -76,8 +76,8 @@ export const MODEL_CONTEXT_WINDOWS: Record<GenAIModel, number> = {
   'gpt_quality': 400_000,        // gpt-5.1
   
   // Grok models
-  'grok_fast': 2_000_000,        // grok-4-fast-non-reasoning
-  'grok_balanced': 2_000_000,    // grok-4-fast-reasoning
+  'grok_fast': 2_000_000,        // grok-4-1-fast-non-reasoning
+  'grok_balanced': 2_000_000,    // grok-4-1-fast-reasoning
   'grok_quality': 256_000,       // grok-4-0709
   
   // Claude models

@@ -2,13 +2,12 @@ package ontology
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
-	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -20,6 +19,7 @@ type UncertaintyResolver struct {
 	claimsRepo      *repo.ClaimRepository
 	eventsRepo      *repo.EventRepository
 	genaiClient     *gen_combined.Client
+	executor        *ai.AITaskExecutor
 	logger          *log.Logger
 }
 
@@ -29,6 +29,7 @@ func NewUncertaintyResolver(
 	claimsRepo *repo.ClaimRepository,
 	eventsRepo *repo.EventRepository,
 	genaiClient *gen_combined.Client,
+	executor *ai.AITaskExecutor,
 	logger *log.Logger,
 ) *UncertaintyResolver {
 	return &UncertaintyResolver{
@@ -36,6 +37,7 @@ func NewUncertaintyResolver(
 		claimsRepo:      claimsRepo,
 		eventsRepo:      eventsRepo,
 		genaiClient:     genaiClient,
+		executor:        executor,
 		logger:          logger,
 	}
 }
@@ -167,62 +169,65 @@ Return JSON with resolution:
   "reasoning": "Detailed explanation of the resolution",
   "selectedClaimId": "claim_id or null",
   "action": "accept|reject|merge|defer"
-}`,
+}
+
+All fields except resolvedValue and selectedClaimId are required.`,
 		uncertainty.Type,
 		uncertainty.Materiality,
 		uncertainty.Status,
 		claimsText,
 	)
 
-	schema := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"resolvedValue": map[string]interface{}{
-				"type": []interface{}{"string", "number", "null"},
-			},
-			"confidence": map[string]interface{}{
-				"type":    "number",
-				"minimum": 0,
-				"maximum": 1,
-			},
-			"reasoning": map[string]interface{}{
-				"type": "string",
-			},
-			"selectedClaimId": map[string]interface{}{
-				"type": []interface{}{"string", "null"},
-			},
-			"action": map[string]interface{}{
-				"type": "string",
-				"enum": []string{"accept", "reject", "merge", "defer"},
-			},
+	// Используем AITaskExecutor с верификатором для проверки JSON десериализации
+	// Для uncertainty используем MinCapabilityScore=8 (более высокое требование)
+	validateFunc := func(data map[string]interface{}) error {
+		return nil
+	}
+	verifier := ai.NewGenericVerifier(validateFunc)
+
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: prompt + "\n\nReturn JSON strictly matching the schema. Do not include markdown code fences.",
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       8, // Высокое требование для uncertainty resolution
+			MaxOutputSize:            2048,
+			MinContextWindow:         8000,
 		},
-		"required": []string{"resolvedValue", "confidence", "reasoning", "action"},
+		Verifier: verifier,
 	}
 
-	opts := gen_combined.Options{
-		ModelOverride:     "gemini_quality",
-		GroundingEnabled:  true, // Включаем web search
-		SystemInstruction: "You are an expert uncertainty resolver. Use web search to gather additional information and resolve conflicts with high confidence.",
-		Temperature:       0.2,
-		MaxOutputTokens:   2048,
-	}
-
-	resp, err := r.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	parsed, err := r.executor.ExecuteStructuredTask(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("LLM analysis failed: %w", err)
 	}
 
-	// Парсим результат
+	// Преобразуем результат
+	resultMap, ok := parsed.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type: %T", parsed)
+	}
+
 	var result ResolutionResult
-	content := resp.Content
-	// Убираем markdown code fences если есть
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-	
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	if val, ok := resultMap["resolvedValue"]; ok && val != nil {
+		if s, ok := val.(string); ok {
+			result.ResolvedValue = &s
+		} else if n, ok := val.(float64); ok {
+			str := fmt.Sprintf("%v", n)
+			result.ResolvedValue = &str
+		}
+	}
+	if conf, ok := resultMap["confidence"].(float64); ok {
+		result.Confidence = conf
+	}
+	if reason, ok := resultMap["reasoning"].(string); ok {
+		result.Reasoning = reason
+	}
+	if claimID, ok := resultMap["selectedClaimId"].(string); ok && claimID != "" {
+		result.SelectedClaimID = &claimID
+	}
+	if action, ok := resultMap["action"].(string); ok {
+		result.Action = action
 	}
 
 	return &result, nil

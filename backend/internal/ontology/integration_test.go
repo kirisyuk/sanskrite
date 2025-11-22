@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"testing"
@@ -17,15 +18,63 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/prompts"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"cloud.google.com/go/firestore"
+	secretmanager "cloud.google.com/go/secretmanager/apiv1"
+	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"google.golang.org/api/option"
 )
 
-// setupTestClients создает тестовые клиенты для интеграционных тестов
-func setupTestClients(t *testing.T) (*gen_combined.Client, ai.EmbeddingProvider, *firestore.Client) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		t.Skip("GEMINI_API_KEY not set; skipping LLM integration test")
+// loadSecretFromGCP загружает секрет из GCP Secret Manager
+// Возвращает пустую строку и nil ошибку, если секрет не найден (не критично)
+func loadSecretFromGCP(ctx context.Context, projectID, secretName string) (string, error) {
+	client, err := secretmanager.NewClient(ctx)
+	if err != nil {
+		// Не критично - может быть недоступен в локальной среде
+		return "", nil
 	}
+	defer client.Close()
+
+	// Пробуем разные варианты имен секретов (lowercase в GCP)
+	secretNames := []string{
+		secretName,                    // Как есть
+		strings.ToLower(secretName),   // lowercase
+		strings.ToLower(strings.ReplaceAll(secretName, "_", "-")), // lowercase с дефисами
+	}
+
+	for _, name := range secretNames {
+		req := &secretmanagerpb.AccessSecretVersionRequest{
+			Name: fmt.Sprintf("projects/%s/secrets/%s/versions/latest", projectID, name),
+		}
+		result, err := client.AccessSecretVersion(ctx, req)
+		if err == nil && result != nil && result.Payload != nil {
+			return strings.TrimSpace(string(result.Payload.Data)), nil
+		}
+	}
+
+	// Секрет не найден - это нормально, не критично
+	return "", nil
+}
+
+// getEnvOrSecret получает значение из env или загружает из GCP Secret Manager
+func getEnvOrSecret(ctx context.Context, projectID, envVar, secretName string) string {
+	// Сначала проверяем env
+	if val := os.Getenv(envVar); val != "" {
+		return val
+	}
+
+	// Пробуем загрузить из GCP Secret Manager
+	if projectID != "" {
+		val, err := loadSecretFromGCP(ctx, projectID, secretName)
+		if err == nil && val != "" {
+			return val
+		}
+	}
+
+	return ""
+}
+
+// setupTestClients создает тестовые клиенты для интеграционных тестов
+func setupTestClients(t *testing.T) (*gen_combined.Client, ai.EmbeddingProvider, *firestore.Client, *ai.AITaskExecutor) {
+	ctx := context.Background()
 
 	projectID := os.Getenv("GCP_PROJECT_ID")
 	if projectID == "" {
@@ -33,6 +82,16 @@ func setupTestClients(t *testing.T) (*gen_combined.Client, ai.EmbeddingProvider,
 	}
 	if projectID == "" {
 		t.Skip("GCP_PROJECT_ID not set; skipping integration test")
+	}
+
+	// Загружаем API ключи из env или GCP Secret Manager
+	apiKey := getEnvOrSecret(ctx, projectID, "GEMINI_API_KEY", "GEMINI_API_KEY_TEST")
+	if apiKey == "" {
+		// Пробуем альтернативные имена
+		apiKey = getEnvOrSecret(ctx, projectID, "GEMINI_API_KEY", "gemini_api_key")
+	}
+	if apiKey == "" {
+		t.Skip("GEMINI_API_KEY not found in env or GCP secrets; skipping LLM integration test")
 	}
 
 	location := os.Getenv("VERTEX_LOCATION")
@@ -45,19 +104,30 @@ func setupTestClients(t *testing.T) (*gen_combined.Client, ai.EmbeddingProvider,
 	genaiClient := gen_combined.NewClient(geminiClient, "")
 
 	// Создаем embedding provider (OpenAI для тестов)
-	openaiKey := os.Getenv("OPENAI_API_KEY")
+	openaiKey := getEnvOrSecret(ctx, projectID, "OPENAI_API_KEY", "OPENAI_API_KEY_TEST")
+	if openaiKey == "" {
+		// Пробуем альтернативные имена
+		openaiKey = getEnvOrSecret(ctx, projectID, "OPENAI_API_KEY", "openai_api_key")
+	}
 	var emb ai.EmbeddingProvider
+	var executor *ai.AITaskExecutor
 	if openaiKey != "" {
 		modelManager := ai.NewAIModelManager()
 		openaiService := ai.NewOpenAIService(openaiKey, modelManager)
-		executor := ai.NewAITaskExecutor([]ai.AIService{openaiService}, modelManager)
+		executor = ai.NewAITaskExecutor([]ai.AIService{openaiService}, modelManager)
 		emb = ai.NewOpenAIEmbedding(executor, "text-embedding-3-small")
 	} else {
-		t.Log("OPENAI_API_KEY not set; embedding tests will be skipped")
+		t.Log("OPENAI_API_KEY not found in env or GCP secrets; embedding tests will be skipped")
+	}
+
+	// Создаем AITaskExecutor для тестов (если еще не создан через OpenAI)
+	if executor == nil && apiKey != "" {
+		modelManager := ai.NewAIModelManager()
+		vertexService := ai.NewVertexAIService(apiKey, modelManager)
+		executor = ai.NewAITaskExecutor([]ai.AIService{vertexService}, modelManager)
 	}
 
 	// Создаем Firestore client (используем эмулятор если доступен)
-	ctx := context.Background()
 	var opts []option.ClientOption
 	credsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	if credsPath != "" {
@@ -69,13 +139,17 @@ func setupTestClients(t *testing.T) (*gen_combined.Client, ai.EmbeddingProvider,
 		t.Fatalf("Failed to create Firestore client: %v", err)
 	}
 
-	return genaiClient, emb, fsClient
+	return genaiClient, emb, fsClient, executor
 }
 
 // TestEntityResolution_Transliteration тестирует разрешение сущностей с транслитерацией
 func TestEntityResolution_Transliteration(t *testing.T) {
-	genaiClient, emb, fsClient := setupTestClients(t)
+	genaiClient, emb, fsClient, executor := setupTestClients(t)
 	defer fsClient.Close()
+
+	if executor == nil {
+		t.Skip("AITaskExecutor not available - skipping test")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -110,7 +184,8 @@ func TestEntityResolution_Transliteration(t *testing.T) {
 	t.Logf("Created test entity: %s (ID: %s)", nvidiaEntity.CanonicalName, nvidiaID)
 
 	// Создаем resolver
-	resolver := NewEntityResolver(entitiesRepo, emb, genaiClient, nil)
+	logger := log.New(os.Stdout, "[Test] ", log.LstdFlags)
+	resolver := NewEntityResolver(entitiesRepo, emb, genaiClient, executor, logger)
 
 	// Тест 1: Точное совпадение
 	resolved, err := resolver.ResolveEntity(ctx, tenantID, "Nvidia", models.EntityTypeOrganization)
@@ -157,7 +232,7 @@ func TestEntityResolution_Transliteration(t *testing.T) {
 
 // TestEntityEnrichment_Wikidata тестирует обогащение сущностей через Wikidata
 func TestEntityEnrichment_Wikidata(t *testing.T) {
-	_, _, fsClient := setupTestClients(t)
+	_, _, fsClient, _ := setupTestClients(t)
 	defer fsClient.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -223,7 +298,10 @@ func TestEntityEnrichment_Wikidata(t *testing.T) {
 
 // TestDomainClassification тестирует классификацию доменов
 func TestDomainClassification(t *testing.T) {
-	genaiClient, _, fsClient := setupTestClients(t)
+	genaiClient, _, fsClient, executor := setupTestClients(t)
+	if executor == nil {
+		t.Skip("AITaskExecutor not available - skipping test")
+	}
 	defer fsClient.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -233,7 +311,7 @@ func TestDomainClassification(t *testing.T) {
 	relationsRepo := repo.NewRelationRepository(fsClient)
 
 	// Инициализируем domain service
-	domainService := setupDomainService(t, fsClient, genaiClient)
+	domainService := setupDomainService(t, fsClient, genaiClient, executor)
 
 	// Инициализируем иерархию доменов
 	err := domainService.InitializeHierarchy(ctx, tenantID)
@@ -281,7 +359,10 @@ func TestDomainClassification(t *testing.T) {
 
 // TestClaimExtraction тестирует извлечение фактов (Claims)
 func TestClaimExtraction(t *testing.T) {
-	genaiClient, _, fsClient := setupTestClients(t)
+	genaiClient, _, fsClient, executor := setupTestClients(t)
+	if executor == nil {
+		t.Skip("AITaskExecutor not available - skipping test")
+	}
 	defer fsClient.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -328,7 +409,7 @@ func TestClaimExtraction(t *testing.T) {
 	}
 
 	// Используем OntologyExtractor для извлечения
-	extractor := setupExtractor(t, fsClient, genaiClient, tenantID)
+	extractor := setupExtractor(t, fsClient, genaiClient, executor, tenantID)
 
 	// Создаем временный document для обработки
 	doc := &models.Document{
@@ -380,7 +461,10 @@ func TestClaimExtraction(t *testing.T) {
 
 // TestCausalLinkDetection тестирует обнаружение причинно-следственных связей
 func TestCausalLinkDetection(t *testing.T) {
-	genaiClient, _, fsClient := setupTestClients(t)
+	genaiClient, _, fsClient, executor := setupTestClients(t)
+	if executor == nil {
+		t.Skip("AITaskExecutor not available - skipping test")
+	}
 	defer fsClient.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -422,7 +506,8 @@ func TestCausalLinkDetection(t *testing.T) {
 	event2ID, _ := eventsRepo.Create(ctx, event2)
 
 	// Используем CausalDetector
-	detector := NewCausalDetector(eventsRepo, causalLinksRepo, genaiClient, nil)
+	logger := log.New(os.Stdout, "[Test] ", log.LstdFlags)
+	detector := NewCausalDetector(eventsRepo, causalLinksRepo, genaiClient, executor, logger)
 
 	// Тестируем обнаружение для каждого события
 	// DetectCausalLinksForEvent анализирует новое событие на связи с существующими
@@ -458,7 +543,7 @@ func TestCausalLinkDetection(t *testing.T) {
 
 // TestConflictDetection тестирует обнаружение конфликтов
 func TestConflictDetection(t *testing.T) {
-	_, _, fsClient := setupTestClients(t)
+	_, _, fsClient, _ := setupTestClients(t)
 	defer fsClient.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -571,7 +656,10 @@ func TestConflictDetection(t *testing.T) {
 
 // TestFullPipeline тестирует полный пайплайн от документа до онтологии
 func TestFullPipeline(t *testing.T) {
-	genaiClient, _, fsClient := setupTestClients(t)
+	genaiClient, _, fsClient, executor := setupTestClients(t)
+	if executor == nil {
+		t.Skip("AITaskExecutor not available - skipping test")
+	}
 	defer fsClient.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -580,8 +668,8 @@ func TestFullPipeline(t *testing.T) {
 	tenantID := "test-tenant-" + time.Now().Format("20060102150405")
 
 	// Инициализируем все компоненты
-	extractor := setupExtractor(t, fsClient, genaiClient, tenantID)
-	domainService := setupDomainService(t, fsClient, genaiClient)
+	extractor := setupExtractor(t, fsClient, genaiClient, executor, tenantID)
+	domainService := setupDomainService(t, fsClient, genaiClient, executor)
 	_ = domainService // Используется ниже для классификации
 
 	// Тестовый документ
@@ -660,13 +748,14 @@ The tech industry is experiencing rapid innovation in artificial intelligence.`,
 
 // Helper functions
 
-func setupDomainService(t *testing.T, fsClient *firestore.Client, genaiClient *gen_combined.Client) *domain.DomainService {
+func setupDomainService(t *testing.T, fsClient *firestore.Client, genaiClient *gen_combined.Client, executor *ai.AITaskExecutor) *domain.DomainService {
 	conceptsRepo := repo.NewConceptRepository(fsClient)
 	relationsRepo := repo.NewRelationRepository(fsClient)
-	return domain.NewDomainService(conceptsRepo, relationsRepo, genaiClient, nil)
+	logger := log.New(os.Stdout, "[Test] ", log.LstdFlags)
+	return domain.NewDomainService(conceptsRepo, relationsRepo, genaiClient, executor, logger)
 }
 
-func setupExtractor(t *testing.T, fsClient *firestore.Client, genaiClient *gen_combined.Client, tenantID string) *OntologyExtractor {
+func setupExtractor(t *testing.T, fsClient *firestore.Client, genaiClient *gen_combined.Client, executor *ai.AITaskExecutor, tenantID string) *OntologyExtractor {
 	entitiesRepo := repo.NewEntityRepository(fsClient)
 	eventsRepo := repo.NewEventRepository(fsClient)
 	claimsRepo := repo.NewClaimRepository(fsClient)
@@ -678,11 +767,12 @@ func setupExtractor(t *testing.T, fsClient *firestore.Client, genaiClient *gen_c
 
 	emb := getEmbeddingProvider(t)
 	_ = emb // Может быть nil если OPENAI_API_KEY не установлен
-	entityResolver := NewEntityResolver(entitiesRepo, emb, genaiClient, nil)
-	trustIntegrator := NewTrustIntegrator(sourcesRepo, claimsRepo, eventsRepo, trustRepo, nil)
-	conflictDetector := NewConflictDetector(claimsRepo, uncertaintyRepo, trustIntegrator, nil)
-	causalDetector := NewCausalDetector(eventsRepo, causalLinksRepo, genaiClient, nil)
-	domainService := setupDomainService(t, fsClient, genaiClient)
+	logger := log.New(os.Stdout, "[Test] ", log.LstdFlags)
+	entityResolver := NewEntityResolver(entitiesRepo, emb, genaiClient, executor, logger)
+	trustIntegrator := NewTrustIntegrator(sourcesRepo, claimsRepo, eventsRepo, trustRepo, logger)
+	conflictDetector := NewConflictDetector(claimsRepo, uncertaintyRepo, trustIntegrator, logger)
+	causalDetector := NewCausalDetector(eventsRepo, causalLinksRepo, genaiClient, executor, logger)
+	domainService := setupDomainService(t, fsClient, genaiClient, executor)
 	entityEnricher := getEntityEnricher(t, entitiesRepo)
 
 	return NewOntologyExtractor(
@@ -754,44 +844,116 @@ func extractDataWithLLM(t *testing.T, ctx context.Context, genaiClient *gen_comb
 		GroundingEnabled:  false,
 		SystemInstruction: "You are an expert content analyst. Extract entities, events, and claims from the text. Be precise and conservative.",
 		Temperature:       0.3,
-		MaxOutputTokens:   4000,
+		MaxOutputTokens:   8192, // Увеличено для надежности (как в других тестах)
 	}
 
-	resp, err := genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	t.Logf("Calling LLM with prompt length: %d chars, max tokens: %d", len(prompt), opts.MaxOutputTokens)
+	// Используем GenerateJSON вместо GenerateJSONStrict, так как строгий режим вызывает проблемы с function calling
+	resp, err := genaiClient.GenerateJSON(ctx, prompt, nil, schema, opts)
 	if err != nil {
 		t.Logf("LLM extraction failed: %v", err)
 		return nil
 	}
 
-	// Парсим ответ
+	if resp == nil {
+		t.Logf("LLM returned nil response")
+		return nil
+	}
+
+	t.Logf("LLM response received: content=%d chars, tool calls=%d, usage=%+v, isToolStep=%v", 
+		len(resp.Content), len(resp.ToolCalls), resp.Usage, resp.IsToolStep)
+	
+	if resp.RawJSON != "" {
+		t.Logf("Raw JSON preview: %.500s", resp.RawJSON)
+	}
+
+	if resp.Content == "" && len(resp.ToolCalls) == 0 {
+		t.Logf("LLM returned empty content and no tool calls. This might indicate a quota/budget issue.")
+		return nil
+	}
+
+	// Парсим ответ - может быть полный DocumentExtraction или только нужные поля
+	var fullResult struct {
+		Entities []ExtractedEntity `json:"entities"`
+		Events   []ExtractedEvent  `json:"events"`
+		Claims   []ExtractedClaim  `json:"claims"`
+		// Другие поля из DocumentExtractionPrompt (игнорируем)
+		Language     string `json:"language,omitempty"`
+		Sentiment    float64 `json:"sentiment,omitempty"`
+		Categories   interface{} `json:"categories,omitempty"`
+		Topics       interface{} `json:"topics,omitempty"`
+		DocumentType string `json:"documentType,omitempty"`
+		KeyPoints    interface{} `json:"keyPoints,omitempty"`
+		Outlinks     interface{} `json:"outlinks,omitempty"`
+	}
+	
 	var result struct {
 		Entities []ExtractedEntity `json:"entities"`
 		Events   []ExtractedEvent  `json:"events"`
 		Claims   []ExtractedClaim  `json:"claims"`
 	}
 
-	content := resp.Content
-	// Убираем markdown code blocks если есть
-	if strings.HasPrefix(content, "```") {
-		lines := strings.Split(content, "\n")
-		var cleaned []string
-		inCodeBlock := false
-		for _, line := range lines {
-			if strings.HasPrefix(line, "```") {
-				inCodeBlock = !inCodeBlock
-				continue
-			}
-			if !inCodeBlock {
-				cleaned = append(cleaned, line)
+	content := strings.TrimSpace(resp.Content)
+	
+	// Если Content пустой, но есть tool calls, извлекаем из них
+	if content == "" && len(resp.ToolCalls) > 0 {
+		for _, tc := range resp.ToolCalls {
+			if tc.Name == "return_structured" || tc.Name == "extract_data" {
+				content = strings.TrimSpace(tc.Arguments)
+				t.Logf("Extracted content from tool call %s: %d chars", tc.Name, len(content))
+				break
 			}
 		}
-		content = strings.Join(cleaned, "\n")
 	}
 
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		t.Logf("Failed to parse LLM response: %v, content: %s", err, content)
+	// Извлекаем JSON из markdown code blocks если есть
+	if strings.Contains(content, "```") {
+		// Находим первый { после ```json или ```
+		jsonStart := strings.Index(content, "{")
+		jsonEnd := strings.LastIndex(content, "}")
+		
+		if jsonStart >= 0 && jsonEnd > jsonStart {
+			content = content[jsonStart : jsonEnd+1]
+		} else {
+			// Альтернативный способ - убираем markdown блоки построчно
+			lines := strings.Split(content, "\n")
+			var cleaned []string
+			inCodeBlock := false
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "```") {
+					inCodeBlock = !inCodeBlock
+					continue
+				}
+				if !inCodeBlock {
+					cleaned = append(cleaned, line)
+				}
+			}
+			content = strings.Join(cleaned, "\n")
+		}
+		content = strings.TrimSpace(content)
+	}
+
+	if content == "" {
+		t.Logf("Content is empty after cleaning. Tool calls: %d", len(resp.ToolCalls))
+		if len(resp.ToolCalls) > 0 {
+			t.Logf("Tool call details: %+v", resp.ToolCalls[0])
+		}
 		return nil
 	}
+
+	if err := json.Unmarshal([]byte(content), &fullResult); err != nil {
+		t.Logf("Failed to parse LLM response: %v, content length: %d, preview: %.200s", err, len(content), content)
+		return nil
+	}
+
+	// Извлекаем только нужные поля
+	result.Entities = fullResult.Entities
+	result.Events = fullResult.Events
+	result.Claims = fullResult.Claims
+
+	t.Logf("Extracted: %d entities, %d events, %d claims", 
+		len(result.Entities), len(result.Events), len(result.Claims))
 
 	return &DocumentExtraction{
 		Entities: result.Entities,
@@ -807,7 +969,16 @@ func getWikidataClientForTest(t *testing.T) WikidataClientInterface {
 }
 
 func getEmbeddingProvider(t *testing.T) ai.EmbeddingProvider {
-	openaiKey := os.Getenv("OPENAI_API_KEY")
+	ctx := context.Background()
+	projectID := os.Getenv("GCP_PROJECT_ID")
+	if projectID == "" {
+		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+	}
+
+	openaiKey := getEnvOrSecret(ctx, projectID, "OPENAI_API_KEY", "OPENAI_API_KEY_TEST")
+	if openaiKey == "" {
+		openaiKey = getEnvOrSecret(ctx, projectID, "OPENAI_API_KEY", "openai_api_key")
+	}
 	if openaiKey == "" {
 		return nil
 	}

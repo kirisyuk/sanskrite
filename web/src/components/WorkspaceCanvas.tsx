@@ -8,12 +8,16 @@ import { useTranslation } from 'react-i18next';
 import { ModalWithHeader } from './ModalWithHeader';
 import { useProjectsStore } from '../stores/projectsStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
+import { useGenaiChatStore } from '../stores/genaiChatStore';
+import { TelegramAddModal } from './TelegramAddModal';
+import { WorkspaceToolbar } from './WorkspaceToolbar';
 import { api } from '../lib/api';
-import type { CoreDoc } from '../types/generated';
+import type { CoreDoc, DataSource } from '../types/generated';
 import type { Project } from '../types';
 
 export interface WorkspaceCanvasProps {
   isOpen: boolean;
+  projectId?: string | null; // Optional: filter by project, null means all projects
   onClose: () => void;
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
 }
@@ -36,6 +40,7 @@ const DocumentItem = React.memo<{
       className="px-2 py-1.5 rounded text-xs flex items-start gap-2 group cursor-pointer"
       style={{
         backgroundColor: 'transparent',
+        maxWidth: 'fit-content',
       }}
       onMouseEnter={(e) => {
         (e.currentTarget as HTMLDivElement).style.backgroundColor =
@@ -62,13 +67,15 @@ const DocumentItem = React.memo<{
       <div className="flex-shrink-0 mt-0.5" style={{ color: 'var(--text-secondary)' }}>
         {getDocumentIcon()}
       </div>
-      <div className="flex-1 min-w-0">
+      <div className="min-w-0" style={{ maxWidth: '300px' }}>
         <div
           className="font-medium truncate"
           style={{ color: 'var(--text-heading)' }}
           title={doc.filename}
         >
-          {doc.filename}
+          {doc.filename && doc.filename.length > 50 
+            ? `${doc.filename.substring(0, 47)}...` 
+            : doc.filename}
         </div>
         <div className="flex items-center gap-2 mt-1">
           <span
@@ -107,15 +114,85 @@ const DocumentItem = React.memo<{
 });
 DocumentItem.displayName = 'DocumentItem';
 
+// Мемоизированный компонент источника
+const SourceItem = React.memo<{
+  source: DataSource;
+}>(({ source }) => {
+  const getSourceIcon = (kind: string) => {
+    switch (kind.toLowerCase()) {
+      case 'telegram':
+      case 'telegram_channel':
+        return (
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+          </svg>
+        );
+      case 'rss':
+        return (
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <circle cx="6" cy="18" r="3" strokeWidth="2" />
+            <path d="M6 9a9 9 0 0 1 9 9M6 3a15 15 0 0 1 15 15" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        );
+      case 'web':
+      case 'url':
+        return (
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <circle cx="12" cy="12" r="10" strokeWidth="2" />
+            <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" strokeWidth="2" />
+          </svg>
+        );
+      default:
+        return (
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M3 3h7l7 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        );
+    }
+  };
+
+  const displayName = source.displayName || source.kind || 'Unknown';
+  
+  return (
+    <div
+      className="px-2 py-1.5 rounded text-xs flex items-center gap-2 group"
+      style={{
+        backgroundColor: 'transparent',
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--white-10)';
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+      }}
+    >
+      <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
+        {getSourceIcon(source.kind)}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-medium truncate" style={{ color: 'var(--text-heading)' }} title={displayName}>
+          {displayName}
+        </div>
+        <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+          {source.kind}
+          {source.status && ` • ${source.status}`}
+        </div>
+      </div>
+    </div>
+  );
+});
+SourceItem.displayName = 'SourceItem';
+
 // Мемоизированный компонент проекта
 const ProjectSection = React.memo<{
   project: Project;
   documents: CoreDoc[];
+  sources?: DataSource[];
   discussionFrame?: string;
   indexStatuses: Record<string, { indexed: boolean; loading: boolean; lastChecked: number }>;
   getIndexedStatus: (doc: CoreDoc) => { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
-}>(({ project, documents, discussionFrame, getIndexedStatus, onOpenDocument }) => {
+}>(({ project, documents, sources, discussionFrame, getIndexedStatus, onOpenDocument }) => {
   return (
     <div className="mb-6">
       {/* Project header */}
@@ -141,12 +218,31 @@ const ProjectSection = React.memo<{
         )}
       </div>
 
+      {/* Sources section */}
+      {sources && sources.length > 0 && (
+        <div className="mb-4">
+          <h5 className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary-strong)' }}>
+            Sources ({sources.length})
+          </h5>
+          <div 
+            className="grid gap-1"
+            style={{
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            }}
+          >
+            {sources.map((source) => (
+              <SourceItem key={source.id} source={source} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Documents list */}
       {documents.length > 0 ? (
         <div 
           className="grid gap-1"
           style={{
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, max-content))',
           }}
         >
           {documents.map((doc) => (
@@ -173,6 +269,7 @@ ProjectSection.displayName = 'ProjectSection';
 
 export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   isOpen,
+  projectId,
   onClose,
   onOpenDocument,
 }) => {
@@ -195,6 +292,15 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   
   // Мемоизируем текущие данные
   const [currentProjectsWithDocs, setCurrentProjectsWithDocs] = React.useState(() => getProjectsWithDocs());
+  
+  // State for project sources
+  const [projectSources, setProjectSources] = React.useState<Record<string, DataSource[]>>({});
+  
+  // State for Telegram modal (only when projectId is provided)
+  const [showAddTelegramModal, setShowAddTelegramModal] = React.useState(false);
+  const [tgInput, setTgInput] = React.useState('');
+  const [tgSubmitting, setTgSubmitting] = React.useState(false);
+  const [tgError, setTgError] = React.useState<string | null>(null);
   
   // Обновляем только при реальных изменениях
   React.useEffect(() => {
@@ -221,16 +327,34 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
 
       try {
         const projects = getProjects() || [];
-        // Load data for all projects in parallel
-        const loadPromises = projects
-          .filter((p) => p && p.id !== 'local-unfold')
-          .map(async (project) => {
+        // Filter by projectId if specified
+        const projectsToLoad = projectId
+          ? projects.filter((p) => p && p.id === projectId)
+          : projects.filter((p) => p && p.id !== 'local-unfold');
+        
+        // Load data for projects in batches to avoid ERR_INSUFFICIENT_RESOURCES
+        // Process 5 projects at a time to limit concurrent HTTP requests
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < projectsToLoad.length; i += BATCH_SIZE) {
+          const batch = projectsToLoad.slice(i, i + BATCH_SIZE);
+          const loadPromises = batch.map(async (project) => {
             try {
-              // Load documents and interactions in parallel
-              const [docs, interactions] = await Promise.all([
+              // Load documents, interactions, and sources in parallel
+              const [docs, interactions, sources] = await Promise.all([
                 api.docsList(project.id).catch(() => [] as CoreDoc[]),
                 api.getProjectInteractions(project.id).catch(() => [] as any[]),
+                api.getProjectSources(project.id).catch(() => [] as DataSource[]),
               ]);
+              
+              // Store sources for this project
+              // Ensure sources is an array (handle null/undefined cases)
+              const sourcesArray = Array.isArray(sources) ? sources : [];
+              if (sourcesArray.length > 0) {
+                setProjectSources((prev) => ({
+                  ...prev,
+                  [project.id]: sourcesArray,
+                }));
+              }
               
               // Extract Discussion Frame
               let discussionFrame: string | undefined;
@@ -258,7 +382,9 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
             }
           });
 
-        await Promise.all(loadPromises);
+          // Wait for current batch to complete before starting next batch
+          await Promise.all(loadPromises);
+        }
       } catch (err) {
         console.error('[WorkspaceCanvas] Failed to load projects data', err);
       } finally {
@@ -268,7 +394,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
 
     // Load in background - cached data is already shown
     loadAllProjectsData();
-  }, [isOpen, projectsLength, projectsIds, setLoading, updateProjectDocs, getProjects, currentProjectsWithDocs.length]);
+  }, [isOpen, projectId, projectsLength, projectsIds, setLoading, updateProjectDocs, getProjects, currentProjectsWithDocs.length]);
 
   // Оптимизация: подписываемся только на ключи статусов, не на весь объект
   const indexStatusesKeys = useWorkspaceStore((s) => Object.keys(s.indexStatuses).join(','));
@@ -324,18 +450,23 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
         }
       }
 
-      // Check statuses in parallel
-      const checkPromises = docsToCheck.map(async ({ projectId, docId }) => {
-        try {
-          const status = await api.docsCheckIndexStatus(projectId, docId);
-          setDocumentIndexStatus(docId, status.indexed, false);
-        } catch (err) {
-          console.error(`[WorkspaceCanvas] Failed to check index status for ${docId}`, err);
-          setDocumentIndexStatus(docId, false, false);
-        }
-      });
+      // Check statuses in batches to avoid ERR_INSUFFICIENT_RESOURCES
+      // Process 10 checks at a time
+      const CHECK_BATCH_SIZE = 10;
+      for (let i = 0; i < docsToCheck.length; i += CHECK_BATCH_SIZE) {
+        const batch = docsToCheck.slice(i, i + CHECK_BATCH_SIZE);
+        const checkPromises = batch.map(async ({ projectId, docId }) => {
+          try {
+            const status = await api.docsCheckIndexStatus(projectId, docId);
+            setDocumentIndexStatus(docId, status.indexed, false);
+          } catch (err) {
+            console.error(`[WorkspaceCanvas] Failed to check index status for ${docId}`, err);
+            setDocumentIndexStatus(docId, false, false);
+          }
+        });
 
-      await Promise.all(checkPromises);
+        await Promise.all(checkPromises);
+      }
     };
 
     checkIndexStatuses();
@@ -373,8 +504,13 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   }, []);
 
   // Memoize projects list to avoid unnecessary re-renders (newest -> oldest)
+  // Filter by projectId if specified
   const sortedProjectsWithDocs = React.useMemo(() => {
-    return [...currentProjectsWithDocs].sort((a, b) => {
+    const filtered = projectId
+      ? currentProjectsWithDocs.filter((p) => p.project.id === projectId)
+      : currentProjectsWithDocs;
+    
+    return [...filtered].sort((a, b) => {
       const fallbackA = a.lastUpdated || 0;
       const fallbackB = b.lastUpdated || 0;
       const tsA = getProjectSortTimestamp(a.project, fallbackA);
@@ -385,16 +521,93 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       }
       return a.project.displayName.localeCompare(b.project.displayName);
     });
-  }, [currentProjectsWithDocs, getProjectSortTimestamp]);
+  }, [currentProjectsWithDocs, projectId, getProjectSortTimestamp]);
+
+  // Handler for document added callback
+  const handleDocumentAdded = React.useCallback(() => {
+    if (!projectId) return;
+    // Reload documents
+    const loadDocs = async () => {
+      try {
+        const docs = await api.docsList(projectId);
+        const projects = getProjects() || [];
+        const project = projects.find((p) => p.id === projectId);
+        if (project) {
+          updateProjectDocs(project, docs || []);
+        }
+      } catch (err) {
+        console.error('[WorkspaceCanvas] Failed to reload documents', err);
+      }
+    };
+    loadDocs();
+  }, [projectId, getProjects, updateProjectDocs]);
+
+  // Handler for source added callback
+  const handleSourceAdded = React.useCallback(() => {
+    if (!projectId) return;
+    // Reload sources
+    const loadSources = async () => {
+      try {
+        const sources = await api.getProjectSources(projectId);
+        setProjectSources((prev) => ({
+          ...prev,
+          [projectId]: sources || [],
+        }));
+      } catch (err) {
+        console.error('[WorkspaceCanvas] Failed to reload sources', err);
+      }
+    };
+    loadSources();
+  }, [projectId]);
+
+  // Handler for adding Telegram source
+  const handleAddTelegramSource = async () => {
+    if (!projectId) return;
+    setTgError(null);
+    const handle = tgInput.trim().replace(/^@/, '').replace(/^t\.me\//, '').replace(/^telegram\.me\//, '');
+    if (!handle) {
+      setTgError('Enter @username or t.me/username');
+      return;
+    }
+    
+    setTgSubmitting(true);
+    try {
+      // Use executeDiscovery to add Telegram source
+      await api.executeDiscovery({
+        projectId,
+        queryText: '', // Empty query for source-only addition
+        language: 'EN',
+        sources: { web: [], telegram: [handle] },
+      });
+      setShowAddTelegramModal(false);
+      setTgInput('');
+      // Reload sources for the project
+      handleSourceAdded();
+    } catch (e: any) {
+      setTgError(e?.message || 'Failed to add channel');
+    } finally {
+      setTgSubmitting(false);
+    }
+  };
 
   if (!isOpen) return null;
 
   return (
-    <ModalWithHeader
-      title={t('unfold.sections.workspace')}
-      onClose={onClose}
-    >
-      <div className="space-y-6 py-2">
+    <>
+      <ModalWithHeader
+        title={t('unfold.sections.workspace')}
+        onClose={onClose}
+      >
+        <div className="space-y-6 py-2">
+          {/* Toolbar - only show when projectId is provided */}
+          {projectId && (
+            <WorkspaceToolbar
+              projectId={projectId}
+              onDocumentAdded={handleDocumentAdded}
+              onSourceAdded={handleSourceAdded}
+              onShowTelegramModal={() => setShowAddTelegramModal(true)}
+            />
+          )}
         {loading && currentProjectsWithDocs.length === 0 ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-pulse text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
@@ -413,6 +626,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
               key={project.id}
               project={project}
               documents={documents}
+              sources={projectSources[project.id]}
               discussionFrame={discussionFrame}
               indexStatuses={currentIndexStatuses}
               getIndexedStatus={getIndexedStatus}
@@ -420,8 +634,26 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
             />
           ))
         )}
-      </div>
-    </ModalWithHeader>
+        </div>
+      </ModalWithHeader>
+
+      {/* Telegram Add Modal */}
+      {projectId && (
+        <TelegramAddModal
+          isOpen={showAddTelegramModal}
+          onClose={() => {
+            setShowAddTelegramModal(false);
+            setTgInput('');
+            setTgError(null);
+          }}
+          input={tgInput}
+          onInputChange={setTgInput}
+          onSubmit={handleAddTelegramSource}
+          isSubmitting={tgSubmitting}
+          error={tgError}
+        />
+      )}
+    </>
   );
 };
 

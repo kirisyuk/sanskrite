@@ -246,6 +246,7 @@ const DiscoveryPage: React.FC = () => {
     showAccount,
     showAdmin,
     showWorkspace,
+    workspaceProjectId,
     staticPage,
     setStaticPage,
     isAdmin,
@@ -1337,6 +1338,7 @@ const DiscoveryPage: React.FC = () => {
         ) : showWorkspace ? (
           <WorkspaceCanvas
             isOpen={showWorkspace}
+            projectId={workspaceProjectId}
             onClose={closeAllModals}
             onOpenDocument={setActiveDoc}
           />
@@ -2281,12 +2283,10 @@ const DiscoveryPage: React.FC = () => {
           getPanelVisibilityStyles={getPanelVisibilityStyles}
           sources={sources}
           currentProjectId={currentProject?.id || null}
-          addMenuRef={addMenuRef}
-          showAddSourceMenu={showAddSourceMenu}
-          onShowAddSourceMenuChange={setShowAddSourceMenu}
           onShowAddTelegramModalChange={setShowAddTelegramModal}
           onPreviewSource={setPreviewSource}
           onOpenDocument={setActiveDoc}
+          onExpandWorkspace={openWorkspace}
           handleAnalyzeEntities={handleAnalyzeEntities}
           handleAnalyzeFacts={handleAnalyzeFacts}
           handleAnalyzeEvents={handleAnalyzeEvents}

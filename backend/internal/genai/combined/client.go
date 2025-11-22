@@ -172,8 +172,8 @@ var ModelContextWindows = map[string]int{
 	"gpt_quality":  400_000, // gpt-5.1
 
 	// Grok models
-	"grok_fast":     2_000_000, // grok-4-fast-non-reasoning
-	"grok_balanced": 2_000_000, // grok-4-fast-reasoning
+	"grok_fast":     2_000_000, // grok-4-1-fast-non-reasoning
+	"grok_balanced": 2_000_000, // grok-4-1-fast-reasoning
 	"grok_quality":  256_000,   // grok-4-0709
 
 	// Claude models
@@ -219,8 +219,8 @@ func (c *Client) normalizeOptionsForGrok(opts Options) gr.Options {
 	return gr.Options{
 		ModelOverride: map[string]string{
 			"grok_quality":  "grok-4-0709",
-			"grok_balanced": "grok-4-fast-reasoning",
-			"grok_fast":     "grok-4-fast-non-reasoning",
+			"grok_balanced": "grok-4-1-fast-reasoning",
+			"grok_fast":     "grok-4-1-fast-non-reasoning",
 		}[canonicalizeAlias(opts.ModelOverride)],
 		Temperature:       opts.Temperature,
 		MaxOutputTokens:   opts.MaxOutputTokens,

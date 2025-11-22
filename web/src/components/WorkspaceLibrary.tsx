@@ -23,6 +23,7 @@ interface WorkspaceLibraryProps {
   onDocumentDelete?: (docId: string) => void;
   onSourceDelete?: (sourceId: string) => void;
   onOpenDocument?: (doc: Document) => void;
+  onExpand?: (projectId: string | null) => void;
 }
 
 const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({ 
@@ -30,6 +31,7 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   onDocumentDelete,
   onSourceDelete,
   onOpenDocument,
+  onExpand,
 }) => {
   const [documents, setDocuments] = React.useState<Document[]>([]);
   const [sources, setSources] = React.useState<Source[]>([]);
@@ -58,19 +60,48 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
     }
   }, [editingDocId]);
 
-  // Load documents when projectId changes
+  // Load documents and sources when projectId changes
   React.useEffect(() => {
     if (!projectId || projectId === 'local-unfold') return;
     
-    const loadDocuments = async () => {
+    const loadData = async () => {
       const startTime = performance.now();
-      console.log('[WorkspaceLibrary] Starting document load at', startTime);
+      console.log('[WorkspaceLibrary] Starting data load at', startTime);
       setLoading(true);
       try {
+        // Load documents
         const docs = await api.docsList(projectId);
-        const endTime = performance.now();
-        console.log('[WorkspaceLibrary] Document load completed at', endTime, 'took', endTime - startTime, 'ms');
+        const docsTime = performance.now();
+        console.log('[WorkspaceLibrary] Document load completed at', docsTime, 'took', docsTime - startTime, 'ms');
         setDocuments(docs || []);
+
+        // Load sources
+        try {
+          const srcs = await api.getProjectSources(projectId);
+          const sourcesTime = performance.now();
+          console.log('[WorkspaceLibrary] Sources load completed at', sourcesTime, 'took', sourcesTime - docsTime, 'ms');
+          // Transform DataSource to Source format
+          const transformedSources: Source[] = (srcs || []).map((s: any) => {
+            // Extract displayName from various possible fields
+            let displayName = s.displayName || s.name;
+            if (!displayName && s.details) {
+              displayName = s.details.uri || s.details.channelUsername || s.details.url;
+            }
+            if (!displayName) {
+              displayName = s.kind || 'Unknown';
+            }
+            return {
+              id: s.id,
+              displayName,
+              kind: s.kind || 'unknown',
+              status: s.status || 'active',
+            };
+          });
+          setSources(transformedSources);
+        } catch (err) {
+          console.error('[WorkspaceLibrary] Failed to load sources', err);
+          setSources([]);
+        }
       } catch (err) {
         console.error('[WorkspaceLibrary] Failed to load documents', err);
       } finally {
@@ -78,7 +109,7 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
       }
     };
 
-    loadDocuments();
+    loadData();
   }, [projectId]);
 
   const getFileIcon = (filename: string, contentType?: string) => {
@@ -181,9 +212,18 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   };
 
   const handleSourceDelete = async (source: Source) => {
-    // TODO: Implement source deletion when API is ready
-    console.log('[WorkspaceLibrary] Source delete requested', { sourceId: source.id });
-    onSourceDelete?.(source.id);
+    if (!projectId || projectId === 'local-unfold') return;
+    
+    try {
+      // Detach source from project
+      await api.detachSource(projectId, source.id);
+      setSources(prev => prev.filter(s => s.id !== source.id));
+      onSourceDelete?.(source.id);
+      console.log('[WorkspaceLibrary] Source detached from project', { sourceId: source.id });
+    } catch (err) {
+      console.error('[WorkspaceLibrary] Failed to detach source', err);
+      alert('Failed to detach source from project');
+    }
   };
 
   const getDocumentDisplayName = (filename: string) => {
@@ -242,6 +282,43 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
 
   return (
     <div className="space-y-4">
+      {/* Header with expand button - always visible if onExpand is provided */}
+      {onExpand && (
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-xs font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
+            Workspace Library
+          </h4>
+          <button
+            type="button"
+            onClick={() => {
+              console.log('[WorkspaceLibrary] Expand clicked', { projectId });
+              onExpand?.(projectId);
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] font-medium transition-colors"
+            style={{
+              color: 'var(--text-heading)',
+              backgroundColor: 'var(--white-06)',
+              border: '1px solid var(--overlay-line-90)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'var(--white-10)';
+              e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'var(--white-06)';
+              e.currentTarget.style.borderColor = 'var(--overlay-line-90)';
+            }}
+            title="Expand to full screen"
+            aria-label="Expand workspace library to full screen"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span>Expand</span>
+          </button>
+        </div>
+      )}
+
       {/* Documents section */}
       {documents.length > 0 && (
         <div>

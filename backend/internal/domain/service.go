@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -24,10 +25,11 @@ func NewDomainService(
 	conceptsRepo *repo.ConceptRepository,
 	relationsRepo *repo.RelationRepository,
 	genaiClient *gen_combined.Client,
+	executor *ai.AITaskExecutor,
 	logger *log.Logger,
 ) *DomainService {
 	hierarchyService := NewDomainHierarchyService(conceptsRepo, logger)
-	classifier := NewDomainClassifier(hierarchyService, conceptsRepo, genaiClient, logger)
+	classifier := NewDomainClassifier(hierarchyService, conceptsRepo, genaiClient, executor, logger)
 	relationManager := NewDomainRelationManager(relationsRepo, logger)
 
 	return &DomainService{

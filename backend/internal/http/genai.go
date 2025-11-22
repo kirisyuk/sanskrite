@@ -1174,12 +1174,18 @@ func (h *GenAIHandler) calculateFallbackCost(provider, modelName string, inputTo
 		case strings.Contains(modelLower, "grok-3-mini"):
 			inputPrice = 0.00000030  // $0.30 / 1M
 			outputPrice = 0.00000050 // $0.50 / 1M
-		case strings.Contains(modelLower, "grok-4-fast-non-reasoning"):
+		case strings.Contains(modelLower, "grok-4-1-fast-non-reasoning"):
 			inputPrice = 0.00000020  // $0.20 / 1M
 			outputPrice = 0.00000050 // $0.50 / 1M
+		case strings.Contains(modelLower, "grok-4-1-fast-reasoning"):
+			inputPrice = 0.00000020  // $0.20 / 1M
+			outputPrice = 0.00000050 // $0.50 / 1M
+		case strings.Contains(modelLower, "grok-4-fast-non-reasoning"):
+			inputPrice = 0.00000020  // $0.20 / 1M (legacy)
+			outputPrice = 0.00000050 // $0.50 / 1M (legacy)
 		case strings.Contains(modelLower, "grok-4-fast-reasoning"):
-			inputPrice = 0.00000020  // $0.20 / 1M (<128K), $0.40 / 1M (>=128K) - using base price
-			outputPrice = 0.00000050 // $0.50 / 1M (<128K), $1.00 / 1M (>=128K) - using base price
+			inputPrice = 0.00000020  // $0.20 / 1M (legacy)
+			outputPrice = 0.00000050 // $0.50 / 1M (legacy)
 		case strings.Contains(modelLower, "grok-4") || strings.Contains(modelLower, "grok-3"):
 			// Grok 4 and Grok 3 (premium models)
 			inputPrice = 0.000003  // $3 / 1M

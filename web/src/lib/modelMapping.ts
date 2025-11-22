@@ -17,8 +17,8 @@ export function mapAliasToModel(alias: string): { provider: string; model: strin
     'gpt_quality': { provider: 'openai', model: 'gpt-5.1' },
     
     // Grok models
-    'grok_fast': { provider: 'grok', model: 'grok-4-fast-non-reasoning' },
-    'grok_balanced': { provider: 'grok', model: 'grok-4-fast-reasoning' },
+    'grok_fast': { provider: 'grok', model: 'grok-4-1-fast-non-reasoning' },
+    'grok_balanced': { provider: 'grok', model: 'grok-4-1-fast-reasoning' },
     'grok_quality': { provider: 'grok', model: 'grok-4-0709' },
     
     // Claude models (provider is 'anthropic' in usage metrics)

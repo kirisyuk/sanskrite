@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -17,6 +18,7 @@ type DomainClassifier struct {
 	hierarchyService *DomainHierarchyService
 	conceptsRepo     *repo.ConceptRepository
 	genaiClient      *gen_combined.Client
+	executor         *ai.AITaskExecutor
 	cache            map[string]*CachedClassification // кэш классификаций
 	logger           *log.Logger
 }
@@ -26,12 +28,14 @@ func NewDomainClassifier(
 	hierarchyService *DomainHierarchyService,
 	conceptsRepo *repo.ConceptRepository,
 	genaiClient *gen_combined.Client,
+	executor *ai.AITaskExecutor,
 	logger *log.Logger,
 ) *DomainClassifier {
 	return &DomainClassifier{
 		hierarchyService: hierarchyService,
 		conceptsRepo:     conceptsRepo,
 		genaiClient:      genaiClient,
+		executor:         executor,
 		cache:            make(map[string]*CachedClassification),
 		logger:           logger,
 	}
@@ -63,20 +67,67 @@ func (c *DomainClassifier) ClassifyEntity(
 	prompt := c.buildEntityClassificationPrompt(entity, contextText, availableDomains)
 	schema := c.buildEntityClassificationSchema()
 
-	opts := gen_combined.Options{
-		ModelOverride:     "gemini_fast",
-		GroundingEnabled:  false,
-		SystemInstruction: "You are an expert domain classifier. Classify entities into business domains based on their characteristics, activities, and context. Use structured JSON output only.",
-		Temperature:       0.3,
-		MaxOutputTokens:   2048,
+	// Используем AITaskExecutor с верификатором для проверки JSON десериализации
+	if c.executor == nil {
+		// Fallback к старому способу
+		opts := gen_combined.Options{
+			ModelOverride:     "gemini_fast",
+			GroundingEnabled:  false,
+			SystemInstruction: "You are an expert domain classifier. Classify entities into business domains based on their characteristics, activities, and context. Use structured JSON output only.",
+			Temperature:       0.3,
+			MaxOutputTokens:   2048,
+		}
+		resp, err := c.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+		if err != nil {
+			return nil, fmt.Errorf("LLM classification failed: %w", err)
+		}
+		var result struct {
+			PrimaryDomain struct {
+				DomainPath []string `json:"domainPath"`
+				Confidence float64  `json:"confidence"`
+				Reasoning  string   `json:"reasoning"`
+			} `json:"primaryDomain"`
+			SecondaryDomains []struct {
+				DomainPath []string `json:"domainPath"`
+				Confidence float64  `json:"confidence"`
+			} `json:"secondaryDomains,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
+			return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+		}
+		return c.processClassificationResult(&result, ctx, tenantID)
 	}
 
-	resp, err := c.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	validateFunc := func(data map[string]interface{}) error {
+		// Проверяем только десериализацию JSON
+		return nil
+	}
+	verifier := ai.NewGenericVerifier(validateFunc)
+
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: prompt + "\n\nReturn JSON strictly matching the schema. Do not include markdown code fences.",
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            2048,
+			MinContextWindow:         4000,
+		},
+		Verifier: verifier,
+	}
+
+	parsed, err := c.executor.ExecuteStructuredTask(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("LLM classification failed: %w", err)
 	}
 
-	// Парсим результат
+	// Преобразуем результат
+	resultMap, ok := parsed.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type: %T", parsed)
+	}
+
+	// Преобразуем map в структуру
 	var result struct {
 		PrimaryDomain struct {
 			DomainPath []string `json:"domainPath"`
@@ -89,9 +140,58 @@ func (c *DomainClassifier) ClassifyEntity(
 		} `json:"secondaryDomains,omitempty"`
 	}
 
-	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	if primary, ok := resultMap["primaryDomain"].(map[string]interface{}); ok {
+		if path, ok := primary["domainPath"].([]interface{}); ok {
+			result.PrimaryDomain.DomainPath = make([]string, len(path))
+			for i, v := range path {
+				if s, ok := v.(string); ok {
+					result.PrimaryDomain.DomainPath[i] = s
+				}
+			}
+		}
+		if conf, ok := primary["confidence"].(float64); ok {
+			result.PrimaryDomain.Confidence = conf
+		}
+		if reason, ok := primary["reasoning"].(string); ok {
+			result.PrimaryDomain.Reasoning = reason
+		}
 	}
+	if secondary, ok := resultMap["secondaryDomains"].([]interface{}); ok {
+		result.SecondaryDomains = make([]struct {
+			DomainPath []string `json:"domainPath"`
+			Confidence float64  `json:"confidence"`
+		}, len(secondary))
+		for i, sec := range secondary {
+			if secMap, ok := sec.(map[string]interface{}); ok {
+				if path, ok := secMap["domainPath"].([]interface{}); ok {
+					result.SecondaryDomains[i].DomainPath = make([]string, len(path))
+					for j, v := range path {
+						if s, ok := v.(string); ok {
+							result.SecondaryDomains[i].DomainPath[j] = s
+						}
+					}
+				}
+				if conf, ok := secMap["confidence"].(float64); ok {
+					result.SecondaryDomains[i].Confidence = conf
+				}
+			}
+		}
+	}
+
+	return c.processClassificationResult(&result, ctx, tenantID)
+}
+
+func (c *DomainClassifier) processClassificationResult(result *struct {
+	PrimaryDomain struct {
+		DomainPath []string `json:"domainPath"`
+		Confidence float64  `json:"confidence"`
+		Reasoning  string   `json:"reasoning"`
+	} `json:"primaryDomain"`
+	SecondaryDomains []struct {
+		DomainPath []string `json:"domainPath"`
+		Confidence float64  `json:"confidence"`
+	} `json:"secondaryDomains,omitempty"`
+}, ctx context.Context, tenantID string) ([]*DomainClassification, error) {
 
 	// Преобразуем в DomainClassification
 	classifications := []*DomainClassification{}
@@ -125,13 +225,39 @@ func (c *DomainClassifier) ClassifyEntity(
 		}
 	}
 
-	// Кэшируем результат
-	c.cache[cacheKey] = &CachedClassification{
-		Classifications: classifications,
-		CachedAt:        time.Now().Unix(), // Unix timestamp
+	return classifications, nil
+}
+
+// executeClassificationTask выполняет LLM запрос для классификации
+func (c *DomainClassifier) executeClassificationTask(ctx context.Context, prompt string, schema map[string]interface{}) (map[string]interface{}, error) {
+	validateFunc := func(data map[string]interface{}) error {
+		return nil
+	}
+	verifier := ai.NewGenericVerifier(validateFunc)
+
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: prompt + "\n\nReturn JSON strictly matching the schema. Do not include markdown code fences.",
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            2048,
+			MinContextWindow:         4000,
+		},
+		Verifier: verifier,
 	}
 
-	return classifications, nil
+	parsed, err := c.executor.ExecuteStructuredTask(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+
+	resultMap, ok := parsed.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type: %T", parsed)
+	}
+
+	return resultMap, nil
 }
 
 // ClassifyEvent определяет домены для Event через LLM
@@ -160,20 +286,12 @@ func (c *DomainClassifier) ClassifyEvent(
 	prompt := c.buildEventClassificationPrompt(event, contextText, availableDomains)
 	schema := c.buildEventClassificationSchema()
 
-	opts := gen_combined.Options{
-		ModelOverride:     "gemini_fast",
-		GroundingEnabled:  false,
-		SystemInstruction: "You are an expert domain classifier. Classify events into business domains based on their nature, participants, and impact. Use structured JSON output only.",
-		Temperature:       0.3,
-		MaxOutputTokens:   2048,
-	}
-
-	resp, err := c.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	resultMap, err := c.executeClassificationTask(ctx, prompt, schema)
 	if err != nil {
 		return nil, fmt.Errorf("LLM classification failed: %w", err)
 	}
 
-	// Парсим результат
+	// Преобразуем map в структуру
 	var result struct {
 		Domains []struct {
 			DomainPath []string `json:"domainPath"`
@@ -183,8 +301,34 @@ func (c *DomainClassifier) ClassifyEvent(
 		} `json:"domains"`
 	}
 
-	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	if domains, ok := resultMap["domains"].([]interface{}); ok {
+		result.Domains = make([]struct {
+			DomainPath []string `json:"domainPath"`
+			Confidence float64  `json:"confidence"`
+			Reasoning  string   `json:"reasoning"`
+			Relevance  string   `json:"relevance"`
+		}, len(domains))
+		for i, dom := range domains {
+			if domMap, ok := dom.(map[string]interface{}); ok {
+				if path, ok := domMap["domainPath"].([]interface{}); ok {
+					result.Domains[i].DomainPath = make([]string, len(path))
+					for j, v := range path {
+						if s, ok := v.(string); ok {
+							result.Domains[i].DomainPath[j] = s
+						}
+					}
+				}
+				if conf, ok := domMap["confidence"].(float64); ok {
+					result.Domains[i].Confidence = conf
+				}
+				if reason, ok := domMap["reasoning"].(string); ok {
+					result.Domains[i].Reasoning = reason
+				}
+				if relevance, ok := domMap["relevance"].(string); ok {
+					result.Domains[i].Relevance = relevance
+				}
+			}
+		}
 	}
 
 	// Преобразуем в DomainClassification
@@ -239,20 +383,12 @@ func (c *DomainClassifier) ClassifyClaim(
 	prompt := c.buildClaimClassificationPrompt(claim, contextText, availableDomains)
 	schema := c.buildClaimClassificationSchema()
 
-	opts := gen_combined.Options{
-		ModelOverride:     "gemini_fast",
-		GroundingEnabled:  false,
-		SystemInstruction: "You are an expert domain classifier. Classify claims into business domains based on their subject, predicate, and object. Use structured JSON output only.",
-		Temperature:       0.3,
-		MaxOutputTokens:   2048,
-	}
-
-	resp, err := c.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	resultMap, err := c.executeClassificationTask(ctx, prompt, schema)
 	if err != nil {
 		return nil, fmt.Errorf("LLM classification failed: %w", err)
 	}
 
-	// Парсим результат
+	// Преобразуем map в структуру
 	var result struct {
 		PrimaryDomain struct {
 			DomainPath []string `json:"domainPath"`
@@ -261,8 +397,21 @@ func (c *DomainClassifier) ClassifyClaim(
 		} `json:"primaryDomain"`
 	}
 
-	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	if primary, ok := resultMap["primaryDomain"].(map[string]interface{}); ok {
+		if path, ok := primary["domainPath"].([]interface{}); ok {
+			result.PrimaryDomain.DomainPath = make([]string, len(path))
+			for i, v := range path {
+				if s, ok := v.(string); ok {
+					result.PrimaryDomain.DomainPath[i] = s
+				}
+			}
+		}
+		if conf, ok := primary["confidence"].(float64); ok {
+			result.PrimaryDomain.Confidence = conf
+		}
+		if reason, ok := primary["reasoning"].(string); ok {
+			result.PrimaryDomain.Reasoning = reason
+		}
 	}
 
 	// Преобразуем в DomainClassification
@@ -340,7 +489,22 @@ CONTEXT:
 AVAILABLE DOMAINS:
 %s
 
-Return JSON with primary domain and optional secondary domains. Each domain must be a path array like ["Economic", "Financial", "Banking"].`,
+Return JSON with primary domain and optional secondary domains. Each domain must be a path array like ["Economic", "Financial", "Banking"].
+
+Schema:
+{
+  "primaryDomain": {
+    "domainPath": ["string"],
+    "confidence": 0.0-1.0,
+    "reasoning": "string"
+  },
+  "secondaryDomains": [
+    {
+      "domainPath": ["string"],
+      "confidence": 0.0-1.0
+    }
+  ]
+}`,
 		entity.CanonicalName,
 		entity.Type,
 		entity.Description,
@@ -406,7 +570,16 @@ CONTEXT:
 AVAILABLE DOMAINS:
 %s
 
-Return JSON with primary domain. Domain must be a path array like ["Economic", "Financial", "Banking"].`,
+Return JSON with primary domain. Domain must be a path array like ["Economic", "Financial", "Banking"].
+
+Schema:
+{
+  "primaryDomain": {
+    "domainPath": ["string"],
+    "confidence": 0.0-1.0,
+    "reasoning": "string"
+  }
+}`,
 		claim.SubjectRef.ID,
 		claim.SubjectRef.Kind,
 		claim.Predicate,

@@ -27,6 +27,7 @@ type DiscoveryHandler struct {
 	profilesRepo     *repo.SourceProfilesRepository
 	logger           *log.Logger
 	orchestrator     *discovery.Orchestrator
+	sourcePoller     *discovery.SourcePoller
 	// rag deps
 	docsRepo           *repo.DocumentsRepository
 	searchRepo         *repo.SearchEventsRepository
@@ -53,6 +54,12 @@ func NewDiscoveryHandler(
 // WithOrchestrator wires orchestrator instance for execution
 func (h *DiscoveryHandler) WithOrchestrator(o *discovery.Orchestrator) *DiscoveryHandler {
 	h.orchestrator = o
+	return h
+}
+
+// WithSourcePoller wires source poller instance for scheduled polling
+func (h *DiscoveryHandler) WithSourcePoller(p *discovery.SourcePoller) *DiscoveryHandler {
+	h.sourcePoller = p
 	return h
 }
 
@@ -769,13 +776,18 @@ func (h *DiscoveryHandler) PublishDue(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
 		return
 	}
-	if h.orchestrator == nil || h.orchestrator.Publish() == nil {
-		WriteInternalError(w, "Poller not configured")
+	if h.sourcePoller == nil {
+		WriteInternalError(w, "Source poller not configured")
 		return
 	}
-	// Use the poller via webhooks handler; here we simply publish a signal event for due polling
-	// In this minimal implementation, we just return OK; background ticker handles due work.
-	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := h.sourcePoller.PublishDue(ctx); err != nil {
+		h.logger.Printf("PublishDue error: %v", err)
+		WriteInternalError(w, fmt.Sprintf("Failed to publish due sources: %v", err))
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "Due sources published"})
 }
 
 // ListProjectInteractions handles GET /api/v1/projects/{id}/interactions

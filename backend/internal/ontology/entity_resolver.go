@@ -2,7 +2,6 @@ package ontology
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -19,6 +18,7 @@ type EntityResolver struct {
 	entitiesRepo *repo.EntityRepository
 	emb          ai.EmbeddingProvider
 	genaiClient  *gen_combined.Client
+	executor     *ai.AITaskExecutor
 	logger       *log.Logger
 }
 
@@ -27,12 +27,14 @@ func NewEntityResolver(
 	entitiesRepo *repo.EntityRepository,
 	emb ai.EmbeddingProvider,
 	genaiClient *gen_combined.Client,
+	executor *ai.AITaskExecutor,
 	logger *log.Logger,
 ) *EntityResolver {
 	return &EntityResolver{
 		entitiesRepo: entitiesRepo,
 		emb:          emb,
 		genaiClient:  genaiClient,
+		executor:     executor,
 		logger:       logger,
 	}
 }
@@ -403,31 +405,6 @@ func (r *EntityResolver) resolveWithLLM(
 		return nil
 	}
 
-	// JSON Schema для ответа LLM
-	schema := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"existingEntityName": map[string]interface{}{
-				"type":        "string",
-				"description": "Canonical name существующей entity, если искомая сущность относится к одной из них (например, 'Нвидиа' -> 'Nvidia'). Используйте точное имя из списка существующих entities.",
-			},
-			"wikidataId": map[string]interface{}{
-				"type":        "string",
-				"description": "Wikidata Q-ID для известных сущностей (например, 'Q9686' для Nvidia), если сущность не найдена в существующих но является известной",
-			},
-			"confidence": map[string]interface{}{
-				"type":        "number",
-				"description": "Уверенность в ответе (0.0-1.0)",
-				"minimum":     0.0,
-				"maximum":     1.0,
-			},
-			"reasoning": map[string]interface{}{
-				"type":        "string",
-				"description": "Краткое объяснение решения",
-			},
-		},
-	}
-
 	prompt := fmt.Sprintf(`You are an expert in entity resolution. Your task is to determine if a given entity name refers to an existing entity in the system, or identify its Wikidata ID.
 
 ENTITY TO RESOLVE:
@@ -451,17 +428,34 @@ INSTRUCTIONS:
 
 IMPORTANT: Use the exact canonical name from the existing entities list, not the input name.
 
-Return JSON strictly matching the schema.`, canonicalName, entityType, strings.Join(entitiesList, "\n"))
+Return JSON strictly matching this schema:
+{
+  "existingEntityName": "string or null",
+  "wikidataId": "string or null",
+  "confidence": 0.0-1.0,
+  "reasoning": "string"
+}`, canonicalName, entityType, strings.Join(entitiesList, "\n"))
 
-	opts := gen_combined.Options{
-		ModelOverride:     "gemini_fast",
-		GroundingEnabled:  false,
-		SystemInstruction: "You are an expert in entity resolution and disambiguation. You understand different languages, transliterations, and naming variations. Be precise and return only high-confidence matches. Always use the exact canonical name from the existing entities list.",
-		Temperature:       0.3,
-		MaxOutputTokens:   512,
+	// Используем AITaskExecutor с верификатором для проверки JSON десериализации
+	validateFunc := func(data map[string]interface{}) error {
+		// Проверяем только десериализацию JSON - если распарсилось, значит валидно
+		return nil
+	}
+	verifier := ai.NewGenericVerifier(validateFunc)
+
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: prompt + "\n\nReturn JSON strictly matching the schema. Do not include markdown code fences.",
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            512,
+			MinContextWindow:         2000,
+		},
+		Verifier: verifier,
 	}
 
-	resp, err := r.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	parsed, err := r.executor.ExecuteStructuredTask(ctx, task)
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Printf("[EntityResolver] LLM resolution failed: %v", err)
@@ -469,7 +463,15 @@ Return JSON strictly matching the schema.`, canonicalName, entityType, strings.J
 		return nil
 	}
 
-	// Парсим ответ
+	// Преобразуем результат в нужный тип
+	resultMap, ok := parsed.(map[string]interface{})
+	if !ok {
+		if r.logger != nil {
+			r.logger.Printf("[EntityResolver] Unexpected result type: %T", parsed)
+		}
+		return nil
+	}
+
 	var result struct {
 		ExistingEntityName *string `json:"existingEntityName"`
 		WikidataID         *string `json:"wikidataId"`
@@ -477,32 +479,29 @@ Return JSON strictly matching the schema.`, canonicalName, entityType, strings.J
 		Reasoning          string  `json:"reasoning"`
 	}
 
-	// Пытаемся распарсить JSON
-	content := resp.Content
-	// Убираем markdown code blocks если есть
-	if strings.HasPrefix(content, "```") {
-		lines := strings.Split(content, "\n")
-		var cleaned []string
-		inCodeBlock := false
-		for _, line := range lines {
-			if strings.HasPrefix(line, "```") {
-				inCodeBlock = !inCodeBlock
-				continue
-			}
-			if !inCodeBlock {
-				cleaned = append(cleaned, line)
-			}
-		}
-		content = strings.Join(cleaned, "\n")
+	// Преобразуем map в структуру
+	if v, ok := resultMap["existingEntityName"].(string); ok && v != "" {
+		result.ExistingEntityName = &v
+	}
+	if v, ok := resultMap["wikidataId"].(string); ok && v != "" {
+		result.WikidataID = &v
+	}
+	if v, ok := resultMap["confidence"].(float64); ok {
+		result.Confidence = v
+	}
+	if v, ok := resultMap["reasoning"].(string); ok {
+		result.Reasoning = v
 	}
 
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		if r.logger != nil {
-			r.logger.Printf("[EntityResolver] Failed to parse LLM response: %v, content: %s", err, content)
-		}
-		return nil
-	}
+	return r.processLLMResult(&result, nameToEntity, wikidataToEntity, existingEntities, canonicalName, entityType)
+}
 
+func (r *EntityResolver) processLLMResult(result *struct {
+	ExistingEntityName *string `json:"existingEntityName"`
+	WikidataID         *string `json:"wikidataId"`
+	Confidence         float64 `json:"confidence"`
+	Reasoning          string  `json:"reasoning"`
+}, nameToEntity map[string]*models.Entity, wikidataToEntity map[string]*models.Entity, existingEntities []*models.Entity, canonicalName string, entityType models.EntityType) *models.Entity {
 	// Проверяем уверенность
 	if result.Confidence < 0.7 {
 		if r.logger != nil {

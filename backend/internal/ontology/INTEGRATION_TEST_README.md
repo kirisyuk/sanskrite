@@ -4,14 +4,37 @@
 
 ## Требования
 
-Для запуска тестов необходимо установить следующие переменные окружения:
+Тесты автоматически загружают ключи из GCP Secret Manager, если они не установлены в переменных окружения.
 
+### Вариант 1: Использование GCP Secret Manager (рекомендуется)
+
+Если у вас есть доступ к GCP проекту, тесты автоматически загрузят ключи из секретов:
+- `GEMINI_API_KEY_TEST` или `gemini_api_key`
+- `OPENAI_API_KEY_TEST` или `openai_api_key`
+
+Необходимо только установить:
+```bash
+export GCP_PROJECT_ID="your-gcp-project-id"
+# или
+export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+```
+
+### Вариант 2: Переменные окружения
+
+Альтернативно можно установить переменные окружения напрямую:
 ```bash
 export GEMINI_API_KEY="your-gemini-api-key"
 export GCP_PROJECT_ID="your-gcp-project-id"
 export OPENAI_API_KEY="your-openai-api-key"  # Опционально, для embeddings
 export GOOGLE_APPLICATION_CREDENTIALS="path/to/credentials.json"  # Опционально
 ```
+
+### Приоритет загрузки
+
+Тесты используют следующий порядок загрузки ключей:
+1. Переменные окружения (если установлены)
+2. GCP Secret Manager (если доступен и переменные не установлены)
+3. Пропуск теста (если ключи не найдены)
 
 ## Запуск тестов
 

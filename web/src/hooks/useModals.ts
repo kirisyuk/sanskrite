@@ -13,6 +13,7 @@ export function useModals() {
   const [activeModal, setActiveModal] = useState<ModalType>(null);
   const [staticPage, setStaticPage] = useState<StaticPageType>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [workspaceProjectId, setWorkspaceProjectId] = useState<string | null>(null);
 
   // Background-load user preferred language and admin status
   useEffect(() => {
@@ -60,16 +61,25 @@ export function useModals() {
     setActiveModal('admin');
   }, [closeAllModals]);
 
-  const openWorkspace = useCallback(() => {
+  const openWorkspace = useCallback((projectId?: string | null) => {
+    console.log('[useModals] openWorkspace called', { projectId });
     closeAllModals();
+    setWorkspaceProjectId(projectId || null);
     setActiveModal('workspace');
+    console.log('[useModals] openWorkspace completed, modal should be workspace');
   }, [closeAllModals]);
+
+  const closeWorkspace = useCallback(() => {
+    setActiveModal(null);
+    setWorkspaceProjectId(null);
+  }, []);
 
   return {
     showSettings: activeModal === 'settings',
     showAccount: activeModal === 'account',
     showAdmin: activeModal === 'admin',
     showWorkspace: activeModal === 'workspace',
+    workspaceProjectId,
     staticPage,
     setStaticPage,
     isAdmin,
@@ -78,6 +88,7 @@ export function useModals() {
     openAdmin,
     openWorkspace,
     closeAllModals,
+    closeWorkspace,
   };
 }
 

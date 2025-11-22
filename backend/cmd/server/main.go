@@ -273,7 +273,7 @@ func main() {
 		// ============================================================================
 
 		// EntityResolver для разрешения дубликатов entities
-		entityResolver := ontology.NewEntityResolver(entitiesRepo, emb, genaiClient, logger)
+		entityResolver := ontology.NewEntityResolver(entitiesRepo, emb, genaiClient, exec, logger)
 
 		// TrustIntegrator для интеграции Source Trust
 		trustIntegrator := ontology.NewTrustIntegrator(sourcesRepo, claimsRepo, eventsRepo, trustRepo, logger)
@@ -282,10 +282,10 @@ func main() {
 		conflictDetector := ontology.NewConflictDetector(claimsRepo, uncertaintyRepo, trustIntegrator, logger)
 
 		// CausalDetector для обнаружения причинно-следственных связей
-		causalDetector := ontology.NewCausalDetector(eventsRepo, causalLinksRepo, genaiClient, logger)
+		causalDetector := ontology.NewCausalDetector(eventsRepo, causalLinksRepo, genaiClient, exec, logger)
 
 		// DomainService для работы с доменами
-		domainService := domain.NewDomainService(conceptsRepo, relationsRepo, genaiClient, logger)
+		domainService := domain.NewDomainService(conceptsRepo, relationsRepo, genaiClient, exec, logger)
 
 		// EntityEnricher для обогащения из Wikidata
 		var entityEnricher *ontology.EntityEnricher
@@ -319,7 +319,7 @@ func main() {
 			}
 		}()
 
-		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo).WithFirestoreClient(fsClient.Client())
+		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo).WithFirestoreClient(fsClient.Client()).WithOrchestrator(orchestrator)
 
 		// Initialize Vertex AI Search client if configured
 		vertexSearchProjectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
@@ -382,6 +382,8 @@ func main() {
 
 			// Start source poller worker (background)
 			poller := discovery.NewSourcePoller(psClient, string(realtime.EventSourcePoll), orchestrator, logger)
+			// Wire poller to discovery handler for HTTP endpoint
+			s.discoveryHandler = s.discoveryHandler.WithSourcePoller(poller)
 			go func() {
 				ctxP, cancelP := context.WithCancel(ctx)
 				defer cancelP()
@@ -422,7 +424,7 @@ func main() {
 
 			// ChatOntologyProcessor для асинхронной обработки чата
 			if interactionsRepo != nil {
-				chatOntologyProcessor := ontology.NewChatOntologyProcessor(ontologyExtractor, genaiClient, interactionsRepo, logger)
+				chatOntologyProcessor := ontology.NewChatOntologyProcessor(ontologyExtractor, genaiClient, exec, interactionsRepo, logger)
 				// Создаем подписку на chat.ontology.process события
 				chatTopic := psClient.Topic(string(realtime.TopicInteractionEvents))
 				chatSubID := "chat.ontology.process.worker"
@@ -702,6 +704,16 @@ func main() {
 	mux.Handle("/api/v1/projects/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/sources") && r.Method == http.MethodPost {
 			sourcesHandler.AttachSource(w, r)
+			return
+		}
+		// GET /api/v1/projects/{id}/sources/{sourceId}/status
+		if strings.Contains(r.URL.Path, "/sources/") && strings.HasSuffix(r.URL.Path, "/status") && r.Method == http.MethodGet {
+			sourcesHandler.GetSourceProjectStatus(w, r)
+			return
+		}
+		// PATCH /api/v1/projects/{id}/sources/{sourceId}/status
+		if strings.Contains(r.URL.Path, "/sources/") && strings.HasSuffix(r.URL.Path, "/status") && r.Method == http.MethodPatch {
+			sourcesHandler.UpdateSourceProjectStatus(w, r)
 			return
 		}
 		if strings.Contains(r.URL.Path, "/sources/") && r.Method == http.MethodDelete {
@@ -1060,6 +1072,38 @@ func main() {
 		}
 
 		httphandlers.WriteError(w, http.StatusNotFound, "NOT_FOUND", "Route not found", nil)
+	})))
+
+	// Sources management routes
+	// Source preview endpoints
+	mux.Handle("/api/v1/sources/preview/telegram", authMiddleware(http.HandlerFunc(s.discoveryHandler.PreviewTelegramChannel)))
+	mux.Handle("/api/v1/sources/preview/rss", authMiddleware(http.HandlerFunc(s.discoveryHandler.PreviewRSSFeed)))
+
+	mux.Handle("/api/v1/sources", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			sourcesHandler.CreateSource(w, r)
+		case http.MethodGet:
+			sourcesHandler.ListSources(w, r)
+		default:
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		}
+	})))
+	mux.Handle("/api/v1/sources/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.Trim(r.URL.Path, "/")
+		parts := strings.Split(path, "/")
+		if len(parts) >= 4 && parts[3] == "status" && r.Method == http.MethodPatch {
+			sourcesHandler.UpdateSourceStatus(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			sourcesHandler.GetSource(w, r)
+		case http.MethodPut:
+			sourcesHandler.UpdateSource(w, r)
+		default:
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		}
 	})))
 
 	// Generation Sessions routes

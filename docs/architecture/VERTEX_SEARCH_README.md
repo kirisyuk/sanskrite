@@ -2,7 +2,7 @@
 
 ## Quick Start
 
-### 1. Configure Environment Variables
+Пу### 1. Configure Environment Variables
 Set these in your deployment:
 - `VERTEX_SEARCH_DATA_STORE_ID=rag-documents-store`
 - `VERTEX_SEARCH_LOCATION=global`

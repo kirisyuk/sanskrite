@@ -745,6 +745,88 @@ func (r *DataSourcesRepository) ListActiveByKinds(ctx context.Context, kinds []s
 	return res, nil
 }
 
+// ListByTenant returns all datasources accessible by a tenant (tenant-scoped + global public sources)
+func (r *DataSourcesRepository) ListByTenant(ctx context.Context, tenantID string, kinds []string, status *string) ([]*models.DataSource, error) {
+	var allDocs []*firestore.DocumentSnapshot
+
+	// Get tenant-scoped sources
+	if len(kinds) > 0 {
+		// Filter by kind if specified
+		q := r.col.Where("tenantId", "==", tenantID).Where("kind", "in", kinds)
+		if status != nil {
+			q = q.Where("status", "==", *status)
+		}
+		docs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		allDocs = append(allDocs, docs...)
+	} else {
+		// Get all tenant-scoped sources
+		q := r.col.Where("tenantId", "==", tenantID)
+		if status != nil {
+			q = q.Where("status", "==", *status)
+		}
+		docs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		allDocs = append(allDocs, docs...)
+	}
+
+	// Get global public sources (rss, telegram_channel, web)
+	globalKinds := []string{"rss", "telegram_channel", "web"}
+	if len(kinds) > 0 {
+		// Filter global kinds by requested kinds
+		filteredKinds := []string{}
+		for _, k := range kinds {
+			for _, gk := range globalKinds {
+				if k == gk {
+					filteredKinds = append(filteredKinds, k)
+					break
+				}
+			}
+		}
+		if len(filteredKinds) > 0 {
+			q := r.col.Where("tenantId", "==", "").Where("kind", "in", filteredKinds)
+			if status != nil {
+				q = q.Where("status", "==", *status)
+			}
+			docs, err := q.Documents(ctx).GetAll()
+			if err != nil {
+				return nil, err
+			}
+			allDocs = append(allDocs, docs...)
+		}
+	} else {
+		// Get all global public sources
+		q := r.col.Where("tenantId", "==", "").Where("kind", "in", globalKinds)
+		if status != nil {
+			q = q.Where("status", "==", *status)
+		}
+		docs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		allDocs = append(allDocs, docs...)
+	}
+
+	var res []*models.DataSource
+	seen := make(map[string]struct{}) // For deduplication
+	for _, d := range allDocs {
+		var ds models.DataSource
+		if err := d.DataTo(&ds); err != nil {
+			continue
+		}
+		// Deduplicate by ID (in case same source appears in both tenant and global queries)
+		if _, ok := seen[ds.ID]; !ok {
+			res = append(res, &ds)
+			seen[ds.ID] = struct{}{}
+		}
+	}
+	return res, nil
+}
+
 // DeleteByProject deletes sources where projectId == id, or removes id from relatedProjectIds
 func (r *DataSourcesRepository) DeleteByProject(ctx context.Context, projectID string) error {
 	// No-op in new model: linkage is managed in rag_source_projects

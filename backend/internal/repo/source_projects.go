@@ -82,6 +82,22 @@ func (r *SourceProjectsRepository) ListBySource(ctx context.Context, tenantID, s
 	return res, nil
 }
 
+func (r *SourceProjectsRepository) GetByProjectAndSource(ctx context.Context, tenantID, projectID, sourceID string) (*models.SourceProject, error) {
+	q := r.col.Where("tenantId", "==", tenantID).Where("projectId", "==", projectID).Where("sourceId", "==", sourceID)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, nil // Not found
+	}
+	var sp models.SourceProject
+	if err := docs[0].DataTo(&sp); err != nil {
+		return nil, err
+	}
+	return &sp, nil
+}
+
 func (r *SourceProjectsRepository) DeleteByProjectAndSource(ctx context.Context, tenantID, projectID, sourceID string) error {
 	q := r.col.Where("tenantId", "==", tenantID).Where("projectId", "==", projectID).Where("sourceId", "==", sourceID)
 	docs, err := q.Documents(ctx).GetAll()

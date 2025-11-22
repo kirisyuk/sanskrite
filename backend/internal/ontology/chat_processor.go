@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"cloud.google.com/go/pubsub"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -15,6 +16,7 @@ import (
 type ChatOntologyProcessor struct {
 	extractor   *OntologyExtractor
 	genaiClient *gen_combined.Client
+	executor    *ai.AITaskExecutor
 	interRepo   *repo.InteractionsRepository
 	logger      *log.Logger
 }
@@ -23,12 +25,14 @@ type ChatOntologyProcessor struct {
 func NewChatOntologyProcessor(
 	extractor *OntologyExtractor,
 	genaiClient *gen_combined.Client,
+	executor *ai.AITaskExecutor,
 	interRepo *repo.InteractionsRepository,
 	logger *log.Logger,
 ) *ChatOntologyProcessor {
 	return &ChatOntologyProcessor{
 		extractor:   extractor,
 		genaiClient: genaiClient,
+		executor:    executor,
 		interRepo:   interRepo,
 		logger:      logger,
 	}
@@ -138,74 +142,117 @@ func (p *ChatOntologyProcessor) extractFromChatMessage(
 MESSAGE:
 %s
 
-Return JSON with entities, events, and claims. Be conservative - only extract clear, factual information.`,
+Return JSON with entities, events, and claims. Be conservative - only extract clear, factual information.
+
+Schema:
+{
+  "entities": [
+    {
+      "type": "string",
+      "value": "string",
+      "confidence": 0.0-1.0
+    }
+  ],
+  "events": [
+    {
+      "title": "string",
+      "dateISO": "string",
+      "context": "string (optional)"
+    }
+  ],
+  "claims": [
+    {
+      "text": "string",
+      "summary": "string (optional)",
+      "confidence": 0.0-1.0
+    }
+  ]
+}`,
 		messageContent)
 
-	schema := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"entities": map[string]interface{}{
-				"type": "array",
-				"items": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"type":       map[string]interface{}{"type": "string"},
-						"value":      map[string]interface{}{"type": "string"},
-						"confidence": map[string]interface{}{"type": "number", "minimum": 0, "maximum": 1},
-					},
-					"required": []string{"type", "value", "confidence"},
-				},
-			},
-			"events": map[string]interface{}{
-				"type": "array",
-				"items": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"title":   map[string]interface{}{"type": "string"},
-						"dateISO": map[string]interface{}{"type": "string"},
-						"context": map[string]interface{}{"type": "string"},
-					},
-					"required": []string{"title", "dateISO"},
-				},
-			},
-			"claims": map[string]interface{}{
-				"type": "array",
-				"items": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"text":       map[string]interface{}{"type": "string"},
-						"summary":    map[string]interface{}{"type": "string"},
-						"confidence": map[string]interface{}{"type": "number", "minimum": 0, "maximum": 1},
-					},
-					"required": []string{"text", "confidence"},
-				},
-			},
+	// Используем AITaskExecutor с верификатором для проверки JSON десериализации
+	validateFunc := func(data map[string]interface{}) error {
+		return nil
+	}
+	verifier := ai.NewGenericVerifier(validateFunc)
+
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: prompt + "\n\nReturn JSON strictly matching the schema. Do not include markdown code fences.",
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            2048,
+			MinContextWindow:         4000,
 		},
-		"required": []string{"entities", "events", "claims"},
+		Verifier: verifier,
 	}
 
-	opts := gen_combined.Options{
-		ModelOverride:     "gemini_fast", // Используем быструю модель для чата
-		GroundingEnabled:  false,
-		SystemInstruction: "You are an expert information extractor. Extract only clear, factual entities, events, and claims from chat messages. Return structured JSON only.",
-		Temperature:       0.2, // Низкая температура для точности
-		MaxOutputTokens:   2048,
-	}
-
-	resp, err := p.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	parsed, err := p.executor.ExecuteStructuredTask(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("LLM extraction failed: %w", err)
 	}
 
-	// Парсим результат
+	// Преобразуем результат
+	resultMap, ok := parsed.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type: %T", parsed)
+	}
+
 	var result struct {
 		Entities []ExtractedEntity `json:"entities"`
 		Events   []ExtractedEvent  `json:"events"`
 		Claims   []ExtractedClaim   `json:"claims"`
 	}
 
-	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	// Преобразуем map в структуру
+	if entities, ok := resultMap["entities"].([]interface{}); ok {
+		result.Entities = make([]ExtractedEntity, len(entities))
+		for i, e := range entities {
+			if eMap, ok := e.(map[string]interface{}); ok {
+				if t, ok := eMap["type"].(string); ok {
+					result.Entities[i].Type = t
+				}
+				if v, ok := eMap["value"].(string); ok {
+					result.Entities[i].Value = v
+				}
+				if conf, ok := eMap["confidence"].(float64); ok {
+					result.Entities[i].Confidence = conf
+				}
+			}
+		}
+	}
+	if events, ok := resultMap["events"].([]interface{}); ok {
+		result.Events = make([]ExtractedEvent, len(events))
+		for i, ev := range events {
+			if evMap, ok := ev.(map[string]interface{}); ok {
+				if title, ok := evMap["title"].(string); ok {
+					result.Events[i].Title = title
+				}
+				if dateISO, ok := evMap["dateISO"].(string); ok {
+					result.Events[i].DateISO = dateISO
+				}
+				if ctx, ok := evMap["context"].(string); ok {
+					result.Events[i].Context = &ctx
+				}
+			}
+		}
+	}
+	if claims, ok := resultMap["claims"].([]interface{}); ok {
+		result.Claims = make([]ExtractedClaim, len(claims))
+		for i, c := range claims {
+			if cMap, ok := c.(map[string]interface{}); ok {
+				if text, ok := cMap["text"].(string); ok {
+					result.Claims[i].Text = text
+				}
+				if summary, ok := cMap["summary"].(string); ok {
+					result.Claims[i].Summary = &summary
+				}
+				if conf, ok := cMap["confidence"].(float64); ok {
+					result.Claims[i].Confidence = conf
+				}
+			}
+		}
 	}
 
 	return &ChatExtraction{
