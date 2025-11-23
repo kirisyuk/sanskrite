@@ -562,6 +562,10 @@ func main() {
 		if pub != nil {
 			sourcesHandler = sourcesHandler.WithPublisher(pub)
 		}
+		// Wire ingest history repository
+		ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
+		sourcesHandler = sourcesHandler.WithIngestHistory(ingestHistoryRepo)
+		orchestrator = orchestrator.WithIngestHistory(ingestHistoryRepo)
 		if pub != nil {
 			s.projectsHandler = s.projectsHandler.WithPublisher(pub)
 		}
@@ -1151,6 +1155,12 @@ func main() {
 		// parts: ["api", "v1", "sources", "{id}", "documents"]
 		if len(parts) >= 5 && parts[4] == "documents" && r.Method == http.MethodGet {
 			sourcesHandler.ListSourceDocuments(w, r)
+			return
+		}
+		// Handle /api/v1/sources/{id}/ingest-history
+		// parts: ["api", "v1", "sources", "{id}", "ingest-history"]
+		if len(parts) >= 5 && parts[4] == "ingest-history" && r.Method == http.MethodGet {
+			sourcesHandler.GetSourceIngestHistory(w, r)
 			return
 		}
 		// Handle /api/v1/sources/{id}/status

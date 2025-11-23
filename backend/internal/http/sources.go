@@ -17,12 +17,13 @@ import (
 
 // SourcesHandler manages project–source links and data sources
 type SourcesHandler struct {
-	sp           *repo.SourceProjectsRepository
-	ds           *repo.DataSourcesRepository
-	docsRepo     *repo.DocumentsRepository
-	orchestrator *discovery.Orchestrator
-	publisher    *realtime.Publisher
-	logger       *log.Logger
+	sp            *repo.SourceProjectsRepository
+	ds            *repo.DataSourcesRepository
+	docsRepo      *repo.DocumentsRepository
+	orchestrator  *discovery.Orchestrator
+	publisher     *realtime.Publisher
+	ingestHistory *repo.SourceIngestHistoryRepository
+	logger        *log.Logger
 }
 
 func NewSourcesHandler(sp *repo.SourceProjectsRepository, ds *repo.DataSourcesRepository, logger *log.Logger) *SourcesHandler {
@@ -44,6 +45,12 @@ func (h *SourcesHandler) WithOrchestrator(o *discovery.Orchestrator) *SourcesHan
 // WithPublisher wires realtime publisher for event publishing
 func (h *SourcesHandler) WithPublisher(pub *realtime.Publisher) *SourcesHandler {
 	h.publisher = pub
+	return h
+}
+
+// WithIngestHistory wires ingest history repository
+func (h *SourcesHandler) WithIngestHistory(hist *repo.SourceIngestHistoryRepository) *SourcesHandler {
+	h.ingestHistory = hist
 	return h
 }
 
@@ -607,10 +614,10 @@ func (h *SourcesHandler) ListSourceDocuments(w http.ResponseWriter, r *http.Requ
 	}
 
 	// For public sources (empty TenantID), pass empty string to ListBySource
-	// which will query by sourceId only (documents may have different tenantIDs)
+	// which will query by sourceId only (documents have TenantID="")
 	// For tenant-scoped sources, use the source's tenantID
 	tenantID := ds.TenantID
-	// Note: For public sources, ListBySource will query by sourceId only
+	// Note: For public sources, ListBySource queries documents with TenantID=""
 
 	docs, err := h.docsRepo.ListBySource(r.Context(), tenantID, sourceID, limit)
 	if err != nil {
@@ -674,33 +681,28 @@ func (h *SourcesHandler) IngestSource(w http.ResponseWriter, r *http.Request) {
 			if ds.Details.LastProcessedMessageID != nil {
 				last = *ds.Details.LastProcessedMessageID
 			}
-			tenantID := ds.TenantID
-			if tenantID == "" {
-				tenantID = auth.TenantID // For public sources, use requester's tenant for ingest
-			}
-			h.logger.Printf("IngestSource: calling IngestTelegram for source %s, channel @%s, lastMessageID=%d, tenantID=%s", sourceID, *ds.Details.ChannelUsername, last, tenantID)
-			ingestErr = h.orchestrator.IngestTelegram(ctx, tenantID, sourceID, *ds.Details.ChannelUsername, last)
+			// For public sources (TenantID == ""), use empty tenantID for documents
+			// This makes documents global and visible to all tenants who added this source
+			docTenantID := ds.TenantID // Empty for public sources, tenant-specific for private sources
+			h.logger.Printf("IngestSource: calling IngestTelegram for source %s, channel @%s, lastMessageID=%d, docTenantID=%s", sourceID, *ds.Details.ChannelUsername, last, docTenantID)
+			ingestErr = h.orchestrator.IngestTelegram(ctx, docTenantID, sourceID, *ds.Details.ChannelUsername, last)
 		case "web":
 			if ds.Details.URI == nil {
 				h.logger.Printf("IngestSource: web source %s missing URI", sourceID)
 				return
 			}
-			tenantID := ds.TenantID
-			if tenantID == "" {
-				tenantID = auth.TenantID
-			}
-			ingestErr = h.orchestrator.IngestWeb(ctx, tenantID, sourceID, *ds.Details.URI)
+			// For public sources (TenantID == ""), use empty tenantID for documents
+			docTenantID := ds.TenantID // Empty for public sources, tenant-specific for private sources
+			ingestErr = h.orchestrator.IngestWeb(ctx, docTenantID, sourceID, *ds.Details.URI)
 		case "rss":
 			if ds.Details.RSSURL == nil {
 				h.logger.Printf("IngestSource: rss source %s missing RSSURL", sourceID)
 				return
 			}
-			tenantID := ds.TenantID
-			if tenantID == "" {
-				tenantID = auth.TenantID
-			}
+			// For public sources (TenantID == ""), use empty tenantID for documents
+			docTenantID := ds.TenantID // Empty for public sources, tenant-specific for private sources
 			if h.orchestrator.EmbeddingProvider() != nil {
-				ingestErr = h.orchestrator.IngestRSS(ctx, tenantID, sourceID, h.orchestrator.EmbeddingProvider())
+				ingestErr = h.orchestrator.IngestRSS(ctx, docTenantID, sourceID, h.orchestrator.EmbeddingProvider())
 			} else {
 				h.logger.Printf("IngestSource: rss source %s requires embedding provider", sourceID)
 				return
@@ -806,6 +808,69 @@ func (h *SourcesHandler) ReprocessDocuments(w http.ResponseWriter, r *http.Reque
 		"sourceId": sourceID,
 		"count":    len(docs),
 		"message":  "Reprocessing queued",
+	})
+}
+
+// GetSourceIngestHistory handles GET /api/v1/sources/{id}/ingest-history
+// Returns the history of ingest runs for a source
+func (h *SourcesHandler) GetSourceIngestHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	if h.ingestHistory == nil {
+		WriteInternalError(w, "Ingest history repository not configured")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 4 { // /api/v1/sources/{id}/ingest-history
+		WriteBadRequest(w, "INVALID_PATH", "Source ID is required")
+		return
+	}
+	sourceID := parts[3]
+
+	// Get source to determine tenantID (for public sources, tenantID is empty)
+	ds, err := h.ds.Get(r.Context(), sourceID)
+	if err != nil || ds == nil {
+		WriteNotFound(w, "Source not found")
+		return
+	}
+
+	// For public sources, tenantID is empty; for private sources, use auth.TenantID
+	tenantID := ds.TenantID
+	if tenantID == "" {
+		tenantID = "" // Public source - query without tenantID filter
+	} else if tenantID != auth.TenantID {
+		// User doesn't have access to this source
+		WriteNotFound(w, "Source not found")
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50 // Default limit
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
+			limit = l
+		}
+	}
+
+	history, err := h.ingestHistory.ListBySource(r.Context(), tenantID, sourceID, limit)
+	if err != nil {
+		h.logger.Printf("[SourcesHandler] Failed to list ingest history for source %s: %v", sourceID, err)
+		WriteInternalError(w, "Failed to retrieve ingest history")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"sourceId": sourceID,
+		"history":  history,
+		"count":    len(history),
 	})
 }
 

@@ -31,7 +31,8 @@ func (r *EntityRepository) WithBigQuerySync(bq *gcp.BigQueryClient) *EntityRepos
 }
 
 func (r *EntityRepository) Create(ctx context.Context, e *models.Entity) (string, error) {
-	if e == nil || e.TenantID == "" {
+	// Allow empty TenantID for global/public sources
+	if e == nil {
 		return "", ErrInvalidOntologyDocument
 	}
 	now := time.Now().UTC()
@@ -64,7 +65,8 @@ func (r *EntityRepository) Create(ctx context.Context, e *models.Entity) (string
 }
 
 func (r *EntityRepository) Upsert(ctx context.Context, e *models.Entity) error {
-	if e == nil || e.ID == "" || e.TenantID == "" {
+	// Allow empty TenantID for global/public sources
+	if e == nil || e.ID == "" {
 		return ErrInvalidOntologyDocument
 	}
 	now := time.Now().UTC()
@@ -258,7 +260,8 @@ func (r *EventRepository) WithBigQuerySync(bq *gcp.BigQueryClient) *EventReposit
 }
 
 func (r *EventRepository) Create(ctx context.Context, e *models.Event) (string, error) {
-	if e == nil || e.TenantID == "" {
+	// Allow empty TenantID for global/public sources
+	if e == nil {
 		return "", ErrInvalidOntologyDocument
 	}
 	now := time.Now().UTC()
@@ -291,7 +294,8 @@ func (r *EventRepository) Create(ctx context.Context, e *models.Event) (string, 
 }
 
 func (r *EventRepository) Upsert(ctx context.Context, e *models.Event) error {
-	if e == nil || e.ID == "" || e.TenantID == "" {
+	// Allow empty TenantID for global/public sources
+	if e == nil || e.ID == "" {
 		return ErrInvalidOntologyDocument
 	}
 	now := time.Now().UTC()
@@ -435,25 +439,25 @@ func (r *EventRepository) syncToBigQuery(ctx context.Context, e *models.Event) {
 	participantsCount := len(e.Participants)
 
 	row := map[string]interface{}{
-		"id":               e.ID,
-		"tenantId":        e.TenantID,
-		"type":             e.Type,
-		"title":            e.Title,
-		"occurredAt":       e.OccurredAt,
-		"occurredStart":    e.OccurredStart,
-		"occurredEnd":      e.OccurredEnd,
-		"location":         locationName,
+		"id":                e.ID,
+		"tenantId":          e.TenantID,
+		"type":              e.Type,
+		"title":             e.Title,
+		"occurredAt":        e.OccurredAt,
+		"occurredStart":     e.OccurredStart,
+		"occurredEnd":       e.OccurredEnd,
+		"location":          locationName,
 		"participantsCount": participantsCount,
-		"outcomeSummary":   e.OutcomeSummary,
-		"sourceId":         sourceID,
-		"sourceType":       sourceType,
-		"confidence":       e.Confidence,
-		"status":           e.Status,
-		"version":          e.Version,
-		"createdBy":        e.CreatedBy,
-		"description":      e.Description,
-		"createdAt":        e.CreatedAt,
-		"updatedAt":        e.UpdatedAt,
+		"outcomeSummary":    e.OutcomeSummary,
+		"sourceId":          sourceID,
+		"sourceType":        sourceType,
+		"confidence":        e.Confidence,
+		"status":            e.Status,
+		"version":           e.Version,
+		"createdBy":         e.CreatedBy,
+		"description":       e.Description,
+		"createdAt":         e.CreatedAt,
+		"updatedAt":         e.UpdatedAt,
 	}
 
 	if err := r.bigquerySync.InsertRow(ctx, "ontology_events", row); err != nil {
@@ -612,7 +616,8 @@ func (r *ClaimRepository) WithBigQuerySync(bq *gcp.BigQueryClient) *ClaimReposit
 }
 
 func (r *ClaimRepository) Create(ctx context.Context, c *models.Claim) (string, error) {
-	if c == nil || c.TenantID == "" {
+	// Allow empty TenantID for global/public sources
+	if c == nil {
 		return "", ErrInvalidOntologyDocument
 	}
 	now := time.Now().UTC()
@@ -645,7 +650,8 @@ func (r *ClaimRepository) Create(ctx context.Context, c *models.Claim) (string, 
 }
 
 func (r *ClaimRepository) Upsert(ctx context.Context, c *models.Claim) error {
-	if c == nil || c.ID == "" || c.TenantID == "" {
+	// Allow empty TenantID for global/public sources
+	if c == nil || c.ID == "" {
 		return ErrInvalidOntologyDocument
 	}
 	now := time.Now().UTC()
@@ -792,12 +798,12 @@ func (r *ClaimRepository) syncToBigQuery(ctx context.Context, c *models.Claim) {
 		"subjectId":   c.SubjectRef.ID,
 		"subjectKind": string(c.SubjectRef.Kind),
 		"predicate":   c.Predicate,
-		"objectKind": string(c.ObjectRef.Kind),
+		"objectKind":  string(c.ObjectRef.Kind),
 		"objectId":    objectID,
 		"stance":      string(c.Stance),
 		"confidence":  c.Confidence,
 		"sourceId":    sourceID,
-		"sourceType": sourceType,
+		"sourceType":  sourceType,
 		"method":      string(c.Provenance.Method),
 		"extractedAt": c.Provenance.ExtractedAt,
 		"status":      c.Status,
@@ -1484,7 +1490,8 @@ func NewSourceRepository(db *firestore.Client) *SourceRepository {
 }
 
 func (r *SourceRepository) Create(ctx context.Context, s *models.Source) (string, error) {
-	if s == nil || s.TenantID == "" {
+	// Allow empty TenantID for global/public sources
+	if s == nil {
 		return "", ErrInvalidOntologyDocument
 	}
 	now := time.Now().UTC()
@@ -1768,4 +1775,3 @@ func (r *UncertaintyModelRepository) Delete(ctx context.Context, id string) erro
 	_, err := r.col.Doc(id).Delete(ctx)
 	return err
 }
-

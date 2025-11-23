@@ -742,6 +742,20 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 		if linkStatus == "" {
 			linkStatus = "active" // Default to active if not set
 		}
+		// Convert time pointers to ISO8601 strings or nil
+		var lastPolledAtStr interface{}
+		if ds.LastPolledAt != nil {
+			lastPolledAtStr = ds.LastPolledAt.Format(time.RFC3339)
+		}
+		var nextPollAtStr interface{}
+		if ds.NextPollAt != nil {
+			nextPollAtStr = ds.NextPollAt.Format(time.RFC3339)
+		}
+		var lastFoundAtStr interface{}
+		if ds.LastFoundAt != nil {
+			lastFoundAtStr = ds.LastFoundAt.Format(time.RFC3339)
+		}
+		
 		m := map[string]interface{}{
 			"id":            ds.ID,
 			"tenantId":      ds.TenantID,
@@ -753,8 +767,9 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 			"sessionId":     ds.SessionID,
 			"ownerUserId":   ds.OwnerUserID,
 			"sourceDetails": ds.Details,
-			"lastPolledAt":  ds.LastPolledAt,
-			"lastFoundAt":   ds.LastFoundAt,
+			"lastPolledAt":  lastPolledAtStr,
+			"nextPollAt":    nextPollAtStr, // Добавляем nextPollAt для отображения следующего планового ingest
+			"lastFoundAt":   lastFoundAtStr,
 			"errorCount":    ds.ErrorCount,
 			"createdAt":     ds.CreatedAt,
 			"updatedAt":     ds.UpdatedAt,

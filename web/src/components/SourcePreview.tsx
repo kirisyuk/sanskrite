@@ -38,6 +38,8 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
   const [documents, setDocuments] = React.useState<any[]>([]);
   const [loadingDocs, setLoadingDocs] = React.useState(false);
   const [documentsError, setDocumentsError] = React.useState<string | null>(null);
+  const [ingestHistory, setIngestHistory] = React.useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = React.useState(false);
 
   React.useEffect(() => {
     function handleDown(e: MouseEvent) {
@@ -103,6 +105,21 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
         });
     }
   }, [source?.id, source?.kind, source?.sourceDetails?.channelUsername]);
+
+  // Load ingest history
+  React.useEffect(() => {
+    if (!source?.id) return;
+    setLoadingHistory(true);
+    api.getSourceIngestHistory(source.id, 20)
+      .then((result) => {
+        setIngestHistory(result.history || []);
+        setLoadingHistory(false);
+      })
+      .catch((err) => {
+        console.error('[SourcePreview] Failed to load ingest history', err);
+        setLoadingHistory(false);
+      });
+  }, [source?.id]);
 
   const badgeStyle: React.CSSProperties = {
     display: 'inline-flex',
@@ -301,6 +318,71 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
           )}
           {source.sourceDetails?.channelUsername && (
             <div><span style={{ color: 'var(--text-tertiary-weak)' }}>telegram:</span> @{source.sourceDetails.channelUsername}</div>
+          )}
+        </div>
+
+        {/* Ingest History section */}
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 8 }}>
+            Ingest History ({ingestHistory.length})
+          </div>
+          {loadingHistory ? (
+            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
+              Loading history...
+            </div>
+          ) : ingestHistory.length === 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
+              No ingest history yet
+            </div>
+          ) : (
+            <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {ingestHistory.map((h: any) => (
+                <div
+                  key={h.id}
+                  style={{
+                    padding: 8,
+                    borderRadius: 8,
+                    backgroundColor: 'var(--bg-sidebar)',
+                    border: '1px solid var(--overlay-line-90)',
+                    fontSize: 11,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ 
+                      padding: '2px 6px', 
+                      borderRadius: 4, 
+                      backgroundColor: h.status === 'success' ? 'var(--accent-success)' : h.status === 'error' ? 'var(--accent-error)' : 'var(--accent-warning)',
+                      color: 'white',
+                      fontSize: 10,
+                      fontWeight: 600,
+                    }}>
+                      {h.status}
+                    </span>
+                    <span style={{ color: 'var(--text-tertiary-weak)', fontSize: 10 }}>
+                      {h.completedAt ? new Date(h.completedAt).toLocaleString() : new Date(h.startedAt).toLocaleString()}
+                    </span>
+                  </div>
+                  <div style={{ color: 'var(--text-secondary-strong)', marginTop: 4 }}>
+                    <div>Processed: {h.documentsProcessed || 0} • Created: {h.documentsCreated || 0}</div>
+                    {h.durationMs && (
+                      <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 2 }}>
+                        Duration: {(h.durationMs / 1000).toFixed(1)}s
+                      </div>
+                    )}
+                    {h.error && (
+                      <div style={{ fontSize: 10, color: 'var(--accent-error)', marginTop: 2 }}>
+                        Error: {h.error}
+                      </div>
+                    )}
+                    {h.params && Object.keys(h.params).length > 0 && (
+                      <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 2 }}>
+                        Params: {JSON.stringify(h.params)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 

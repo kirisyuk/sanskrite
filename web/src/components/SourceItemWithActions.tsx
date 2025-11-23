@@ -6,6 +6,8 @@ interface Source {
   displayName: string;
   kind: string;
   status?: string;
+  lastPolledAt?: string;
+  nextPollAt?: string;
 }
 
 interface SourceItemWithActionsProps {
@@ -138,6 +140,47 @@ export const SourceItemWithActions: React.FC<SourceItemWithActionsProps> = ({
         <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
           {source.kind}
           {source.status && ` • ${source.status}`}
+        </div>
+        <div className="text-[9px] mt-0.5" style={{ color: 'var(--text-tertiary-weak)' }}>
+          {(source.lastPolledAt || source.nextPollAt) ? (
+            <>
+              {source.lastPolledAt && (
+                <span>Last: {new Date(source.lastPolledAt).toLocaleString('ru-RU', { 
+                  year: 'numeric', 
+                  month: '2-digit', 
+                  day: '2-digit', 
+                  hour: '2-digit', 
+                  minute: '2-digit' 
+                })}</span>
+              )}
+              {source.lastPolledAt && source.nextPollAt && source.status !== 'paused' && ' • '}
+              {source.nextPollAt && source.status !== 'paused' && (
+                <span>Next: {new Date(source.nextPollAt).toLocaleString('ru-RU', { 
+                  year: 'numeric', 
+                  month: '2-digit', 
+                  day: '2-digit', 
+                  hour: '2-digit', 
+                  minute: '2-digit' 
+                })}</span>
+              )}
+              {source.status === 'paused' && source.lastPolledAt && (
+                <span className="ml-1" style={{ fontStyle: 'italic' }}>(paused)</span>
+              )}
+              {source.status === 'paused' && !source.lastPolledAt && source.nextPollAt && (
+                <span style={{ fontStyle: 'italic' }}>Next: {new Date(source.nextPollAt).toLocaleString('ru-RU', { 
+                  year: 'numeric', 
+                  month: '2-digit', 
+                  day: '2-digit', 
+                  hour: '2-digit', 
+                  minute: '2-digit' 
+                })} (paused)</span>
+              )}
+            </>
+          ) : (
+            <span style={{ fontStyle: 'italic', opacity: 0.5 }}>
+              Last: — • Next: — (здесь появится время последнего и следующего ingest)
+            </span>
+          )}
         </div>
       </div>
 

@@ -152,7 +152,8 @@ func (r *DocumentsRepository) Upsert(ctx context.Context, d *models.Document) er
 }
 
 func (r *DocumentsRepository) Create(ctx context.Context, d *models.Document) (string, error) {
-	if d == nil || d.SourceID == "" || d.TenantID == "" {
+	// Allow empty TenantID for public sources (documents are global)
+	if d == nil || d.SourceID == "" {
 		return "", ErrInvalidDocument
 	}
 	now := time.Now().UTC()
@@ -214,7 +215,16 @@ func (r *DocumentsRepository) GetByID(ctx context.Context, id string) (*models.D
 }
 
 func (r *DocumentsRepository) GetByExternalID(ctx context.Context, tenantID, sourceID, externalID string) (*models.Document, error) {
-	q := r.col.Where("tenantId", "==", tenantID).Where("sourceId", "==", sourceID).Where("externalId", "==", externalID).Limit(1)
+	// For public sources (empty tenantID), query by sourceId and externalId only
+	// For tenant-scoped sources, filter by tenantId, sourceId, and externalId
+	var q firestore.Query
+	if tenantID == "" {
+		// Public source: query by sourceId and externalId only (documents have TenantID="")
+		q = r.col.Where("sourceId", "==", sourceID).Where("externalId", "==", externalID).Limit(1)
+	} else {
+		// Tenant-scoped source: filter by tenantId, sourceId, and externalId
+		q = r.col.Where("tenantId", "==", tenantID).Where("sourceId", "==", sourceID).Where("externalId", "==", externalID).Limit(1)
+	}
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil || len(docs) == 0 {
 		return nil, err
@@ -362,10 +372,11 @@ func (r *CoreDocsRepo) Delete(ctx context.Context, id string) (bool, error) {
 
 func (r *DocumentsRepository) ListBySource(ctx context.Context, tenantID, sourceID string, limit int) ([]*models.Document, error) {
 	// For public sources (empty tenantID), query by sourceId only
+	// Documents from public sources have TenantID="" and are visible to all tenants
 	// For tenant-scoped sources, filter by both tenantId and sourceId
 	var q firestore.Query
 	if tenantID == "" {
-		// Public source: query by sourceId only (documents may have different tenantIDs)
+		// Public source: query by sourceId only (documents have TenantID="")
 		q = r.col.Where("sourceId", "==", sourceID).OrderBy("originPublishedAt", firestore.Desc)
 	} else {
 		// Tenant-scoped source: filter by both tenantId and sourceId

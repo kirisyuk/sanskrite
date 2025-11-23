@@ -34,6 +34,7 @@ type WaitlistRepository struct{ col *firestore.CollectionRef }
 type MetaAnalysesRepository struct{ col *firestore.CollectionRef }
 type MetaAggregateProjectsRepository struct{ col *firestore.CollectionRef }
 type MetaAggregateUsersRepository struct{ col *firestore.CollectionRef }
+type SourceIngestHistoryRepository struct{ col *firestore.CollectionRef }
 
 func NewUsersRepository(db *firestore.Client) *UsersRepository {
 	return &UsersRepository{col: db.Collection("core_users")}
@@ -69,6 +70,56 @@ func NewMetaAggregateProjectsRepository(db *firestore.Client) *MetaAggregateProj
 
 func NewMetaAggregateUsersRepository(db *firestore.Client) *MetaAggregateUsersRepository {
 	return &MetaAggregateUsersRepository{col: db.Collection("meta_aggregate_user")}
+}
+
+func NewSourceIngestHistoryRepository(db *firestore.Client) *SourceIngestHistoryRepository {
+	return &SourceIngestHistoryRepository{col: db.Collection("source_ingest_history")}
+}
+
+// Create создает новую запись истории обработки
+func (r *SourceIngestHistoryRepository) Create(ctx context.Context, h *models.SourceIngestHistory) (string, error) {
+	if h == nil || h.SourceID == "" {
+		return "", errors.New("invalid source ingest history")
+	}
+	now := time.Now().UTC()
+	if h.CreatedAt.IsZero() {
+		h.CreatedAt = now
+	}
+	if h.StartedAt.IsZero() {
+		h.StartedAt = now
+	}
+	doc := r.col.NewDoc()
+	h.ID = doc.ID
+	_, err := doc.Set(ctx, h)
+	return h.ID, err
+}
+
+// ListBySource возвращает историю обработок для источника, отсортированную по дате (новые первые)
+func (r *SourceIngestHistoryRepository) ListBySource(ctx context.Context, tenantID, sourceID string, limit int) ([]*models.SourceIngestHistory, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var q firestore.Query
+	if tenantID != "" {
+		// Для приватных источников фильтруем по tenantID
+		q = r.col.Where("sourceId", "==", sourceID).Where("tenantId", "==", tenantID).OrderBy("startedAt", firestore.Desc).Limit(limit)
+	} else {
+		// Для публичных источников (tenantID пустой) фильтруем только по sourceID
+		q = r.col.Where("sourceId", "==", sourceID).OrderBy("startedAt", firestore.Desc).Limit(limit)
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.SourceIngestHistory
+	for _, d := range docs {
+		var h models.SourceIngestHistory
+		if err := d.DataTo(&h); err != nil {
+			continue
+		}
+		out = append(out, &h)
+	}
+	return out, nil
 }
 
 // --- Meta Analyses ---

@@ -35,6 +35,7 @@ type Orchestrator struct {
 	logger       *log.Logger
 	cache        *repo.ProcessedContentRepository
 	interactions *repo.InteractionsRepository
+	ingestHistory *repo.SourceIngestHistoryRepository
 }
 
 type TelegramFetcher interface {
@@ -65,6 +66,12 @@ func (o *Orchestrator) Exec() *ai.AITaskExecutor { return o.exec }
 
 // EmbeddingProvider accessor (used by HTTP handlers for RSS ingest)
 func (o *Orchestrator) EmbeddingProvider() ai.EmbeddingProvider { return o.emb }
+
+// WithIngestHistory wires SourceIngestHistory repository for tracking ingest runs
+func (o *Orchestrator) WithIngestHistory(h *repo.SourceIngestHistoryRepository) *Orchestrator {
+	o.ingestHistory = h
+	return o
+}
 
 // ensureProjectSourceLink creates an active link between project and source if missing.
 func (o *Orchestrator) ensureProjectSourceLink(ctx context.Context, tenantID, projectID, sourceID string) {
@@ -241,6 +248,26 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 			_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"tenantId": tenantID, "sourceId": sourceID, "documentId": d.ID, "externalId": d.ExternalID})
 		}
 	}
+	
+	// Update LastPolledAt and NextPollAt in DataSource
+	if o.sources != nil {
+		ds, err := o.sources.Get(ctx, sourceID)
+		if err == nil && ds != nil {
+			now := time.Now().UTC()
+			ds.LastPolledAt = &now
+			// Calculate next poll time based on cadence
+			interval := o.cadenceToDuration(ds)
+			next := now.Add(interval)
+			ds.NextPollAt = &next
+			// Reset backoff on successful ingest
+			zero := 0
+			ds.PollBackoffSec = &zero
+			if err := o.sources.Upsert(ctx, ds); err != nil {
+				o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
+			}
+		}
+	}
+	
 	return nil
 }
 
@@ -250,14 +277,37 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 		return fmt.Errorf("ingest dependencies not wired")
 	}
 	o.logger.Printf("orchestrator: IngestTelegram started for @%s (sourceID=%s, tenantID=%s, lastMessageID=%d)", handle, sourceID, tenantID, lastMessageID)
+	startTime := time.Now().UTC()
 	msgs, err := o.telegram.FetchUpdates(ctx, handle, lastMessageID)
 	if err != nil {
 		o.logger.Printf("orchestrator: IngestTelegram failed to fetch updates for @%s: %v", handle, err)
+		// Записываем историю с ошибкой
+		if o.ingestHistory != nil {
+			errStr := err.Error()
+			durationMs := int(time.Since(startTime).Milliseconds())
+			completedAt := time.Now().UTC()
+			_, _ = o.ingestHistory.Create(ctx, &models.SourceIngestHistory{
+				TenantID:          tenantID,
+				SourceID:          sourceID,
+				Kind:              "telegram_channel",
+				Status:            "error",
+				Error:             &errStr,
+				Params:            map[string]interface{}{"handle": handle, "lastMessageID": lastMessageID},
+				DocumentsProcessed: 0,
+				DocumentsCreated:   0,
+				DurationMs:         &durationMs,
+				StartedAt:          startTime,
+				CompletedAt:        &completedAt,
+				CreatedAt:          startTime,
+			})
+		}
 		return err
 	}
 	o.logger.Printf("orchestrator: IngestTelegram fetched %d messages for @%s", len(msgs), handle)
 	now := time.Now().UTC()
 	maxSeenID := lastMessageID
+	documentsCreated := 0
+	documentsProcessed := 0
 	for _, m := range msgs {
 		extID := fmt.Sprintf("%d", m.ID)
 		if m.ID > maxSeenID {
@@ -273,6 +323,7 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 		if text == "" {
 			continue
 		}
+		documentsProcessed++
 		if existing != nil {
 			existing.Title = m.Link
 			existing.URL = m.Link
@@ -295,6 +346,7 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 				return err
 			}
 			docID = id
+			documentsCreated++
 		}
 		parts := ChunkText(text, 800)
 		if len(parts) > 0 {
@@ -327,8 +379,76 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			}
 		}
 	}
+	completedAt := time.Now().UTC()
+	durationMs := int(completedAt.Sub(startTime).Milliseconds())
+	status := "success"
+	if documentsProcessed == 0 {
+		status = "partial"
+	}
+	
+	// Записываем историю обработки
+	if o.ingestHistory != nil {
+		_, _ = o.ingestHistory.Create(ctx, &models.SourceIngestHistory{
+			TenantID:          tenantID,
+			SourceID:          sourceID,
+			Kind:              "telegram_channel",
+			Status:            status,
+			Params:            map[string]interface{}{"handle": handle, "lastMessageID": lastMessageID, "maxSeenID": maxSeenID},
+			DocumentsProcessed: documentsProcessed,
+			DocumentsCreated:    documentsCreated,
+			DurationMs:         &durationMs,
+			StartedAt:          startTime,
+			CompletedAt:        &completedAt,
+			CreatedAt:          startTime,
+		})
+	}
+	
 	o.logger.Printf("orchestrator: IngestTelegram completed for @%s (sourceID=%s): processed %d messages, maxSeenID=%d", handle, sourceID, len(msgs), maxSeenID)
+	
+	// Update LastPolledAt and NextPollAt in DataSource
+	if o.sources != nil {
+		ds, err := o.sources.Get(ctx, sourceID)
+		if err == nil && ds != nil {
+			now := time.Now().UTC()
+			ds.LastPolledAt = &now
+			// Calculate next poll time based on cadence (same logic as poller_worker)
+			interval := o.cadenceToDuration(ds)
+			next := now.Add(interval)
+			ds.NextPollAt = &next
+			// Reset backoff on successful ingest
+			zero := 0
+			ds.PollBackoffSec = &zero
+			if err := o.sources.Upsert(ctx, ds); err != nil {
+				o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
+			}
+		}
+	}
+	
 	return nil
+}
+
+// cadenceToDuration maps publishingCadence string (if available via profile) to a polling interval.
+// Same logic as in poller_worker.go
+func (o *Orchestrator) cadenceToDuration(ds *models.DataSource) time.Duration {
+	// Default 30 minutes
+	def := 30 * time.Minute
+	// Try to infer from profile attached to this datasource via orchestrator.profiles
+	// Minimal implementation: look up profile and parse behaviorPatterns.publishingCadence keywords
+	// Since poller doesn't have direct access to profiles repo, fall back to LastFoundAt heuristics
+	if ds.LastFoundAt != nil {
+		age := time.Since(*ds.LastFoundAt)
+		switch {
+		case age < 15*time.Minute:
+			return 10 * time.Minute
+		case age < 2*time.Hour:
+			return 30 * time.Minute
+		case age < 24*time.Hour:
+			return 2 * time.Hour
+		default:
+			return 6 * time.Hour
+		}
+	}
+	return def
 }
 
 // IngestProjectSources triggers ingest for all sources linked to a project (legacy linkage for now)
@@ -417,7 +537,31 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	if err != nil {
 		return err
 	}
-	return o.processProviderDocuments(ctx, tenantID, sourceID, docs, embed)
+	err = o.processProviderDocuments(ctx, tenantID, sourceID, docs, embed)
+	if err != nil {
+		return err
+	}
+	
+	// Update LastPolledAt and NextPollAt in DataSource
+	if o.sources != nil {
+		ds, err := o.sources.Get(ctx, sourceID)
+		if err == nil && ds != nil {
+			now := time.Now().UTC()
+			ds.LastPolledAt = &now
+			// Calculate next poll time based on cadence
+			interval := o.cadenceToDuration(ds)
+			next := now.Add(interval)
+			ds.NextPollAt = &next
+			// Reset backoff on successful ingest
+			zero := 0
+			ds.PollBackoffSec = &zero
+			if err := o.sources.Upsert(ctx, ds); err != nil {
+				o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
+			}
+		}
+	}
+	
+	return nil
 }
 
 // processProviderDocuments is a helper to process documents from any provider
@@ -1212,8 +1356,10 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 	// IngestTelegram will fetch messages itself, so we call it first
 	if o.docs != nil && o.chunks != nil && o.emb != nil {
 		// Use tenantID from input (project's tenant) for document storage
-		// Even though source is public (TenantID=""), documents are stored with project's tenantID
-		if ingestErr := o.IngestTelegram(ctx, in.TenantID, ds.ID, handle, 0); ingestErr != nil {
+		// For public sources (TenantID=""), documents should be global (TenantID="")
+		// This makes them visible to all tenants who added this source
+		docTenantID := ds.TenantID // Empty for public sources, tenant-specific for private sources
+		if ingestErr := o.IngestTelegram(ctx, docTenantID, ds.ID, handle, 0); ingestErr != nil {
 			o.logger.Printf("orchestrator: failed to ingest telegram messages for @%s: %v", handle, ingestErr)
 			// Don't fail the whole process if ingest fails, continue with profiling
 		} else {

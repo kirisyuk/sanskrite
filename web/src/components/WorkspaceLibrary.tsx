@@ -1,6 +1,7 @@
 import React from 'react';
 import { api } from '../lib/api';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
+import { useWorkspaceStore } from '../stores/workspaceStore';
 import { SourceItemWithActions } from './SourceItemWithActions';
 import SourcePreview from './SourcePreview';
 import { SourceDocumentsViewer } from './SourceDocumentsViewer';
@@ -20,6 +21,8 @@ interface Source {
   displayName: string;
   kind: string;
   status?: string;
+  lastPolledAt?: string;
+  nextPollAt?: string;
 }
 
 interface WorkspaceLibraryProps {
@@ -47,6 +50,12 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   const setPendingAttachedDocIds = useGenaiChatStore((state) => state.setPendingAttachedDocIds);
   const [previewSource, setPreviewSource] = React.useState<DataSource | null>(null);
   const [documentsViewSource, setDocumentsViewSource] = React.useState<DataSource | null>(null);
+  
+  // Sync sources with workspace store
+  const setProjectSources = useWorkspaceStore((s) => s.setProjectSources);
+  const updateSourceStatus = useWorkspaceStore((s) => s.updateSourceStatus);
+  const storeProjectSources = useWorkspaceStore((s) => projectId ? s.projectSources[projectId] : undefined);
+  const sourceStatusUpdates = useWorkspaceStore((s) => s.sourceStatusUpdates);
 
   // PERF: Track mount time
   React.useEffect(() => {
@@ -101,6 +110,8 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
               displayName,
               kind: s.kind || 'unknown',
               status: s.status || 'active',
+              lastPolledAt: s.lastPolledAt,
+              nextPollAt: s.nextPollAt,
             };
           });
           setSources(transformedSources);
@@ -116,7 +127,45 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
     };
 
     loadData();
-  }, [projectId]);
+  }, [projectId, setProjectSources]);
+  
+  // Sync sources from store when they change (e.g., from WorkspaceCanvas)
+  React.useEffect(() => {
+    if (!projectId || !storeProjectSources) return;
+    
+    const transformedSources: Source[] = storeProjectSources.map((s: DataSource) => {
+      let displayName = s.displayName || s.name;
+      if (!displayName && s.details) {
+        displayName = s.details.uri || s.details.channelUsername || s.details.url;
+      }
+      if (!displayName) {
+        displayName = s.kind || 'Unknown';
+      }
+      return {
+        id: s.id,
+        displayName,
+        kind: s.kind || 'unknown',
+        status: s.status || 'active',
+        lastPolledAt: s.lastPolledAt,
+        nextPollAt: s.nextPollAt,
+      };
+    });
+    
+    // Use a ref to track previous sources to avoid infinite loops
+    setSources(prevSources => {
+      const currentIds = prevSources.map(s => s.id).sort().join(',');
+      const newIds = transformedSources.map(s => s.id).sort().join(',');
+      if (currentIds !== newIds) {
+        return transformedSources;
+      }
+      // Check if status changed
+      const statusChanged = transformedSources.some(newSource => {
+        const oldSource = prevSources.find(s => s.id === newSource.id);
+        return oldSource && oldSource.status !== newSource.status;
+      });
+      return statusChanged ? transformedSources : prevSources;
+    });
+  }, [projectId, storeProjectSources, sourceStatusUpdates]);
 
   const getFileIcon = (filename: string, contentType?: string) => {
     const ext = filename.split('.').pop()?.toLowerCase();
@@ -450,13 +499,29 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
                 key={source.id}
                 source={source}
                 projectId={projectId}
-                onStatusChange={(sourceId, newStatus) => {
+                onStatusChange={async (sourceId, newStatus) => {
+                  // Update local state immediately
                   setSources(prev => prev.map(s => 
                     s.id === sourceId ? { ...s, status: newStatus } : s
                   ));
+                  // Update store for synchronization with WorkspaceCanvas
+                  updateSourceStatus(sourceId, newStatus);
+                  // Also update store sources for this project
+                  if (projectId && storeProjectSources) {
+                    const updated = storeProjectSources.map(s =>
+                      s.id === sourceId ? { ...s, status: newStatus } : s
+                    );
+                    setProjectSources(projectId, updated);
+                  }
                 }}
                 onDelete={(sourceId) => {
+                  // Update local state immediately
                   setSources(prev => prev.filter(s => s.id !== sourceId));
+                  // Update store for synchronization with WorkspaceCanvas
+                  if (projectId && storeProjectSources) {
+                    const updated = storeProjectSources.filter(s => s.id !== sourceId);
+                    setProjectSources(projectId, updated);
+                  }
                   onSourceDelete?.(sourceId);
                 }}
                 onPreview={async (source) => {

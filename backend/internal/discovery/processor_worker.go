@@ -95,7 +95,17 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 			// summarization via AI (best effort)
 			summary := ""
 			if w.exec != nil && d.FullText != "" {
-				task := &ai.AITask{TaskType: ai.TaskTypeSummarization, InputContent: "Summarize in 1-2 sentences:\n\n" + d.FullText, AIRequirements: ai.AIRequirements{TextGenerationCapability: true, MinCapabilityScore: 5, MaxOutputSize: 256}}
+				task := &ai.AITask{
+					TaskType:     ai.TaskTypeSummarization,
+					InputContent: "Summarize in 1-2 sentences:\n\n" + d.FullText,
+					TenantID:     payload.TenantID, // Передаем TenantID для записи метрик
+					UserID:       "system",         // Системные задачи ingest используют "system" как UserID
+					AIRequirements: ai.AIRequirements{
+						TextGenerationCapability: true,
+						MinCapabilityScore:       5,
+						MaxOutputSize:            256,
+					},
+				}
 				if res, err := w.exec.ExecuteTask(ctx, task); err == nil {
 					summary = res.Content
 				}
@@ -228,6 +238,8 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 				t := &ai.AITask{
 					TaskType:     ai.TaskTypeContentGeneration,
 					InputContent: prompt,
+					TenantID:     payload.TenantID, // Передаем TenantID для записи метрик
+					UserID:       "system",        // Системные задачи ingest используют "system" как UserID
 					AIRequirements: ai.AIRequirements{
 						TextGenerationCapability: true,
 						MinCapabilityScore:       6,

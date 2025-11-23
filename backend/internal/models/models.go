@@ -403,6 +403,23 @@ type SearchEvent struct {
 	CreatedAt     time.Time      `json:"createdAt" firestore:"createdAt"`
 }
 
+// SourceIngestHistory хранит историю обработок источника
+type SourceIngestHistory struct {
+	ID          string                 `json:"id" firestore:"id"`
+	TenantID    string                 `json:"tenantId" firestore:"tenantId"`
+	SourceID    string                 `json:"sourceId" firestore:"sourceId"`
+	Kind        string                 `json:"kind" firestore:"kind"` // telegram_channel, rss, web
+	Status      string                 `json:"status" firestore:"status"` // success, error, partial
+	Error       *string                `json:"error,omitempty" firestore:"error,omitempty"`
+	Params      map[string]interface{} `json:"params,omitempty" firestore:"params,omitempty"` // Параметры обработки (lastMessageID, URL, etc.)
+	DocumentsProcessed int             `json:"documentsProcessed" firestore:"documentsProcessed"`
+	DocumentsCreated    int             `json:"documentsCreated" firestore:"documentsCreated"`
+	DurationMs          *int            `json:"durationMs,omitempty" firestore:"durationMs,omitempty"`
+	StartedAt   time.Time              `json:"startedAt" firestore:"startedAt"`
+	CompletedAt *time.Time             `json:"completedAt,omitempty" firestore:"completedAt,omitempty"`
+	CreatedAt   time.Time              `json:"createdAt" firestore:"createdAt"`
+}
+
 // User соответствует Core.Users
 type User struct {
 	ID       string `json:"id" firestore:"id"`

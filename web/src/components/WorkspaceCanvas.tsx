@@ -177,6 +177,8 @@ const ProjectSection = React.memo<{
                   displayName: source.displayName || source.kind || 'Unknown',
                   kind: source.kind,
                   status: source.status,
+                  lastPolledAt: source.lastPolledAt,
+                  nextPollAt: source.nextPollAt,
                 }}
                 projectId={project.id}
                 onStatusChange={onSourceStatusChange}
@@ -251,12 +253,21 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   // Мемоизируем текущие данные
   const [currentProjectsWithDocs, setCurrentProjectsWithDocs] = React.useState(() => getProjectsWithDocs());
   
-  // State for project sources
+  // State for project sources - sync with workspace store
+  const storeProjectSources = useWorkspaceStore((s) => s.projectSources);
+  const setProjectSourcesStore = useWorkspaceStore((s) => s.setProjectSources);
+  const updateSourceStatus = useWorkspaceStore((s) => s.updateSourceStatus);
+  const sourceStatusUpdates = useWorkspaceStore((s) => s.sourceStatusUpdates);
   const [projectSources, setProjectSources] = React.useState<Record<string, DataSource[]>>({});
   
   // State for source preview
   const [previewSource, setPreviewSource] = React.useState<DataSource | null>(null);
   const [documentsViewSource, setDocumentsViewSource] = React.useState<DataSource | null>(null);
+  
+  // Sync local state with store
+  React.useEffect(() => {
+    setProjectSources(storeProjectSources);
+  }, [storeProjectSources, sourceStatusUpdates]);
   
   // State for Telegram modal (only when projectId is provided)
   const [showAddTelegramModal, setShowAddTelegramModal] = React.useState(false);
@@ -312,10 +323,12 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
               // Ensure sources is an array (handle null/undefined cases)
               const sourcesArray = Array.isArray(sources) ? sources : [];
               if (sourcesArray.length > 0) {
+                // Update both local state and store for synchronization
                 setProjectSources((prev) => ({
                   ...prev,
                   [project.id]: sourcesArray,
                 }));
+                setProjectSourcesStore(project.id, sourcesArray);
               }
               
               // Extract Discussion Frame
@@ -511,10 +524,13 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
     const loadSources = async (retryCount = 0) => {
       try {
         const sources = await api.getProjectSources(projectId);
+        const sourcesArray = sources || [];
+        // Update both local state and store for synchronization
         setProjectSources((prev) => ({
           ...prev,
-          [projectId]: sources || [],
+          [projectId]: sourcesArray,
         }));
+        setProjectSourcesStore(projectId, sourcesArray);
       } catch (err) {
         console.error('[WorkspaceCanvas] Failed to reload sources', err);
         // Retry up to 3 times with exponential backoff
@@ -526,7 +542,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
     };
     // Wait a bit for source creation to complete, then load
     setTimeout(() => loadSources(), 500);
-  }, [projectId]);
+  }, [projectId, setProjectSourcesStore]);
 
   // Handler for adding Telegram source
   const handleAddTelegramSource = async () => {
@@ -601,7 +617,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
               getIndexedStatus={getIndexedStatus}
               onOpenDocument={onOpenDocument}
               onSourceStatusChange={(sourceId, newStatus) => {
-                // Update local state and reload sources
+                // Update local state immediately
                 setProjectSources(prev => {
                   const updated = { ...prev };
                   if (updated[project.id]) {
@@ -611,10 +627,20 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
                   }
                   return updated;
                 });
+                // Update store for synchronization with WorkspaceLibrary
+                updateSourceStatus(sourceId, newStatus);
+                // Also update store sources for this project
+                if (projectSources[project.id]) {
+                  const updated = projectSources[project.id].map(s =>
+                    s.id === sourceId ? { ...s, status: newStatus } : s
+                  );
+                  setProjectSourcesStore(project.id, updated);
+                }
+                // Reload from server to ensure consistency
                 handleSourceAdded();
               }}
               onSourceDelete={(sourceId) => {
-                // Update local state and reload sources
+                // Update local state immediately
                 setProjectSources(prev => {
                   const updated = { ...prev };
                   if (updated[project.id]) {
@@ -622,6 +648,12 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
                   }
                   return updated;
                 });
+                // Update store for synchronization with WorkspaceLibrary
+                if (projectSources[project.id]) {
+                  const updated = projectSources[project.id].filter(s => s.id !== sourceId);
+                  setProjectSourcesStore(project.id, updated);
+                }
+                // Reload from server to ensure consistency
                 handleSourceAdded();
               }}
               onSourcePreview={(source) => {

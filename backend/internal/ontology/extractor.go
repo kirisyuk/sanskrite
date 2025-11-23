@@ -591,6 +591,7 @@ func (e *OntologyExtractor) ensureSource(
 	}
 
 	// Ищем существующий Source по URL или SourceID
+	// For public sources (empty tenantID), ListByTenant will find global sources (TenantID="")
 	if document.URL != "" {
 		allSources, err := e.sourcesRepo.ListByTenant(ctx, tenantID, 1000)
 		if err == nil {
