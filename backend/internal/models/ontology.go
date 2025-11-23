@@ -136,11 +136,18 @@ const (
 	RelationDirectionBidirectional   RelationDirection = "bidirectional"
 )
 
+// SourceRef ссылка на источник артефакта (документ, чат, веб-страница и т.д.)
+type SourceRef struct {
+	SourceID   string `json:"sourceId" firestore:"sourceId"`   // ID источника (document ID, chat ID, etc.)
+	SourceType string `json:"sourceType" firestore:"sourceType"` // тип источника: document, telegram_channel, rss, web, chat, etc.
+}
+
 // Provenance информация о происхождении данных
 type Provenance struct {
-	SourceIDs  []string   `json:"sourceIds" firestore:"sourceIds"`
-	ObservedAt *time.Time `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
-	Method     string     `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
+	SourceIDs   []string    `json:"sourceIds" firestore:"sourceIds"`   // ID источников данных (DataSource IDs) - для обратной совместимости
+	SourceRefs  []SourceRef `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"` // детальные ссылки на источники артефактов
+	ObservedAt  *time.Time  `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
+	Method      string      `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
 }
 
 // Relation представляет статические/квазистатические связи между Entity/Concept
@@ -208,7 +215,8 @@ type TemporalInfo struct {
 
 // ClaimProvenance детальная информация о происхождении утверждения
 type ClaimProvenance struct {
-	SourceIDs       []string         `json:"sourceIds" firestore:"sourceIds"`
+	SourceIDs       []string         `json:"sourceIds" firestore:"sourceIds"`   // ID источников данных (DataSource IDs) - для обратной совместимости
+	SourceRefs      []SourceRef      `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"` // детальные ссылки на источники артефактов
 	Method          ExtractionMethod `json:"method" firestore:"method"`
 	ExtractedAt     time.Time        `json:"extractedAt" firestore:"extractedAt"`
 	EvidenceAnchors []string         `json:"evidenceAnchors,omitempty" firestore:"evidenceAnchors,omitempty"` // строки/offset

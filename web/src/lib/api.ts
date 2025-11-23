@@ -162,6 +162,46 @@ class ApiClient {
     return response.data;
   }
 
+  async updateSourceProjectStatus(projectId: string, sourceId: string, status: 'active' | 'paused'): Promise<{ id: string; status: string }> {
+    const response = await this.client.patch<{ id: string; status: string }>(`/api/v1/projects/${projectId}/sources/${sourceId}/status`, {
+      status,
+    });
+    return response.data;
+  }
+
+  async getSourceDocuments(sourceId: string, limit?: number): Promise<any[]> {
+    const params = limit ? `?limit=${limit}` : '';
+    const response = await this.client.get<any[]>(`/api/v1/sources/${sourceId}/documents${params}`);
+    return response.data;
+  }
+
+  async previewTelegramChannel(channel: string): Promise<{ channel: string; count: number; messages: any[] }> {
+    const response = await this.client.get<{ channel: string; count: number; messages: any[] }>(`/api/v1/sources/preview/telegram?channel=${encodeURIComponent(channel)}`);
+    return response.data;
+  }
+
+  /**
+   * Trigger ingest for a specific source
+   * POST /api/v1/sources/{id}/ingest
+   */
+  async ingestSource(sourceId: string): Promise<{ queued: boolean; sourceId: string; kind: string }> {
+    const response = await this.client.post<{ queued: boolean; sourceId: string; kind: string }>(
+      `/api/v1/sources/${sourceId}/ingest`
+    );
+    return response.data;
+  }
+
+  /**
+   * Reprocess documents with status "embedded" for a source
+   * POST /api/v1/sources/{id}/reprocess
+   */
+  async reprocessSource(sourceId: string): Promise<{ queued: boolean; sourceId: string; count: number; message: string }> {
+    const response = await this.client.post<{ queued: boolean; sourceId: string; count: number; message: string }>(
+      `/api/v1/sources/${sourceId}/reprocess`
+    );
+    return response.data;
+  }
+
   async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[]> {
     const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[] }>(`/api/v1/projects/${projectId}/interactions`);
     return response.data.items;
@@ -458,8 +498,9 @@ class ApiClient {
   }
 
   // --- Core Docs (project attachments) ---
-  async docsList(projectId: string) {
-    const res = await this.client.get(`/api/v1/projects/${projectId}/docs`);
+  async docsList(projectId: string, excludeDocumentType?: string) {
+    const params = excludeDocumentType ? `?excludeDocumentType=${encodeURIComponent(excludeDocumentType)}` : '';
+    const res = await this.client.get(`/api/v1/projects/${projectId}/docs${params}`);
     return res.data as any[];
   }
 

@@ -652,6 +652,15 @@ func (r *DataSourcesRepository) Get(ctx context.Context, id string) (*models.Dat
 	return &ds, nil
 }
 
+// Delete removes a data source by ID
+func (r *DataSourcesRepository) Delete(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("source ID is required")
+	}
+	_, err := r.col.Doc(id).Delete(ctx)
+	return err
+}
+
 // FindByCanonicalSource finds a datasource by tenant + canonical source identifier (e.g., normalized URL or @username)
 func (r *DataSourcesRepository) FindByCanonicalSource(ctx context.Context, tenantID, canonical string) (*models.DataSource, error) {
 	// Search across all datasources (globals + tenant-scoped)

@@ -7,6 +7,7 @@ require (
 	cloud.google.com/go/bigquery v1.72.0
 	cloud.google.com/go/firestore v1.20.0
 	cloud.google.com/go/pubsub v1.50.1
+	cloud.google.com/go/secretmanager v1.16.0
 	cloud.google.com/go/storage v1.56.0
 	firebase.google.com/go/v4 v4.14.0
 	github.com/google/uuid v1.6.0
@@ -30,7 +31,6 @@ require (
 	cloud.google.com/go/longrunning v0.7.0 // indirect
 	cloud.google.com/go/monitoring v1.24.3 // indirect
 	cloud.google.com/go/pubsub/v2 v2.0.0 // indirect
-	cloud.google.com/go/secretmanager v1.16.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.29.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.53.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.53.0 // indirect

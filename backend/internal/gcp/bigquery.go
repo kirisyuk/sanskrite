@@ -113,3 +113,32 @@ func isAlreadyExistsError(err error) bool {
 		strings.Contains(errStr, "Already Exists") ||
 		strings.Contains(errStr, "409")
 }
+
+// InsertRow inserts a single row into a BigQuery table
+func (b *BigQueryClient) InsertRow(ctx context.Context, tableName string, row map[string]interface{}) error {
+	return b.InsertRows(ctx, tableName, []map[string]interface{}{row})
+}
+
+// mapSaver implements bigquery.ValueSaver for map payloads
+type mapSaver map[string]interface{}
+
+func (m mapSaver) Save() (map[string]bigquery.Value, string, error) {
+	values := make(map[string]bigquery.Value, len(m))
+	for k, v := range m {
+		values[k] = v
+	}
+	return values, "", nil
+}
+
+// InsertRows inserts multiple rows into a BigQuery table
+func (b *BigQueryClient) InsertRows(ctx context.Context, tableName string, rows []map[string]interface{}) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	inserter := b.client.Dataset(b.datasetID).Table(tableName).Inserter()
+	values := make([]bigquery.ValueSaver, len(rows))
+	for i, row := range rows {
+		values[i] = mapSaver(row)
+	}
+	return inserter.Put(ctx, values)
+}

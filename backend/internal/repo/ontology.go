@@ -7,6 +7,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 
+	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
@@ -14,10 +15,19 @@ var ErrInvalidOntologyDocument = errors.New("invalid ontology document")
 
 // --- Entity Repository ---
 
-type EntityRepository struct{ col *firestore.CollectionRef }
+type EntityRepository struct {
+	col          *firestore.CollectionRef
+	bigquerySync *gcp.BigQueryClient // Опциональная синхронизация с BigQuery
+}
 
 func NewEntityRepository(db *firestore.Client) *EntityRepository {
 	return &EntityRepository{col: db.Collection("ontology_entities")}
+}
+
+// WithBigQuerySync настраивает автоматическую синхронизацию метаданных с BigQuery
+func (r *EntityRepository) WithBigQuerySync(bq *gcp.BigQueryClient) *EntityRepository {
+	r.bigquerySync = bq
+	return r
 }
 
 func (r *EntityRepository) Create(ctx context.Context, e *models.Entity) (string, error) {
@@ -40,6 +50,16 @@ func (r *EntityRepository) Create(ctx context.Context, e *models.Entity) (string
 	if _, err := doc.Set(ctx, e); err != nil {
 		return "", err
 	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(entity *models.Entity) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, entity)
+		}(e)
+	}
+
 	return e.ID, nil
 }
 
@@ -59,7 +79,20 @@ func (r *EntityRepository) Upsert(ctx context.Context, e *models.Entity) error {
 		e.Status = "active"
 	}
 	_, err := r.col.Doc(e.ID).Set(ctx, e)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(entity *models.Entity) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, entity)
+		}(e)
+	}
+
+	return nil
 }
 
 func (r *EntityRepository) Get(ctx context.Context, id string) (*models.Entity, error) {
@@ -127,6 +160,81 @@ func (r *EntityRepository) FindByCanonicalName(ctx context.Context, tenantID, ca
 	return &e, nil
 }
 
+// ListBySource находит все entities, созданные из указанного источника
+// Ищет по Attributes["sourceId"] и опционально Attributes["sourceType"]
+func (r *EntityRepository) ListBySource(ctx context.Context, tenantID, sourceID, sourceType string, limit int) ([]*models.Entity, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var q firestore.Query
+	if sourceType != "" {
+		q = r.col.Where("tenantId", "==", tenantID).Where("attributes.sourceId", "==", sourceID).Where("attributes.sourceType", "==", sourceType).OrderBy("createdAt", firestore.Desc).Limit(limit)
+	} else {
+		q = r.col.Where("tenantId", "==", tenantID).Where("attributes.sourceId", "==", sourceID).OrderBy("createdAt", firestore.Desc).Limit(limit)
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.Entity
+	for _, d := range docs {
+		var e models.Entity
+		if err := d.DataTo(&e); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
+// syncToBigQuery синхронизирует метаданные Entity в BigQuery
+func (r *EntityRepository) syncToBigQuery(ctx context.Context, e *models.Entity) {
+	if r.bigquerySync == nil || e == nil {
+		return
+	}
+
+	// Extract sourceId and sourceType from Attributes if present
+	sourceID := ""
+	sourceType := ""
+	if e.Attributes != nil {
+		if sid, ok := e.Attributes["sourceId"].(string); ok {
+			sourceID = sid
+		}
+		if st, ok := e.Attributes["sourceType"].(string); ok {
+			sourceType = st
+		}
+	}
+
+	homeLocationName := ""
+	if e.HomeLocation != nil {
+		homeLocationName = e.HomeLocation.Name
+	}
+
+	row := map[string]interface{}{
+		"id":            e.ID,
+		"tenantId":      e.TenantID,
+		"canonicalName": e.CanonicalName,
+		"type":          string(e.Type),
+		"aliases":       e.Aliases,
+		"sourceId":      sourceID,
+		"sourceType":    sourceType,
+		"homeLocation":  homeLocationName,
+		"status":        e.Status,
+		"version":       e.Version,
+		"createdBy":     e.CreatedBy,
+		"updatedBy":     e.UpdatedBy,
+		"description":   e.Description,
+		"tags":          e.Tags,
+		"createdAt":     e.CreatedAt,
+		"updatedAt":     e.UpdatedAt,
+	}
+
+	if err := r.bigquerySync.InsertRow(ctx, "ontology_entities", row); err != nil {
+		// Логируем ошибку, но не прерываем выполнение (best effort)
+		_ = err
+	}
+}
+
 func (r *EntityRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.col.Doc(id).Delete(ctx)
 	return err
@@ -134,10 +242,19 @@ func (r *EntityRepository) Delete(ctx context.Context, id string) error {
 
 // --- Event Repository ---
 
-type EventRepository struct{ col *firestore.CollectionRef }
+type EventRepository struct {
+	col          *firestore.CollectionRef
+	bigquerySync *gcp.BigQueryClient // Опциональная синхронизация с BigQuery
+}
 
 func NewEventRepository(db *firestore.Client) *EventRepository {
 	return &EventRepository{col: db.Collection("ontology_events")}
+}
+
+// WithBigQuerySync настраивает автоматическую синхронизацию метаданных с BigQuery
+func (r *EventRepository) WithBigQuerySync(bq *gcp.BigQueryClient) *EventRepository {
+	r.bigquerySync = bq
+	return r
 }
 
 func (r *EventRepository) Create(ctx context.Context, e *models.Event) (string, error) {
@@ -160,6 +277,16 @@ func (r *EventRepository) Create(ctx context.Context, e *models.Event) (string, 
 	if _, err := doc.Set(ctx, e); err != nil {
 		return "", err
 	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(event *models.Event) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, event)
+		}(e)
+	}
+
 	return e.ID, nil
 }
 
@@ -179,7 +306,20 @@ func (r *EventRepository) Upsert(ctx context.Context, e *models.Event) error {
 		e.Status = "active"
 	}
 	_, err := r.col.Doc(e.ID).Set(ctx, e)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(event *models.Event) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, event)
+		}(e)
+	}
+
+	return nil
 }
 
 func (r *EventRepository) Get(ctx context.Context, id string) (*models.Event, error) {
@@ -232,6 +372,94 @@ func (r *EventRepository) ListByTenantAndType(ctx context.Context, tenantID, eve
 		out = append(out, &e)
 	}
 	return out, nil
+}
+
+// ListBySource находит все events, созданные из указанного источника
+// Ищет по Provenance.SourceRefs (array-contains для sourceId)
+func (r *EventRepository) ListBySource(ctx context.Context, tenantID, sourceID, sourceType string, limit int) ([]*models.Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	// Firestore не поддерживает прямые запросы по вложенным массивам объектов
+	// Поэтому используем client-side фильтрацию после получения по tenantId
+	q := r.col.Where("tenantId", "==", tenantID).OrderBy("createdAt", firestore.Desc)
+	if limit > 0 {
+		q = q.Limit(limit * 2) // Получаем больше, чтобы после фильтрации осталось достаточно
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.Event
+	for _, d := range docs {
+		var e models.Event
+		if err := d.DataTo(&e); err != nil {
+			continue
+		}
+		// Фильтруем по sourceRefs
+		for _, ref := range e.Provenance.SourceRefs {
+			if ref.SourceID == sourceID && (sourceType == "" || ref.SourceType == sourceType) {
+				out = append(out, &e)
+				break
+			}
+		}
+		if len(out) >= limit && limit > 0 {
+			break
+		}
+	}
+	if len(out) > limit && limit > 0 {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// syncToBigQuery синхронизирует метаданные Event в BigQuery
+func (r *EventRepository) syncToBigQuery(ctx context.Context, e *models.Event) {
+	if r.bigquerySync == nil || e == nil {
+		return
+	}
+
+	// Extract sourceId and sourceType from Provenance.SourceRefs
+	sourceID := ""
+	sourceType := ""
+	if len(e.Provenance.SourceRefs) > 0 {
+		sourceID = e.Provenance.SourceRefs[0].SourceID
+		sourceType = e.Provenance.SourceRefs[0].SourceType
+	}
+
+	locationName := ""
+	if e.Location != nil {
+		locationName = e.Location.Name
+	}
+
+	participantsCount := len(e.Participants)
+
+	row := map[string]interface{}{
+		"id":               e.ID,
+		"tenantId":        e.TenantID,
+		"type":             e.Type,
+		"title":            e.Title,
+		"occurredAt":       e.OccurredAt,
+		"occurredStart":    e.OccurredStart,
+		"occurredEnd":      e.OccurredEnd,
+		"location":         locationName,
+		"participantsCount": participantsCount,
+		"outcomeSummary":   e.OutcomeSummary,
+		"sourceId":         sourceID,
+		"sourceType":       sourceType,
+		"confidence":       e.Confidence,
+		"status":           e.Status,
+		"version":          e.Version,
+		"createdBy":        e.CreatedBy,
+		"description":      e.Description,
+		"createdAt":        e.CreatedAt,
+		"updatedAt":        e.UpdatedAt,
+	}
+
+	if err := r.bigquerySync.InsertRow(ctx, "ontology_events", row); err != nil {
+		// Логируем ошибку, но не прерываем выполнение (best effort)
+		_ = err
+	}
 }
 
 func (r *EventRepository) Delete(ctx context.Context, id string) error {
@@ -368,10 +596,19 @@ func (r *RelationRepository) Delete(ctx context.Context, id string) error {
 
 // --- Claim Repository ---
 
-type ClaimRepository struct{ col *firestore.CollectionRef }
+type ClaimRepository struct {
+	col          *firestore.CollectionRef
+	bigquerySync *gcp.BigQueryClient // Опциональная синхронизация с BigQuery
+}
 
 func NewClaimRepository(db *firestore.Client) *ClaimRepository {
 	return &ClaimRepository{col: db.Collection("ontology_claims")}
+}
+
+// WithBigQuerySync настраивает автоматическую синхронизацию метаданных с BigQuery
+func (r *ClaimRepository) WithBigQuerySync(bq *gcp.BigQueryClient) *ClaimRepository {
+	r.bigquerySync = bq
+	return r
 }
 
 func (r *ClaimRepository) Create(ctx context.Context, c *models.Claim) (string, error) {
@@ -394,6 +631,16 @@ func (r *ClaimRepository) Create(ctx context.Context, c *models.Claim) (string, 
 	if _, err := doc.Set(ctx, c); err != nil {
 		return "", err
 	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(claim *models.Claim) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, claim)
+		}(c)
+	}
+
 	return c.ID, nil
 }
 
@@ -413,7 +660,20 @@ func (r *ClaimRepository) Upsert(ctx context.Context, c *models.Claim) error {
 		c.Status = "active"
 	}
 	_, err := r.col.Doc(c.ID).Set(ctx, c)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(claim *models.Claim) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, claim)
+		}(c)
+	}
+
+	return nil
 }
 
 func (r *ClaimRepository) Get(ctx context.Context, id string) (*models.Claim, error) {
@@ -468,10 +728,110 @@ func (r *ClaimRepository) ListBySubject(ctx context.Context, tenantID, subjectID
 	return out, nil
 }
 
+// ListBySource находит все claims, созданные из указанного источника
+// Ищет по Provenance.SourceRefs (array-contains для sourceId)
+func (r *ClaimRepository) ListBySource(ctx context.Context, tenantID, sourceID, sourceType string, limit int) ([]*models.Claim, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	// Firestore не поддерживает прямые запросы по вложенным массивам объектов
+	// Поэтому используем client-side фильтрацию после получения по tenantId
+	q := r.col.Where("tenantId", "==", tenantID).OrderBy("createdAt", firestore.Desc)
+	if limit > 0 {
+		q = q.Limit(limit * 2) // Получаем больше, чтобы после фильтрации осталось достаточно
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.Claim
+	for _, d := range docs {
+		var c models.Claim
+		if err := d.DataTo(&c); err != nil {
+			continue
+		}
+		// Фильтруем по sourceRefs
+		for _, ref := range c.Provenance.SourceRefs {
+			if ref.SourceID == sourceID && (sourceType == "" || ref.SourceType == sourceType) {
+				out = append(out, &c)
+				break
+			}
+		}
+		if len(out) >= limit && limit > 0 {
+			break
+		}
+	}
+	if len(out) > limit && limit > 0 {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// syncToBigQuery синхронизирует метаданные Claim в BigQuery
+func (r *ClaimRepository) syncToBigQuery(ctx context.Context, c *models.Claim) {
+	if r.bigquerySync == nil || c == nil {
+		return
+	}
+
+	// Extract sourceId and sourceType from Provenance.SourceRefs
+	sourceID := ""
+	sourceType := ""
+	if len(c.Provenance.SourceRefs) > 0 {
+		sourceID = c.Provenance.SourceRefs[0].SourceID
+		sourceType = c.Provenance.SourceRefs[0].SourceType
+	}
+
+	objectID := ""
+	if c.ObjectRef.ID != nil {
+		objectID = *c.ObjectRef.ID
+	}
+
+	row := map[string]interface{}{
+		"id":          c.ID,
+		"tenantId":    c.TenantID,
+		"subjectId":   c.SubjectRef.ID,
+		"subjectKind": string(c.SubjectRef.Kind),
+		"predicate":   c.Predicate,
+		"objectKind": string(c.ObjectRef.Kind),
+		"objectId":    objectID,
+		"stance":      string(c.Stance),
+		"confidence":  c.Confidence,
+		"sourceId":    sourceID,
+		"sourceType": sourceType,
+		"method":      string(c.Provenance.Method),
+		"extractedAt": c.Provenance.ExtractedAt,
+		"status":      c.Status,
+		"version":     c.Version,
+		"createdBy":   c.CreatedBy,
+		"description": c.Description,
+		"createdAt":   c.CreatedAt,
+		"updatedAt":   c.UpdatedAt,
+	}
+
+	if err := r.bigquerySync.InsertRow(ctx, "ontology_claims", row); err != nil {
+		// Логируем ошибку, но не прерываем выполнение (best effort)
+		_ = err
+	}
+}
+
 func (r *ClaimRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.col.Doc(id).Delete(ctx)
 	return err
 }
+
+// TODO: Add BigQuery sync for remaining ontology artifacts:
+// - Concept (concepts/domains/processes)
+// - Relation (static relationships between entities/concepts)
+// - MetricState (quantitative metrics)
+// - Trend (aggregated dynamics)
+// - CausalLink (causal relationships)
+// - Scenario (possible future developments)
+// - ActionableItem (actionable recommendations)
+// - Source (data sources)
+// - Trust (trust models for sources)
+// - UncertaintyModel (uncertainty tracking)
+// These artifacts are not automatically extracted from documents but may be created manually or derived.
+// When implementing, follow the same pattern as Entity/Event/Claim repositories.
 
 // --- Concept Repository ---
 

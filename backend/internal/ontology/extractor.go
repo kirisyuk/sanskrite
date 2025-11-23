@@ -249,8 +249,9 @@ func (e *OntologyExtractor) extractEntities(
 			Aliases:       []string{canonicalName}, // Начальный алиас
 			Attributes: map[string]interface{}{
 				"extractedFrom": "document",
-				"documentID":    document.ID,
-				"sourceID":      sourceID,
+				"sourceId":     document.ID,    // ID документа как источника
+				"sourceType":   "document",     // тип источника
+				"dataSourceId": sourceID,       // ID DataSource (если есть)
 			},
 		}
 
@@ -328,6 +329,13 @@ func (e *OntologyExtractor) extractEvents(
 			baseConfidence = e.trustIntegrator.AdjustEventConfidence(ctx, tenantID, nil, sourceID, baseConfidence)
 		}
 
+		// Определяем тип источника
+		sourceType := "document"
+		if document.SourceID != "" {
+			// Можно определить тип по DataSource, но пока используем "document"
+			sourceType = "document"
+		}
+
 		// Создаем Event
 		event := &models.Event{
 			BaseOntologyFields: models.BaseOntologyFields{
@@ -345,7 +353,13 @@ func (e *OntologyExtractor) extractEvents(
 			OccurredAt: &occurredAt,
 			Confidence: baseConfidence,
 			Provenance: models.Provenance{
-				SourceIDs:  []string{sourceID},
+				SourceIDs: []string{sourceID},
+				SourceRefs: []models.SourceRef{
+					{
+						SourceID:   document.ID,
+						SourceType: sourceType,
+					},
+				},
 				ObservedAt: &now,
 				Method:     "LLM_extraction",
 			},
@@ -439,6 +453,13 @@ func (e *OntologyExtractor) extractClaims(
 			adjustedConfidence = e.trustIntegrator.AdjustClaimConfidence(ctx, tenantID, nil, sourceID, ext.Confidence)
 		}
 
+		// Определяем тип источника
+		sourceType := "document"
+		if document.SourceID != "" {
+			// Можно определить тип по DataSource, но пока используем "document"
+			sourceType = "document"
+		}
+
 		// Создаем Claim
 		claim := &models.Claim{
 			BaseOntologyFields: models.BaseOntologyFields{
@@ -460,7 +481,13 @@ func (e *OntologyExtractor) extractClaims(
 			Confidence: adjustedConfidence,
 			Stance:    models.StanceNeutral,
 			Provenance: models.ClaimProvenance{
-				SourceIDs:       []string{sourceID},
+				SourceIDs: []string{sourceID},
+				SourceRefs: []models.SourceRef{
+					{
+						SourceID:   document.ID,
+						SourceType: sourceType,
+					},
+				},
 				Method:          models.ExtractionMethodNLP,
 				ExtractedAt:     now,
 				EvidenceAnchors: ext.EvidenceURLs,

@@ -11,6 +11,9 @@ import { useWorkspaceStore } from '../stores/workspaceStore';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { TelegramAddModal } from './TelegramAddModal';
 import { WorkspaceToolbar } from './WorkspaceToolbar';
+import { SourceItemWithActions } from './SourceItemWithActions';
+import SourcePreview from './SourcePreview';
+import { SourceDocumentsViewer } from './SourceDocumentsViewer';
 import { api } from '../lib/api';
 import type { CoreDoc, DataSource } from '../types/generated';
 import type { Project } from '../types';
@@ -114,74 +117,6 @@ const DocumentItem = React.memo<{
 });
 DocumentItem.displayName = 'DocumentItem';
 
-// Мемоизированный компонент источника
-const SourceItem = React.memo<{
-  source: DataSource;
-}>(({ source }) => {
-  const getSourceIcon = (kind: string) => {
-    switch (kind.toLowerCase()) {
-      case 'telegram':
-      case 'telegram_channel':
-        return (
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
-          </svg>
-        );
-      case 'rss':
-        return (
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <circle cx="6" cy="18" r="3" strokeWidth="2" />
-            <path d="M6 9a9 9 0 0 1 9 9M6 3a15 15 0 0 1 15 15" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-        );
-      case 'web':
-      case 'url':
-        return (
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <circle cx="12" cy="12" r="10" strokeWidth="2" />
-            <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" strokeWidth="2" />
-          </svg>
-        );
-      default:
-        return (
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M3 3h7l7 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        );
-    }
-  };
-
-  const displayName = source.displayName || source.kind || 'Unknown';
-  
-  return (
-    <div
-      className="px-2 py-1.5 rounded text-xs flex items-center gap-2 group"
-      style={{
-        backgroundColor: 'transparent',
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--white-10)';
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
-      }}
-    >
-      <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
-        {getSourceIcon(source.kind)}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="font-medium truncate" style={{ color: 'var(--text-heading)' }} title={displayName}>
-          {displayName}
-        </div>
-        <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-          {source.kind}
-          {source.status && ` • ${source.status}`}
-        </div>
-      </div>
-    </div>
-  );
-});
-SourceItem.displayName = 'SourceItem';
 
 // Мемоизированный компонент проекта
 const ProjectSection = React.memo<{
@@ -192,7 +127,11 @@ const ProjectSection = React.memo<{
   indexStatuses: Record<string, { indexed: boolean; loading: boolean; lastChecked: number }>;
   getIndexedStatus: (doc: CoreDoc) => { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
-}>(({ project, documents, sources, discussionFrame, getIndexedStatus, onOpenDocument }) => {
+  onSourceStatusChange?: (sourceId: string, newStatus: 'active' | 'paused') => void;
+  onSourceDelete?: (sourceId: string) => void;
+  onSourcePreview?: (source: DataSource) => void;
+  onViewDocuments?: (source: DataSource) => void;
+}>(({ project, documents, sources, discussionFrame, getIndexedStatus, onOpenDocument, onSourceStatusChange, onSourceDelete, onSourcePreview, onViewDocuments }) => {
   return (
     <div className="mb-6">
       {/* Project header */}
@@ -231,7 +170,26 @@ const ProjectSection = React.memo<{
             }}
           >
             {sources.map((source) => (
-              <SourceItem key={source.id} source={source} />
+              <SourceItemWithActions
+                key={source.id}
+                source={{
+                  id: source.id,
+                  displayName: source.displayName || source.kind || 'Unknown',
+                  kind: source.kind,
+                  status: source.status,
+                }}
+                projectId={project.id}
+                onStatusChange={onSourceStatusChange}
+                onDelete={onSourceDelete}
+                onPreview={() => onSourcePreview?.(source)}
+                onViewDocuments={(sourceId) => {
+                  // Find source in current sources list
+                  const source = sources?.find((s) => s.id === sourceId);
+                  if (source && onViewDocuments) {
+                    onViewDocuments(source);
+                  }
+                }}
+              />
             ))}
           </div>
         </div>
@@ -295,6 +253,10 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   
   // State for project sources
   const [projectSources, setProjectSources] = React.useState<Record<string, DataSource[]>>({});
+  
+  // State for source preview
+  const [previewSource, setPreviewSource] = React.useState<DataSource | null>(null);
+  const [documentsViewSource, setDocumentsViewSource] = React.useState<DataSource | null>(null);
   
   // State for Telegram modal (only when projectId is provided)
   const [showAddTelegramModal, setShowAddTelegramModal] = React.useState(false);
@@ -545,8 +507,8 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   // Handler for source added callback
   const handleSourceAdded = React.useCallback(() => {
     if (!projectId) return;
-    // Reload sources
-    const loadSources = async () => {
+    // Reload sources with retry logic (since source creation is async)
+    const loadSources = async (retryCount = 0) => {
       try {
         const sources = await api.getProjectSources(projectId);
         setProjectSources((prev) => ({
@@ -555,9 +517,15 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
         }));
       } catch (err) {
         console.error('[WorkspaceCanvas] Failed to reload sources', err);
+        // Retry up to 3 times with exponential backoff
+        if (retryCount < 3) {
+          const delay = Math.pow(2, retryCount) * 500; // 500ms, 1000ms, 2000ms
+          setTimeout(() => loadSources(retryCount + 1), delay);
+        }
       }
     };
-    loadSources();
+    // Wait a bit for source creation to complete, then load
+    setTimeout(() => loadSources(), 500);
   }, [projectId]);
 
   // Handler for adding Telegram source
@@ -573,6 +541,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
     setTgSubmitting(true);
     try {
       // Use executeDiscovery to add Telegram source
+      // Note: This is fire-and-forget on backend, so source creation happens asynchronously
       await api.executeDiscovery({
         projectId,
         queryText: '', // Empty query for source-only addition
@@ -581,7 +550,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       });
       setShowAddTelegramModal(false);
       setTgInput('');
-      // Reload sources for the project
+      // Reload sources for the project (with retry logic to handle async creation)
       handleSourceAdded();
     } catch (e: any) {
       setTgError(e?.message || 'Failed to add channel');
@@ -631,11 +600,66 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
               indexStatuses={currentIndexStatuses}
               getIndexedStatus={getIndexedStatus}
               onOpenDocument={onOpenDocument}
+              onSourceStatusChange={(sourceId, newStatus) => {
+                // Update local state and reload sources
+                setProjectSources(prev => {
+                  const updated = { ...prev };
+                  if (updated[project.id]) {
+                    updated[project.id] = updated[project.id].map(s =>
+                      s.id === sourceId ? { ...s, status: newStatus } : s
+                    );
+                  }
+                  return updated;
+                });
+                handleSourceAdded();
+              }}
+              onSourceDelete={(sourceId) => {
+                // Update local state and reload sources
+                setProjectSources(prev => {
+                  const updated = { ...prev };
+                  if (updated[project.id]) {
+                    updated[project.id] = updated[project.id].filter(s => s.id !== sourceId);
+                  }
+                  return updated;
+                });
+                handleSourceAdded();
+              }}
+              onSourcePreview={(source) => {
+                setPreviewSource(source);
+              }}
+              onViewDocuments={async (source) => {
+                // Load full source data for documents view
+                try {
+                  const allSources = await api.getProjectSources(project.id);
+                  const fullSource = allSources.find((s: DataSource) => s.id === source.id);
+                  if (fullSource) {
+                    setDocumentsViewSource(fullSource);
+                  }
+                } catch (err) {
+                  console.error('[WorkspaceCanvas] Failed to load source for documents view', err);
+                }
+              }}
             />
           ))
         )}
         </div>
       </ModalWithHeader>
+
+      {/* Source Preview */}
+      {previewSource && (
+        <SourcePreview
+          source={previewSource}
+          onClose={() => setPreviewSource(null)}
+        />
+      )}
+
+      {/* Source Documents Viewer */}
+      {documentsViewSource && (
+        <SourceDocumentsViewer
+          source={documentsViewSource}
+          onClose={() => setDocumentsViewSource(null)}
+        />
+      )}
 
       {/* Telegram Add Modal */}
       {projectId && (

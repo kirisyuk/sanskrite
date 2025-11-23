@@ -7,7 +7,6 @@ import { WorkspaceToolbar } from './WorkspaceToolbar';
 import WorkspaceLibrary from './WorkspaceLibrary';
 
 interface WorkspacePanelProps {
-  sources: any[];
   currentProjectId: string | null;
   onShowAddTelegramModalChange: (value: boolean) => void;
   onPreviewSource: (source: any) => void;
@@ -96,6 +95,7 @@ const renderSourceCard = (
       onClick={() => onPreviewSource(source)}
     >
       <div className="flex items-center gap-2 px-3 py-2">
+        <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
         {isFetched ? (
           <svg
             className="w-3 h-3"
@@ -120,12 +120,16 @@ const renderSourceCard = (
         ) : (
           getSourceIcon(inferredKind)
         )}
-        <span>
-          <strong style={{ fontWeight: 500 }}>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate" style={{ color: 'var(--text-heading)' }} title={source.displayName || source.id}>
+            {source.displayName || source.id}
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
             {inferredKind || 'source'}
-          </strong>{' '}
-          {source.displayName || source.id}
-        </span>
+            {source.status && ` • ${source.status}`}
+          </div>
+        </div>
         <span className="ml-auto">
           {source.status === 'processing' && (
             <span
@@ -268,7 +272,6 @@ const renderSourceCard = (
 };
 
 export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
-  sources,
   currentProjectId,
   onShowAddTelegramModalChange,
   onPreviewSource,
@@ -301,26 +304,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         onShowTelegramModal={() => onShowAddTelegramModalChange(true)}
       />
 
-      {/* Sources section */}
-      {sources.length > 0 && (
-        <div className="mb-4">
-          <div
-            className="text-[11px] uppercase tracking-wide mb-2"
-            style={{
-              color: 'var(--text-tertiary-weak)',
-            }}
-          >
-            Sources
-          </div>
-          <div className="space-y-2">
-            {sources.map((source) =>
-              renderSourceCard(source, onPreviewSource),
-            )}
-          </div>
-        </div>
-      )}
-
-
+      {/* Sources are now shown in WorkspaceLibrary below to avoid duplication */}
       <WorkspaceLibrary
         projectId={genaiChat.projectId}
         onDocumentDelete={(docId: string) => {

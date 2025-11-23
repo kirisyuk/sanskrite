@@ -374,7 +374,7 @@ func (h *ProjectsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) 
 	}
 	// Cascade: delete core docs for this project (best-effort)
 	if h.coreDocs != nil {
-		if docs, err := h.coreDocs.ListByProject(r.Context(), authInfo.TenantID, projectID, 0); err == nil {
+		if docs, err := h.coreDocs.ListByProject(r.Context(), authInfo.TenantID, projectID, 0, nil); err == nil {
 			for _, d := range docs {
 				_, _ = h.coreDocs.Delete(r.Context(), d.ID)
 			}
@@ -664,7 +664,12 @@ func (h *ProjectsHandler) ListProjectDocs(w http.ResponseWriter, r *http.Request
 		WriteForbidden(w, "Access denied")
 		return
 	}
-	docs, err := h.coreDocs.ListByProject(r.Context(), authInfo.TenantID, projectID, 0)
+	// Parse excludeDocumentType query parameter (e.g., ?excludeDocumentType=post)
+	var excludeDocumentType *string
+	if excludeType := r.URL.Query().Get("excludeDocumentType"); excludeType != "" {
+		excludeDocumentType = &excludeType
+	}
+	docs, err := h.coreDocs.ListByProject(r.Context(), authInfo.TenantID, projectID, 0, excludeDocumentType)
 	if err != nil {
 		h.logger.Printf("ListProjectDocs error: %v", err)
 		WriteInternalError(w, "Failed to list documents")
@@ -1265,7 +1270,7 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 
 		// Load previous entities CoreDoc (latest)
 		var prevJSON string
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "entities.json") && d.ExtractedText != nil {
 					prevJSON = *d.ExtractedText
@@ -1409,7 +1414,7 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 			UpdatedAt:     now,
 		}
 		// Try find existing entities.json to preserve ID
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "entities.json") {
 					doc.ID = d.ID
@@ -1500,7 +1505,7 @@ func (h *ProjectsHandler) AnalyzeFacts(w http.ResponseWriter, r *http.Request) {
 		}
 		transcript := b.String()
 		var prevJSON string
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "facts.json") && d.ExtractedText != nil {
 					prevJSON = *d.ExtractedText
@@ -1580,7 +1585,7 @@ Guidelines:
 		}
 		now := time.Now().UTC()
 		doc := &models.CoreDoc{TenantID: tenantID, ProjectID: pid, Filename: "facts.json", ContentType: "application/json", ExtractedText: &text, StoragePath: storagePath, ParseStatus: strPtr("parsed"), ParseMeta: map[string]any{"updatedAt": now.Format(time.RFC3339)}, CreatedBy: &auth.UID, CreatedAt: now, UpdatedAt: now}
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "facts.json") {
 					doc.ID = d.ID
@@ -1666,7 +1671,7 @@ func (h *ProjectsHandler) AnalyzeEvents(w http.ResponseWriter, r *http.Request) 
 		}
 		transcript := b.String()
 		var prevJSON string
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "events.json") && d.ExtractedText != nil {
 					prevJSON = *d.ExtractedText
@@ -1749,7 +1754,7 @@ Rules: prefer precise timestamps if available; severity/confidence in 0..1.
 		}
 		now := time.Now().UTC()
 		doc := &models.CoreDoc{TenantID: tenantID, ProjectID: pid, Filename: "events.json", ContentType: "application/json", ExtractedText: &text, StoragePath: storagePath, ParseStatus: strPtr("parsed"), ParseMeta: map[string]any{"updatedAt": now.Format(time.RFC3339)}, CreatedBy: &auth.UID, CreatedAt: now, UpdatedAt: now}
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "events.json") {
 					doc.ID = d.ID
@@ -1835,7 +1840,7 @@ func (h *ProjectsHandler) AnalyzeMetrics(w http.ResponseWriter, r *http.Request)
 		}
 		transcript := b.String()
 		var prevJSON string
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "metrics.json") && d.ExtractedText != nil {
 					prevJSON = *d.ExtractedText
@@ -1947,7 +1952,7 @@ Guidelines: keys stable and normalized; prefer domain-specific scope.
 		}
 		now := time.Now().UTC()
 		doc := &models.CoreDoc{TenantID: tenantID, ProjectID: pid, Filename: "metrics.json", ContentType: "application/json", ExtractedText: &text, StoragePath: storagePath, ParseStatus: strPtr("parsed"), ParseMeta: map[string]any{"updatedAt": now.Format(time.RFC3339)}, CreatedBy: &auth.UID, CreatedAt: now, UpdatedAt: now}
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "metrics.json") {
 					doc.ID = d.ID
@@ -2034,7 +2039,7 @@ func (h *ProjectsHandler) AnalyzeDecisions(w http.ResponseWriter, r *http.Reques
 		}
 		transcript := b.String()
 		var prevJSON string
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "decisions.json") && d.ExtractedText != nil {
 					prevJSON = *d.ExtractedText
@@ -2130,7 +2135,7 @@ Return STRICT JSON: { "decisions": [ {
 		}
 		now := time.Now().UTC()
 		doc := &models.CoreDoc{TenantID: tenantID, ProjectID: pid, Filename: "decisions.json", ContentType: "application/json", ExtractedText: &text, StoragePath: storagePath, ParseStatus: strPtr("parsed"), ParseMeta: map[string]any{"updatedAt": now.Format(time.RFC3339)}, CreatedBy: &auth.UID, CreatedAt: now, UpdatedAt: now}
-		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50); err == nil {
+		if docs, err := h.coreDocs.ListByProject(ctx, tenantID, pid, 50, nil); err == nil {
 			for _, d := range docs {
 				if strings.EqualFold(d.Filename, "decisions.json") {
 					doc.ID = d.ID

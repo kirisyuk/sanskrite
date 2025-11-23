@@ -644,7 +644,7 @@ func (e *CoreDocsToolExecutor) listCoreDocs(ctx context.Context, args json.RawMe
 		limit = *params.Limit
 	}
 
-	docs, err := e.coreDocs.ListByProject(ctx, e.tenantID, e.projectID, limit)
+	docs, err := e.coreDocs.ListByProject(ctx, e.tenantID, e.projectID, limit, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list documents: %w", err)
 	}

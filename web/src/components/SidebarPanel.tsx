@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectsStore } from '../stores/projectsStore';
 import { api } from '../lib/api';
 import { isArtifact, type Artifact } from '../types/artifact';
-import type { CoreDoc } from '../types/generated';
+import type { CoreDoc, Project } from '../types/generated';
 
 interface SidebarPanelProps {
   isOpen: boolean;
@@ -59,6 +59,199 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const deletingProjectIdsArray = useProjectsStore((s) => s.deletingProjectIds);
   const deletingProjectIds = React.useMemo(() => new Set(deletingProjectIdsArray), [deletingProjectIdsArray]);
+
+  // Group projects by date (Today, Yesterday, Later)
+  const groupedProjects = React.useMemo(() => {
+    if (!projects || projects.length === 0) {
+      return { today: [], yesterday: [], later: [] };
+    }
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    // Sort projects by lastInteractionAt (if exists) or createdAt
+    const sortedProjects = [...projects].sort((a, b) => {
+      const getTimestamp = (project: typeof projects[0]) => {
+        if (project.lastInteractionAt) {
+          return new Date(project.lastInteractionAt).getTime();
+        }
+        return new Date(project.createdAt).getTime();
+      };
+      return getTimestamp(b) - getTimestamp(a); // Newest first
+    });
+
+    const grouped = { today: [] as typeof projects, yesterday: [] as typeof projects, later: [] as typeof projects };
+
+    for (const project of sortedProjects) {
+      const getDate = (project: typeof projects[0]) => {
+        if (project.lastInteractionAt) {
+          return new Date(project.lastInteractionAt);
+        }
+        return new Date(project.createdAt);
+      };
+
+      const projectDate = getDate(project);
+      const projectDateOnly = new Date(projectDate.getFullYear(), projectDate.getMonth(), projectDate.getDate());
+
+      if (projectDateOnly.getTime() === today.getTime()) {
+        grouped.today.push(project);
+      } else if (projectDateOnly.getTime() === yesterday.getTime()) {
+        grouped.yesterday.push(project);
+      } else {
+        grouped.later.push(project);
+      }
+    }
+
+    return grouped;
+  }, [projects]);
+  const renderProjectRow = (project: Project) => {
+    const isDeleting = deletingProjectIds.has(project.id);
+    return (
+      <div
+        key={project.id}
+        className="px-2 py-1 rounded text-xs flex items-center gap-2 group cursor-pointer"
+        title={project.displayName}
+        onClick={() => {
+          if (editingProjectId !== project.id && !isDeleting) {
+            console.log('[SidebarPanel] Clicked on project', {
+              projectId: project.id,
+              projectName: project.displayName,
+              currentProjectId: currentProject?.id,
+            });
+            setCurrentProject(project);
+            if (isMobile) {
+              onClose();
+            }
+          }
+        }}
+        style={{
+          backgroundColor: currentProject?.id === project.id ? 'var(--white-10)' : 'transparent',
+          opacity: isDeleting ? 0.5 : 1,
+          cursor: isDeleting ? 'default' : 'pointer',
+        }}
+        onMouseEnter={(e) => {
+          if (currentProject?.id !== project.id && editingProjectId !== project.id && !isDeleting) {
+            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--white-10)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (currentProject?.id !== project.id && editingProjectId !== project.id) {
+            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+          }
+        }}
+      >
+        {editingProjectId === project.id ? (
+          <>
+            <input
+              ref={editingInputRef}
+              type="text"
+              value={editingProjectName}
+              onChange={(e) => onEditingProjectNameChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  onRenameChat(project.id, editingProjectName);
+                } else if (e.key === 'Escape') {
+                  onEditingProjectIdChange(null);
+                  onEditingProjectNameChange('');
+                }
+              }}
+              onBlur={() => {
+                onRenameChat(project.id, editingProjectName);
+              }}
+              className="flex-1 px-1 py-0.5 rounded text-xs"
+              style={{
+                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                color: 'var(--text-heading)',
+                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+              }}
+              placeholder={t('unfold.sections.renameChatPlaceholder')}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </>
+        ) : (
+          <>
+            <span
+              className="flex-1 truncate"
+              style={{
+                color: isDeleting ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
+                textDecoration: isDeleting ? 'line-through' : 'none',
+              }}
+            >
+              {project.displayName}
+            </span>
+            {!isDeleting && (
+              <>
+                <button
+                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
+                  title={t('unfold.sections.renameChat')}
+                  style={{ backgroundColor: 'transparent' }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onStartEditingProject(project.id, project.displayName);
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                    />
+                  </svg>
+                </button>
+                <button
+                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
+                  title={t('unfold.sections.deleteChat')}
+                  style={{ backgroundColor: 'transparent' }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteChat(project.id, project.displayName);
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
+                    />
+                  </svg>
+                </button>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderProjectGroup = (items: Project[], label: string) => {
+    if (!items || items.length === 0) {
+      return null;
+    }
+    return (
+      <>
+        <div className="text-[11px] uppercase tracking-wide px-2" style={{ color: 'var(--text-tertiary-weak)' }}>
+          {label}
+        </div>
+        <div className="space-y-1">{items.map(renderProjectRow)}</div>
+      </>
+    );
+  };
   const [pages, setPages] = React.useState<Artifact[]>([]);
   const [pagesLoading, setPagesLoading] = React.useState(false);
   const [editingPageId, setEditingPageId] = React.useState<string | null>(null);
@@ -641,199 +834,27 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               </>
             ) : (
               <>
-            <div
-              className="text-[11px] uppercase tracking-wide mb-2"
-              style={{ color: 'var(--text-tertiary-weak)' }}
-            >
-              {t('unfold.sections.chats')}
-            </div>
+                <div
+                  className="text-[11px] uppercase tracking-wide mb-2"
+                  style={{ color: 'var(--text-tertiary-weak)' }}
+                >
+                  {t('unfold.sections.chats')}
+                </div>
 
-            {projectsLoading && projects.length === 0 ? (
-              <div
-                className="text-xs"
-                style={{ color: 'var(--text-secondary-strong)' }}
-              >
-                {t('unfold.sections.loadingChats')}
-              </div>
-            ) : projects.length === 0 ? (
-              <div
-                className="text-xs"
-                style={{ color: 'var(--text-secondary-strong)' }}
-              >
-                {t('unfold.sections.noChatsYet')}
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {projects.map((project) => {
-                  const isDeleting = deletingProjectIds.has(project.id);
-                  return (
-                  <div
-                    key={project.id}
-                    className="px-2 py-1 rounded text-xs flex items-center gap-2 group cursor-pointer"
-                    title={project.displayName}
-                    onClick={() => {
-                      if (editingProjectId !== project.id && !isDeleting) {
-                        console.log('[SidebarPanel] Clicked on project', { 
-                          projectId: project.id, 
-                          projectName: project.displayName,
-                          currentProjectId: currentProject?.id 
-                        });
-                        setCurrentProject(project);
-                        if (isMobile) {
-                          onClose();
-                        }
-                      }
-                    }}
-                    style={{
-                      backgroundColor:
-                        currentProject?.id === project.id
-                          ? 'var(--white-10)'
-                          : 'transparent',
-                      opacity: isDeleting ? 0.5 : 1,
-                      cursor: isDeleting ? 'default' : 'pointer',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (
-                        currentProject?.id !== project.id &&
-                        editingProjectId !== project.id &&
-                        !isDeleting
-                      )
-                        (e.currentTarget as HTMLDivElement).style.backgroundColor =
-                          'var(--white-10)';
-                    }}
-                    onMouseLeave={(e) => {
-                      if (
-                        currentProject?.id !== project.id &&
-                        editingProjectId !== project.id
-                      )
-                        (e.currentTarget as HTMLDivElement).style.backgroundColor =
-                          'transparent';
-                    }}
-                  >
-                    {editingProjectId === project.id ? (
-                      <>
-                        <input
-                          ref={editingInputRef}
-                          type="text"
-                          value={editingProjectName}
-                          onChange={(e) =>
-                            onEditingProjectNameChange(e.target.value)
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              onRenameChat(project.id, editingProjectName);
-                            } else if (e.key === 'Escape') {
-                              onEditingProjectIdChange(null);
-                              onEditingProjectNameChange('');
-                            }
-                          }}
-                          onBlur={() => {
-                            onRenameChat(project.id, editingProjectName);
-                          }}
-                          className="flex-1 px-1 py-0.5 rounded text-xs"
-                          style={{
-                            backgroundColor: 'var(--bg-input, #1A1A1A)',
-                            color: 'var(--text-heading)',
-                            border:
-                              '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
-                          }}
-                          placeholder={t(
-                            'unfold.sections.renameChatPlaceholder',
-                          )}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <span
-                          className="flex-1 truncate"
-                          style={{ 
-                            color: isDeleting 
-                              ? 'var(--text-tertiary-weak)' 
-                              : 'var(--text-heading)',
-                            textDecoration: isDeleting 
-                              ? 'line-through' 
-                              : 'none',
-                          }}
-                        >
-                          {project.displayName}
-                        </span>
-                        {!isDeleting && (
-                          <>
-                            <button
-                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
-                              title={t('unfold.sections.renameChat')}
-                              style={{ backgroundColor: 'transparent' }}
-                              onMouseEnter={(e) => {
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.backgroundColor = 'var(--white-10)';
-                              }}
-                              onMouseLeave={(e) => {
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.backgroundColor = 'transparent';
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onStartEditingProject(project.id, project.displayName);
-                              }}
-                            >
-                              <svg
-                                className="w-3.5 h-3.5"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                                />
-                              </svg>
-                            </button>
-                            <button
-                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
-                              title={t('unfold.sections.deleteChat')}
-                              style={{ backgroundColor: 'transparent' }}
-                              onMouseEnter={(e) => {
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.backgroundColor = 'var(--white-10)';
-                              }}
-                              onMouseLeave={(e) => {
-                                (
-                                  e.currentTarget as HTMLButtonElement
-                                ).style.backgroundColor = 'transparent';
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteChat(project.id, project.displayName);
-                              }}
-                            >
-                              <svg
-                                className="w-3.5 h-3.5"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
-                                />
-                              </svg>
-                            </button>
-                          </>
-                        )}
-                      </>
-                    )}
+                {projectsLoading && projects.length === 0 ? (
+                  <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
+                    {t('unfold.sections.loadingChats')}
                   </div>
-                  );
-                })}
-              </div>
+                ) : projects.length === 0 ? (
+                  <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
+                    {t('unfold.sections.noChatsYet')}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {renderProjectGroup(groupedProjects.today, t('unfold.sections.today', 'Today'))}
+                    {renderProjectGroup(groupedProjects.yesterday, t('unfold.sections.yesterday', 'Yesterday'))}
+                    {renderProjectGroup(groupedProjects.later, t('unfold.sections.later', 'Later'))}
+                  </div>
                 )}
               </>
             )}

@@ -860,6 +860,16 @@ deploy_api() {
     redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
   fi
   
+  # Get Telegram service URL if it exists
+  local telegram_url=""
+  local telegram_service="sanskrite-telegram"
+  if gcloud run services describe "$telegram_service" --region="$REGION" >/dev/null 2>&1; then
+    telegram_url=$(gcloud run services describe "$telegram_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
+    if [[ -n "$telegram_url" ]]; then
+      echo -e "${BLUE}[api] Found Telegram service:${NC} $telegram_url"
+    fi
+  fi
+  
   # Build env vars string
   # Note: VERTEX_SEARCH_LOCATION must be "global" for Discovery Engine Data Stores
   # Data Stores are created in "global" region, but search API uses the same location
@@ -870,6 +880,14 @@ deploy_api() {
   if [[ -n "$redis_host" ]]; then
     env_vars="$env_vars,REDIS_HOST=$redis_host,REDIS_PORT=$redis_port"
     echo -e "${BLUE}[api] Using Redis:${NC} $redis_host:$redis_port"
+  fi
+  
+  # Add Telegram service URL if available
+  if [[ -n "$telegram_url" ]]; then
+    env_vars="$env_vars,TELEGRAM_SERVICE_URL=$telegram_url"
+    echo -e "${BLUE}[api] Setting TELEGRAM_SERVICE_URL:${NC} $telegram_url"
+  else
+    echo -e "${YELLOW}[api] Telegram service not found - TELEGRAM_SERVICE_URL will not be set${NC}"
   fi
   
   echo -e "${BLUE}[api] Deploying to Cloud Run from image...${NC}"
@@ -1140,13 +1158,16 @@ deploy_py() {
   TG_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${BLUE}[py] URL:${NC} $TG_URL"
   
-  # Update backend with TELEGRAM_SERVICE_URL
-  if [[ "$TARGET_API" -eq 1 ]] || gcloud run services describe sanskrite-api --region "$REGION" >/dev/null 2>&1; then
-    echo -e "${BLUE}[api] Updating backend with TELEGRAM_SERVICE_URL...${NC}"
+  # Update backend with TELEGRAM_SERVICE_URL if we have it (only if API was not just deployed)
+  # If API was deployed, TELEGRAM_SERVICE_URL is already set in env_vars during deploy
+  if [[ -n "$TG_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe sanskrite-api --region "$REGION" >/dev/null 2>&1; then
+    echo -e "${BLUE}[api] Updating existing backend with TELEGRAM_SERVICE_URL=$TG_URL...${NC}"
     gcloud run services update sanskrite-api \
       --region "$REGION" \
       --update-env-vars "TELEGRAM_SERVICE_URL=$TG_URL" \
-      --quiet || true
+      --quiet || {
+      echo -e "${YELLOW}[api] WARNING: Failed to update TELEGRAM_SERVICE_URL${NC}" >&2
+    }
   fi
 }
 

@@ -1,6 +1,10 @@
 import React from 'react';
 import { api } from '../lib/api';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
+import { SourceItemWithActions } from './SourceItemWithActions';
+import SourcePreview from './SourcePreview';
+import { SourceDocumentsViewer } from './SourceDocumentsViewer';
+import type { DataSource } from '../types/generated';
 
 interface Document {
   id: string;
@@ -41,6 +45,8 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   const editingDocInputRef = React.useRef<HTMLInputElement>(null);
   const pendingAttachedDocIds = useGenaiChatStore((state) => state.pendingAttachedDocIds);
   const setPendingAttachedDocIds = useGenaiChatStore((state) => state.setPendingAttachedDocIds);
+  const [previewSource, setPreviewSource] = React.useState<DataSource | null>(null);
+  const [documentsViewSource, setDocumentsViewSource] = React.useState<DataSource | null>(null);
 
   // PERF: Track mount time
   React.useEffect(() => {
@@ -69,8 +75,8 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
       console.log('[WorkspaceLibrary] Starting data load at', startTime);
       setLoading(true);
       try {
-        // Load documents
-        const docs = await api.docsList(projectId);
+        // Load documents, excluding automatic post documents - they will be shown separately
+        const docs = await api.docsList(projectId, 'post');
         const docsTime = performance.now();
         console.log('[WorkspaceLibrary] Document load completed at', docsTime, 'took', docsTime - startTime, 'ms');
         setDocuments(docs || []);
@@ -165,31 +171,6 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
     );
   };
 
-  const getSourceIcon = (kind: string) => {
-    switch (kind.toLowerCase()) {
-      case 'telegram':
-        return (
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
-          </svg>
-        );
-      case 'web':
-      case 'url':
-        return (
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <circle cx="12" cy="12" r="10" strokeWidth="2" />
-            <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" strokeWidth="2" />
-          </svg>
-        );
-      default:
-        return (
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M3 3h7l7 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        );
-    }
-  };
-
   const formatSize = (bytes?: number): string => {
     if (!bytes) return '';
     if (bytes < 1024) return `${bytes}B`;
@@ -208,21 +189,6 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
       console.log('[WorkspaceLibrary] Document deleted', { docId: doc.id });
     } catch (err) {
       console.error('[WorkspaceLibrary] Failed to delete document', err);
-    }
-  };
-
-  const handleSourceDelete = async (source: Source) => {
-    if (!projectId || projectId === 'local-unfold') return;
-    
-    try {
-      // Detach source from project
-      await api.detachSource(projectId, source.id);
-      setSources(prev => prev.filter(s => s.id !== source.id));
-      onSourceDelete?.(source.id);
-      console.log('[WorkspaceLibrary] Source detached from project', { sourceId: source.id });
-    } catch (err) {
-      console.error('[WorkspaceLibrary] Failed to detach source', err);
-      alert('Failed to detach source from project');
     }
   };
 
@@ -378,7 +344,7 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
                               if (newName && newName !== doc.filename) {
                                 try {
                                   await api.docsUpdate(projectId, doc.id, { filename: newName });
-                                  const docs = await api.docsList(projectId);
+                                  const docs = await api.docsList(projectId, 'post');
                                   setDocuments(docs || []);
                                 } catch (err) {
                                   console.error('[WorkspaceLibrary] Failed to rename document', err);
@@ -399,7 +365,7 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
                             if (newName && newName !== doc.filename) {
                               try {
                                 await api.docsUpdate(projectId, doc.id, { filename: newName });
-                                const docs = await api.docsList(projectId);
+                                const docs = await api.docsList(projectId, 'post');
                                 setDocuments(docs || []);
                               } catch (err) {
                                 console.error('[WorkspaceLibrary] Failed to rename document', err);
@@ -480,43 +446,65 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
           </h4>
           <div className="space-y-1">
             {sources.map((source) => (
-              <div
+              <SourceItemWithActions
                 key={source.id}
-                className="flex items-center gap-2 px-2 py-1.5 rounded group hover:bg-white/5 transition-colors"
-              >
-                {/* Icon */}
-                <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                  {getSourceIcon(source.kind)}
-                </div>
-
-                {/* Source info */}
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate" style={{ color: 'var(--text-heading)' }} title={source.displayName}>
-                    {source.displayName}
-                  </div>
-                  <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-                    {source.kind}
-                    {source.status && ` • ${source.status}`}
-                  </div>
-                </div>
-
-                {/* Delete button */}
-                <button
-                  type="button"
-                  onClick={() => handleSourceDelete(source)}
-                  className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-all"
-                  style={{ color: 'var(--text-secondary)' }}
-                  aria-label="Delete source"
-                  title="Delete source"
-                >
-                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button>
-              </div>
+                source={source}
+                projectId={projectId}
+                onStatusChange={(sourceId, newStatus) => {
+                  setSources(prev => prev.map(s => 
+                    s.id === sourceId ? { ...s, status: newStatus } : s
+                  ));
+                }}
+                onDelete={(sourceId) => {
+                  setSources(prev => prev.filter(s => s.id !== sourceId));
+                  onSourceDelete?.(sourceId);
+                }}
+                onPreview={async (source) => {
+                  if (!projectId || projectId === 'local-unfold') return;
+                  try {
+                    // Load full source data with profile
+                    const allSources = await api.getProjectSources(projectId);
+                    const fullSource = allSources.find((s: DataSource) => s.id === source.id);
+                    if (fullSource) {
+                      setPreviewSource(fullSource);
+                    }
+                  } catch (err) {
+                    console.error('[WorkspaceLibrary] Failed to load source for preview', err);
+                  }
+                }}
+                onViewDocuments={async (sourceId) => {
+                  if (!projectId || projectId === 'local-unfold') return;
+                  try {
+                    // Load full source data
+                    const allSources = await api.getProjectSources(projectId);
+                    const fullSource = allSources.find((s: DataSource) => s.id === sourceId);
+                    if (fullSource) {
+                      setDocumentsViewSource(fullSource);
+                    }
+                  } catch (err) {
+                    console.error('[WorkspaceLibrary] Failed to load source for documents view', err);
+                  }
+                }}
+              />
             ))}
           </div>
         </div>
+      )}
+
+      {/* Source Preview */}
+      {previewSource && (
+        <SourcePreview
+          source={previewSource}
+          onClose={() => setPreviewSource(null)}
+        />
+      )}
+
+      {/* Source Documents Viewer */}
+      {documentsViewSource && (
+        <SourceDocumentsViewer
+          source={documentsViewSource}
+          onClose={() => setDocumentsViewSource(null)}
+        />
       )}
     </div>
   );

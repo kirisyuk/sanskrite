@@ -202,7 +202,7 @@ func (h *ArtifactsHandler) ListArtifacts(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	projectID := path[3]
-	items, err := h.coreDocs.ListByProject(r.Context(), auth.TenantID, projectID, 0)
+	items, err := h.coreDocs.ListByProject(r.Context(), auth.TenantID, projectID, 0, nil)
 	if err != nil {
 		WriteInternalError(w, "Failed to list artifacts")
 		return

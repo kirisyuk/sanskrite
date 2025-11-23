@@ -25,12 +25,12 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
+	"github.com/igorkirisyuk/sanskrite/internal/domain"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
+	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
-	"github.com/igorkirisyuk/sanskrite/internal/ontology"
-	"github.com/igorkirisyuk/sanskrite/internal/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
 )
 
@@ -106,6 +106,7 @@ func main() {
 	uncertaintyRepo := repo.NewUncertaintyModelRepository(fsClient.Client())
 	// RAG repos
 	ragDocsBucket := getEnv("RAG_DOCUMENTS_BUCKET", "")
+	var bqClient *gcp.BigQueryClient // Will be initialized later if BigQuery is enabled
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	if ragDocsBucket != "" && gcsClient != nil {
 		docsRepo = docsRepo.WithStorage(gcsClient, ragDocsBucket)
@@ -136,7 +137,31 @@ func main() {
 	var agentsHandler *httphandlers.AgentsHandler
 	var verifiedHandler *httphandlers.VerifiedHandler
 	var bigqueryHandler *httphandlers.BigQueryHandler
-	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger)
+	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
+	if bqClient != nil {
+		sourcesDocsRepo = sourcesDocsRepo.WithBigQuerySync(bqClient)
+	}
+	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
+
+	// Documents handler for artifact queries (created early to use in routes)
+	artifactsDocsRepo := docsRepo // Use the same repo instance with BigQuery sync if enabled
+	entityRepo := repo.NewEntityRepository(fsClient.Client())
+	eventRepo := repo.NewEventRepository(fsClient.Client())
+	claimRepo := repo.NewClaimRepository(fsClient.Client())
+	if bqClient != nil {
+		entityRepo = entityRepo.WithBigQuerySync(bqClient)
+		eventRepo = eventRepo.WithBigQuerySync(bqClient)
+		claimRepo = claimRepo.WithBigQuerySync(bqClient)
+		logger.Printf("BigQuery sync enabled for ontology artifacts (entities, events, claims)")
+	}
+	documentsHandler := httphandlers.NewDocumentsHandler(
+		artifactsDocsRepo,
+		entityRepo,
+		eventRepo,
+		claimRepo,
+		logger,
+	)
+
 	searchEventsRepo := repo.NewSearchEventsRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
 	rulesRepo := repo.NewRulesRepository(fsClient.Client())
@@ -167,7 +192,10 @@ func main() {
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()))
 		aiExecHandler = httphandlers.NewAIExecHandler(exec)
 		wc := crawler.NewWebCrawler()
-		tgBase := os.Getenv("TELEGRAM_SERVICE_URL")
+		tgBase := strings.TrimSpace(os.Getenv("TELEGRAM_SERVICE_URL"))
+		if tgBase == "" {
+			log.Printf("WARNING: TELEGRAM_SERVICE_URL is not set - Telegram features will be disabled")
+		}
 		tgClient := telegram.NewClient(tgBase)
 		projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
 		pub, err := realtime.NewPublisher(ctx, projectID)
@@ -198,10 +226,15 @@ func main() {
 
 		// Initialize BigQuery client and AI service
 		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "sanskrite_documents")
-		if bqClient, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID, opts...); err == nil {
+		if bq, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID, opts...); err == nil {
+			bqClient = bq
 			bigqueryAIService := services.NewBigQueryAIService(bqClient, genaiClient, logger)
 			bigqueryHandler = httphandlers.NewBigQueryHandler(bigqueryAIService, logger)
 			logger.Printf("BigQuery AI service enabled: project=%s, dataset=%s", projectID, bigqueryDatasetID)
+			// Wire BigQuery sync to repositories
+			docsRepo = docsRepo.WithBigQuerySync(bqClient)
+			coreDocsRepo = coreDocsRepo.WithBigQuerySync(bqClient)
+			logger.Printf("BigQuery sync enabled for documents and core docs")
 			// Note: BigQuery client will be closed when server shuts down
 		} else {
 			logger.Printf("BigQuery AI service disabled: %v", err)
@@ -361,7 +394,8 @@ func main() {
 		if pub != nil {
 			psClient := pub.Client()
 			// Передаем OntologyExtractor в DocumentProcessor
-			worker := discovery.NewDocumentProcessor(psClient, string(realtime.EventDocProcess), docsRepo, rulesRepo, exec, ontologyExtractor, logger)
+			// Используем агрегированный топик hatlone.artifact.events, куда публикуются события EventDocProcess
+			worker := discovery.NewDocumentProcessor(psClient, string(realtime.TopicArtifactEvents), docsRepo, rulesRepo, exec, ontologyExtractor, logger)
 			go func() {
 				ctxW, cancelW := context.WithCancel(ctx)
 				defer cancelW()
@@ -524,6 +558,10 @@ func main() {
 		// Wire cascade repos to projects handler
 		s.projectsHandler = s.projectsHandler.WithCascade(s.sprofs, interactions)
 		s.discoveryHandler = s.discoveryHandler.WithOrchestrator(orchestrator).WithInteractions(interactions).WithProfiles(s.sprofs)
+		sourcesHandler = sourcesHandler.WithOrchestrator(orchestrator)
+		if pub != nil {
+			sourcesHandler = sourcesHandler.WithPublisher(pub)
+		}
 		if pub != nil {
 			s.projectsHandler = s.projectsHandler.WithPublisher(pub)
 		}
@@ -1092,18 +1130,49 @@ func main() {
 	mux.Handle("/api/v1/sources/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.Trim(r.URL.Path, "/")
 		parts := strings.Split(path, "/")
-		if len(parts) >= 4 && parts[3] == "status" && r.Method == http.MethodPatch {
+		// Handle /api/v1/sources/{id}/artifacts
+		if len(parts) >= 5 && parts[4] == "artifacts" && r.Method == http.MethodGet {
+			documentsHandler.GetSourceArtifacts(w, r)
+			return
+		}
+		// Handle /api/v1/sources/{id}/ingest
+		// parts: ["api", "v1", "sources", "{id}", "ingest"]
+		if len(parts) >= 5 && parts[4] == "ingest" && r.Method == http.MethodPost {
+			sourcesHandler.IngestSource(w, r)
+			return
+		}
+		// Handle /api/v1/sources/{id}/reprocess
+		// parts: ["api", "v1", "sources", "{id}", "reprocess"]
+		if len(parts) >= 5 && parts[4] == "reprocess" && r.Method == http.MethodPost {
+			sourcesHandler.ReprocessDocuments(w, r)
+			return
+		}
+		// Handle /api/v1/sources/{id}/documents
+		// parts: ["api", "v1", "sources", "{id}", "documents"]
+		if len(parts) >= 5 && parts[4] == "documents" && r.Method == http.MethodGet {
+			sourcesHandler.ListSourceDocuments(w, r)
+			return
+		}
+		// Handle /api/v1/sources/{id}/status
+		// parts: ["api", "v1", "sources", "{id}", "status"]
+		if len(parts) >= 5 && parts[4] == "status" && r.Method == http.MethodPatch {
 			sourcesHandler.UpdateSourceStatus(w, r)
 			return
 		}
-		switch r.Method {
-		case http.MethodGet:
-			sourcesHandler.GetSource(w, r)
-		case http.MethodPut:
-			sourcesHandler.UpdateSource(w, r)
-		default:
-			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+		// Handle /api/v1/sources/{id}
+		// parts: ["api", "v1", "sources", "{id}"]
+		if len(parts) >= 4 {
+			switch r.Method {
+			case http.MethodGet:
+				sourcesHandler.GetSource(w, r)
+			case http.MethodPut:
+				sourcesHandler.UpdateSource(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+			return
 		}
+		httphandlers.WriteError(w, http.StatusNotFound, "NOT_FOUND", "Route not found", nil)
 	})))
 
 	// Generation Sessions routes

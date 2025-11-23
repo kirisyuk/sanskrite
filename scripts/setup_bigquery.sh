@@ -87,6 +87,38 @@ bq mk --table \
   "id:STRING,tenantId:STRING,projectId:STRING,filename:STRING,contentType:STRING,description:STRING,sizeBytes:INT64,storagePath:STRING,extractedText:STRING,parseStatus:STRING,parseMeta:JSON,pageCount:INT64,docType:STRING,createdBy:STRING,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" 2>/dev/null || \
   echo "Table core_docs_metadata may already exist"
 
+# Create tables for ontology artifacts (entities, events, claims)
+echo "Creating tables for ontology artifacts..."
+bq mk --table \
+  --project_id="$PROJECT_ID" \
+  "${DATASET}.ontology_entities" \
+  "id:STRING,tenantId:STRING,canonicalName:STRING,type:STRING,aliases:STRING,sourceId:STRING,sourceType:STRING,homeLocation:STRING,status:STRING,version:INT64,createdBy:STRING,updatedBy:STRING,description:STRING,tags:STRING,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" 2>/dev/null || \
+  echo "Table ontology_entities may already exist"
+
+bq mk --table \
+  --project_id="$PROJECT_ID" \
+  "${DATASET}.ontology_events" \
+  "id:STRING,tenantId:STRING,type:STRING,title:STRING,occurredAt:TIMESTAMP,occurredStart:TIMESTAMP,occurredEnd:TIMESTAMP,location:STRING,participantsCount:INT64,outcomeSummary:STRING,sourceId:STRING,sourceType:STRING,confidence:FLOAT64,status:STRING,version:INT64,createdBy:STRING,description:STRING,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" 2>/dev/null || \
+  echo "Table ontology_events may already exist"
+
+bq mk --table \
+  --project_id="$PROJECT_ID" \
+  "${DATASET}.ontology_claims" \
+  "id:STRING,tenantId:STRING,subjectId:STRING,subjectKind:STRING,predicate:STRING,objectKind:STRING,objectId:STRING,stance:STRING,confidence:FLOAT64,sourceId:STRING,sourceType:STRING,method:STRING,extractedAt:TIMESTAMP,status:STRING,version:INT64,createdBy:STRING,description:STRING,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" 2>/dev/null || \
+  echo "Table ontology_claims may already exist"
+
+# TODO: Add tables for remaining ontology artifacts:
+# - ontology_concepts
+# - ontology_relations
+# - ontology_metric_states
+# - ontology_trends
+# - ontology_causal_links
+# - ontology_scenarios
+# - ontology_actionable_items
+# - ontology_sources
+# - ontology_trust
+# - ontology_uncertainty_models
+
 # Note: ML model creation requires correct remote_service_type
 # Will be configured when BigQuery ML remote models are fully set up
 echo "Note: ML model creation skipped - requires specific remote_service_type"

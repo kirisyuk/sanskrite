@@ -703,13 +703,16 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var out []map[string]any
-	status := "active"
-	links, err := h.sourceProjectsRepo.ListByProject(r.Context(), authInfo.TenantID, projectID, &status)
+	// Don't filter by status - return all links (frontend can filter if needed)
+	// This allows showing paused sources that are still linked to the project
+	links, err := h.sourceProjectsRepo.ListByProject(r.Context(), authInfo.TenantID, projectID, nil)
 	if err != nil {
 		h.logger.Printf("ListByProject (sourceProjects) error: %v", err)
 		WriteInternalError(w, "Failed to list sources")
 		return
 	}
+
+	h.logger.Printf("ListProjectSources: found %d links for project %s (tenant: %s)", len(links), projectID, authInfo.TenantID)
 
 	// Optionally prefetch profiles and index by dataSourceId
 	profilesBySource := map[string]any{}
@@ -730,7 +733,14 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 		}
 		ds, err := h.dataSourcesRepo.Get(r.Context(), link.SourceID)
 		if err != nil || ds == nil {
+			h.logger.Printf("ListProjectSources: failed to get source %s: %v", link.SourceID, err)
 			continue
+		}
+		// Use link status (active/paused) instead of source status for project-specific status
+		// Source status is global, link status is project-specific
+		linkStatus := link.Status
+		if linkStatus == "" {
+			linkStatus = "active" // Default to active if not set
 		}
 		m := map[string]interface{}{
 			"id":            ds.ID,
@@ -738,7 +748,7 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 			"pk":            ds.Pk,
 			"displayName":   ds.DisplayName,
 			"kind":          ds.Kind,
-			"status":        ds.Status,
+			"status":        linkStatus, // Use link status (project-specific) instead of source status
 			"researchId":    ds.ResearchID,
 			"sessionId":     ds.SessionID,
 			"ownerUserId":   ds.OwnerUserID,
@@ -911,8 +921,8 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		// Research-specific fields (optional, for research interactions)
 		ResearchQuery    *string                `json:"researchQuery,omitempty"`
 		ResearchProgress *repo.ResearchProgress `json:"researchProgress,omitempty"`
-		SubQueries       []string               `json:"subQueries,omitempty"` // For research.result
-		ResearchSources  []repo.ResearchSource   `json:"researchSources,omitempty"` // For research.result
+		SubQueries       []string               `json:"subQueries,omitempty"`      // For research.result
+		ResearchSources  []repo.ResearchSource  `json:"researchSources,omitempty"` // For research.result
 		// Sections (optional client-provided for future-proofing; server derives when missing)
 		SectionID *string `json:"sectionId,omitempty"`
 	}
@@ -995,6 +1005,11 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		}
 		// Update its sectionId to self for easier grouping
 		_ = h.interactionsRepo.Update(r.Context(), startID, map[string]interface{}{"sectionId": startID})
+		// Update project's lastInteractionAt
+		if err := h.projectsRepo.UpdateLastInteraction(r.Context(), projectID); err != nil {
+			h.logger.Printf("Failed to update project interaction time: %v", err)
+			// Non-fatal, continue
+		}
 		WriteJSON(w, http.StatusCreated, map[string]any{"id": startID})
 		return
 	}
@@ -1019,6 +1034,11 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		if err != nil {
 			WriteInternalError(w, "Failed to create interaction")
 			return
+		}
+		// Update project's lastInteractionAt
+		if err := h.projectsRepo.UpdateLastInteraction(r.Context(), projectID); err != nil {
+			h.logger.Printf("Failed to update project interaction time: %v", err)
+			// Non-fatal, continue
 		}
 		WriteJSON(w, http.StatusCreated, map[string]any{"id": endID})
 		return
@@ -1064,22 +1084,28 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		SearchQueries:            body.SearchQueries,
 		Sources:                  body.Sources,
 		// Research-specific fields
-		ResearchQuery:            body.ResearchQuery,
-		ResearchProgress:         body.ResearchProgress,
-		SubQueries:               body.SubQueries,
-		ResearchSources:          body.ResearchSources,
-		SectionID:                sectionPtr,
+		ResearchQuery:    body.ResearchQuery,
+		ResearchProgress: body.ResearchProgress,
+		SubQueries:       body.SubQueries,
+		ResearchSources:  body.ResearchSources,
+		SectionID:        sectionPtr,
 	})
 	if err != nil {
 		WriteInternalError(w, "Failed to create interaction")
 		return
 	}
 
+	// Update project's lastInteractionAt
+	if err := h.projectsRepo.UpdateLastInteraction(r.Context(), projectID); err != nil {
+		h.logger.Printf("Failed to update project interaction time: %v", err)
+		// Non-fatal, continue
+	}
+
 	// Публикуем событие для асинхронной обработки онтологии (только для user и assistant)
 	if (k == "user" || k == "assistant") && h.orchestrator != nil && h.orchestrator.Publish() != nil {
 		_ = h.orchestrator.Publish().PublishJSON(r.Context(), realtime.EventChatOntologyProcess, authInfo.TenantID, map[string]any{
-			"tenantId":     authInfo.TenantID,
-			"projectId":    projectID,
+			"tenantId":      authInfo.TenantID,
+			"projectId":     projectID,
 			"interactionId": id,
 		})
 	}
@@ -1303,13 +1329,13 @@ func (h *DiscoveryHandler) VertexAISearch(w http.ResponseWriter, r *http.Request
 	// Build tenant-aware filter
 	// Allow access to tenant's own documents + global documents
 	tenantFilter := fmt.Sprintf("tenantId:\"%s\" OR tenantId:\"global\"", auth.TenantID)
-	
+
 	// Combine with user-provided filter if present
 	finalFilter := tenantFilter
 	if body.Filter != "" {
 		finalFilter = fmt.Sprintf("(%s) AND (%s)", tenantFilter, body.Filter)
 	}
-	
+
 	searchReq := &ai.SearchRequest{
 		Query:    body.Query,
 		PageSize: body.PageSize,
@@ -1333,9 +1359,9 @@ func (h *DiscoveryHandler) VertexAISearch(w http.ResponseWriter, r *http.Request
 			}
 		}
 		_, _ = h.searchRepo.Create(r.Context(), &models.SearchEvent{
-			TenantID:     auth.TenantID,
-			ProjectID:    projectID,
-			Query:        body.Query,
+			TenantID:      auth.TenantID,
+			ProjectID:     projectID,
+			Query:         body.Query,
 			ResultsDocIDs: docIDs,
 		})
 	}

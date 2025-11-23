@@ -63,13 +63,16 @@ func (o *Orchestrator) Publish() *realtime.Publisher { return o.publish }
 // Exec accessor (used by HTTP handlers needing embeddings)
 func (o *Orchestrator) Exec() *ai.AITaskExecutor { return o.exec }
 
+// EmbeddingProvider accessor (used by HTTP handlers for RSS ingest)
+func (o *Orchestrator) EmbeddingProvider() ai.EmbeddingProvider { return o.emb }
+
 // ensureProjectSourceLink creates an active link between project and source if missing.
 func (o *Orchestrator) ensureProjectSourceLink(ctx context.Context, tenantID, projectID, sourceID string) {
 	if o.sproj == nil || strings.TrimSpace(projectID) == "" || strings.TrimSpace(sourceID) == "" {
 		return
 	}
-	status := "active"
-	links, err := o.sproj.ListBySource(ctx, tenantID, sourceID, &status)
+	// Check for any existing link (regardless of status)
+	links, err := o.sproj.ListBySource(ctx, tenantID, sourceID, nil)
 	if err != nil {
 		o.logger.Printf("orchestrator: link: ListBySource error tenant=%s project=%s source=%s: %v", tenantID, projectID, sourceID, err)
 		return
@@ -80,7 +83,7 @@ func (o *Orchestrator) ensureProjectSourceLink(ctx context.Context, tenantID, pr
 			return
 		}
 	}
-	_, err = o.sproj.Create(ctx, &models.SourceProject{TenantID: tenantID, SourceID: sourceID, ProjectID: projectID, Status: "active", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+	_, err = o.sproj.Create(ctx, &models.SourceProject{TenantID: tenantID, SourceID: sourceID, ProjectID: projectID, Status: "paused", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
 	if err != nil {
 		o.logger.Printf("orchestrator: link create failed tenant=%s project=%s source=%s: %v", tenantID, projectID, sourceID, err)
 		return
@@ -246,10 +249,13 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 	if o.telegram == nil || o.docs == nil || o.chunks == nil || o.emb == nil {
 		return fmt.Errorf("ingest dependencies not wired")
 	}
+	o.logger.Printf("orchestrator: IngestTelegram started for @%s (sourceID=%s, tenantID=%s, lastMessageID=%d)", handle, sourceID, tenantID, lastMessageID)
 	msgs, err := o.telegram.FetchUpdates(ctx, handle, lastMessageID)
 	if err != nil {
+		o.logger.Printf("orchestrator: IngestTelegram failed to fetch updates for @%s: %v", handle, err)
 		return err
 	}
+	o.logger.Printf("orchestrator: IngestTelegram fetched %d messages for @%s", len(msgs), handle)
 	now := time.Now().UTC()
 	maxSeenID := lastMessageID
 	for _, m := range msgs {
@@ -321,6 +327,7 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			}
 		}
 	}
+	o.logger.Printf("orchestrator: IngestTelegram completed for @%s (sourceID=%s): processed %d messages, maxSeenID=%d", handle, sourceID, len(msgs), maxSeenID)
 	return nil
 }
 
@@ -515,18 +522,18 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 			}
 		} else {
 			// For new documents, get it back by externalID to publish event
-		if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, nd.ExternalID); d != nil {
-			d.Status = "embedded"
-			_ = o.docs.Upsert(ctx, d)
-			// publish to document.process
-			if o.publish != nil {
-				payload := map[string]any{
-					"tenantId":   tenantID,
-					"sourceId":   sourceID,
-					"documentId": d.ID,
-					"externalId": d.ExternalID,
-				}
-				_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, payload)
+			if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, nd.ExternalID); d != nil {
+				d.Status = "embedded"
+				_ = o.docs.Upsert(ctx, d)
+				// publish to document.process
+				if o.publish != nil {
+					payload := map[string]any{
+						"tenantId":   tenantID,
+						"sourceId":   sourceID,
+						"documentId": d.ID,
+						"externalId": d.ExternalID,
+					}
+					_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, payload)
 				}
 			}
 		}
@@ -967,8 +974,8 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		createdNew = true
 		// Ensure link project<->source is created for this chat
 		if o.sproj != nil && strings.TrimSpace(in.ProjectID) != "" {
-			status := "active"
-			links, _ := o.sproj.ListBySource(ctx, in.TenantID, ds.ID, &status)
+			// Check for any existing link (regardless of status)
+			links, _ := o.sproj.ListBySource(ctx, in.TenantID, ds.ID, nil)
 			exists := false
 			for _, l := range links {
 				if l.ProjectID == in.ProjectID {
@@ -977,7 +984,7 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 				}
 			}
 			if !exists {
-				_, _ = o.sproj.Create(ctx, &models.SourceProject{TenantID: in.TenantID, SourceID: ds.ID, ProjectID: in.ProjectID, Status: "active", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+				_, _ = o.sproj.Create(ctx, &models.SourceProject{TenantID: in.TenantID, SourceID: ds.ID, ProjectID: in.ProjectID, Status: "paused", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
 			}
 		}
 	}
@@ -1112,7 +1119,29 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		ds.LastSeen = time.Now().UTC()
 		needsUpdate = true
 
+		// Ensure link project<->source is created (even if source already exists)
+		if o.sproj != nil && strings.TrimSpace(in.ProjectID) != "" {
+			link, _ := o.sproj.GetByProjectAndSource(ctx, in.TenantID, in.ProjectID, ds.ID)
+			if link == nil {
+				// Link doesn't exist, create it
+				_, err := o.sproj.Create(ctx, &models.SourceProject{
+					TenantID:  in.TenantID,
+					SourceID:  ds.ID,
+					ProjectID: in.ProjectID,
+					Status:    "paused",
+					CreatedAt: time.Now().UTC(),
+					UpdatedAt: time.Now().UTC(),
+				})
+				if err != nil {
+					o.logger.Printf("orchestrator: failed to create source-project link for @%s: %v", handle, err)
+				} else {
+					o.logger.Printf("orchestrator: created source-project link for @%s to project %s", handle, in.ProjectID)
+				}
+			}
+		}
+
 		// If source was previously processed, normalize status to paused and reuse profile
+		// But still fetch and ingest messages if needed
 		if ds.Status == "completed" && o.profiles != nil {
 			// normalize to paused for public sources
 			ds.Status = "paused"
@@ -1120,10 +1149,11 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 				_ = o.sources.Upsert(ctx, ds)
 			}
 			if sp, _ := o.profiles.GetByDataSource(ctx, in.TenantID, ds.ID); sp != nil {
-				o.logger.Printf("orchestrator: reusing existing profile for @%s", handle)
+				o.logger.Printf("orchestrator: reusing existing profile for @%s, but will still fetch/ingest messages", handle)
+				// Don't return early - continue to fetch and ingest messages
+				// Publish profile event but continue processing
 				o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 					"projectId": in.ProjectID, "sourceId": ds.ID, "profile": sp.Profile})
-				return nil
 			}
 		}
 	} else {
@@ -1150,8 +1180,8 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 
 		// Ensure link project<->source is created for this chat
 		if o.sproj != nil && strings.TrimSpace(in.ProjectID) != "" {
-			status := "active"
-			links, _ := o.sproj.ListBySource(ctx, in.TenantID, ds.ID, &status)
+			// Check for any existing link (regardless of status)
+			links, _ := o.sproj.ListBySource(ctx, in.TenantID, ds.ID, nil)
 			exists := false
 			for _, l := range links {
 				if l.ProjectID == in.ProjectID {
@@ -1160,7 +1190,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 				}
 			}
 			if !exists {
-				_, _ = o.sproj.Create(ctx, &models.SourceProject{TenantID: in.TenantID, SourceID: ds.ID, ProjectID: in.ProjectID, Status: "active", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+				_, _ = o.sproj.Create(ctx, &models.SourceProject{TenantID: in.TenantID, SourceID: ds.ID, ProjectID: in.ProjectID, Status: "paused", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
 			}
 		}
 	}
@@ -1178,7 +1208,20 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, msg)
 
-	// fetch posts (last 30 to avoid Firestore 1MB document limit)
+	// Save messages as documents if ingest is available
+	// IngestTelegram will fetch messages itself, so we call it first
+	if o.docs != nil && o.chunks != nil && o.emb != nil {
+		// Use tenantID from input (project's tenant) for document storage
+		// Even though source is public (TenantID=""), documents are stored with project's tenantID
+		if ingestErr := o.IngestTelegram(ctx, in.TenantID, ds.ID, handle, 0); ingestErr != nil {
+			o.logger.Printf("orchestrator: failed to ingest telegram messages for @%s: %v", handle, ingestErr)
+			// Don't fail the whole process if ingest fails, continue with profiling
+		} else {
+			o.logger.Printf("orchestrator: successfully ingested messages for @%s", handle)
+		}
+	}
+
+	// fetch posts (last 30 to avoid Firestore 1MB document limit) for profiling
 	msgs, err := o.telegram.FetchUpdates(ctx, handle, 0)
 	if err != nil {
 		o.logger.Printf("orchestrator: telegram fetch error for @%s: %v", handle, err)
@@ -1188,7 +1231,8 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 	if len(msgs) > 30 {
 		msgs = msgs[len(msgs)-30:]
 	}
-	// concatenate text
+
+	// concatenate text for profiling
 	var b strings.Builder
 	for _, m := range msgs {
 		if m.Text != "" {

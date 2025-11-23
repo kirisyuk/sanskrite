@@ -264,6 +264,14 @@ const DiscoveryPage: React.FC = () => {
   React.useEffect(() => {
     try {
       if (!lastDocEvent) return;
+      
+      // Skip RAG document events (from sources) - they have documentId, sourceId, externalId
+      // We only care about CoreDoc events (project documents) which have docId, filename
+      if ((lastDocEvent as any).documentId || (lastDocEvent as any).sourceId) {
+        // This is a RAG document event, not a CoreDoc event - skip it
+        return;
+      }
+      
       const did = String((lastDocEvent as any).docId || '');
       const fname = String((lastDocEvent as any).filename || '');
       const isEntities =
@@ -2281,8 +2289,10 @@ const DiscoveryPage: React.FC = () => {
           setDrawerWidth={setDrawerWidth}
           closeAllRightPanels={closeAllRightPanels}
           getPanelVisibilityStyles={getPanelVisibilityStyles}
-          sources={sources}
           currentProjectId={currentProject?.id || null}
+          addMenuRef={addMenuRef}
+          showAddSourceMenu={showAddSourceMenu}
+          onShowAddSourceMenuChange={setShowAddSourceMenu}
           onShowAddTelegramModalChange={setShowAddTelegramModal}
           onPreviewSource={setPreviewSource}
           onOpenDocument={setActiveDoc}

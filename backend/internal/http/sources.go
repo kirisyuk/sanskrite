@@ -1,25 +1,50 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 // SourcesHandler manages project–source links and data sources
 type SourcesHandler struct {
-	sp     *repo.SourceProjectsRepository
-	ds     *repo.DataSourcesRepository
-	logger *log.Logger
+	sp           *repo.SourceProjectsRepository
+	ds           *repo.DataSourcesRepository
+	docsRepo     *repo.DocumentsRepository
+	orchestrator *discovery.Orchestrator
+	publisher    *realtime.Publisher
+	logger       *log.Logger
 }
 
 func NewSourcesHandler(sp *repo.SourceProjectsRepository, ds *repo.DataSourcesRepository, logger *log.Logger) *SourcesHandler {
 	return &SourcesHandler{sp: sp, ds: ds, logger: logger}
+}
+
+// WithDocuments wires documents repository
+func (h *SourcesHandler) WithDocuments(d *repo.DocumentsRepository) *SourcesHandler {
+	h.docsRepo = d
+	return h
+}
+
+// WithOrchestrator wires orchestrator for ingest operations
+func (h *SourcesHandler) WithOrchestrator(o *discovery.Orchestrator) *SourcesHandler {
+	h.orchestrator = o
+	return h
+}
+
+// WithPublisher wires realtime publisher for event publishing
+func (h *SourcesHandler) WithPublisher(pub *realtime.Publisher) *SourcesHandler {
+	h.publisher = pub
+	return h
 }
 
 // AttachSource handles POST /api/v1/projects/{id}/sources
@@ -53,7 +78,7 @@ func (h *SourcesHandler) AttachSource(w http.ResponseWriter, r *http.Request) {
 		TenantID:  auth.TenantID,
 		SourceID:  body.SourceID,
 		ProjectID: projectID,
-		Status:    firstNonEmpty(body.Status, "active"),
+		Status:    firstNonEmpty(body.Status, "paused"),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -111,6 +136,7 @@ func (h *SourcesHandler) GetSourceProjectStatus(w http.ResponseWriter, r *http.R
 }
 
 // DetachSource handles DELETE /api/v1/projects/{id}/sources/{sourceId}
+// Removes the project-source link. If this is the last link, deletes the source itself.
 func (h *SourcesHandler) DetachSource(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only DELETE is allowed", nil)
@@ -122,16 +148,39 @@ func (h *SourcesHandler) DetachSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// parts: ["api", "v1", "projects", "{id}", "sources", "{sourceId}"]
 	if len(parts) < 6 {
 		WriteBadRequest(w, "INVALID_PATH", "Project and Source IDs are required")
 		return
 	}
 	projectID := parts[3]
 	sourceID := parts[5]
+
+	// Delete the project-source link
 	if err := h.sp.DeleteByProjectAndSource(r.Context(), auth.TenantID, projectID, sourceID); err != nil {
+		h.logger.Printf("Failed to delete project-source link: %v", err)
 		WriteInternalError(w, "Failed to detach source")
 		return
 	}
+
+	// Check if this was the last link for this source
+	count, err := h.sp.CountBySource(r.Context(), sourceID)
+	if err != nil {
+		h.logger.Printf("Failed to count source links: %v", err)
+		// Continue anyway - link is already deleted
+	} else if count == 0 {
+		// This was the last link, delete the source itself
+		h.logger.Printf("Last link removed for source %s, deleting source", sourceID)
+		if h.ds != nil {
+			if err := h.ds.Delete(r.Context(), sourceID); err != nil {
+				h.logger.Printf("Failed to delete source %s: %v", sourceID, err)
+				// Don't fail the request - link is already deleted
+			} else {
+				h.logger.Printf("Successfully deleted source %s (no more links)", sourceID)
+			}
+		}
+	}
+
 	WriteJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -316,11 +365,12 @@ func (h *SourcesHandler) GetSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 3 {
+	// parts: ["api", "v1", "sources", "{id}"]
+	if len(parts) < 4 {
 		WriteBadRequest(w, "INVALID_PATH", "Source ID is required")
 		return
 	}
-	sourceID := parts[2]
+	sourceID := parts[3]
 
 	ds, err := h.ds.Get(r.Context(), sourceID)
 	if err != nil || ds == nil {
@@ -344,11 +394,12 @@ func (h *SourcesHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 3 {
+	// parts: ["api", "v1", "sources", "{id}"]
+	if len(parts) < 4 {
 		WriteBadRequest(w, "INVALID_PATH", "Source ID is required")
 		return
 	}
-	sourceID := parts[2]
+	sourceID := parts[3]
 
 	// Get existing source
 	ds, err := h.ds.Get(r.Context(), sourceID)
@@ -403,11 +454,12 @@ func (h *SourcesHandler) UpdateSourceStatus(w http.ResponseWriter, r *http.Reque
 	}
 
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 4 || parts[3] != "status" {
+	// parts: ["api", "v1", "sources", "{id}", "status"]
+	if len(parts) < 5 || parts[4] != "status" {
 		WriteBadRequest(w, "INVALID_PATH", "Source ID and /status are required")
 		return
 	}
-	sourceID := parts[2]
+	sourceID := parts[3]
 
 	// Get existing source
 	ds, err := h.ds.Get(r.Context(), sourceID)
@@ -506,6 +558,255 @@ func (h *SourcesHandler) ListSources(w http.ResponseWriter, r *http.Request) {
 	// so no need for additional post-filtering. This keeps the code simpler and more efficient.
 
 	WriteJSON(w, http.StatusOK, sources)
+}
+
+// ListSourceDocuments handles GET /api/v1/sources/{id}/documents
+// Returns documents (messages) for a specific source
+func (h *SourcesHandler) ListSourceDocuments(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	if h.docsRepo == nil {
+		WriteInternalError(w, "Documents repository is not configured")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// parts: ["api", "v1", "sources", "{id}", "documents"]
+	if len(parts) < 5 || parts[4] != "documents" {
+		WriteBadRequest(w, "INVALID_PATH", "Source ID and /documents are required")
+		return
+	}
+	sourceID := parts[3]
+
+	// Verify source exists and belongs to tenant
+	ds, err := h.ds.Get(r.Context(), sourceID)
+	if err != nil || ds == nil {
+		WriteNotFound(w, "Source not found")
+		return
+	}
+	// Check tenant access (public sources have empty tenantId)
+	if ds.TenantID != "" && ds.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Parse limit query parameter
+	limit := 0
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	// For public sources (empty TenantID), pass empty string to ListBySource
+	// which will query by sourceId only (documents may have different tenantIDs)
+	// For tenant-scoped sources, use the source's tenantID
+	tenantID := ds.TenantID
+	// Note: For public sources, ListBySource will query by sourceId only
+
+	docs, err := h.docsRepo.ListBySource(r.Context(), tenantID, sourceID, limit)
+	if err != nil {
+		h.logger.Printf("Failed to list documents for source %s: %v", sourceID, err)
+		WriteInternalError(w, "Failed to list documents")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, docs)
+}
+
+// IngestSource handles POST /api/v1/sources/{id}/ingest
+// Triggers ingest for a specific source
+func (h *SourcesHandler) IngestSource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	if h.orchestrator == nil {
+		WriteInternalError(w, "Ingest not configured")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 4 {
+		WriteBadRequest(w, "INVALID_PATH", "Source ID is required")
+		return
+	}
+	sourceID := parts[3]
+
+	// Get source to determine its kind and details
+	ds, err := h.ds.Get(r.Context(), sourceID)
+	if err != nil {
+		h.logger.Printf("Failed to get source %s: %v", sourceID, err)
+		WriteNotFound(w, "Source not found")
+		return
+	}
+
+	// Check access: source must belong to tenant or be public
+	if ds.TenantID != "" && ds.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Trigger ingest asynchronously based on source kind
+	go func() {
+		ctx := context.Background()
+		h.logger.Printf("IngestSource: starting ingest for source %s (kind: %s)", sourceID, ds.Kind)
+		var ingestErr error
+		switch ds.Kind {
+		case "telegram_channel":
+			if ds.Details.ChannelUsername == nil {
+				h.logger.Printf("IngestSource: telegram_channel source %s missing ChannelUsername", sourceID)
+				return
+			}
+			last := 0
+			if ds.Details.LastProcessedMessageID != nil {
+				last = *ds.Details.LastProcessedMessageID
+			}
+			tenantID := ds.TenantID
+			if tenantID == "" {
+				tenantID = auth.TenantID // For public sources, use requester's tenant for ingest
+			}
+			h.logger.Printf("IngestSource: calling IngestTelegram for source %s, channel @%s, lastMessageID=%d, tenantID=%s", sourceID, *ds.Details.ChannelUsername, last, tenantID)
+			ingestErr = h.orchestrator.IngestTelegram(ctx, tenantID, sourceID, *ds.Details.ChannelUsername, last)
+		case "web":
+			if ds.Details.URI == nil {
+				h.logger.Printf("IngestSource: web source %s missing URI", sourceID)
+				return
+			}
+			tenantID := ds.TenantID
+			if tenantID == "" {
+				tenantID = auth.TenantID
+			}
+			ingestErr = h.orchestrator.IngestWeb(ctx, tenantID, sourceID, *ds.Details.URI)
+		case "rss":
+			if ds.Details.RSSURL == nil {
+				h.logger.Printf("IngestSource: rss source %s missing RSSURL", sourceID)
+				return
+			}
+			tenantID := ds.TenantID
+			if tenantID == "" {
+				tenantID = auth.TenantID
+			}
+			if h.orchestrator.EmbeddingProvider() != nil {
+				ingestErr = h.orchestrator.IngestRSS(ctx, tenantID, sourceID, h.orchestrator.EmbeddingProvider())
+			} else {
+				h.logger.Printf("IngestSource: rss source %s requires embedding provider", sourceID)
+				return
+			}
+		default:
+			h.logger.Printf("IngestSource: unsupported source kind %s for source %s", ds.Kind, sourceID)
+			return
+		}
+		if ingestErr != nil {
+			h.logger.Printf("IngestSource: failed to ingest source %s (kind: %s): %v", sourceID, ds.Kind, ingestErr)
+		} else {
+			h.logger.Printf("IngestSource: successfully completed ingest for source %s (kind: %s)", sourceID, ds.Kind)
+		}
+	}()
+
+	WriteJSON(w, http.StatusAccepted, map[string]any{"queued": true, "sourceId": sourceID, "kind": ds.Kind})
+}
+
+// ReprocessDocuments handles POST /api/v1/sources/{id}/reprocess
+// Republishes document.process events for documents with status "embedded"
+func (h *SourcesHandler) ReprocessDocuments(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	if h.docsRepo == nil {
+		WriteInternalError(w, "Documents repository not configured")
+		return
+	}
+	if h.publisher == nil {
+		WriteInternalError(w, "Publisher not configured")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 4 {
+		WriteBadRequest(w, "INVALID_PATH", "Source ID is required")
+		return
+	}
+	sourceID := parts[3]
+
+	// Get source to determine tenantID
+	ds, err := h.ds.Get(r.Context(), sourceID)
+	if err != nil {
+		h.logger.Printf("ReprocessDocuments: failed to get source %s: %v", sourceID, err)
+		WriteNotFound(w, "Source not found")
+		return
+	}
+
+	// Check access
+	if ds.TenantID != "" && ds.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Determine tenantID for query
+	tenantID := ds.TenantID
+	if tenantID == "" {
+		tenantID = auth.TenantID // For public sources, use requester's tenant
+	}
+
+	// Find documents with status "embedded"
+	docs, err := h.docsRepo.ListByStatus(r.Context(), tenantID, sourceID, "embedded", 0) // 0 = no limit
+	if err != nil {
+		h.logger.Printf("ReprocessDocuments: failed to list documents: %v", err)
+		WriteInternalError(w, "Failed to list documents")
+		return
+	}
+
+	if len(docs) == 0 {
+		WriteJSON(w, http.StatusOK, map[string]any{"reprocessed": 0, "message": "No documents with status 'embedded' found"})
+		return
+	}
+
+	// Republish events asynchronously
+	go func() {
+		ctx := context.Background()
+		count := 0
+		for _, doc := range docs {
+			if h.publisher != nil {
+				payload := map[string]any{
+					"tenantId":   doc.TenantID,
+					"sourceId":   doc.SourceID,
+					"documentId": doc.ID,
+					"externalId": doc.ExternalID,
+				}
+				if err := h.publisher.PublishJSON(ctx, realtime.EventDocProcess, doc.TenantID, payload); err != nil {
+					h.logger.Printf("ReprocessDocuments: failed to publish event for document %s: %v", doc.ID, err)
+					continue
+				}
+				count++
+			}
+		}
+		h.logger.Printf("ReprocessDocuments: republished %d events for source %s", count, sourceID)
+	}()
+
+	WriteJSON(w, http.StatusAccepted, map[string]any{
+		"queued":   true,
+		"sourceId": sourceID,
+		"count":    len(docs),
+		"message":  "Reprocessing queued",
+	})
 }
 
 // Inline light helpers

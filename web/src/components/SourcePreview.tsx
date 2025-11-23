@@ -1,5 +1,7 @@
 import React from 'react';
 import { DataSource } from '../types/generated';
+import { api } from '../lib/api';
+import { MarkdownRenderer } from '../lib/markdownComponents';
 
 type SourceWithProfile = DataSource & { profile?: any; description?: string };
 
@@ -33,6 +35,9 @@ const closeBtnStyle: React.CSSProperties = {
 
 export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, style }) => {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const [documents, setDocuments] = React.useState<any[]>([]);
+  const [loadingDocs, setLoadingDocs] = React.useState(false);
+  const [documentsError, setDocumentsError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     function handleDown(e: MouseEvent) {
@@ -50,6 +55,54 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
       document.removeEventListener('keydown', handleKey);
     };
   }, [onClose]);
+
+  // Load documents when source changes
+  React.useEffect(() => {
+    if (!source?.id) return;
+    setLoadingDocs(true);
+    setDocumentsError(null);
+    
+    // For Telegram sources, use preview endpoint
+    if (source.kind === 'telegram_channel' && source.sourceDetails?.channelUsername) {
+      const channel = source.sourceDetails.channelUsername;
+      api.previewTelegramChannel(channel)
+        .then((result) => {
+          // Convert Telegram messages to document format
+          // TelegramMessage format: { id: number, text: string, date: string, link: string }
+          // Telegram service (Telethon iter_messages) returns messages in reverse chronological order (newest first),
+          // so messages are already in the correct order
+          const docs = (result.messages || []).map((msg: any) => ({
+              id: msg.id?.toString() || '',
+              title: msg.link || '',
+              fullText: msg.text || '', // Use fullText to match document display format
+              text: msg.text || '',
+              url: msg.link || '',
+              date: msg.date || '',
+              link: msg.link || '',
+              originPublishedAt: msg.date || null,
+            }));
+          setDocuments(docs);
+          setLoadingDocs(false);
+        })
+        .catch((err) => {
+          console.error('[SourcePreview] Failed to load Telegram preview', err);
+          setDocumentsError('Failed to load messages');
+          setLoadingDocs(false);
+        });
+    } else {
+      // For other sources, use documents endpoint
+      api.getSourceDocuments(source.id, 20)
+        .then((docs) => {
+          setDocuments(docs || []);
+          setLoadingDocs(false);
+        })
+        .catch((err) => {
+          console.error('[SourcePreview] Failed to load documents', err);
+          setDocumentsError('Failed to load messages');
+          setLoadingDocs(false);
+        });
+    }
+  }, [source?.id, source?.kind, source?.sourceDetails?.channelUsername]);
 
   const badgeStyle: React.CSSProperties = {
     display: 'inline-flex',
@@ -248,6 +301,84 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
           )}
           {source.sourceDetails?.channelUsername && (
             <div><span style={{ color: 'var(--text-tertiary-weak)' }}>telegram:</span> @{source.sourceDetails.channelUsername}</div>
+          )}
+        </div>
+
+        {/* Messages/Documents section */}
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 8 }}>
+            {source.kind === 'telegram_channel' ? 'Messages' : 'Documents'} ({documents.length})
+          </div>
+          {loadingDocs ? (
+            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
+              Loading messages...
+            </div>
+          ) : documentsError ? (
+            <div style={{ fontSize: 11, color: 'var(--accent-error)', padding: '8px 0' }}>
+              {documentsError}
+            </div>
+          ) : documents.length === 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
+              No messages yet
+            </div>
+          ) : (
+            <div style={{ maxHeight: 300, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {documents.map((doc: any) => (
+                <div
+                  key={doc.id}
+                  style={{
+                    padding: 8,
+                    borderRadius: 8,
+                    backgroundColor: 'var(--bg-sidebar)',
+                    border: '1px solid var(--overlay-line-90)',
+                  }}
+                >
+                  {(doc.fullText || doc.text) && (
+                    <div
+                      className="markdown"
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--text-secondary-strong)',
+                        lineHeight: 1.4,
+                        marginBottom: doc.url ? 4 : 0,
+                      }}
+                    >
+                      <MarkdownRenderer 
+                        content={doc.fullText || doc.text || ''} 
+                        skipWrapper={true}
+                        className=""
+                      />
+                    </div>
+                  )}
+                  {doc.title && doc.title !== doc.url && (
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 4 }}>
+                      {doc.title}
+                    </div>
+                  )}
+                  {doc.originPublishedAt && (
+                    <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 4 }}>
+                      {new Date(doc.originPublishedAt).toLocaleDateString()}
+                    </div>
+                  )}
+                  {doc.url && (
+                    <a
+                      href={doc.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontSize: 10,
+                        color: 'var(--accent-primary)',
+                        textDecoration: 'none',
+                        marginTop: 4,
+                        display: 'inline-block',
+                      }}
+                    >
+                      Open →
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </div>

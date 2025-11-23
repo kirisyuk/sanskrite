@@ -20,7 +20,6 @@ interface RightDrawerProps {
   closeAllRightPanels: () => void;
   getPanelVisibilityStyles: (visible: boolean) => React.CSSProperties;
   // Workspace panel props
-  sources: any[];
   currentProjectId: string | null;
   addMenuRef: React.RefObject<HTMLDivElement | null>;
   showAddSourceMenu: boolean;
@@ -68,7 +67,6 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
   setDrawerWidth,
   closeAllRightPanels,
   getPanelVisibilityStyles,
-  sources,
   currentProjectId,
   onShowAddTelegramModalChange,
   onPreviewSource,
@@ -355,7 +353,6 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                 {rightPanelType === 'workspace' && (
                   <div style={getPanelVisibilityStyles(true)}>
                     <WorkspacePanel
-                      sources={sources}
                       currentProjectId={currentProjectId}
                       onShowAddTelegramModalChange={onShowAddTelegramModalChange}
                       onPreviewSource={onPreviewSource}

@@ -18,6 +18,7 @@ type DocumentsRepository struct {
 	bucket           string
 	useGCS           bool
 	vertexSearchSync func(ctx context.Context, tenantID string) // Опциональная функция синхронизации с Vertex AI Search
+	bigquerySync     *gcp.BigQueryClient                        // Опциональная синхронизация с BigQuery
 }
 
 func NewDocumentsRepository(db *firestore.Client) *DocumentsRepository {
@@ -36,6 +37,12 @@ func (r *DocumentsRepository) WithStorage(storage *gcp.GCSClient, bucket string)
 // syncFn будет вызвана асинхронно после успешной загрузки документа в GCS
 func (r *DocumentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, tenantID string)) *DocumentsRepository {
 	r.vertexSearchSync = syncFn
+	return r
+}
+
+// WithBigQuerySync настраивает автоматическую синхронизацию метаданных с BigQuery
+func (r *DocumentsRepository) WithBigQuerySync(bq *gcp.BigQueryClient) *DocumentsRepository {
+	r.bigquerySync = bq
 	return r
 }
 
@@ -106,7 +113,7 @@ func (r *DocumentsRepository) Upsert(ctx context.Context, d *models.Document) er
 		d.IngestedAt = now
 	}
 	d.UpdatedAt = now
-	
+
 	// Upload content to GCS if enabled and FullText is present
 	if d.FullText != "" {
 		storagePath, err := r.uploadContent(ctx, d)
@@ -126,9 +133,22 @@ func (r *DocumentsRepository) Upsert(ctx context.Context, d *models.Document) er
 			}
 		}
 	}
-	
+
 	_, err := r.col.Doc(d.ID).Set(ctx, d)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(doc *models.Document) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, doc)
+		}(d)
+	}
+
+	return nil
 }
 
 func (r *DocumentsRepository) Create(ctx context.Context, d *models.Document) (string, error) {
@@ -141,7 +161,7 @@ func (r *DocumentsRepository) Create(ctx context.Context, d *models.Document) (s
 	d.UpdatedAt = now
 	doc := r.col.NewDoc()
 	d.ID = doc.ID
-	
+
 	// Upload content to GCS if enabled and FullText is present
 	if d.FullText != "" {
 		storagePath, err := r.uploadContent(ctx, d)
@@ -161,10 +181,20 @@ func (r *DocumentsRepository) Create(ctx context.Context, d *models.Document) (s
 			}
 		}
 	}
-	
+
 	if _, err := doc.Set(ctx, d); err != nil {
 		return "", err
 	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(doc *models.Document) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, doc)
+		}(d)
+	}
+
 	return doc.ID, nil
 }
 
@@ -200,10 +230,19 @@ func (r *DocumentsRepository) GetByExternalID(ctx context.Context, tenantID, sou
 
 var ErrInvalidCoreDoc = errors.New("invalid core doc")
 
-type CoreDocsRepo struct{ col *firestore.CollectionRef }
+type CoreDocsRepo struct {
+	col          *firestore.CollectionRef
+	bigquerySync *gcp.BigQueryClient // Опциональная синхронизация с BigQuery
+}
 
 func NewCoreDocsRepo(db *firestore.Client) *CoreDocsRepo {
 	return &CoreDocsRepo{col: db.Collection("core_docs")}
+}
+
+// WithBigQuerySync настраивает автоматическую синхронизацию метаданных с BigQuery
+func (r *CoreDocsRepo) WithBigQuerySync(bq *gcp.BigQueryClient) *CoreDocsRepo {
+	r.bigquerySync = bq
+	return r
 }
 
 func (r *CoreDocsRepo) Create(ctx context.Context, d *models.CoreDoc) (string, error) {
@@ -218,6 +257,16 @@ func (r *CoreDocsRepo) Create(ctx context.Context, d *models.CoreDoc) (string, e
 	if _, err := doc.Set(ctx, d); err != nil {
 		return "", err
 	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(doc *models.CoreDoc) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, doc)
+		}(d)
+	}
+
 	return doc.ID, nil
 }
 
@@ -231,7 +280,20 @@ func (r *CoreDocsRepo) Upsert(ctx context.Context, d *models.CoreDoc) error {
 	}
 	d.UpdatedAt = now
 	_, err := r.col.Doc(d.ID).Set(ctx, d)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	if r.bigquerySync != nil {
+		go func(doc *models.CoreDoc) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			r.syncToBigQuery(syncCtx, doc)
+		}(d)
+	}
+
+	return nil
 }
 
 func (r *CoreDocsRepo) Get(ctx context.Context, id string) (*models.CoreDoc, error) {
@@ -249,10 +311,17 @@ func (r *CoreDocsRepo) Get(ctx context.Context, id string) (*models.CoreDoc, err
 	return &out, nil
 }
 
-func (r *CoreDocsRepo) ListByProject(ctx context.Context, tenantID, projectID string, limit int) ([]*models.CoreDoc, error) {
-	q := r.col.Where("tenantId", "==", tenantID).Where("projectId", "==", projectID).OrderBy("createdAt", firestore.Desc)
-	if limit > 0 {
-		q = q.Limit(limit)
+func (r *CoreDocsRepo) ListByProject(ctx context.Context, tenantID, projectID string, limit int, excludeDocumentType *string) ([]*models.CoreDoc, error) {
+	q := r.col.Where("tenantId", "==", tenantID).Where("projectId", "==", projectID)
+	q = q.OrderBy("createdAt", firestore.Desc)
+	// Increase limit if we need to filter, to account for excluded items
+	queryLimit := limit
+	if excludeDocumentType != nil && *excludeDocumentType != "" && limit > 0 {
+		// Request more documents to account for filtering
+		queryLimit = limit * 2
+	}
+	if queryLimit > 0 {
+		q = q.Limit(queryLimit)
 	}
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
@@ -264,7 +333,18 @@ func (r *CoreDocsRepo) ListByProject(ctx context.Context, tenantID, projectID st
 		if err := d.DataTo(&cd); err != nil {
 			continue
 		}
+		// Filter out excluded documentType on client side
+		// Check documentType from Firestore document data (may not be in struct)
+		if excludeDocumentType != nil && *excludeDocumentType != "" {
+			if docType, ok := d.Data()["documentType"].(string); ok && docType == *excludeDocumentType {
+				continue
+			}
+		}
 		res = append(res, &cd)
+		// Stop if we've reached the desired limit
+		if limit > 0 && len(res) >= limit {
+			break
+		}
 	}
 	return res, nil
 }
@@ -281,7 +361,52 @@ func (r *CoreDocsRepo) Delete(ctx context.Context, id string) (bool, error) {
 }
 
 func (r *DocumentsRepository) ListBySource(ctx context.Context, tenantID, sourceID string, limit int) ([]*models.Document, error) {
-	q := r.col.Where("tenantId", "==", tenantID).Where("sourceId", "==", sourceID).OrderBy("originPublishedAt", firestore.Desc)
+	// For public sources (empty tenantID), query by sourceId only
+	// For tenant-scoped sources, filter by both tenantId and sourceId
+	var q firestore.Query
+	if tenantID == "" {
+		// Public source: query by sourceId only (documents may have different tenantIDs)
+		q = r.col.Where("sourceId", "==", sourceID).OrderBy("originPublishedAt", firestore.Desc)
+	} else {
+		// Tenant-scoped source: filter by both tenantId and sourceId
+		q = r.col.Where("tenantId", "==", tenantID).Where("sourceId", "==", sourceID).OrderBy("originPublishedAt", firestore.Desc)
+	}
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	res := make([]*models.Document, 0, len(docs))
+	for _, d := range docs {
+		var doc models.Document
+		if err := d.DataTo(&doc); err != nil {
+			continue
+		}
+		res = append(res, &doc)
+	}
+	return res, nil
+}
+
+// ListByStatus returns documents with a specific status, optionally filtered by sourceID
+func (r *DocumentsRepository) ListByStatus(ctx context.Context, tenantID, sourceID, status string, limit int) ([]*models.Document, error) {
+	var q firestore.Query
+	if tenantID == "" {
+		// Public source: query by sourceId only
+		if sourceID != "" {
+			q = r.col.Where("sourceId", "==", sourceID).Where("status", "==", status).OrderBy("createdAt", firestore.Desc)
+		} else {
+			q = r.col.Where("status", "==", status).OrderBy("createdAt", firestore.Desc)
+		}
+	} else {
+		// Tenant-scoped source: filter by tenantId
+		if sourceID != "" {
+			q = r.col.Where("tenantId", "==", tenantID).Where("sourceId", "==", sourceID).Where("status", "==", status).OrderBy("createdAt", firestore.Desc)
+		} else {
+			q = r.col.Where("tenantId", "==", tenantID).Where("status", "==", status).OrderBy("createdAt", firestore.Desc)
+		}
+	}
 	if limit > 0 {
 		q = q.Limit(limit)
 	}
@@ -423,4 +548,112 @@ func (r *DocumentsRepository) GetByCoreDocID(ctx context.Context, tenantID, core
 		}
 	}
 	return nil, ErrInvalidDocument
+}
+
+// syncToBigQuery синхронизирует метаданные документа в BigQuery
+func (r *DocumentsRepository) syncToBigQuery(ctx context.Context, d *models.Document) {
+	if r.bigquerySync == nil || d == nil {
+		return
+	}
+
+	storagePath := ""
+	if d.StoragePath != nil {
+		storagePath = *d.StoragePath
+	}
+
+	row := map[string]interface{}{
+		"id":           d.ID,
+		"tenantId":     d.TenantID,
+		"sourceId":     d.SourceID,
+		"externalId":   d.ExternalID,
+		"title":        d.Title,
+		"url":          d.URL,
+		"documentPath": d.DocumentPath,
+		"storagePath":  storagePath,
+		"status":       d.Status,
+		"contentType":  d.ContentType,
+		"documentType": d.DocumentType,
+		"language":     d.Language,
+		"contentHash":  d.ContentHash,
+		"ingestedAt":   d.IngestedAt,
+		"createdAt":   d.CreatedAt,
+		"updatedAt":   d.UpdatedAt,
+	}
+
+	if err := r.bigquerySync.InsertRow(ctx, "documents_metadata", row); err != nil {
+		// Логируем ошибку, но не прерываем выполнение (best effort)
+		// В production можно использовать структурированное логирование
+		_ = err // Игнорируем ошибку для асинхронной синхронизации
+	}
+}
+
+// syncToBigQuery синхронизирует метаданные CoreDoc в BigQuery
+func (r *CoreDocsRepo) syncToBigQuery(ctx context.Context, d *models.CoreDoc) {
+	if r.bigquerySync == nil || d == nil {
+		return
+	}
+
+	storagePath := ""
+	if d.StoragePath != nil {
+		storagePath = *d.StoragePath
+	}
+
+	description := ""
+	if d.Description != nil {
+		description = *d.Description
+	}
+
+	extractedText := ""
+	if d.ExtractedText != nil {
+		extractedText = *d.ExtractedText
+	}
+
+	parseStatus := ""
+	if d.ParseStatus != nil {
+		parseStatus = *d.ParseStatus
+	}
+
+	docType := ""
+	if d.DocType != nil {
+		docType = *d.DocType
+	}
+
+	createdBy := ""
+	if d.CreatedBy != nil {
+		createdBy = *d.CreatedBy
+	}
+
+	var sizeBytes *int64
+	if d.SizeBytes != nil {
+		sizeBytes = d.SizeBytes
+	}
+
+	var pageCount *int
+	if d.PageCount != nil {
+		pageCount = d.PageCount
+	}
+
+	row := map[string]interface{}{
+		"id":           d.ID,
+		"tenantId":     d.TenantID,
+		"projectId":    d.ProjectID,
+		"filename":     d.Filename,
+		"contentType":  d.ContentType,
+		"description":  description,
+		"sizeBytes":    sizeBytes,
+		"storagePath":  storagePath,
+		"extractedText": extractedText,
+		"parseStatus":  parseStatus,
+		"parseMeta":    d.ParseMeta,
+		"pageCount":    pageCount,
+		"docType":      docType,
+		"createdBy":    createdBy,
+		"createdAt":    d.CreatedAt,
+		"updatedAt":    d.UpdatedAt,
+	}
+
+	if err := r.bigquerySync.InsertRow(ctx, "core_docs_metadata", row); err != nil {
+		// Логируем ошибку, но не прерываем выполнение (best effort)
+		_ = err // Игнорируем ошибку для асинхронной синхронизации
+	}
 }

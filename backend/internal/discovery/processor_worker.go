@@ -52,17 +52,31 @@ func ensureSubscription(ps *pubsub.Client, topicName, subID string, logger *log.
 }
 
 func NewDocumentProcessor(ps *pubsub.Client, topicName string, docs *repo.DocumentsRepository, rules *repo.RulesRepository, exec *ai.AITaskExecutor, extractor *ontology.OntologyExtractor, logger *log.Logger) *DocumentProcessor {
-	sub, _ := ensureSubscription(ps, topicName, topicName+".worker", logger)
+	// Используем имя подписки с суффиксом .document-processor.worker для агрегированного топика
+	subID := topicName + ".document-processor.worker"
+	sub, _ := ensureSubscription(ps, topicName, subID, logger)
 	return &DocumentProcessor{sub: sub, docsRepo: docs, rules: rules, exec: exec, extractor: extractor, logger: logger}
 }
 
 func (w *DocumentProcessor) Start(ctx context.Context) error {
 	if w.sub == nil {
+		if w.logger != nil {
+			w.logger.Printf("doc processor: subscription is nil, skipping start")
+		}
 		return nil
+	}
+	if w.logger != nil {
+		w.logger.Printf("doc processor: starting subscription %s", w.sub.ID())
 	}
 	w.sub.ReceiveSettings.Synchronous = false
 	w.sub.ReceiveSettings.MaxOutstandingMessages = 16
 	return w.sub.Receive(ctx, func(ctx context.Context, m *pubsub.Message) {
+		// Фильтруем только события document.process из агрегированного топика
+		eventType := m.Attributes["eventType"]
+		if eventType != "document.process" {
+			m.Ack()
+			return
+		}
 		var payload struct {
 			TenantID   string `json:"tenantId"`
 			SourceID   string `json:"sourceId"`

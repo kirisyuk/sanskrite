@@ -63,10 +63,10 @@ func (h *DiscoveryHandler) PreviewTelegramChannel(w http.ResponseWriter, r *http
 	}
 
 	// Limit to 20 most recent messages
-	// Telegram service returns messages in chronological order (oldest first),
-	// so we take the last 20 messages (most recent)
+	// Telegram service (Telethon iter_messages) returns messages in reverse chronological order (newest first),
+	// so we take the first 20 messages (most recent)
 	if len(messages) > 20 {
-		messages = messages[len(messages)-20:]
+		messages = messages[:20]
 	}
 
 	// Format response

@@ -109,3 +109,14 @@ func (r *SourceProjectsRepository) DeleteByProjectAndSource(ctx context.Context,
 	}
 	return nil
 }
+
+// CountBySource counts all project-source links for a given source (across all tenants)
+// Used to determine if a source should be deleted when last link is removed
+func (r *SourceProjectsRepository) CountBySource(ctx context.Context, sourceID string) (int, error) {
+	q := r.col.Where("sourceId", "==", sourceID)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+	return len(docs), nil
+}
