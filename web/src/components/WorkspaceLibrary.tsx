@@ -134,9 +134,9 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
     if (!projectId || !storeProjectSources) return;
     
     const transformedSources: Source[] = storeProjectSources.map((s: DataSource) => {
-      let displayName = s.displayName || s.name;
-      if (!displayName && s.details) {
-        displayName = s.details.uri || s.details.channelUsername || s.details.url;
+      let displayName: string = s.displayName || '';
+      if (!displayName && s.sourceDetails) {
+        displayName = s.sourceDetails.uri || s.sourceDetails.channelUsername || s.sourceDetails.sourceUri || '';
       }
       if (!displayName) {
         displayName = s.kind || 'Unknown';
