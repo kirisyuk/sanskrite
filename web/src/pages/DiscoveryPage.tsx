@@ -516,6 +516,7 @@ const DiscoveryPage: React.FC = () => {
     parseStatus?: string;
     docType?: string;
     artifactConfig?: any;
+    extractedText?: string;
   }>(null);
   
   // PERFORMANCE FIX: Use selector to get interactions only when needed, not subscribe to entire array

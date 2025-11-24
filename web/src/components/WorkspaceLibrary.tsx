@@ -2,6 +2,7 @@ import React from 'react';
 import { api } from '../lib/api';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
+import { useDiscoveryStore } from '../stores/discoveryStore';
 import { SourceItemWithActions } from './SourceItemWithActions';
 import SourcePreview from './SourcePreview';
 import { SourceDocumentsViewer } from './SourceDocumentsViewer';
@@ -14,6 +15,9 @@ interface Document {
   sizeBytes?: number;
   parseStatus?: string;
   createdAt?: string;
+  extractedText?: string;
+  docType?: string;
+  artifactConfig?: any;
 }
 
 interface Source {
@@ -50,6 +54,10 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   const setPendingAttachedDocIds = useGenaiChatStore((state) => state.setPendingAttachedDocIds);
   const [previewSource, setPreviewSource] = React.useState<DataSource | null>(null);
   const [documentsViewSource, setDocumentsViewSource] = React.useState<DataSource | null>(null);
+  
+  // Subscribe to WebSocket document events
+  const lastDocEvent = useDiscoveryStore((state: any) => state.lastDocEvent);
+  const lastProcessedEventRef = React.useRef<{ docId: string; status: string; ts: number } | null>(null);
   
   // Sync sources with workspace store
   const setProjectSources = useWorkspaceStore((s) => s.setProjectSources);
@@ -166,6 +174,79 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
       return statusChanged ? transformedSources : prevSources;
     });
   }, [projectId, storeProjectSources, sourceStatusUpdates]);
+
+  // Handle WebSocket document events - update documents list in real-time
+  React.useEffect(() => {
+    if (!lastDocEvent || !projectId || projectId === 'local-unfold') return;
+    
+    const eventDocId = lastDocEvent.docId;
+    const eventProjectId = lastDocEvent.projectId;
+    const eventStatus = lastDocEvent.status;
+    const eventTs = lastDocEvent.ts || 0;
+    
+    // Only process events for current project
+    if (eventProjectId !== projectId) return;
+    
+    // Deduplicate events - skip if we already processed this exact event
+    const eventKey = `${eventDocId}:${eventStatus}:${eventTs}`;
+    const lastProcessed = lastProcessedEventRef.current;
+    if (lastProcessed && 
+        lastProcessed.docId === eventDocId && 
+        lastProcessed.status === eventStatus && 
+        lastProcessed.ts === eventTs) {
+      console.log('[WorkspaceLibrary] Skipping duplicate event:', { eventDocId, eventStatus, eventTs });
+      return;
+    }
+    
+    // Mark as processed
+    lastProcessedEventRef.current = { docId: eventDocId, status: eventStatus, ts: eventTs };
+    
+    console.log('[WorkspaceLibrary] Processing document event:', { eventDocId, eventStatus, eventProjectId });
+    
+    // Handle document deletion
+    if (eventStatus === 'deleted') {
+      setDocuments(prev => prev.filter(d => d.id !== eventDocId));
+      return;
+    }
+    
+    // For uploaded/parsing/parsed statuses, fetch or update document
+    if (eventStatus === 'uploaded' || eventStatus === 'parsing' || eventStatus === 'parsed') {
+      // Check if document already exists in list
+      setDocuments(prev => {
+        const existingDoc = prev.find(d => d.id === eventDocId);
+        
+        if (existingDoc) {
+          // Update existing document status
+          return prev.map(doc => 
+            doc.id === eventDocId 
+              ? { ...doc, parseStatus: eventStatus }
+              : doc
+          );
+        } else {
+          // Document doesn't exist yet - fetch it from API
+          api.docsList(projectId, 'post').then(docs => {
+            const newDoc = docs?.find((d: Document) => d.id === eventDocId);
+            if (newDoc) {
+              setDocuments(prevDocs => {
+                // Avoid duplicates
+                if (prevDocs.find(d => d.id === eventDocId)) {
+                  return prevDocs.map(doc => 
+                    doc.id === eventDocId 
+                      ? { ...doc, parseStatus: eventStatus }
+                      : doc
+                  );
+                }
+                return [...prevDocs, newDoc];
+              });
+            }
+          }).catch(err => {
+            console.error('[WorkspaceLibrary] Failed to fetch new document:', err);
+          });
+          return prev; // Return unchanged while fetching
+        }
+      });
+    }
+  }, [lastDocEvent, projectId]);
 
   const getFileIcon = (filename: string, contentType?: string) => {
     const ext = filename.split('.').pop()?.toLowerCase();

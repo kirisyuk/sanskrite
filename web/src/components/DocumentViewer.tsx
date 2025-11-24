@@ -13,6 +13,7 @@ export interface CoreDocMeta {
   parseStatus?: string;
   docType?: string;
   artifactConfig?: any;
+  extractedText?: string;
 }
 
 interface DocumentViewerProps {
@@ -32,6 +33,11 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
 
   const isEntities = (doc.filename || '').toLowerCase() === 'entities.json';
   const isArtifactDoc = doc.docType === 'dynamic_artifact' && doc.artifactConfig;
+  const fileExt = (doc.filename.split('.').pop() || '').toLowerCase();
+  const contentType = (doc.contentType || '').toLowerCase();
+  const isDocFile = fileExt === 'doc' || contentType.includes('application/msword');
+  const isDocxFile = fileExt === 'docx' || contentType.includes('officedocument.wordprocessingml.document');
+  const isWordDoc = isDocFile || isDocxFile;
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -39,27 +45,56 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Load full document if it's an artifact
+  // Set textContent from doc.extractedText if available (for .doc files)
   React.useEffect(() => {
-    if (isArtifactDoc) {
+    if (isWordDoc && doc.extractedText && doc.extractedText !== textContent) {
+      setTextContent(doc.extractedText);
+    }
+  }, [isWordDoc, doc.extractedText, textContent]);
+
+  // Load full document if it's an artifact or Word file (to get extractedText)
+  React.useEffect(() => {
+    if (isArtifactDoc || (isWordDoc && !doc.extractedText && !textContent)) {
+      setLoading(true);
       (async () => {
         try {
           const docs = await api.docsList(projectId);
           const foundDoc = docs.find((d: CoreDoc) => d.id === doc.id);
-          if (foundDoc && isArtifact(foundDoc)) {
-            setFullDoc(foundDoc);
+          if (foundDoc) {
+            if (isArtifactDoc && isArtifact(foundDoc)) {
+              setFullDoc(foundDoc);
+            } else if (isWordDoc && foundDoc.extractedText) {
+              // Use extractedText from full doc for Word files
+              setTextContent(foundDoc.extractedText);
+            }
           }
         } catch (e) {
           console.error('[DocumentViewer] Failed to load full document', e);
+          setError('Failed to load document text');
+        } finally {
+          setLoading(false);
         }
       })();
     }
-  }, [projectId, doc.id, isArtifactDoc]);
+  }, [projectId, doc.id, isArtifactDoc, isWordDoc, doc.extractedText, textContent]);
 
   React.useEffect(() => {
     // Skip loading blob for artifacts - we'll render structured view
     if (isArtifactDoc) {
       setLoading(false);
+      return;
+    }
+
+    // For Word files, use extractedText if available
+    if (isWordDoc) {
+      // If extractedText is in props, use it directly
+      if (doc.extractedText && !textContent) {
+        setTextContent(doc.extractedText);
+        setLoading(false);
+        return;
+      }
+      // If no extractedText yet, don't load blob - wait for the other effect to load it
+      // Loading state is handled by the other effect
       return;
     }
 
@@ -90,11 +125,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
       }
     })();
     return () => { if (revoked) { try { URL.revokeObjectURL(revoked); } catch {} } };
-  }, [projectId, doc.id, isArtifactDoc]);
+  }, [projectId, doc.id, isArtifactDoc, isWordDoc, doc.extractedText]);
 
   const headerTitle = isEntities ? 'Entities container' : (doc.filename || 'document');
-  const fileExt = (doc.filename.split('.').pop() || '').toLowerCase();
-  const isMarkdown = fileExt === 'md' || (doc.contentType || '').includes('markdown');
+  const isMarkdown = fileExt === 'md' || contentType.includes('markdown');
 
   const download = async () => {
     try {
@@ -245,7 +279,18 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
       );
     }
     return (
-      <pre className="p-3 text-12" style={{ color: 'var(--text-heading)', background: 'var(--bg-elevated)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, overflow: 'auto' }}>
+      <pre
+        className="p-3 text-12"
+        style={{
+          color: 'var(--text-heading)',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--overlay-line-90)',
+          borderRadius: 8,
+          overflow: 'auto',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}
+      >
         {textContent || ''}
       </pre>
     );
@@ -254,7 +299,12 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
   const ct = (doc.contentType || '').toLowerCase();
   const isImage = /^(png|jpg|jpeg|gif|webp|bmp|svg)$/.test(fileExt) || ct.startsWith('image/');
   const isPdf = fileExt === 'pdf' || ct.includes('pdf');
-  const isTextLike = isMarkdown || ct.startsWith('text/') || /(json|csv|tsv)/.test(ct) || /(md|txt|csv|tsv|json)$/i.test(fileExt);
+  const isTextLike =
+    isMarkdown ||
+    ct.startsWith('text/') ||
+    /(json|csv|tsv)/.test(ct) ||
+    /(md|txt|csv|tsv|json)$/i.test(fileExt) ||
+    (isWordDoc && (doc.extractedText || textContent));
 
   const renderBody = () => {
     // Render structured view for artifacts

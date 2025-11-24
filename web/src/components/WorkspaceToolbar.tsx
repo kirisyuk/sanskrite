@@ -48,9 +48,7 @@ export const WorkspaceToolbar: React.FC<WorkspaceToolbarProps> = ({
     
     try {
       const doc = await api.docsUpload(projectId, file);
-      try {
-        await api.docsParse(projectId, doc.id);
-      } catch {}
+      // Parsing is triggered automatically by backend after upload
       onDocumentAdded?.();
     } catch (err) {
       console.error('[WorkspaceToolbar] Document upload failed', err);

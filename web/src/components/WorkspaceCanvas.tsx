@@ -22,14 +22,14 @@ export interface WorkspaceCanvasProps {
   isOpen: boolean;
   projectId?: string | null; // Optional: filter by project, null means all projects
   onClose: () => void;
-  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
+  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; extractedText?: string }) => void;
 }
 
 // Мемоизированный компонент документа
 const DocumentItem = React.memo<{
   doc: CoreDoc;
   indexedStatus: { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
-  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
+  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; extractedText?: string }) => void;
 }>(({ doc, indexedStatus, onOpenDocument }) => {
   const getDocumentIcon = () => (
     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -63,6 +63,7 @@ const DocumentItem = React.memo<{
             parseStatus: doc.parseStatus,
             docType: doc.docType,
             artifactConfig: doc.artifactConfig,
+            extractedText: doc.extractedText,
           });
         }
       }}

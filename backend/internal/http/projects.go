@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
@@ -792,7 +793,7 @@ func (h *ProjectsHandler) UploadProjectDoc(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	doc.ID = id
-	// Optional: kick off parse event for frontend stream
+	// Publish uploaded event for frontend stream
 	if h.pub != nil {
 		_ = h.pub.PublishJSON(r.Context(), realtime.EventDocProcess, authInfo.TenantID, map[string]any{
 			"projectId": projectID,
@@ -801,7 +802,7 @@ func (h *ProjectsHandler) UploadProjectDoc(w http.ResponseWriter, r *http.Reques
 			"ts":        time.Now().UnixMilli(),
 		})
 	}
-	// Autoparse
+	// Autoparse in background goroutine
 	go func(tenant, pid, did string) {
 		// reload fresh doc to include ID
 		if d, err := h.coreDocs.Get(context.Background(), did); err == nil {
@@ -1117,20 +1118,26 @@ func (h *ProjectsHandler) ExportDocToDocx(w http.ResponseWriter, r *http.Request
 			WriteBadRequest(w, "NO_CONTENT", "Artifact has no content")
 			return
 		}
-	} else if cd.ExtractedText != nil && *cd.ExtractedText != "" {
-		markdownContent = *cd.ExtractedText
-	} else if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") && h.storage != nil {
-		// Try to read from storage
-		bucket, object := splitGsPath(*cd.StoragePath)
-		data, err := h.storage.ReadObject(r.Context(), bucket, object)
-		if err != nil {
-			WriteInternalError(w, "Failed to read document content")
+	} else {
+		// Try to get full extracted text (from Firestore or GCS)
+		fullText, err := h.getFullExtractedText(r.Context(), cd)
+		if err == nil && fullText != "" {
+			markdownContent = fullText
+		} else if cd.ExtractedText != nil && *cd.ExtractedText != "" {
+			markdownContent = *cd.ExtractedText
+		} else if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") && h.storage != nil {
+			// Try to read from storage
+			bucket, object := splitGsPath(*cd.StoragePath)
+			data, err := h.storage.ReadObject(r.Context(), bucket, object)
+			if err != nil {
+				WriteInternalError(w, "Failed to read document content")
+				return
+			}
+			markdownContent = string(data)
+		} else {
+			WriteBadRequest(w, "NO_CONTENT", "Document has no readable content")
 			return
 		}
-		markdownContent = string(data)
-	} else {
-		WriteBadRequest(w, "NO_CONTENT", "Document has no readable content")
-		return
 	}
 
 	// Convert markdown to DOCX using Pandoc
@@ -2216,16 +2223,43 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 			if err := h.chunksRepo.DeleteByDoc(r.Context(), authInfo.TenantID, doc.ID); err != nil {
 				h.logger.Printf("Warning: failed to delete chunks for doc %s: %v", doc.ID, err)
 			}
-			// Delete the document
+			// Delete the document (this also deletes from GCS and triggers Vertex AI Search sync)
 			if err := h.docsRepo.Delete(r.Context(), doc.ID); err != nil {
 				h.logger.Printf("Warning: failed to delete document %s: %v", doc.ID, err)
 			}
 		}
 	}
+	
+	// Delete original file from GCS
 	if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") && h.storage != nil {
 		bucket, object := splitGsPath(*cd.StoragePath)
-		_ = h.storage.DeleteObject(r.Context(), bucket, object)
+		if err := h.storage.DeleteObject(r.Context(), bucket, object); err != nil {
+			h.logger.Printf("Warning: failed to delete original file from GCS for doc %s: %v", docID, err)
+		}
 	}
+	
+	// Delete extracted text from GCS if it was stored there
+	if cd.ParseMeta != nil && h.storage != nil {
+		if pathRaw, ok := cd.ParseMeta["extractedTextPath"]; ok {
+			if pathStr, ok := pathRaw.(string); ok && pathStr != "" && strings.HasPrefix(pathStr, "gs://") {
+				bucket, object := splitGsPath(pathStr)
+				if err := h.storage.DeleteObject(r.Context(), bucket, object); err != nil {
+					h.logger.Printf("Warning: failed to delete extracted text from GCS for doc %s: %v", docID, err)
+				}
+			}
+		}
+		// Delete normalized CSV from GCS if it was stored there
+		if pathRaw, ok := cd.ParseMeta["normalizedPath"]; ok {
+			if pathStr, ok := pathRaw.(string); ok && pathStr != "" && strings.HasPrefix(pathStr, "gs://") {
+				bucket, object := splitGsPath(pathStr)
+				if err := h.storage.DeleteObject(r.Context(), bucket, object); err != nil {
+					h.logger.Printf("Warning: failed to delete normalized CSV from GCS for doc %s: %v", docID, err)
+				}
+			}
+		}
+	}
+	
+	// Delete CoreDoc from Firestore
 	_, _ = h.coreDocs.Delete(r.Context(), docID)
 	if h.pub != nil {
 		_ = h.pub.PublishJSON(r.Context(), realtime.EventDocProcess, authInfo.TenantID, map[string]any{"projectId": projectID, "docId": docID, "status": "deleted", "ts": time.Now().UnixMilli()})
@@ -2233,25 +2267,77 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// getFullExtractedText reads the full extracted text from CoreDoc, loading from GCS if needed
+func (h *ProjectsHandler) getFullExtractedText(ctx context.Context, cd *models.CoreDoc) (string, error) {
+	return getFullExtractedTextFromCoreDoc(ctx, cd, h.storage)
+}
+
+// getFullExtractedTextFromCoreDoc reads the full extracted text from CoreDoc, loading from GCS if needed
+// This is a helper function that can be used without ProjectsHandler
+func getFullExtractedTextFromCoreDoc(ctx context.Context, cd *models.CoreDoc, storage StorageClient) (string, error) {
+	// Check if full text is stored in GCS
+	if cd.ParseMeta != nil && storage != nil {
+		if pathRaw, ok := cd.ParseMeta["extractedTextPath"]; ok {
+			if pathStr, ok := pathRaw.(string); ok && pathStr != "" {
+				// Read from GCS
+				bucket, object := splitGsPath(pathStr)
+				data, err := storage.ReadObject(ctx, bucket, object)
+				if err != nil {
+					return "", fmt.Errorf("failed to read extracted text from GCS: %w", err)
+				}
+				return string(data), nil
+			}
+		}
+	}
+	// Fallback to ExtractedText field
+	if cd.ExtractedText != nil {
+		return *cd.ExtractedText, nil
+	}
+	return "", nil
+}
+
 // indexCoreDoc indexes a CoreDoc by creating/updating Document and Chunks with embeddings
 func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd *models.CoreDoc) error {
 	if h.docsRepo == nil || h.chunksRepo == nil || h.emb == nil {
 		// RAG not configured, skip indexing
-		return nil
-	}
-	if cd.ExtractedText == nil || strings.TrimSpace(*cd.ExtractedText) == "" {
-		// No text to index
+		if h.logger != nil {
+			h.logger.Printf("indexCoreDoc: RAG not configured, skipping indexing for doc %s", cd.ID)
+		}
 		return nil
 	}
 	// Skip indexing for dynamic artifacts (they are generated, not indexed)
 	if cd.DocType != nil && *cd.DocType == "dynamic_artifact" {
+		if h.logger != nil {
+			h.logger.Printf("indexCoreDoc: skipping dynamic artifact doc %s", cd.ID)
+		}
 		return nil
+	}
+
+	// Get full extracted text (from Firestore or GCS)
+	text, err := h.getFullExtractedText(ctx, cd)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("indexCoreDoc: failed to get extracted text for doc %s: %v", cd.ID, err)
+		}
+		return fmt.Errorf("failed to get extracted text: %w", err)
+	}
+	// Sanitize UTF-8 before saving to Firestore (Document model)
+	text = sanitizeUTF8(text)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		// No text to index
+		if h.logger != nil {
+			h.logger.Printf("indexCoreDoc: no text to index for doc %s", cd.ID)
+		}
+		return nil
+	}
+	if h.logger != nil {
+		h.logger.Printf("indexCoreDoc: starting indexing for doc %s (text length: %d)", cd.ID, len(text))
 	}
 
 	// Virtual SourceID for project documents
 	virtualSourceID := fmt.Sprintf("project:%s", cd.ProjectID)
 	externalID := fmt.Sprintf("coredoc:%s", cd.ID)
-	text := strings.TrimSpace(*cd.ExtractedText)
 
 	// Check if Document already exists
 	existingDoc, _ := h.docsRepo.GetByCoreDocID(ctx, tenantID, cd.ID)
@@ -2300,9 +2386,15 @@ func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd 
 		}
 		id, err := h.docsRepo.Create(ctx, doc)
 		if err != nil {
+			if h.logger != nil {
+				h.logger.Printf("indexCoreDoc: failed to create document for CoreDoc %s: %v", cd.ID, err)
+			}
 			return fmt.Errorf("failed to create document: %w", err)
 		}
 		docID = id
+		if h.logger != nil {
+			h.logger.Printf("indexCoreDoc: created Document %s for CoreDoc %s", docID, cd.ID)
+		}
 	}
 
 	// Chunk and embed
@@ -2313,7 +2405,13 @@ func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd 
 
 	vectors, err := h.emb.EmbedTexts(ctx, parts)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("indexCoreDoc: failed to create embeddings for doc %s: %v", cd.ID, err)
+		}
 		return fmt.Errorf("failed to create embeddings: %w", err)
+	}
+	if h.logger != nil {
+		h.logger.Printf("indexCoreDoc: created %d embeddings for doc %s", len(vectors), cd.ID)
 	}
 
 	for i := range parts {
@@ -2341,6 +2439,9 @@ func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd 
 		_ = h.docsRepo.Upsert(ctx, doc)
 	}
 
+	if h.logger != nil {
+		h.logger.Printf("indexCoreDoc: successfully indexed CoreDoc %s (Document: %s, Chunks: %d)", cd.ID, docID, len(parts))
+	}
 	return nil
 }
 
@@ -2352,7 +2453,13 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 	bucket, object := splitGsPath(*cd.StoragePath)
 	data, err := h.storage.ReadObject(ctx, bucket, object)
 	if err != nil {
-		return err
+		if h.logger != nil {
+			h.logger.Printf("parseAndPersist: failed to read object from GCS: bucket=%s, object=%s, error=%v", bucket, object, err)
+		}
+		return fmt.Errorf("failed to read object from GCS: %w", err)
+	}
+	if h.logger != nil {
+		h.logger.Printf("parseAndPersist: read %d bytes from GCS for doc %s", len(data), cd.ID)
 	}
 
 	// Special handling for CSV/TSV to produce structured meta and normalized copy
@@ -2380,7 +2487,39 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 			}
 		}
 		status := "parsed"
-		cd.ExtractedText = &text
+		
+		// For large CSV text, store full text in GCS and keep preview in Firestore
+		const previewSize = 10 * 1024 // 10KB preview
+		const largeTextThreshold = 100 * 1024 // 100KB threshold
+		
+		if len(text) > largeTextThreshold && h.storage != nil && h.bucket != "" {
+			// Store full text in GCS
+			extractedTextObject := fmt.Sprintf("%s/%s/%s-extracted-text.txt", tenantID, projectID, cd.ID)
+			if err := h.storage.UploadBytes(ctx, h.bucket, extractedTextObject, []byte(text), "text/plain", map[string]string{
+				"tenantId":   tenantID,
+				"projectId":  projectID,
+				"docId":      cd.ID,
+				"extracted":  "true",
+			}); err == nil {
+				// Store preview in Firestore
+				preview := text
+				if len(preview) > previewSize {
+					preview = preview[:previewSize] + "..."
+				}
+				cd.ExtractedText = &preview
+				if meta == nil {
+					meta = map[string]any{}
+				}
+				meta["extractedTextPath"] = fmt.Sprintf("gs://%s/%s", h.bucket, extractedTextObject)
+			} else {
+				// Fallback: store full text in Firestore if GCS upload fails
+				cd.ExtractedText = &text
+			}
+		} else {
+			// Small text: store directly in Firestore
+			cd.ExtractedText = &text
+		}
+		
 		cd.ParseStatus = &status
 		if cd.ParseMeta == nil {
 			cd.ParseMeta = map[string]any{}
@@ -2393,10 +2532,79 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 		// default path for non-CSV
 		t, pages, perr := parseByContentType(cd.ContentType, data)
 		if perr != nil {
-			return perr
+			if h.logger != nil {
+				h.logger.Printf("parseAndPersist: failed to parse content for doc %s (contentType: %s): %v", cd.ID, cd.ContentType, perr)
+			}
+			return fmt.Errorf("failed to parse content: %w", perr)
+		}
+		if h.logger != nil {
+			h.logger.Printf("parseAndPersist: parsed %d bytes of text for doc %s (contentType: %s)", len(t), cd.ID, cd.ContentType)
 		}
 		status := "parsed"
-		cd.ExtractedText = &t
+		
+		// For large text files, store full text in GCS and keep preview in Firestore
+		const previewSize = 10 * 1024 // 10KB preview
+		const largeTextThreshold = 100 * 1024 // 100KB threshold
+		
+		if len(t) > largeTextThreshold && h.storage != nil && h.bucket != "" {
+			// Store full text in GCS
+			extractedTextObject := fmt.Sprintf("%s/%s/%s-extracted-text.txt", tenantID, projectID, cd.ID)
+			if err := h.storage.UploadBytes(ctx, h.bucket, extractedTextObject, []byte(t), "text/plain", map[string]string{
+				"tenantId":   tenantID,
+				"projectId":  projectID,
+				"docId":      cd.ID,
+				"extracted":  "true",
+			}); err == nil {
+				// Store preview in Firestore (sanitize UTF-8 for Firestore compatibility)
+				preview := t
+				if len(preview) > previewSize {
+					preview = preview[:previewSize] + "..."
+				}
+				preview = sanitizeUTF8(preview)
+				cd.ExtractedText = &preview
+				if cd.ParseMeta == nil {
+					cd.ParseMeta = map[string]any{}
+				}
+				cd.ParseMeta["extractedTextPath"] = fmt.Sprintf("gs://%s/%s", h.bucket, extractedTextObject)
+			} else {
+				// GCS upload failed - log error but still try to save preview in Firestore
+				// Don't save full text to avoid Firestore size limits
+				if h.logger != nil {
+					h.logger.Printf("Warning: failed to upload extracted text to GCS for doc %s: %v", cd.ID, err)
+				}
+				preview := t
+				if len(preview) > previewSize {
+					preview = preview[:previewSize] + "..."
+				}
+				preview = sanitizeUTF8(preview)
+				cd.ExtractedText = &preview
+				if cd.ParseMeta == nil {
+					cd.ParseMeta = map[string]any{}
+				}
+				cd.ParseMeta["extractedTextPath"] = "" // Mark that GCS upload failed
+				cd.ParseMeta["extractedTextError"] = err.Error()
+			}
+		} else {
+			// Small text or storage not configured: store directly in Firestore
+			// But if text is still large (>50KB), truncate to avoid Firestore limits
+			const firestoreSafeSize = 50 * 1024 // 50KB safe limit for Firestore
+			if len(t) > firestoreSafeSize {
+				if h.logger != nil {
+					h.logger.Printf("Warning: text size %d exceeds Firestore safe limit, truncating for doc %s", len(t), cd.ID)
+				}
+				truncated := sanitizeUTF8(t[:firestoreSafeSize] + "...")
+				cd.ExtractedText = &truncated
+				if cd.ParseMeta == nil {
+					cd.ParseMeta = map[string]any{}
+				}
+				cd.ParseMeta["truncated"] = true
+				cd.ParseMeta["originalSize"] = len(t)
+			} else {
+				sanitized := sanitizeUTF8(t)
+				cd.ExtractedText = &sanitized
+			}
+		}
+		
 		cd.ParseStatus = &status
 		if pages != nil {
 			cd.PageCount = pages
@@ -2406,8 +2614,21 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 		}
 		cd.ParseMeta["updatedAt"] = time.Now().UTC().Format(time.RFC3339)
 	}
+	if h.logger != nil {
+		extractedSize := 0
+		if cd.ExtractedText != nil {
+			extractedSize = len(*cd.ExtractedText)
+		}
+		h.logger.Printf("parseAndPersist: saving CoreDoc %s to Firestore (extractedText size: %d bytes)", cd.ID, extractedSize)
+	}
 	if err := h.coreDocs.Upsert(ctx, cd); err != nil {
-		return err
+		if h.logger != nil {
+			h.logger.Printf("parseAndPersist: failed to save CoreDoc %s to Firestore: %v", cd.ID, err)
+		}
+		return fmt.Errorf("failed to save CoreDoc to Firestore: %w", err)
+	}
+	if h.logger != nil {
+		h.logger.Printf("parseAndPersist: successfully saved CoreDoc %s to Firestore", cd.ID)
 	}
 	if h.pub != nil {
 		chars := 0
@@ -2422,6 +2643,28 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 		// Don't fail parsing if indexing fails
 	}
 	return nil
+}
+
+// sanitizeUTF8 removes invalid UTF-8 sequences from a string to make it safe for Firestore
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	// Replace invalid UTF-8 sequences with replacement character
+	var b strings.Builder
+	b.Grow(len(s))
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		if r == utf8.RuneError && size == 1 {
+			// Invalid UTF-8 sequence, replace with replacement character
+			b.WriteRune('�')
+			s = s[size:]
+		} else {
+			b.WriteRune(r)
+			s = s[size:]
+		}
+	}
+	return b.String()
 }
 
 func splitGsPath(gs string) (bucket, object string) {

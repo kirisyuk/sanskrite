@@ -469,7 +469,31 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           
           return updated;
         });
-        const merged = [...processedServerItems, ...keepLocals];
+        // Дедупликация по id: если есть два interaction с одинаковым id, оставляем только один (приоритет серверному)
+        const seenIds = new Set<string>();
+        const deduplicatedServerItems: any[] = [];
+        for (const it of processedServerItems) {
+          if (!seenIds.has(it.id)) {
+            seenIds.add(it.id);
+            deduplicatedServerItems.push(it);
+          }
+        }
+        const deduplicatedKeepLocals: any[] = [];
+        for (const it of keepLocals) {
+          const localId = it.id as any;
+          // Проверяем, не был ли уже добавлен interaction с таким id (через persistedByLocalId маппинг)
+          const mappedId = map[localId];
+          // Пропускаем локальный interaction, если:
+          // 1. Его id уже есть в серверных interactions
+          // 2. Его mapped id уже есть в серверных interactions (значит серверный interaction уже загружен)
+          if (seenIds.has(localId) || (mappedId && seenIds.has(mappedId))) {
+            continue;
+          }
+          seenIds.add(localId);
+          if (mappedId) seenIds.add(mappedId);
+          deduplicatedKeepLocals.push(it);
+        }
+        const merged = [...deduplicatedServerItems, ...deduplicatedKeepLocals];
         
         // Clear global queries/sources on hydration - chips are now per-interaction only
         // Global state is only temporary during streaming and should not persist

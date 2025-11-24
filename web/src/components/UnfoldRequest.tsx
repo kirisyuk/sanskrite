@@ -531,18 +531,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       const currentIds = store.pendingAttachedDocIds.filter(id => !id.startsWith('temp-'));
       store.setPendingAttachedDocIds([...currentIds, doc.id]);
       
-      // Trigger parse and wait for completion
-      try {
-        await api.docsParse(pid, doc.id);
-        setAttachedDocs(prev => prev.map(d => 
-          d.id === doc.id 
-            ? { ...d, status: 'parsed' as const }
-            : d
-        ));
-      } catch (parseErr) {
-        console.warn('[Attach] parse failed, but doc uploaded', parseErr);
-        // Keep as parsing - will check status later
-      }
+      // Parsing is triggered automatically by backend after upload
+      // Status will be updated via WebSocket events
     } catch (err) {
       console.error('[Attach] failed', err);
       // Mark as failed
