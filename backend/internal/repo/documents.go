@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -14,15 +15,25 @@ import (
 
 type DocumentsRepository struct {
 	col              *firestore.CollectionRef
+	db               *firestore.Client // Firestore client for batch operations
 	storage          *gcp.GCSClient
 	bucket           string
 	useGCS           bool
-	vertexSearchSync func(ctx context.Context, tenantID string) // Опциональная функция синхронизации с Vertex AI Search
-	bigquerySync     *gcp.BigQueryClient                        // Опциональная синхронизация с BigQuery
+	vertexSearchSync func(ctx context.Context, tenantID string) (operationName string, err error) // Опциональная функция синхронизации с Vertex AI Search, возвращает operationName
+	bigquerySync     *gcp.BigQueryClient                                                          // Опциональная синхронизация с BigQuery
 }
 
 func NewDocumentsRepository(db *firestore.Client) *DocumentsRepository {
-	return &DocumentsRepository{col: db.Collection("rag_documents"), useGCS: false}
+	return &DocumentsRepository{
+		col:    db.Collection("rag_documents"),
+		db:     db,
+		useGCS: false,
+	}
+}
+
+// Collection returns the Firestore collection reference (for queries)
+func (r *DocumentsRepository) Collection() *firestore.CollectionRef {
+	return r.col
 }
 
 // WithStorage configures the repository to use GCS for storing document content
@@ -35,7 +46,8 @@ func (r *DocumentsRepository) WithStorage(storage *gcp.GCSClient, bucket string)
 
 // WithVertexSearchSync настраивает автоматическую синхронизацию с Vertex AI Search
 // syncFn будет вызвана асинхронно после успешной загрузки документа в GCS
-func (r *DocumentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, tenantID string)) *DocumentsRepository {
+// syncFn должна возвращать operationName для отслеживания статуса операции
+func (r *DocumentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, tenantID string) (operationName string, err error)) *DocumentsRepository {
 	r.vertexSearchSync = syncFn
 	return r
 }
@@ -128,7 +140,12 @@ func (r *DocumentsRepository) Upsert(ctx context.Context, d *models.Document) er
 					// Используем background context с таймаутом
 					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
-					r.vertexSearchSync(syncCtx, tenantID)
+					operationName, err := r.vertexSearchSync(syncCtx, tenantID)
+					if err == nil && operationName != "" {
+						// Operation tracking will be handled by a background worker
+						// For now, we just log it - full tracking implementation will be added separately
+						log.Printf("[DocumentsRepo] Vertex AI Search sync triggered for tenant %s: operation=%s", tenantID, operationName)
+					}
 				}(d.TenantID)
 			}
 		}
@@ -177,7 +194,12 @@ func (r *DocumentsRepository) Create(ctx context.Context, d *models.Document) (s
 					// Используем background context с таймаутом
 					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
-					r.vertexSearchSync(syncCtx, tenantID)
+					operationName, err := r.vertexSearchSync(syncCtx, tenantID)
+					if err == nil && operationName != "" {
+						// Operation tracking will be handled by a background worker
+						// For now, we just log it - full tracking implementation will be added separately
+						log.Printf("[DocumentsRepo] Vertex AI Search sync triggered for tenant %s: operation=%s", tenantID, operationName)
+					}
 				}(d.TenantID)
 			}
 		}
@@ -536,6 +558,60 @@ func (r *DocumentsRepository) DeleteBySource(ctx context.Context, tenantID, sour
 	return nil
 }
 
+// MarkTenantDocumentsAsIndexed обновляет VertexSearchIndexedAt для всех документов tenant, которые имеют StoragePath но еще не помечены как проиндексированные
+func (r *DocumentsRepository) MarkTenantDocumentsAsIndexed(ctx context.Context, tenantID string) error {
+	now := time.Now().UTC()
+	// Query documents by tenant (filter storagePath in memory to avoid composite index requirements)
+	q := r.col.Where("tenantId", "==", tenantID)
+
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return fmt.Errorf("failed to query documents: %w", err)
+	}
+
+	batch := r.db.Batch()
+	batchCount := 0
+	updatedCount := 0
+	for _, docSnap := range docs {
+		var d models.Document
+		if err := docSnap.DataTo(&d); err != nil {
+			continue
+		}
+		if d.StoragePath == nil || *d.StoragePath == "" {
+			continue
+		}
+		// Only update if VertexSearchIndexedAt is nil or zero
+		if d.VertexSearchIndexedAt == nil || d.VertexSearchIndexedAt.IsZero() {
+			batch.Update(docSnap.Ref, []firestore.Update{
+				{Path: "vertexSearchIndexedAt", Value: now},
+				{Path: "updatedAt", Value: now},
+			})
+			batchCount++
+			updatedCount++
+
+			// Firestore batch limit is 500 operations
+			if batchCount >= 500 {
+				if _, err := batch.Commit(ctx); err != nil {
+					return fmt.Errorf("failed to commit batch: %w", err)
+				}
+				batch = r.db.Batch()
+				batchCount = 0
+			}
+		}
+	}
+
+	if batchCount > 0 {
+		if _, err := batch.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit final batch: %w", err)
+		}
+	}
+
+	if updatedCount > 0 {
+		log.Printf("[DocumentsRepo] Marked %d documents as indexed for tenant %s", updatedCount, tenantID)
+	}
+	return nil
+}
+
 // GetByCoreDocID finds a document by CoreDocID stored in Attrs
 func (r *DocumentsRepository) GetByCoreDocID(ctx context.Context, tenantID, coreDocID string) (*models.Document, error) {
 	if tenantID == "" || coreDocID == "" {
@@ -587,8 +663,8 @@ func (r *DocumentsRepository) syncToBigQuery(ctx context.Context, d *models.Docu
 		"language":     d.Language,
 		"contentHash":  d.ContentHash,
 		"ingestedAt":   d.IngestedAt,
-		"createdAt":   d.CreatedAt,
-		"updatedAt":   d.UpdatedAt,
+		"createdAt":    d.CreatedAt,
+		"updatedAt":    d.UpdatedAt,
 	}
 
 	if err := r.bigquerySync.InsertRow(ctx, "documents_metadata", row); err != nil {
@@ -645,22 +721,22 @@ func (r *CoreDocsRepo) syncToBigQuery(ctx context.Context, d *models.CoreDoc) {
 	}
 
 	row := map[string]interface{}{
-		"id":           d.ID,
-		"tenantId":     d.TenantID,
-		"projectId":    d.ProjectID,
-		"filename":     d.Filename,
-		"contentType":  d.ContentType,
-		"description":  description,
-		"sizeBytes":    sizeBytes,
-		"storagePath":  storagePath,
+		"id":            d.ID,
+		"tenantId":      d.TenantID,
+		"projectId":     d.ProjectID,
+		"filename":      d.Filename,
+		"contentType":   d.ContentType,
+		"description":   description,
+		"sizeBytes":     sizeBytes,
+		"storagePath":   storagePath,
 		"extractedText": extractedText,
-		"parseStatus":  parseStatus,
-		"parseMeta":    d.ParseMeta,
-		"pageCount":    pageCount,
-		"docType":      docType,
-		"createdBy":    createdBy,
-		"createdAt":    d.CreatedAt,
-		"updatedAt":    d.UpdatedAt,
+		"parseStatus":   parseStatus,
+		"parseMeta":     d.ParseMeta,
+		"pageCount":     pageCount,
+		"docType":       docType,
+		"createdBy":     createdBy,
+		"createdAt":     d.CreatedAt,
+		"updatedAt":     d.UpdatedAt,
 	}
 
 	if err := r.bigquerySync.InsertRow(ctx, "core_docs_metadata", row); err != nil {

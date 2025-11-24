@@ -324,28 +324,29 @@ type MetaAggregateUser struct {
 
 // Document represents a normalized unit of content to be chunked/embedded
 type Document struct {
-	ID                string           `json:"id" firestore:"id"`
-	TenantID          string           `json:"tenantId" firestore:"tenantId"`
-	SourceID          string           `json:"sourceId" firestore:"sourceId"`
-	ExternalID        string           `json:"externalId" firestore:"externalId"`
-	Title             string           `json:"title,omitempty" firestore:"title"`
-	URL               string           `json:"url,omitempty" firestore:"url"`
-	DocumentPath      string           `json:"documentPath" firestore:"documentPath"`
-	FullText          string           `json:"fullText" firestore:"fullText"`                           // Kept for backward compatibility, but content should be in GCS
-	StoragePath       *string          `json:"storagePath,omitempty" firestore:"storagePath,omitempty"` // gs://bucket/path to content in GCS
-	Status            string           `json:"status" firestore:"status"`                               // new → embedded → processing → processed; error:*
-	ContentType       string           `json:"contentType,omitempty" firestore:"contentType"`           // plainText, html, markdown, binary
-	DocumentType      string           `json:"documentType,omitempty" firestore:"documentType"`         // post, article, pdf, word
-	Language          string           `json:"language,omitempty" firestore:"language"`
-	Authors           []string         `json:"authors,omitempty" firestore:"authors"`
-	SourceMeta        map[string]any   `json:"sourceMeta,omitempty" firestore:"sourceMeta"`
-	ContentHash       string           `json:"contentHash" firestore:"contentHash"`
-	Categories        []map[string]any `json:"categories,omitempty" firestore:"categories"` // {label, confidence, method, taxonomyId, version, at}
-	Attrs             map[string]any   `json:"attrs,omitempty" firestore:"attrs"`
-	OriginPublishedAt *time.Time       `json:"originPublishedAt,omitempty" firestore:"originPublishedAt"`
-	IngestedAt        time.Time        `json:"ingestedAt" firestore:"ingestedAt"`
-	CreatedAt         time.Time        `json:"createdAt" firestore:"createdAt"`
-	UpdatedAt         time.Time        `json:"updatedAt" firestore:"updatedAt"`
+	ID                    string           `json:"id" firestore:"id"`
+	TenantID              string           `json:"tenantId" firestore:"tenantId"`
+	SourceID              string           `json:"sourceId" firestore:"sourceId"`
+	ExternalID            string           `json:"externalId" firestore:"externalId"`
+	Title                 string           `json:"title,omitempty" firestore:"title"`
+	URL                   string           `json:"url,omitempty" firestore:"url"`
+	DocumentPath          string           `json:"documentPath" firestore:"documentPath"`
+	FullText              string           `json:"fullText" firestore:"fullText"`                           // Kept for backward compatibility, but content should be in GCS
+	StoragePath           *string          `json:"storagePath,omitempty" firestore:"storagePath,omitempty"` // gs://bucket/path to content in GCS
+	Status                string           `json:"status" firestore:"status"`                               // new → embedded → processing → processed; error:*
+	ContentType           string           `json:"contentType,omitempty" firestore:"contentType"`           // plainText, html, markdown, binary
+	DocumentType          string           `json:"documentType,omitempty" firestore:"documentType"`         // post, article, pdf, word
+	Language              string           `json:"language,omitempty" firestore:"language"`
+	Authors               []string         `json:"authors,omitempty" firestore:"authors"`
+	SourceMeta            map[string]any   `json:"sourceMeta,omitempty" firestore:"sourceMeta"`
+	ContentHash           string           `json:"contentHash" firestore:"contentHash"`
+	Categories            []map[string]any `json:"categories,omitempty" firestore:"categories"` // {label, confidence, method, taxonomyId, version, at}
+	Attrs                 map[string]any   `json:"attrs,omitempty" firestore:"attrs"`
+	OriginPublishedAt     *time.Time       `json:"originPublishedAt,omitempty" firestore:"originPublishedAt"`
+	IngestedAt            time.Time        `json:"ingestedAt" firestore:"ingestedAt"`
+	CreatedAt             time.Time        `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt             time.Time        `json:"updatedAt" firestore:"updatedAt"`
+	VertexSearchIndexedAt *time.Time       `json:"vertexSearchIndexedAt,omitempty" firestore:"vertexSearchIndexedAt,omitempty"` // Timestamp when document was successfully indexed in Vertex AI Search
 }
 
 // Chunk stores vectorized searchable fragments of a document
@@ -405,19 +406,19 @@ type SearchEvent struct {
 
 // SourceIngestHistory хранит историю обработок источника
 type SourceIngestHistory struct {
-	ID          string                 `json:"id" firestore:"id"`
-	TenantID    string                 `json:"tenantId" firestore:"tenantId"`
-	SourceID    string                 `json:"sourceId" firestore:"sourceId"`
-	Kind        string                 `json:"kind" firestore:"kind"` // telegram_channel, rss, web
-	Status      string                 `json:"status" firestore:"status"` // success, error, partial
-	Error       *string                `json:"error,omitempty" firestore:"error,omitempty"`
-	Params      map[string]interface{} `json:"params,omitempty" firestore:"params,omitempty"` // Параметры обработки (lastMessageID, URL, etc.)
-	DocumentsProcessed int             `json:"documentsProcessed" firestore:"documentsProcessed"`
-	DocumentsCreated    int             `json:"documentsCreated" firestore:"documentsCreated"`
-	DurationMs          *int            `json:"durationMs,omitempty" firestore:"durationMs,omitempty"`
-	StartedAt   time.Time              `json:"startedAt" firestore:"startedAt"`
-	CompletedAt *time.Time             `json:"completedAt,omitempty" firestore:"completedAt,omitempty"`
-	CreatedAt   time.Time              `json:"createdAt" firestore:"createdAt"`
+	ID                 string                 `json:"id" firestore:"id"`
+	TenantID           string                 `json:"tenantId" firestore:"tenantId"`
+	SourceID           string                 `json:"sourceId" firestore:"sourceId"`
+	Kind               string                 `json:"kind" firestore:"kind"`     // telegram_channel, rss, web
+	Status             string                 `json:"status" firestore:"status"` // success, error, partial
+	Error              *string                `json:"error,omitempty" firestore:"error,omitempty"`
+	Params             map[string]interface{} `json:"params,omitempty" firestore:"params,omitempty"` // Параметры обработки (lastMessageID, URL, etc.)
+	DocumentsProcessed int                    `json:"documentsProcessed" firestore:"documentsProcessed"`
+	DocumentsCreated   int                    `json:"documentsCreated" firestore:"documentsCreated"`
+	DurationMs         *int                   `json:"durationMs,omitempty" firestore:"durationMs,omitempty"`
+	StartedAt          time.Time              `json:"startedAt" firestore:"startedAt"`
+	CompletedAt        *time.Time             `json:"completedAt,omitempty" firestore:"completedAt,omitempty"`
+	CreatedAt          time.Time              `json:"createdAt" firestore:"createdAt"`
 }
 
 // User соответствует Core.Users

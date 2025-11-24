@@ -138,9 +138,7 @@ func main() {
 	var verifiedHandler *httphandlers.VerifiedHandler
 	var bigqueryHandler *httphandlers.BigQueryHandler
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
-	if bqClient != nil {
-		sourcesDocsRepo = sourcesDocsRepo.WithBigQuerySync(bqClient)
-	}
+	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
 
 	// Documents handler for artifact queries (created early to use in routes)
@@ -148,12 +146,7 @@ func main() {
 	entityRepo := repo.NewEntityRepository(fsClient.Client())
 	eventRepo := repo.NewEventRepository(fsClient.Client())
 	claimRepo := repo.NewClaimRepository(fsClient.Client())
-	if bqClient != nil {
-		entityRepo = entityRepo.WithBigQuerySync(bqClient)
-		eventRepo = eventRepo.WithBigQuerySync(bqClient)
-		claimRepo = claimRepo.WithBigQuerySync(bqClient)
-		logger.Printf("BigQuery sync enabled for ontology artifacts (entities, events, claims)")
-	}
+	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	documentsHandler := httphandlers.NewDocumentsHandler(
 		artifactsDocsRepo,
 		entityRepo,
@@ -234,7 +227,11 @@ func main() {
 			// Wire BigQuery sync to repositories
 			docsRepo = docsRepo.WithBigQuerySync(bqClient)
 			coreDocsRepo = coreDocsRepo.WithBigQuerySync(bqClient)
-			logger.Printf("BigQuery sync enabled for documents and core docs")
+			sourcesDocsRepo = sourcesDocsRepo.WithBigQuerySync(bqClient)
+			entityRepo = entityRepo.WithBigQuerySync(bqClient)
+			eventRepo = eventRepo.WithBigQuerySync(bqClient)
+			claimRepo = claimRepo.WithBigQuerySync(bqClient)
+			logger.Printf("BigQuery sync enabled for documents, core docs, sources, and ontology artifacts")
 			// Note: BigQuery client will be closed when server shuts down
 		} else {
 			logger.Printf("BigQuery AI service disabled: %v", err)
@@ -360,17 +357,19 @@ func main() {
 		// Default to "global" to match Data Store location
 		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "global")
 		vertexSearchDataStoreID := getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")
-		vertexSearchAPIKey := getEnv("GEMINI_API_KEY", "")
+		// Vertex AI Search requires OAuth2 (Application Default Credentials), not API key
+		// Pass empty string to use OAuth2 authentication
+		// Note: GEMINI_API_KEY may be set for other services, but Vertex AI Search uses OAuth2
 		var vertexSearchClient *ai.VertexAISearchClient
-		if vertexSearchDataStoreID != "" && vertexSearchAPIKey != "" {
-			vertexSearchClient = ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, vertexSearchAPIKey)
+		if vertexSearchDataStoreID != "" {
+			vertexSearchClient = ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, "")
 			s.discoveryHandler = s.discoveryHandler.WithVertexSearch(vertexSearchClient)
 			logger.Printf("Vertex AI Search enabled: project=%s, location=%s, dataStore=%s", vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID)
 
 			// Настраиваем автоматическую синхронизацию документов с Vertex AI Search
 			// После загрузки документа в GCS автоматически триггерим импорт
 			if ragDocsBucket != "" {
-				docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) {
+				docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
 					// Импортируем документы конкретного tenant (incremental sync)
 					gcsPath := fmt.Sprintf("gs://%s/%s/**", ragDocsBucket, tenantID)
 					importReq := &ai.ImportDocumentsRequest{
@@ -380,14 +379,26 @@ func main() {
 					operationName, err := vertexSearchClient.ImportDocuments(ctx, importReq)
 					if err != nil {
 						logger.Printf("[VertexAISearch] Failed to trigger sync for tenant %s: %v", tenantID, err)
-					} else {
-						logger.Printf("[VertexAISearch] Sync triggered for tenant %s: operation=%s", tenantID, operationName)
+						return "", err
 					}
+					logger.Printf("[VertexAISearch] Sync triggered for tenant %s: operation=%s", tenantID, operationName)
+
+					// Start tracking operation asynchronously
+					go func(opName string, tid string) {
+						trackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+						defer cancel()
+						if err := ai.TrackImportOperation(trackCtx, vertexSearchClient, docsRepo, opName, tid, 5*time.Minute); err != nil {
+							logger.Printf("[VertexAISearch] Failed to track operation %s: %v", opName, err)
+						}
+					}(operationName, tenantID)
+
+					return operationName, nil
 				})
 				logger.Printf("Vertex AI Search auto-sync enabled: documents will sync automatically after GCS upload")
 			}
 		} else {
-			logger.Printf("Vertex AI Search disabled: VERTEX_SEARCH_DATA_STORE_ID or GEMINI_API_KEY not set")
+			logger.Printf("Vertex AI Search disabled: VERTEX_SEARCH_DATA_STORE_ID not set")
+			logger.Printf("  Note: Vertex AI Search uses OAuth2 (Application Default Credentials), not API key")
 		}
 
 		// Start document processor worker (background)

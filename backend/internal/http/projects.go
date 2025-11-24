@@ -967,14 +967,25 @@ func (h *ProjectsHandler) CheckDocumentIndexStatus(w http.ResponseWriter, r *htt
 		WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "no_storage_path"})
 		return
 	}
-	// Check indexing status via Vertex AI Search
-	indexed, err := h.vertexSearchClient.CheckDocumentStatus(r.Context(), *cd.StoragePath, authInfo.TenantID)
-	if err != nil {
-		h.logger.Printf("Failed to check document index status: %v", err)
-		WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "check_failed", "error": err.Error()})
-		return
+
+	// Try to find corresponding Document in rag_documents (which is actually indexed in Vertex AI Search)
+	// Documents are created when CoreDoc is parsed and stored in RAG_DOCUMENTS_BUCKET
+	if h.docsRepo != nil {
+		ragDoc, err := h.docsRepo.GetByCoreDocID(r.Context(), authInfo.TenantID, docID)
+		if err == nil && ragDoc != nil {
+			// Check if document has VertexSearchIndexedAt timestamp - this is the source of truth
+			if ragDoc.VertexSearchIndexedAt != nil && !ragDoc.VertexSearchIndexedAt.IsZero() {
+				WriteJSON(w, http.StatusOK, map[string]any{"indexed": true, "indexedAt": ragDoc.VertexSearchIndexedAt})
+				return
+			}
+			// If no timestamp, document is not indexed yet
+			WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "not_indexed"})
+			return
+		}
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"indexed": indexed})
+
+	// If no rag document found, document is not indexed
+	WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "no_rag_document"})
 }
 
 // DownloadProjectDoc handles GET /api/v1/projects/{id}/docs/{docId}/download

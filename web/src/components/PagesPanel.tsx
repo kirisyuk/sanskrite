@@ -765,7 +765,7 @@ FORMAT REQUIREMENTS:
             <div 
               className="grid gap-1"
               style={{
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, max-content))',
               }}
             >
               {categoryTemplates.map((template) => (
@@ -774,6 +774,7 @@ FORMAT REQUIREMENTS:
                   className="px-2 py-1.5 rounded text-xs flex items-start gap-2 group cursor-pointer"
                   style={{
                     backgroundColor: 'transparent',
+                    maxWidth: 'fit-content',
                   }}
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLDivElement).style.backgroundColor =
@@ -788,7 +789,7 @@ FORMAT REQUIREMENTS:
                   <div className="flex-shrink-0 mt-0.5" style={{ color: 'var(--text-secondary)' }}>
                     {getTemplateIcon()}
                   </div>
-                  <div className="flex-1">
+                  <div className="min-w-0" style={{ maxWidth: '300px' }}>
                     <div
                       className="font-medium truncate"
                       style={{ color: 'var(--text-heading)' }}
@@ -806,12 +807,11 @@ FORMAT REQUIREMENTS:
                     </div>
                     {template.description && (
                       <div
-                        className="text-[10px] mt-0.5"
+                        className="text-[10px] mt-0.5 line-clamp-2"
                         style={{ 
                           color: 'var(--text-secondary-strong)',
-                          wordBreak: 'normal',
-                          overflowWrap: 'normal',
                         }}
+                        title={template.description}
                       >
                         {template.description}
                       </div>

@@ -85,12 +85,16 @@ const DocumentItem = React.memo<{
             className="text-[10px] px-1.5 py-0.5 rounded"
             style={{
               color: indexedStatus.status === 'indexed' 
-                ? 'var(--accent-primary)' 
+                ? 'var(--accent-success)' 
+                : indexedStatus.status === 'not_indexed'
+                ? 'var(--accent-primary)'
                 : indexedStatus.status === 'loading'
                 ? 'var(--text-secondary-strong)'
                 : 'var(--text-tertiary-weak)',
               backgroundColor: indexedStatus.status === 'indexed'
-                ? 'var(--white-10)'
+                ? 'var(--success-20)'
+                : indexedStatus.status === 'not_indexed'
+                ? 'rgba(255, 169, 77, 0.20)'
                 : indexedStatus.status === 'loading'
                 ? 'var(--white-06)'
                 : 'transparent',
@@ -408,9 +412,16 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       // Collect all documents that need status check
       const docsToCheck: Array<{ projectId: string; docId: string }> = [];
       
+      let totalDocs = 0;
+      let docsWithoutStoragePath = 0;
+      
       for (const { project, documents } of currentProjectsWithDocs) {
         for (const doc of documents) {
-          if (!doc.storagePath || doc.id === 'local-unfold') continue;
+          totalDocs++;
+          if (!doc.storagePath || doc.id === 'local-unfold') {
+            if (!doc.storagePath) docsWithoutStoragePath++;
+            continue;
+          }
           
           const existingStatus = indexStatuses[doc.id];
           // Check if we need to refresh (no status or status is older than 5 minutes)
@@ -425,6 +436,8 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
         }
       }
 
+      console.log(`[WorkspaceCanvas] Index status check: total docs=${totalDocs}, without storagePath=${docsWithoutStoragePath}, to check=${docsToCheck.length}`);
+
       // Check statuses in batches to avoid ERR_INSUFFICIENT_RESOURCES
       // Process 10 checks at a time
       const CHECK_BATCH_SIZE = 10;
@@ -433,7 +446,14 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
         const checkPromises = batch.map(async ({ projectId, docId }) => {
           try {
             const status = await api.docsCheckIndexStatus(projectId, docId);
+            console.log(`[WorkspaceCanvas] API response for ${docId}:`, status);
             setDocumentIndexStatus(docId, status.indexed, false);
+            // Log reason if document is not indexed
+            if (!status.indexed) {
+              console.log(`[WorkspaceCanvas] Document ${docId} not indexed: reason=${status.reason || 'unknown'}${status.error ? `, error=${status.error}` : ''}`);
+            } else {
+              console.log(`[WorkspaceCanvas] Document ${docId} is indexed`);
+            }
           } catch (err) {
             console.error(`[WorkspaceCanvas] Failed to check index status for ${docId}`, err);
             setDocumentIndexStatus(docId, false, false);
