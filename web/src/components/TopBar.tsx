@@ -173,7 +173,7 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
         <a href="/" aria-label="Home" className="flex items-center" style={{ textDecoration: 'none' }}>
           <img
             src={theme === 'dark' ? logoDarkTheme : logoLightTheme}
-            alt="Sanskrite"
+            alt="hatl.one"
             className="h-[12px] w-auto object-contain"
             style={{
               filter: theme === 'dark' ? 'drop-shadow(0 0 2px rgba(0,0,0,0.6))' : 'none',

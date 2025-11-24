@@ -273,11 +273,10 @@
 /* Base styles */
 html {
   height: 100%;
-  /* Radial gradient from bottom-left with purple-blue tint */
-  background: radial-gradient(ellipse at bottom left, rgba(100, 100, 200, 0.15) 0%, var(--bg-body) 70%);
+  background: var(--bg-body);
 }
 [data-theme="dark"] html {
-  background: radial-gradient(ellipse at bottom left, rgba(120, 100, 200, 0.12) 0%, var(--bg-body) 60%);
+  background: var(--bg-body);
 }
 
 body {

@@ -116,7 +116,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
         <div className="auth-container">
         <div className="auth-card">
           <div className="text-center mb-8">
-            <img src={theme === 'dark' ? darkLogo : lightLogo} alt="Sanskrite" className="auth-logo" />
+            <img src={theme === 'dark' ? darkLogo : lightLogo} alt="hatl.one" className="auth-logo" />
             <h1 className="auth-title">{getTitle()}</h1>
             <p className="auth-subtitle">
               {currentView === 'login' && ''}
