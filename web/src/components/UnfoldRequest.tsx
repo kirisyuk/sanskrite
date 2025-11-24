@@ -609,19 +609,34 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
           if (!doc) continue;
           
           let docText = '';
+          const docSizeBytes = doc.sizeBytes || 0;
           
-          // First, try to use extractedText if available
-          if (doc.extractedText) {
-            docText = doc.extractedText;
-          } else {
-            // For artifact documents (entities.json, facts.json, etc.), 
-            // content might be stored in StoragePath and needs to be downloaded
-            try {
-              const blob = await api.docsDownload(currentProjectId, docId);
-              if (cancelled) return;
-              docText = await new Response(blob).text();
-            } catch (downloadErr) {
-              console.warn('[UnfoldRequest] Failed to download document content', { docId, error: downloadErr });
+          // Always download full document content (same logic as in genaiChatStore)
+          // For text files (CSV, TXT, etc.), docsDownload returns the original file which is the text
+          try {
+            const blob = await api.docsDownload(currentProjectId, docId);
+            if (cancelled) return;
+            docText = await new Response(blob).text();
+            console.log('[UnfoldRequest] Downloaded document for context calculation', {
+              docId,
+              filename: doc.filename,
+              sizeBytes: docSizeBytes,
+              sizeKB: (docSizeBytes / 1024).toFixed(2),
+              contentLength: docText.length,
+              contentKB: (docText.length / 1024).toFixed(2),
+              tokens: Math.ceil(docText.length / 4)
+            });
+          } catch (downloadErr) {
+            // Fallback to extractedText if download fails
+            if (doc.extractedText) {
+              docText = doc.extractedText;
+              console.warn('[UnfoldRequest] Failed to download, using extractedText fallback', { 
+                docId, 
+                error: downloadErr,
+                extractedTextLength: doc.extractedText.length
+              });
+            } else {
+              console.warn('[UnfoldRequest] Failed to download document and no extractedText', { docId, error: downloadErr });
               // Continue with next document if download fails
               continue;
             }
@@ -629,6 +644,13 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
           
           totalChars += docText.length;
         }
+        
+        console.log('[UnfoldRequest] Total pending documents context', {
+          docCount: pendingAttachedDocIds.length,
+          totalChars,
+          totalKB: (totalChars / 1024).toFixed(2),
+          totalTokens: Math.ceil(totalChars / 4)
+        });
         
         // Convert chars to tokens (rough estimate: ~4 chars per token)
         const tokens = Math.ceil(totalChars / 4);

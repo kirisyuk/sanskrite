@@ -222,26 +222,48 @@ ${evalInstruction} Return only the JSON.`;
     systemInstruction: langDirective,
   });
 
-  // Parse response
+  // Parse response with improved error handling
   let parsed: any = null;
   try {
-    if (typeof res?.content === 'string') {
-      const s = res.content.trim();
-      if (s.startsWith('{') || s.startsWith('[')) parsed = JSON.parse(s);
-    }
+    let contentToParse = res?.content || '';
+    
+    // Try rawJSON first if available
     const rawJSON = (res as any)?.rawJSON;
-    if (!parsed && typeof rawJSON === 'string') {
-      const s2 = rawJSON.trim();
-      if (s2.startsWith('{') || s2.startsWith('[')) parsed = JSON.parse(s2);
+    if (typeof rawJSON === 'string' && rawJSON.trim()) {
+      contentToParse = rawJSON;
     }
-    if (!parsed && typeof res?.content === 'string') {
-      const m = res.content.match(/\{[\s\S]*\}/);
-      if (m && m[0]) {
-        parsed = JSON.parse(m[0]);
+    
+    // Remove markdown code fences if present
+    contentToParse = contentToParse
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/```\s*$/i, '')
+      .trim();
+    
+    // Remove Python code patterns (e.g., "tool_code\nprint(default_api.return_structured(...))")
+    if (contentToParse.includes('tool_code') || contentToParse.includes('print(') || contentToParse.includes('default_api')) {
+      // Try to extract JSON from Python code
+      const jsonMatch = contentToParse.match(/\{[\s\S]*\}/);
+      if (jsonMatch && jsonMatch[0]) {
+        contentToParse = jsonMatch[0];
+      }
+    }
+    
+    // Try parsing directly
+    if (contentToParse.startsWith('{') || contentToParse.startsWith('[')) {
+      parsed = JSON.parse(contentToParse);
+    } else {
+      // Try to find JSON object/array in content
+      const jsonMatch = contentToParse.match(/\{[\s\S]*\}/) || contentToParse.match(/\[[\s\S]*\]/);
+      if (jsonMatch && jsonMatch[0]) {
+        parsed = JSON.parse(jsonMatch[0]);
       }
     }
   } catch (pe) {
-    console.warn('[BiasEval] parse failed', pe, { contentPreview: (res?.content || '').slice(0, 200) });
+    console.warn('[BiasEval] parse failed', pe, { 
+      contentPreview: (res?.content || '').slice(0, 200),
+      rawJSONPreview: ((res as any)?.rawJSON || '').slice(0, 200)
+    });
   }
 
   if (!parsed || typeof parsed !== 'object') {

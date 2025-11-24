@@ -102,15 +102,30 @@ func (e *GraphToolExecutor) validateGraphData(gd *GraphData) error {
 	if len(gd.Sources) == 0 {
 		return fmt.Errorf("sources must be a non-empty array")
 	}
-	// Validate table structure: all rows should have same length
+	// Validate and normalize table structure: all rows should have same length
 	headerLen := len(gd.Table[0])
 	for i, row := range gd.Table[1:] {
-		if len(row) != headerLen {
-			return fmt.Errorf("table row %d has %d columns, expected %d (must match header)", i+1, len(row), headerLen)
+		rowIdx := i + 1
+		// Normalize row length: pad with empty strings if too short, trim if too long
+		if len(row) < headerLen {
+			// Pad row with empty strings to match header length
+			for len(row) < headerLen {
+				row = append(row, "")
+			}
+			gd.Table[rowIdx] = row
+			if e.logger != nil {
+				e.logger.Printf("[GraphToolExecutor] Normalized row %d: padded from %d to %d columns", rowIdx, len(row)-headerLen+len(row), headerLen)
+			}
+		} else if len(row) > headerLen {
+			// Trim row to match header length
+			gd.Table[rowIdx] = row[:headerLen]
+			if e.logger != nil {
+				e.logger.Printf("[GraphToolExecutor] Normalized row %d: trimmed from %d to %d columns", rowIdx, len(row), headerLen)
+			}
 		}
 		// First column should be string (label), rest should be numbers
 		if row[0] == nil {
-			return fmt.Errorf("table row %d: first column (label) cannot be null", i+1)
+			return fmt.Errorf("table row %d: first column (label) cannot be null", rowIdx)
 		}
 	}
 	return nil

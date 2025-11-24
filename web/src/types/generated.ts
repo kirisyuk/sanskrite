@@ -264,6 +264,7 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDocument {
   ingestedAt: string;
   createdAt: string;
   updatedAt: string;
+  vertexSearchIndexedAt?: string;
 }
 
 export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsProject {

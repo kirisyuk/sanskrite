@@ -20,6 +20,7 @@ import (
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	g "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
+	gen_retry "github.com/igorkirisyuk/sanskrite/internal/genai"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/research"
@@ -980,8 +981,38 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Wrap registry with retryable executor for self-correction
+		retryableReg := gen_retry.NewRetryableToolExecutor(reg, h.client)
+		
+		// Set up callbacks for retry and correction events
+		retryableReg.SetCallbacks(
+			func(toolName string, attempt int, error *gen_retry.ToolCallError) {
+				// Notify frontend about retry attempt
+				log.Printf("[GenAI Stream] Tool retry: tool=%s attempt=%d errorType=%s error=%s", toolName, attempt, error.Type, error.Message)
+				_ = h.publisher.PublishJSON(ctx, "genai.stream.tool_retry", auth.TenantID, map[string]any{
+					"projectId": projectID,
+					"streamId":  streamID,
+					"toolName":  toolName,
+					"attempt":   attempt,
+					"errorType": string(error.Type),
+					"error":     error.Message,
+				})
+			},
+			func(toolName string, attempt int, correctedArgs json.RawMessage) {
+				// Notify frontend about correction
+				log.Printf("[GenAI Stream] Tool corrected: tool=%s attempt=%d", toolName, attempt)
+				_ = h.publisher.PublishJSON(ctx, "genai.stream.tool_correction", auth.TenantID, map[string]any{
+					"projectId":     projectID,
+					"streamId":      streamID,
+					"toolName":      toolName,
+					"attempt":       attempt,
+					"correctedArgs": string(correctedArgs),
+				})
+			},
+		)
+
 		log.Printf("[GenAI Stream] Starting stream with tools (projectId=%s streamId=%s toolsCount=%d)", projectID, streamID, len(req.Tools))
-		err = h.client.StreamWithTools(ctx, req.Prompt, req.Tools, reg, req.Options, onEvt)
+		err = h.client.StreamWithTools(ctx, req.Prompt, req.Tools, retryableReg, req.Options, onEvt)
 	} else {
 		log.Printf("[GenAI Stream] Starting stream without tools (projectId=%s streamId=%s)", projectID, streamID)
 		err = h.client.Stream(ctx, req.Prompt, req.Tools, req.Options, onEvt)

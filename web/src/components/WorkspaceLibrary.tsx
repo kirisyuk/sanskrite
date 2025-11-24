@@ -217,27 +217,48 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
         
         if (existingDoc) {
           // Update existing document status
-          return prev.map(doc => 
+          const updated = prev.map(doc => 
             doc.id === eventDocId 
               ? { ...doc, parseStatus: eventStatus }
               : doc
           );
+          console.log('[WorkspaceLibrary] Updated document status:', { 
+            docId: eventDocId, 
+            oldStatus: existingDoc.parseStatus, 
+            newStatus: eventStatus 
+          });
+          return updated;
         } else {
           // Document doesn't exist yet - fetch it from API
           api.docsList(projectId, 'post').then(docs => {
             const newDoc = docs?.find((d: Document) => d.id === eventDocId);
             if (newDoc) {
               setDocuments(prevDocs => {
-                // Avoid duplicates
-                if (prevDocs.find(d => d.id === eventDocId)) {
+                // Avoid duplicates - check if document was added while we were fetching
+                const existing = prevDocs.find(d => d.id === eventDocId);
+                if (existing) {
+                  // Document was added while fetching - update its status
+                  console.log('[WorkspaceLibrary] Document added while fetching, updating status:', { 
+                    docId: eventDocId, 
+                    oldStatus: existing.parseStatus, 
+                    newStatus: eventStatus 
+                  });
                   return prevDocs.map(doc => 
                     doc.id === eventDocId 
                       ? { ...doc, parseStatus: eventStatus }
                       : doc
                   );
                 }
-                return [...prevDocs, newDoc];
+                // Add new document with updated parseStatus from event
+                console.log('[WorkspaceLibrary] Adding new document with status:', { 
+                  docId: eventDocId, 
+                  filename: newDoc.filename, 
+                  status: eventStatus 
+                });
+                return [...prevDocs, { ...newDoc, parseStatus: eventStatus }];
               });
+            } else {
+              console.warn('[WorkspaceLibrary] Document not found in API response:', { docId: eventDocId });
             }
           }).catch(err => {
             console.error('[WorkspaceLibrary] Failed to fetch new document:', err);

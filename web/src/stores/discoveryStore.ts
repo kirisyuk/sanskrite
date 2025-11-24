@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { api } from '../lib/api';
 import type { DataSource } from '../types';
 
+const IS_DEV = import.meta.env.DEV;
+
 // --- WebSocket connection management (module scope to persist across store re-creations) ---
 let wsRef: WebSocket | null = null;
 let reconnectAttempts = 0;
@@ -1150,14 +1152,15 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                     st.onStart();
                     break;
                   case 'genai.stream.chunk':
-                    // CRITICAL: Ensure streaming is enabled before processing chunks
-                    // If onStart wasn't called (e.g., due to race condition), enable streaming now
+                    // Ensure streaming is enabled before processing chunks
                     if (!st.streaming) {
-                      console.warn('[DiscoveryStore] genai.stream.chunk received but streaming not enabled, enabling now', {
-                        projectId: msg.data?.projectId,
-                        streamId: msg.data?.streamId,
-                        storeProjectId: st.projectId
-                      });
+                      if (IS_DEV) {
+                        console.debug('[DiscoveryStore] genai.stream.chunk received before streaming flag, auto-starting', {
+                          projectId: msg.data?.projectId,
+                          streamId: msg.data?.streamId,
+                          storeProjectId: st.projectId
+                        });
+                      }
                       st.onStart();
                     }
                     // CRITICAL: Ensure currentStreamId is set from chunk event if not already set
@@ -1165,17 +1168,21 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                       useGenaiChatStore.setState({ currentStreamId: eventStreamId } as any);
                     }
                     if (msg.data?.text) {
-                      console.log('[DiscoveryStore] Received genai.stream.chunk', { 
-                        textLength: msg.data.text.length,
-                        chunkIndex: msg.data?.chunkIndex,
-                        projectId: msg.data?.projectId, 
-                        streamId: msg.data?.streamId,
-                        storeProjectId: st.projectId,
-                        streaming: st.streaming
-                      });
+                      if (IS_DEV) {
+                        console.debug('[DiscoveryStore] Received genai.stream.chunk', { 
+                          textLength: msg.data.text.length,
+                          chunkIndex: msg.data?.chunkIndex,
+                          projectId: msg.data?.projectId, 
+                          streamId: msg.data?.streamId,
+                          storeProjectId: st.projectId,
+                          streaming: st.streaming
+                        });
+                      }
                       st.onChunk(msg.data.text);
                     } else {
-                      console.warn('[DiscoveryStore] genai.stream.chunk missing text', msg.data);
+                      if (IS_DEV) {
+                        console.warn('[DiscoveryStore] genai.stream.chunk missing text', msg.data);
+                      }
                     }
                     break;
                   case 'genai.stream.tool_call':
@@ -1183,6 +1190,16 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                     break;
                   case 'genai.stream.tool_result':
                     if (Array.isArray(msg.data?.toolCalls)) st.onToolResult(msg.data.toolCalls);
+                    break;
+                  case 'genai.stream.tool_retry':
+                    // Notify about tool retry attempt
+                    console.log('[DiscoveryStore] Tool retry', msg.data);
+                    st.onToolRetry?.(msg.data);
+                    break;
+                  case 'genai.stream.tool_correction':
+                    // Notify about tool correction
+                    console.log('[DiscoveryStore] Tool correction', msg.data);
+                    st.onToolCorrection?.(msg.data);
                     break;
                   case 'genai.stream.done':
                     // Prevent duplicate processing of done events (PubSub can deliver messages multiple times)

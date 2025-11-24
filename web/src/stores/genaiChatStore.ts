@@ -8,12 +8,13 @@ import type { GenaiToolCall } from './genaiStore';
 import { useGenAISettings, mapProviderStrengthToModel, getModelContextWindow } from './genaiSettingsStore';
 import { useProjectsStore } from './projectsStore';
 
-export type ChatRole = 'user' | 'assistant';
+export type ChatRole = 'user' | 'assistant' | 'system';
 
 export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
+  timestamp?: number;
 }
 
 export interface StartStreamArgs {
@@ -79,6 +80,8 @@ interface GenaiChatState {
   error: string | null;
   toolCalls: GenaiToolCall[];
   toolResults: GenaiToolCall[];
+  toolRetries: Array<{ toolName: string; attempt: number; errorType: string; error: string; timestamp: number }>;
+  toolCorrections: Array<{ toolName: string; attempt: number; correctedArgs: string; timestamp: number }>;
   attributions: Array<{ title?: string; url?: string }>;
   searchQueries: string[];
   sources: string[];
@@ -125,6 +128,7 @@ interface GenaiChatState {
   startStream: (args: StartStreamArgs) => Promise<void>;
   setPendingAttachedDocIds: (ids: string[]) => void;
   reset: () => void;
+  clearToolRetries: () => void;
   openMetricOverlay: (metric: SxMonitorMetric) => Promise<void>;
   closeMetricOverlay: () => void;
 
@@ -134,6 +138,8 @@ interface GenaiChatState {
   onError: (err: string) => void;
   onToolCall: (calls: GenaiToolCall[]) => void;
   onToolResult: (calls: GenaiToolCall[]) => void;
+  onToolRetry: (data: { toolName: string; attempt: number; errorType: string; error: string }) => void;
+  onToolCorrection: (data: { toolName: string; attempt: number; correctedArgs: string }) => void;
   onDoneMeta: (meta: { usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; attributions?: Array<{ title?: string; url?: string }>; searchQueries?: string[]; sources?: string[] }) => void;
   setEvaluation: (messageId: string, ev: {
     biasLevel: number;
@@ -176,6 +182,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   error: null,
   toolCalls: [],
   toolResults: [],
+  toolRetries: [],
+  toolCorrections: [],
   attributions: [],
   searchQueries: [],
   sources: [],
@@ -197,7 +205,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   hydrating: false,
   currentStreamId: undefined,
 
-  reset: () => set({ projectId: 'local-unfold', messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [], hydrating: false, currentStreamId: undefined }),
+  reset: () => set({ projectId: 'local-unfold', messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], toolRetries: [], toolCorrections: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [], hydrating: false, currentStreamId: undefined }),
+  
+  clearToolRetries: () => set({ toolRetries: [], toolCorrections: [] }),
   
   setPendingAttachedDocIds: (ids) => set({ pendingAttachedDocIds: ids }),
 
@@ -1357,29 +1367,85 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 const docInteractions: LocalInteraction[] = [];
                 for (const docId of attachedDocIds) {
                   const doc = docMap.get(docId);
-                  if (doc && doc.extractedText) {
-                    const docInteraction: LocalInteraction = {
-                      id: `${now}-doc-${docId}`,
-                      projectId,
+                  if (!doc) {
+                    console.warn('[Chat] Document not found in list', { docId });
+                    continue;
+                  }
+                  
+                  // Always download the full document content
+                  // For text files (CSV, TXT, etc.), docsDownload returns the original file which is the text
+                  // For other files, it returns the original, but that's better than using a preview
+                  let docContent = '';
+                  const docSizeBytes = doc.sizeBytes || 0;
+                  let contentSource = 'unknown';
+                  
+                  try {
+                    console.log('[Chat] Downloading full document content', { docId, filename: doc.filename, contentType: doc.contentType, sizeBytes: docSizeBytes });
+                    const blob = await api.docsDownload(projectId, docId);
+                    docContent = await new Response(blob).text();
+                    contentSource = 'download';
+                    console.log('[Chat] Downloaded document content', { 
+                      docId, 
+                      filename: doc.filename,
+                      contentLength: docContent.length,
+                      contentLengthKB: (docContent.length / 1024).toFixed(2),
+                      sizeBytes: docSizeBytes,
+                      sizeKB: (docSizeBytes / 1024).toFixed(2)
+                    });
+                  } catch (downloadErr) {
+                    // Fallback to extractedText if download fails
+                    if (doc.extractedText && doc.extractedText.length > 0) {
+                      console.warn('[Chat] Failed to download document, using extractedText fallback', { docId, error: downloadErr });
+                      docContent = doc.extractedText;
+                      contentSource = 'extractedText';
+                    } else {
+                      console.warn('[Chat] Failed to download document and no extractedText available', { docId, error: downloadErr });
+                      continue; // Skip this document if we can't get its content
+                    }
+                  }
+                  
+                  if (docContent.length === 0) {
+                    console.warn('[Chat] Document content is empty', { docId });
+                    continue;
+                  }
+                  
+                  // Calculate tokens added to context
+                  const contentChars = docContent.length;
+                  const contentTokens = Math.ceil(contentChars / 4);
+                  
+                  console.log('[Chat] Document added to context', {
+                    docId,
+                    filename: doc.filename,
+                    sizeBytes: docSizeBytes,
+                    sizeKB: (docSizeBytes / 1024).toFixed(2),
+                    contentChars,
+                    contentKB: (contentChars / 1024).toFixed(2),
+                    contentTokens,
+                    contentSource,
+                    ratio: docSizeBytes > 0 ? ((contentChars / docSizeBytes) * 100).toFixed(1) + '%' : 'N/A'
+                  });
+                  
+                  const docInteraction: LocalInteraction = {
+                    id: `${now}-doc-${docId}`,
+                    projectId,
+                    kind: 'system',
+                    subkind: 'document.attach',
+                    content: docContent,
+                    createdAt: new Date().toISOString(),
+                    replyTo: resUser.id, // Link to user interaction
+                  };
+                  docInteractions.push(docInteraction);
+                  
+                  // Persist on server
+                  try {
+                    await api.createProjectInteraction(projectId, {
                       kind: 'system',
                       subkind: 'document.attach',
-                      content: doc.extractedText,
-                      createdAt: new Date().toISOString(),
-                      replyTo: resUser.id, // Link to user interaction
-                    };
-                    docInteractions.push(docInteraction);
-                    
-                    // Persist on server
-                    try {
-                      await api.createProjectInteraction(projectId, {
-                        kind: 'system',
-                        subkind: 'document.attach',
-                        content: doc.extractedText,
-                        replyTo: resUser.id,
-                      });
-                    } catch (e) {
-                      console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
-                    }
+                      content: docContent,
+                      replyTo: resUser.id,
+                    });
+                  } catch (e) {
+                    console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
                   }
                 }
                 
@@ -3352,6 +3418,41 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     }
   },
   onToolCall: (calls) => set({ toolCalls: calls || [] }),
+  onToolRetry: (data) => {
+    console.log('[GenAIChatStore] Tool retry', data);
+    set((s) => ({
+      toolRetries: [...s.toolRetries, { ...data, timestamp: Date.now() }],
+    } as Partial<GenaiChatState>));
+    // Add notification message to chat
+    const notificationMsg: ChatMessage = {
+      id: `tool-retry-${Date.now()}`,
+      role: 'system',
+      content: `⚠️ Обнаружена ошибка при выполнении инструмента "${data.toolName}". Попытка исправления ${data.attempt}/3...`,
+      timestamp: Date.now(),
+    };
+    set((s) => ({
+      messages: [...s.messages, notificationMsg],
+    } as Partial<GenaiChatState>));
+  },
+  onToolCorrection: (data) => {
+    console.log('[GenAIChatStore] Tool correction', data);
+    set((s) => ({
+      toolCorrections: [...s.toolCorrections, { ...data, timestamp: Date.now() }],
+    } as Partial<GenaiChatState>));
+    // Update notification message
+    set((s) => {
+      const msgs = [...s.messages];
+      const lastRetryMsg = msgs.findLast((m) => m.id?.startsWith('tool-retry-'));
+      if (lastRetryMsg) {
+        const idx = msgs.indexOf(lastRetryMsg);
+        msgs[idx] = {
+          ...lastRetryMsg,
+          content: `✅ Ошибка исправлена. Повторная попытка выполнения инструмента "${data.toolName}"...`,
+        };
+      }
+      return { messages: msgs } as Partial<GenaiChatState>;
+    });
+  },
   onToolResult: (calls) => {
     const toolCalls = calls || [];
     set((s) => {

@@ -114,6 +114,8 @@ func (c *Client) ExecuteWithTools(ctx context.Context, prompt string, toolDecls 
 // so we use non-streaming Generate for the first request with tools, then stream the continuation
 func (c *Client) StreamWithTools(ctx context.Context, prompt string, toolDecls []Tool, exec ToolExecutor, opts Options, onEvent func(StreamEvent) error) error {
 	var pendingCalls []ToolCall
+	var firstStageUsage Usage
+	finalModel := opts.ModelOverride
 
 	// Gemini doesn't support function calling in streaming mode, so use non-streaming Generate first
 	if len(toolDecls) > 0 {
@@ -123,6 +125,10 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, toolDecls [
 		if err != nil {
 			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
 			return err
+		}
+		firstStageUsage = resp.Usage
+		if resp.Model != "" {
+			finalModel = resp.Model
 		}
 
 		// Emit text content if any
@@ -237,6 +243,11 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, toolDecls [
 	// This avoids streaming for tool calls - just get the final answer
 	resp2, err := c.GenerateConversation(ctx, contents, toolDecls, opts)
 	if err != nil {
+		if isGeminiContinuationWarning(err) {
+			log.Printf("[Gemini StreamWithTools] Final continuation failed after tool execution, suppressing error: %v", err)
+			_ = onEvent(StreamEvent{Type: "done", Usage: firstStageUsage, Model: finalModel})
+			return nil
+		}
 		_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
 		return err
 	}
@@ -250,6 +261,14 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, toolDecls [
 	}
 	_ = onEvent(StreamEvent{Type: "done", Usage: resp2.Usage, Model: resp2.Model})
 	return nil
+}
+
+func isGeminiContinuationWarning(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Function call arguments require the JSON schema")
 }
 
 // normalizeTelegramChannel converts @name or t.me/name[/...] to username

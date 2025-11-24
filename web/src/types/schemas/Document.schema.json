@@ -77,6 +77,10 @@
     "updatedAt": {
       "type": "string",
       "format": "date-time"
+    },
+    "vertexSearchIndexedAt": {
+      "type": "string",
+      "format": "date-time"
     }
   },
   "additionalProperties": false,
