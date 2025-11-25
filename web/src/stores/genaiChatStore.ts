@@ -7,6 +7,8 @@ import type { AnalyzeInteractionRef, AnalyzeRequest } from '../types/stance';
 import type { GenaiToolCall } from './genaiStore';
 import { useGenAISettings, mapProviderStrengthToModel, getModelContextWindow } from './genaiSettingsStore';
 import { useProjectsStore } from './projectsStore';
+import { parseOntologyCommands } from '../types/ontologyCommands';
+import { processOntologyCommands } from '../lib/ontologyCommandProcessor';
 
 export type ChatRole = 'user' | 'assistant' | 'system';
 
@@ -25,12 +27,18 @@ export interface StartStreamArgs {
   suppressUserEcho?: boolean;
 }
 
-type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action' | 'research';
+type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action' | 'research' | 'ontology';
+
+// Ontology entity subkinds
+export type OntologySubkind = 'entity' | 'event' | 'claim' | 'relation' | 'concept' | 'metricState' | 'trend' | 'causalLink' | 'scenario' | 'actionableItem';
+
 export interface LocalInteraction {
   id: string;
   projectId: string; // temporary local id binding
   kind: InteractionKind;
   subkind?: string;
+  // For ontology interactions: subkind contains entity type, content contains full entity JSON
+  // Status is tracked via metadata.status (active/deleted) - interactions store final states only
   content: string;
   contentSanitized?: string;
   sxInstructions?: SxInstruction[];
@@ -72,6 +80,9 @@ export interface LocalInteraction {
     url: string;
     score?: number;
   }>;
+  // Ontology-specific: entity ID from the entity data (stored in content as JSON)
+  // Used for deduplication and updates - same entity ID means same entity
+  ontologyEntityId?: string; // Extracted from content.id when kind='ontology'
 }
 
 interface GenaiChatState {
@@ -2314,6 +2325,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       
       // Filter out evaluation messages, actions, section markers, and perspectives - they shouldn't be in chat context
       const chatInteractions = interactions.filter((it) => {
+        // Exclude ontology interactions (they are shown in Model tab, not in chat)
+        if (it.kind === 'ontology') {
+          return false;
+        }
         // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
         if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
           return false;
@@ -2342,6 +2357,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       });
       
       // LLM context includes document attachments (for token counting and LLM), but excludes other non-displayable types
+      // NOTE: ontology interactions ARE included in LLM context (they represent the model state that LLM should see)
       const llmContextInteractions = interactions.filter((it) => {
         // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
         if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
@@ -2406,7 +2422,23 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const pinnedMessages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string; tokens: number }> = [];
       
       for (const it of sortedPinned) {
-        const text = (it.summary && it.summary.trim()) ? it.summary : it.content;
+        // For ontology interactions in Model mode, format as structured entity data
+        let text: string;
+        if (it.kind === 'ontology' && it.content) {
+          try {
+            const entityData = JSON.parse(it.content);
+            // Format ontology entity for LLM context: show type, ID, and key properties
+            const entityId = entityData.id || it.ontologyEntityId || it.id;
+            const entityType = it.subkind || 'entity';
+            const name = entityData.canonicalName || entityData.name || entityData.title || entityId;
+            text = `[ONTOLOGY_ENTITY:${entityType}]\nID: ${entityId}\nName: ${name}\nData: ${JSON.stringify(entityData, null, 2)}`;
+          } catch {
+            // Fallback to raw content if JSON parsing fails
+            text = it.content;
+          }
+        } else {
+          text = (it.summary && it.summary.trim()) ? it.summary : it.content;
+        }
         const tokens = Math.ceil(text.length / 4); // Approximate: 1 token = 4 chars
         
         // If adding this pinned message would exceed 90% limit, truncate oldest pinned messages
@@ -2418,7 +2450,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               ? text.slice(0, maxChars - 50) + '\n... [truncated]'
               : text;
             pinnedMessages.push({
-              role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
+              role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research' || it.kind === 'ontology') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
               text: it.subkind === 'document.attach' 
                 ? `[ATTACHED DOCUMENT]\n${truncated}` 
                 : truncated,
@@ -2431,7 +2463,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         }
         
         pinnedMessages.push({
-          role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
+          role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research' || it.kind === 'ontology') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
           text: it.subkind === 'document.attach' 
             ? `[ATTACHED DOCUMENT]\n${text}` 
             : text,
@@ -2451,7 +2483,23 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       
       for (let i = regularInteractions.length - 1; i >= 0; i--) {
         const it = regularInteractions[i];
-        const text = (it.summary && it.summary.trim()) ? it.summary : it.content;
+        // For ontology interactions in Model mode, format as structured entity data
+        let text: string;
+        if (it.kind === 'ontology' && it.content) {
+          try {
+            const entityData = JSON.parse(it.content);
+            // Format ontology entity for LLM context: show type, ID, and key properties
+            const entityId = entityData.id || it.ontologyEntityId || it.id;
+            const entityType = it.subkind || 'entity';
+            const name = entityData.canonicalName || entityData.name || entityData.title || entityId;
+            text = `[ONTOLOGY_ENTITY:${entityType}]\nID: ${entityId}\nName: ${name}\nData: ${JSON.stringify(entityData, null, 2)}`;
+          } catch {
+            // Fallback to raw content if JSON parsing fails
+            text = it.content;
+          }
+        } else {
+          text = (it.summary && it.summary.trim()) ? it.summary : it.content;
+        }
         const tokens = Math.ceil(text.length / 4); // Approximate: 1 token = 4 chars
         
         // If adding this message would exceed remaining limit, truncate older messages
@@ -2465,7 +2513,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               ? text.slice(0, maxChars - 50) + '\n... [truncated]'
               : text;
             regularMessages.push({
-              role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
+              role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research' || it.kind === 'ontology') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
               text: it.subkind === 'document.attach' 
                 ? `[ATTACHED DOCUMENT]\n${truncated}` 
                 : truncated,
@@ -2478,7 +2526,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         }
         
         regularMessages.push({
-          role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
+          role: (it.kind === 'assistant' || it.kind === 'system' || it.kind === 'research' || it.kind === 'ontology') ? 'assistant' : (it.kind === 'note' ? 'note' : 'user'),
           text: it.subkind === 'document.attach' 
             ? `[ATTACHED DOCUMENT]\n${text}` 
             : text,
@@ -2523,12 +2571,13 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       // CRITICAL: Используем проверенный projectId из локальной переменной
       // Не читаем из store, чтобы избежать гонок
       
-      // Check if model is gemini_preview - use non-streaming for Gemini 3 Pro Preview
+      // Check if streaming is disabled (Model mode) or model is gemini_preview - use non-streaming API
       // Get model from options.modelOverride or from currentSettings.model
       const modelOverride = options?.modelOverride || currentSettings.model || '';
       const isGeminiPreview = modelOverride === 'gemini_preview' || modelOverride === 'gemini-3-pro-preview';
+      const disableStreaming = options?.disableStreaming === true;
       
-      if (isGeminiPreview) {
+      if (disableStreaming || isGeminiPreview) {
         // Use non-streaming API for Gemini 3 Pro Preview
         console.log('[Chat] Using non-streaming API for gemini_preview', { projectId, streamId });
         
@@ -2546,7 +2595,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           : [];
         
         const generateRequest: any = {
-          model: 'gemini_preview',
+          model: disableStreaming ? (modelOverride || currentSettings.model || 'gemini_fast') : 'gemini_preview',
           prompt: prompt,
           messages: historyMessages.length > 0 ? historyMessages : undefined, // Backend will add to systemInstruction
           systemInstruction: options?.systemInstruction,
@@ -2569,6 +2618,37 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           const usage = response?.usage;
           const sources = response?.sources || [];
           const attributions = response?.attributions || [];
+          
+          // Model mode: parse and process ontology commands
+          if (disableStreaming) {
+            try {
+              const commands = parseOntologyCommands(content);
+              if (commands.length > 0) {
+                // Process commands and create/update/delete ontology interactions
+                await processOntologyCommands(commands, projectId);
+                // Don't create assistant message/interaction - commands are processed directly
+                // Remove placeholder assistant message
+                set((s) => {
+                  const msgs = [...s.messages];
+                  // Remove last assistant placeholder if exists
+                  if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant' && !msgs[msgs.length - 1].content) {
+                    msgs.pop();
+                  }
+                  return {
+                    messages: msgs,
+                    streaming: false, 
+                    currentStreamId: undefined,
+                    usage,
+                    error: null,
+                  } as any;
+                });
+                return; // Exit early - commands processed, no message needed
+              }
+            } catch (err) {
+              console.error('[Chat] Failed to process ontology commands', err);
+              // Fall through to normal message handling if parsing fails
+            }
+          }
           
           // Update messages with full content
           set((s) => {

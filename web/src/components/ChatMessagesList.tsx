@@ -139,6 +139,11 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
               );
             }
             
+            // Skip ontology interactions (they are shown in Model tab, not in chat)
+            if (it.kind === 'ontology') {
+              return null;
+            }
+            
             const isUser = it.kind === 'user';
             // Skip rendering if inside a collapsed section
             try {
@@ -177,7 +182,7 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
             const errorMessage = isError ? (it.content || genaiChat.error) : null;
             
             return (
-              <div key={it.id} className="group relative">
+              <div key={it.id} data-interaction-id={it.id} className="group relative">
                 <MessageActions
                   interactionId={it.id}
                   isUser={isUser}

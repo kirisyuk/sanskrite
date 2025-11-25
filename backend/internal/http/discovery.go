@@ -940,6 +940,8 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		ResearchSources  []repo.ResearchSource  `json:"researchSources,omitempty"` // For research.result
 		// Sections (optional client-provided for future-proofing; server derives when missing)
 		SectionID *string `json:"sectionId,omitempty"`
+		// Ontology-specific fields (only for kind="ontology")
+		OntologyEntityID *string `json:"ontologyEntityId,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteBadRequest(w, "INVALID_JSON", "Failed to parse body")
@@ -948,12 +950,13 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 	// normalize kind
 	k := strings.ToLower(strings.TrimSpace(body.Kind))
 	switch k {
-	case "user", "assistant", "system", "note", "section_start", "section_end", "action", "research":
+	case "user", "assistant", "system", "note", "section_start", "section_end", "action", "research", "ontology":
 	default:
 		k = "note"
 	}
 	// validate content presence only for non-section kinds
 	// Research progress interactions may have empty content (they show progress, not final content)
+	// Ontology interactions require content (JSON with entity data)
 	if k != "section_start" && k != "section_end" && k != "research" {
 		if strings.TrimSpace(body.Content) == "" {
 			WriteBadRequest(w, "INVALID_JSON", "kind and content are required")
@@ -964,6 +967,19 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 	if k == "research" && body.Subkind != nil && *body.Subkind == "research.result" {
 		if strings.TrimSpace(body.Content) == "" {
 			WriteBadRequest(w, "INVALID_JSON", "content is required for research.result")
+			return
+		}
+	}
+	// For ontology, content is required (JSON with entity final state)
+	if k == "ontology" {
+		if strings.TrimSpace(body.Content) == "" {
+			WriteBadRequest(w, "INVALID_JSON", "content is required for ontology interactions")
+			return
+		}
+		// Validate that content is valid JSON
+		var testJSON interface{}
+		if err := json.Unmarshal([]byte(body.Content), &testJSON); err != nil {
+			WriteBadRequest(w, "INVALID_JSON", "ontology content must be valid JSON")
 			return
 		}
 	}
@@ -1104,6 +1120,8 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		SubQueries:       body.SubQueries,
 		ResearchSources:  body.ResearchSources,
 		SectionID:        sectionPtr,
+		// Ontology-specific fields
+		OntologyEntityID: body.OntologyEntityID,
 	})
 	if err != nil {
 		WriteInternalError(w, "Failed to create interaction")
@@ -1218,6 +1236,7 @@ func (h *DiscoveryHandler) UpdateProjectInteraction(w http.ResponseWriter, r *ht
 		"agentProfile": {}, "evaluations": {}, "metadata": {}, "relations": {}, "language": {},
 		"systemInstructionApplied": {}, "generationParams": {}, "highRisk": {},
 		"originalMessageId": {}, "coreDocIds": {}, "searchQueries": {}, "sources": {},
+		"ontologyEntityId": {}, // For ontology interactions
 	}
 	updates := map[string]interface{}{}
 	for k, v := range payload {

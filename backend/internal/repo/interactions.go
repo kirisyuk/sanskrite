@@ -49,9 +49,12 @@ type Interaction struct {
 	ID               string  `json:"id" firestore:"id"`
 	TenantID         string  `json:"tenantId" firestore:"tenantId"`
 	ProjectID        string  `json:"projectId" firestore:"projectId"`
-	Kind             string  `json:"kind" firestore:"kind"` // e.g., "discovery.answer"
-	Subkind          *string `json:"subkind,omitempty" firestore:"subkind,omitempty"`
-	Content          string  `json:"content" firestore:"content"`
+	Kind             string  `json:"kind" firestore:"kind"` // e.g., "discovery.answer", "ontology"
+	Subkind          *string `json:"subkind,omitempty" firestore:"subkind,omitempty"` // For ontology: "entity", "event", "claim", "relation", "concept", "metricState", "trend", "causalLink", "scenario", "actionableItem"
+	Content          string  `json:"content" firestore:"content"` // For ontology: full entity JSON (final state, not operation)
+	// Ontology-specific: entity ID extracted from content.id for deduplication
+	// Interactions store final states only - no operation field needed
+	OntologyEntityID *string `json:"ontologyEntityId,omitempty" firestore:"ontologyEntityId,omitempty"` // Entity ID from content (for quick lookup/deduplication)
 	ContentSanitized *string `json:"contentSanitized,omitempty" firestore:"contentSanitized,omitempty"`
 	Summary          *string `json:"summary,omitempty" firestore:"summary,omitempty"`
 	// Sections: optional grouping of interactions inside Unfold chat

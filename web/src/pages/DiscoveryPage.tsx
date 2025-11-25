@@ -44,6 +44,7 @@ import { LLMEvaluation } from '../components/LLMEvaluation';
 import { DiscussionFlow } from '../components/DiscussionFlow';
 import { TextTasksPanel, TextTask } from '../components/TextTasksPanel';
 import { ExperimentalResponsePanel } from '../components/ExperimentalResponsePanel';
+import { ModelGraph, useModelGraphHasNodes } from '../components/ModelGraph';
 import {
   generateExperimentalResponse,
   ExperimentalResponse,
@@ -68,6 +69,7 @@ import {
   getSxSystemInstructionShort,
   getSxSystemInstructionFull,
 } from '../lib/uiUtils';
+import { getModelSystemPrompt } from '../lib/modelSystemPrompt';
 import { CollapsibleText } from '../components/CollapsibleText';
 import { 
   generateKeyInsights, 
@@ -213,17 +215,6 @@ const DiscoveryPage: React.FC = () => {
   } = useDiscoveryStore();
   const { viewMode } = useUIStore();
   
-  // Get random empty state message (selected once per language)
-  const emptyStateMessage = React.useMemo(() => {
-    const emptyMessages = t('unfold.perspectives.chatEmptyState.descriptions', {
-      returnObjects: true,
-    }) as string[];
-    if (Array.isArray(emptyMessages) && emptyMessages.length > 0) {
-      return emptyMessages[Math.floor(Math.random() * emptyMessages.length)];
-    }
-    return emptyMessages?.[0] || 'Ready to start a conversation?';
-  }, [i18n.language, t]);
-  
   const [queryText, setQueryText] = useState('');
   const [sideOpen, setSideOpen] = useState(false);
   const [running, setRunning] = useState(false);
@@ -232,6 +223,24 @@ const DiscoveryPage: React.FC = () => {
   const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives' | 'models' | 'pages'>(
     'chat',
   );
+  
+  // Check if Model graph has nodes (for empty state)
+  const modelGraphHasNodes = useModelGraphHasNodes();
+  
+  // Get random empty state message (selected once per language)
+  // Use modelEmptyState for Model tab, chatEmptyState for Discuss tab
+  const emptyStateMessage = React.useMemo(() => {
+    const key = unfoldSubView === 'models' 
+      ? 'unfold.perspectives.modelEmptyState.descriptions'
+      : 'unfold.perspectives.chatEmptyState.descriptions';
+    const emptyMessages = t(key, {
+      returnObjects: true,
+    }) as string[];
+    if (Array.isArray(emptyMessages) && emptyMessages.length > 0) {
+      return emptyMessages[Math.floor(Math.random() * emptyMessages.length)];
+    }
+    return emptyMessages?.[0] || (unfoldSubView === 'models' ? 'Ready to map some connections?' : 'Ready to start a conversation?');
+  }, [i18n.language, t, unfoldSubView]);
   const [currentPerspectivePreset, setCurrentPerspectivePreset] =
     useState<string>('consulting');
   const [isAnalysisClosed, setIsAnalysisClosed] = useState(false);
@@ -1467,7 +1476,24 @@ const DiscoveryPage: React.FC = () => {
                             color: 'var(--text-heading)',
                   }}
                 >
-                  {t('unfold.sections.chat')}
+                  Discuss
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={unfoldSubView === 'models'}
+                  aria-controls="unfold-models-panel"
+                  onClick={() => setUnfoldSubView('models')}
+                  className="px-2 py-1 text-12 rounded"
+                  style={{
+                            background:
+                              unfoldSubView === 'models'
+                                ? 'var(--white-10)'
+                                : 'transparent',
+                            color: 'var(--text-heading)',
+                  }}
+                >
+                  Model
                 </button>
                 <button
                   type="button"
@@ -1485,23 +1511,6 @@ const DiscoveryPage: React.FC = () => {
                   }}
                 >
                   {t('unfold.sections.perspectives')}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={unfoldSubView === 'models'}
-                  aria-controls="unfold-models-panel"
-                  onClick={() => setUnfoldSubView('models')}
-                  className="px-2 py-1 text-12 rounded"
-                  style={{
-                            background:
-                              unfoldSubView === 'models'
-                                ? 'var(--white-10)'
-                                : 'transparent',
-                            color: 'var(--text-heading)',
-                  }}
-                >
-                  Models
                 </button>
                 <button
                   type="button"
@@ -1528,16 +1537,43 @@ const DiscoveryPage: React.FC = () => {
                         onPresetChange={setCurrentPerspectivePreset}
                       />
             )}
-            {/* Models content (placeholder) */}
+            {/* Models content - React Graph */}
             {unfoldSubView === 'models' && (
-              <div className="flex-1 flex items-center justify-center">
-                <div
-                  className="text-13 text-center"
-                  style={{ color: 'var(--text-secondary-strong)' }}
-                >
-                  Models mode coming soon
-                </div>
-              </div>
+              <>
+                {!modelGraphHasNodes ? (
+                  // Empty state - показываем по центру, как в чате
+                  <div
+                    className="flex items-center justify-center"
+                    style={{
+                      height: '100%',
+                      minHeight: isMobile
+                        ? '200px'
+                        : 'calc(100vh - 300px)',
+                      padding: isMobile ? '24px 12px' : '48px 24px',
+                    }}
+                  >
+                    <div className="max-w-md text-center">
+                      <div
+                        className="text-16"
+                        style={{
+                          color: 'var(--text-heading)',
+                          lineHeight: '1.6',
+                          fontSize: 'clamp(18px, 2vw, 24px)',
+                          fontWeight: 500,
+                        }}
+                      >
+                        {emptyStateMessage}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col flex-1" style={{ minHeight: 0, display: 'flex' }}>
+                    <div className="flex-1" style={{ minHeight: 0, position: 'relative' }}>
+                      <ModelGraph />
+                    </div>
+                  </div>
+                )}
+              </>
             )}
             {/* Pages content */}
             {unfoldSubView === 'pages' && (
@@ -1558,7 +1594,7 @@ const DiscoveryPage: React.FC = () => {
                         contentVisibility: 'auto',
                         containIntrinsicSize: '800px 600px',
                         display:
-                          unfoldSubView === 'perspectives' || unfoldSubView === 'models' || unfoldSubView === 'pages' ? 'none' : undefined,
+                          unfoldSubView === 'perspectives' || unfoldSubView === 'pages' || unfoldSubView === 'models' ? 'none' : undefined,
                       }}
                     >
               {(() => {
@@ -1763,7 +1799,7 @@ const DiscoveryPage: React.FC = () => {
               genaiChatMessagesLength={genaiChatMessagesLength}
             />
             {/* Input */}
-            {unfoldSubView !== 'perspectives' && unfoldSubView !== 'models' && unfoldSubView !== 'pages' && (
+            {unfoldSubView !== 'perspectives' && unfoldSubView !== 'pages' && (
             <div ref={unfoldRequestRef}>
             <UnfoldRequest
               dangerTint={isHighRisk}
@@ -1852,6 +1888,13 @@ const DiscoveryPage: React.FC = () => {
                               getLanguageName(preferredLang);
                             const sxSystemInstruction =
                               getSxSystemInstructionFull();
+                            
+                            // Model mode system prompt (for ontological entity management)
+                            const modelSystemInstruction =
+                              unfoldSubView === 'models'
+                                ? getModelSystemPrompt(langNameForPrompt)
+                                : '';
+                            
                             const graphSystemInstruction =
                               unfoldMode === 'graph'
                                 ? `=== GRAPH MODE ACTIVE ===\n` +
@@ -1910,9 +1953,13 @@ const DiscoveryPage: React.FC = () => {
                     `Example for R&D investments USA vs EU:\n` +
                     `{"chartTitle":"R&D Investment Trends (% of GDP)","chartType":"line","table":[["","2013","2018","2023"],["USA",2.8,2.82,3.4],["EU",2.08,2.18,2.26]],"sources":["https://ec.europa.eu/eurostat/statistics-explained/index.php?title=R%26D_expenditure","https://data.worldbank.org/indicator/GB.XPD.RSDV.GD.ZS"]}`
                   : '';
+                // In Model mode, use Model system instruction (no other instructions)
                 // In graph mode, prioritize graph instruction by putting it first
+                // Otherwise, use standard instructions
                             const combinedSystemInstruction =
-                              unfoldMode === 'graph'
+                              unfoldSubView === 'models'
+                  ? modelSystemInstruction // Model mode: ONLY ontology instructions, no other prompts
+                  : unfoldMode === 'graph'
                   ? [
                       graphSystemInstruction,
                   genaiSettings.systemInstruction || '',
@@ -1941,6 +1988,8 @@ const DiscoveryPage: React.FC = () => {
                   temperature: genaiSettings.temperature,
                   maxOutputTokens: genaiSettings.maxOutputTokens,
                   systemInstruction: combinedSystemInstruction,
+                  // Model mode: disable streaming, use non-streaming API
+                  disableStreaming: unfoldSubView === 'models',
                 };
               // Capture previous assistant reply (if any) BEFORE starting stream
               const stBefore = useGenaiChatStore.getState();

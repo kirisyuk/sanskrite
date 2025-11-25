@@ -56,6 +56,7 @@ export function useAdvancedAutoScroll(
   const lastScrollStreamingState = useRef<boolean>(false);
   const lastProjectIdRef = useRef<string | null>(null);
   const lastUpdateTimestampRef = useRef<number>(0);
+  const lastUserInteractionIdRef = useRef<string | null>(null);
   
   const genaiChat = useGenaiChatStore();
   const genaiChatInteractionsLength = useGenaiChatStore(
@@ -79,6 +80,7 @@ export function useAdvancedAutoScroll(
       lastProjectIdRef.current = projectId;
       // Reset scroll position tracking for new project
       lastScrollInteractionLength.current = 0;
+      lastUserInteractionIdRef.current = null;
       setTimeout(() => {
         if (containerRef.current) {
           containerRef.current.scrollTop = containerRef.current.scrollHeight;
@@ -110,6 +112,19 @@ export function useAdvancedAutoScroll(
     }
   }, [hydrating, interactionsLength, containerRef]);
 
+  // Track last user interaction ID to scroll to it specifically
+  // Use a stable selector that returns only the ID to avoid infinite loops
+  const currentUserInteractionId = useGenaiChatStore((state) => {
+    const interactions = state.interactions;
+    // Find last user interaction by iterating backwards
+    for (let i = interactions.length - 1; i >= 0; i--) {
+      if ((interactions[i] as any)?.kind === 'user') {
+        return interactions[i]?.id || null;
+      }
+    }
+    return null;
+  });
+
   // Auto-scroll on new interactions or when streaming completes
   useEffect(() => {
     if (!containerRef.current) return;
@@ -119,12 +134,46 @@ export function useAdvancedAutoScroll(
 
     // Scroll when new interaction is added (length increased)
     if (currentLength > lastScrollInteractionLength.current) {
+      const isNewUserMessage = currentUserInteractionId && 
+        currentUserInteractionId !== lastUserInteractionIdRef.current;
+      
       lastScrollInteractionLength.current = currentLength;
-      requestAnimationFrame(() => {
-        if (containerRef.current) {
-          containerRef.current.scrollTop = containerRef.current.scrollHeight;
-        }
-      });
+      
+      // If this is a new user message, scroll to it specifically
+      if (isNewUserMessage && currentUserInteractionId) {
+        lastUserInteractionIdRef.current = currentUserInteractionId;
+        // Use double requestAnimationFrame + timeout to ensure DOM is fully updated
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              if (containerRef.current) {
+                // Try to find the user message element and scroll to it
+                const userMessageElement = containerRef.current.querySelector(
+                  `[data-interaction-id="${currentUserInteractionId}"]`
+                ) as HTMLElement | null;
+                
+                if (userMessageElement) {
+                  // Scroll to the user message element
+                  userMessageElement.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'center' 
+                  });
+                } else {
+                  // Fallback: scroll to bottom
+                  containerRef.current.scrollTop = containerRef.current.scrollHeight;
+                }
+              }
+            }, 100);
+          });
+        });
+      } else {
+        // For non-user messages, use standard scroll to bottom
+        requestAnimationFrame(() => {
+          if (containerRef.current) {
+            containerRef.current.scrollTop = containerRef.current.scrollHeight;
+          }
+        });
+      }
       return;
     }
 
@@ -145,7 +194,7 @@ export function useAdvancedAutoScroll(
     }
 
     lastScrollStreamingState.current = currentStreaming;
-  }, [interactionsLength, streaming, containerRef]);
+  }, [interactionsLength, streaming, containerRef, currentUserInteractionId]);
 
   // Auto-scroll during streaming when content updates (chunks arrive)
   useEffect(() => {
