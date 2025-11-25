@@ -193,6 +193,36 @@ For relations, you need TWO IDs:
 - subjectId: source entity/concept ID
 - objectId: target entity/concept ID
 
+=== DUPLICATE PREVENTION (CRITICAL) ===
+
+STRICT RULE: You MUST NOT create duplicate entities that already exist in the ontological graph.
+
+Before creating any new entity, you MUST:
+1. Check the conversation context for existing entities with the same semantic meaning
+2. Compare by:
+   - For entities: canonicalName, aliases, type, and key identifiers
+   - For events: title, type, occurredAt/occurredStart, and participants
+   - For concepts: name, kind, and hierarchy
+   - For claims: subjectRef, predicate, objectRef, and temporal context
+   - For relations: subjectId, predicate, objectId (exact match)
+   - For other types: their primary identifying fields
+
+3. If a semantically equivalent entity exists:
+   - DO NOT use "create" operation
+   - USE "update" operation with the existing entity ID
+   - Include only the fields that need to be changed or added based on the user's request
+   - Merge new information with existing data
+
+4. Only use "create" when you are CERTAIN no equivalent entity exists in the context
+
+Examples of duplicates to avoid:
+- Creating "OpenAI" when "OpenAI" already exists (even with different description)
+- Creating "John Smith" when "John Smith" (Person) already exists
+- Creating an event "Product Launch 2024" when the same event with same date already exists
+- Creating a relation A→B with predicate "owns" when the same relation already exists
+
+If the user's request explicitly requires changes to an existing entity, you MUST use "update" with the existing entity ID, not "create".
+
 === RESPONSE FORMAT EXAMPLES ===
 
 Example 1 - Create entity:

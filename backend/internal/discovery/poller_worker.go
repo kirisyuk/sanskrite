@@ -35,10 +35,16 @@ func (w *SourcePoller) PublishDue(ctx context.Context) error {
 	}
 	now := time.Now()
 	for _, ds := range list {
+		// Global pause/completed status - skip
 		if ds.Status != "active" {
 			continue
 		}
 		if ds.NextPollAt != nil && now.Before(*ds.NextPollAt) {
+			continue
+		}
+		// Check if source has at least one active project
+		if !w.hasActiveProjects(ctx, ds.TenantID, ds.ID) {
+			w.logger.Printf("source poller: skipping source %s - no active projects", ds.ID)
 			continue
 		}
 		payload := map[string]any{"tenantId": ds.TenantID, "sourceId": ds.ID, "kind": ds.Kind}
@@ -75,8 +81,14 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 			m.Ack()
 			return
 		}
-		// Skip paused/completed
+		// Skip paused/completed - global status from core_datasources
 		if ds.Status == "paused" || ds.Status == "completed" {
+			m.Ack()
+			return
+		}
+		// Check if source has at least one active project in rag_source_projects
+		if !w.hasActiveProjects(ctx, payload.TenantID, payload.SourceID) {
+			w.logger.Printf("source poller: skipping source %s - no active projects", payload.SourceID)
 			m.Ack()
 			return
 		}
@@ -135,6 +147,22 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 		_ = dsRepo.Upsert(ctx, ds)
 		m.Ack()
 	})
+}
+
+// hasActiveProjects checks if the source has at least one active project in rag_source_projects
+func (w *SourcePoller) hasActiveProjects(ctx context.Context, tenantID, sourceID string) bool {
+	if w.orchestrator == nil || w.orchestrator.sproj == nil {
+		// If SourceProjectsRepository is not available, allow processing for backward compatibility
+		return true
+	}
+	activeStatus := "active"
+	links, err := w.orchestrator.sproj.ListBySource(ctx, tenantID, sourceID, &activeStatus)
+	if err != nil {
+		w.logger.Printf("source poller: failed to check active projects for source %s: %v", sourceID, err)
+		// On error, allow processing to avoid blocking (fail-open)
+		return true
+	}
+	return len(links) > 0
 }
 
 // cadenceToDuration maps publishingCadence string (if available via profile) to a polling interval.
