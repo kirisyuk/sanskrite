@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -16,6 +16,12 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { ThemeContext } from './ThemeProvider';
+import { nodeTypes } from './ModelGraphNodeTypes';
+
+// Создаем стабильную ссылку на nodeTypes на уровне модуля
+// Это гарантирует, что объект создается только один раз при загрузке модуля
+// Object.freeze предотвращает любые изменения объекта
+const STABLE_NODE_TYPES: NodeTypes = Object.freeze(nodeTypes);
 
 // Типы для онтологических сущностей (соответствуют subkind в interactions)
 type OntologyEntityType = 'entity' | 'event' | 'claim' | 'relation' | 'concept' | 'metricState' | 'trend' | 'causalLink' | 'scenario' | 'actionableItem';
@@ -73,73 +79,6 @@ const getEntityColor = (type: OntologyEntityType, theme: 'light' | 'dark'): stri
   return colors[type]?.[theme] || (theme === 'dark' ? '#60A5FA' : '#3B82F6');
 };
 
-// Кастомный узел для онтологических сущностей
-const OntologyNode: React.FC<{ data: OntologyNodeData }> = ({ data }) => {
-  const { theme } = React.useContext(ThemeContext);
-  const color = getEntityColor(data.type, theme);
-  const bgColor = theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)';
-  const textColor = theme === 'dark' ? 'var(--text-heading)' : 'var(--text-heading)';
-  const borderColor = color;
-
-  return (
-    <div
-      style={{
-        background: bgColor,
-        border: `2px solid ${borderColor}`,
-        borderRadius: '8px',
-        padding: '8px 12px',
-        minWidth: '120px',
-        boxShadow: theme === 'dark' 
-          ? `0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 1px ${borderColor}40`
-          : `0 2px 8px rgba(0, 0, 0, 0.1), 0 0 0 1px ${borderColor}40`,
-      }}
-    >
-      <div
-        style={{
-          fontSize: '10px',
-          fontWeight: 600,
-          color: borderColor,
-          textTransform: 'uppercase',
-          letterSpacing: '0.5px',
-          marginBottom: '4px',
-        }}
-      >
-        {data.type.charAt(0).toUpperCase() + data.type.slice(1).replace(/([A-Z])/g, ' $1').trim()}
-      </div>
-      <div
-        style={{
-          fontSize: '13px',
-          fontWeight: 500,
-          color: textColor,
-          lineHeight: '1.4',
-          wordBreak: 'break-word',
-        }}
-      >
-        {data.label || data.canonicalName || data.id}
-      </div>
-      {data.description && (
-        <div
-          style={{
-            fontSize: '11px',
-            color: 'var(--text-secondary)',
-            marginTop: '4px',
-            lineHeight: '1.3',
-            maxWidth: '200px',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {data.description}
-        </div>
-      )}
-    </div>
-  );
-};
-
-const nodeTypes: NodeTypes = {
-  ontology: OntologyNode,
-};
 
 // Hook для проверки наличия нод (используется в родительском компоненте для empty state)
 export const useModelGraphHasNodes = (): boolean => {
@@ -263,11 +202,21 @@ export const ModelGraph: React.FC = () => {
         // Обрабатываем связи в зависимости от типа сущности
         if (entityType === 'relation') {
           // Relation: subjectId -> objectId
-          if (entityData.subjectId && entityData.objectId && entityData.subjectId !== entityData.objectId) {
+          const subjectId = entityData.subjectId;
+          const objectId = entityData.objectId;
+          if (
+            subjectId &&
+            objectId &&
+            typeof subjectId === 'string' &&
+            typeof objectId === 'string' &&
+            subjectId !== 'undefined' &&
+            objectId !== 'undefined' &&
+            subjectId !== objectId
+          ) {
             edgesList.push({
               id: `${entityId}-relation-edge`,
-              source: entityData.subjectId,
-              target: entityData.objectId,
+              source: subjectId,
+              target: objectId,
               type: 'smoothstep',
               label: entityData.predicate || 'related',
               markerEnd: {
@@ -284,13 +233,29 @@ export const ModelGraph: React.FC = () => {
                 fontSize: '11px',
               },
             });
+          } else if (subjectId || objectId) {
+            console.warn('[ModelGraph] Invalid relation edge data', {
+              entityId,
+              subjectId,
+              objectId,
+              subjectIdType: typeof subjectId,
+              objectIdType: typeof objectId,
+            });
           }
         } else if (entityType === 'claim') {
           // Claim: subjectRef -> objectRef
           if (entityData.subjectRef?.id && entityData.objectRef) {
             const sourceId = entityData.subjectRef.id;
             const targetId = entityData.objectRef.id || (typeof entityData.objectRef.value === 'string' ? entityData.objectRef.value : null);
-            if (sourceId && targetId && sourceId !== targetId) {
+            if (
+              sourceId &&
+              targetId &&
+              typeof sourceId === 'string' &&
+              typeof targetId === 'string' &&
+              sourceId !== 'undefined' &&
+              targetId !== 'undefined' &&
+              sourceId !== targetId
+            ) {
               edgesList.push({
                 id: `${entityId}-claim-edge`,
                 source: sourceId,
@@ -311,6 +276,14 @@ export const ModelGraph: React.FC = () => {
                   fontSize: '11px',
                 },
               });
+            } else if (sourceId || targetId) {
+              console.warn('[ModelGraph] Invalid claim edge data', {
+                entityId,
+                sourceId,
+                targetId,
+                sourceIdType: typeof sourceId,
+                targetIdType: typeof targetId,
+              });
             }
           }
         } else if (entityType === 'causalLink') {
@@ -318,7 +291,15 @@ export const ModelGraph: React.FC = () => {
           if (entityData.causeRef?.id && entityData.effectRef?.id) {
             const sourceId = entityData.causeRef.id;
             const targetId = entityData.effectRef.id;
-            if (sourceId !== targetId) {
+            if (
+              sourceId &&
+              targetId &&
+              typeof sourceId === 'string' &&
+              typeof targetId === 'string' &&
+              sourceId !== 'undefined' &&
+              targetId !== 'undefined' &&
+              sourceId !== targetId
+            ) {
               edgesList.push({
                 id: `${entityId}-causal-edge`,
                 source: sourceId,
@@ -339,6 +320,14 @@ export const ModelGraph: React.FC = () => {
                   fontSize: '11px',
                 },
               });
+            } else if (sourceId || targetId) {
+              console.warn('[ModelGraph] Invalid causalLink edge data', {
+                entityId,
+                sourceId,
+                targetId,
+                sourceIdType: typeof sourceId,
+                targetIdType: typeof targetId,
+              });
             }
           }
         } else if (entityType === 'event') {
@@ -346,7 +335,12 @@ export const ModelGraph: React.FC = () => {
           if (entityData.participants && Array.isArray(entityData.participants)) {
             entityData.participants.forEach((participant: any, idx: number) => {
               const participantId = participant.entityId;
-              if (participantId && participantId !== entityId) {
+              if (
+                participantId &&
+                typeof participantId === 'string' &&
+                participantId !== 'undefined' &&
+                participantId !== entityId
+              ) {
                 edgesList.push({
                   id: `${participantId}-${entityId}-participant-${idx}`,
                   source: participantId,
@@ -367,15 +361,27 @@ export const ModelGraph: React.FC = () => {
                     fontSize: '11px',
                   },
                 });
+              } else if (participantId) {
+                console.warn('[ModelGraph] Invalid event participant edge data', {
+                  entityId,
+                  participantId,
+                  participantIdType: typeof participantId,
+                });
               }
             });
           }
         } else if (entityType === 'metricState') {
           // MetricState: subjectRef -> metricState
-          if (entityData.subjectRef?.id && entityData.subjectRef.id !== entityId) {
+          const subjectRefId = entityData.subjectRef?.id;
+          if (
+            subjectRefId &&
+            typeof subjectRefId === 'string' &&
+            subjectRefId !== 'undefined' &&
+            subjectRefId !== entityId
+          ) {
             edgesList.push({
-              id: `${entityData.subjectRef.id}-${entityId}-metric`,
-              source: entityData.subjectRef.id,
+              id: `${subjectRefId}-${entityId}-metric`,
+              source: subjectRefId,
               target: entityId,
               type: 'smoothstep',
               label: entityData.metricName || 'metric',
@@ -393,12 +399,23 @@ export const ModelGraph: React.FC = () => {
                 fontSize: '11px',
               },
             });
+          } else if (subjectRefId) {
+            console.warn('[ModelGraph] Invalid metricState edge data', {
+              entityId,
+              subjectRefId,
+              subjectRefIdType: typeof subjectRefId,
+            });
           }
         } else if (entityType === 'trend') {
           // Trend: subjectRef -> trend
           if (entityData.focus?.subjectScope?.ids && Array.isArray(entityData.focus.subjectScope.ids)) {
             entityData.focus.subjectScope.ids.forEach((subjectId: string, idx: number) => {
-              if (subjectId !== entityId) {
+              if (
+                subjectId &&
+                typeof subjectId === 'string' &&
+                subjectId !== 'undefined' &&
+                subjectId !== entityId
+              ) {
                 edgesList.push({
                   id: `${subjectId}-${entityId}-trend-${idx}`,
                   source: subjectId,
@@ -419,6 +436,12 @@ export const ModelGraph: React.FC = () => {
                     fontSize: '11px',
                   },
                 });
+              } else if (subjectId) {
+                console.warn('[ModelGraph] Invalid trend edge data', {
+                  entityId,
+                  subjectId,
+                  subjectIdType: typeof subjectId,
+                });
               }
             });
           }
@@ -427,7 +450,12 @@ export const ModelGraph: React.FC = () => {
           if (entityData.impacts && Array.isArray(entityData.impacts)) {
             entityData.impacts.forEach((impact: any, idx: number) => {
               const targetId = impact.targetRef?.id;
-              if (targetId && targetId !== entityId) {
+              if (
+                targetId &&
+                typeof targetId === 'string' &&
+                targetId !== 'undefined' &&
+                targetId !== entityId
+              ) {
                 edgesList.push({
                   id: `${entityId}-${targetId}-scenario-impact-${idx}`,
                   source: entityId,
@@ -448,15 +476,27 @@ export const ModelGraph: React.FC = () => {
                     fontSize: '11px',
                   },
                 });
+              } else if (targetId) {
+                console.warn('[ModelGraph] Invalid scenario edge data', {
+                  entityId,
+                  targetId,
+                  targetIdType: typeof targetId,
+                });
               }
             });
           }
         } else if (entityType === 'actionableItem') {
           // ActionableItem: assignedTo, relatedEntityIds
-          if (entityData.assignedTo && entityData.assignedTo !== entityId) {
+          const assignedTo = entityData.assignedTo;
+          if (
+            assignedTo &&
+            typeof assignedTo === 'string' &&
+            assignedTo !== 'undefined' &&
+            assignedTo !== entityId
+          ) {
             edgesList.push({
-              id: `${entityData.assignedTo}-${entityId}-assigned`,
-              source: entityData.assignedTo,
+              id: `${assignedTo}-${entityId}-assigned`,
+              source: assignedTo,
               target: entityId,
               type: 'smoothstep',
               label: 'assigned to',
@@ -474,10 +514,21 @@ export const ModelGraph: React.FC = () => {
                 fontSize: '11px',
               },
             });
+          } else if (assignedTo) {
+            console.warn('[ModelGraph] Invalid actionableItem assignedTo edge data', {
+              entityId,
+              assignedTo,
+              assignedToType: typeof assignedTo,
+            });
           }
           if (entityData.relatedEntityIds && Array.isArray(entityData.relatedEntityIds)) {
             entityData.relatedEntityIds.forEach((relatedId: string, idx: number) => {
-              if (relatedId !== entityId) {
+              if (
+                relatedId &&
+                typeof relatedId === 'string' &&
+                relatedId !== 'undefined' &&
+                relatedId !== entityId
+              ) {
                 edgesList.push({
                   id: `${entityId}-${relatedId}-related-${idx}`,
                   source: entityId,
@@ -498,6 +549,12 @@ export const ModelGraph: React.FC = () => {
                     fontSize: '11px',
                   },
                 });
+              } else if (relatedId) {
+                console.warn('[ModelGraph] Invalid actionableItem relatedEntityIds edge data', {
+                  entityId,
+                  relatedId,
+                  relatedIdType: typeof relatedId,
+                });
               }
             });
           }
@@ -508,9 +565,34 @@ export const ModelGraph: React.FC = () => {
     });
 
     // Преобразуем Map в массив нод (берем только node, без createdAt)
+    const finalNodes = Array.from(nodesMap.values()).map((item) => item.node);
+    const nodeIds = new Set(finalNodes.map((n) => n.id));
+
+    // Фильтруем рёбра: оставляем только те, где и source, и target существуют в nodesMap
+    const validEdges = edgesList.filter((edge) => {
+      const sourceExists = nodeIds.has(edge.source);
+      const targetExists = nodeIds.has(edge.target);
+      
+      if (!sourceExists || !targetExists) {
+        console.warn(
+          '[ModelGraph] Skipping edge with missing node(s)',
+          {
+            edgeId: edge.id,
+            source: edge.source,
+            sourceExists,
+            target: edge.target,
+            targetExists,
+          }
+        );
+        return false;
+      }
+      
+      return true;
+    });
+
     return {
-      nodes: Array.from(nodesMap.values()).map((item) => item.node),
-      edges: edgesList,
+      nodes: finalNodes,
+      edges: validEdges,
     };
   }, [ontologyInteractions, theme]);
 
@@ -529,7 +611,7 @@ export const ModelGraph: React.FC = () => {
     },
     [setEdges]
   );
-
+  
   // Цвета для фона графа
   const bgColor = theme === 'dark' ? 'var(--bg-body)' : 'var(--bg-body)';
   const bgPatternColor = theme === 'dark' ? 'var(--overlay-line-90)' : 'var(--overlay-line-90)';
@@ -547,7 +629,7 @@ export const ModelGraph: React.FC = () => {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
-        nodeTypes={nodeTypes}
+        nodeTypes={STABLE_NODE_TYPES}
         fitView
         style={{ background: bgColor, width: '100%', height: '100%' }}
         minZoom={0.1}

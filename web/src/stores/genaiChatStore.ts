@@ -1212,7 +1212,15 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       // also record local interaction for user unless suppressed
       interactions: [
         ...s.interactions,
-        ...(suppressUserEcho ? [] : [{ id: now + '-iu', projectId, kind: 'user' as InteractionKind, content: prompt, createdAt, originalMessageId: now + '-u' } as LocalInteraction]),
+        ...(suppressUserEcho ? [] : [{ 
+          id: now + '-iu', 
+          projectId, 
+          kind: 'user' as InteractionKind, 
+          subkind: agentMeta?.subkind, // Сохраняем subkind из agentMeta для фильтрации по вкладкам
+          content: prompt, 
+          createdAt, 
+          originalMessageId: now + '-u' 
+        } as LocalInteraction]),
       ],
     }) as any;});
     
@@ -2622,7 +2630,44 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           // Model mode: parse and process ontology commands
           if (disableStreaming) {
             try {
+              console.log('[Chat] Model mode: parsing ontology commands', { 
+                contentLength: content.length, 
+                contentPreview: content.substring(0, 200),
+                contentEnd: content.substring(Math.max(0, content.length - 200)),
+                usage: usage ? { 
+                  outputTokens: usage.outputTokens, 
+                  totalTokens: usage.totalTokens,
+                  maxOutputTokens: options?.maxOutputTokens 
+                } : null
+              });
+              
+              // Check if response might be truncated (ends abruptly in JSON)
+              const trimmedContent = content.trim();
+              const mightBeTruncated = (
+                trimmedContent.length > 0 &&
+                !trimmedContent.endsWith('}') &&
+                !trimmedContent.endsWith(']') &&
+                (trimmedContent.includes('"commands"') || trimmedContent.includes('"operation"'))
+              );
+              
+              if (mightBeTruncated) {
+                console.warn('[Chat] Model mode: Response might be truncated!', {
+                  contentLength: content.length,
+                  endsWith: trimmedContent.substring(Math.max(0, trimmedContent.length - 50)),
+                  usage,
+                  maxOutputTokens: options?.maxOutputTokens
+                });
+                // Show warning to user
+                set((s) => ({
+                  error: `Response was truncated. Some ontology commands may be missing. Consider increasing maxOutputTokens (current: ${options?.maxOutputTokens || 'default'}).`,
+                }));
+              }
+              
               const commands = parseOntologyCommands(content);
+              console.log('[Chat] Model mode: parsed commands', { 
+                commandsCount: commands.length,
+                commands: commands.map(c => ({ operation: c.operation, type: c.type, id: c.id }))
+              });
               if (commands.length > 0) {
                 // Process commands and create/update/delete ontology interactions
                 await processOntologyCommands(commands, projectId);

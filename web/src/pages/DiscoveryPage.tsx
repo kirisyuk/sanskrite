@@ -324,7 +324,8 @@ const DiscoveryPage: React.FC = () => {
   // PERFORMANCE FIX: Subscribe only to specific values for critical paths, keep genaiChat for compatibility
   const genaiChat = useGenaiChatStore();
   const genaiChatProjectId = useGenaiChatStore((state) => state.projectId);
-  const mergedMessages = useMergedMessages();
+  // Исключаем сообщения из Model вкладки, когда мы в Discuss вкладке
+  const mergedMessages = useMergedMessages(unfoldSubView === 'chat');
   
   const genaiChatInteractionsLength = useGenaiChatStore(
     (state) => state.interactions.length,
@@ -1986,7 +1987,11 @@ const DiscoveryPage: React.FC = () => {
                   groundingEnabled: genaiSettings.groundingEnabled,
                   researchEnabled: genaiSettings.researchEnabled,
                   temperature: genaiSettings.temperature,
-                  maxOutputTokens: genaiSettings.maxOutputTokens,
+                  // Model mode needs more tokens for large ontology command sets
+                  // Increase to 32768 (32k) for Model mode, use default for other modes
+                  maxOutputTokens: unfoldSubView === 'models' 
+                    ? Math.max(genaiSettings.maxOutputTokens || 8192, 32768)
+                    : genaiSettings.maxOutputTokens,
                   systemInstruction: combinedSystemInstruction,
                   // Model mode: disable streaming, use non-streaming API
                   disableStreaming: unfoldSubView === 'models',
@@ -2020,7 +2025,18 @@ const DiscoveryPage: React.FC = () => {
                             await genaiChat.startStream({
                               prompt,
                               tools,
-                              options: { ...options, __lang: preferredLang },
+                              options: { 
+                                ...options, 
+                                __lang: preferredLang,
+                                // Добавляем метаданные о вкладке, из которой было отправлено сообщение
+                                __sourceView: unfoldSubView,
+                              },
+                              agentMeta: unfoldSubView === 'models' 
+                                ? { 
+                                    displayName: 'Model',
+                                    subkind: 'model.chat',
+                                  }
+                                : undefined,
                             });
               // Fire-and-forget: structured bias evaluation for the USER message we just sent
               try {

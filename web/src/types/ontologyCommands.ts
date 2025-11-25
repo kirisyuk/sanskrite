@@ -41,10 +41,16 @@ export function parseOntologyCommands(responseText: string): OntologyCommand[] {
     // Пытаемся найти JSON в тексте (может быть обернут в markdown code fence)
     let jsonText = responseText.trim();
     
-    // Убираем markdown code fences если есть
-    const jsonMatch = jsonText.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
-    if (jsonMatch) {
-      jsonText = jsonMatch[1];
+    // Убираем markdown code fences если есть (поддерживаем разные форматы)
+    // Формат: ```json\n{...}\n``` или ```\n{...}\n```
+    jsonText = jsonText.replace(/^```(?:json)?\s*\n?/m, ''); // Убираем начало code fence
+    jsonText = jsonText.replace(/\n?```\s*$/m, ''); // Убираем конец code fence
+    jsonText = jsonText.trim();
+    
+    // Также пытаемся найти JSON объект внутри текста (если есть лишний текст)
+    const jsonObjectMatch = jsonText.match(/\{[\s\S]*\}/);
+    if (jsonObjectMatch) {
+      jsonText = jsonObjectMatch[0];
     }
     
     // Парсим JSON
@@ -65,6 +71,30 @@ export function parseOntologyCommands(responseText: string): OntologyCommand[] {
     return [];
   } catch (err) {
     console.warn('[parseOntologyCommands] Failed to parse commands', err);
+    console.warn('[parseOntologyCommands] Response text:', responseText.substring(0, 500));
+    // Попробуем более агрессивную очистку markdown
+    try {
+      let cleaned = responseText.trim();
+      // Убираем все возможные варианты markdown code fences
+      cleaned = cleaned.replace(/^```[a-z]*\s*\n?/gim, '');
+      cleaned = cleaned.replace(/\n?```\s*$/gim, '');
+      cleaned = cleaned.trim();
+      
+      // Ищем JSON объект или массив
+      const jsonMatch = cleaned.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.commands && Array.isArray(parsed.commands)) {
+          return parsed.commands.filter(validateOntologyCommand);
+        } else if (Array.isArray(parsed)) {
+          return parsed.filter(validateOntologyCommand);
+        } else if (validateOntologyCommand(parsed)) {
+          return [parsed];
+        }
+      }
+    } catch (retryErr) {
+      console.warn('[parseOntologyCommands] Retry parsing also failed', retryErr);
+    }
     return [];
   }
 }

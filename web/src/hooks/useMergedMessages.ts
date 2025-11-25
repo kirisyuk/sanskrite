@@ -9,8 +9,9 @@ export type MergedItem = {
 
 /**
  * Хук для подготовки объединенного списка сообщений и взаимодействий
+ * @param excludeModelChat - если true, исключает interactions из Model вкладки (subkind='model.chat' или kind='ontology')
  */
-export function useMergedMessages() {
+export function useMergedMessages(excludeModelChat: boolean = false) {
   // Subscribe to lengths to trigger recalculation only when needed
   const interactionsLength = useGenaiChatStore((state) => state.interactions.length);
   const messagesLength = useGenaiChatStore((state) => state.messages.length);
@@ -24,6 +25,18 @@ export function useMergedMessages() {
 
   return useMemo(() => {
     const { interactions, messages: stateMessages } = getState();
+    
+    // Debug logging for Model chat filtering
+    if (excludeModelChat) {
+      const modelChatInteractions = interactions.filter(it => it.subkind === 'model.chat' || it.kind === 'ontology');
+      if (modelChatInteractions.length > 0) {
+        console.log('[useMergedMessages] Found Model chat interactions to exclude', {
+          excludeModelChat,
+          modelChatCount: modelChatInteractions.length,
+          interactions: modelChatInteractions.map(it => ({ id: it.id, kind: it.kind, subkind: it.subkind }))
+        });
+      }
+    }
     const merged: MergedItem[] = [];
 
     // Add interactions first (user, assistant, and section markers)
@@ -59,6 +72,95 @@ export function useMergedMessages() {
         // Exclude document attachments (they are context, not chat content)
         if (it.subkind === 'document.attach') {
           return false;
+        }
+        // Exclude Model chat interactions when in Discuss view
+        if (excludeModelChat) {
+          // TEMPORARY: Exclude only user interactions with subkind='model.chat' (created from Model tab)
+          // Assistant messages from Model should be visible in Discuss chat
+          if (it.subkind === 'model.chat' && it.kind === 'user') {
+            console.log('[useMergedMessages] Excluding Model chat user interaction', { id: it.id, kind: it.kind, subkind: it.subkind });
+            return false;
+          }
+          // Exclude ontology interactions (they belong to Model view)
+          if (it.kind === 'ontology') {
+            console.log('[useMergedMessages] Excluding ontology interaction', { id: it.id, kind: it.kind, subkind: it.subkind });
+            return false;
+          }
+          // Exclude user interactions that are likely from Model mode
+          if (it.kind === 'user' && !it.subkind) {
+            // Find the first ontology interaction in the project
+            const ontologyInteractions = interactions.filter((other) => other.kind === 'ontology');
+            if (ontologyInteractions.length > 0) {
+              // Get the earliest ontology interaction time
+              const firstOntologyTime = Math.min(
+                ...ontologyInteractions.map((other) => {
+                  try {
+                    const ca: any = other.createdAt;
+                    if (ca && typeof ca.seconds === 'number') {
+                      return ca.seconds * 1000;
+                    } else if (typeof ca === 'string') {
+                      return Date.parse(ca) || 0;
+                    } else if (typeof ca === 'number') {
+                      return ca;
+                    }
+                  } catch {}
+                  return 0;
+                }).filter(t => t > 0)
+              );
+              
+              // Get user interaction time
+              const userTime = (() => {
+                try {
+                  const ca: any = it.createdAt;
+                  if (ca && typeof ca.seconds === 'number') {
+                    return ca.seconds * 1000;
+                  } else if (typeof ca === 'string') {
+                    return Date.parse(ca) || 0;
+                  } else if (typeof ca === 'number') {
+                    return ca;
+                  }
+                } catch {}
+                return 0;
+              })();
+              
+              // Exclude if user interaction was created after first ontology interaction
+              // OR if it's followed by ontology interactions within 10 seconds
+              if (userTime > 0 && firstOntologyTime > 0 && userTime >= firstOntologyTime) {
+                console.log('[useMergedMessages] Excluding user interaction created after ontology interactions', { 
+                  id: it.id, 
+                  kind: it.kind, 
+                  subkind: it.subkind,
+                  userTime,
+                  firstOntologyTime
+                });
+                return false;
+              }
+              
+              // Also check if it's followed by ontology interactions (more precise check)
+              const hasFollowingOntology = ontologyInteractions.some((other) => {
+                const otherTime = (() => {
+                  try {
+                    const ca: any = other.createdAt;
+                    if (ca && typeof ca.seconds === 'number') {
+                      return ca.seconds * 1000;
+                    } else if (typeof ca === 'string') {
+                      return Date.parse(ca) || 0;
+                    } else if (typeof ca === 'number') {
+                      return ca;
+                    }
+                  } catch {}
+                  return 0;
+                })();
+                // Consider it related if created within 10 seconds after user message
+                return userTime > 0 && otherTime > userTime && otherTime - userTime < 10000;
+              });
+              
+              if (hasFollowingOntology) {
+                console.log('[useMergedMessages] Excluding user interaction followed by ontology', { id: it.id, kind: it.kind, subkind: it.subkind });
+                return false;
+              }
+            }
+          }
         }
         // Include error interactions (subkind === 'error') - they should be displayed in chat
         if (it.kind === 'assistant' && it.subkind === 'error') {
@@ -157,6 +259,7 @@ export function useMergedMessages() {
     messagesLength,
     streaming,
     lastUpdate, // Include lastUpdate to trigger recalculation when interactions are updated
+    excludeModelChat, // Include excludeModelChat to trigger recalculation when filter changes
   ]);
 }
 

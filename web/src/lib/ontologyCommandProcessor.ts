@@ -20,10 +20,9 @@ export async function processOntologyCommands(
   projectId: string
 ): Promise<string[]> {
   const createdInteractionIds: string[] = [];
-  const genaiChatStore = useGenaiChatStore.getState();
   
   // Получаем текущие interactions для поиска существующих сущностей
-  const currentInteractions = genaiChatStore.interactions.filter(
+  const currentInteractions = useGenaiChatStore.getState().interactions.filter(
     (it) => it.kind === 'ontology'
   );
   
@@ -78,7 +77,7 @@ export async function processOntologyCommands(
         createdInteractionIds.push(interaction.id);
         
         // Обновляем локальное состояние
-        genaiChatStore.setState((s) => ({
+        useGenaiChatStore.setState((s) => ({
           interactions: [
             ...s.interactions,
             {
@@ -127,7 +126,7 @@ export async function processOntologyCommands(
         createdInteractionIds.push(existingInteraction.id);
         
         // Обновляем локальное состояние
-        genaiChatStore.setState((s) => ({
+        useGenaiChatStore.setState((s) => ({
           interactions: s.interactions.map((it) =>
             it.id === existingInteraction.id
               ? {
@@ -164,7 +163,7 @@ export async function processOntologyCommands(
           });
           
           // Обновляем локальное состояние
-          genaiChatStore.setState((s) => ({
+          useGenaiChatStore.setState((s) => ({
             interactions: s.interactions.map((it) =>
               it.id === existingInteraction.id
                 ? {
@@ -179,7 +178,7 @@ export async function processOntologyCommands(
           await api.deleteProjectInteraction(projectId, existingInteraction.id);
           
           // Удаляем из локального состояния
-          genaiChatStore.setState((s) => ({
+          useGenaiChatStore.setState((s) => ({
             interactions: s.interactions.filter((it) => it.id !== existingInteraction.id),
           }));
         }

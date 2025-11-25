@@ -1088,6 +1088,11 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		}
 	}
 
+	// Log subkind for debugging Model mode filtering
+	if body.Subkind != nil {
+		h.logger.Printf("CreateProjectInteraction: creating %s interaction with subkind=%s", k, *body.Subkind)
+	}
+	
 	id, err := h.interactionsRepo.Create(r.Context(), &repo.Interaction{
 		TenantID:                 authInfo.TenantID,
 		ProjectID:                projectID,
