@@ -12,6 +12,7 @@ import ReactFlow, {
   NodeTypes,
   EdgeTypes,
   MarkerType,
+  ReactFlowInstance,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
@@ -89,17 +90,41 @@ export const useModelGraphHasNodes = (): boolean => {
       return it.kind === 'ontology';
     });
     
+    console.log('[useModelGraphHasNodes] Checking for nodes:', {
+      totalInteractions: interactions.length,
+      ontologyInteractions: ontologyInteractions.length,
+      interactions: ontologyInteractions.map(it => ({
+        id: it.id,
+        subkind: it.subkind,
+        hasContent: !!it.content,
+        contentPreview: it.content?.substring(0, 100),
+      })),
+    });
+    
     // Проверяем, есть ли хотя бы одна interaction с валидными данными
     // Исключаем удаленные сущности (status='deleted')
-    return ontologyInteractions.some((it) => {
-      if (!it.content) return false;
+    const hasNodes = ontologyInteractions.some((it) => {
+      if (!it.content) {
+        console.log('[useModelGraphHasNodes] Interaction without content:', it.id);
+        return false;
+      }
       try {
         const entityData = JSON.parse(it.content);
-        return entityData.status !== 'deleted' && entityData.status !== 'archived';
-      } catch {
+        const isValid = entityData.status !== 'deleted' && entityData.status !== 'archived';
+        console.log('[useModelGraphHasNodes] Interaction check:', {
+          id: it.id,
+          status: entityData.status,
+          isValid,
+        });
+        return isValid;
+      } catch (err) {
+        console.warn('[useModelGraphHasNodes] Failed to parse interaction:', it.id, err);
         return false;
       }
     });
+    
+    console.log('[useModelGraphHasNodes] Result:', hasNodes);
+    return hasNodes;
   }, [interactions]);
 };
 
@@ -107,13 +132,25 @@ export const ModelGraph: React.FC = () => {
   const { theme } = React.useContext(ThemeContext);
   const interactions = useGenaiChatStore((s) => s.interactions);
   const projectId = useGenaiChatStore((s) => s.projectId);
+  const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
 
   // Фильтруем interactions для онтологических сущностей
   // Используем kind='ontology' с subkind для типа сущности
   const ontologyInteractions = useMemo(() => {
-    return interactions.filter((it) => {
+    const filtered = interactions.filter((it) => {
       return it.kind === 'ontology';
     });
+    console.log('[ModelGraph] Ontology interactions:', {
+      total: interactions.length,
+      ontology: filtered.length,
+      interactions: filtered.map(it => ({
+        id: it.id,
+        subkind: it.subkind,
+        hasContent: !!it.content,
+        contentLength: it.content?.length || 0,
+      })),
+    });
+    return filtered;
   }, [interactions]);
 
   // Преобразуем interactions в ноды и связи для ReactFlow
@@ -148,10 +185,28 @@ export const ModelGraph: React.FC = () => {
           return;
         }
 
-        // Проверяем статус - пропускаем удаленные сущности
+        // Используем ID сущности из данных (финальное состояние)
+        const entityId = entityData.id || interaction.ontologyEntityId || interaction.id;
+        if (!entityId) {
+          console.warn('[ModelGraph] No entity ID found', interaction.id);
+          return;
+        }
+
+        // Нормализуем тип сущности из subkind или entityData.type
+        const entityType = normalizeEntityType(interaction.subkind, entityData);
+        
+        // Relations не создаются как ноды - они только создают рёбра между существующими нодами
+        // НО: мы не можем создать edge здесь, потому что ноды могут быть созданы позже
+        // Поэтому мы сохраняем relation для обработки после создания всех нод
+        if (entityType === 'relation') {
+          // Пропускаем создание ноды для relation - они только создают рёбра
+          // Edge будет создан позже, после того как все ноды будут созданы
+          return;
+        }
+        
+        // Проверяем статус - пропускаем удаленные сущности (только для нод, не для relations)
         if (entityData.status === 'deleted' || entityData.status === 'archived') {
           // Удаляем ноду, если она существует
-          const entityId = entityData.id || interaction.ontologyEntityId || interaction.id;
           nodesMap.delete(entityId);
           // Удаляем связанные edges
           const edgesToRemove: number[] = [];
@@ -164,15 +219,6 @@ export const ModelGraph: React.FC = () => {
           return;
         }
 
-        // Используем ID сущности из данных (финальное состояние)
-        const entityId = entityData.id || interaction.ontologyEntityId || interaction.id;
-        if (!entityId) {
-          console.warn('[ModelGraph] No entity ID found', interaction.id);
-          return;
-        }
-
-        // Нормализуем тип сущности из subkind или entityData.type
-        const entityType = normalizeEntityType(interaction.subkind, entityData);
         const label = entityData.canonicalName || entityData.name || entityData.title || entityData.label || entityId;
 
         // Создаем или обновляем ноду (последнее состояние перезапишет предыдущее)
@@ -199,50 +245,8 @@ export const ModelGraph: React.FC = () => {
           createdAt: interaction.createdAt || new Date().toISOString(),
         });
 
-        // Обрабатываем связи в зависимости от типа сущности
-        if (entityType === 'relation') {
-          // Relation: subjectId -> objectId
-          const subjectId = entityData.subjectId;
-          const objectId = entityData.objectId;
-          if (
-            subjectId &&
-            objectId &&
-            typeof subjectId === 'string' &&
-            typeof objectId === 'string' &&
-            subjectId !== 'undefined' &&
-            objectId !== 'undefined' &&
-            subjectId !== objectId
-          ) {
-            edgesList.push({
-              id: `${entityId}-relation-edge`,
-              source: subjectId,
-              target: objectId,
-              type: 'smoothstep',
-              label: entityData.predicate || 'related',
-              markerEnd: {
-                type: MarkerType.ArrowClosed,
-                width: 20,
-                height: 20,
-              },
-              style: {
-                stroke: theme === 'dark' ? 'var(--text-secondary)' : 'var(--text-secondary)',
-                strokeWidth: 1.5,
-              },
-              labelStyle: {
-                fill: theme === 'dark' ? 'var(--text-secondary-strong)' : 'var(--text-secondary-strong)',
-                fontSize: '11px',
-              },
-            });
-          } else if (subjectId || objectId) {
-            console.warn('[ModelGraph] Invalid relation edge data', {
-              entityId,
-              subjectId,
-              objectId,
-              subjectIdType: typeof subjectId,
-              objectIdType: typeof objectId,
-            });
-          }
-        } else if (entityType === 'claim') {
+        // Обрабатываем связи в зависимости от типа сущности (кроме relation - они уже обработаны выше)
+        if (entityType === 'claim') {
           // Claim: subjectRef -> objectRef
           if (entityData.subjectRef?.id && entityData.objectRef) {
             const sourceId = entityData.subjectRef.id;
@@ -568,6 +572,94 @@ export const ModelGraph: React.FC = () => {
     const finalNodes = Array.from(nodesMap.values()).map((item) => item.node);
     const nodeIds = new Set(finalNodes.map((n) => n.id));
 
+    // Теперь обрабатываем relations - создаем edges для них после того, как все ноды созданы
+    sortedInteractions.forEach((interaction) => {
+      try {
+        if (!interaction.content) return;
+        
+        let entityData: any = {};
+        try {
+          entityData = JSON.parse(interaction.content);
+        } catch {
+          return;
+        }
+        
+        // Пропускаем удаленные
+        if (entityData.status === 'deleted' || entityData.status === 'archived') {
+          return;
+        }
+        
+        const entityId = entityData.id || interaction.ontologyEntityId || interaction.id;
+        if (!entityId) return;
+        
+        const entityType = normalizeEntityType(interaction.subkind, entityData);
+        
+        // Обрабатываем relations - создаем edges
+        if (entityType === 'relation') {
+          const subjectId = entityData.subjectId;
+          const objectId = entityData.objectId;
+          
+          // Проверяем, что обе ноды существуют
+          if (
+            subjectId &&
+            objectId &&
+            typeof subjectId === 'string' &&
+            typeof objectId === 'string' &&
+            subjectId !== 'undefined' &&
+            objectId !== 'undefined' &&
+            subjectId !== objectId &&
+            nodeIds.has(subjectId) &&
+            nodeIds.has(objectId)
+          ) {
+            // Создаем edge с явным указанием handle ids
+            const edge = {
+              id: `${entityId}-relation-edge`,
+              source: subjectId,
+              target: objectId,
+              sourceHandle: 'source', // ID handle на source ноде
+              targetHandle: 'target', // ID handle на target ноде
+              type: 'smoothstep',
+              label: entityData.predicate || 'related',
+              markerEnd: {
+                type: MarkerType.ArrowClosed,
+                width: 20,
+                height: 20,
+              },
+              style: {
+                stroke: theme === 'dark' ? 'var(--text-secondary)' : 'var(--text-secondary)',
+                strokeWidth: 1.5,
+              },
+              labelStyle: {
+                fill: theme === 'dark' ? 'var(--text-secondary-strong)' : 'var(--text-secondary-strong)',
+                fontSize: '11px',
+              },
+            };
+            
+            edgesList.push(edge);
+            
+            console.log('[ModelGraph] Created relation edge', {
+              edgeId: edge.id,
+              source: subjectId,
+              target: objectId,
+              predicate: entityData.predicate,
+              sourceExists: nodeIds.has(subjectId),
+              targetExists: nodeIds.has(objectId),
+            });
+          } else {
+            console.warn('[ModelGraph] Cannot create relation edge - missing nodes or invalid data', {
+              entityId,
+              subjectId,
+              objectId,
+              subjectExists: subjectId ? nodeIds.has(subjectId) : false,
+              objectExists: objectId ? nodeIds.has(objectId) : false,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[ModelGraph] Failed to process relation for edge creation', interaction.id, err);
+      }
+    });
+
     // Фильтруем рёбра: оставляем только те, где и source, и target существуют в nodesMap
     const validEdges = edgesList.filter((edge) => {
       const sourceExists = nodeIds.has(edge.source);
@@ -590,6 +682,21 @@ export const ModelGraph: React.FC = () => {
       return true;
     });
 
+    console.log('[ModelGraph] Processed graph data:', {
+      nodesCount: finalNodes.length,
+      edgesCount: validEdges.length,
+      edgesListCount: edgesList.length,
+      nodeIds: finalNodes.map(n => n.id),
+      edgeSources: validEdges.map(e => ({ 
+        id: e.id, 
+        source: e.source, 
+        target: e.target,
+        sourceExists: nodeIds.has(e.source),
+        targetExists: nodeIds.has(e.target),
+      })),
+      filteredOutEdges: edgesList.length - validEdges.length,
+    });
+
     return {
       nodes: finalNodes,
       edges: validEdges,
@@ -598,6 +705,15 @@ export const ModelGraph: React.FC = () => {
 
   const [reactFlowNodes, setNodes, onNodesChange] = useNodesState(nodes);
   const [reactFlowEdges, setEdges, onEdgesChange] = useEdgesState(edges);
+  
+  // Логируем состояние ReactFlow
+  React.useEffect(() => {
+    console.log('[ModelGraph] ReactFlow state:', {
+      reactFlowNodesCount: reactFlowNodes.length,
+      reactFlowEdgesCount: reactFlowEdges.length,
+      nodes: reactFlowNodes.map(n => ({ id: n.id, type: n.type, hasData: !!n.data })),
+    });
+  }, [reactFlowNodes, reactFlowEdges]);
 
   // Обновляем ноды и связи при изменении данных
   React.useEffect(() => {
@@ -621,8 +737,201 @@ export const ModelGraph: React.FC = () => {
     return null; // Возвращаем null, чтобы родительский компонент мог показать empty state
   }
 
+  // Обработчик для кнопки Align - выравнивание нод
+  const handleAlign = useCallback(() => {
+    console.log('[ModelGraph] Align button clicked');
+    
+    // Получаем текущие ноды и edges
+    const currentNodes = reactFlowNodes;
+    const currentEdges = reactFlowEdges;
+    
+    if (currentNodes.length === 0) {
+      console.warn('[ModelGraph] Align: No nodes to align');
+      return;
+    }
+    
+    // Создаем Set связанных нод (ноды, которые имеют хотя бы один edge)
+    const connectedNodeIds = new Set<string>();
+    currentEdges.forEach((edge) => {
+      connectedNodeIds.add(edge.source);
+      connectedNodeIds.add(edge.target);
+    });
+    
+    // Разделяем ноды на связанные и несвязанные
+    const connectedNodes: Node[] = [];
+    const unconnectedNodes: Node[] = [];
+    
+    currentNodes.forEach((node) => {
+      if (connectedNodeIds.has(node.id)) {
+        connectedNodes.push(node);
+      } else {
+        unconnectedNodes.push(node);
+      }
+    });
+    
+    console.log('[ModelGraph] Align: nodes distribution', {
+      total: currentNodes.length,
+      connected: connectedNodes.length,
+      unconnected: unconnectedNodes.length,
+    });
+    
+    // Параметры размещения
+    const nodeWidth = 150; // Примерная ширина ноды
+    const nodeHeight = 100; // Примерная высота ноды
+    const padding = 50; // Отступ от краев
+    const nodeSpacing = 20; // Расстояние между нодами
+    const horizontalGap = 200; // Расстояние между колонками (sources, intermediate, sinks)
+    
+    // Вычисляем размеры области графа (используем примерные значения, можно улучшить)
+    const graphWidth = 1200;
+    const graphHeight = 800;
+    
+    const updatedNodes = currentNodes.map((node) => {
+      const isConnected = connectedNodeIds.has(node.id);
+      
+      if (isConnected) {
+        // Для связанных нод определяем их роль в графе
+        // Источники (sources) - ноды без входящих edges
+        // Стоки (sinks) - ноды без исходящих edges
+        // Промежуточные - остальные
+        
+        const hasIncoming = currentEdges.some((edge) => edge.target === node.id);
+        const hasOutgoing = currentEdges.some((edge) => edge.source === node.id);
+        
+        let nodeCategory: 'source' | 'sink' | 'intermediate';
+        if (!hasIncoming && hasOutgoing) {
+          nodeCategory = 'source'; // Источник - только исходящие связи
+        } else if (hasIncoming && !hasOutgoing) {
+          nodeCategory = 'sink'; // Сток - только входящие связи
+        } else {
+          nodeCategory = 'intermediate'; // Промежуточная - и входящие, и исходящие
+        }
+        
+        // Группируем ноды по категориям
+        const sourceNodes = connectedNodes.filter((n) => {
+          const hasIn = currentEdges.some((e) => e.target === n.id);
+          const hasOut = currentEdges.some((e) => e.source === n.id);
+          return !hasIn && hasOut;
+        });
+        
+        const sinkNodes = connectedNodes.filter((n) => {
+          const hasIn = currentEdges.some((e) => e.target === n.id);
+          const hasOut = currentEdges.some((e) => e.source === n.id);
+          return hasIn && !hasOut;
+        });
+        
+        const intermediateNodes = connectedNodes.filter((n) => {
+          const hasIn = currentEdges.some((e) => e.target === n.id);
+          const hasOut = currentEdges.some((e) => e.source === n.id);
+          return hasIn && hasOut;
+        });
+        
+        // Определяем позицию ноды в зависимости от категории
+        let x: number;
+        let y: number;
+        const startY = padding;
+        
+        if (nodeCategory === 'source') {
+          // Источники - слева
+          const index = sourceNodes.findIndex((n) => n.id === node.id);
+          const cols = Math.max(1, Math.ceil(Math.sqrt(sourceNodes.length)));
+          const rows = Math.ceil(sourceNodes.length / cols);
+          const row = Math.floor(index / cols);
+          const col = index % cols;
+          
+          const areaWidth = cols * (nodeWidth + nodeSpacing) - nodeSpacing;
+          const startX = padding;
+          
+          x = startX + col * (nodeWidth + nodeSpacing);
+          y = startY + row * (nodeHeight + nodeSpacing);
+          
+        } else if (nodeCategory === 'sink') {
+          // Стоки - справа
+          const index = sinkNodes.findIndex((n) => n.id === node.id);
+          const cols = Math.max(1, Math.ceil(Math.sqrt(sinkNodes.length)));
+          const rows = Math.ceil(sinkNodes.length / cols);
+          const row = Math.floor(index / cols);
+          const col = index % cols;
+          
+          const areaWidth = cols * (nodeWidth + nodeSpacing) - nodeSpacing;
+          const startX = graphWidth - padding - areaWidth;
+          
+          x = startX + col * (nodeWidth + nodeSpacing);
+          y = startY + row * (nodeHeight + nodeSpacing);
+          
+        } else {
+          // Промежуточные - в центре
+          const index = intermediateNodes.findIndex((n) => n.id === node.id);
+          const cols = Math.max(1, Math.ceil(Math.sqrt(intermediateNodes.length)));
+          const rows = Math.ceil(intermediateNodes.length / cols);
+          const row = Math.floor(index / cols);
+          const col = index % cols;
+          
+          const areaWidth = cols * (nodeWidth + nodeSpacing) - nodeSpacing;
+          const startX = (graphWidth - areaWidth) / 2;
+          
+          x = startX + col * (nodeWidth + nodeSpacing);
+          y = startY + row * (nodeHeight + nodeSpacing);
+        }
+        
+        return {
+          ...node,
+          position: { x, y },
+        };
+      } else {
+        // Размещаем несвязанные ноды снизу
+        const index = unconnectedNodes.findIndex((n) => n.id === node.id);
+        const cols = Math.ceil(Math.sqrt(unconnectedNodes.length));
+        const rows = Math.ceil(unconnectedNodes.length / cols);
+        const row = Math.floor(index / cols);
+        const col = index % cols;
+        
+        const areaWidth = cols * (nodeWidth + nodeSpacing) - nodeSpacing;
+        const startX = (graphWidth - areaWidth) / 2;
+        // Размещаем снизу с отступом
+        const startY = graphHeight - padding - rows * (nodeHeight + nodeSpacing);
+        
+        return {
+          ...node,
+          position: {
+            x: startX + col * (nodeWidth + nodeSpacing),
+            y: startY + row * (nodeHeight + nodeSpacing),
+          },
+        };
+      }
+    });
+    
+    // Обновляем позиции нод
+    setNodes(updatedNodes);
+    
+    // После обновления позиций, вызываем fitView для центрирования
+    // Используем setTimeout, чтобы дать React Flow обновиться
+    setTimeout(() => {
+      try {
+        if (reactFlowInstanceRef.current) {
+          reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 300 });
+        }
+      } catch (err) {
+        console.warn('[ModelGraph] Failed to fit view after align', err);
+      }
+    }, 100);
+    
+    console.log('[ModelGraph] Align: nodes repositioned', {
+      connectedCount: connectedNodes.length,
+      unconnectedCount: unconnectedNodes.length,
+    });
+  }, [reactFlowNodes, reactFlowEdges, setNodes]);
+
   return (
-    <div style={{ width: '100%', height: '100%', background: bgColor, position: 'relative' }}>
+    <div 
+      style={{ width: '100%', height: '100%', background: bgColor, position: 'relative' }}
+      className="react-flow-attribution-hidden"
+    >
+      <style>{`
+        .react-flow-attribution-hidden .react-flow__attribution {
+          display: none !important;
+        }
+      `}</style>
       <ReactFlow
         nodes={reactFlowNodes}
         edges={reactFlowEdges}
@@ -630,11 +939,15 @@ export const ModelGraph: React.FC = () => {
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         nodeTypes={STABLE_NODE_TYPES}
+        onInit={(instance) => {
+          reactFlowInstanceRef.current = instance;
+        }}
         fitView
         style={{ background: bgColor, width: '100%', height: '100%' }}
         minZoom={0.1}
         maxZoom={2}
         defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+        proOptions={{ hideAttribution: true }}
       >
         <Background color={bgPatternColor} gap={16} />
         <Controls
@@ -657,6 +970,78 @@ export const ModelGraph: React.FC = () => {
           maskColor={theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)'}
         />
       </ReactFlow>
+      
+      {/* Кастомная панель инструментов справа */}
+      <div
+        style={{
+          position: 'absolute',
+          right: '16px',
+          top: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          zIndex: 5,
+        }}
+      >
+        <div
+          style={{
+            background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
+            borderRadius: '8px',
+            padding: '4px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+            boxShadow: theme === 'dark' 
+              ? '0 2px 8px rgba(0, 0, 0, 0.3)'
+              : '0 2px 8px rgba(0, 0, 0, 0.1)',
+          }}
+        >
+          <button
+            onClick={handleAlign}
+            title="Align nodes"
+            style={{
+              width: '32px',
+              height: '32px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'transparent',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-heading)',
+              transition: 'background-color 150ms',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = theme === 'dark' 
+                ? 'var(--white-10)' 
+                : 'var(--white-10)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 3h18v18H3z" />
+              <path d="M9 9h6v6H9z" />
+              <path d="M3 9h6" />
+              <path d="M15 9h6" />
+              <path d="M9 3v6" />
+              <path d="M9 15v6" />
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

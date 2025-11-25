@@ -45,6 +45,7 @@ import { DiscussionFlow } from '../components/DiscussionFlow';
 import { TextTasksPanel, TextTask } from '../components/TextTasksPanel';
 import { ExperimentalResponsePanel } from '../components/ExperimentalResponsePanel';
 import { ModelGraph, useModelGraphHasNodes } from '../components/ModelGraph';
+import { ModelContextPanel } from '../components/ModelContextPanel';
 import {
   generateExperimentalResponse,
   ExperimentalResponse,
@@ -1538,18 +1539,38 @@ const DiscoveryPage: React.FC = () => {
                         onPresetChange={setCurrentPerspectivePreset}
                       />
             )}
-            {/* Models content - React Graph */}
+            {/* Models content - Context Panel + React Graph */}
             {unfoldSubView === 'models' && (
-              <>
+              <div 
+                className="flex flex-1" 
+                style={{ 
+                  minHeight: 0, 
+                  display: 'flex',
+                  gap: '16px',
+                  height: '100%',
+                }}
+              >
+                {/* Context Panel - левая колонка (всегда видна) */}
+                <div 
+                  style={{ 
+                    width: '320px',
+                    minWidth: '320px',
+                    flexShrink: 0,
+                    height: '100%',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <ModelContextPanel />
+                </div>
+                
+                {/* Graph - правая колонка */}
                 {!modelGraphHasNodes ? (
-                  // Empty state - показываем по центру, как в чате
+                  // Empty state для графа
                   <div
-                    className="flex items-center justify-center"
+                    className="flex-1 flex items-center justify-center"
                     style={{
+                      minHeight: 0,
                       height: '100%',
-                      minHeight: isMobile
-                        ? '200px'
-                        : 'calc(100vh - 300px)',
                       padding: isMobile ? '24px 12px' : '48px 24px',
                     }}
                   >
@@ -1568,13 +1589,18 @@ const DiscoveryPage: React.FC = () => {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex flex-col flex-1" style={{ minHeight: 0, display: 'flex' }}>
-                    <div className="flex-1" style={{ minHeight: 0, position: 'relative' }}>
-                      <ModelGraph />
-                    </div>
+                  <div 
+                    className="flex-1" 
+                    style={{ 
+                      minHeight: 0, 
+                      position: 'relative',
+                      height: '100%',
+                    }}
+                  >
+                    <ModelGraph />
                   </div>
                 )}
-              </>
+              </div>
             )}
             {/* Pages content */}
             {unfoldSubView === 'pages' && (

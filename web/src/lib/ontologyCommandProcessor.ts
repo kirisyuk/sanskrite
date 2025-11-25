@@ -11,6 +11,12 @@ import { useGenaiChatStore } from '../stores/genaiChatStore';
 
 /**
  * Обрабатывает команды от LLM и сохраняет финальные состояния в interactions
+ * 
+ * Логика обработки:
+ * 1. Разделяем команды на объекты (entities, events, concepts и т.д.) и связи (relations, claims, causalLinks)
+ * 2. Сначала создаем все объекты и строим маппинг временных ID (от LLM) -> реальных ID (Firestore)
+ * 3. Затем обрабатываем связи, заменяя временные ID на реальные
+ * 
  * @param commands - массив команд от LLM
  * @param projectId - ID проекта
  * @returns Promise с массивом созданных/обновленных interaction IDs
@@ -42,41 +48,120 @@ export async function processOntologyCommands(
     }
   });
   
+  // Маппинг временных ID (от LLM) -> реальных ID (Firestore)
+  // Ключ: временный ID из команды LLM (например, "entity-id-for-ИП БАЙМУРАТОВ К.")
+  // Значение: реальный Firestore document ID
+  const tempIdToRealId = new Map<string, string>();
+  
+  // Типы, которые являются связями (требуют ссылок на другие объекты)
+  const relationTypes = new Set(['relation', 'claim', 'causalLink']);
+  
+  // Разделяем команды на объекты и связи
+  const objectCommands: OntologyCommand[] = [];
+  const relationCommands: OntologyCommand[] = [];
+  
   for (const cmd of commands) {
+    if (cmd.operation === 'create' && relationTypes.has(cmd.type)) {
+      relationCommands.push(cmd);
+    } else {
+      objectCommands.push(cmd);
+    }
+  }
+  
+  console.log('[processOntologyCommands] Separated commands', {
+    total: commands.length,
+    objects: objectCommands.length,
+    relations: relationCommands.length,
+  });
+  
+  const errors: Array<{ command: OntologyCommand; error: Error }> = [];
+  
+  // ШАГ 1: Обрабатываем все объекты (entities, events, concepts и т.д.)
+  // Строим маппинг временных ID -> реальных ID
+  for (const cmd of objectCommands) {
     try {
       if (cmd.operation === 'create') {
         // CREATE: создаем interaction, Firestore генерирует уникальный ID
         if (!cmd.data) {
           console.warn('[processOntologyCommands] Create command missing data', cmd);
+          errors.push({ command: cmd, error: new Error('Create command missing data') });
           continue;
         }
         
+        // Извлекаем временный ID из data (если LLM его предложил)
+        // LLM может предложить ID вида "entity-id-for-ИП БАЙМУРАТОВ К." или просто использовать id из data
+        const tempId = cmd.data?.id;
+        
         // Создаем interaction БЕЗ id в content (ID будет добавлен после создания)
         // Firestore автоматически генерирует уникальный document ID
-        const interaction = await api.createProjectInteraction(projectId, {
-          kind: 'ontology',
-          subkind: cmd.type,
-          content: JSON.stringify(cmd.data), // Без id, добавим после создания
-        });
+        let interaction;
+        try {
+          // Убираем временный ID из data перед созданием (если есть)
+          const dataWithoutId = { ...cmd.data };
+          delete dataWithoutId.id;
+          
+          interaction = await api.createProjectInteraction(projectId, {
+            kind: 'ontology',
+            subkind: cmd.type,
+            content: JSON.stringify(dataWithoutId), // Без id, добавим после создания
+          });
+        } catch (err) {
+          console.error('[processOntologyCommands] Failed to create interaction on server', cmd, err);
+          errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          continue; // Не обновляем локальное состояние, если создание на сервере не удалось
+        }
         
         // Используем interaction.id как entity ID (уникальный Firestore document ID)
         const entityId = interaction.id;
         
-        // Обновляем content с правильным ID сущности
+        // Сохраняем маппинг временного ID -> реального ID
+        if (tempId && tempId !== entityId) {
+          tempIdToRealId.set(tempId, entityId);
+          console.log('[processOntologyCommands] Mapped temp ID to real ID', {
+            tempId,
+            realId: entityId,
+            type: cmd.type,
+          });
+        }
+        
+        // Обновляем content с правильным ID сущности (пока без разрешения ссылок)
+        // Ссылки будут разрешены во втором проходе после создания всех объектов
         const entityData = {
           ...cmd.data,
-          id: entityId,
+          id: entityId, // Используем реальный Firestore ID
         };
         
-        // Обновляем interaction с финальным состоянием (с ID)
-        await api.updateProjectInteraction(projectId, interaction.id, {
-          content: JSON.stringify(entityData),
-          ontologyEntityId: entityId,
-        });
+        // Обновляем interaction с финальным состоянием (с ID, но пока без разрешенных ссылок)
+        try {
+          const updateResult = await api.updateProjectInteraction(projectId, interaction.id, {
+            content: JSON.stringify(entityData),
+            ontologyEntityId: entityId,
+          });
+          
+          if (!updateResult.success) {
+            throw new Error('Update returned success: false');
+          }
+        } catch (err) {
+          console.error('[processOntologyCommands] Failed to update interaction on server after create', {
+            interactionId: interaction.id,
+            entityId,
+            error: err,
+          });
+          // КРИТИЧНО: Если update не удался, у нас есть interaction без правильного ID в content
+          // Попробуем удалить созданный interaction, чтобы не оставлять неполное состояние
+          try {
+            await api.deleteProjectInteraction(projectId, interaction.id);
+            console.warn('[processOntologyCommands] Deleted incomplete interaction after failed update', interaction.id);
+          } catch (deleteErr) {
+            console.error('[processOntologyCommands] Failed to cleanup incomplete interaction', interaction.id, deleteErr);
+          }
+          errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          continue; // Не обновляем локальное состояние
+        }
         
         createdInteractionIds.push(interaction.id);
         
-        // Обновляем локальное состояние
+        // Обновляем локальное состояние только после успешного сохранения на сервере
         useGenaiChatStore.setState((s) => ({
           interactions: [
             ...s.interactions,
@@ -96,11 +181,13 @@ export async function processOntologyCommands(
         // UPDATE: находим существующий interaction и обновляем его content
         if (!cmd.id) {
           console.warn('[processOntologyCommands] Update command missing id', cmd);
+          errors.push({ command: cmd, error: new Error('Update command missing id') });
           continue;
         }
         
         if (!cmd.data) {
           console.warn('[processOntologyCommands] Update command missing data', cmd);
+          errors.push({ command: cmd, error: new Error('Update command missing data') });
           continue;
         }
         
@@ -108,6 +195,7 @@ export async function processOntologyCommands(
         
         if (!existingInteraction) {
           console.warn('[processOntologyCommands] Update command: entity not found', cmd.id);
+          errors.push({ command: cmd, error: new Error(`Entity not found: ${cmd.id}`) });
           continue;
         }
         
@@ -118,14 +206,28 @@ export async function processOntologyCommands(
         };
         
         // Обновляем interaction через API
-        await api.updateProjectInteraction(projectId, existingInteraction.id, {
-          content: JSON.stringify(entityData),
-          subkind: cmd.type, // Может измениться тип
-        });
+        try {
+          const updateResult = await api.updateProjectInteraction(projectId, existingInteraction.id, {
+            content: JSON.stringify(entityData),
+            subkind: cmd.type, // Может измениться тип
+          });
+          
+          if (!updateResult.success) {
+            throw new Error('Update returned success: false');
+          }
+        } catch (err) {
+          console.error('[processOntologyCommands] Failed to update interaction on server', {
+            interactionId: existingInteraction.id,
+            entityId: cmd.id,
+            error: err,
+          });
+          errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          continue; // Не обновляем локальное состояние, если обновление на сервере не удалось
+        }
         
         createdInteractionIds.push(existingInteraction.id);
         
-        // Обновляем локальное состояние
+        // Обновляем локальное состояние только после успешного сохранения на сервере
         useGenaiChatStore.setState((s) => ({
           interactions: s.interactions.map((it) =>
             it.id === existingInteraction.id
@@ -143,6 +245,7 @@ export async function processOntologyCommands(
         // DELETE: находим interaction и помечаем как удаленный или удаляем физически
         if (!cmd.id) {
           console.warn('[processOntologyCommands] Delete command missing id', cmd);
+          errors.push({ command: cmd, error: new Error('Delete command missing id') });
           continue;
         }
         
@@ -150,42 +253,444 @@ export async function processOntologyCommands(
         
         if (!existingInteraction) {
           console.warn('[processOntologyCommands] Delete command: entity not found', cmd.id);
+          errors.push({ command: cmd, error: new Error(`Entity not found: ${cmd.id}`) });
           continue;
         }
         
         // Вариант 1: Помечаем как удаленный (обновляем content с status='deleted')
+        let deleteSuccess = false;
         try {
           const entityData = JSON.parse(existingInteraction.content || '{}');
           entityData.status = 'deleted';
           
-          await api.updateProjectInteraction(projectId, existingInteraction.id, {
+          const updateResult = await api.updateProjectInteraction(projectId, existingInteraction.id, {
             content: JSON.stringify(entityData),
           });
           
-          // Обновляем локальное состояние
-          useGenaiChatStore.setState((s) => ({
-            interactions: s.interactions.map((it) =>
-              it.id === existingInteraction.id
-                ? {
-                    ...it,
-                    content: JSON.stringify(entityData),
-                  }
-                : it
-            ),
-          }));
-        } catch {
+          if (updateResult.success) {
+            deleteSuccess = true;
+            // Обновляем локальное состояние только после успешного сохранения на сервере
+            useGenaiChatStore.setState((s) => ({
+              interactions: s.interactions.map((it) =>
+                it.id === existingInteraction.id
+                  ? {
+                      ...it,
+                      content: JSON.stringify(entityData),
+                    }
+                  : it
+              ),
+            }));
+          }
+        } catch (updateErr) {
           // Вариант 2: Если не удалось обновить, удаляем физически
-          await api.deleteProjectInteraction(projectId, existingInteraction.id);
-          
-          // Удаляем из локального состояния
-          useGenaiChatStore.setState((s) => ({
-            interactions: s.interactions.filter((it) => it.id !== existingInteraction.id),
-          }));
+          try {
+            const deleteResult = await api.deleteProjectInteraction(projectId, existingInteraction.id);
+            if (deleteResult.success) {
+              deleteSuccess = true;
+              // Удаляем из локального состояния только после успешного удаления на сервере
+              useGenaiChatStore.setState((s) => ({
+                interactions: s.interactions.filter((it) => it.id !== existingInteraction.id),
+              }));
+            }
+          } catch (deleteErr) {
+            console.error('[processOntologyCommands] Failed to delete interaction on server', {
+              interactionId: existingInteraction.id,
+              entityId: cmd.id,
+              updateError: updateErr,
+              deleteError: deleteErr,
+            });
+            errors.push({ 
+              command: cmd, 
+              error: deleteErr instanceof Error ? deleteErr : new Error(String(deleteErr)) 
+            });
+          }
+        }
+        
+        if (!deleteSuccess) {
+          // Если ни update, ни delete не удались, добавляем в ошибки
+          if (errors.length === 0 || errors[errors.length - 1].command !== cmd) {
+            errors.push({ command: cmd, error: new Error('Failed to delete entity') });
+          }
         }
       }
     } catch (err) {
-      console.error('[processOntologyCommands] Failed to process command', cmd, err);
+      console.error('[processOntologyCommands] Unexpected error processing command', cmd, err);
+      errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
     }
+  }
+  
+  // ШАГ 1.5: Второй проход - разрешаем ссылки в уже созданных объектах
+  // Обновляем объекты, которые ссылаются на другие объекты из этого батча
+  const objectsToUpdate = new Map<string, { interactionId: string; data: any; type: string }>();
+  
+  for (const cmd of objectCommands) {
+    if (cmd.operation !== 'create') continue;
+    
+    try {
+      const tempId = cmd.data?.id;
+      const realId = tempId ? tempIdToRealId.get(tempId) : null;
+      if (!realId) continue; // Объект не был создан или не имел временного ID
+      
+      // Функция для замены временных ID на реальные
+      const resolveId = (id: string | undefined): string | undefined => {
+        if (!id) return undefined;
+        if (tempIdToRealId.has(id)) {
+          return tempIdToRealId.get(id);
+        }
+        if (interactionsByEntityId.has(id)) {
+          return id;
+        }
+        return id; // Оставляем как есть, если не найден
+      };
+      
+      // Проверяем, есть ли ссылки, которые нужно разрешить
+      let needsUpdate = false;
+      const resolvedData = JSON.parse(JSON.stringify(cmd.data)); // Глубокая копия
+      
+      // Для metricState: subjectRef.id
+      if (cmd.type === 'metricState' && resolvedData.subjectRef?.id) {
+        const resolved = resolveId(resolvedData.subjectRef.id);
+        if (resolved && resolved !== resolvedData.subjectRef.id) {
+          resolvedData.subjectRef.id = resolved;
+          needsUpdate = true;
+        }
+      }
+      
+      // Для event: participants[].entityId
+      if (cmd.type === 'event' && Array.isArray(resolvedData.participants)) {
+        for (const p of resolvedData.participants) {
+          if (p.entityId) {
+            const resolved = resolveId(p.entityId);
+            if (resolved && resolved !== p.entityId) {
+              p.entityId = resolved;
+              needsUpdate = true;
+            }
+          }
+        }
+      }
+      
+      // Для trend: focus.subjectScope.ids[]
+      if (cmd.type === 'trend' && resolvedData.focus?.subjectScope?.ids && Array.isArray(resolvedData.focus.subjectScope.ids)) {
+        for (let i = 0; i < resolvedData.focus.subjectScope.ids.length; i++) {
+          const resolved = resolveId(resolvedData.focus.subjectScope.ids[i]);
+          if (resolved && resolved !== resolvedData.focus.subjectScope.ids[i]) {
+            resolvedData.focus.subjectScope.ids[i] = resolved;
+            needsUpdate = true;
+          }
+        }
+      }
+      
+      // Для scenario: impacts[].targetRef.id
+      if (cmd.type === 'scenario' && Array.isArray(resolvedData.impacts)) {
+        for (const impact of resolvedData.impacts) {
+          if (impact.targetRef?.id) {
+            const resolved = resolveId(impact.targetRef.id);
+            if (resolved && resolved !== impact.targetRef.id) {
+              impact.targetRef.id = resolved;
+              needsUpdate = true;
+            }
+          }
+        }
+      }
+      
+      // Для actionableItem: assignedTo и relatedEntityIds[]
+      if (cmd.type === 'actionableItem') {
+        if (resolvedData.assignedTo) {
+          const resolved = resolveId(resolvedData.assignedTo);
+          if (resolved && resolved !== resolvedData.assignedTo) {
+            resolvedData.assignedTo = resolved;
+            needsUpdate = true;
+          }
+        }
+        if (Array.isArray(resolvedData.relatedEntityIds)) {
+          for (let i = 0; i < resolvedData.relatedEntityIds.length; i++) {
+            const resolved = resolveId(resolvedData.relatedEntityIds[i]);
+            if (resolved && resolved !== resolvedData.relatedEntityIds[i]) {
+              resolvedData.relatedEntityIds[i] = resolved;
+              needsUpdate = true;
+            }
+          }
+        }
+      }
+      
+      if (needsUpdate) {
+        // Обновляем с реальным ID
+        resolvedData.id = realId;
+        objectsToUpdate.set(realId, {
+          interactionId: realId, // interaction.id == entityId
+          data: resolvedData,
+          type: cmd.type,
+        });
+      }
+    } catch (err) {
+      console.warn('[processOntologyCommands] Failed to prepare object update for link resolution', cmd, err);
+    }
+  }
+  
+  // Обновляем объекты с разрешенными ссылками
+  for (const [entityId, { interactionId, data, type }] of objectsToUpdate) {
+    try {
+      const updateResult = await api.updateProjectInteraction(projectId, interactionId, {
+        content: JSON.stringify(data),
+        subkind: type,
+      });
+      
+      if (updateResult.success) {
+        // Обновляем локальное состояние
+        useGenaiChatStore.setState((s) => ({
+          interactions: s.interactions.map((it) =>
+            it.id === interactionId
+              ? {
+                  ...it,
+                  content: JSON.stringify(data),
+                }
+              : it
+          ),
+        }));
+      }
+    } catch (err) {
+      console.error('[processOntologyCommands] Failed to update object with resolved links', {
+        interactionId,
+        entityId,
+        error: err,
+      });
+      errors.push({ 
+        command: { operation: 'update', type, id: entityId, data } as OntologyCommand, 
+        error: err instanceof Error ? err : new Error(String(err)) 
+      });
+    }
+  }
+  
+  // ШАГ 2: Обрабатываем связи (relations, claims, causalLinks)
+  // Заменяем временные ID на реальные используя маппинг
+  for (const cmd of relationCommands) {
+    try {
+      if (cmd.operation === 'create') {
+        if (!cmd.data) {
+          console.warn('[processOntologyCommands] Create relation command missing data', cmd);
+          errors.push({ command: cmd, error: new Error('Create relation command missing data') });
+          continue;
+        }
+        
+        // Функция для замены временных ID на реальные в объекте
+        const resolveId = (id: string | undefined): string | undefined => {
+          if (!id) return undefined;
+          // Сначала проверяем маппинг временных ID
+          if (tempIdToRealId.has(id)) {
+            return tempIdToRealId.get(id);
+          }
+          // Затем проверяем существующие interactions
+          if (interactionsByEntityId.has(id)) {
+            return id; // ID уже реальный
+          }
+          // Пытаемся найти по имени (для обратной совместимости)
+          // Например, "entity-id-for-ИП БАЙМУРАТОВ К." -> ищем сущность с таким именем
+          // Но это сложно, поэтому просто возвращаем исходный ID и надеемся, что он правильный
+          return id;
+        };
+        
+        // Заменяем временные ID в data на реальные
+        const resolvedData = { ...cmd.data };
+        
+        // Для relation: subjectId и objectId
+        if (cmd.type === 'relation') {
+          if (resolvedData.subjectId) {
+            const resolved = resolveId(resolvedData.subjectId);
+            if (resolved) {
+              resolvedData.subjectId = resolved;
+            } else {
+              console.warn('[processOntologyCommands] Could not resolve subjectId', {
+                tempId: resolvedData.subjectId,
+                relation: cmd,
+              });
+              errors.push({ command: cmd, error: new Error(`Could not resolve subjectId: ${resolvedData.subjectId}`) });
+              continue;
+            }
+          }
+          if (resolvedData.objectId) {
+            const resolved = resolveId(resolvedData.objectId);
+            if (resolved) {
+              resolvedData.objectId = resolved;
+            } else {
+              console.warn('[processOntologyCommands] Could not resolve objectId', {
+                tempId: resolvedData.objectId,
+                relation: cmd,
+              });
+              errors.push({ command: cmd, error: new Error(`Could not resolve objectId: ${resolvedData.objectId}`) });
+              continue;
+            }
+          }
+        }
+        
+        // Для claim: subjectRef.id и objectRef.id
+        if (cmd.type === 'claim') {
+          if (resolvedData.subjectRef?.id) {
+            const resolved = resolveId(resolvedData.subjectRef.id);
+            if (resolved) {
+              resolvedData.subjectRef = { ...resolvedData.subjectRef, id: resolved };
+            } else {
+              console.warn('[processOntologyCommands] Could not resolve claim subjectRef.id', {
+                tempId: resolvedData.subjectRef.id,
+                relation: cmd,
+              });
+              errors.push({ command: cmd, error: new Error(`Could not resolve claim subjectRef.id: ${resolvedData.subjectRef.id}`) });
+              continue;
+            }
+          }
+          if (resolvedData.objectRef?.id) {
+            const resolved = resolveId(resolvedData.objectRef.id);
+            if (resolved) {
+              resolvedData.objectRef = { ...resolvedData.objectRef, id: resolved };
+            } else {
+              // objectRef может быть не ID, а значением
+              if (typeof resolvedData.objectRef.value === 'string') {
+                // Оставляем как есть
+              } else {
+                console.warn('[processOntologyCommands] Could not resolve claim objectRef.id', {
+                  tempId: resolvedData.objectRef.id,
+                  relation: cmd,
+                });
+                errors.push({ command: cmd, error: new Error(`Could not resolve claim objectRef.id: ${resolvedData.objectRef.id}`) });
+                continue;
+              }
+            }
+          }
+        }
+        
+        // Для causalLink: causeRef.id и effectRef.id
+        if (cmd.type === 'causalLink') {
+          if (resolvedData.causeRef?.id) {
+            const resolved = resolveId(resolvedData.causeRef.id);
+            if (resolved) {
+              resolvedData.causeRef = { ...resolvedData.causeRef, id: resolved };
+            } else {
+              console.warn('[processOntologyCommands] Could not resolve causalLink causeRef.id', {
+                tempId: resolvedData.causeRef.id,
+                relation: cmd,
+              });
+              errors.push({ command: cmd, error: new Error(`Could not resolve causalLink causeRef.id: ${resolvedData.causeRef.id}`) });
+              continue;
+            }
+          }
+          if (resolvedData.effectRef?.id) {
+            const resolved = resolveId(resolvedData.effectRef.id);
+            if (resolved) {
+              resolvedData.effectRef = { ...resolvedData.effectRef, id: resolved };
+            } else {
+              console.warn('[processOntologyCommands] Could not resolve causalLink effectRef.id', {
+                tempId: resolvedData.effectRef.id,
+                relation: cmd,
+              });
+              errors.push({ command: cmd, error: new Error(`Could not resolve causalLink effectRef.id: ${resolvedData.effectRef.id}`) });
+              continue;
+            }
+          }
+        }
+        
+        // Убираем временный ID из data перед созданием (если есть)
+        const tempId = resolvedData.id;
+        delete resolvedData.id;
+        
+        // Создаем interaction для связи
+        let interaction;
+        try {
+          interaction = await api.createProjectInteraction(projectId, {
+            kind: 'ontology',
+            subkind: cmd.type,
+            content: JSON.stringify(resolvedData),
+          });
+        } catch (err) {
+          console.error('[processOntologyCommands] Failed to create relation interaction on server', cmd, err);
+          errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          continue;
+        }
+        
+        const entityId = interaction.id;
+        
+        // Сохраняем маппинг временного ID связи -> реального ID (если был временный ID)
+        if (tempId && tempId !== entityId) {
+          tempIdToRealId.set(tempId, entityId);
+        }
+        
+        // Обновляем content с правильным ID
+        const entityData = {
+          ...resolvedData,
+          id: entityId,
+        };
+        
+        // Обновляем interaction с финальным состоянием (с ID)
+        try {
+          const updateResult = await api.updateProjectInteraction(projectId, interaction.id, {
+            content: JSON.stringify(entityData),
+            ontologyEntityId: entityId,
+          });
+          
+          if (!updateResult.success) {
+            throw new Error('Update returned success: false');
+          }
+        } catch (err) {
+          console.error('[processOntologyCommands] Failed to update relation interaction on server after create', {
+            interactionId: interaction.id,
+            entityId,
+            error: err,
+          });
+          try {
+            await api.deleteProjectInteraction(projectId, interaction.id);
+            console.warn('[processOntologyCommands] Deleted incomplete relation interaction after failed update', interaction.id);
+          } catch (deleteErr) {
+            console.error('[processOntologyCommands] Failed to cleanup incomplete relation interaction', interaction.id, deleteErr);
+          }
+          errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          continue;
+        }
+        
+        createdInteractionIds.push(interaction.id);
+        
+        // Обновляем локальное состояние
+        useGenaiChatStore.setState((s) => ({
+          interactions: [
+            ...s.interactions,
+            {
+              id: interaction.id,
+              projectId,
+              kind: 'ontology',
+              subkind: cmd.type,
+              content: JSON.stringify(entityData),
+              ontologyEntityId: entityId,
+              createdAt: new Date().toISOString(),
+            } as LocalInteraction,
+          ],
+        }));
+        
+      } else if (cmd.operation === 'update' || cmd.operation === 'delete') {
+        // UPDATE и DELETE для связей обрабатываются так же, как для объектов
+        // (логика уже есть выше в обработке objectCommands)
+        console.warn('[processOntologyCommands] Update/Delete for relations not yet implemented in new flow', cmd);
+        errors.push({ command: cmd, error: new Error('Update/Delete for relations not yet implemented') });
+      }
+    } catch (err) {
+      console.error('[processOntologyCommands] Unexpected error processing relation command', cmd, err);
+      errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+    }
+  }
+  
+  // Логируем все ошибки, если они есть
+  if (errors.length > 0) {
+    console.error('[processOntologyCommands] Some commands failed to save on server', {
+      totalCommands: commands.length,
+      failedCommands: errors.length,
+      errors: errors.map(e => ({
+        operation: e.command.operation,
+        type: e.command.type,
+        id: e.command.id,
+        error: e.error.message,
+      })),
+    });
+    
+    // Показываем предупреждение пользователю через store
+    useGenaiChatStore.setState((s) => ({
+      error: `Some ontology commands failed to save on server. ${errors.length} out of ${commands.length} commands failed. Check console for details.`,
+    } as any));
   }
   
   return createdInteractionIds;
