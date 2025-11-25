@@ -161,22 +161,37 @@ Example: {"title": "Climate Change Policies"}`;
       hasRawJSON: !!(res as any)?.rawJSON
     });
 
+    // Helper function to fix common JSON escaping issues
+    // Fixes invalid escape sequences like \' (single quotes don't need escaping in JSON)
+    const fixJSONEscaping = (jsonStr: string): string => {
+      // Replace \' with ' inside string values (between double quotes)
+      // This regex matches \' that appears inside quoted strings
+      return jsonStr.replace(/\\'/g, "'");
+    };
+
     // Parse response - same approach as bias evaluation
     let parsed: any = null;
     try {
       if (typeof res?.content === 'string') {
         const s = res.content.trim();
-        if (s.startsWith('{') || s.startsWith('[')) parsed = JSON.parse(s);
+        if (s.startsWith('{') || s.startsWith('[')) {
+          const fixed = fixJSONEscaping(s);
+          parsed = JSON.parse(fixed);
+        }
       }
       const rawJSON = (res as any)?.rawJSON;
       if (!parsed && typeof rawJSON === 'string') {
         const s2 = rawJSON.trim();
-        if (s2.startsWith('{') || s2.startsWith('[')) parsed = JSON.parse(s2);
+        if (s2.startsWith('{') || s2.startsWith('[')) {
+          const fixed = fixJSONEscaping(s2);
+          parsed = JSON.parse(fixed);
+        }
       }
       if (!parsed && typeof res?.content === 'string') {
         const m = res.content.match(/\{[\s\S]*\}/);
         if (m && m[0]) {
-          parsed = JSON.parse(m[0]);
+          const fixed = fixJSONEscaping(m[0]);
+          parsed = JSON.parse(fixed);
         }
       }
     } catch (pe) {
