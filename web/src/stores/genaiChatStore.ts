@@ -2333,6 +2333,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       
       // Filter out evaluation messages, actions, section markers, and perspectives - they shouldn't be in chat context
       const chatInteractions = interactions.filter((it) => {
+        // Exclude Model chat interactions (they belong to Model tab, not Discuss chat)
+        if (it.subkind === 'model.chat') {
+          return false;
+        }
         // Exclude ontology interactions (they are shown in Model tab, not in chat)
         if (it.kind === 'ontology') {
           return false;
@@ -2725,13 +2729,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           // Create interaction with full response
           const now = Date.now();
           const assistantLocalId = now + '-ia';
+          const originalMessageId = now + '-a';
           const assistantInteraction: LocalInteraction = {
             id: assistantLocalId,
             projectId,
             kind: 'assistant',
             content,
             createdAt: new Date().toISOString(),
-            originalMessageId: now + '-a',
+            originalMessageId,
           };
           
           // Add sources and attributions if available
@@ -2740,17 +2745,36 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             (assistantInteraction as any).attributions = attributions;
           }
           
-          // Add to interactions
-          set((s) => ({
-            interactions: [...s.interactions, assistantInteraction],
-          } as any));
+          // Add to interactions (check for duplicates first)
+          set((s) => {
+            // Check if interaction with this originalMessageId already exists (from WebSocket)
+            const existingByOriginalId = s.interactions.find((it: any) => 
+              (it as any).originalMessageId === originalMessageId
+            );
+            // Check if interaction with this local ID already exists
+            const existingByLocalId = s.interactions.find((it: any) => it.id === assistantLocalId);
+            
+            if (existingByOriginalId || existingByLocalId) {
+              console.log('[Chat] Non-streaming: Interaction already exists, skipping duplicate', {
+                originalMessageId,
+                assistantLocalId,
+                existingByOriginalId: existingByOriginalId?.id,
+                existingByLocalId: existingByLocalId?.id
+              });
+              return s;
+            }
+            
+            return {
+              interactions: [...s.interactions, assistantInteraction],
+            } as any;
+          });
           
           // Persist on server
           try {
             const payload: any = {
               kind: 'assistant',
               content,
-              originalMessageId: now + '-a',
+              originalMessageId,
             };
             if (sources.length > 0) {
               payload.sources = sources;
@@ -2764,15 +2788,32 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             
             const res = await api.createProjectInteraction(projectId, payload);
             
-            // Update interaction ID
+            // Update interaction ID (check for duplicates from WebSocket)
             set((s) => {
               const map = { ...(s.persistedByLocalId || {}) } as Record<string, string>;
               map[assistantLocalId] = res.id;
               const items = [...s.interactions];
-              const idx = items.findIndex((it) => it.id === assistantLocalId);
-              if (idx >= 0) {
-                (items[idx] as any).id = res.id;
+              
+              // Check if WebSocket already added interaction with server ID
+              const existingByServerId = items.find((it: any) => it.id === res.id);
+              if (existingByServerId) {
+                // WebSocket already added it, remove local duplicate
+                const idx = items.findIndex((it) => it.id === assistantLocalId);
+                if (idx >= 0) {
+                  items.splice(idx, 1);
+                }
+                console.log('[Chat] Non-streaming: WebSocket already added interaction, removed local duplicate', {
+                  serverId: res.id,
+                  assistantLocalId
+                });
+              } else {
+                // Update local interaction ID
+                const idx = items.findIndex((it) => it.id === assistantLocalId);
+                if (idx >= 0) {
+                  (items[idx] as any).id = res.id;
+                }
               }
+              
               return { interactions: items, persistedByLocalId: map } as any;
             });
           } catch (e) {

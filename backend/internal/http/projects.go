@@ -2313,13 +2313,28 @@ func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd 
 		return nil
 	}
 
-	// Get full extracted text (from Firestore or GCS)
-	text, err := h.getFullExtractedText(ctx, cd)
-	if err != nil {
-		if h.logger != nil {
-			h.logger.Printf("indexCoreDoc: failed to get extracted text for doc %s: %v", cd.ID, err)
+	// Get full extracted text
+	var text string
+	var err error
+	
+	// For artifacts with ArtifactConfig, assemble text from sections
+	if cd.ArtifactConfig != nil && len(cd.ArtifactConfig.Structure) > 0 {
+		text = assembleArtifactMarkdownFromConfig(cd.ArtifactConfig)
+		if text == "" {
+			if h.logger != nil {
+				h.logger.Printf("indexCoreDoc: artifact doc %s has no content in sections", cd.ID)
+			}
+			return nil
 		}
-		return fmt.Errorf("failed to get extracted text: %w", err)
+	} else {
+		// For regular documents, get text from Firestore or GCS
+		text, err = h.getFullExtractedText(ctx, cd)
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Printf("indexCoreDoc: failed to get extracted text for doc %s: %v", cd.ID, err)
+			}
+			return fmt.Errorf("failed to get extracted text: %w", err)
+		}
 	}
 	// Sanitize UTF-8 before saving to Firestore (Document model)
 	text = sanitizeUTF8(text)

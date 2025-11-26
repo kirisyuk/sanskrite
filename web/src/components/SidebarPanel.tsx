@@ -106,8 +106,35 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 
     return grouped;
   }, [projects]);
+  
+  // Calculate days since last interaction
+  const getDaysSinceLastInteraction = (project: Project): number => {
+    const now = new Date();
+    const projectDate = project.lastInteractionAt 
+      ? new Date(project.lastInteractionAt) 
+      : new Date(project.createdAt);
+    const diffTime = Math.abs(now.getTime() - projectDate.getTime());
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
+
+  // Format days into human-readable format (d, w, m)
+  const formatTimeAgo = (days: number): string => {
+    if (days < 14) {
+      return `${days}d`;
+    } else if (days < 30) {
+      const weeks = Math.floor(days / 7);
+      return `${weeks}w`;
+    } else {
+      const months = Math.floor(days / 30);
+      return `${months}m`;
+    }
+  };
+
   const renderProjectRow = (project: Project) => {
     const isDeleting = deletingProjectIds.has(project.id);
+    const daysAgo = getDaysSinceLastInteraction(project);
+    const timeAgoLabel = daysAgo > 0 ? formatTimeAgo(daysAgo) : null;
     return (
       <div
         key={project.id}
@@ -182,56 +209,69 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               {project.displayName}
             </span>
             {!isDeleting && (
-              <>
-                <button
-                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
-                  title={t('unfold.sections.renameChat')}
-                  style={{ backgroundColor: 'transparent' }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onStartEditingProject(project.id, project.displayName);
-                  }}
-                >
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                    />
-                  </svg>
-                </button>
-                <button
-                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded"
-                  title={t('unfold.sections.deleteChat')}
-                  style={{ backgroundColor: 'transparent' }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteChat(project.id, project.displayName);
-                  }}
-                >
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
-                    />
-                  </svg>
-                </button>
-              </>
+              <div className="relative flex items-center justify-end flex-shrink-0" style={{ width: '56px' }}>
+                {timeAgoLabel && (
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded absolute right-0 group-hover:opacity-0 group-hover:pointer-events-none transition-opacity"
+                    style={{
+                      color: 'var(--text-tertiary-weak)',
+                      backgroundColor: 'var(--white-5)',
+                    }}
+                  >
+                    {timeAgoLabel}
+                  </span>
+                )}
+                <div className="absolute right-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    className="p-1 rounded"
+                    title={t('unfold.sections.renameChat')}
+                    style={{ backgroundColor: 'transparent' }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStartEditingProject(project.id, project.displayName);
+                    }}
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    className="p-1 rounded"
+                    title={t('unfold.sections.deleteChat')}
+                    style={{ backgroundColor: 'transparent' }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteChat(project.id, project.displayName);
+                    }}
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
             )}
           </>
         )}
