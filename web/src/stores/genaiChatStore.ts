@@ -142,6 +142,7 @@ interface GenaiChatState {
   startStream: (args: StartStreamArgs) => Promise<void>;
   setPendingAttachedDocIds: (ids: string[]) => void;
   reset: () => void;
+  cancelStream: () => void;
   clearToolRetries: () => void;
   openMetricOverlay: (metric: SxMonitorMetric) => Promise<void>;
   closeMetricOverlay: () => void;
