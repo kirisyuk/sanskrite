@@ -307,7 +307,7 @@ class ApiClient {
     parallelToolCalls?: boolean;
     projectId?: string;
     streamId?: string;
-  }): Promise<{ content?: string; model: string; usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; sources?: string[]; attributions?: Array<{ title?: string; url?: string }>; rawJSON?: string; }>
+  }, signal?: AbortSignal): Promise<{ content?: string; model: string; usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; sources?: string[]; attributions?: Array<{ title?: string; url?: string }>; rawJSON?: string; }>
   {
     const body: any = {
       model: data.model,
@@ -335,7 +335,9 @@ class ApiClient {
     if (data.streamId) {
       body.streamId = data.streamId;
     }
-    const response = await this.client.post(`/api/v1/genai/generate`, body);
+    const response = await this.client.post(`/api/v1/genai/generate`, body, {
+      signal,
+    });
     return response.data;
   }
   async genaiAdhocJSON(data: {
@@ -496,14 +498,16 @@ class ApiClient {
     projectId?: string;
     streamId?: string;
     researchEnabled?: boolean;
-  }) {
+  }, signal?: AbortSignal) {
     // Extract researchEnabled from options if present and add to top level
     const body: any = { ...data };
     if (data.options?.researchEnabled !== undefined) {
       body.researchEnabled = data.options.researchEnabled;
     }
     // Fire-and-forget HTTP 200 triggers Pub/Sub/WS stream events
-    const response = await this.client.post(`/api/v1/genai/stream`, body);
+    const response = await this.client.post(`/api/v1/genai/stream`, body, {
+      signal,
+    });
     return response.data;
   }
 

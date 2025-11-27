@@ -196,6 +196,8 @@ interface GenaiChatState {
     total: number;
     currentOperation?: string;
   } | null;
+  // Request cancellation support
+  abortController?: AbortController;
 }
 
 export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
@@ -228,8 +230,30 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   currentStreamId: undefined,
   processingCommands: false,
   commandsProgress: null,
+  abortController: undefined,
 
-  reset: () => set({ projectId: 'local-unfold', messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], toolRetries: [], toolCorrections: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [], hydrating: false, currentStreamId: undefined, processingCommands: false, commandsProgress: null }),
+  reset: () => {
+    // Cancel any ongoing request before resetting
+    const state = get();
+    if (state.abortController) {
+      state.abortController.abort();
+    }
+    set({ projectId: 'local-unfold', messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], toolRetries: [], toolCorrections: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [], hydrating: false, currentStreamId: undefined, processingCommands: false, commandsProgress: null, abortController: undefined });
+  },
+
+  cancelStream: () => {
+    const state = get();
+    if (state.abortController) {
+      console.log('[Chat] Cancelling stream request');
+      state.abortController.abort();
+      set({ 
+        streaming: false, 
+        currentStreamId: undefined, 
+        abortController: undefined,
+        error: 'Запрос был прерван пользователем'
+      });
+    }
+  },
   
   clearToolRetries: () => set({ toolRetries: [], toolCorrections: [] }),
   
@@ -2691,9 +2715,12 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       // Generate per-stream UUID for FE-side filtering
       const streamId = (crypto && 'randomUUID' in crypto) ? (crypto as any).randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
       
-      // CRITICAL: Save streamId immediately so events can be filtered correctly
+      // Create AbortController for request cancellation
+      const abortController = new AbortController();
+      
+      // CRITICAL: Save streamId and abortController immediately so events can be filtered correctly
       // This must be set before API call to avoid race condition
-      set({ currentStreamId: streamId } as any);
+      set({ currentStreamId: streamId, abortController } as any);
       
       // If toolUsageEnabled is true, pass empty tools array [] to signal backend should register its tools
       // If toolUsageEnabled is false, pass undefined/null to signal backend should NOT register tools
@@ -2712,6 +2739,19 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       if (disableStreaming || isGeminiPreview) {
         // Use non-streaming API for Gemini 3 Pro Preview
         console.log('[Chat] Using non-streaming API for gemini_preview', { projectId, streamId });
+        
+        // Model mode: set processing state immediately to show UI indicator
+        if (disableStreaming) {
+          set((s) => ({
+            processingCommands: true,
+            commandsProgress: {
+              stage: 'parsing',
+              processed: 0,
+              total: 0,
+              currentOperation: 'Waiting for response...',
+            },
+          } as any));
+        }
         
         // Call onStart to set up UI state (streaming placeholder)
         get().onStart();
@@ -2738,11 +2778,13 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           tools: finalTools,
           projectId: projectId,
           streamId: streamId,
+          // Model mode: require strict JSON output
+          strictJSONEnabled: disableStreaming ? true : undefined,
         };
         
         try {
-          // Call non-streaming API
-          const response = await api.genaiGenerate(generateRequest);
+          // Call non-streaming API with abort signal
+          const response = await api.genaiGenerate(generateRequest, abortController.signal);
           
           // Process response as if it came from streaming
           const content = response?.content || '';
@@ -2765,7 +2807,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 } : null
               });
               
-              // Устанавливаем состояние обработки ДО парсинга, чтобы показать анимацию
+              // Update processing state - already set before API call, now update to parsing stage
               set((s) => ({
                 processingCommands: true,
                 commandsProgress: {
@@ -3084,16 +3126,39 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
           
         } catch (e: any) {
+          // Check if request was aborted
+          if (e?.name === 'AbortError' || abortController.signal.aborted) {
+            console.log('[Chat] Non-streaming request was cancelled');
+            set({ streaming: false, currentStreamId: undefined, abortController: undefined, processingCommands: false, commandsProgress: null });
+            return;
+          }
           console.error('[Chat] Non-streaming API error', e);
-          set({ streaming: false, currentStreamId: undefined, error: e?.message || 'Non-streaming request failed' });
+          set({ streaming: false, currentStreamId: undefined, abortController: undefined, processingCommands: false, commandsProgress: null, error: e?.message || 'Non-streaming request failed' });
         }
       } else {
         // Use streaming API for other models
         console.log('[Chat] startStream: Sending API request', { projectId, streamId });
-        await api.genaiStream({ prompt, tools: finalTools, options, messages, projectId, streamId });
+        try {
+          await api.genaiStream({ prompt, tools: finalTools, options, messages, projectId, streamId }, abortController.signal);
+        } catch (e: any) {
+          // Check if request was aborted
+          if (e?.name === 'AbortError' || abortController.signal.aborted) {
+            console.log('[Chat] Streaming request was cancelled');
+            set({ streaming: false, currentStreamId: undefined, abortController: undefined });
+            return;
+          }
+          throw e; // Re-throw if not aborted
+        }
       }
     } catch (e: any) {
-      set({ streaming: false, currentStreamId: undefined, error: e?.message || 'Stream start failed' });
+      // Check if request was aborted
+      const state = get();
+      if (e?.name === 'AbortError' || state.abortController?.signal.aborted) {
+        console.log('[Chat] Request was cancelled');
+        set({ streaming: false, currentStreamId: undefined, abortController: undefined, processingCommands: false, commandsProgress: null });
+        return;
+      }
+      set({ streaming: false, currentStreamId: undefined, abortController: undefined, processingCommands: false, commandsProgress: null, error: e?.message || 'Stream start failed' });
     }
   },
 
@@ -3679,7 +3744,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         })();
 
-        return { streaming: false, currentStreamId: undefined, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: nextInteractions, artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
+        return { streaming: false, currentStreamId: undefined, abortController: undefined, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: nextInteractions, artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
       }
       // If we are here, assistant produced no chunks and content is empty.
       // Remove the trailing empty placeholder and create a stub interaction so the user sees the outcome.
@@ -3717,7 +3782,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         nextMeta[id] = { headerText: meta.displayName, leftAccent: true, refineEnabled: !!meta?.agentProfile?.capabilities?.refinePrevious, agentProfile: meta?.agentProfile };
       }
       console.warn('[GenAI Stream] done without chunks: created empty reply stub');
-      return { streaming: false, currentStreamId: undefined, messages: msgs, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: [...s.interactions, base] } as any;
+      return { streaming: false, currentStreamId: undefined, abortController: undefined, messages: msgs, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: [...s.interactions, base] } as any;
     }),
   onError: (err) => {
     try {
@@ -3828,6 +3893,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       set({ 
         streaming: false, 
         currentStreamId: undefined, 
+        abortController: undefined,
         messages: pruned, 
         error: userFriendlyError, 
         interactions: currentInteractions, // Preserve error interaction
@@ -3843,7 +3909,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       if (pruned.length > 0 && pruned[pruned.length - 1].role === 'assistant' && (!pruned[pruned.length - 1].content || pruned[pruned.length - 1].content.trim().length === 0)) {
         pruned.pop();
       }
-      set({ streaming: false, currentStreamId: undefined, messages: pruned, error: err || 'Stream error', pendingAssistantMeta: undefined, pendingAssistantOptions: get().pendingAssistantOptions, pendingAssistantPrompt: get().pendingAssistantPrompt, pendingAssistantTools: get().pendingAssistantTools });
+      set({ streaming: false, currentStreamId: undefined, abortController: undefined, messages: pruned, error: err || 'Stream error', pendingAssistantMeta: undefined, pendingAssistantOptions: get().pendingAssistantOptions, pendingAssistantPrompt: get().pendingAssistantPrompt, pendingAssistantTools: get().pendingAssistantTools });
     }
   },
   onToolCall: (calls) => set({ toolCalls: calls || [] }),

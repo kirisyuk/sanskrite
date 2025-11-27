@@ -1234,38 +1234,79 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                 <circle cx="12" cy="12" r="3" />
               </svg>
             </button>
-            <button
-              type="button"
-              aria-label={t('unfold.request.send')}
-              className="flex items-center justify-center rounded-full"
-              onClick={handleClickSubmit}
-              style={{
-                width: '32px',
-                height: '32px',
-                backgroundColor: 'transparent',
-                opacity: disabled ? 0.6 : 1,
-              }}
-              onMouseEnter={(e) => {
-                if (!disabled) {
-                  const svg = e.currentTarget.querySelector('svg path');
-                  if (svg) {
-                    (svg as SVGPathElement).style.fill = theme === 'light' ? '#FFB366' : '#FF9538';
-                  }
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!disabled) {
-                  const svg = e.currentTarget.querySelector('svg path');
-                  if (svg) {
-                    (svg as SVGPathElement).style.fill = theme === 'dark' ? '#FF9538' : '#FFB366';
-                  }
-                }
-              }}
-            >
-              <svg className="w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M8 5v14l11-7z" style={{ fill: theme === 'dark' ? '#FF9538' : '#FFB366' }} />
-              </svg>
-            </button>
+            {(() => {
+              const streaming = useGenaiChatStore((s) => s.streaming);
+              const cancelStream = useGenaiChatStore((s) => s.cancelStream);
+              
+              if (streaming) {
+                // Show stop button when streaming
+                return (
+                  <button
+                    type="button"
+                    aria-label={t('unfold.request.stop', { defaultValue: 'Остановить' })}
+                    className="flex items-center justify-center rounded-full"
+                    onClick={() => cancelStream()}
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      backgroundColor: 'transparent',
+                    }}
+                    onMouseEnter={(e) => {
+                      const svg = e.currentTarget.querySelector('svg');
+                      if (svg) {
+                        (svg as SVGElement).style.color = '#ef4444';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      const svg = e.currentTarget.querySelector('svg');
+                      if (svg) {
+                        (svg as SVGElement).style.color = 'var(--text-heading)';
+                      }
+                    }}
+                  >
+                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ color: 'var(--text-heading)' }}>
+                      <rect x="6" y="6" width="12" height="12" rx="1" />
+                    </svg>
+                  </button>
+                );
+              }
+              
+              // Show send button when not streaming
+              return (
+                <button
+                  type="button"
+                  aria-label={t('unfold.request.send')}
+                  className="flex items-center justify-center rounded-full"
+                  onClick={handleClickSubmit}
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    backgroundColor: 'transparent',
+                    opacity: disabled ? 0.6 : 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!disabled) {
+                      const svg = e.currentTarget.querySelector('svg path');
+                      if (svg) {
+                        (svg as SVGPathElement).style.fill = theme === 'light' ? '#FFB366' : '#FF9538';
+                      }
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!disabled) {
+                      const svg = e.currentTarget.querySelector('svg path');
+                      if (svg) {
+                        (svg as SVGPathElement).style.fill = theme === 'dark' ? '#FF9538' : '#FFB366';
+                      }
+                    }
+                  }}
+                >
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 5v14l11-7z" style={{ fill: theme === 'dark' ? '#FF9538' : '#FFB366' }} />
+                  </svg>
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>
