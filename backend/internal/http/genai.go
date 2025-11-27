@@ -31,6 +31,7 @@ type GenAIHandler struct {
 	publisher        Publisher
 	usageMetricsRepo *repo.UsageMetricsRepository
 	modelManager     *ai.AIModelManager
+	taskExecutor     *ai.AITaskExecutor
 	// CoreDocs tool dependencies (optional, wired via WithCoreDocsTools)
 	coreDocs     *repo.CoreDocsRepo
 	interactions *repo.InteractionsRepository
@@ -90,6 +91,12 @@ func (h *GenAIHandler) WithUsageMetrics(repo *repo.UsageMetricsRepository) *GenA
 // WithModelManager wires AI model manager for cost calculation
 func (h *GenAIHandler) WithModelManager(mm *ai.AIModelManager) *GenAIHandler {
 	h.modelManager = mm
+	return h
+}
+
+// WithAIExecutor wires AI task executor for structured tasks (model mode)
+func (h *GenAIHandler) WithAIExecutor(exec *ai.AITaskExecutor) *GenAIHandler {
+	h.taskExecutor = exec
 	return h
 }
 
@@ -211,7 +218,182 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Regular generation flow (unchanged)
+	// Model mode: use task executor with JSON verifier for strict JSON validation
+	if req.StrictJSONEnabled && h.taskExecutor != nil {
+		// Build system instruction with message history (same as regular flow)
+		systemInstruction := req.SystemInstruction
+		if len(req.Messages) > 0 {
+			ctxLines := make([]string, 0, len(req.Messages))
+			for _, m := range req.Messages {
+				role := strings.ToLower(strings.TrimSpace(m.Role))
+				if role == "" {
+					role = "user"
+				}
+				text := strings.TrimSpace(m.Text)
+				if text == "" {
+					continue
+				}
+				ctxLines = append(ctxLines, "- "+role+": "+text)
+			}
+			if len(ctxLines) > 0 {
+				pre := "You are given the full chat context below. Respond ONLY to the latest user message, taking the prior context into account. Do not restate or summarize the transcript itself."
+				ctx := "\nConversation context (most recent last):\n" + strings.Join(ctxLines, "\n")
+				if strings.TrimSpace(systemInstruction) == "" {
+					systemInstruction = pre + ctx
+				} else {
+					systemInstruction = strings.TrimSpace(systemInstruction) + "\n\n" + pre + ctx
+				}
+			}
+		}
+
+		// Create verifier for ontology commands structure: { "commands": [...] }
+		verifier := ai.NewMapVerifier([]string{"commands"}, func(m map[string]interface{}) error {
+			// Verify commands is an array
+			commands, ok := m["commands"]
+			if !ok {
+				return fmt.Errorf("missing 'commands' field")
+			}
+			commandsArr, ok := commands.([]interface{})
+			if !ok {
+				return fmt.Errorf("'commands' must be an array")
+			}
+			// Basic validation: each command should have operation and type
+			for i, cmd := range commandsArr {
+				cmdMap, ok := cmd.(map[string]interface{})
+				if !ok {
+					return fmt.Errorf("command[%d] must be an object", i)
+				}
+				if _, ok := cmdMap["operation"]; !ok {
+					return fmt.Errorf("command[%d] missing 'operation' field", i)
+				}
+				if _, ok := cmdMap["type"]; !ok {
+					return fmt.Errorf("command[%d] missing 'type' field", i)
+				}
+			}
+			return nil
+		})
+
+		// Build full input content with system instruction
+		// AITask doesn't support systemInstruction separately, so we include it in InputContent
+		fullInput := req.Prompt
+		if systemInstruction != "" {
+			fullInput = systemInstruction + "\n\nUser request: " + req.Prompt
+		}
+
+		// Estimate input tokens
+		inputChars := len(fullInput)
+		inputTokens := inputChars / 4
+
+		// Create AITask for structured execution
+		task := &ai.AITask{
+			TaskType: ai.TaskTypeOntologyMapping,
+			InputContent: fullInput,
+			AIRequirements: ai.AIRequirements{
+				PreferredModel:        req.Model,
+				MinContextWindow:      1000,
+				MaxOutputSize:         req.MaxOutputTokens,
+				MinCapabilityScore:    5,
+				TextGenerationCapability: true,
+			},
+			Verifier: verifier,
+			EnableTelemetry: true,
+		}
+
+		// Set tenant/user info if available
+		if auth := GetAuthInfo(r.Context()); auth != nil {
+			task.TenantID = auth.TenantID
+			task.UserID = auth.UID
+			if req.ProjectID != "" {
+				task.Project = req.ProjectID
+			}
+		}
+
+		// Execute using task executor (with fallback and JSON verification)
+		parsed, err := h.taskExecutor.ExecuteStructuredTask(ctx, task)
+		if err != nil {
+			log.Printf("GenAIGenerate model mode (task executor) error: %v", err)
+			status, code, msg, details := parseUpstreamError(err)
+			_ = WriteError(w, status, code, msg, details)
+			return
+		}
+
+		// Convert parsed result back to JSON string for response
+		parsedMap, ok := parsed.(map[string]interface{})
+		if !ok {
+			log.Printf("GenAIGenerate model mode: unexpected parsed result type")
+			_ = WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Unexpected response format", nil)
+			return
+		}
+
+		// Marshal back to JSON
+		jsonBytes, err := json.Marshal(parsedMap)
+		if err != nil {
+			log.Printf("GenAIGenerate model mode: failed to marshal result: %v", err)
+			_ = WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to serialize response", nil)
+			return
+		}
+
+		// Create response compatible with GenAIResponse format
+		// We need to get model name from task executor result, but ExecuteStructuredTask doesn't return it
+		// For now, use the requested model or fallback
+		modelName := req.Model
+		if modelName == "" {
+			modelName = "gemini_fast" // fallback
+		}
+
+		// Estimate usage (task executor doesn't return detailed usage)
+		outputChars := len(jsonBytes)
+		outputTokens := outputChars / 4
+		resp := gen_combined.GenAIResponse{
+			Content: string(jsonBytes),
+			Model:   modelName,
+			Usage: g.Usage{
+				PromptTokens:  inputTokens,
+				OutputTokens:  outputTokens,
+				TotalTokens:   inputTokens + outputTokens,
+			},
+		}
+
+		// Continue with response handling below
+		_ = WriteJSON(w, http.StatusOK, resp)
+		
+		// Emit telemetry (best-effort)
+		go func() {
+			if auth := GetAuthInfo(r.Context()); auth != nil {
+				_ = persistGenAITelemetry(r.Context(), auth.TenantID, map[string]any{
+					"kind":      "genAI_telemetry",
+					"mode":      "model_mode",
+					"model":     resp.Model,
+					"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+					"elapsedMs": time.Since(started).Milliseconds(),
+					"usage":     resp.Usage,
+					"params": map[string]any{
+						"temperature":        req.Temperature,
+						"maxOutputTokens":    req.MaxOutputTokens,
+						"strictJSONEnabled":  true,
+					},
+				})
+
+				// Save usage metrics asynchronously
+				if h.usageMetricsRepo != nil && h.modelManager != nil {
+					go func() {
+						metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+						durationMs := int(time.Since(started).Milliseconds())
+						projectID := req.ProjectID
+						var projectIDPtr *string
+						if projectID != "" {
+							projectIDPtr = &projectID
+						}
+						_ = h.saveUsageMetric(metricCtx, auth, req, resp, projectIDPtr, nil, &durationMs)
+					}()
+				}
+			}
+		}()
+		return
+	}
+
+	// Regular generation flow (unchanged for discuss mode)
 	resp, err := h.client.GenAIGenerate(ctx, req)
 	if err != nil {
 		// Log upstream error body for diagnostics (e.g., Gemini 400 with details)

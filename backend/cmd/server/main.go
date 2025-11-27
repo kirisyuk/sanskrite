@@ -259,6 +259,7 @@ func main() {
 		genaiHandler = httphandlers.NewGenAIHandler().
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
 			WithModelManager(modelManager).
+			WithAIExecutor(exec). // Wire task executor for model mode (structured tasks)
 			WithCoreDocsTools(coreDocsRepo, interactionsRepo, docsRepo, chunksRepo, emb).
 			WithGraphTools(true) // Enable graph tools
 
