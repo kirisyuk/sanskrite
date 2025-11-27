@@ -646,8 +646,12 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         // Generate frameExpansions for assistant interactions that don't have them yet
         // Include both LLM responses and agent responses (bring-in agents)
         // Only generate for the last assistant interaction if it doesn't have an expansion interaction
+        // Exclude ontology interactions and model.chat responses (they are structured data, not conversational content)
         const assistantInteractions = merged.filter((it: any) => 
-          it.kind === 'assistant' && it.content && it.content.trim()
+          it.kind === 'assistant' && 
+          it.content && 
+          it.content.trim() &&
+          it.subkind !== 'model.chat'
         );
         if (assistantInteractions.length >= 1) {
           // Generate expansions for the last assistant interaction if it doesn't have them
@@ -680,9 +684,12 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               );
               if (replyToIdx >= 0) {
                 // Collect user messages before and including replyTo (up to 2 most recent)
-                for (let i = replyToIdx; i >= 0 && userMessages.length < 2; i--) {
-                  const item = merged[i];
-                  if (item.kind === 'user' && (item.content || (item as any).contentSanitized)) {
+                  for (let i = replyToIdx; i >= 0 && userMessages.length < 2; i--) {
+                    const item = merged[i];
+                    // Exclude model.chat user messages (they are ontology commands, not conversational content)
+                    if (item.kind === 'user' && 
+                        item.subkind !== 'model.chat' &&
+                        (item.content || (item as any).contentSanitized)) {
                     const content = (item.content || (item as any).contentSanitized || '') as string;
                     if (content.trim()) {
                       userMessages.unshift(content); // Add to beginning to maintain chronological order
@@ -694,9 +701,12 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               // If no explicit replyTo, find the last 2 user messages before this assistant message
               const assistantIdx = merged.findIndex((it: any) => it.id === lastAssistant.id && it.kind === 'assistant');
               if (assistantIdx > 0) {
-                for (let i = assistantIdx - 1; i >= 0 && userMessages.length < 2; i--) {
-                  const item = merged[i];
-                  if (item.kind === 'user' && (item.content || (item as any).contentSanitized)) {
+                  for (let i = assistantIdx - 1; i >= 0 && userMessages.length < 2; i--) {
+                    const item = merged[i];
+                    // Exclude model.chat user messages (they are ontology commands, not conversational content)
+                    if (item.kind === 'user' && 
+                        item.subkind !== 'model.chat' &&
+                        (item.content || (item as any).contentSanitized)) {
                     const content = (item.content || (item as any).contentSanitized || '') as string;
                     if (content.trim()) {
                       userMessages.unshift(content); // Add to beginning to maintain chronological order
@@ -3661,8 +3671,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             if (!projectId || projectId === 'local-unfold') return;
             // Count all assistant interactions (including agents) to ensure we have at least 1 response
             // Count includes this one we're about to add, so we check if we'll have >= 1 after adding
+            // Exclude ontology interactions and model.chat responses (they are structured data, not conversational content)
             const currentAssistants = get().interactions.filter((it) => 
-              it.kind === 'assistant'
+              it.kind === 'assistant' &&
+              it.subkind !== 'model.chat'
             );
             // After adding this interaction, we'll have currentAssistants.length + 1
             if (currentAssistants.length + 1 < 1) {
@@ -3670,7 +3682,12 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               return;
             }
             // Generate expansions for the last assistant message
-            if (lastAssistant && lastAssistant.content && lastAssistant.content.trim()) {
+            // Skip ontology interactions and model.chat responses (they are structured data, not conversational content)
+            if (lastAssistant && 
+                lastAssistant.content && 
+                lastAssistant.content.trim() &&
+                (lastAssistant as any).kind !== 'ontology' &&
+                (lastAssistant as any).subkind !== 'model.chat') {
               // Check if expansion interaction already exists
               const state = get();
               const map = (state as any).persistedByLocalId || {};
@@ -3708,7 +3725,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                   for (let i = replyToIdx; i >= 0 && userMessages.length < 2; i--) {
                     const item = allItems[i];
                     const isUser = ('kind' in item && item.kind === 'user') || ('role' in item && item.role === 'user');
-                    if (isUser && (item.content || (item as any).contentSanitized)) {
+                    // Exclude model.chat user messages (they are ontology commands, not conversational content)
+                    if (isUser && 
+                        (item as any).subkind !== 'model.chat' &&
+                        (item.content || (item as any).contentSanitized)) {
                       const content = (item.content || (item as any).contentSanitized || '') as string;
                       if (content.trim()) {
                         userMessages.unshift(content); // Add to beginning to maintain chronological order
@@ -3727,7 +3747,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                   for (let i = assistantIdx - 1; i >= 0 && userMessages.length < 2; i--) {
                     const item = allItems[i];
                     const isUser = ('kind' in item && item.kind === 'user') || ('role' in item && item.role === 'user');
-                    if (isUser && (item.content || (item as any).contentSanitized)) {
+                    // Exclude model.chat user messages (they are ontology commands, not conversational content)
+                    if (isUser && 
+                        (item as any).subkind !== 'model.chat' &&
+                        (item.content || (item as any).contentSanitized)) {
                       const content = (item.content || (item as any).contentSanitized || '') as string;
                       if (content.trim()) {
                         userMessages.unshift(content); // Add to beginning to maintain chronological order
