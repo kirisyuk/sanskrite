@@ -24,19 +24,13 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
   const getState = useGenaiChatStore.getState;
 
   return useMemo(() => {
-    const { interactions, messages: stateMessages } = getState();
+    const { interactions, messages: stateMessages, streaming: currentStreaming } = getState();
     
-    // Debug logging for Model chat filtering
-    if (excludeModelChat) {
-      const modelChatInteractions = interactions.filter(it => it.subkind === 'model.chat' || it.kind === 'ontology');
-      if (modelChatInteractions.length > 0) {
-        console.log('[useMergedMessages] Found Model chat interactions to exclude', {
-          excludeModelChat,
-          modelChatCount: modelChatInteractions.length,
-          interactions: modelChatInteractions.map(it => ({ id: it.id, kind: it.kind, subkind: it.subkind }))
-        });
-      }
-    }
+    // Skip Model chat filtering during streaming to save resources
+    // During streaming, we show temporary messages from 'messages' array, not from 'interactions'
+    // Filtering is only needed for persisted interactions, not for temporary streaming messages
+    const shouldExcludeModelChat = excludeModelChat && !currentStreaming;
+    
     const merged: MergedItem[] = [];
 
     // Add interactions first (user, assistant, and section markers)
@@ -77,16 +71,14 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
         if (it.kind === 'ontology' && it.subkind === 'layout') {
           return false;
         }
-        // Exclude Model chat interactions when in Discuss view
-        if (excludeModelChat) {
+        // Exclude Model chat interactions when in Discuss view (skip during streaming to save resources)
+        if (shouldExcludeModelChat) {
           // Exclude all interactions with subkind='model.chat' (created from Model tab)
           if (it.subkind === 'model.chat') {
-            console.log('[useMergedMessages] Excluding Model chat interaction', { id: it.id, kind: it.kind, subkind: it.subkind });
             return false;
           }
           // Exclude ontology interactions (they belong to Model view)
           if (it.kind === 'ontology') {
-            console.log('[useMergedMessages] Excluding ontology interaction', { id: it.id, kind: it.kind, subkind: it.subkind });
             return false;
           }
         }
