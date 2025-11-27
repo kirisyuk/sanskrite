@@ -80,6 +80,15 @@ export function buildContext(options: BuildContextOptions = {}): {
   interactions.forEach((it: any) => {
     if (!it) return;
     
+    // Exclude ontology interactions (structured data, not chat content)
+    if (it.kind === 'ontology') {
+      return;
+    }
+    // Exclude layout interactions (UI state, not chat content)
+    if (it.kind === 'ontology' && it.subkind === 'layout') {
+      return;
+    }
+    
     // Exclude queued tasks interactions (they are metadata, not chat content)
     if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind === 'queued.tasks') {
       return;

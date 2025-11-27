@@ -187,11 +187,47 @@ Your response MUST be a JSON object with this exact structure:
 
 === CONTEXT ===
 
-You have access to existing ontological entities in the conversation context. When updating or deleting, use the entity IDs from the context.
+You have access to existing ontological entities in the conversation context. Each entity in the context includes its REAL ID that you MUST use when creating relations.
 
-For relations, you need TWO IDs:
-- subjectId: source entity/concept ID
-- objectId: target entity/concept ID
+CRITICAL RULES FOR RELATIONS:
+1. When creating relations, you MUST use the EXACT entity IDs from the context
+2. DO NOT invent temporary IDs like "entity-id-1", "concept-id-zaibatsu", or "kQ9v6f7q8r9s0t1u2v3w"
+3. If an entity mentioned in the user's request is NOT in the context, you MUST FIRST create it, THEN use its ID in relations
+4. NEVER use temporary or invented IDs - they will cause errors
+
+For relations, you need TWO IDs from the context:
+- subjectId: MUST be the exact ID from an existing entity/concept in the context (or newly created in the same command batch)
+- objectId: MUST be the exact ID from an existing entity/concept in the context (or newly created in the same command batch)
+
+WORKFLOW FOR CREATING RELATIONS:
+1. SEARCH the context THOROUGHLY for ALL entities mentioned in the user's request
+   - Look for entities by name (canonicalName, aliases, labels)
+   - Check ALL [ONTOLOGY_ENTITY:...] entries in the context
+   - Entities may have different names in different languages (e.g., "Япония" = "Japan")
+2. If an entity EXISTS in context, use its EXACT ID from the context
+3. If an entity is MISSING from context, create it FIRST in the commands array
+4. Then create the relation using the REAL IDs from context or from newly created entities
+5. If creating multiple entities and relations in one batch, order matters: create entities BEFORE relations
+
+CRITICAL SEARCH STRATEGY:
+- When user mentions "Япония", search for: "Япония", "Japan", "Japan" (in any language)
+- When user mentions "дзайбацу", search for: "Дзайбацу", "Zaibatsu", "zaibatsu"
+- Check ALL [ONTOLOGY_ENTITY:entity] entries - don't skip any
+- Match by canonicalName, aliases, or description keywords
+
+Example: If user says "link Япония with Дзайбацу" and context shows:
+[ONTOLOGY_ENTITY:entity]
+ID: HQA1CEK4554xETv8FNIH (USE THIS EXACT ID IN RELATIONS)
+Name: Япония
+
+[ONTOLOGY_ENTITY:entity]
+ID: hMiORqGjy6oU8F9uLXU4 (USE THIS EXACT ID IN RELATIONS)
+Name: Дзайбацу
+
+Then create relation using REAL IDs:
+{ "operation": "create", "type": "relation", "data": { "subjectId": "HQA1CEK4554xETv8FNIH", "predicate": "associatedWith", "objectId": "hMiORqGjy6oU8F9uLXU4", ... } }
+
+NEVER use temporary IDs like "entity-id-japan", "kQ9v6f7q8r9s0t1u2v3w", or any invented IDs
 
 === DUPLICATE PREVENTION (CRITICAL) ===
 
@@ -240,22 +276,23 @@ Example 1 - Create entity:
   ]
 }
 
-Example 2 - Create relation:
+Example 2 - Create relation (using REAL IDs from context):
 {
   "commands": [
     {
       "operation": "create",
       "type": "relation",
       "data": {
-        "subjectId": "entity-id-1",
-        "predicate": "owns",
-        "objectId": "entity-id-2",
+        "subjectId": "hMiORqGjy6oU8F9uLXU4",
+        "predicate": "associatedWith",
+        "objectId": "eTmvJKtU7i0Rv4Y3Easa",
         "direction": "subjectToObject",
         "confidence": 0.95
       }
     }
   ]
 }
+NOTE: subjectId and objectId MUST be exact IDs from existing entities in the context, NOT temporary IDs like "entity-id-1"
 
 Example 3 - Update entity:
 {
@@ -271,27 +308,28 @@ Example 3 - Update entity:
   ]
 }
 
-Example 4 - Multiple commands:
+Example 4 - Multiple commands (creating entity, then linking to existing):
 {
   "commands": [
     {
       "operation": "create",
       "type": "entity",
-      "data": { "canonicalName": "Entity 1", "type": "Organization" }
+      "data": { "canonicalName": "New Entity", "type": "Organization" }
     },
     {
       "operation": "create",
       "type": "relation",
       "data": {
-        "subjectId": "entity-id-1",
+        "subjectId": "hMiORqGjy6oU8F9uLXU4",
         "predicate": "relatedTo",
-        "objectId": "entity-id-2",
+        "objectId": "eTmvJKtU7i0Rv4Y3Easa",
         "direction": "bidirectional",
         "confidence": 0.8
       }
     }
   ]
 }
+NOTE: When linking to existing entities, use their REAL IDs from context. Only omit id field when CREATING new entities.
 
 === CRITICAL REMINDERS ===
 

@@ -284,6 +284,27 @@ export const PagesPanel: React.FC<PagesPanelProps> = ({
       if (!it) return false;
       // Only include interactions from current project
       if (it.projectId !== projectId) return false;
+      // Exclude ontology interactions (they are structured data, not chat content)
+      if (it.kind === 'ontology') {
+        return false;
+      }
+      // Exclude layout interactions (UI state, not chat content)
+      if (it.kind === 'ontology' && it.subkind === 'layout') {
+        return false;
+      }
+      // Exclude other non-chat interactions
+      if (it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end') {
+        return false;
+      }
+      // Exclude perspective interactions
+      if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+        return false;
+      }
+      // Exclude queued tasks
+      if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind === 'queued.tasks') {
+        return false;
+      }
+      // Only include user and assistant interactions (actual chat content)
       return it.kind === 'user' || it.kind === 'assistant';
     });
     

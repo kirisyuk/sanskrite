@@ -3,6 +3,7 @@
 
 import { api } from './api';
 import type { OntologyCommand } from '../types/ontologyCommands';
+import { validateOntologyCommand } from '../types/ontologyCommands';
 import type { LocalInteraction } from '../stores/genaiChatStore';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 
@@ -19,13 +20,115 @@ import { useGenaiChatStore } from '../stores/genaiChatStore';
  * 
  * @param commands - массив команд от LLM
  * @param projectId - ID проекта
+ * @param onProgress - callback для обновления прогресса обработки
  * @returns Promise с массивом созданных/обновленных interaction IDs
  */
 export async function processOntologyCommands(
   commands: OntologyCommand[],
-  projectId: string
-): Promise<string[]> {
+  projectId: string,
+  onProgress?: (progress: {
+    stage: 'parsing' | 'validating' | 'creating' | 'updating' | 'deleting' | 'linking' | 'complete';
+    processed: number;
+    total: number;
+    currentOperation?: string;
+  }) => void
+): Promise<{ success: boolean; createdIds: string[]; errors: Array<{ command: OntologyCommand; error: string }> }> {
   const createdInteractionIds: string[] = [];
+  
+  // Обновляем прогресс - начало валидации
+  onProgress?.({
+    stage: 'validating',
+    processed: 0,
+    total: commands.length,
+    currentOperation: 'Validating commands...',
+  });
+  
+  // Валидация команд перед обработкой
+  const validationErrors: Array<{ command: OntologyCommand; error: string }> = [];
+  const validCommands: OntologyCommand[] = [];
+  
+  for (let i = 0; i < commands.length; i++) {
+    const cmd = commands[i];
+    if (!validateOntologyCommand(cmd)) {
+      validationErrors.push({
+        command: cmd,
+        error: 'Invalid command structure',
+      });
+      continue;
+    }
+    
+    // Дополнительная валидация содержимого data
+    if ((cmd.operation === 'create' || cmd.operation === 'update') && cmd.data) {
+      // Проверяем обязательные поля в зависимости от типа
+      if (cmd.type === 'entity' && !cmd.data.canonicalName) {
+        validationErrors.push({
+          command: cmd,
+          error: 'Entity missing required field: canonicalName',
+        });
+        continue;
+      }
+      if (cmd.type === 'event' && (!cmd.data.type || !cmd.data.title)) {
+        validationErrors.push({
+          command: cmd,
+          error: 'Event missing required fields: type or title',
+        });
+        continue;
+      }
+      if (cmd.type === 'relation' && (!cmd.data.subjectId || !cmd.data.objectId || !cmd.data.predicate)) {
+        validationErrors.push({
+          command: cmd,
+          error: 'Relation missing required fields: subjectId, objectId, or predicate',
+        });
+        continue;
+      }
+      if (cmd.type === 'claim' && (!cmd.data.subjectRef || !cmd.data.predicate || !cmd.data.objectRef)) {
+        validationErrors.push({
+          command: cmd,
+          error: 'Claim missing required fields: subjectRef, predicate, or objectRef',
+        });
+        continue;
+      }
+    }
+    
+    validCommands.push(cmd);
+    
+    // Обновляем прогресс валидации
+    onProgress?.({
+      stage: 'validating',
+      processed: i + 1,
+      total: commands.length,
+      currentOperation: `Validating command ${i + 1}/${commands.length}...`,
+    });
+  }
+  
+  if (validationErrors.length > 0) {
+    console.warn('[processOntologyCommands] Some commands failed validation', {
+      totalCommands: commands.length,
+      validationErrors: validationErrors.length,
+      errors: validationErrors,
+    });
+  }
+  
+  if (validCommands.length === 0) {
+    // Нет валидных команд для обработки
+    const errorMessage = validationErrors.length > 0
+      ? `All ${commands.length} commands failed validation. Check console for details.`
+      : 'No valid commands to process.';
+    
+    useGenaiChatStore.setState((s) => {
+      const existingError = s.error;
+      const newError = existingError 
+        ? `${existingError}. ${errorMessage}`
+        : errorMessage;
+      return { error: newError } as any;
+    });
+    
+    return {
+      success: false,
+      createdIds: [],
+      errors: validationErrors,
+    };
+  }
   
   // Получаем текущие interactions для поиска существующих сущностей
   const currentInteractions = useGenaiChatStore.getState().interactions.filter(
@@ -60,7 +163,7 @@ export async function processOntologyCommands(
   const objectCommands: OntologyCommand[] = [];
   const relationCommands: OntologyCommand[] = [];
   
-  for (const cmd of commands) {
+  for (const cmd of validCommands) {
     if (cmd.operation === 'create' && relationTypes.has(cmd.type)) {
       relationCommands.push(cmd);
     } else {
@@ -78,13 +181,23 @@ export async function processOntologyCommands(
   
   // ШАГ 1: Обрабатываем все объекты (entities, events, concepts и т.д.)
   // Строим маппинг временных ID -> реальных ID
+  let processedObjects = 0;
   for (const cmd of objectCommands) {
     try {
       if (cmd.operation === 'create') {
+        // Обновляем прогресс - создание
+        onProgress?.({
+          stage: 'creating',
+          processed: processedObjects,
+          total: objectCommands.length,
+          currentOperation: `Creating ${cmd.type}...`,
+        });
+        
         // CREATE: создаем interaction, Firestore генерирует уникальный ID
         if (!cmd.data) {
           console.warn('[processOntologyCommands] Create command missing data', cmd);
           errors.push({ command: cmd, error: new Error('Create command missing data') });
+          processedObjects++;
           continue;
         }
         
@@ -108,6 +221,7 @@ export async function processOntologyCommands(
         } catch (err) {
           console.error('[processOntologyCommands] Failed to create interaction on server', cmd, err);
           errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          processedObjects++;
           continue; // Не обновляем локальное состояние, если создание на сервере не удалось
         }
         
@@ -160,6 +274,15 @@ export async function processOntologyCommands(
         }
         
         createdInteractionIds.push(interaction.id);
+        processedObjects++;
+        
+        // Обновляем прогресс после успешного создания
+        onProgress?.({
+          stage: 'creating',
+          processed: processedObjects,
+          total: objectCommands.length,
+          currentOperation: `Created ${cmd.type}`,
+        });
         
         // Обновляем локальное состояние только после успешного сохранения на сервере
         useGenaiChatStore.setState((s) => ({
@@ -178,16 +301,26 @@ export async function processOntologyCommands(
         }));
         
       } else if (cmd.operation === 'update') {
+        // Обновляем прогресс - обновление
+        onProgress?.({
+          stage: 'updating',
+          processed: processedObjects,
+          total: objectCommands.length,
+          currentOperation: `Updating ${cmd.type}...`,
+        });
+        
         // UPDATE: находим существующий interaction и обновляем его content
         if (!cmd.id) {
           console.warn('[processOntologyCommands] Update command missing id', cmd);
           errors.push({ command: cmd, error: new Error('Update command missing id') });
+          processedObjects++;
           continue;
         }
         
         if (!cmd.data) {
           console.warn('[processOntologyCommands] Update command missing data', cmd);
           errors.push({ command: cmd, error: new Error('Update command missing data') });
+          processedObjects++;
           continue;
         }
         
@@ -196,6 +329,7 @@ export async function processOntologyCommands(
         if (!existingInteraction) {
           console.warn('[processOntologyCommands] Update command: entity not found', cmd.id);
           errors.push({ command: cmd, error: new Error(`Entity not found: ${cmd.id}`) });
+          processedObjects++;
           continue;
         }
         
@@ -222,10 +356,20 @@ export async function processOntologyCommands(
             error: err,
           });
           errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          processedObjects++;
           continue; // Не обновляем локальное состояние, если обновление на сервере не удалось
         }
         
         createdInteractionIds.push(existingInteraction.id);
+        processedObjects++;
+        
+        // Обновляем прогресс после успешного обновления
+        onProgress?.({
+          stage: 'updating',
+          processed: processedObjects,
+          total: objectCommands.length,
+          currentOperation: `Updated ${cmd.type}`,
+        });
         
         // Обновляем локальное состояние только после успешного сохранения на сервере
         useGenaiChatStore.setState((s) => ({
@@ -242,10 +386,19 @@ export async function processOntologyCommands(
         }));
         
       } else if (cmd.operation === 'delete') {
+        // Обновляем прогресс - удаление
+        onProgress?.({
+          stage: 'deleting',
+          processed: processedObjects,
+          total: objectCommands.length,
+          currentOperation: `Deleting ${cmd.type}...`,
+        });
+        
         // DELETE: находим interaction и помечаем как удаленный или удаляем физически
         if (!cmd.id) {
           console.warn('[processOntologyCommands] Delete command missing id', cmd);
           errors.push({ command: cmd, error: new Error('Delete command missing id') });
+          processedObjects++;
           continue;
         }
         
@@ -254,6 +407,7 @@ export async function processOntologyCommands(
         if (!existingInteraction) {
           console.warn('[processOntologyCommands] Delete command: entity not found', cmd.id);
           errors.push({ command: cmd, error: new Error(`Entity not found: ${cmd.id}`) });
+          processedObjects++;
           continue;
         }
         
@@ -312,6 +466,16 @@ export async function processOntologyCommands(
             errors.push({ command: cmd, error: new Error('Failed to delete entity') });
           }
         }
+        
+        processedObjects++;
+        
+        // Обновляем прогресс после удаления
+        onProgress?.({
+          stage: 'deleting',
+          processed: processedObjects,
+          total: objectCommands.length,
+          currentOperation: `Deleted ${cmd.type}`,
+        });
       }
     } catch (err) {
       console.error('[processOntologyCommands] Unexpected error processing command', cmd, err);
@@ -463,6 +627,17 @@ export async function processOntologyCommands(
   
   // ШАГ 2: Обрабатываем связи (relations, claims, causalLinks)
   // Заменяем временные ID на реальные используя маппинг
+  let processedRelations = 0;
+  const totalCommands = objectCommands.length + relationCommands.length;
+  
+  // Обновляем прогресс - начало обработки связей
+  onProgress?.({
+    stage: 'linking',
+    processed: objectCommands.length,
+    total: totalCommands,
+    currentOperation: 'Linking entities...',
+  });
+  
   for (const cmd of relationCommands) {
     try {
       if (cmd.operation === 'create') {
@@ -475,18 +650,17 @@ export async function processOntologyCommands(
         // Функция для замены временных ID на реальные в объекте
         const resolveId = (id: string | undefined): string | undefined => {
           if (!id) return undefined;
-          // Сначала проверяем маппинг временных ID
+          // Сначала проверяем маппинг временных ID (для только что созданных сущностей)
           if (tempIdToRealId.has(id)) {
             return tempIdToRealId.get(id);
           }
-          // Затем проверяем существующие interactions
+          // Затем проверяем существующие interactions (для уже существующих сущностей)
           if (interactionsByEntityId.has(id)) {
-            return id; // ID уже реальный
+            return id; // ID уже реальный и существует
           }
-          // Пытаемся найти по имени (для обратной совместимости)
-          // Например, "entity-id-for-ИП БАЙМУРАТОВ К." -> ищем сущность с таким именем
-          // Но это сложно, поэтому просто возвращаем исходный ID и надеемся, что он правильный
-          return id;
+          // Если ID не найден ни в маппинге, ни в существующих interactions - это ошибка
+          // LLM должен был использовать реальный ID из контекста или создать сущность сначала
+          return undefined; // Возвращаем undefined, чтобы вызвать ошибку валидации
         };
         
         // Заменяем временные ID в data на реальные
@@ -504,6 +678,7 @@ export async function processOntologyCommands(
                 relation: cmd,
               });
               errors.push({ command: cmd, error: new Error(`Could not resolve subjectId: ${resolvedData.subjectId}`) });
+              processedRelations++;
               continue;
             }
           }
@@ -517,6 +692,7 @@ export async function processOntologyCommands(
                 relation: cmd,
               });
               errors.push({ command: cmd, error: new Error(`Could not resolve objectId: ${resolvedData.objectId}`) });
+              processedRelations++;
               continue;
             }
           }
@@ -534,6 +710,7 @@ export async function processOntologyCommands(
                 relation: cmd,
               });
               errors.push({ command: cmd, error: new Error(`Could not resolve claim subjectRef.id: ${resolvedData.subjectRef.id}`) });
+              processedRelations++;
               continue;
             }
           }
@@ -551,6 +728,7 @@ export async function processOntologyCommands(
                   relation: cmd,
                 });
                 errors.push({ command: cmd, error: new Error(`Could not resolve claim objectRef.id: ${resolvedData.objectRef.id}`) });
+                processedRelations++;
                 continue;
               }
             }
@@ -569,6 +747,7 @@ export async function processOntologyCommands(
                 relation: cmd,
               });
               errors.push({ command: cmd, error: new Error(`Could not resolve causalLink causeRef.id: ${resolvedData.causeRef.id}`) });
+              processedRelations++;
               continue;
             }
           }
@@ -582,6 +761,7 @@ export async function processOntologyCommands(
                 relation: cmd,
               });
               errors.push({ command: cmd, error: new Error(`Could not resolve causalLink effectRef.id: ${resolvedData.effectRef.id}`) });
+              processedRelations++;
               continue;
             }
           }
@@ -602,6 +782,7 @@ export async function processOntologyCommands(
         } catch (err) {
           console.error('[processOntologyCommands] Failed to create relation interaction on server', cmd, err);
           errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          processedRelations++;
           continue;
         }
         
@@ -641,10 +822,20 @@ export async function processOntologyCommands(
             console.error('[processOntologyCommands] Failed to cleanup incomplete relation interaction', interaction.id, deleteErr);
           }
           errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+          processedRelations++;
           continue;
         }
         
         createdInteractionIds.push(interaction.id);
+        processedRelations++;
+        
+        // Обновляем прогресс после создания связи
+        onProgress?.({
+          stage: 'linking',
+          processed: objectCommands.length + processedRelations,
+          total: totalCommands,
+          currentOperation: `Created ${cmd.type}`,
+        });
         
         // Обновляем локальное состояние
         useGenaiChatStore.setState((s) => ({
@@ -667,32 +858,59 @@ export async function processOntologyCommands(
         // (логика уже есть выше в обработке objectCommands)
         console.warn('[processOntologyCommands] Update/Delete for relations not yet implemented in new flow', cmd);
         errors.push({ command: cmd, error: new Error('Update/Delete for relations not yet implemented') });
+        processedRelations++;
       }
     } catch (err) {
       console.error('[processOntologyCommands] Unexpected error processing relation command', cmd, err);
       errors.push({ command: cmd, error: err instanceof Error ? err : new Error(String(err)) });
+      processedRelations++;
     }
   }
   
+  // Объединяем ошибки валидации и обработки
+  const allErrors = [
+    ...validationErrors.map(e => ({ command: e.command, error: e.error })),
+    ...errors.map(e => ({ command: e.command, error: e.error.message })),
+  ];
+  
   // Логируем все ошибки, если они есть
-  if (errors.length > 0) {
-    console.error('[processOntologyCommands] Some commands failed to save on server', {
+  if (allErrors.length > 0) {
+    console.error('[processOntologyCommands] Some commands failed', {
       totalCommands: commands.length,
-      failedCommands: errors.length,
-      errors: errors.map(e => ({
+      validCommands: validCommands.length,
+      failedCommands: allErrors.length,
+      errors: allErrors.map(e => ({
         operation: e.command.operation,
         type: e.command.type,
         id: e.command.id,
-        error: e.error.message,
+        error: e.error,
       })),
     });
     
     // Показываем предупреждение пользователю через store
-    useGenaiChatStore.setState((s) => ({
-      error: `Some ontology commands failed to save on server. ${errors.length} out of ${commands.length} commands failed. Check console for details.`,
-    } as any));
+    // Не перезаписываем существующий error, а добавляем к нему
+    useGenaiChatStore.setState((s) => {
+      const existingError = s.error;
+      const newError = `Some ontology commands failed: ${allErrors.length} out of ${commands.length} commands failed. ${existingError ? existingError + ' ' : ''}Check console for details.`;
+      return { error: newError } as any;
+    });
+  } else if (createdInteractionIds.length > 0) {
+    // Успешно обработано - очищаем error только если он был о парсинге/truncation
+    useGenaiChatStore.setState((s) => {
+      const existingError = s.error;
+      // Очищаем error только если он был о парсинге или truncation
+      // Если error был установлен processOntologyCommands ранее, оставляем его
+      if (existingError && (existingError.includes('parse') || existingError.includes('truncated'))) {
+        return { error: null } as any;
+      }
+      return s;
+    });
   }
   
-  return createdInteractionIds;
+  return {
+    success: allErrors.length === 0,
+    createdIds: createdInteractionIds,
+    errors: allErrors,
+  };
 }
 

@@ -32,6 +32,9 @@ type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start
 // Ontology entity subkinds
 export type OntologySubkind = 'entity' | 'event' | 'claim' | 'relation' | 'concept' | 'metricState' | 'trend' | 'causalLink' | 'scenario' | 'actionableItem';
 
+// Ontology operations (commands from LLM)
+export type OntologyOperation = 'create' | 'update' | 'delete';
+
 export interface LocalInteraction {
   id: string;
   projectId: string; // temporary local id binding
@@ -185,6 +188,14 @@ interface GenaiChatState {
   hydrating: boolean;
   // Active stream tracking (for filtering events by streamId)
   currentStreamId?: string;
+  // Model mode: ontology commands processing state
+  processingCommands: boolean;
+  commandsProgress: {
+    stage: 'parsing' | 'validating' | 'creating' | 'updating' | 'deleting' | 'linking' | 'complete';
+    processed: number;
+    total: number;
+    currentOperation?: string;
+  } | null;
 }
 
 export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
@@ -215,8 +226,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   pendingAttachedDocIds: [],
   hydrating: false,
   currentStreamId: undefined,
+  processingCommands: false,
+  commandsProgress: null,
 
-  reset: () => set({ projectId: 'local-unfold', messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], toolRetries: [], toolCorrections: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [], hydrating: false, currentStreamId: undefined }),
+  reset: () => set({ projectId: 'local-unfold', messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], toolRetries: [], toolCorrections: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [], hydrating: false, currentStreamId: undefined, processingCommands: false, commandsProgress: null }),
   
   clearToolRetries: () => set({ toolRetries: [], toolCorrections: [] }),
   
@@ -514,7 +527,91 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           if (mappedId) seenIds.add(mappedId);
           deduplicatedKeepLocals.push(it);
         }
-        const merged = [...deduplicatedServerItems, ...deduplicatedKeepLocals];
+        let merged = [...deduplicatedServerItems, ...deduplicatedKeepLocals];
+        
+        // Clean up dangling relations (relations pointing to non-existent entities) at chat load time
+        // Build a set of all existing entity/concept IDs
+        const existingEntityIds = new Set<string>();
+        merged.forEach((it: any) => {
+          if (it.kind === 'ontology') {
+            // For entities/concepts, use ontologyEntityId or id
+            const entityId = it.ontologyEntityId || it.id;
+            if (entityId) {
+              existingEntityIds.add(entityId);
+            }
+            // Also check content.id for backward compatibility
+            if (it.content) {
+              try {
+                const entityData = JSON.parse(it.content);
+                if (entityData.id) {
+                  existingEntityIds.add(entityData.id);
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+        });
+        
+        // Find and remove dangling relations
+        const danglingRelationIds: string[] = [];
+        const cleanedMerged: any[] = [];
+        
+        merged.forEach((it: any) => {
+          if (it.kind === 'ontology' && it.subkind === 'relation' && it.content) {
+            try {
+              const relationData = JSON.parse(it.content);
+              const subjectId = relationData.subjectId;
+              const objectId = relationData.objectId;
+              
+              // Check if both subjectId and objectId exist
+              const subjectExists = subjectId && existingEntityIds.has(subjectId);
+              const objectExists = objectId && existingEntityIds.has(objectId);
+              
+              if (!subjectExists || !objectExists) {
+                console.warn('[hydrateInteractions] Found dangling relation, will delete', {
+                  relationId: it.id,
+                  subjectId,
+                  objectId,
+                  subjectExists,
+                  objectExists,
+                });
+                danglingRelationIds.push(it.id);
+                // Don't add to cleanedMerged - effectively removing it
+                return;
+              }
+            } catch (e) {
+              console.warn('[hydrateInteractions] Failed to parse relation content, keeping relation', {
+                relationId: it.id,
+                error: e,
+              });
+            }
+          }
+          cleanedMerged.push(it);
+        });
+        
+        // Delete dangling relations from server asynchronously (don't block hydration)
+        if (danglingRelationIds.length > 0) {
+          console.log('[hydrateInteractions] Deleting dangling relations', {
+            count: danglingRelationIds.length,
+            ids: danglingRelationIds,
+          });
+          (async () => {
+            for (const relationId of danglingRelationIds) {
+              try {
+                await api.deleteProjectInteraction(projectId, relationId);
+                console.log('[hydrateInteractions] Deleted dangling relation', { relationId });
+              } catch (e) {
+                console.warn('[hydrateInteractions] Failed to delete dangling relation', {
+                  relationId,
+                  error: e,
+                });
+              }
+            }
+          })();
+        }
+        
+        merged = cleanedMerged;
         
         // Clear global queries/sources on hydration - chips are now per-interaction only
         // Global state is only temporary during streaming and should not persist
@@ -2337,6 +2434,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         if (it.subkind === 'model.chat') {
           return false;
         }
+        // Exclude layout interactions (they are UI state, not chat content)
+        if (it.kind === 'ontology' && it.subkind === 'layout') {
+          return false;
+        }
         // Exclude ontology interactions (they are shown in Model tab, not in chat)
         if (it.kind === 'ontology') {
           return false;
@@ -2369,8 +2470,14 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       });
       
       // LLM context includes document attachments (for token counting and LLM), but excludes other non-displayable types
-      // NOTE: ontology interactions ARE included in LLM context (they represent the model state that LLM should see)
+      // Exclude ontology interactions - they are structured data (entities, relations, etc.), not conversational content
+      // They should not be sent to LLM as chat context (they are shown in Model tab, not in chat)
       const llmContextInteractions = interactions.filter((it) => {
+        // Exclude ontology interactions (structured data, not chat content)
+        // This includes layout interactions (UI state, not chat content)
+        if (it.kind === 'ontology') {
+          return false;
+        }
         // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
         if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
           return false;
@@ -2501,10 +2608,23 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           try {
             const entityData = JSON.parse(it.content);
             // Format ontology entity for LLM context: show type, ID, and key properties
-            const entityId = entityData.id || it.ontologyEntityId || it.id;
+            // CRITICAL: Always use the REAL ID (ontologyEntityId first) so LLM can reference it in relations
+            // Use ontologyEntityId first, as it's the canonical Firestore ID, not a temporary one from entityData.id
+            const entityId = it.ontologyEntityId || entityData.id || it.id;
             const entityType = it.subkind || 'entity';
             const name = entityData.canonicalName || entityData.name || entityData.title || entityId;
-            text = `[ONTOLOGY_ENTITY:${entityType}]\nID: ${entityId}\nName: ${name}\nData: ${JSON.stringify(entityData, null, 2)}`;
+            const aliases = entityData.aliases || [];
+            const aliasesText = aliases.length > 0 ? `\nAliases: ${aliases.join(', ')}` : '';
+            
+            // CRITICAL: Remove any temporary ID from entityData before sending to LLM
+            // Create a clean copy without temporary IDs to ensure LLM only sees real IDs
+            const cleanEntityData = { ...entityData };
+            // Replace id field with the real ID (entityId) to ensure consistency
+            cleanEntityData.id = entityId;
+            
+            // Emphasize the ID prominently - LLM must use this exact ID when creating relations
+            // Include aliases to help LLM find entities by different names
+            text = `[ONTOLOGY_ENTITY:${entityType}]\nID: ${entityId} (USE THIS EXACT ID IN RELATIONS)\nName: ${name}${aliasesText}\nData: ${JSON.stringify(cleanEntityData, null, 2)}`;
           } catch {
             // Fallback to raw content if JSON parsing fails
             text = it.content;
@@ -2645,56 +2765,199 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 } : null
               });
               
-              // Check if response might be truncated (ends abruptly in JSON)
-              const trimmedContent = content.trim();
-              const mightBeTruncated = (
-                trimmedContent.length > 0 &&
-                !trimmedContent.endsWith('}') &&
-                !trimmedContent.endsWith(']') &&
-                (trimmedContent.includes('"commands"') || trimmedContent.includes('"operation"'))
-              );
+              // Устанавливаем состояние обработки ДО парсинга, чтобы показать анимацию
+              set((s) => ({
+                processingCommands: true,
+                commandsProgress: {
+                  stage: 'parsing',
+                  processed: 0,
+                  total: 0,
+                  currentOperation: 'Parsing commands...',
+                },
+              } as any));
               
-              if (mightBeTruncated) {
-                console.warn('[Chat] Model mode: Response might be truncated!', {
-                  contentLength: content.length,
-                  endsWith: trimmedContent.substring(Math.max(0, trimmedContent.length - 50)),
-                  usage,
-                  maxOutputTokens: options?.maxOutputTokens
+              // Упрощенная проверка: парсер сам определит truncation на основе баланса скобок
+              // Не делаем предварительную проверку - она была слишком строгой
+              const parseResult = parseOntologyCommands(content, false);
+              
+              // Обрабатываем результат парсинга
+              if (parseResult.parseError) {
+                // Ошибка парсинга - показываем пользователю
+                console.error('[Chat] Model mode: Failed to parse ontology commands', {
+                  error: parseResult.parseError,
+                  wasTruncated: parseResult.wasTruncated,
+                  contentPreview: content.substring(0, 500),
                 });
-                // Show warning to user
+                
+                let errorMessage = `Failed to parse ontology commands: ${parseResult.parseError}`;
+                if (parseResult.wasTruncated) {
+                  errorMessage += ` Response was truncated. Consider increasing maxOutputTokens (current: ${options?.maxOutputTokens || 'default'}).`;
+                }
+                
                 set((s) => ({
-                  error: `Response was truncated. Some ontology commands may be missing. Consider increasing maxOutputTokens (current: ${options?.maxOutputTokens || 'default'}).`,
-                }));
+                  error: errorMessage,
+                  streaming: false,
+                  currentStreamId: undefined,
+                  processingCommands: false,
+                  commandsProgress: null,
+                } as any));
+                
+                // Fall through to normal message handling - показываем ответ как текст
+                // Но не создаем assistant interaction, так как это была ошибка парсинга
+                return;
               }
               
-              const commands = parseOntologyCommands(content);
-              console.log('[Chat] Model mode: parsed commands', { 
-                commandsCount: commands.length,
-                commands: commands.map(c => ({ operation: c.operation, type: c.type, id: c.id }))
-              });
-              if (commands.length > 0) {
-                // Process commands and create/update/delete ontology interactions
-                await processOntologyCommands(commands, projectId);
-                // Don't create assistant message/interaction - commands are processed directly
-                // Remove placeholder assistant message
-                set((s) => {
-                  const msgs = [...s.messages];
-                  // Remove last assistant placeholder if exists
-                  if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant' && !msgs[msgs.length - 1].content) {
-                    msgs.pop();
-                  }
-                  return {
-                    messages: msgs,
-                    streaming: false, 
-                    currentStreamId: undefined,
-                    usage,
-                    error: null,
-                  } as any;
+              if (parseResult.wasTruncated) {
+                // Ответ обрезан, но мы не пытались парсить
+                console.warn('[Chat] Model mode: Response was truncated, skipping parsing', {
+                  contentLength: content.length,
+                  maxOutputTokens: options?.maxOutputTokens,
                 });
-                return; // Exit early - commands processed, no message needed
+                
+                set((s) => ({
+                  error: `Response was truncated. Cannot parse incomplete JSON. Consider increasing maxOutputTokens (current: ${options?.maxOutputTokens || 'default'}).`,
+                  streaming: false,
+                  currentStreamId: undefined,
+                  processingCommands: false,
+                  commandsProgress: null,
+                } as any));
+                
+                return;
+              }
+              
+              console.log('[Chat] Model mode: parsed commands', { 
+                commandsCount: parseResult.commands.length,
+                isValidJson: parseResult.isValidJson,
+                commands: parseResult.commands.map(c => ({ operation: c.operation, type: c.type, id: c.id }))
+              });
+              
+              if (parseResult.commands.length > 0) {
+                // Есть команды для обработки
+                try {
+                  // Устанавливаем состояние обработки команд
+                  set((s) => ({
+                    processingCommands: true,
+                    commandsProgress: {
+                      stage: 'validating',
+                      processed: 0,
+                      total: parseResult.commands.length,
+                    },
+                  } as any));
+                  
+                  // Process commands and create/update/delete ontology interactions
+                  const processResult = await processOntologyCommands(
+                    parseResult.commands, 
+                    projectId,
+                    (progress) => {
+                      // Callback для обновления прогресса
+                      set((s) => ({
+                        commandsProgress: progress,
+                      } as any));
+                    }
+                  );
+                  
+                  // Логируем результат обработки
+                  console.log('[Chat] Model mode: Commands processed', {
+                    totalCommands: parseResult.commands.length,
+                    success: processResult.success,
+                    createdIds: processResult.createdIds.length,
+                    errors: processResult.errors.length,
+                  });
+                  
+                  // Обновляем состояние - завершаем обработку команд
+                  set((s) => {
+                    const msgs = [...s.messages];
+                    // Remove last assistant placeholder if exists
+                    if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant' && !msgs[msgs.length - 1].content) {
+                      msgs.pop();
+                    }
+                    
+                    // processOntologyCommands уже обновил error через setState внутри себя
+                    // Не перезаписываем error здесь - он уже установлен правильно
+                    
+                    return {
+                      messages: msgs,
+                      streaming: false, 
+                      currentStreamId: undefined,
+                      usage,
+                      processingCommands: false,
+                      commandsProgress: {
+                        stage: 'complete',
+                        processed: processResult.createdIds.length,
+                        total: parseResult.commands.length,
+                      },
+                      // Не трогаем error - processOntologyCommands уже установил его правильно
+                    } as any;
+                  });
+                  
+                  // Очищаем прогресс через небольшую задержку, чтобы пользователь увидел завершение
+                  setTimeout(() => {
+                    set((s) => ({
+                      commandsProgress: null,
+                    } as any));
+                  }, 1000);
+                  
+                  return; // Exit early - commands processed, no message needed
+                } catch (processErr) {
+                  // Ошибка при обработке команд
+                  console.error('[Chat] Model mode: Failed to process ontology commands', processErr);
+                  set((s) => {
+                    const existingError = s.error;
+                    const newError = `Failed to process ontology commands: ${processErr instanceof Error ? processErr.message : String(processErr)}. ${existingError ? existingError : ''}`;
+                    return {
+                      error: newError,
+                      streaming: false,
+                      currentStreamId: undefined,
+                      processingCommands: false,
+                      commandsProgress: null,
+                    } as any;
+                  });
+                  return;
+                }
+              } else {
+                // Нет команд - это может быть нормально (пустой ответ) или ошибка
+                // Если JSON валидный, но команд нет - это нормально (LLM вернул пустой массив)
+                // Если JSON невалидный - это ошибка (но мы уже обработали это выше)
+                if (parseResult.isValidJson) {
+                  // Валидный JSON, но команд нет - это нормально
+                  console.log('[Chat] Model mode: Valid JSON but no commands found - empty response');
+                  
+                  set((s) => {
+                    const msgs = [...s.messages];
+                    // Remove last assistant placeholder if exists
+                    if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant' && !msgs[msgs.length - 1].content) {
+                      msgs.pop();
+                    }
+                    return {
+                      messages: msgs,
+                      streaming: false,
+                      currentStreamId: undefined,
+                      usage,
+                      error: null,
+                    } as any;
+                  });
+                  
+                  return; // Exit early - no commands to process
+                } else {
+                  // Невалидный JSON - ошибка (но мы уже обработали это выше через parseError)
+                  // Этот код не должен выполняться, но на всякий случай
+                  console.error('[Chat] Model mode: Invalid JSON and no commands - unexpected state');
+                  set((s) => ({
+                    error: 'Invalid JSON response from LLM. Expected ontology commands.',
+                    streaming: false,
+                    currentStreamId: undefined,
+                  } as any));
+                  return;
+                }
               }
             } catch (err) {
-              console.error('[Chat] Failed to process ontology commands', err);
+              // Неожиданная ошибка при обработке
+              console.error('[Chat] Model mode: Unexpected error processing ontology commands', err);
+              set((s) => ({
+                error: `Unexpected error: ${err instanceof Error ? err.message : String(err)}`,
+                streaming: false,
+                currentStreamId: undefined,
+              } as any));
               // Fall through to normal message handling if parsing fails
             }
           }

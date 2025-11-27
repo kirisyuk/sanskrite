@@ -319,6 +319,131 @@ export const UsageTab: React.FC = () => {
     return usageData.tokenCategories;
   }, [usageData]);
 
+  // Format model name for display (defined early so it can be used in premiumModelNames)
+  const formatModelName = (modelName: string): string => {
+    if (!modelName) return modelName;
+    
+    // Handle Tavily models: convert "tavily-search-basic" -> "Tavily Search"
+    if (modelName.includes('tavily-')) {
+      return 'Tavily Search';
+    }
+    
+    // Handle Claude models: convert "claude-sonnet-4-5-20250929" -> "claude sonnet"
+    if (modelName.includes('claude-')) {
+      const parts = modelName.split('-');
+      if (parts.length >= 2) {
+        // Extract model type (sonnet, opus, haiku, etc.)
+        const modelType = parts[1];
+        return `claude ${modelType}`;
+      }
+    }
+    
+    // Handle Gemini models: keep readable parts
+    if (modelName.includes('gemini-')) {
+      const parts = modelName.split('-');
+      if (parts.length >= 2) {
+        // Extract version and type (e.g., "2.5-pro", "2.5-flash-lite")
+        const versionType = parts.slice(1).join(' ').replace(/\d{8}/g, '').trim(); // Remove date patterns
+        return `gemini ${versionType}`;
+      }
+    }
+    
+    // Handle Grok models
+    if (modelName.includes('grok-')) {
+      // Format grok-4-0709 as "Grok 4.1"
+      if (modelName.includes('grok-4-0709')) {
+        return 'Grok 4.1';
+      }
+      // Format grok-4-1-* as "Grok 4.1" (but exclude fast versions in premium detection)
+      if (modelName.includes('grok-4-1-') && !modelName.includes('fast')) {
+        return 'Grok 4.1';
+      }
+      return modelName.replace(/-/g, ' ').replace(/\d{8}/g, '').trim();
+    }
+    
+    // Handle GPT models
+    if (modelName.includes('gpt-')) {
+      const parts = modelName.split('-');
+      if (parts.length >= 2) {
+        return parts.slice(0, 2).join(' '); // Keep "gpt-5" format
+      }
+    }
+    
+    // Default: replace dashes with spaces, remove date patterns
+    return modelName.replace(/-/g, ' ').replace(/\d{8}/g, '').trim();
+  };
+
+  // Helper function to determine if a model is premium based on modelAlias
+  const isPremiumModel = (provider: string, modelAlias?: string): boolean => {
+    if (!modelAlias) return false;
+    // Check for _quality suffix (any provider)
+    if (modelAlias.endsWith('_quality')) return true;
+    // Check for _balanced suffix (Claude only)
+    if (provider === 'anthropic' && modelAlias.endsWith('_balanced')) return true;
+    return false;
+  };
+
+  // Collect premium model names from events or byModel
+  const premiumModelNames = React.useMemo(() => {
+    const premiumModels = new Set<string>();
+    
+    // First, try to get from events (most accurate, has modelAlias)
+    if (eventsData?.events && eventsData.events.length > 0) {
+      eventsData.events.forEach(event => {
+        if (isPremiumModel(event.provider, event.modelAlias)) {
+          // Format model name nicely
+          const formatted = formatModelName(event.model);
+          premiumModels.add(formatted);
+        }
+      });
+    }
+    
+    // Fallback: determine premium models from byModel by checking model names
+    // This covers cases where events aren't loaded yet, or when modelAlias is missing
+    // We always check byModel to catch premium models that might not have modelAlias set
+    if (usageData?.byModel) {
+      Object.keys(usageData.byModel).forEach(key => {
+        const [provider, model] = key.split(':');
+        const modelLower = model.toLowerCase();
+        
+        // GPT premium models: gpt-5, gpt-5.1, gpt-5.2, etc. (but not gpt-5-nano, gpt-5-mini)
+        if (provider === 'openai' && modelLower.includes('gpt-5') && 
+            !modelLower.includes('nano') && !modelLower.includes('mini')) {
+          premiumModels.add(formatModelName(model));
+        }
+        
+        // Gemini premium models: gemini-2.5-pro, gemini-3-pro (but not flash or flash-lite)
+        if (provider === 'gemini' && 
+            (modelLower.includes('gemini-2.5-pro') || modelLower.includes('gemini-3-pro'))) {
+          premiumModels.add(formatModelName(model));
+        }
+        
+        // Claude premium models: all Opus versions (claude-opus-*) and Sonnet 4.5
+        // Opus is premium (claude-opus-*), Sonnet 4.5 is also premium (claude-sonnet-4-5-*)
+        if (provider === 'anthropic') {
+          if (modelLower.includes('claude-opus-')) {
+            // All Opus versions are premium
+            premiumModels.add(formatModelName(model));
+          } else if (modelLower.includes('claude-sonnet-4-5-') || modelLower.includes('claude-sonnet-4.5-')) {
+            // Sonnet 4.5 is premium
+            premiumModels.add(formatModelName(model));
+          }
+        }
+        
+        // Grok premium models: grok-4-1-* but not fast versions (grok-4-1-fast-*)
+        if (provider === 'grok' && modelLower.includes('grok-4-1-') && !modelLower.includes('fast')) {
+          premiumModels.add(formatModelName(model));
+        }
+        // Also check for grok-4-0709 (quality model)
+        if (provider === 'grok' && modelLower.includes('grok-4-0709')) {
+          premiumModels.add(formatModelName(model));
+        }
+      });
+    }
+    
+    return Array.from(premiumModels).sort();
+  }, [eventsData?.events, usageData?.byModel]);
+
   // Group events by model and time proximity, or consecutive same-model events
   const groupedEvents = React.useMemo(() => {
     if (!eventsData?.events || eventsData.events.length === 0) return [];
@@ -357,41 +482,48 @@ export const UsageTab: React.FC = () => {
       });
       
       // If not found by time window, check if this event is consecutive (same model, no other models in between)
-      // Find the most recent group (by endTime) that matches the same model/alias/kind
+      // Find groups that match the same model/alias/kind and check if event is consecutive to them
       if (!foundGroup) {
-        // Find all groups with matching model/alias/kind, sorted by endTime (newest first)
-        const matchingGroups = groups
-          .filter(group => {
-            const groupKey = `${group.model}:${group.modelAlias || ''}:${group.kind}`;
-            return groupKey === eventKey;
-          })
-          .sort((a, b) => b.endTime.getTime() - a.endTime.getTime());
+        // Find all groups with matching model/alias/kind
+        const matchingGroups = groups.filter(group => {
+          const groupKey = `${group.model}:${group.modelAlias || ''}:${group.kind}`;
+          return groupKey === eventKey;
+        });
+        
+        // Helper function to check if there are other models between two time points
+        const hasOtherModelsBetween = (startTime: number, endTime: number) => {
+          return sortedEvents.some(otherEvent => {
+            // Skip the current event
+            if (otherEvent.id === event.id) return false;
+            
+            const otherEventTime = new Date(otherEvent.createdAt).getTime();
+            const otherEventKey = `${otherEvent.model}:${otherEvent.modelAlias || ''}:${otherEvent.kind}`;
+            
+            // Check if other event is between startTime and endTime and has different model
+            if (otherEventTime >= startTime && otherEventTime <= endTime && otherEventKey !== eventKey) {
+              return true;
+            }
+            return false;
+          });
+        };
         
         // Check if this event is consecutive to any matching group
-        // (event is older than group's endTime, meaning it comes right before chronologically)
+        // Check both directions: event before group and event after group
         for (const group of matchingGroups) {
-          if (eventTime < group.endTime.getTime()) {
-            // Check if there are any other events (not in this group) between this event and the group
-            // by checking original sortedEvents array
-            const groupEndTime = group.endTime.getTime();
-            const hasOtherModelsBetween = sortedEvents.some(otherEvent => {
-              // Skip events that are already in this group
-              if (group.events.some(e => e.id === otherEvent.id)) return false;
-              // Skip the current event
-              if (otherEvent.id === event.id) return false;
-              
-              const otherEventTime = new Date(otherEvent.createdAt).getTime();
-              const otherEventKey = `${otherEvent.model}:${otherEvent.modelAlias || ''}:${otherEvent.kind}`;
-              
-              // Check if other event is between eventTime and groupEndTime and has different model
-              if (otherEventTime >= eventTime && otherEventTime <= groupEndTime && otherEventKey !== eventKey) {
-                return true;
-              }
-              return false;
-            });
-            
-            // If no other models between, it's consecutive
-            if (!hasOtherModelsBetween) {
+          const groupStartTime = group.startTime.getTime();
+          const groupEndTime = group.endTime.getTime();
+          
+          // Case 1: Event comes before the group (eventTime < groupStartTime)
+          if (eventTime < groupStartTime) {
+            if (!hasOtherModelsBetween(eventTime, groupStartTime)) {
+              foundGroup = group;
+              break;
+            }
+          }
+          
+          // Case 2: Event comes after the group (eventTime > groupEndTime)
+          if (!foundGroup && eventTime > groupEndTime) {
+            if (!hasOtherModelsBetween(groupEndTime, eventTime)) {
               foundGroup = group;
               break;
             }
@@ -448,51 +580,6 @@ export const UsageTab: React.FC = () => {
     if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
     if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
     return tokens.toString();
-  };
-
-  const formatModelName = (modelName: string): string => {
-    if (!modelName) return modelName;
-    
-    // Handle Tavily models: convert "tavily-search-basic" -> "Tavily Search"
-    if (modelName.includes('tavily-')) {
-      return 'Tavily Search';
-    }
-    
-    // Handle Claude models: convert "claude-sonnet-4-5-20250929" -> "claude sonnet"
-    if (modelName.includes('claude-')) {
-      const parts = modelName.split('-');
-      if (parts.length >= 2) {
-        // Extract model type (sonnet, opus, haiku, etc.)
-        const modelType = parts[1];
-        return `claude ${modelType}`;
-      }
-    }
-    
-    // Handle Gemini models: keep readable parts
-    if (modelName.includes('gemini-')) {
-      const parts = modelName.split('-');
-      if (parts.length >= 2) {
-        // Extract version and type (e.g., "2.5-pro", "2.5-flash-lite")
-        const versionType = parts.slice(1).join(' ').replace(/\d{8}/g, '').trim(); // Remove date patterns
-        return `gemini ${versionType}`;
-      }
-    }
-    
-    // Handle Grok models
-    if (modelName.includes('grok-')) {
-      return modelName.replace(/-/g, ' ').replace(/\d{8}/g, '').trim();
-    }
-    
-    // Handle GPT models
-    if (modelName.includes('gpt-')) {
-      const parts = modelName.split('-');
-      if (parts.length >= 2) {
-        return parts.slice(0, 2).join(' '); // Keep "gpt-5" format
-      }
-    }
-    
-    // Default: replace dashes with spaces, remove date patterns
-    return modelName.replace(/-/g, ' ').replace(/\d{8}/g, '').trim();
   };
 
   const formatTimeRange = (startTime: Date, endTime: Date) => {
@@ -578,7 +665,9 @@ export const UsageTab: React.FC = () => {
         <div className="grid grid-cols-2 gap-4">
           <div className="p-4 rounded-lg" style={{ backgroundColor: 'var(--white-05)', border: '1px solid var(--overlay-line-90)' }}>
             <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
-              {t('account.tabs.usageDetails.premiumModels')}
+              {premiumModelNames.length > 0 
+                ? `Premium models (${premiumModelNames.join(', ')})`
+                : t('account.tabs.usageDetails.premiumModels')}
             </div>
             <div className="text-xl font-semibold mb-2" style={{ color: 'var(--text-heading)' }}>
               {formatTokens(tokenCategories.premiumTokens.totalTokens)}

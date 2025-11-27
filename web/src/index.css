@@ -1,4 +1,14 @@
-﻿/* Right-edge mirror button (document) */
+﻿/* Spin animation for loading indicators */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Right-edge mirror button (document) */
 .mirror-doc-btn {
   background-color: #FFA94D;
 }
@@ -337,6 +347,35 @@ p {
   line-height: 1.25rem; /* 20px */
 }
 
+/* Select dropdown styling for dark theme */
+[data-theme="dark"] .unfold-strength-select,
+[data-theme="dark"] .unfold-mode-select {
+  background-color: var(--bg-input) !important;
+  color: var(--text-heading) !important;
+  outline: none !important;
+  box-shadow: none !important;
+  border: 1px solid var(--overlay-line-90) !important;
+  color-scheme: dark;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+[data-theme="dark"] .unfold-strength-select:focus,
+[data-theme="dark"] .unfold-mode-select:focus,
+[data-theme="dark"] .unfold-strength-select:active,
+[data-theme="dark"] .unfold-mode-select:active {
+  outline: none !important;
+  box-shadow: none !important;
+  border: 1px solid var(--overlay-line-90) !important;
+}
+
+[data-theme="dark"] .unfold-strength-select option,
+[data-theme="dark"] .unfold-mode-select option {
+  background-color: #1A1A1A !important;
+  color: #D0D0D8 !important;
+}
+
 /* Utility for exact 11px text size */
 .text-11 {
   font-size: 0.6875rem; /* 11px */
@@ -513,6 +552,16 @@ p {
   color: #0B0D12;
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   border-radius: 8px;  /* More rounded */
+}
+
+[data-theme="dark"] .lang-select option {
+  background-color: #1A1A1A !important;
+  color: #D0D0D8 !important;
+}
+
+[data-theme="light"] .lang-select option {
+  background-color: rgba(255,255,255,0.98) !important;
+  color: #0B0D12 !important;
 }
 
 /* Button components */

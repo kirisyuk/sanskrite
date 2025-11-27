@@ -1089,8 +1089,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               aria-label={t('unfold.request.modelStrengthLabel')}
               value={settings.strength}
               onChange={(e) => settings.setStrength(e.target.value as any)}
-              className="text-xs"
-              style={{ background: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px' }}
+              className="text-xs unfold-strength-select"
+              style={{ backgroundColor: 'var(--bg-input)', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px', outline: 'none', boxShadow: 'none' }}
             >
               <option value="fast">{t('unfold.request.strengthFast')}</option>
               <option value="balanced" disabled={settings.provider === 'deepseek'}>{t('unfold.request.strengthBalanced')}</option>
@@ -1190,8 +1190,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               aria-label={t('unfold.request.modeLabel')}
               value={mode}
               onChange={handleModeChange}
-              className="text-xs"
-              style={{ background: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px' }}
+              className="text-xs unfold-mode-select"
+              style={{ backgroundColor: 'var(--bg-input)', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px', colorScheme: theme === 'dark' ? 'dark' : 'light', outline: 'none', boxShadow: 'none' }}
             >
               <option value="text">{t('unfold.request.modeText')}</option>
               <option value="graph">{t('unfold.request.modeGraph')}</option>

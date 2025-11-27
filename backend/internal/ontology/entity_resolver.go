@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
@@ -589,7 +590,7 @@ func (r *EntityResolver) MergeEntities(
 	}
 
 	// Обновляем primary
-	primary.UpdatedAt = primary.UpdatedAt // Обновим время
+	primary.UpdatedAt = time.Now().UTC()
 	if err := r.entitiesRepo.Upsert(ctx, primary); err != nil {
 		return fmt.Errorf("failed to update primary entity: %w", err)
 	}

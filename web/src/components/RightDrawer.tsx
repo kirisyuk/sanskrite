@@ -8,9 +8,10 @@ import FindingsPanel from './FindingsPanel';
 import { ExperimentalPanel } from './ExperimentalPanel';
 import { ContextPanel } from './ContextPanel';
 import { PendingActionsPanel } from './PendingActionsPanel';
+import { ModelContextPanel } from './ModelContextPanel';
 
 interface RightDrawerProps {
-  rightPanelType: 'workspace' | 'artifacts' | 'experimental' | 'analysis' | 'context' | 'pending-actions' | null;
+  rightPanelType: 'workspace' | 'artifacts' | 'experimental' | 'analysis' | 'context' | 'pending-actions' | 'model-context' | null;
   viewMode: string;
   showAccount: boolean;
   showSettings: boolean;
@@ -291,7 +292,9 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                             ? t('unfold.sections.pendingActions', {
                                 defaultValue: 'Pending Actions',
                               })
-                            : 'Workspace'}
+                            : rightPanelType === 'model-context'
+                              ? 'Context'
+                              : 'Workspace'}
                 </h3>
                 <button
                   type="button"
@@ -418,6 +421,13 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                       onApply={onApplyTasks || (() => {})}
                       isApplying={textTasksApplying}
                     />
+                  </div>
+                )}
+
+                {/* Model Context Panel */}
+                {rightPanelType === 'model-context' && (
+                  <div style={getPanelVisibilityStyles(true)}>
+                    <ModelContextPanel />
                   </div>
                 )}
               </div>

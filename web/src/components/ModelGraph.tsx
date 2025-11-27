@@ -18,6 +18,7 @@ import 'reactflow/dist/style.css';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { ThemeContext } from './ThemeProvider';
 import { nodeTypes } from './ModelGraphNodeTypes';
+import { api } from '../lib/api';
 
 // Создаем стабильную ссылку на nodeTypes на уровне модуля
 // Это гарантирует, что объект создается только один раз при загрузке модуля
@@ -133,6 +134,9 @@ export const ModelGraph: React.FC = () => {
   const interactions = useGenaiChatStore((s) => s.interactions);
   const projectId = useGenaiChatStore((s) => s.projectId);
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
+  
+  // Храним предыдущие ноды для сохранения позиций
+  const previousNodesRef = useRef<Map<string, Node>>(new Map());
 
   // Фильтруем interactions для онтологических сущностей
   // Используем kind='ontology' с subkind для типа сущности
@@ -140,6 +144,7 @@ export const ModelGraph: React.FC = () => {
     const filtered = interactions.filter((it) => {
       return it.kind === 'ontology';
     });
+    
     console.log('[ModelGraph] Ontology interactions:', {
       total: interactions.length,
       ontology: filtered.length,
@@ -153,22 +158,112 @@ export const ModelGraph: React.FC = () => {
     return filtered;
   }, [interactions]);
 
+  // Загружаем layout из отдельного interaction (должен быть только один)
+  // Если их несколько (из-за ошибок), берем самый новый
+  const layoutInteraction = useMemo(() => {
+    const layouts = ontologyInteractions.filter(
+      (it) => it.kind === 'ontology' && it.subkind === 'layout'
+    );
+    
+    if (layouts.length === 0) {
+      return undefined;
+    }
+    
+    // Если несколько layout interactions, берем самый новый
+    if (layouts.length > 1) {
+      console.warn('[ModelGraph] Found multiple layout interactions, using the newest one', {
+        count: layouts.length,
+        ids: layouts.map(l => l.id),
+      });
+      // Сортируем по времени создания (новый первый) и берем первый
+      layouts.sort((a, b) => {
+        const timeA = new Date(a.createdAt || 0).getTime();
+        const timeB = new Date(b.createdAt || 0).getTime();
+        return timeB - timeA; // Новый первый
+      });
+    }
+    
+    return layouts[0];
+  }, [ontologyInteractions]);
+
+  const savedNodePositions = useMemo(() => {
+    if (!layoutInteraction?.content) {
+      return new Map<string, { x: number; y: number }>();
+    }
+    
+    try {
+      const layoutData = JSON.parse(layoutInteraction.content);
+      const positions = new Map<string, { x: number; y: number }>();
+      
+      if (layoutData.positions && typeof layoutData.positions === 'object') {
+        Object.entries(layoutData.positions).forEach(([nodeId, pos]: [string, any]) => {
+          if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+            positions.set(nodeId, { x: pos.x, y: pos.y });
+          }
+        });
+      }
+      
+      return positions;
+    } catch (err) {
+      console.warn('[ModelGraph] Failed to parse layout interaction', err);
+      return new Map<string, { x: number; y: number }>();
+    }
+  }, [layoutInteraction]);
+
   // Преобразуем interactions в ноды и связи для ReactFlow
   // Interactions хранят финальные состояния сущностей (не операции)
-  // При загрузке истории показываем последнее состояние каждой сущности
+  // Фильтруем только финальные состояния - берем последний interaction для каждой сущности
   const { nodes, edges } = useMemo(() => {
     const nodesMap = new Map<string, { node: Node; createdAt: string }>();
     const edgesList: Edge[] = [];
 
-    // Сортируем interactions по createdAt для обработки в хронологическом порядке
-    // Последнее состояние сущности перезапишет предыдущее
-    const sortedInteractions = [...ontologyInteractions].sort((a, b) => {
+    // Фильтруем layout interactions - они не являются сущностями
+    const entityInteractions = ontologyInteractions.filter(
+      (it) => !(it.kind === 'ontology' && it.subkind === 'layout')
+    );
+
+    // Группируем interactions по entityId и берем только последний (финальное состояние)
+    const interactionsByEntityId = new Map<string, typeof entityInteractions[0]>();
+    
+    entityInteractions.forEach((interaction) => {
+      try {
+        let entityData: any = {};
+        if (interaction.content) {
+          try {
+            entityData = JSON.parse(interaction.content);
+          } catch {
+            return; // Пропускаем некорректные
+          }
+        }
+        
+        const entityId = entityData.id || interaction.ontologyEntityId || interaction.id;
+        if (!entityId) return;
+        
+        // Берем последний interaction для каждой сущности (финальное состояние)
+        const existing = interactionsByEntityId.get(entityId);
+        if (!existing) {
+          interactionsByEntityId.set(entityId, interaction);
+        } else {
+          // Сравниваем по времени - берем более новый
+          const existingTime = new Date(existing.createdAt || 0).getTime();
+          const currentTime = new Date(interaction.createdAt || 0).getTime();
+          if (currentTime > existingTime) {
+            interactionsByEntityId.set(entityId, interaction);
+          }
+        }
+      } catch (err) {
+        // Пропускаем некорректные interactions
+      }
+    });
+
+    // Сортируем финальные interactions по createdAt для обработки
+    const finalInteractions = Array.from(interactionsByEntityId.values()).sort((a, b) => {
       const timeA = new Date(a.createdAt || 0).getTime();
       const timeB = new Date(b.createdAt || 0).getTime();
       return timeA - timeB;
     });
 
-    sortedInteractions.forEach((interaction) => {
+    finalInteractions.forEach((interaction) => {
       try {
         // Парсим content как JSON - содержит финальное состояние сущности
         let entityData: any = {};
@@ -221,9 +316,12 @@ export const ModelGraph: React.FC = () => {
 
         const label = entityData.canonicalName || entityData.name || entityData.title || entityData.label || entityId;
 
-        // Создаем или обновляем ноду (последнее состояние перезапишет предыдущее)
+        // Создаем или обновляем ноду
+        // Используем сохраненную позицию из layout interaction, если есть
         const existing = nodesMap.get(entityId);
-        const nodePosition = existing?.node.position || {
+        const savedPosition = savedNodePositions.get(entityId);
+        const previousNode = previousNodesRef.current.get(entityId);
+        const nodePosition = savedPosition || previousNode?.position || existing?.node.position || {
           x: Math.random() * 800,
           y: Math.random() * 600,
         };
@@ -573,7 +671,7 @@ export const ModelGraph: React.FC = () => {
     const nodeIds = new Set(finalNodes.map((n) => n.id));
 
     // Теперь обрабатываем relations - создаем edges для них после того, как все ноды созданы
-    sortedInteractions.forEach((interaction) => {
+    finalInteractions.forEach((interaction) => {
       try {
         if (!interaction.content) return;
         
@@ -701,25 +799,246 @@ export const ModelGraph: React.FC = () => {
       nodes: finalNodes,
       edges: validEdges,
     };
-  }, [ontologyInteractions, theme]);
+  }, [ontologyInteractions, theme, savedNodePositions]);
 
   const [reactFlowNodes, setNodes, onNodesChange] = useNodesState(nodes);
   const [reactFlowEdges, setEdges, onEdgesChange] = useEdgesState(edges);
   
-  // Логируем состояние ReactFlow
+  // Сохраняем текущие ноды в ref для сохранения позиций при следующем обновлении
   React.useEffect(() => {
-    console.log('[ModelGraph] ReactFlow state:', {
-      reactFlowNodesCount: reactFlowNodes.length,
-      reactFlowEdgesCount: reactFlowEdges.length,
-      nodes: reactFlowNodes.map(n => ({ id: n.id, type: n.type, hasData: !!n.data })),
+    const nodesMap = new Map<string, Node>();
+    reactFlowNodes.forEach(node => {
+      nodesMap.set(node.id, node);
     });
+    previousNodesRef.current = nodesMap;
+  }, [reactFlowNodes]);
+
+  // Сохраняем позиции нод в layout interaction (debounced, неблокирующее)
+  const saveLayoutTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isSavingRef = useRef<boolean>(false);
+  
+  const saveNodePositions = useCallback((nodes: Node[]) => {
+    if (!projectId || projectId === 'local-unfold') {
+      return;
+    }
+
+    // Отменяем предыдущий таймер
+    if (saveLayoutTimeoutRef.current) {
+      clearTimeout(saveLayoutTimeoutRef.current);
+    }
+
+    // Debounce сохранение на 1 секунду - полностью неблокирующее
+    saveLayoutTimeoutRef.current = setTimeout(() => {
+      // Выполняем сохранение асинхронно, не блокируя UI
+      (async () => {
+        // Предотвращаем параллельные сохранения
+        if (isSavingRef.current) {
+          return;
+        }
+        
+        isSavingRef.current = true;
+        
+        try {
+          const positions: Record<string, { x: number; y: number }> = {};
+          nodes.forEach(node => {
+            if (node.position) {
+              positions[node.id] = { x: node.position.x, y: node.position.y };
+            }
+          });
+
+          const layoutData = { positions };
+          const content = JSON.stringify(layoutData);
+
+          // Проверяем, есть ли уже layout interactions (может быть несколько из-за ошибок)
+          const allLayoutInteractions = useGenaiChatStore.getState().interactions.filter(
+            (it) => it.kind === 'ontology' && it.subkind === 'layout'
+          );
+          
+          if (allLayoutInteractions.length > 0) {
+            // Есть существующие layout interactions - обновляем самый новый
+            const latestLayout = allLayoutInteractions.sort((a, b) => {
+              const timeA = new Date(a.createdAt || 0).getTime();
+              const timeB = new Date(b.createdAt || 0).getTime();
+              return timeB - timeA; // Новый первый
+            })[0];
+            
+            // Обновляем самый новый
+            await api.updateProjectInteraction(projectId, latestLayout.id, {
+              content,
+            });
+            
+            // Если есть старые дубликаты, удаляем их (в фоне, не блокируя)
+            if (allLayoutInteractions.length > 1) {
+              const oldLayouts = allLayoutInteractions.slice(1);
+              // Удаляем старые асинхронно, не ждем завершения
+              Promise.all(
+                oldLayouts.map(old => 
+                  api.deleteProjectInteraction(projectId, old.id).catch(err => {
+                    console.warn('[ModelGraph] Failed to delete old layout interaction', old.id, err);
+                  })
+                )
+              ).then(() => {
+                // Обновляем локальное состояние после удаления
+                useGenaiChatStore.setState((s) => ({
+                  interactions: s.interactions.filter(
+                    (it) => !(it.kind === 'ontology' && it.subkind === 'layout' && it.id !== latestLayout.id)
+                  ),
+                }));
+              });
+            }
+            
+            // Тихий лог (не показываем пользователю)
+            console.log('[ModelGraph] Layout saved', {
+              projectId,
+              positionsCount: Object.keys(positions).length,
+            });
+          } else {
+            // Создаем новый layout interaction (первый раз)
+            // Дополнительная проверка перед созданием (защита от race condition)
+            const checkAgain = useGenaiChatStore.getState().interactions.filter(
+              (it) => it.kind === 'ontology' && it.subkind === 'layout'
+            );
+            
+            if (checkAgain.length > 0) {
+              // Кто-то уже создал layout interaction, обновляем его
+              const latestLayout = checkAgain.sort((a, b) => {
+                const timeA = new Date(a.createdAt || 0).getTime();
+                const timeB = new Date(b.createdAt || 0).getTime();
+                return timeB - timeA;
+              })[0];
+              
+              await api.updateProjectInteraction(projectId, latestLayout.id, {
+                content,
+              });
+              console.log('[ModelGraph] Layout updated (found existing during create)', {
+                projectId,
+                positionsCount: Object.keys(positions).length,
+              });
+            } else {
+              // Создаем новый layout interaction
+              const result = await api.createProjectInteraction(projectId, {
+                kind: 'ontology',
+                subkind: 'layout',
+                content,
+              });
+              // Обновляем локальное состояние после создания (оптимистично)
+              useGenaiChatStore.setState({
+                interactions: [
+                  ...useGenaiChatStore.getState().interactions,
+                  {
+                    id: result.id,
+                    projectId,
+                    kind: 'ontology' as const,
+                    subkind: 'layout',
+                    content,
+                    createdAt: new Date().toISOString(),
+                  },
+                ],
+              } as any);
+              console.log('[ModelGraph] Layout created', {
+                projectId,
+                positionsCount: Object.keys(positions).length,
+              });
+            }
+          }
+        } catch (err) {
+          // Тихая обработка ошибок - не показываем пользователю
+          // Позиции останутся в памяти и будут сохранены при следующем изменении
+          console.warn('[ModelGraph] Failed to save layout (will retry on next change)', err);
+        } finally {
+          isSavingRef.current = false;
+        }
+      })();
+    }, 1000);
+  }, [projectId, layoutInteraction]);
+
+  // Сохраняем позиции при изменении нод (debounced)
+  React.useEffect(() => {
+    if (reactFlowNodes.length > 0) {
+      saveNodePositions(reactFlowNodes);
+    }
+    
+    return () => {
+      if (saveLayoutTimeoutRef.current) {
+        clearTimeout(saveLayoutTimeoutRef.current);
+      }
+    };
+  }, [reactFlowNodes, saveNodePositions]);
+  
+  // Логируем состояние ReactFlow (только при реальных изменениях)
+  const previousNodesCountRef = useRef<number>(0);
+  const previousEdgesCountRef = useRef<number>(0);
+  
+  React.useEffect(() => {
+    const nodesChanged = reactFlowNodes.length !== previousNodesCountRef.current;
+    const edgesChanged = reactFlowEdges.length !== previousEdgesCountRef.current;
+    
+    if (nodesChanged || edgesChanged) {
+      console.log('[ModelGraph] ReactFlow state changed:', {
+        reactFlowNodesCount: reactFlowNodes.length,
+        reactFlowEdgesCount: reactFlowEdges.length,
+        nodesChanged,
+        edgesChanged,
+      });
+      previousNodesCountRef.current = reactFlowNodes.length;
+      previousEdgesCountRef.current = reactFlowEdges.length;
+    }
   }, [reactFlowNodes, reactFlowEdges]);
 
-  // Обновляем ноды и связи при изменении данных
+  // Обновляем ноды и связи при изменении данных, но только если данные реально изменились
+  const previousNodesDataRef = useRef<string>('');
+  const previousEdgesDataRef = useRef<string>('');
+  
   React.useEffect(() => {
-    setNodes(nodes);
-    setEdges(edges);
-  }, [nodes, edges, setNodes, setEdges]);
+    // Создаем хеш для сравнения нод (без позиций, так как они могут меняться пользователем)
+    const nodesHash = nodes
+      .map(n => `${n.id}:${JSON.stringify(n.data)}`)
+      .sort()
+      .join('|');
+    
+    // Создаем хеш для сравнения рёбер
+    const edgesHash = edges
+      .map(e => `${e.id}:${e.source}:${e.target}:${e.label || ''}`)
+      .sort()
+      .join('|');
+    
+    // Обновляем только если данные реально изменились
+    const nodesChanged = nodesHash !== previousNodesDataRef.current;
+    const edgesChanged = edgesHash !== previousEdgesDataRef.current;
+    
+    if (nodesChanged || edgesChanged) {
+      console.log('[ModelGraph] Graph data changed, updating ReactFlow:', {
+        nodesChanged,
+        edgesChanged,
+        nodesCount: nodes.length,
+        edgesCount: edges.length,
+      });
+      
+      // При обновлении нод сохраняем позиции из текущего состояния ReactFlow
+      if (nodesChanged) {
+        const nodesWithPreservedPositions = nodes.map(newNode => {
+          const existingNode = reactFlowNodes.find(n => n.id === newNode.id);
+          if (existingNode) {
+            // Сохраняем позицию из текущего состояния, если нода уже существует
+            return {
+              ...newNode,
+              position: existingNode.position,
+            };
+          }
+          return newNode;
+        });
+        setNodes(nodesWithPreservedPositions);
+        previousNodesDataRef.current = nodesHash;
+      }
+      
+      if (edgesChanged) {
+        setEdges(edges);
+        previousEdgesDataRef.current = edgesHash;
+      }
+    } else {
+      console.log('[ModelGraph] Graph data unchanged, skipping ReactFlow update');
+    }
+  }, [nodes, edges, setNodes, setEdges, reactFlowNodes]);
 
   const onConnect = useCallback(
     (params: Connection) => {
@@ -737,188 +1056,284 @@ export const ModelGraph: React.FC = () => {
     return null; // Возвращаем null, чтобы родительский компонент мог показать empty state
   }
 
-  // Обработчик для кнопки Align - выравнивание нод
+  // Обработчик для кнопки Align - улучшенная иерархическая раскладка графа
   const handleAlign = useCallback(() => {
-    console.log('[ModelGraph] Align button clicked');
+    console.log('[ModelGraph] Arrange button clicked');
     
-    // Получаем текущие ноды и edges
     const currentNodes = reactFlowNodes;
     const currentEdges = reactFlowEdges;
     
     if (currentNodes.length === 0) {
-      console.warn('[ModelGraph] Align: No nodes to align');
+      console.warn('[ModelGraph] Arrange: No nodes to arrange');
       return;
     }
     
-    // Создаем Set связанных нод (ноды, которые имеют хотя бы один edge)
-    const connectedNodeIds = new Set<string>();
-    currentEdges.forEach((edge) => {
-      connectedNodeIds.add(edge.source);
-      connectedNodeIds.add(edge.target);
-    });
+    // Параметры раскладки
+    const nodeWidth = 180;
+    const nodeHeight = 120;
+    const padding = 120;
+    const layerSpacing = 450; // Расстояние между слоями (увеличено для подписей рёбер)
+    const nodeSpacing = 100; // Расстояние между нодами в слое (увеличено для подписей рёбер)
+    const componentSpacing = 200; // Расстояние между компонентами
     
-    // Разделяем ноды на связанные и несвязанные
-    const connectedNodes: Node[] = [];
-    const unconnectedNodes: Node[] = [];
+    // Создаем граф связей
+    const nodeMap = new Map<string, Node>();
+    const incomingEdges = new Map<string, string[]>(); // target -> [sources]
+    const outgoingEdges = new Map<string, string[]>(); // source -> [targets]
+    const nodeIds = new Set<string>();
     
     currentNodes.forEach((node) => {
-      if (connectedNodeIds.has(node.id)) {
-        connectedNodes.push(node);
-      } else {
-        unconnectedNodes.push(node);
+      nodeMap.set(node.id, node);
+      nodeIds.add(node.id);
+      incomingEdges.set(node.id, []);
+      outgoingEdges.set(node.id, []);
+    });
+    
+    currentEdges.forEach((edge) => {
+      if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) {
+        const sources = incomingEdges.get(edge.target) || [];
+        sources.push(edge.source);
+        incomingEdges.set(edge.target, sources);
+        
+        const targets = outgoingEdges.get(edge.source) || [];
+        targets.push(edge.target);
+        outgoingEdges.set(edge.source, targets);
       }
     });
     
-    console.log('[ModelGraph] Align: nodes distribution', {
-      total: currentNodes.length,
-      connected: connectedNodes.length,
-      unconnected: unconnectedNodes.length,
-    });
+    // Разделяем на связанные компоненты
+    const visited = new Set<string>();
+    const components: string[][] = [];
     
-    // Параметры размещения
-    const nodeWidth = 150; // Примерная ширина ноды
-    const nodeHeight = 100; // Примерная высота ноды
-    const padding = 50; // Отступ от краев
-    const nodeSpacing = 20; // Расстояние между нодами
-    const horizontalGap = 200; // Расстояние между колонками (sources, intermediate, sinks)
-    
-    // Вычисляем размеры области графа (используем примерные значения, можно улучшить)
-    const graphWidth = 1200;
-    const graphHeight = 800;
-    
-    const updatedNodes = currentNodes.map((node) => {
-      const isConnected = connectedNodeIds.has(node.id);
+    const dfs = (nodeId: string, component: string[]) => {
+      if (visited.has(nodeId)) return;
+      visited.add(nodeId);
+      component.push(nodeId);
       
-      if (isConnected) {
-        // Для связанных нод определяем их роль в графе
-        // Источники (sources) - ноды без входящих edges
-        // Стоки (sinks) - ноды без исходящих edges
-        // Промежуточные - остальные
-        
-        const hasIncoming = currentEdges.some((edge) => edge.target === node.id);
-        const hasOutgoing = currentEdges.some((edge) => edge.source === node.id);
-        
-        let nodeCategory: 'source' | 'sink' | 'intermediate';
-        if (!hasIncoming && hasOutgoing) {
-          nodeCategory = 'source'; // Источник - только исходящие связи
-        } else if (hasIncoming && !hasOutgoing) {
-          nodeCategory = 'sink'; // Сток - только входящие связи
-        } else {
-          nodeCategory = 'intermediate'; // Промежуточная - и входящие, и исходящие
+      const neighbors = [
+        ...(outgoingEdges.get(nodeId) || []),
+        ...(incomingEdges.get(nodeId) || []),
+      ];
+      
+      neighbors.forEach((neighbor) => {
+        if (!visited.has(neighbor)) {
+          dfs(neighbor, component);
         }
-        
-        // Группируем ноды по категориям
-        const sourceNodes = connectedNodes.filter((n) => {
-          const hasIn = currentEdges.some((e) => e.target === n.id);
-          const hasOut = currentEdges.some((e) => e.source === n.id);
-          return !hasIn && hasOut;
-        });
-        
-        const sinkNodes = connectedNodes.filter((n) => {
-          const hasIn = currentEdges.some((e) => e.target === n.id);
-          const hasOut = currentEdges.some((e) => e.source === n.id);
-          return hasIn && !hasOut;
-        });
-        
-        const intermediateNodes = connectedNodes.filter((n) => {
-          const hasIn = currentEdges.some((e) => e.target === n.id);
-          const hasOut = currentEdges.some((e) => e.source === n.id);
-          return hasIn && hasOut;
-        });
-        
-        // Определяем позицию ноды в зависимости от категории
-        let x: number;
-        let y: number;
-        const startY = padding;
-        
-        if (nodeCategory === 'source') {
-          // Источники - слева
-          const index = sourceNodes.findIndex((n) => n.id === node.id);
-          const cols = Math.max(1, Math.ceil(Math.sqrt(sourceNodes.length)));
-          const rows = Math.ceil(sourceNodes.length / cols);
-          const row = Math.floor(index / cols);
-          const col = index % cols;
-          
-          const areaWidth = cols * (nodeWidth + nodeSpacing) - nodeSpacing;
-          const startX = padding;
-          
-          x = startX + col * (nodeWidth + nodeSpacing);
-          y = startY + row * (nodeHeight + nodeSpacing);
-          
-        } else if (nodeCategory === 'sink') {
-          // Стоки - справа
-          const index = sinkNodes.findIndex((n) => n.id === node.id);
-          const cols = Math.max(1, Math.ceil(Math.sqrt(sinkNodes.length)));
-          const rows = Math.ceil(sinkNodes.length / cols);
-          const row = Math.floor(index / cols);
-          const col = index % cols;
-          
-          const areaWidth = cols * (nodeWidth + nodeSpacing) - nodeSpacing;
-          const startX = graphWidth - padding - areaWidth;
-          
-          x = startX + col * (nodeWidth + nodeSpacing);
-          y = startY + row * (nodeHeight + nodeSpacing);
-          
-        } else {
-          // Промежуточные - в центре
-          const index = intermediateNodes.findIndex((n) => n.id === node.id);
-          const cols = Math.max(1, Math.ceil(Math.sqrt(intermediateNodes.length)));
-          const rows = Math.ceil(intermediateNodes.length / cols);
-          const row = Math.floor(index / cols);
-          const col = index % cols;
-          
-          const areaWidth = cols * (nodeWidth + nodeSpacing) - nodeSpacing;
-          const startX = (graphWidth - areaWidth) / 2;
-          
-          x = startX + col * (nodeWidth + nodeSpacing);
-          y = startY + row * (nodeHeight + nodeSpacing);
-        }
-        
-        return {
-          ...node,
-          position: { x, y },
-        };
-      } else {
-        // Размещаем несвязанные ноды снизу
-        const index = unconnectedNodes.findIndex((n) => n.id === node.id);
-        const cols = Math.ceil(Math.sqrt(unconnectedNodes.length));
-        const rows = Math.ceil(unconnectedNodes.length / cols);
-        const row = Math.floor(index / cols);
-        const col = index % cols;
-        
-        const areaWidth = cols * (nodeWidth + nodeSpacing) - nodeSpacing;
-        const startX = (graphWidth - areaWidth) / 2;
-        // Размещаем снизу с отступом
-        const startY = graphHeight - padding - rows * (nodeHeight + nodeSpacing);
-        
-        return {
-          ...node,
-          position: {
-            x: startX + col * (nodeWidth + nodeSpacing),
-            y: startY + row * (nodeHeight + nodeSpacing),
-          },
-        };
+      });
+    };
+    
+    nodeIds.forEach((nodeId) => {
+      if (!visited.has(nodeId)) {
+        const component: string[] = [];
+        dfs(nodeId, component);
+        components.push(component);
       }
     });
     
-    // Обновляем позиции нод
+    console.log('[ModelGraph] Arrange: found components', {
+      totalNodes: currentNodes.length,
+      componentsCount: components.length,
+      componentSizes: components.map(c => c.length),
+    });
+    
+    // Функция для топологической сортировки и определения слоев
+    const assignLayers = (componentNodeIds: string[]): Map<string, number> => {
+      const layerMap = new Map<string, number>();
+      const inDegree = new Map<string, number>();
+      
+      // Инициализация
+      componentNodeIds.forEach((id) => {
+        inDegree.set(id, incomingEdges.get(id)?.filter(s => componentNodeIds.includes(s)).length || 0);
+      });
+      
+      // Топологическая сортировка с определением слоев
+      const queue: string[] = [];
+      componentNodeIds.forEach((id) => {
+        if (inDegree.get(id) === 0) {
+          queue.push(id);
+          layerMap.set(id, 0);
+        }
+      });
+      
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        const currentLayer = layerMap.get(current) || 0;
+        
+        const targets = outgoingEdges.get(current) || [];
+        targets.forEach((target) => {
+          if (!componentNodeIds.includes(target)) return;
+          
+          const targetInDegree = (inDegree.get(target) || 0) - 1;
+          inDegree.set(target, targetInDegree);
+          
+          if (targetInDegree === 0) {
+            // Находим максимальный слой среди всех предшественников
+            const predecessors = incomingEdges.get(target) || [];
+            let maxPredLayer = -1;
+            predecessors.forEach((pred) => {
+              if (componentNodeIds.includes(pred)) {
+                const predLayer = layerMap.get(pred) || 0;
+                maxPredLayer = Math.max(maxPredLayer, predLayer);
+              }
+            });
+            
+            layerMap.set(target, maxPredLayer + 1);
+            queue.push(target);
+          }
+        });
+      }
+      
+      // Для узлов с циклами (если остались необработанные)
+      componentNodeIds.forEach((id) => {
+        if (!layerMap.has(id)) {
+          // Находим минимальный слой среди предшественников или ставим 0
+          const predecessors = incomingEdges.get(id) || [];
+          let minPredLayer = Infinity;
+          predecessors.forEach((pred) => {
+            if (componentNodeIds.includes(pred) && layerMap.has(pred)) {
+              minPredLayer = Math.min(minPredLayer, layerMap.get(pred) || 0);
+            }
+          });
+          layerMap.set(id, minPredLayer === Infinity ? 0 : minPredLayer + 1);
+        }
+      });
+      
+      return layerMap;
+    };
+    
+    // Функция для размещения нод в слое
+    const positionNodesInLayer = (
+      layerNodes: string[],
+      layerIndex: number,
+      componentStartX: number,
+      componentStartY: number
+    ): Map<string, { x: number; y: number }> => {
+      const positions = new Map<string, { x: number; y: number }>();
+      const layerHeight = layerNodes.length * (nodeHeight + nodeSpacing) - nodeSpacing;
+      
+      layerNodes.forEach((nodeId, index) => {
+        const x = componentStartX + layerIndex * layerSpacing;
+        const y = componentStartY + (layerHeight / 2) - (layerNodes.length - 1 - index) * (nodeHeight + nodeSpacing) + (nodeHeight / 2);
+        positions.set(nodeId, { x, y });
+      });
+      
+      return positions;
+    };
+    
+    // Размещаем каждый компонент
+    const nodePositions = new Map<string, { x: number; y: number }>();
+    let currentY = padding;
+    
+    components.forEach((component, compIndex) => {
+      if (component.length === 0) return;
+      
+      // Для одиночных нод используем простую раскладку
+      if (component.length === 1) {
+        const nodeId = component[0];
+        const cols = Math.ceil(Math.sqrt(components.length));
+        const col = compIndex % cols;
+        const row = Math.floor(compIndex / cols);
+        const areaWidth = cols * (nodeWidth + nodeSpacing * 2) - nodeSpacing * 2;
+        const graphWidth = Math.max(1600, 1200); // Увеличена минимальная ширина
+        const startX = padding + (graphWidth - padding * 2 - areaWidth) / 2;
+        
+        nodePositions.set(nodeId, {
+          x: startX + col * (nodeWidth + nodeSpacing * 2),
+          y: currentY + row * (nodeHeight + nodeSpacing * 2),
+        });
+        return;
+      }
+      
+      // Для связанных компонентов используем иерархическую раскладку
+      const layerMap = assignLayers(component);
+      
+      // Группируем ноды по слоям
+      const layers: string[][] = [];
+      let maxLayer = -1;
+      layerMap.forEach((layer, nodeId) => {
+        maxLayer = Math.max(maxLayer, layer);
+        while (layers.length <= layer) {
+          layers.push([]);
+        }
+        layers[layer].push(nodeId);
+      });
+      
+      // Сортируем ноды внутри каждого слоя для лучшей визуализации
+      layers.forEach((layer) => {
+        layer.sort((a, b) => {
+          // Сортируем по количеству связей (более связанные - выше)
+          const aConnections = (outgoingEdges.get(a)?.length || 0) + (incomingEdges.get(a)?.length || 0);
+          const bConnections = (outgoingEdges.get(b)?.length || 0) + (incomingEdges.get(b)?.length || 0);
+          return bConnections - aConnections;
+        });
+      });
+      
+      // Вычисляем размеры компонента
+      const maxLayerHeight = Math.max(...layers.map(l => l.length * (nodeHeight + nodeSpacing) - nodeSpacing));
+      const componentWidth = (maxLayer + 1) * layerSpacing;
+      const componentHeight = maxLayerHeight;
+      
+      // Центрируем компонент (используем динамическую ширину)
+      const graphWidth = Math.max(1600, componentWidth + padding * 2);
+      const componentStartX = padding + (graphWidth - padding * 2 - componentWidth) / 2;
+      const componentStartY = currentY;
+      
+      // Размещаем ноды
+      layers.forEach((layerNodes, layerIndex) => {
+        const layerPositions = positionNodesInLayer(
+          layerNodes,
+          layerIndex,
+          componentStartX,
+          componentStartY
+        );
+        layerPositions.forEach((pos, nodeId) => {
+          nodePositions.set(nodeId, pos);
+        });
+      });
+      
+      // Обновляем текущую Y позицию для следующего компонента
+      currentY += componentHeight + componentSpacing;
+    });
+    
+    // Применяем позиции к нодам
+    const updatedNodes = currentNodes.map((node) => {
+      const position = nodePositions.get(node.id);
+      if (position) {
+        return {
+          ...node,
+          position,
+        };
+      }
+      // Fallback для нод без позиции (не должно происходить)
+      return {
+        ...node,
+        position: {
+          x: Math.random() * 800,
+          y: Math.random() * 600,
+        },
+      };
+    });
+    
     setNodes(updatedNodes);
     
-    // После обновления позиций, вызываем fitView для центрирования
-    // Используем setTimeout, чтобы дать React Flow обновиться
+    // Центрируем вид после раскладки
     setTimeout(() => {
       try {
         if (reactFlowInstanceRef.current) {
-          reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 300 });
+          reactFlowInstanceRef.current.fitView({ padding: 0.2, duration: 500 });
         }
       } catch (err) {
-        console.warn('[ModelGraph] Failed to fit view after align', err);
+        console.warn('[ModelGraph] Failed to fit view after arrange', err);
       }
-    }, 100);
+    }, 150);
     
-    console.log('[ModelGraph] Align: nodes repositioned', {
-      connectedCount: connectedNodes.length,
-      unconnectedCount: unconnectedNodes.length,
+    console.log('[ModelGraph] Arrange: nodes repositioned', {
+      totalNodes: updatedNodes.length,
+      components: components.length,
+      layers: components.map(c => {
+        const layerMap = assignLayers(c);
+        return Math.max(...Array.from(layerMap.values()), -1) + 1;
+      }),
     });
   }, [reactFlowNodes, reactFlowEdges, setNodes]);
 

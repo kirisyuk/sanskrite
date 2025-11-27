@@ -57,6 +57,7 @@ export function useAdvancedAutoScroll(
   const lastProjectIdRef = useRef<string | null>(null);
   const lastUpdateTimestampRef = useRef<number>(0);
   const lastUserInteractionIdRef = useRef<string | null>(null);
+  const hasScrolledToCurrentUserMessageRef = useRef<boolean>(false);
   
   const genaiChat = useGenaiChatStore();
   const genaiChatInteractionsLength = useGenaiChatStore(
@@ -81,6 +82,7 @@ export function useAdvancedAutoScroll(
       // Reset scroll position tracking for new project
       lastScrollInteractionLength.current = 0;
       lastUserInteractionIdRef.current = null;
+      hasScrolledToCurrentUserMessageRef.current = false;
       setTimeout(() => {
         if (containerRef.current) {
           containerRef.current.scrollTop = containerRef.current.scrollHeight;
@@ -142,6 +144,7 @@ export function useAdvancedAutoScroll(
       // If this is a new user message, scroll to it specifically
       if (isNewUserMessage && currentUserInteractionId) {
         lastUserInteractionIdRef.current = currentUserInteractionId;
+        hasScrolledToCurrentUserMessageRef.current = false;
         // Use double requestAnimationFrame + timeout to ensure DOM is fully updated
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
@@ -158,7 +161,11 @@ export function useAdvancedAutoScroll(
                     behavior: 'smooth', 
                     block: 'center' 
                   });
+                  hasScrolledToCurrentUserMessageRef.current = true;
                 } else {
+                  // Element not found (might be temporary ID), mark as not scrolled yet
+                  // Will retry when ID updates to server ID
+                  hasScrolledToCurrentUserMessageRef.current = false;
                   // Fallback: scroll to bottom
                   containerRef.current.scrollTop = containerRef.current.scrollHeight;
                 }
@@ -195,6 +202,57 @@ export function useAdvancedAutoScroll(
 
     lastScrollStreamingState.current = currentStreaming;
   }, [interactionsLength, streaming, containerRef, currentUserInteractionId]);
+
+  // Handle case when user interaction ID changes (e.g., from temporary to server ID)
+  // This happens when a user message is saved to the server and gets a new ID
+  useEffect(() => {
+    if (!containerRef.current) return;
+    if (!currentUserInteractionId) return;
+    
+    // If the user interaction ID changed, it might be an ID update (temporary -> server ID)
+    // We should scroll to the new ID if we haven't successfully scrolled to it yet
+    if (
+      currentUserInteractionId !== lastUserInteractionIdRef.current &&
+      currentUserInteractionId
+    ) {
+      // Check if we had a previous user interaction ID (meaning this is an ID update, not a new message)
+      const isIdUpdate = lastUserInteractionIdRef.current !== null;
+      
+      // Only scroll if:
+      // 1. This is an ID update (temporary -> server), OR
+      // 2. We haven't successfully scrolled to the current message yet
+      if (isIdUpdate || !hasScrolledToCurrentUserMessageRef.current) {
+        lastUserInteractionIdRef.current = currentUserInteractionId;
+        
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              if (containerRef.current) {
+                // Try to find the user message element with the new server ID
+                const userMessageElement = containerRef.current.querySelector(
+                  `[data-interaction-id="${currentUserInteractionId}"]`
+                ) as HTMLElement | null;
+                
+                if (userMessageElement) {
+                  // Scroll to the user message element
+                  userMessageElement.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'center' 
+                  });
+                  hasScrolledToCurrentUserMessageRef.current = true;
+                } else {
+                  // Element not found, fallback to scroll to bottom
+                  containerRef.current.scrollTop = containerRef.current.scrollHeight;
+                  // Don't mark as scrolled if element wasn't found
+                  hasScrolledToCurrentUserMessageRef.current = false;
+                }
+              }
+            }, 150); // Slightly longer delay for ID updates to ensure DOM is updated
+          });
+        });
+      }
+    }
+  }, [currentUserInteractionId, containerRef]);
 
   // Auto-scroll during streaming when content updates (chunks arrive)
   useEffect(() => {

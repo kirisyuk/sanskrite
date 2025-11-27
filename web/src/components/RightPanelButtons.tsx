@@ -14,6 +14,7 @@ interface RightPanelButtonsProps {
   availUserAnalysis: boolean;
   availDiscussionFlow: boolean;
   hasQueuedTasks?: boolean; // Show button if there are queued tasks
+  unfoldSubView?: 'chat' | 'perspectives' | 'models' | 'pages'; // Show model-context button only in models subview
 }
 
 export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
@@ -24,6 +25,7 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
   availUserAnalysis,
   availDiscussionFlow,
   hasQueuedTasks = false,
+  unfoldSubView,
 }) => {
   const { t } = useTranslation();
 
@@ -251,6 +253,33 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
           >
             <path d="M9 11l3 3L22 4" />
             <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+          </svg>
+        </button>
+      )}
+
+      {/* Model Context button - shows only in models subview */}
+      {unfoldSubView === 'models' && (
+        <button
+          type="button"
+          aria-label="Model Context"
+          title="Model Context"
+          onClick={() => handleButtonClick('model-context')}
+          className="rounded-lg flex items-center justify-center transition-all duration-300"
+          style={getRightPanelButtonStyle(rightPanelType === 'model-context')}
+          onMouseEnter={(e) => handleMouseEnter(e, rightPanelType === 'model-context')}
+          onMouseLeave={(e) => handleMouseLeave(e, rightPanelType === 'model-context')}
+        >
+          <svg
+            className="w-4 h-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+            <circle cx="12" cy="10" r="3" />
           </svg>
         </button>
       )}

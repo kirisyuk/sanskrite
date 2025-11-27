@@ -50,7 +50,7 @@ type Interaction struct {
 	TenantID         string  `json:"tenantId" firestore:"tenantId"`
 	ProjectID        string  `json:"projectId" firestore:"projectId"`
 	Kind             string  `json:"kind" firestore:"kind"` // e.g., "discovery.answer", "ontology"
-	Subkind          *string `json:"subkind,omitempty" firestore:"subkind,omitempty"` // For ontology: "entity", "event", "claim", "relation", "concept", "metricState", "trend", "causalLink", "scenario", "actionableItem"
+	Subkind          *string `json:"subkind,omitempty" firestore:"subkind,omitempty"` // For ontology: "entity", "event", "claim", "relation", "concept", "metricState", "trend", "causalLink", "scenario", "actionableItem", "layout" (UI state)
 	Content          string  `json:"content" firestore:"content"` // For ontology: full entity JSON (final state, not operation)
 	// Ontology-specific: entity ID extracted from content.id for deduplication
 	// Interactions store final states only - no operation field needed

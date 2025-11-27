@@ -63,7 +63,13 @@ func (r *SourceProjectsRepository) ListByProject(ctx context.Context, tenantID, 
 }
 
 func (r *SourceProjectsRepository) ListBySource(ctx context.Context, tenantID, sourceID string, status *string) ([]*models.SourceProject, error) {
-	q := r.col.Where("tenantId", "==", tenantID).Where("sourceId", "==", sourceID)
+	var q firestore.Query
+	// If tenantID is empty, search across all tenants (for public sources)
+	if tenantID == "" {
+		q = r.col.Where("sourceId", "==", sourceID)
+	} else {
+		q = r.col.Where("tenantId", "==", tenantID).Where("sourceId", "==", sourceID)
+	}
 	if status != nil && *status != "" {
 		q = q.Where("status", "==", *status)
 	}

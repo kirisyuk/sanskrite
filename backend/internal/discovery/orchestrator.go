@@ -20,21 +20,21 @@ import (
 )
 
 type Orchestrator struct {
-	exec         *ai.AITaskExecutor
-	crawl        *crawler.WebCrawler
-	telegram     TelegramFetcher
-	providersReg *prov.Registry
-	projects     *repo.ProjectsRepository
-	sources      *repo.DataSourcesRepository
-	sproj        *repo.SourceProjectsRepository
-	profiles     *repo.SourceProfilesRepository
-	docs         *repo.DocumentsRepository
-	chunks       *repo.ChunksRepository
-	emb          ai.EmbeddingProvider
-	publish      *realtime.Publisher
-	logger       *log.Logger
-	cache        *repo.ProcessedContentRepository
-	interactions *repo.InteractionsRepository
+	exec          *ai.AITaskExecutor
+	crawl         *crawler.WebCrawler
+	telegram      TelegramFetcher
+	providersReg  *prov.Registry
+	projects      *repo.ProjectsRepository
+	sources       *repo.DataSourcesRepository
+	sproj         *repo.SourceProjectsRepository
+	profiles      *repo.SourceProfilesRepository
+	docs          *repo.DocumentsRepository
+	chunks        *repo.ChunksRepository
+	emb           ai.EmbeddingProvider
+	publish       *realtime.Publisher
+	logger        *log.Logger
+	cache         *repo.ProcessedContentRepository
+	interactions  *repo.InteractionsRepository
 	ingestHistory *repo.SourceIngestHistoryRepository
 }
 
@@ -200,6 +200,29 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 	}
 	fr, err := o.crawl.FetchContent(ctx, canonicalURL)
 	if err != nil {
+		// Even on error, update LastPolledAt and NextPollAt to ensure polling continues
+		if o.sources != nil {
+			if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+				now := time.Now().UTC()
+				ds.LastPolledAt = &now
+				// Use backoff for errors
+				b := 60
+				if ds.PollBackoffSec != nil && *ds.PollBackoffSec > 0 {
+					b = *ds.PollBackoffSec * 2
+					if b > 3600 {
+						b = 3600
+					}
+				}
+				ds.PollBackoffSec = &b
+				next := now.Add(time.Duration(b) * time.Second)
+				ds.NextPollAt = &next
+				if err := o.sources.Upsert(ctx, ds); err != nil {
+					o.logger.Printf("orchestrator: failed to update NextPollAt/LastPolledAt on error for source %s: %v", sourceID, err)
+				} else {
+					o.logger.Printf("orchestrator: updated NextPollAt/LastPolledAt on error for source %s (NextPollAt: %s)", sourceID, next.Format(time.RFC3339))
+				}
+			}
+		}
 		return err
 	}
 	now := time.Now().UTC()
@@ -248,7 +271,7 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 			_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"tenantId": tenantID, "sourceId": sourceID, "documentId": d.ID, "externalId": d.ExternalID})
 		}
 	}
-	
+
 	// Update LastPolledAt and NextPollAt in DataSource
 	if o.sources != nil {
 		ds, err := o.sources.Get(ctx, sourceID)
@@ -267,7 +290,7 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -287,12 +310,12 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			durationMs := int(time.Since(startTime).Milliseconds())
 			completedAt := time.Now().UTC()
 			_, _ = o.ingestHistory.Create(ctx, &models.SourceIngestHistory{
-				TenantID:          tenantID,
-				SourceID:          sourceID,
-				Kind:              "telegram_channel",
-				Status:            "error",
-				Error:             &errStr,
-				Params:            map[string]interface{}{"handle": handle, "lastMessageID": lastMessageID},
+				TenantID:           tenantID,
+				SourceID:           sourceID,
+				Kind:               "telegram_channel",
+				Status:             "error",
+				Error:              &errStr,
+				Params:             map[string]interface{}{"handle": handle, "lastMessageID": lastMessageID},
 				DocumentsProcessed: 0,
 				DocumentsCreated:   0,
 				DurationMs:         &durationMs,
@@ -301,6 +324,30 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 				CreatedAt:          startTime,
 			})
 		}
+		// Even on error, update LastPolledAt and NextPollAt to ensure polling continues
+		// This is critical - we must never leave these fields empty
+		if o.sources != nil {
+			if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+				now := time.Now().UTC()
+				ds.LastPolledAt = &now
+				// Use backoff for errors
+				b := 60
+				if ds.PollBackoffSec != nil && *ds.PollBackoffSec > 0 {
+					b = *ds.PollBackoffSec * 2
+					if b > 3600 {
+						b = 3600
+					}
+				}
+				ds.PollBackoffSec = &b
+				next := now.Add(time.Duration(b) * time.Second)
+				ds.NextPollAt = &next
+				if err := o.sources.Upsert(ctx, ds); err != nil {
+					o.logger.Printf("orchestrator: failed to update NextPollAt/LastPolledAt on error for source %s: %v", sourceID, err)
+				} else {
+					o.logger.Printf("orchestrator: updated NextPollAt/LastPolledAt on error for source %s (NextPollAt: %s)", sourceID, next.Format(time.RFC3339))
+				}
+			}
+		}
 		return err
 	}
 	o.logger.Printf("orchestrator: IngestTelegram fetched %d messages for @%s", len(msgs), handle)
@@ -308,6 +355,27 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 	maxSeenID := lastMessageID
 	documentsCreated := 0
 	documentsProcessed := 0
+
+	// Update LastProcessedMessageID even on error/timeout to avoid reprocessing same messages
+	// Use defer to ensure it's updated even if context deadline is exceeded
+	defer func() {
+		if o.sources != nil && maxSeenID > lastMessageID {
+			// Use background context to ensure update happens even if original context timed out
+			bgCtx := context.Background()
+			if ds, err := o.sources.Get(bgCtx, sourceID); err == nil && ds != nil {
+				// Only move forward - update if we processed at least one message
+				if ds.Details.LastProcessedMessageID == nil || maxSeenID > *ds.Details.LastProcessedMessageID {
+					ds.Details.LastProcessedMessageID = &maxSeenID
+					if err := o.sources.Upsert(bgCtx, ds); err != nil {
+						o.logger.Printf("orchestrator: failed to update LastProcessedMessageID on timeout for source %s: %v", sourceID, err)
+					} else {
+						o.logger.Printf("orchestrator: updated LastProcessedMessageID to %d for source %s (processed up to this ID, may have timed out)", maxSeenID, sourceID)
+					}
+				}
+			}
+		}
+	}()
+
 	for _, m := range msgs {
 		extID := fmt.Sprintf("%d", m.ID)
 		if m.ID > maxSeenID {
@@ -369,13 +437,15 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			}
 		}
 	}
-	// Update lastProcessedMessageId on the DataSource after ingest (best-effort)
+	// Update lastProcessedMessageId on the DataSource after successful ingest
+	// Note: On error/timeout, defer function above will update it
 	if o.sources != nil {
 		if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
 			// Only move forward
 			if ds.Details.LastProcessedMessageID == nil || maxSeenID > *ds.Details.LastProcessedMessageID {
 				ds.Details.LastProcessedMessageID = &maxSeenID
 				_ = o.sources.Upsert(ctx, ds)
+				o.logger.Printf("orchestrator: updated LastProcessedMessageID to %d for source %s (successful ingest)", maxSeenID, sourceID)
 			}
 		}
 	}
@@ -385,26 +455,26 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 	if documentsProcessed == 0 {
 		status = "partial"
 	}
-	
+
 	// Записываем историю обработки
 	if o.ingestHistory != nil {
 		_, _ = o.ingestHistory.Create(ctx, &models.SourceIngestHistory{
-			TenantID:          tenantID,
-			SourceID:          sourceID,
-			Kind:              "telegram_channel",
-			Status:            status,
-			Params:            map[string]interface{}{"handle": handle, "lastMessageID": lastMessageID, "maxSeenID": maxSeenID},
+			TenantID:           tenantID,
+			SourceID:           sourceID,
+			Kind:               "telegram_channel",
+			Status:             status,
+			Params:             map[string]interface{}{"handle": handle, "lastMessageID": lastMessageID, "maxSeenID": maxSeenID},
 			DocumentsProcessed: documentsProcessed,
-			DocumentsCreated:    documentsCreated,
+			DocumentsCreated:   documentsCreated,
 			DurationMs:         &durationMs,
 			StartedAt:          startTime,
 			CompletedAt:        &completedAt,
 			CreatedAt:          startTime,
 		})
 	}
-	
+
 	o.logger.Printf("orchestrator: IngestTelegram completed for @%s (sourceID=%s): processed %d messages, maxSeenID=%d", handle, sourceID, len(msgs), maxSeenID)
-	
+
 	// Update LastPolledAt and NextPollAt in DataSource
 	if o.sources != nil {
 		ds, err := o.sources.Get(ctx, sourceID)
@@ -423,7 +493,7 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -535,13 +605,59 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	}
 	docs, err := p.Ingest(ctx, tenantID, feedURL)
 	if err != nil {
+		// Even on error, update LastPolledAt and NextPollAt to ensure polling continues
+		if o.sources != nil {
+			if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+				now := time.Now().UTC()
+				ds.LastPolledAt = &now
+				// Use backoff for errors
+				b := 60
+				if ds.PollBackoffSec != nil && *ds.PollBackoffSec > 0 {
+					b = *ds.PollBackoffSec * 2
+					if b > 3600 {
+						b = 3600
+					}
+				}
+				ds.PollBackoffSec = &b
+				next := now.Add(time.Duration(b) * time.Second)
+				ds.NextPollAt = &next
+				if err := o.sources.Upsert(ctx, ds); err != nil {
+					o.logger.Printf("orchestrator: failed to update NextPollAt/LastPolledAt on error for source %s: %v", sourceID, err)
+				} else {
+					o.logger.Printf("orchestrator: updated NextPollAt/LastPolledAt on error for source %s (NextPollAt: %s)", sourceID, next.Format(time.RFC3339))
+				}
+			}
+		}
 		return err
 	}
 	err = o.processProviderDocuments(ctx, tenantID, sourceID, docs, embed)
 	if err != nil {
+		// Even on error, update LastPolledAt and NextPollAt to ensure polling continues
+		if o.sources != nil {
+			if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+				now := time.Now().UTC()
+				ds.LastPolledAt = &now
+				// Use backoff for errors
+				b := 60
+				if ds.PollBackoffSec != nil && *ds.PollBackoffSec > 0 {
+					b = *ds.PollBackoffSec * 2
+					if b > 3600 {
+						b = 3600
+					}
+				}
+				ds.PollBackoffSec = &b
+				next := now.Add(time.Duration(b) * time.Second)
+				ds.NextPollAt = &next
+				if err := o.sources.Upsert(ctx, ds); err != nil {
+					o.logger.Printf("orchestrator: failed to update NextPollAt/LastPolledAt on error for source %s: %v", sourceID, err)
+				} else {
+					o.logger.Printf("orchestrator: updated NextPollAt/LastPolledAt on error for source %s (NextPollAt: %s)", sourceID, next.Format(time.RFC3339))
+				}
+			}
+		}
 		return err
 	}
-	
+
 	// Update LastPolledAt and NextPollAt in DataSource
 	if o.sources != nil {
 		ds, err := o.sources.Get(ctx, sourceID)
@@ -560,7 +676,7 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -1095,6 +1211,9 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 	} else {
 		now := time.Now().UTC()
 		o.logger.Printf("orchestrator: creating new web source %s for project %s", canonicalURL, in.ProjectID)
+		// Set initial NextPollAt based on cadence (estimate)
+		initialInterval := o.cadenceToDuration(nil) // Use default for new sources
+		initialNext := now.Add(initialInterval)
 		ds = &models.DataSource{
 			// Public source: store globally (no tenant scoping)
 			TenantID:    "",
@@ -1108,6 +1227,7 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 			UpdatedAt:   now,
 			FirstSeen:   now,
 			LastSeen:    now,
+			NextPollAt:  &initialNext, // Set initial estimate
 		}
 		if createdID, err := o.sources.Create(ctx, ds); err != nil {
 			o.logger.Printf("orchestrator: failed to create web source %s: %v", canonicalURL, err)
@@ -1303,6 +1423,9 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 	} else {
 		now := time.Now().UTC()
 		o.logger.Printf("orchestrator: creating new telegram source @%s for project %s", handle, in.ProjectID)
+		// Set initial NextPollAt based on cadence (estimate)
+		initialInterval := o.cadenceToDuration(nil) // Use default for new sources
+		initialNext := now.Add(initialInterval)
 		ds = &models.DataSource{
 			// Public source: store globally (no tenant scoping)
 			TenantID:    "",
@@ -1313,6 +1436,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 			OwnerUserID: in.OwnerUID,
 			Details:     models.SourceDetails{ChannelUsername: &handle},
 			CreatedAt:   now, UpdatedAt: now, FirstSeen: now, LastSeen: now,
+			NextPollAt: &initialNext, // Set initial estimate
 		}
 		if createdID, err := o.sources.Create(ctx, ds); err != nil {
 			o.logger.Printf("orchestrator: failed to create telegram source @%s: %v", handle, err)
@@ -1596,15 +1720,4 @@ func summarizeProfile(p *models.SourceProfileData) string {
 	}
 	b, _ := json.Marshal(s)
 	return string(b)
-}
-
-// contains: kept for readability across orchestrator; referenced in docs/tests historically.
-// nolint:unused
-func contains(arr []string, s string) bool {
-	for _, x := range arr {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

@@ -82,7 +82,6 @@ export const ModelContextPanel: React.FC = () => {
         overflowY: 'auto',
         padding: '16px',
         background: 'var(--bg-elevated)',
-        borderRight: '1px solid var(--border-subtle)',
       }}
     >
       <div
@@ -103,7 +102,7 @@ export const ModelContextPanel: React.FC = () => {
           const color = getInteractionColor(interaction.kind || 'unknown', theme);
           
           // Формируем заголовок
-          let title = interaction.kind || 'unknown';
+          let title: string = interaction.kind || 'unknown';
           if (interaction.subkind) {
             title += ` / ${interaction.subkind}`;
           }

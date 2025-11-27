@@ -102,7 +102,7 @@ export default function Homepage() {
                 <div className="text-13" style={{ color: 'var(--text-secondary)' }}>{t('homepage.tagline')}</div>
                 <div className="text-13" style={{ color: 'var(--text-secondary)' }}>{t('homepage.description')}</div>
                 <div className="text-13" style={{ color: 'var(--text-secondary)' }}>{t('homepage.description2')}</div>
-                <div className="text-13" style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{t('homepage.beta')}</div>
+                <div className="text-13" style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{t('homepage.accessNote')}</div>
               </div>
             </div>
 

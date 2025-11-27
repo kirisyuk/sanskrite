@@ -35,8 +35,16 @@ export function validateOntologyCommand(cmd: any): cmd is OntologyCommand {
   return true;
 }
 
+// Результат парсинга команд
+export interface ParseOntologyCommandsResult {
+  commands: OntologyCommand[];
+  parseError: string | null; // null если парсинг успешен, иначе описание ошибки
+  isValidJson: boolean; // true если JSON валидный, даже если команды не найдены
+  wasTruncated: boolean; // true если ответ был обрезан
+}
+
 // Парсинг команд из ответа LLM
-export function parseOntologyCommands(responseText: string): OntologyCommand[] {
+export function parseOntologyCommands(responseText: string, wasTruncated: boolean = false): ParseOntologyCommandsResult {
   try {
     // Пытаемся найти JSON в тексте (может быть обернут в markdown code fence)
     let jsonText = responseText.trim();
@@ -47,31 +55,71 @@ export function parseOntologyCommands(responseText: string): OntologyCommand[] {
     jsonText = jsonText.replace(/\n?```\s*$/m, ''); // Убираем конец code fence
     jsonText = jsonText.trim();
     
-    // Также пытаемся найти JSON объект внутри текста (если есть лишний текст)
+    // Если был флаг wasTruncated, но мы все равно пытаемся парсить
+    // (проверка truncation могла быть слишком строгой)
+    // Пытаемся найти JSON объект внутри текста (если есть лишний текст)
     const jsonObjectMatch = jsonText.match(/\{[\s\S]*\}/);
     if (jsonObjectMatch) {
       jsonText = jsonObjectMatch[0];
     }
     
-    // Парсим JSON
-    const parsed = JSON.parse(jsonText);
-    
-    // Проверяем формат ответа
-    if (parsed.commands && Array.isArray(parsed.commands)) {
-      // Формат: { commands: [...] }
-      return parsed.commands.filter(validateOntologyCommand);
-    } else if (Array.isArray(parsed)) {
-      // Формат: [...] (массив команд напрямую)
-      return parsed.filter(validateOntologyCommand);
-    } else if (validateOntologyCommand(parsed)) {
-      // Одна команда напрямую
-      return [parsed];
+    // Парсим JSON - если парсинг успешен, значит JSON валидный (независимо от флага wasTruncated)
+    let parsed: any;
+    try {
+      parsed = JSON.parse(jsonText);
+      // Если парсинг успешен, значит JSON валидный - сбрасываем флаг truncation
+      wasTruncated = false;
+    } catch (parseErr) {
+      // Парсинг не удался - проверяем, действительно ли обрезан
+      // Проверяем баланс скобок для более точного определения truncation
+      const openBraces = (jsonText.match(/\{/g) || []).length;
+      const closeBraces = (jsonText.match(/\}/g) || []).length;
+      const openBrackets = (jsonText.match(/\[/g) || []).length;
+      const closeBrackets = (jsonText.match(/\]/g) || []).length;
+      
+      const isActuallyTruncated = (
+        (openBraces > closeBraces || openBrackets > closeBrackets) &&
+        (jsonText.includes('"commands"') || jsonText.includes('"operation"'))
+      );
+      
+      if (isActuallyTruncated || wasTruncated) {
+        // Действительно обрезан
+        return {
+          commands: [],
+          parseError: 'Response was truncated. Cannot parse incomplete JSON.',
+          isValidJson: false,
+          wasTruncated: true,
+        };
+      } else {
+        // Не обрезан, но парсинг не удался - это ошибка парсинга
+        throw parseErr;
+      }
     }
     
-    return [];
+    // Проверяем формат ответа
+    let commands: OntologyCommand[] = [];
+    if (parsed.commands && Array.isArray(parsed.commands)) {
+      // Формат: { commands: [...] }
+      commands = parsed.commands.filter(validateOntologyCommand);
+    } else if (Array.isArray(parsed)) {
+      // Формат: [...] (массив команд напрямую)
+      commands = parsed.filter(validateOntologyCommand);
+    } else if (validateOntologyCommand(parsed)) {
+      // Одна команда напрямую
+      commands = [parsed];
+    }
+    
+    // Если JSON валидный, но команд нет - это может быть нормально (пустой ответ)
+    return {
+      commands,
+      parseError: null,
+      isValidJson: true,
+      wasTruncated: false,
+    };
   } catch (err) {
     console.warn('[parseOntologyCommands] Failed to parse commands', err);
     console.warn('[parseOntologyCommands] Response text:', responseText.substring(0, 500));
+    
     // Попробуем более агрессивную очистку markdown
     try {
       let cleaned = responseText.trim();
@@ -84,18 +132,33 @@ export function parseOntologyCommands(responseText: string): OntologyCommand[] {
       const jsonMatch = cleaned.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
+        let commands: OntologyCommand[] = [];
         if (parsed.commands && Array.isArray(parsed.commands)) {
-          return parsed.commands.filter(validateOntologyCommand);
+          commands = parsed.commands.filter(validateOntologyCommand);
         } else if (Array.isArray(parsed)) {
-          return parsed.filter(validateOntologyCommand);
+          commands = parsed.filter(validateOntologyCommand);
         } else if (validateOntologyCommand(parsed)) {
-          return [parsed];
+          commands = [parsed];
         }
+        
+        return {
+          commands,
+          parseError: null,
+          isValidJson: true,
+          wasTruncated: false,
+        };
       }
     } catch (retryErr) {
       console.warn('[parseOntologyCommands] Retry parsing also failed', retryErr);
     }
-    return [];
+    
+    // Если не удалось распарсить - возвращаем ошибку
+    return {
+      commands: [],
+      parseError: err instanceof Error ? err.message : String(err),
+      isValidJson: false,
+      wasTruncated: false,
+    };
   }
 }
 

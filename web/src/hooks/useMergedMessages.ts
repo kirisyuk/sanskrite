@@ -73,6 +73,10 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
         if (it.subkind === 'document.attach') {
           return false;
         }
+        // Exclude layout interactions (they are UI state, not chat content)
+        if (it.kind === 'ontology' && it.subkind === 'layout') {
+          return false;
+        }
         // Exclude Model chat interactions when in Discuss view
         if (excludeModelChat) {
           // Exclude all interactions with subkind='model.chat' (created from Model tab)

@@ -45,7 +45,7 @@ import { DiscussionFlow } from '../components/DiscussionFlow';
 import { TextTasksPanel, TextTask } from '../components/TextTasksPanel';
 import { ExperimentalResponsePanel } from '../components/ExperimentalResponsePanel';
 import { ModelGraph, useModelGraphHasNodes } from '../components/ModelGraph';
-import { ModelContextPanel } from '../components/ModelContextPanel';
+import { ModelProcessingIndicator } from '../components/ModelProcessingIndicator';
 import {
   generateExperimentalResponse,
   ExperimentalResponse,
@@ -227,6 +227,8 @@ const DiscoveryPage: React.FC = () => {
   
   // Check if Model graph has nodes (for empty state)
   const modelGraphHasNodes = useModelGraphHasNodes();
+  const processingCommands = useGenaiChatStore((s) => s.processingCommands);
+  const commandsProgress = useGenaiChatStore((s) => s.commandsProgress);
   
   // Get random empty state message (selected once per language)
   // Use modelEmptyState for Model tab, chatEmptyState for Discuss tab
@@ -1539,31 +1541,17 @@ const DiscoveryPage: React.FC = () => {
                         onPresetChange={setCurrentPerspectivePreset}
                       />
             )}
-            {/* Models content - Context Panel + React Graph */}
+            {/* Models content - React Graph */}
             {unfoldSubView === 'models' && (
               <div 
                 className="flex flex-1" 
                 style={{ 
                   minHeight: 0, 
                   display: 'flex',
-                  gap: '16px',
                   height: '100%',
                 }}
               >
-                {/* Context Panel - левая колонка (всегда видна) */}
-                <div 
-                  style={{ 
-                    width: '320px',
-                    minWidth: '320px',
-                    flexShrink: 0,
-                    height: '100%',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <ModelContextPanel />
-                </div>
-                
-                {/* Graph - правая колонка */}
+                {/* Graph - занимает всю ширину */}
                 {!modelGraphHasNodes ? (
                   // Empty state для графа
                   <div
@@ -1574,19 +1562,23 @@ const DiscoveryPage: React.FC = () => {
                       padding: isMobile ? '24px 12px' : '48px 24px',
                     }}
                   >
-                    <div className="max-w-md text-center">
-                      <div
-                        className="text-16"
-                        style={{
-                          color: 'var(--text-heading)',
-                          lineHeight: '1.6',
-                          fontSize: 'clamp(18px, 2vw, 24px)',
-                          fontWeight: 500,
-                        }}
-                      >
-                        {emptyStateMessage}
+                    {processingCommands || commandsProgress ? (
+                      <ModelProcessingIndicator variant="empty-state" />
+                    ) : (
+                      <div className="max-w-md text-center">
+                        <div
+                          className="text-16"
+                          style={{
+                            color: 'var(--text-heading)',
+                            lineHeight: '1.6',
+                            fontSize: 'clamp(18px, 2vw, 24px)',
+                            fontWeight: 500,
+                          }}
+                        >
+                          {emptyStateMessage}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 ) : (
                   <div 
@@ -1598,6 +1590,12 @@ const DiscoveryPage: React.FC = () => {
                     }}
                   >
                     <ModelGraph />
+                    {(processingCommands || commandsProgress) && (
+                      <>
+                        <ModelProcessingIndicator variant="overlay" />
+                        <ModelProcessingIndicator variant="status-bar" />
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -2443,6 +2441,7 @@ const DiscoveryPage: React.FC = () => {
           availUserAnalysis={availUserAnalysis}
           hasQueuedTasks={queuedTasks && queuedTasks.some((t) => !t.applied)}
           availDiscussionFlow={availDiscussionFlow}
+          unfoldSubView={unfoldSubView}
         />
       </div>
     </div>

@@ -252,11 +252,10 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
         {/* Language switcher */}
         <select
           aria-label="Select language"
-          className="text-12 px-2 py-1 rounded"
+          className="lang-select text-12 px-2 py-1"
           value={selectedUi}
           onChange={handleLanguageChange}
-          style={{ backgroundColor: 'transparent', color: 'var(--text-heading)', border: '1px solid var(--white-10)' }}
-       >
+        >
           <option value="en">EN</option>
           <option value="de">DE</option>
           <option value="es">ES</option>

@@ -805,6 +805,29 @@ func (r *DataSourcesRepository) ListActiveByKinds(ctx context.Context, kinds []s
 	return res, nil
 }
 
+// ListByKinds returns all datasources filtered by kinds (regardless of status)
+// This is used by the poller to check sources with active project links
+func (r *DataSourcesRepository) ListByKinds(ctx context.Context, kinds []string) ([]*models.DataSource, error) {
+	if len(kinds) == 0 {
+		return []*models.DataSource{}, nil
+	}
+	// Firestore IN supports up to 10 values
+	q := r.col.Where("kind", "in", kinds)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var res []*models.DataSource
+	for _, d := range docs {
+		var ds models.DataSource
+		if err := d.DataTo(&ds); err != nil {
+			continue
+		}
+		res = append(res, &ds)
+	}
+	return res, nil
+}
+
 // ListByTenant returns all datasources accessible by a tenant (tenant-scoped + global public sources)
 func (r *DataSourcesRepository) ListByTenant(ctx context.Context, tenantID string, kinds []string, status *string) ([]*models.DataSource, error) {
 	var allDocs []*firestore.DocumentSnapshot
