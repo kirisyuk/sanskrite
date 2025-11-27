@@ -196,6 +196,13 @@ export async function generateUserStanceAnalysis(
       return;
     }
 
+    // Limit transcript size to prevent 502 errors (absolute limit: ~8000 chars)
+    const MAX_TRANSCRIPT_LENGTH = 8000;
+    if (transcript.length > MAX_TRANSCRIPT_LENGTH) {
+      transcript = transcript.substring(0, MAX_TRANSCRIPT_LENGTH) + '\n\n[... conversation transcript truncated for analysis ...]';
+      console.log(`[UserStanceAnalysis] Transcript truncated from ${transcript.length} to ${MAX_TRANSCRIPT_LENGTH} chars`);
+    }
+
     // Schema for structured response
     const riskCategories = [
       'medical_or_mental_health',

@@ -122,16 +122,26 @@ export async function evaluateBias(params: {
   const schemaText = JSON.stringify(schema, null, 2);
   const dictText = JSON.stringify(biasDict);
 
+  // Limit context size to prevent 502 errors
+  const MAX_CONTEXT_LENGTH = 3000;
+  const MAX_TARGET_LENGTH = 3000;
+  const truncatedContextText = contextText && contextText.length > MAX_CONTEXT_LENGTH
+    ? contextText.substring(0, MAX_CONTEXT_LENGTH) + '\n[... context truncated ...]'
+    : contextText;
+  const truncatedTextToEvaluate = textToEvaluate.length > MAX_TARGET_LENGTH
+    ? textToEvaluate.substring(0, MAX_TARGET_LENGTH) + '\n[... content truncated ...]'
+    : textToEvaluate;
+
   // Build context and target blocks based on role
-  const ctxBlock = contextText && contextText.trim().length > 0
+  const ctxBlock = truncatedContextText && truncatedContextText.trim().length > 0
     ? (messageRole === 'assistant'
-        ? `USER_MESSAGE (context, do NOT evaluate this text):\n${contextText}\n\n`
-        : `ASSISTANT_REPLY (context, do NOT evaluate this text):\n${contextText}\n\n`)
+        ? `USER_MESSAGE (context, do NOT evaluate this text):\n${truncatedContextText}\n\n`
+        : `ASSISTANT_REPLY (context, do NOT evaluate this text):\n${truncatedContextText}\n\n`)
     : '';
 
   const targetBlock = messageRole === 'assistant'
-    ? `ASSISTANT_REPLY (to evaluate):\n${textToEvaluate}`
-    : `USER_MESSAGE (to evaluate):\n${textToEvaluate}`;
+    ? `ASSISTANT_REPLY (to evaluate):\n${truncatedTextToEvaluate}`
+    : `USER_MESSAGE (to evaluate):\n${truncatedTextToEvaluate}`;
 
   const evalInstruction = messageRole === 'assistant'
     ? `Evaluate ONLY the ASSISTANT_REPLY both standalone and IN RELATION to USER_MESSAGE (if provided). Do NOT assess the user's content.`

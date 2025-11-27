@@ -93,8 +93,21 @@ export async function generateFrameExpansions(
 
     const schemaText = JSON.stringify(schema, null, 2);
 
-    // Build context block with user messages if available (up to 2 most recent)
-    const userMessagesFiltered = userMessages?.filter((msg) => msg && msg.trim().length > 0) || [];
+    // Limit context size to prevent 502 errors
+    // Truncate assistant content to ~4000 chars (roughly 1000 tokens)
+    const MAX_ASSISTANT_CONTENT_LENGTH = 4000;
+    const truncatedAssistantContent = assistantContent.length > MAX_ASSISTANT_CONTENT_LENGTH
+      ? assistantContent.substring(0, MAX_ASSISTANT_CONTENT_LENGTH) + '\n\n[... content truncated for analysis ...]'
+      : assistantContent;
+
+    // Build context block with user messages if available (up to 2 most recent, max 500 chars each)
+    const MAX_USER_MESSAGE_LENGTH = 500;
+    const userMessagesFiltered = (userMessages?.filter((msg) => msg && msg.trim().length > 0) || [])
+      .slice(0, 2) // Limit to 2 most recent
+      .map((msg) => msg.length > MAX_USER_MESSAGE_LENGTH 
+        ? msg.substring(0, MAX_USER_MESSAGE_LENGTH) + '[...]'
+        : msg);
+    
     const userContextBlock = userMessagesFiltered.length > 0
       ? `ORIGINAL USER QUESTIONS (context for understanding what prompted this response, chronological order - oldest first):\n${userMessagesFiltered.map((msg, idx) => `${idx + 1}. ${msg}`).join('\n\n')}\n\n`
       : '';
@@ -147,7 +160,7 @@ The JSON MUST conform EXACTLY to this schema (no additional keys, types must mat
 ${schemaText}
 
 ${userContextBlock}LLM RESPONSE TO ANALYZE:
-${assistantContent}`;
+${truncatedAssistantContent}`;
 
     const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
 
