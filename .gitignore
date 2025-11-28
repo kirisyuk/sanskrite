@@ -5,6 +5,8 @@ web/dist/
 web/.vite/
 web/.eslintcache
 web/coverage/
+*.tsbuildinfo
+*.tsbuildinfo.backup
 
 # Env & Secrets
 .env
@@ -30,6 +32,16 @@ backend/server
 *.dll
 *.so
 *.dylib
+# Binary files in root and bin directories
+bin/
+main
+server.exe
+hatlone-ws.exe
+verified-proxy.exe
+ws-broker
+ws-broker.exe
+sync-coredocs-bigquery.exe
+reindex-all-coredocs.exe
 
 # Python
 __pycache__/
@@ -52,11 +64,20 @@ env/
 # Logs
 *.log
 logs/
+logs_*.txt
+logs_*.json
+profile_*.txt
+build.log
 
 # Temporary files
 *.tmp
 *.bak
 *.cache
+timeline.txt
+timeline2.txt
+req.json
+collected/
+*.tar.gz
 
 # Documentation artifacts
 docs/**/*.pdf
