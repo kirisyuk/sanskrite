@@ -291,12 +291,24 @@ func (r *CoreDocsRepo) Create(ctx context.Context, d *models.CoreDoc) (string, e
 	}
 
 	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	// Log before goroutine to ensure it's captured
 	if r.bigquerySync != nil {
+		log.Printf("[CoreDocsRepo] Triggering BigQuery sync for CoreDoc %s (%s) in Create (bigquerySync=%v)", d.ID, d.Filename, r.bigquerySync != nil)
+		docCopy := d // Capture doc for goroutine
 		go func(doc *models.CoreDoc) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[CoreDocsRepo] PANIC in BigQuery sync goroutine for CoreDoc %s: %v", doc.ID, r)
+				}
+			}()
 			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			log.Printf("[CoreDocsRepo] Starting BigQuery sync goroutine for CoreDoc %s", doc.ID)
 			r.syncToBigQuery(syncCtx, doc)
-		}(d)
+			log.Printf("[CoreDocsRepo] Completed BigQuery sync goroutine for CoreDoc %s", doc.ID)
+		}(docCopy)
+	} else {
+		log.Printf("[CoreDocsRepo] WARNING: bigquerySync is nil, skipping sync for CoreDoc %s (%s)", d.ID, d.Filename)
 	}
 
 	return doc.ID, nil
@@ -317,12 +329,24 @@ func (r *CoreDocsRepo) Upsert(ctx context.Context, d *models.CoreDoc) error {
 	}
 
 	// Синхронизация с BigQuery асинхронно (best effort, не блокируем основной поток)
+	// Log before goroutine to ensure it's captured
 	if r.bigquerySync != nil {
+		log.Printf("[CoreDocsRepo] Triggering BigQuery sync for CoreDoc %s (%s) in Upsert (bigquerySync=%v)", d.ID, d.Filename, r.bigquerySync != nil)
+		docCopy := d // Capture doc for goroutine
 		go func(doc *models.CoreDoc) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[CoreDocsRepo] PANIC in BigQuery sync goroutine for CoreDoc %s: %v", doc.ID, r)
+				}
+			}()
 			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			log.Printf("[CoreDocsRepo] Starting BigQuery sync goroutine for CoreDoc %s", doc.ID)
 			r.syncToBigQuery(syncCtx, doc)
-		}(d)
+			log.Printf("[CoreDocsRepo] Completed BigQuery sync goroutine for CoreDoc %s", doc.ID)
+		}(docCopy)
+	} else {
+		log.Printf("[CoreDocsRepo] WARNING: bigquerySync is nil, skipping sync for CoreDoc %s (%s)", d.ID, d.Filename)
 	}
 
 	return nil
@@ -668,15 +692,25 @@ func (r *DocumentsRepository) syncToBigQuery(ctx context.Context, d *models.Docu
 	}
 
 	if err := r.bigquerySync.InsertRow(ctx, "documents_metadata", row); err != nil {
-		// Логируем ошибку, но не прерываем выполнение (best effort)
-		// В production можно использовать структурированное логирование
-		_ = err // Игнорируем ошибку для асинхронной синхронизации
+		// Логируем ошибку для диагностики (best effort, не прерываем выполнение)
+		errStr := err.Error()
+		if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "already exists") || strings.Contains(errStr, "UNIQUE") {
+			// Документ уже существует - это нормально
+			return
+		}
+		log.Printf("[DocumentsRepo] Failed to sync Document %s to BigQuery: %v", d.ID, err)
+	} else {
+		log.Printf("[DocumentsRepo] Successfully synced Document %s to BigQuery", d.ID)
 	}
 }
 
 // syncToBigQuery синхронизирует метаданные CoreDoc в BigQuery
 func (r *CoreDocsRepo) syncToBigQuery(ctx context.Context, d *models.CoreDoc) {
+	log.Printf("[CoreDocsRepo] syncToBigQuery called for CoreDoc %s (%s), bigquerySync=%v", d.ID, d.Filename, r.bigquerySync != nil)
 	if r.bigquerySync == nil || d == nil {
+		if r.bigquerySync == nil {
+			log.Printf("[CoreDocsRepo] WARNING: bigquerySync is nil for CoreDoc %s", d.ID)
+		}
 		return
 	}
 
@@ -739,8 +773,11 @@ func (r *CoreDocsRepo) syncToBigQuery(ctx context.Context, d *models.CoreDoc) {
 		"updatedAt":     d.UpdatedAt,
 	}
 
-	if err := r.bigquerySync.InsertRow(ctx, "core_docs_metadata", row); err != nil {
-		// Логируем ошибку, но не прерываем выполнение (best effort)
-		_ = err // Игнорируем ошибку для асинхронной синхронизации
+	// Use UpsertRow to handle both insert and update (avoids duplicate errors)
+	if err := r.bigquerySync.UpsertRow(ctx, "core_docs_metadata", row); err != nil {
+		// Логируем ошибку для диагностики (best effort, не прерываем выполнение)
+		log.Printf("[CoreDocsRepo] Failed to sync CoreDoc %s (%s) to BigQuery: %v", d.ID, d.Filename, err)
+	} else {
+		log.Printf("[CoreDocsRepo] Successfully synced CoreDoc %s (%s) to BigQuery", d.ID, d.Filename)
 	}
 }

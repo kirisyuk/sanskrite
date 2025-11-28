@@ -876,7 +876,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               <>
                 <div
                   className="text-[11px] uppercase tracking-wide mb-2"
-                  style={{ color: 'var(--text-tertiary-weak)' }}
+                  style={{ color: 'var(--text-heading)' }}
                 >
                   {t('unfold.sections.chats')}
                 </div>

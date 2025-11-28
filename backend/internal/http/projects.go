@@ -18,9 +18,12 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
+	"github.com/igorkirisyuk/sanskrite/internal/gcp"
+	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/services"
 )
 
 // ProjectsHandler handles project-related HTTP requests
@@ -47,6 +50,12 @@ type ProjectsHandler struct {
 	emb        ai.EmbeddingProvider
 	// Vertex AI Search client for checking document indexing status
 	vertexSearchClient *ai.VertexAISearchClient
+	// BigQuery client for checking document availability in BigQuery
+	bigqueryClient *gcp.BigQueryClient
+	// BigQuery AI Service for natural language queries
+	bigqueryAIService *services.BigQueryAIService
+	// GenAI client for Prepare mode
+	genaiClient *gen_combined.Client
 }
 
 // NewProjectsHandler creates a new ProjectsHandler
@@ -114,6 +123,24 @@ func (h *ProjectsHandler) WithRAG(docs *repo.DocumentsRepository, chunks *repo.C
 // WithVertexSearch wires Vertex AI Search client for checking document indexing status
 func (h *ProjectsHandler) WithVertexSearch(client *ai.VertexAISearchClient) *ProjectsHandler {
 	h.vertexSearchClient = client
+	return h
+}
+
+// WithBigQuery wires BigQuery client for checking document availability in BigQuery
+func (h *ProjectsHandler) WithBigQuery(client *gcp.BigQueryClient) *ProjectsHandler {
+	h.bigqueryClient = client
+	return h
+}
+
+// WithBigQueryAI wires BigQuery AI Service for natural language queries
+func (h *ProjectsHandler) WithBigQueryAI(service *services.BigQueryAIService) *ProjectsHandler {
+	h.bigqueryAIService = service
+	return h
+}
+
+// WithGenAIClient wires GenAI client for Prepare mode
+func (h *ProjectsHandler) WithGenAIClient(client *gen_combined.Client) *ProjectsHandler {
+	h.genaiClient = client
 	return h
 }
 
@@ -989,6 +1016,805 @@ func (h *ProjectsHandler) CheckDocumentIndexStatus(w http.ResponseWriter, r *htt
 	WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "no_rag_document"})
 }
 
+// CheckDocumentBigQueryStatus checks if document is available in BigQuery
+func (h *ProjectsHandler) CheckDocumentBigQueryStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	if h.coreDocs == nil {
+		WriteInternalError(w, "Core docs repository is not configured")
+		return
+	}
+	if h.bigqueryClient == nil {
+		// If BigQuery is not configured, return not available
+		WriteJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "bigquery_not_configured"})
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// /api/v1/projects/{id}/docs/{docId}/bigquery-status
+	if len(parts) < 7 {
+		WriteBadRequest(w, "INVALID_PATH", "Project and document ID are required")
+		return
+	}
+	projectID, docID := parts[3], parts[5]
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	// Get the document
+	cd, err := h.coreDocs.Get(r.Context(), docID)
+	if err != nil || cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
+		WriteNotFound(w, "Document not found")
+		return
+	}
+
+	// Check if document exists in BigQuery core_docs_metadata table
+	// Note: Metadata can exist in BigQuery even without StoragePath
+	// StoragePath is only needed for reading content via object tables
+	exists, err := h.bigqueryClient.DocumentExistsInTable(r.Context(), "core_docs_metadata", docID)
+	if err != nil {
+		// Log error but return not available (best effort)
+		h.logger.Printf("[ProjectsHandler] Failed to check BigQuery status for doc %s: %v", docID, err)
+		WriteJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "check_failed", "error": err.Error()})
+		return
+	}
+
+	if exists {
+		WriteJSON(w, http.StatusOK, map[string]any{"available": true})
+		return
+	}
+
+	// Document not found in BigQuery
+	WriteJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "not_synced"})
+}
+
+// QueryBigQuery handles POST /api/v1/projects/{id}/analytics/query
+// Executes a natural language query against BigQuery for documents in the project
+func (h *ProjectsHandler) QueryBigQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+
+	if h.bigqueryAIService == nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] QueryBigQuery: BigQuery AI Service not configured")
+		}
+		WriteInternalError(w, "BigQuery analytics not configured")
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// /api/v1/projects/{id}/analytics/query
+	if len(parts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] QueryBigQuery: Access denied for project %s, user tenantID=%s", projectID, auth.TenantID)
+		}
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req struct {
+		Query      string `json:"query"`
+		MaxResults int    `json:"maxResults,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] QueryBigQuery: Failed to parse request body: %v", err)
+		}
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+
+	if strings.TrimSpace(req.Query) == "" {
+		WriteBadRequest(w, "MISSING_QUERY", "Query is required")
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] QueryBigQuery: Processing query for project %s, tenantID=%s, query=%q, maxResults=%d",
+			projectID, auth.TenantID, req.Query, req.MaxResults)
+	}
+
+	// Execute query with project and tenant filtering
+	serviceReq := &services.QueryRequest{
+		NaturalLanguageQuery: req.Query,
+		TenantID:             auth.TenantID,
+		DocumentProjectID:   projectID,
+		MaxResults:           req.MaxResults,
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] QueryBigQuery: Calling BigQueryAIService.ExecuteQuery with tenantID=%s, documentProjectID=%s",
+			serviceReq.TenantID, serviceReq.DocumentProjectID)
+	}
+
+	response, err := h.bigqueryAIService.ExecuteQuery(r.Context(), serviceReq)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] QueryBigQuery: ERROR - ExecuteQuery failed: %v", err)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to execute query: %v", err))
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] QueryBigQuery: Query executed successfully, rowCount=%d, resultsCount=%d, hasError=%v",
+			response.RowCount, len(response.Results), response.Error != "")
+	}
+
+	WriteJSON(w, http.StatusOK, response)
+}
+
+// GenerateSQL handles POST /api/v1/projects/{id}/analytics/generate-sql
+// Generates SQL from natural language query without executing it
+func (h *ProjectsHandler) GenerateSQL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+
+	if h.bigqueryAIService == nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] GenerateSQL: BigQuery AI Service not configured")
+		}
+		WriteInternalError(w, "BigQuery analytics not configured")
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// /api/v1/projects/{id}/analytics/generate-sql
+	if len(parts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] GenerateSQL: Access denied for project %s, user tenantID=%s", projectID, auth.TenantID)
+		}
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req struct {
+		Query string `json:"query"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] GenerateSQL: Failed to parse request body: %v", err)
+		}
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+
+	if strings.TrimSpace(req.Query) == "" {
+		WriteBadRequest(w, "MISSING_QUERY", "Query is required")
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] GenerateSQL: Processing query for project %s, tenantID=%s, query=%q",
+			projectID, auth.TenantID, req.Query)
+	}
+
+	serviceReq := &services.QueryRequest{
+		NaturalLanguageQuery: req.Query,
+		TenantID:             auth.TenantID,
+		DocumentProjectID:    projectID,
+	}
+
+	response, err := h.bigqueryAIService.GenerateSQLOnly(r.Context(), serviceReq)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] GenerateSQL: ERROR - GenerateSQLOnly failed: %v", err)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to generate SQL: %v", err))
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] GenerateSQL: SQL generated successfully, length=%d", len(response.SQL))
+	}
+
+	WriteJSON(w, http.StatusOK, response)
+}
+
+// GetBigQuerySchema handles GET /api/v1/projects/{id}/analytics/schema
+// Returns BigQuery schema information for SQL generation
+func (h *ProjectsHandler) GetBigQuerySchema(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+
+	if h.bigqueryAIService == nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] GetBigQuerySchema: BigQuery AI Service not configured")
+		}
+		WriteInternalError(w, "BigQuery analytics not configured")
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// /api/v1/projects/{id}/analytics/schema
+	if len(parts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] GetBigQuerySchema: Access denied for project %s, user tenantID=%s", projectID, auth.TenantID)
+		}
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Get schema info using the service's method
+	schemaInfo, err := h.bigqueryAIService.GetSchemaInfo(r.Context())
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] GetBigQuerySchema: Failed to get schema: %v", err)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to get schema: %v", err))
+		return
+	}
+
+	// Get project and dataset IDs
+	projectID_bq := h.bigqueryAIService.ProjectID()
+	datasetID := h.bigqueryAIService.DatasetID()
+
+	response := map[string]interface{}{
+		"projectID":      projectID_bq,
+		"datasetID":      datasetID,
+		"schemaInfo":     schemaInfo,
+		"tenantID":       auth.TenantID,
+		"projectIDFilter": projectID, // Document project ID for filtering
+	}
+
+	WriteJSON(w, http.StatusOK, response)
+}
+
+// ExecuteSQL handles POST /api/v1/projects/{id}/analytics/execute-sql
+// Executes SQL query and returns results
+func (h *ProjectsHandler) ExecuteSQL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+
+	if h.bigqueryAIService == nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] ExecuteSQL: BigQuery AI Service not configured")
+		}
+		WriteInternalError(w, "BigQuery analytics not configured")
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// /api/v1/projects/{id}/analytics/execute-sql
+	if len(parts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] ExecuteSQL: Access denied for project %s, user tenantID=%s", projectID, auth.TenantID)
+		}
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req struct {
+		SQL        string `json:"sql"`
+		MaxResults int    `json:"maxResults,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] ExecuteSQL: Failed to parse request body: %v", err)
+		}
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+
+	if strings.TrimSpace(req.SQL) == "" {
+		WriteBadRequest(w, "MISSING_SQL", "SQL query is required")
+		return
+	}
+
+	if req.MaxResults <= 0 {
+		req.MaxResults = 100
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] ExecuteSQL: Executing SQL for project %s, tenantID=%s, sqlLength=%d, maxResults=%d",
+			projectID, auth.TenantID, len(req.SQL), req.MaxResults)
+	}
+
+	response, err := h.bigqueryAIService.ExecuteSQLOnly(r.Context(), req.SQL, req.MaxResults)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] ExecuteSQL: ERROR - ExecuteSQLOnly failed: %v", err)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to execute SQL: %v", err))
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] ExecuteSQL: SQL executed successfully, rowCount=%d, resultsCount=%d, hasError=%v",
+			response.RowCount, len(response.Results), response.Error != "")
+	}
+
+	WriteJSON(w, http.StatusOK, response)
+}
+
+// PrepareAnalyzeRequest represents the request body for Prepare Analyze endpoint
+type PrepareAnalyzeRequest struct {
+	UserQuery string `json:"userQuery"` // Natural language query from user
+}
+
+// PrepareCommand represents a single command in the response
+type PrepareCommand struct {
+	Action     string `json:"action"`     // "update", "create", "delete", "merge"
+	DocumentID string `json:"documentId"` // ID of document to modify
+	Prompt     string `json:"prompt"`     // LLM prompt for how to modify the document
+	Reason     string `json:"reason"`     // Explanation of why this change is needed
+	Priority   int    `json:"priority,omitempty"` // Optional priority (higher = more important)
+}
+
+// PrepareAnalyzeResponse represents the response from Prepare Analyze endpoint
+type PrepareAnalyzeResponse struct {
+	Commands []PrepareCommand `json:"commands"`
+	Summary  string           `json:"summary"` // Summary of analysis
+}
+
+// PrepareAnalyze handles POST /api/v1/projects/{id}/prepare/analyze
+// Stage 1: Analyzes documents and generates JSON commands for modifications
+func (h *ProjectsHandler) PrepareAnalyze(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+
+	if h.coreDocs == nil || h.genaiClient == nil {
+		WriteInternalError(w, "Prepare mode not configured")
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareAnalyze: Access denied for project %s, user tenantID=%s", projectID, auth.TenantID)
+		}
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req PrepareAnalyzeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareAnalyze: Failed to parse request body: %v", err)
+		}
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+
+	if strings.TrimSpace(req.UserQuery) == "" {
+		WriteBadRequest(w, "MISSING_QUERY", "userQuery is required")
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] PrepareAnalyze: Starting analysis for project %s, query: %s", projectID, req.UserQuery)
+	}
+
+	// Get all documents for the project
+	docs, err := h.coreDocs.ListByProject(r.Context(), auth.TenantID, projectID, 0, nil)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareAnalyze: Failed to list documents: %v", err)
+		}
+		WriteInternalError(w, "Failed to list documents")
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] PrepareAnalyze: Found %d documents", len(docs))
+	}
+
+	// Build document summaries for LLM context
+	var docSummaries []string
+	for _, doc := range docs {
+		summary := fmt.Sprintf("- ID: %s, Filename: %s, Type: %s, Size: %d bytes",
+			doc.ID, doc.Filename, getDocType(doc), getDocSize(doc))
+		if doc.Description != nil && *doc.Description != "" {
+			summary += fmt.Sprintf(", Description: %s", *doc.Description)
+		}
+		docSummaries = append(docSummaries, summary)
+	}
+
+	// Build prompt for LLM
+	prompt := fmt.Sprintf(`You are analyzing documents in a project to prepare them for analytical queries (e.g., forecasting, statistical analysis).
+
+User's request: %s
+
+Available documents:
+%s
+
+Analyze these documents and determine what modifications are needed to make them ready for analytical queries. Consider:
+- Adding missing timestamps or date columns
+- Normalizing data formats
+- Adding required metadata
+- Structuring unstructured data
+- Ensuring data quality for ML models (e.g., ARIMA_PLUS requires at least 3 data points per time series)
+
+Return a JSON object with this structure:
+{
+  "commands": [
+    {
+      "action": "update",
+      "documentId": "doc_id_here",
+      "prompt": "Detailed instructions for how to modify this document. Be specific about what changes to make.",
+      "reason": "Why this change is needed",
+      "priority": 1
+    }
+  ],
+  "summary": "Brief summary of the analysis and planned changes"
+}
+
+Actions can be: "update" (modify existing document), "create" (create new document), "delete" (remove document), "merge" (combine documents).
+If no changes are needed, return an empty commands array.
+
+Return ONLY valid JSON, no markdown formatting.`, req.UserQuery, strings.Join(docSummaries, "\n"))
+
+	// Call LLM to generate commands
+	genReq := gen_combined.GenAIRequest{
+		Model:             "gemini-2.0-flash-exp", // Use fast model for analysis
+		Prompt:            prompt,
+		MaxOutputTokens:  4096,
+		Temperature:      0.3, // Lower temperature for more deterministic analysis
+	}
+
+	resp, err := h.genaiClient.GenAIGenerate(r.Context(), genReq)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareAnalyze: LLM generation failed: %v", err)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to generate analysis: %v", err))
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] PrepareAnalyze: LLM response received, length: %d", len(resp.Content))
+	}
+
+	// Parse JSON response
+	// Remove markdown code blocks if present
+	content := strings.TrimSpace(resp.Content)
+	if strings.HasPrefix(content, "```json") {
+		content = strings.TrimPrefix(content, "```json")
+		content = strings.TrimSuffix(content, "```")
+	} else if strings.HasPrefix(content, "```") {
+		content = strings.TrimPrefix(content, "```")
+		content = strings.TrimSuffix(content, "```")
+	}
+	content = strings.TrimSpace(content)
+
+	var analyzeResp PrepareAnalyzeResponse
+	if err := json.Unmarshal([]byte(content), &analyzeResp); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareAnalyze: Failed to parse LLM response: %v, content: %s", err, content)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to parse analysis response: %v", err))
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] PrepareAnalyze: Analysis complete, %d commands generated", len(analyzeResp.Commands))
+	}
+
+	WriteJSON(w, http.StatusOK, analyzeResp)
+}
+
+// PrepareApplyRequest represents the request body for Prepare Apply endpoint
+type PrepareApplyRequest struct {
+	DocumentID string `json:"documentId"` // ID of document to modify
+	Prompt     string `json:"prompt"`     // LLM prompt for how to modify the document
+}
+
+// PrepareApplyResponse represents the response from Prepare Apply endpoint
+type PrepareApplyResponse struct {
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	DocumentID string `json:"documentId,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// PrepareApply handles POST /api/v1/projects/{id}/prepare/apply
+// Stage 2: Applies modifications to a document based on LLM prompt
+func (h *ProjectsHandler) PrepareApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+
+	if h.coreDocs == nil || h.storage == nil || h.genaiClient == nil {
+		WriteInternalError(w, "Prepare mode not configured")
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := parts[3]
+
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != auth.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareApply: Access denied for project %s, user tenantID=%s", projectID, auth.TenantID)
+		}
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req PrepareApplyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareApply: Failed to parse request body: %v", err)
+		}
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+
+	if strings.TrimSpace(req.DocumentID) == "" || strings.TrimSpace(req.Prompt) == "" {
+		WriteBadRequest(w, "MISSING_PARAMS", "documentId and prompt are required")
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] PrepareApply: Starting application for document %s", req.DocumentID)
+	}
+
+	// Get document
+	cd, err := h.coreDocs.Get(r.Context(), req.DocumentID)
+	if err != nil || cd == nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareApply: Document not found: %s, error: %v", req.DocumentID, err)
+		}
+		WriteBadRequest(w, "DOCUMENT_NOT_FOUND", "Document not found")
+		return
+	}
+
+	if cd.ProjectID != projectID || cd.TenantID != auth.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareApply: Access denied for document %s", req.DocumentID)
+		}
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Read current document content
+	currentContent, err := h.getDocumentContent(r.Context(), cd)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareApply: Failed to read document content: %v", err)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to read document content: %v", err))
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] PrepareApply: Read document content, length: %d", len(currentContent))
+	}
+
+	// Build prompt for LLM to modify document
+	modifyPrompt := fmt.Sprintf(`You are modifying a document to prepare it for analytical queries.
+
+Document ID: %s
+Filename: %s
+Content Type: %s
+
+Current document content:
+%s
+
+Modification instructions:
+%s
+
+Apply the modifications to the document. Return ONLY the modified document content, without any explanations or markdown formatting. The output should be ready to replace the original document.
+
+If the document is a CSV, maintain CSV format. If it's JSON, maintain JSON format. If it's text/markdown, maintain that format.`, req.DocumentID, cd.Filename, cd.ContentType, currentContent, req.Prompt)
+
+	// Call LLM to generate modified content
+	genReq := gen_combined.GenAIRequest{
+		Model:             "gemini-2.0-flash-exp",
+		Prompt:            modifyPrompt,
+		MaxOutputTokens:   50000, // 50K tokens as per user requirement
+		Temperature:       0.3,
+	}
+
+	resp, err := h.genaiClient.GenAIGenerate(r.Context(), genReq)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareApply: LLM generation failed: %v", err)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to generate modified content: %v", err))
+		return
+	}
+
+	modifiedContent := strings.TrimSpace(resp.Content)
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] PrepareApply: Generated modified content, length: %d", len(modifiedContent))
+	}
+
+	// Save modified content back to document
+	// For documents with storage, update the storage object
+	// For dynamic artifacts, update ExtractedText or ArtifactConfig
+	if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") {
+		// Update storage object
+		bucket, object := splitGsPath(*cd.StoragePath)
+		if err := h.storage.UploadBytes(r.Context(), bucket, object, []byte(modifiedContent), cd.ContentType, nil); err != nil {
+			if h.logger != nil {
+				h.logger.Printf("[ProjectsHandler] PrepareApply: Failed to update storage: %v", err)
+			}
+			WriteInternalError(w, fmt.Sprintf("Failed to save modified document: %v", err))
+			return
+		}
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareApply: Updated storage object: %s", *cd.StoragePath)
+		}
+	}
+
+	// Update ExtractedText field
+	cd.ExtractedText = &modifiedContent
+	cd.UpdatedAt = time.Now().UTC()
+
+	// Save updated CoreDoc
+	if err := h.coreDocs.Upsert(r.Context(), cd); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[ProjectsHandler] PrepareApply: Failed to update CoreDoc: %v", err)
+		}
+		// Try to rollback storage if update failed
+		if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") {
+			bucket, object := splitGsPath(*cd.StoragePath)
+			_ = h.storage.UploadBytes(r.Context(), bucket, object, []byte(currentContent), cd.ContentType, nil)
+		}
+		WriteInternalError(w, fmt.Sprintf("Failed to save document: %v", err))
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[ProjectsHandler] PrepareApply: Successfully applied modifications to document %s", req.DocumentID)
+	}
+
+	WriteJSON(w, http.StatusOK, PrepareApplyResponse{
+		Success:    true,
+		Message:    "Document modified successfully",
+		DocumentID: req.DocumentID,
+	})
+}
+
+// Helper functions
+func getDocType(cd *models.CoreDoc) string {
+	if cd.DocType != nil {
+		return *cd.DocType
+	}
+	return "static"
+}
+
+func getDocSize(cd *models.CoreDoc) int64 {
+	if cd.SizeBytes != nil {
+		return *cd.SizeBytes
+	}
+	return 0
+}
+
+// getDocumentContent reads the full content of a CoreDoc
+func (h *ProjectsHandler) getDocumentContent(ctx context.Context, cd *models.CoreDoc) (string, error) {
+	// Handle dynamic artifacts
+	if cd.DocType != nil && *cd.DocType == "dynamic_artifact" && cd.ArtifactConfig != nil {
+		return assembleArtifactMarkdownFromConfig(cd.ArtifactConfig), nil
+	}
+
+	// Try to get full extracted text
+	if fullText, err := getFullExtractedTextFromCoreDoc(ctx, cd, h.storage); err == nil && fullText != "" {
+		return fullText, nil
+	}
+
+	// Fallback to ExtractedText field
+	if cd.ExtractedText != nil && *cd.ExtractedText != "" {
+		return *cd.ExtractedText, nil
+	}
+
+	// Try to read from storage
+	if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") && h.storage != nil {
+		bucket, object := splitGsPath(*cd.StoragePath)
+		data, err := h.storage.ReadObject(ctx, bucket, object)
+		if err != nil {
+			return "", fmt.Errorf("failed to read from storage: %w", err)
+		}
+		return string(data), nil
+	}
+
+	return "", fmt.Errorf("document has no readable content")
+}
+
 // DownloadProjectDoc handles GET /api/v1/projects/{id}/docs/{docId}/download
 func (h *ProjectsHandler) DownloadProjectDoc(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1447,6 +2273,14 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 		} else {
 			_ = h.coreDocs.Upsert(ctx, doc)
 		}
+
+		// Index CoreDoc for vector search
+		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+				log.Printf("[AnalyzeEntities] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
+			}
+		}
+
 		if h.pub != nil {
 			payload := map[string]any{"projectId": pid, "docId": "entities.json", "filename": "entities.json", "status": "parsed", "ts": time.Now().UnixMilli()}
 			log.Printf("[AnalyzeEntities] Publishing parsed status: %+v", payload)
@@ -1618,6 +2452,14 @@ Guidelines:
 		} else {
 			_ = h.coreDocs.Upsert(ctx, doc)
 		}
+
+		// Index CoreDoc for vector search
+		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+				log.Printf("[AnalyzeFacts] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
+			}
+		}
+
 		if h.pub != nil {
 			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "facts.json", "filename": "facts.json", "status": "parsed", "ts": time.Now().UnixMilli()})
 			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
@@ -1787,6 +2629,14 @@ Rules: prefer precise timestamps if available; severity/confidence in 0..1.
 		} else {
 			_ = h.coreDocs.Upsert(ctx, doc)
 		}
+
+		// Index CoreDoc for vector search
+		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+				log.Printf("[AnalyzeEvents] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
+			}
+		}
+
 		if h.pub != nil {
 			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "events.json", "filename": "events.json", "status": "parsed", "ts": time.Now().UnixMilli()})
 			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
@@ -1985,6 +2835,14 @@ Guidelines: keys stable and normalized; prefer domain-specific scope.
 		} else {
 			_ = h.coreDocs.Upsert(ctx, doc)
 		}
+
+		// Index CoreDoc for vector search
+		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+				log.Printf("[AnalyzeMetrics] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
+			}
+		}
+
 		if h.pub != nil {
 			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "metrics.json", "filename": "metrics.json", "status": "parsed", "ts": time.Now().UnixMilli()})
 			_ = h.pub.PublishJSON(ctx, realtime.EventAnalysisStatus, tenantID, map[string]any{
@@ -2168,6 +3026,14 @@ Return STRICT JSON: { "decisions": [ {
 		} else {
 			_ = h.coreDocs.Upsert(ctx, doc)
 		}
+
+		// Index CoreDoc for vector search
+		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+				log.Printf("[AnalyzeDecisions] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
+			}
+		}
+
 		if h.pub != nil {
 			log.Printf("[AnalyzeDecisions] Analysis complete, publishing done status (count=%d, elapsed=%dms)", len(merged), time.Since(started).Milliseconds())
 			_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": pid, "docId": "decisions.json", "filename": "decisions.json", "status": "parsed", "ts": time.Now().UnixMilli()})
@@ -2229,7 +3095,7 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
-	
+
 	// Delete original file from GCS
 	if cd.StoragePath != nil && strings.HasPrefix(*cd.StoragePath, "gs://") && h.storage != nil {
 		bucket, object := splitGsPath(*cd.StoragePath)
@@ -2237,7 +3103,7 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 			h.logger.Printf("Warning: failed to delete original file from GCS for doc %s: %v", docID, err)
 		}
 	}
-	
+
 	// Delete extracted text from GCS if it was stored there
 	if cd.ParseMeta != nil && h.storage != nil {
 		if pathRaw, ok := cd.ParseMeta["extractedTextPath"]; ok {
@@ -2258,7 +3124,7 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
-	
+
 	// Delete CoreDoc from Firestore
 	_, _ = h.coreDocs.Delete(r.Context(), docID)
 	if h.pub != nil {
@@ -2316,7 +3182,7 @@ func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd 
 	// Get full extracted text
 	var text string
 	var err error
-	
+
 	// For artifacts with ArtifactConfig, assemble text from sections
 	if cd.ArtifactConfig != nil && len(cd.ArtifactConfig.Structure) > 0 {
 		text = assembleArtifactMarkdownFromConfig(cd.ArtifactConfig)
@@ -2502,19 +3368,19 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 			}
 		}
 		status := "parsed"
-		
+
 		// For large CSV text, store full text in GCS and keep preview in Firestore
-		const previewSize = 10 * 1024 // 10KB preview
+		const previewSize = 10 * 1024         // 10KB preview
 		const largeTextThreshold = 100 * 1024 // 100KB threshold
-		
+
 		if len(text) > largeTextThreshold && h.storage != nil && h.bucket != "" {
 			// Store full text in GCS
 			extractedTextObject := fmt.Sprintf("%s/%s/%s-extracted-text.txt", tenantID, projectID, cd.ID)
 			if err := h.storage.UploadBytes(ctx, h.bucket, extractedTextObject, []byte(text), "text/plain", map[string]string{
-				"tenantId":   tenantID,
-				"projectId":  projectID,
-				"docId":      cd.ID,
-				"extracted":  "true",
+				"tenantId":  tenantID,
+				"projectId": projectID,
+				"docId":     cd.ID,
+				"extracted": "true",
 			}); err == nil {
 				// Store preview in Firestore
 				preview := text
@@ -2534,7 +3400,7 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 			// Small text: store directly in Firestore
 			cd.ExtractedText = &text
 		}
-		
+
 		cd.ParseStatus = &status
 		if cd.ParseMeta == nil {
 			cd.ParseMeta = map[string]any{}
@@ -2556,19 +3422,19 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 			h.logger.Printf("parseAndPersist: parsed %d bytes of text for doc %s (contentType: %s)", len(t), cd.ID, cd.ContentType)
 		}
 		status := "parsed"
-		
+
 		// For large text files, store full text in GCS and keep preview in Firestore
-		const previewSize = 10 * 1024 // 10KB preview
+		const previewSize = 10 * 1024         // 10KB preview
 		const largeTextThreshold = 100 * 1024 // 100KB threshold
-		
+
 		if len(t) > largeTextThreshold && h.storage != nil && h.bucket != "" {
 			// Store full text in GCS
 			extractedTextObject := fmt.Sprintf("%s/%s/%s-extracted-text.txt", tenantID, projectID, cd.ID)
 			if err := h.storage.UploadBytes(ctx, h.bucket, extractedTextObject, []byte(t), "text/plain", map[string]string{
-				"tenantId":   tenantID,
-				"projectId":  projectID,
-				"docId":      cd.ID,
-				"extracted":  "true",
+				"tenantId":  tenantID,
+				"projectId": projectID,
+				"docId":     cd.ID,
+				"extracted": "true",
 			}); err == nil {
 				// Store preview in Firestore (sanitize UTF-8 for Firestore compatibility)
 				preview := t
@@ -2619,7 +3485,7 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 				cd.ExtractedText = &sanitized
 			}
 		}
-		
+
 		cd.ParseStatus = &status
 		if pages != nil {
 			cd.PageCount = pages

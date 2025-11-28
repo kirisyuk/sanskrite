@@ -29,8 +29,9 @@ export interface WorkspaceCanvasProps {
 const DocumentItem = React.memo<{
   doc: CoreDoc;
   indexedStatus: { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
+  bigqueryStatus: { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string };
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; extractedText?: string }) => void;
-}>(({ doc, indexedStatus, onOpenDocument }) => {
+}>(({ doc, indexedStatus, bigqueryStatus, onOpenDocument }) => {
   const getDocumentIcon = () => (
     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
       <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -81,7 +82,7 @@ const DocumentItem = React.memo<{
             ? `${doc.filename.substring(0, 47)}...` 
             : doc.filename}
         </div>
-        <div className="flex items-center gap-2 mt-1">
+        <div className="flex items-center gap-2 mt-1 flex-wrap">
           <span
             className="text-[10px] px-1.5 py-0.5 rounded"
             style={{
@@ -102,6 +103,27 @@ const DocumentItem = React.memo<{
             }}
           >
             {indexedStatus.text}
+          </span>
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded"
+            style={{
+              color: bigqueryStatus.status === 'available' 
+                ? 'var(--accent-success)' 
+                : bigqueryStatus.status === 'not_available'
+                ? 'var(--accent-primary)'
+                : bigqueryStatus.status === 'loading'
+                ? 'var(--text-secondary-strong)'
+                : 'var(--text-tertiary-weak)',
+              backgroundColor: bigqueryStatus.status === 'available'
+                ? 'var(--success-20)'
+                : bigqueryStatus.status === 'not_available'
+                ? 'rgba(255, 169, 77, 0.20)'
+                : bigqueryStatus.status === 'loading'
+                ? 'var(--white-06)'
+                : 'transparent',
+            }}
+          >
+            {bigqueryStatus.text}
           </span>
           {doc.sizeBytes && (
             <span
@@ -131,12 +153,13 @@ const ProjectSection = React.memo<{
   discussionFrame?: string;
   indexStatuses: Record<string, { indexed: boolean; loading: boolean; lastChecked: number }>;
   getIndexedStatus: (doc: CoreDoc) => { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
+  getBigQueryStatus: (doc: CoreDoc) => { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string };
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
   onSourceStatusChange?: (sourceId: string, newStatus: 'active' | 'paused') => void;
   onSourceDelete?: (sourceId: string) => void;
   onSourcePreview?: (source: DataSource) => void;
   onViewDocuments?: (source: DataSource) => void;
-}>(({ project, documents, sources, discussionFrame, getIndexedStatus, onOpenDocument, onSourceStatusChange, onSourceDelete, onSourcePreview, onViewDocuments }) => {
+}>(({ project, documents, sources, discussionFrame, getIndexedStatus, getBigQueryStatus, onOpenDocument, onSourceStatusChange, onSourceDelete, onSourcePreview, onViewDocuments }) => {
   return (
     <div className="mb-6">
       {/* Project header */}
@@ -171,7 +194,7 @@ const ProjectSection = React.memo<{
           <div 
             className="grid gap-1"
             style={{
-              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, max-content))',
             }}
           >
             {sources.map((source) => (
@@ -215,6 +238,7 @@ const ProjectSection = React.memo<{
               key={doc.id}
               doc={doc}
               indexedStatus={getIndexedStatus(doc)}
+              bigqueryStatus={getBigQueryStatus(doc)}
               onOpenDocument={onOpenDocument}
             />
           ))}
@@ -385,6 +409,14 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   
   // Мемоизируем текущие статусы
   const [currentIndexStatuses, setCurrentIndexStatuses] = React.useState(() => getIndexStatuses());
+
+  // BigQuery statuses
+  const bigqueryStatusesKeys = useWorkspaceStore((s) => Object.keys(s.bigqueryStatuses).join(','));
+  const setDocumentBigQueryStatus = useWorkspaceStore((s) => s.setDocumentBigQueryStatus);
+  
+  const getBigQueryStatuses = React.useCallback(() => useWorkspaceStore.getState().bigqueryStatuses, []);
+  
+  const [currentBigQueryStatuses, setCurrentBigQueryStatuses] = React.useState(() => getBigQueryStatuses());
   
   // Обновляем статусы только при реальных изменениях
   React.useEffect(() => {
@@ -403,6 +435,24 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       return hasChanges ? newStatuses : prevStatuses;
     });
   }, [indexStatusesKeys, getIndexStatuses]);
+
+  // Обновляем BigQuery статусы только при реальных изменениях
+  React.useEffect(() => {
+    const newStatuses = getBigQueryStatuses();
+    setCurrentBigQueryStatuses((prevStatuses) => {
+      const currentKeys = Object.keys(prevStatuses).join(',');
+      const newKeys = Object.keys(newStatuses).join(',');
+      if (currentKeys !== newKeys) {
+        return newStatuses;
+      }
+      // Проверяем изменения в значениях
+      const hasChanges = Object.keys(newStatuses).some(
+        (key) => prevStatuses[key]?.available !== newStatuses[key]?.available ||
+                 prevStatuses[key]?.loading !== newStatuses[key]?.loading
+      );
+      return hasChanges ? newStatuses : prevStatuses;
+    });
+  }, [bigqueryStatusesKeys, getBigQueryStatuses]);
 
   // Check index status for documents - update in background, use cached if available
   React.useEffect(() => {
@@ -468,6 +518,65 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
     checkIndexStatuses();
   }, [isOpen, currentProjectsWithDocs, indexStatusesKeys, setDocumentIndexStatus, getIndexStatuses]);
 
+  // Check BigQuery status for documents - update in background, use cached if available
+  React.useEffect(() => {
+    if (!isOpen || currentProjectsWithDocs.length === 0) return;
+
+    const checkBigQueryStatuses = async () => {
+      const bigqueryStatuses = getBigQueryStatuses();
+      // Collect all documents that need status check
+      const docsToCheck: Array<{ projectId: string; docId: string }> = [];
+      
+      for (const { project, documents } of currentProjectsWithDocs) {
+        for (const doc of documents) {
+          if (!doc.storagePath || doc.id === 'local-unfold') {
+            continue;
+          }
+          
+          const existingStatus = bigqueryStatuses[doc.id];
+          // Check if we need to refresh (no status or status is older than 5 minutes)
+          const needsCheck = !existingStatus || 
+            (Date.now() - existingStatus.lastChecked > 5 * 60 * 1000);
+          
+          if (needsCheck) {
+            docsToCheck.push({ projectId: project.id, docId: doc.id });
+            // Set loading state immediately
+            setDocumentBigQueryStatus(doc.id, false, true);
+          }
+        }
+      }
+
+      console.log(`[WorkspaceCanvas] BigQuery status check: to check=${docsToCheck.length}`);
+
+      // Check statuses in batches to avoid ERR_INSUFFICIENT_RESOURCES
+      // Process 10 checks at a time
+      const CHECK_BATCH_SIZE = 10;
+      for (let i = 0; i < docsToCheck.length; i += CHECK_BATCH_SIZE) {
+        const batch = docsToCheck.slice(i, i + CHECK_BATCH_SIZE);
+        const checkPromises = batch.map(async ({ projectId, docId }) => {
+          try {
+            const status = await api.docsCheckBigQueryStatus(projectId, docId);
+            console.log(`[WorkspaceCanvas] BigQuery API response for ${docId}:`, status);
+            setDocumentBigQueryStatus(docId, status.available, false);
+            // Log reason if document is not available
+            if (!status.available) {
+              console.log(`[WorkspaceCanvas] Document ${docId} not available in BigQuery: reason=${status.reason || 'unknown'}${status.error ? `, error=${status.error}` : ''}`);
+            } else {
+              console.log(`[WorkspaceCanvas] Document ${docId} is available in BigQuery`);
+            }
+          } catch (err) {
+            console.error(`[WorkspaceCanvas] Failed to check BigQuery status for ${docId}`, err);
+            setDocumentBigQueryStatus(docId, false, false);
+          }
+        });
+
+        await Promise.all(checkPromises);
+      }
+    };
+
+    checkBigQueryStatuses();
+  }, [isOpen, currentProjectsWithDocs, bigqueryStatusesKeys, setDocumentBigQueryStatus, getBigQueryStatuses]);
+
   const getIndexedStatus = React.useCallback((doc: CoreDoc): { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string } => {
     if (!doc.storagePath) {
       return { status: 'not_indexed', text: 'Not indexed' };
@@ -486,6 +595,24 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       ? { status: 'indexed', text: 'Indexed' }
       : { status: 'not_indexed', text: 'Not indexed' };
   }, [currentIndexStatuses]);
+
+  const getBigQueryStatus = React.useCallback((doc: CoreDoc): { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string } => {
+    // Check status from store - don't assume based on storagePath
+    // Metadata can exist in BigQuery even without storagePath
+    
+    const status = currentBigQueryStatuses[doc.id];
+    if (!status) {
+      return { status: 'unknown', text: 'Unknown' };
+    }
+    
+    if (status.loading) {
+      return { status: 'loading', text: 'Checking...' };
+    }
+    
+    return status.available 
+      ? { status: 'available', text: 'Analytics Ready' }
+      : { status: 'not_available', text: 'Not Analytics Ready' };
+  }, [currentBigQueryStatuses]);
 
   const getProjectSortTimestamp = React.useCallback((project: Project, fallback: number) => {
     const parseDate = (value?: string) => (value ? Date.parse(value) : NaN);
@@ -636,6 +763,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
               discussionFrame={discussionFrame}
               indexStatuses={currentIndexStatuses}
               getIndexedStatus={getIndexedStatus}
+              getBigQueryStatus={getBigQueryStatus}
               onOpenDocument={onOpenDocument}
               onSourceStatusChange={(sourceId, newStatus) => {
                 // Update local state immediately

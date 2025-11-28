@@ -133,6 +133,10 @@ func (e *GraphToolExecutor) validateGraphData(gd *GraphData) error {
 
 // createGraph creates a new graph interaction
 func (e *GraphToolExecutor) createGraph(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+	if e.logger != nil {
+		e.logger.Printf("[GraphToolExecutor] createGraph called with args length=%d", len(args))
+	}
+	
 	var params struct {
 		ChartTitle string          `json:"chartTitle"`
 		ChartType  string          `json:"chartType,omitempty"`
@@ -141,7 +145,15 @@ func (e *GraphToolExecutor) createGraph(ctx context.Context, args json.RawMessag
 		ReplyTo    *string         `json:"replyTo,omitempty"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
+		if e.logger != nil {
+			e.logger.Printf("[GraphToolExecutor] ERROR unmarshaling createGraph args: %v, args=%s", err, string(args))
+		}
 		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	
+	if e.logger != nil {
+		e.logger.Printf("[GraphToolExecutor] createGraph params: chartTitle=%q, chartType=%q, tableRows=%d, sourcesCount=%d", 
+			params.ChartTitle, params.ChartType, len(params.Table), len(params.Sources))
 	}
 
 	// Build GraphData
@@ -187,7 +199,14 @@ func (e *GraphToolExecutor) createGraph(ctx context.Context, args json.RawMessag
 
 	interactionID, err := e.interactions.Create(ctx, interaction)
 	if err != nil {
+		if e.logger != nil {
+			e.logger.Printf("[GraphToolExecutor] ERROR creating interaction: %v", err)
+		}
 		return nil, fmt.Errorf("failed to create interaction: %w", err)
+	}
+	
+	if e.logger != nil {
+		e.logger.Printf("[GraphToolExecutor] Interaction created successfully: interactionID=%s", interactionID)
 	}
 
 	// Publish WebSocket event

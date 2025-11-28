@@ -312,24 +312,30 @@ func (w *SourcePoller) hasActiveProjects(ctx context.Context, tenantID, sourceID
 }
 
 // cadenceToDuration maps publishingCadence string (if available via profile) to a polling interval.
+// In poller_worker, we don't know if new content was found, so we rely on LastFoundAt heuristics.
 func cadenceToDuration(ds *models.DataSource) time.Duration {
 	// Default 30 minutes
 	def := 30 * time.Minute
 	// Try to infer from profile attached to this datasource via orchestrator.profiles
 	// Minimal implementation: look up profile and parse behaviorPatterns.publishingCadence keywords
 	// Since poller doesn't have direct access to profiles repo, fall back to LastFoundAt heuristics
-	if ds.LastFoundAt != nil {
+	if ds != nil && ds.LastFoundAt != nil {
 		age := time.Since(*ds.LastFoundAt)
 		switch {
 		case age < 15*time.Minute:
+			// Recently found content - check more frequently
 			return 10 * time.Minute
 		case age < 2*time.Hour:
+			// Found content within last 2 hours - moderate frequency
 			return 30 * time.Minute
 		case age < 24*time.Hour:
+			// Found content within last day - check less frequently
 			return 2 * time.Hour
 		default:
+			// No new content for more than 24 hours - check rarely
 			return 6 * time.Hour
 		}
 	}
+	// No LastFoundAt set - use default (likely first poll or no content ever found)
 	return def
 }

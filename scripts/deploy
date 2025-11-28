@@ -535,33 +535,144 @@ except:
   
   # 3.8 Setup BigQuery for documents analytics
   echo -e "${BLUE}[infra] Setting up BigQuery for documents analytics...${NC}"
-  if command -v bq >/dev/null 2>&1; then
-    local dataset="${PROJECT_ID}_documents"
-    local dataset_ref="${PROJECT_ID}:${dataset}"
-    if bq show "$dataset_ref" >/dev/null 2>&1; then
-      echo -e "${GREEN}[infra] BigQuery dataset exists:${NC} ${dataset_ref}"
-    else
-      echo -e "${BLUE}[infra] Creating BigQuery dataset...${NC}"
-      bq mk --dataset --location=US --project_id="$PROJECT_ID" "$dataset" >/dev/null 2>&1 && \
-        echo -e "${GREEN}[infra] Created BigQuery dataset:${NC} ${dataset_ref}" || \
-        echo -e "${YELLOW}[infra] Warning: Failed to create BigQuery dataset${NC}"
-    fi
-    
-    # Create metadata table if not exists
-    local table_ref="${dataset_ref}.documents_metadata"
-    if bq show "$table_ref" >/dev/null 2>&1; then
-      echo -e "${GREEN}[infra] BigQuery metadata table exists${NC}"
-    else
-      echo -e "${BLUE}[infra] Creating BigQuery metadata table...${NC}"
-      bq mk --table --project_id="$PROJECT_ID" \
-        "$table_ref" \
-        "id:STRING,tenantId:STRING,sourceId:STRING,externalId:STRING,title:STRING,url:STRING,documentPath:STRING,storagePath:STRING,status:STRING,contentType:STRING,documentType:STRING,language:STRING,contentHash:STRING,ingestedAt:TIMESTAMP,createdAt:TIMESTAMP,updatedAt:TIMESTAMP" >/dev/null 2>&1 && \
-        echo -e "${GREEN}[infra] Created BigQuery metadata table${NC}" || \
-        echo -e "${YELLOW}[infra] Warning: Failed to create metadata table${NC}"
-    fi
+  local dataset="${PROJECT_ID}_documents"
+  local dataset_ref="${PROJECT_ID}:${dataset}"
+  
+  # Check if dataset exists using REST API (works on Windows too)
+  local access_token=$(gcloud auth print-access-token 2>/dev/null)
+  if [[ -z "$access_token" ]]; then
+    echo -e "${YELLOW}[infra] Warning: Cannot get access token, skipping BigQuery setup${NC}"
+    return
+  fi
+  
+  local dataset_exists=$(curl -s -H "Authorization: Bearer $access_token" \
+    "https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT_ID}/datasets/${dataset}" \
+    2>/dev/null | grep -q '"datasetId"' && echo "yes" || echo "no")
+  
+  if [[ "$dataset_exists" == "yes" ]]; then
+    echo -e "${GREEN}[infra] BigQuery dataset exists:${NC} ${dataset_ref}"
   else
-    echo -e "${YELLOW}[infra] bq CLI not found, skipping BigQuery setup${NC}"
-    echo -e "${YELLOW}[infra] Run scripts/setup_bigquery.sh manually${NC}"
+    echo -e "${BLUE}[infra] Creating BigQuery dataset...${NC}"
+    local create_response=$(curl -s -X POST \
+      -H "Authorization: Bearer $access_token" \
+      -H "Content-Type: application/json" \
+      "https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT_ID}/datasets" \
+      -d "{\"datasetReference\":{\"datasetId\":\"${dataset}\",\"projectId\":\"${PROJECT_ID}\"},\"location\":\"US\"}" \
+      2>/dev/null)
+    
+    if echo "$create_response" | grep -q '"datasetId"'; then
+      echo -e "${GREEN}[infra] Created BigQuery dataset:${NC} ${dataset_ref}"
+    else
+      echo -e "${YELLOW}[infra] Warning: Failed to create BigQuery dataset${NC}"
+      echo -e "${YELLOW}[infra] Response: ${create_response}${NC}"
+      return
+    fi
+  fi
+  
+  # Check and create documents_metadata table if not exists
+  local table_id="documents_metadata"
+  local table_exists=$(curl -s -H "Authorization: Bearer $access_token" \
+    "https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT_ID}/datasets/${dataset}/tables/${table_id}" \
+    2>/dev/null | grep -q '"tableId"' && echo "yes" || echo "no")
+  
+  if [[ "$table_exists" == "yes" ]]; then
+    echo -e "${GREEN}[infra] BigQuery table exists:${NC} ${dataset_ref}.${table_id}"
+  else
+    echo -e "${BLUE}[infra] Creating BigQuery table:${NC} ${table_id}"
+    local table_schema='{
+      "tableReference": {
+        "projectId": "'"${PROJECT_ID}"'",
+        "datasetId": "'"${dataset}"'",
+        "tableId": "'"${table_id}"'"
+      },
+      "schema": {
+        "fields": [
+          {"name": "id", "type": "STRING", "mode": "REQUIRED"},
+          {"name": "tenantId", "type": "STRING"},
+          {"name": "sourceId", "type": "STRING"},
+          {"name": "externalId", "type": "STRING"},
+          {"name": "title", "type": "STRING"},
+          {"name": "url", "type": "STRING"},
+          {"name": "documentPath", "type": "STRING"},
+          {"name": "storagePath", "type": "STRING"},
+          {"name": "status", "type": "STRING"},
+          {"name": "contentType", "type": "STRING"},
+          {"name": "documentType", "type": "STRING"},
+          {"name": "language", "type": "STRING"},
+          {"name": "contentHash", "type": "STRING"},
+          {"name": "ingestedAt", "type": "TIMESTAMP"},
+          {"name": "createdAt", "type": "TIMESTAMP"},
+          {"name": "updatedAt", "type": "TIMESTAMP"}
+        ]
+      }
+    }'
+    
+    local create_table_response=$(curl -s -X POST \
+      -H "Authorization: Bearer $access_token" \
+      -H "Content-Type: application/json" \
+      "https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT_ID}/datasets/${dataset}/tables" \
+      -d "$table_schema" \
+      2>/dev/null)
+    
+    if echo "$create_table_response" | grep -q '"tableId"'; then
+      echo -e "${GREEN}[infra] Created BigQuery table:${NC} ${dataset_ref}.${table_id}"
+    else
+      echo -e "${YELLOW}[infra] Warning: Failed to create table ${table_id}${NC}"
+      echo -e "${YELLOW}[infra] Response: ${create_table_response}${NC}"
+    fi
+  fi
+  
+  # Check and create core_docs_metadata table if not exists
+  local core_table_id="core_docs_metadata"
+  local core_table_exists=$(curl -s -H "Authorization: Bearer $access_token" \
+    "https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT_ID}/datasets/${dataset}/tables/${core_table_id}" \
+    2>/dev/null | grep -q '"tableId"' && echo "yes" || echo "no")
+  
+  if [[ "$core_table_exists" == "yes" ]]; then
+    echo -e "${GREEN}[infra] BigQuery table exists:${NC} ${dataset_ref}.${core_table_id}"
+  else
+    echo -e "${BLUE}[infra] Creating BigQuery table:${NC} ${core_table_id}"
+    local core_table_schema='{
+      "tableReference": {
+        "projectId": "'"${PROJECT_ID}"'",
+        "datasetId": "'"${dataset}"'",
+        "tableId": "'"${core_table_id}"'"
+      },
+      "schema": {
+        "fields": [
+          {"name": "id", "type": "STRING", "mode": "REQUIRED"},
+          {"name": "tenantId", "type": "STRING"},
+          {"name": "projectId", "type": "STRING"},
+          {"name": "filename", "type": "STRING"},
+          {"name": "contentType", "type": "STRING"},
+          {"name": "description", "type": "STRING"},
+          {"name": "sizeBytes", "type": "INTEGER"},
+          {"name": "storagePath", "type": "STRING"},
+          {"name": "extractedText", "type": "STRING"},
+          {"name": "parseStatus", "type": "STRING"},
+          {"name": "parseMeta", "type": "JSON"},
+          {"name": "pageCount", "type": "INTEGER"},
+          {"name": "docType", "type": "STRING"},
+          {"name": "createdBy", "type": "STRING"},
+          {"name": "createdAt", "type": "TIMESTAMP"},
+          {"name": "updatedAt", "type": "TIMESTAMP"}
+        ]
+      }
+    }'
+    
+    local create_core_table_response=$(curl -s -X POST \
+      -H "Authorization: Bearer $access_token" \
+      -H "Content-Type: application/json" \
+      "https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT_ID}/datasets/${dataset}/tables" \
+      -d "$core_table_schema" \
+      2>/dev/null)
+    
+    if echo "$create_core_table_response" | grep -q '"tableId"'; then
+      echo -e "${GREEN}[infra] Created BigQuery table:${NC} ${dataset_ref}.${core_table_id}"
+    else
+      echo -e "${YELLOW}[infra] Warning: Failed to create table ${core_table_id}${NC}"
+      echo -e "${YELLOW}[infra] Response: ${create_core_table_response}${NC}"
+    fi
   fi
   
   # 3.9 Setup Redis (Memorystore)
@@ -900,6 +1011,7 @@ deploy_api() {
     --max-instances=3 \
     --cpu=1 \
     --memory=512Mi \
+    --timeout=300 \
     --set-env-vars "$env_vars" \
     --set-secrets "$paypal_secrets" \
     --clear-vpc-connector \

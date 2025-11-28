@@ -2,6 +2,8 @@ package gcp
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
@@ -141,4 +143,192 @@ func (b *BigQueryClient) InsertRows(ctx context.Context, tableName string, rows 
 		values[i] = mapSaver(row)
 	}
 	return inserter.Put(ctx, values)
+}
+
+// DocumentExistsInTable checks if a document exists in a BigQuery table by ID
+func (b *BigQueryClient) DocumentExistsInTable(ctx context.Context, tableName string, docID string) (bool, error) {
+	query := fmt.Sprintf(
+		"SELECT COUNT(*) as cnt FROM `%s.%s.%s` WHERE id = @docID LIMIT 1",
+		b.projectID, b.datasetID, tableName,
+	)
+
+	q := b.client.Query(query)
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "docID", Value: docID},
+	}
+	q.Location = "US"
+
+	it, err := q.Read(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	var result struct {
+		Cnt int64 `bigquery:"cnt"`
+	}
+
+	if err := it.Next(&result); err != nil {
+		// If iterator is done (no rows), document doesn't exist
+		return false, nil
+	}
+
+	return result.Cnt > 0, nil
+}
+
+// UpsertRow inserts or updates a row in BigQuery table using MERGE statement
+func (b *BigQueryClient) UpsertRow(ctx context.Context, tableName string, row map[string]interface{}) error {
+	if len(row) == 0 {
+		return nil
+	}
+
+	// Convert values to proper types for BigQuery parameters
+	convertValue := func(v interface{}) interface{} {
+		if v == nil {
+			return nil
+		}
+		// Handle pointers
+		switch val := v.(type) {
+		case *int:
+			if val == nil {
+				return nil
+			}
+			return *val
+		case *int64:
+			if val == nil {
+				return nil
+			}
+			return *val
+		case *string:
+			if val == nil {
+				return nil
+			}
+			return *val
+		case map[string]interface{}:
+			// Convert map to JSON string for BigQuery
+			jsonBytes, err := json.Marshal(val)
+			if err != nil {
+				return nil
+			}
+			return string(jsonBytes)
+		default:
+			return v
+		}
+	}
+
+	// Build MERGE statement
+	// For core_docs_metadata, the primary key is 'id'
+	query := fmt.Sprintf(`
+		MERGE `+"`%s.%s.%s`"+` AS target
+		USING (SELECT @id AS id) AS source
+		ON target.id = source.id
+		WHEN MATCHED THEN
+			UPDATE SET
+				tenantId = @tenantId,
+				projectId = @projectId,
+				filename = @filename,
+				contentType = @contentType,
+				description = @description,
+				sizeBytes = @sizeBytes,
+				storagePath = @storagePath,
+				extractedText = @extractedText,
+				parseStatus = @parseStatus,
+				parseMeta = PARSE_JSON(@parseMeta),
+				pageCount = @pageCount,
+				docType = @docType,
+				createdBy = @createdBy,
+				updatedAt = @updatedAt
+		WHEN NOT MATCHED THEN
+			INSERT (id, tenantId, projectId, filename, contentType, description, sizeBytes, storagePath, extractedText, parseStatus, parseMeta, pageCount, docType, createdBy, createdAt, updatedAt)
+			VALUES (@id, @tenantId, @projectId, @filename, @contentType, @description, @sizeBytes, @storagePath, @extractedText, @parseStatus, PARSE_JSON(@parseMeta), @pageCount, @docType, @createdBy, @createdAt, @updatedAt)
+	`, b.projectID, b.datasetID, tableName)
+
+	q := b.client.Query(query)
+
+	// Build parameters from row with proper type conversion
+	// Only include non-nil parameters (BigQuery doesn't accept nil parameters)
+	params := []bigquery.QueryParameter{}
+	paramMap := make(map[string]bool) // Track which parameters we're including
+	for k, v := range row {
+		converted := convertValue(v)
+		if converted != nil {
+			params = append(params, bigquery.QueryParameter{
+				Name:  k,
+				Value: converted,
+			})
+			paramMap[k] = true
+		}
+	}
+
+	// Build dynamic MERGE query that only updates fields that are provided
+	// For fields not in paramMap, use COALESCE to keep existing value or set to NULL
+	updateFields := []string{}
+	insertFields := []string{}
+	insertValues := []string{}
+
+	// Required fields
+	requiredFields := []string{"id", "tenantId", "projectId", "filename", "contentType", "createdAt", "updatedAt"}
+	for _, field := range requiredFields {
+		if paramMap[field] {
+			insertFields = append(insertFields, field)
+			insertValues = append(insertValues, fmt.Sprintf("@%s", field))
+		}
+	}
+
+	// Optional fields
+	optionalFields := []string{"description", "sizeBytes", "storagePath", "extractedText", "parseStatus", "parseMeta", "pageCount", "docType", "createdBy"}
+	for _, field := range optionalFields {
+		if paramMap[field] {
+			insertFields = append(insertFields, field)
+			if field == "parseMeta" {
+				insertValues = append(insertValues, "PARSE_JSON(@parseMeta)")
+			} else {
+				insertValues = append(insertValues, fmt.Sprintf("@%s", field))
+			}
+			if field == "parseMeta" {
+				updateFields = append(updateFields, fmt.Sprintf("%s = PARSE_JSON(@parseMeta)", field))
+			} else {
+				updateFields = append(updateFields, fmt.Sprintf("%s = @%s", field, field))
+			}
+		} else {
+			// For optional fields not provided, set to NULL on insert, keep existing on update
+			insertFields = append(insertFields, field)
+			if field == "parseMeta" {
+				insertValues = append(insertValues, "NULL")
+			} else {
+				insertValues = append(insertValues, "NULL")
+			}
+		}
+	}
+
+	query = fmt.Sprintf(`
+		MERGE `+"`%s.%s.%s`"+` AS target
+		USING (SELECT @id AS id) AS source
+		ON target.id = source.id
+		WHEN MATCHED THEN
+			UPDATE SET
+				%s
+		WHEN NOT MATCHED THEN
+			INSERT (%s)
+			VALUES (%s)
+	`, b.projectID, b.datasetID, tableName,
+		strings.Join(updateFields, ",\n\t\t\t"),
+		strings.Join(insertFields, ", "),
+		strings.Join(insertValues, ", "))
+
+	q = b.client.Query(query)
+	q.Parameters = params
+	q.Location = "US"
+
+	it, err := q.Read(ctx)
+	if err != nil {
+		return fmt.Errorf("UpsertRow MERGE query failed for table %s: %w", tableName, err)
+	}
+	// Consume iterator to ensure query completes
+	for {
+		var row map[string]interface{}
+		if err := it.Next(&row); err != nil {
+			break
+		}
+	}
+	return nil
 }

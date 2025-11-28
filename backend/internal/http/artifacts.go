@@ -185,6 +185,9 @@ func (h *ArtifactsHandler) CreateArtifact(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Note: Dynamic artifacts are not indexed in Vertex AI Search (they are generated dynamically)
+	// But they are automatically synced to BigQuery via coreDocs.Create/Upsert -> WithBigQuerySync
+
 	WriteJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 

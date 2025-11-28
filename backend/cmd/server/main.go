@@ -137,6 +137,7 @@ func main() {
 	var agentsHandler *httphandlers.AgentsHandler
 	var verifiedHandler *httphandlers.VerifiedHandler
 	var bigqueryHandler *httphandlers.BigQueryHandler
+	var bigqueryAIService *services.BigQueryAIService
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
@@ -221,7 +222,7 @@ func main() {
 		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "sanskrite_documents")
 		if bq, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID, opts...); err == nil {
 			bqClient = bq
-			bigqueryAIService := services.NewBigQueryAIService(bqClient, genaiClient, logger)
+			bigqueryAIService = services.NewBigQueryAIService(bqClient, genaiClient, logger)
 			bigqueryHandler = httphandlers.NewBigQueryHandler(bigqueryAIService, logger)
 			logger.Printf("BigQuery AI service enabled: project=%s, dataset=%s", projectID, bigqueryDatasetID)
 			// Wire BigQuery sync to repositories
@@ -556,8 +557,9 @@ func main() {
 			pub,
 			logger,
 		)
-		// Core docs repo
-		coreDocsRepo := repo.NewCoreDocsRepo(fsClient.Client())
+		// Core docs repo - use existing instance with BigQuery sync if available
+		// coreDocsRepo was already created above and configured with BigQuery sync
+		// Don't create a new instance here, reuse the existing one
 		s.projectsHandler = s.projectsHandler.WithCoreDocs(coreDocsRepo).WithStorage(gcsClient, bucket).WithAIExecutor(exec)
 		// Wire RAG dependencies for CoreDoc indexing
 		if emb != nil {
@@ -566,6 +568,20 @@ func main() {
 		// Wire Vertex Search client if configured
 		if vertexSearchClient != nil {
 			s.projectsHandler = s.projectsHandler.WithVertexSearch(vertexSearchClient)
+		}
+		// Wire BigQuery client if configured
+		if bqClient != nil {
+			s.projectsHandler = s.projectsHandler.WithBigQuery(bqClient)
+		}
+		// Wire BigQuery AI Service to projects handler for analytics queries
+		if bigqueryAIService != nil {
+			s.projectsHandler = s.projectsHandler.WithBigQueryAI(bigqueryAIService)
+			logger.Printf("BigQuery AI service wired to projects handler for analytics queries")
+		}
+		// Wire GenAI client to projects handler for Prepare mode
+		if genaiClient != nil {
+			s.projectsHandler = s.projectsHandler.WithGenAIClient(genaiClient)
+			logger.Printf("GenAI client wired to projects handler for Prepare mode")
 		}
 		// Wire cascade repos to projects handler
 		s.projectsHandler = s.projectsHandler.WithCascade(s.sprofs, interactions)
@@ -874,6 +890,39 @@ func main() {
 		if strings.HasSuffix(r.URL.Path, "/index-status") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodGet {
 			s.projectsHandler.CheckDocumentIndexStatus(w, r)
 			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/bigquery-status") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodGet {
+			s.projectsHandler.CheckDocumentBigQueryStatus(w, r)
+			return
+		}
+		// Analytics endpoints: /api/v1/projects/{id}/analytics/*
+		if strings.Contains(r.URL.Path, "/analytics/") && strings.Contains(r.URL.Path, "/projects/") {
+			if strings.HasSuffix(r.URL.Path, "/analytics/schema") && r.Method == http.MethodGet {
+				s.projectsHandler.GetBigQuerySchema(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/analytics/generate-sql") && r.Method == http.MethodPost {
+				s.projectsHandler.GenerateSQL(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/analytics/execute-sql") && r.Method == http.MethodPost {
+				s.projectsHandler.ExecuteSQL(w, r)
+				return
+			}
+			// Prepare mode endpoints
+			if strings.HasSuffix(r.URL.Path, "/prepare/analyze") && r.Method == http.MethodPost {
+				s.projectsHandler.PrepareAnalyze(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/prepare/apply") && r.Method == http.MethodPost {
+				s.projectsHandler.PrepareApply(w, r)
+				return
+			}
+			// Legacy endpoint: /api/v1/projects/{id}/analytics/query
+			if strings.HasSuffix(r.URL.Path, "/analytics/query") && r.Method == http.MethodPost {
+				s.projectsHandler.QueryBigQuery(w, r)
+				return
+			}
 		}
 		if strings.HasSuffix(r.URL.Path, "/export") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodPost {
 			s.projectsHandler.ExportDocToDocx(w, r)

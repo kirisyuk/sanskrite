@@ -62,6 +62,8 @@ type SectionGenerationRequest struct {
 	ProjectID          string // For WebSocket routing
 	UserID             string // For usage tracking
 	StreamID           string // For ordering and FE filtering
+	FullStructure      []models.ArtifactSection // Full document structure to avoid duplication
+	UserRequest        *string                 // Original user request/requirements
 }
 
 // SectionGenerationResult contains the result of section generation
@@ -89,7 +91,7 @@ func (s *ArtifactExecutorService) GenerateSection(
 	startTime := time.Now()
 
 	// Build prompt with context
-	prompt := s.buildSectionPrompt(req.Section, req.Context, req.GenerationSettings)
+	prompt := s.buildSectionPrompt(req.Section, req.Context, req.GenerationSettings, req.FullStructure, req.UserRequest)
 
 	// Build enhanced system instruction with date and professional requirements
 	systemInstruction := s.buildSystemInstruction(req.GenerationSettings.SystemPrompt, req.GenerationSettings.PreferredLanguage)
@@ -150,7 +152,7 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 	}
 
 	// Build prompt
-	prompt := s.buildSectionPrompt(req.Section, req.Context, req.GenerationSettings)
+	prompt := s.buildSectionPrompt(req.Section, req.Context, req.GenerationSettings, req.FullStructure, req.UserRequest)
 
 	// Build enhanced system instruction with date and professional requirements
 	systemInstruction := s.buildSystemInstruction(req.GenerationSettings.SystemPrompt, req.GenerationSettings.PreferredLanguage)
@@ -324,8 +326,40 @@ func (s *ArtifactExecutorService) buildSectionPrompt(
 	section models.ArtifactSection,
 	context *GatheredContext,
 	settings models.GenerationSettings,
+	fullStructure []models.ArtifactSection,
+	userRequest *string,
 ) string {
 	var builder strings.Builder
+
+	// User request/requirements (if provided)
+	if userRequest != nil && *userRequest != "" {
+		builder.WriteString("**Document Purpose & Requirements:**\n")
+		builder.WriteString(*userRequest)
+		builder.WriteString("\n\n")
+		builder.WriteString("This document should address the above requirements. Keep this in mind when generating content.\n\n")
+		builder.WriteString("---\n\n")
+	}
+
+	// Document structure overview (to avoid duplication)
+	if len(fullStructure) > 1 {
+		builder.WriteString("**Document Structure Overview:**\n")
+		builder.WriteString("This document contains the following sections:\n\n")
+		for i, s := range fullStructure {
+			desc := ""
+			if s.Description != nil && *s.Description != "" {
+				desc = fmt.Sprintf(" - %s", *s.Description)
+			}
+			marker := ""
+			if s.ID == section.ID {
+				marker = " ← [YOU ARE GENERATING THIS SECTION]"
+			}
+			builder.WriteString(fmt.Sprintf("%d. **%s**%s%s\n", i+1, s.Title, desc, marker))
+		}
+		builder.WriteString("\n**Important:** Avoid duplicating information that belongs in other sections. ")
+		builder.WriteString("Focus this section on its specific purpose, while referencing related content in other sections when appropriate. ")
+		builder.WriteString("Each section should complement the others without unnecessary overlap.\n\n")
+		builder.WriteString("---\n\n")
+	}
 
 	// Section instructions
 	builder.WriteString("Generate content for the following section:\n\n")

@@ -16,6 +16,12 @@ interface DocumentIndexStatus {
   lastChecked: number;
 }
 
+interface DocumentBigQueryStatus {
+  available: boolean;
+  loading: boolean;
+  lastChecked: number;
+}
+
 interface Source {
   id: string;
   displayName: string;
@@ -54,6 +60,7 @@ interface WorkspaceState {
   loading: boolean;
   lastFetchTime: number | null;
   indexStatuses: Record<string, DocumentIndexStatus>; // docId -> status
+  bigqueryStatuses: Record<string, DocumentBigQueryStatus>; // docId -> status
   projectSources: Record<string, DataSource[]>; // projectId -> sources
   sourceStatusUpdates: Record<string, number>; // sourceId -> timestamp of last status change
   
@@ -62,6 +69,7 @@ interface WorkspaceState {
   setLoading: (loading: boolean) => void;
   updateProjectDocs: (project: Project, documents: CoreDoc[], discussionFrame?: string) => void;
   setDocumentIndexStatus: (docId: string, indexed: boolean, loading?: boolean) => void;
+  setDocumentBigQueryStatus: (docId: string, available: boolean, loading?: boolean) => void;
   setProjectSources: (projectId: string, sources: DataSource[]) => void;
   updateSourceStatus: (sourceId: string, newStatus: 'active' | 'paused') => void;
   clear: () => void;
@@ -72,6 +80,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   loading: false,
   lastFetchTime: null,
   indexStatuses: {},
+  bigqueryStatuses: {},
   projectSources: {},
   sourceStatusUpdates: {},
 
@@ -124,6 +133,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     },
   })),
 
+  setDocumentBigQueryStatus: (docId, available, loading = false) => set((state) => ({
+    bigqueryStatuses: {
+      ...state.bigqueryStatuses,
+      [docId]: {
+        available,
+        loading,
+        lastChecked: Date.now(),
+      },
+    },
+  })),
+
   setProjectSources: (projectId, sources) => set((state) => ({
     projectSources: {
       ...state.projectSources,
@@ -160,6 +180,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     loading: false,
     lastFetchTime: null,
     indexStatuses: {},
+    bigqueryStatuses: {},
     projectSources: {},
     sourceStatusUpdates: {},
   }),

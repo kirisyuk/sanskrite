@@ -185,6 +185,8 @@ func (s *ArtifactOrchestratorService) GenerateSection(
 		ProjectID:          req.ProjectID,
 		UserID:             req.UserID,
 		StreamID:           req.StreamID,
+		FullStructure:      artifact.ArtifactConfig.Structure,
+		UserRequest:        artifact.ArtifactConfig.UserRequest,
 	}
 
 	var genResult *SectionGenerationResult

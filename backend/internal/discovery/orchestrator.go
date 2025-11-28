@@ -277,21 +277,22 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 		ds, err := o.sources.Get(ctx, sourceID)
 		if err == nil && ds != nil {
 			now := time.Now().UTC()
-			ds.LastPolledAt = &now
-			// Calculate next poll time based on cadence
-			interval := o.cadenceToDuration(ds)
-			next := now.Add(interval)
-			ds.NextPollAt = &next
-			// Reset backoff on successful ingest
-			zero := 0
-			ds.PollBackoffSec = &zero
-			if err := o.sources.Upsert(ctx, ds); err != nil {
-				o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
-			}
+		ds.LastPolledAt = &now
+		// For IngestWeb, we don't track LastFoundAt separately as it's a single-page source
+		// Calculate next poll time based on cadence (assume no new content if existing document was updated)
+		interval := o.cadenceToDuration(ds, false)
+		next := now.Add(interval)
+		ds.NextPollAt = &next
+		// Reset backoff on successful ingest
+		zero := 0
+		ds.PollBackoffSec = &zero
+		if err := o.sources.Upsert(ctx, ds); err != nil {
+			o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
 		}
 	}
+}
 
-	return nil
+return nil
 }
 
 // IngestTelegram ingests recent Telegram messages as documents and chunks
@@ -481,8 +482,13 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 		if err == nil && ds != nil {
 			now := time.Now().UTC()
 			ds.LastPolledAt = &now
+			// Update LastFoundAt only if new documents were created (new content found)
+			if documentsCreated > 0 {
+				ds.LastFoundAt = &now
+				o.logger.Printf("orchestrator: updated LastFoundAt for source %s (found %d new messages)", sourceID, documentsCreated)
+			}
 			// Calculate next poll time based on cadence (same logic as poller_worker)
-			interval := o.cadenceToDuration(ds)
+			interval := o.cadenceToDuration(ds, documentsCreated > 0)
 			next := now.Add(interval)
 			ds.NextPollAt = &next
 			// Reset backoff on successful ingest
@@ -490,6 +496,8 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			ds.PollBackoffSec = &zero
 			if err := o.sources.Upsert(ctx, ds); err != nil {
 				o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
+			} else {
+				o.logger.Printf("orchestrator: updated NextPollAt for source %s to %s (interval: %v, foundNew: %v)", sourceID, next.Format(time.RFC3339), interval, documentsCreated > 0)
 			}
 		}
 	}
@@ -498,10 +506,17 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 }
 
 // cadenceToDuration maps publishingCadence string (if available via profile) to a polling interval.
+// foundNew indicates if new content was found in the current poll.
 // Same logic as in poller_worker.go
-func (o *Orchestrator) cadenceToDuration(ds *models.DataSource) time.Duration {
+func (o *Orchestrator) cadenceToDuration(ds *models.DataSource, foundNew bool) time.Duration {
 	// Default 30 minutes
 	def := 30 * time.Minute
+	
+	// If new content was found in current poll, use shorter interval
+	if foundNew {
+		return 10 * time.Minute
+	}
+	
 	// Try to infer from profile attached to this datasource via orchestrator.profiles
 	// Minimal implementation: look up profile and parse behaviorPatterns.publishingCadence keywords
 	// Since poller doesn't have direct access to profiles repo, fall back to LastFoundAt heuristics
@@ -509,15 +524,20 @@ func (o *Orchestrator) cadenceToDuration(ds *models.DataSource) time.Duration {
 		age := time.Since(*ds.LastFoundAt)
 		switch {
 		case age < 15*time.Minute:
+			// Recently found content - check more frequently
 			return 10 * time.Minute
 		case age < 2*time.Hour:
+			// Found content within last 2 hours - moderate frequency
 			return 30 * time.Minute
 		case age < 24*time.Hour:
+			// Found content within last day - check less frequently
 			return 2 * time.Hour
 		default:
+			// No new content for more than 24 hours - check rarely
 			return 6 * time.Hour
 		}
 	}
+	// No LastFoundAt set - use default (likely first poll or no content ever found)
 	return def
 }
 
@@ -630,7 +650,7 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 		}
 		return err
 	}
-	err = o.processProviderDocuments(ctx, tenantID, sourceID, docs, embed)
+	documentsCreated, err := o.processProviderDocuments(ctx, tenantID, sourceID, docs, embed)
 	if err != nil {
 		// Even on error, update LastPolledAt and NextPollAt to ensure polling continues
 		if o.sources != nil {
@@ -664,8 +684,13 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 		if err == nil && ds != nil {
 			now := time.Now().UTC()
 			ds.LastPolledAt = &now
+			// Update LastFoundAt only if new documents were created (new content found)
+			if documentsCreated > 0 {
+				ds.LastFoundAt = &now
+				o.logger.Printf("orchestrator: updated LastFoundAt for source %s (found %d new documents)", sourceID, documentsCreated)
+			}
 			// Calculate next poll time based on cadence
-			interval := o.cadenceToDuration(ds)
+			interval := o.cadenceToDuration(ds, documentsCreated > 0)
 			next := now.Add(interval)
 			ds.NextPollAt = &next
 			// Reset backoff on successful ingest
@@ -673,6 +698,8 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 			ds.PollBackoffSec = &zero
 			if err := o.sources.Upsert(ctx, ds); err != nil {
 				o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
+			} else {
+				o.logger.Printf("orchestrator: updated NextPollAt for source %s to %s (interval: %v, foundNew: %v)", sourceID, next.Format(time.RFC3339), interval, documentsCreated > 0)
 			}
 		}
 	}
@@ -681,9 +708,11 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 }
 
 // processProviderDocuments is a helper to process documents from any provider
-func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, sourceID string, docs []prov.NormalizedDocument, embed ai.EmbeddingProvider) error {
+// Returns the number of newly created documents (not updated existing ones)
+func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, sourceID string, docs []prov.NormalizedDocument, embed ai.EmbeddingProvider) (int, error) {
 	// Deduplicate documents by ExternalID within this ingest run
 	seenExt := map[string]struct{}{}
+	documentsCreated := 0
 	for _, nd := range docs {
 		if nd.ExternalID != "" {
 			if _, ok := seenExt[nd.ExternalID]; ok {
@@ -709,7 +738,7 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 			existing.ContentHash = repo.HashContent(nd.FullText)
 			existing.UpdatedAt = now
 			if err := o.docs.Upsert(ctx, existing); err != nil {
-				return err
+				return 0, err
 			}
 			docID = existing.ID
 		} else {
@@ -734,9 +763,10 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 			}
 			id, err := o.docs.Create(ctx, d)
 			if err != nil {
-				return err
+				return 0, err
 			}
 			docID = id
+			documentsCreated++
 		}
 
 		// chunk and embed synchronously
@@ -746,7 +776,7 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 		}
 		vectors, err := embed.EmbedTexts(ctx, parts)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		for i := range parts {
 			ch := &models.Chunk{
@@ -763,7 +793,7 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 				CreatedAt:        time.Now().UTC(),
 			}
 			if _, err := o.chunks.Create(ctx, ch); err != nil {
-				return err
+				return 0, err
 			}
 		}
 		// Update document status to embedded and enqueue async processing
@@ -798,7 +828,7 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 			}
 		}
 	}
-	return nil
+	return documentsCreated, nil
 }
 
 type ExecuteInput struct {
@@ -1212,7 +1242,7 @@ func (o *Orchestrator) processWebSource(ctx context.Context, in ExecuteInput, ca
 		now := time.Now().UTC()
 		o.logger.Printf("orchestrator: creating new web source %s for project %s", canonicalURL, in.ProjectID)
 		// Set initial NextPollAt based on cadence (estimate)
-		initialInterval := o.cadenceToDuration(nil) // Use default for new sources
+		initialInterval := o.cadenceToDuration(nil, false) // Use default for new sources
 		initialNext := now.Add(initialInterval)
 		ds = &models.DataSource{
 			// Public source: store globally (no tenant scoping)
@@ -1424,7 +1454,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 		now := time.Now().UTC()
 		o.logger.Printf("orchestrator: creating new telegram source @%s for project %s", handle, in.ProjectID)
 		// Set initial NextPollAt based on cadence (estimate)
-		initialInterval := o.cadenceToDuration(nil) // Use default for new sources
+		initialInterval := o.cadenceToDuration(nil, false) // Use default for new sources
 		initialNext := now.Add(initialInterval)
 		ds = &models.DataSource{
 			// Public source: store globally (no tenant scoping)

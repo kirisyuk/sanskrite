@@ -91,40 +91,22 @@ export const useModelGraphHasNodes = (): boolean => {
       return it.kind === 'ontology';
     });
     
-    console.log('[useModelGraphHasNodes] Checking for nodes:', {
-      totalInteractions: interactions.length,
-      ontologyInteractions: ontologyInteractions.length,
-      interactions: ontologyInteractions.map(it => ({
-        id: it.id,
-        subkind: it.subkind,
-        hasContent: !!it.content,
-        contentPreview: it.content?.substring(0, 100),
-      })),
-    });
-    
     // Проверяем, есть ли хотя бы одна interaction с валидными данными
     // Исключаем удаленные сущности (status='deleted')
     const hasNodes = ontologyInteractions.some((it) => {
       if (!it.content) {
-        console.log('[useModelGraphHasNodes] Interaction without content:', it.id);
         return false;
       }
       try {
         const entityData = JSON.parse(it.content);
         const isValid = entityData.status !== 'deleted' && entityData.status !== 'archived';
-        console.log('[useModelGraphHasNodes] Interaction check:', {
-          id: it.id,
-          status: entityData.status,
-          isValid,
-        });
         return isValid;
       } catch (err) {
-        console.warn('[useModelGraphHasNodes] Failed to parse interaction:', it.id, err);
+        // Failed to parse - skip this interaction
         return false;
       }
     });
     
-    console.log('[useModelGraphHasNodes] Result:', hasNodes);
     return hasNodes;
   }, [interactions]);
 };

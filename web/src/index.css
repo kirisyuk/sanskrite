@@ -376,6 +376,14 @@ p {
   color: #D0D0D8 !important;
 }
 
+/* Dropdown opens upward - wrap select in container with bottom positioning */
+.unfold-mode-select {
+  /* Note: Native select dropdown direction is browser-controlled */
+  /* For true upward opening, a custom dropdown component would be needed */
+  /* This CSS attempts to influence positioning but may not work in all browsers */
+  position: relative;
+}
+
 /* Utility for exact 11px text size */
 .text-11 {
   font-size: 0.6875rem; /* 11px */

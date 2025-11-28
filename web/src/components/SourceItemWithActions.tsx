@@ -24,13 +24,13 @@ const getSourceIcon = (kind: string) => {
     case 'telegram':
     case 'telegram_channel':
       return (
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
         </svg>
       );
     case 'rss':
       return (
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <circle cx="6" cy="18" r="3" strokeWidth="2" />
           <path d="M6 9a9 9 0 0 1 9 9M6 3a15 15 0 0 1 15 15" strokeWidth="2" strokeLinecap="round" />
         </svg>
@@ -38,14 +38,14 @@ const getSourceIcon = (kind: string) => {
     case 'web':
     case 'url':
       return (
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <circle cx="12" cy="12" r="10" strokeWidth="2" />
           <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" strokeWidth="2" />
         </svg>
       );
     default:
       return (
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M3 3h7l7 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
@@ -108,10 +108,11 @@ export const SourceItemWithActions: React.FC<SourceItemWithActionsProps> = ({
 
   return (
     <div
-      className="px-2 py-1.5 rounded text-xs flex items-center gap-2 group"
+      className="px-2 py-1.5 rounded text-xs flex items-start gap-2 group"
       style={{
         backgroundColor: 'transparent',
         cursor: onPreview ? 'pointer' : 'default',
+        maxWidth: 'fit-content',
       }}
       onClick={(e) => {
         // Don't trigger preview if clicking on buttons
@@ -128,57 +129,34 @@ export const SourceItemWithActions: React.FC<SourceItemWithActionsProps> = ({
       }}
     >
       {/* Icon */}
-      <div className="flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
+      <div className="flex-shrink-0 mt-0.5" style={{ color: 'var(--text-secondary)' }}>
         {getSourceIcon(source.kind)}
       </div>
 
       {/* Source info */}
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0" style={{ maxWidth: '300px' }}>
         <div className="font-medium truncate" style={{ color: 'var(--text-heading)' }} title={source.displayName}>
-          {source.displayName}
+          {source.displayName && source.displayName.length > 50 
+            ? `${source.displayName.substring(0, 47)}...` 
+            : source.displayName}
         </div>
-        <div className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
-          {source.kind}
-          {source.status && ` • ${source.status}`}
-        </div>
-        <div className="text-[9px] mt-0.5" style={{ color: 'var(--text-tertiary-weak)' }}>
-          {(source.lastPolledAt || source.nextPollAt) ? (
-            <>
-              {source.lastPolledAt && (
-                <span>Last: {new Date(source.lastPolledAt).toLocaleString('ru-RU', { 
-                  year: 'numeric', 
-                  month: '2-digit', 
-                  day: '2-digit', 
-                  hour: '2-digit', 
-                  minute: '2-digit' 
-                })}</span>
-              )}
-              {source.lastPolledAt && source.nextPollAt && source.status !== 'paused' && ' • '}
-              {source.nextPollAt && source.status !== 'paused' && (
-                <span>Next: {new Date(source.nextPollAt).toLocaleString('ru-RU', { 
-                  year: 'numeric', 
-                  month: '2-digit', 
-                  day: '2-digit', 
-                  hour: '2-digit', 
-                  minute: '2-digit' 
-                })}</span>
-              )}
-              {source.status === 'paused' && source.lastPolledAt && (
-                <span className="ml-1" style={{ fontStyle: 'italic' }}>(paused)</span>
-              )}
-              {source.status === 'paused' && !source.lastPolledAt && source.nextPollAt && (
-                <span style={{ fontStyle: 'italic' }}>Next: {new Date(source.nextPollAt).toLocaleString('ru-RU', { 
-                  year: 'numeric', 
-                  month: '2-digit', 
-                  day: '2-digit', 
-                  hour: '2-digit', 
-                  minute: '2-digit' 
-                })} (paused)</span>
-              )}
-            </>
-          ) : (
-            <span style={{ fontStyle: 'italic', opacity: 0.5 }}>
-              Last: — • Next: — (здесь появится время последнего и следующего ingest)
+        <div className="flex items-center gap-2 mt-1 flex-wrap">
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+            {source.kind}
+          </span>
+          {source.status && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded"
+              style={{
+                color: source.status === 'active' 
+                  ? 'var(--accent-success)' 
+                  : 'var(--accent-primary)',
+                backgroundColor: source.status === 'active'
+                  ? 'var(--success-20)'
+                  : 'rgba(255, 169, 77, 0.20)',
+              }}
+            >
+              {source.status}
             </span>
           )}
         </div>

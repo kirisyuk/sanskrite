@@ -153,6 +153,7 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsCoreDoc {
       userModified: boolean;
       [k: string]: any;
     };
+    userRequest?: string;
     generationSettings: {
       preferredLanguage: string;
       systemPrompt: string;

@@ -17,10 +17,10 @@ import (
 	"cloud.google.com/go/firestore"
 	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	gen_retry "github.com/igorkirisyuk/sanskrite/internal/genai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	g "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
-	gen_retry "github.com/igorkirisyuk/sanskrite/internal/genai"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/research"
@@ -218,7 +218,8 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Model mode: use task executor with JSON verifier for strict JSON validation
+	// Model mode: use task executor with universal JSON verifier for strict JSON validation
+	// Universal verifier only checks JSON deserialization correctness, no schema-specific validation
 	if req.StrictJSONEnabled && h.taskExecutor != nil {
 		// Build system instruction with message history (same as regular flow)
 		systemInstruction := req.SystemInstruction
@@ -246,32 +247,9 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Create verifier for ontology commands structure: { "commands": [...] }
-		verifier := ai.NewMapVerifier([]string{"commands"}, func(m map[string]interface{}) error {
-			// Verify commands is an array
-			commands, ok := m["commands"]
-			if !ok {
-				return fmt.Errorf("missing 'commands' field")
-			}
-			commandsArr, ok := commands.([]interface{})
-			if !ok {
-				return fmt.Errorf("'commands' must be an array")
-			}
-			// Basic validation: each command should have operation and type
-			for i, cmd := range commandsArr {
-				cmdMap, ok := cmd.(map[string]interface{})
-				if !ok {
-					return fmt.Errorf("command[%d] must be an object", i)
-				}
-				if _, ok := cmdMap["operation"]; !ok {
-					return fmt.Errorf("command[%d] missing 'operation' field", i)
-				}
-				if _, ok := cmdMap["type"]; !ok {
-					return fmt.Errorf("command[%d] missing 'type' field", i)
-				}
-			}
-			return nil
-		})
+		// Create universal JSON verifier - only checks JSON deserialization correctness
+		// No schema-specific validation (like commands check) - if JSON is invalid, it will fail naturally
+		verifier := ai.NewSimpleJSONVerifier()
 
 		// Build full input content with system instruction
 		// AITask doesn't support systemInstruction separately, so we include it in InputContent
@@ -285,17 +263,18 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		inputTokens := inputChars / 4
 
 		// Create AITask for structured execution
+		// Use ContentGeneration as universal task type for any structured JSON generation
 		task := &ai.AITask{
-			TaskType: ai.TaskTypeOntologyMapping,
+			TaskType:     ai.TaskTypeContentGeneration,
 			InputContent: fullInput,
 			AIRequirements: ai.AIRequirements{
-				PreferredModel:        req.Model,
-				MinContextWindow:      1000,
-				MaxOutputSize:         req.MaxOutputTokens,
-				MinCapabilityScore:    5,
+				PreferredModel:           req.Model,
+				MinContextWindow:         1000,
+				MaxOutputSize:            req.MaxOutputTokens,
+				MinCapabilityScore:       5,
 				TextGenerationCapability: true,
 			},
-			Verifier: verifier,
+			Verifier:        verifier,
 			EnableTelemetry: true,
 		}
 
@@ -318,15 +297,9 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Convert parsed result back to JSON string for response
-		parsedMap, ok := parsed.(map[string]interface{})
-		if !ok {
-			log.Printf("GenAIGenerate model mode: unexpected parsed result type")
-			_ = WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Unexpected response format", nil)
-			return
-		}
-
-		// Marshal back to JSON
-		jsonBytes, err := json.Marshal(parsedMap)
+		// Result can be map[string]interface{} or []interface{} depending on JSONSchema
+		// SimpleJSONVerifier returns interface{}, so we marshal it directly
+		jsonBytes, err := json.Marshal(parsed)
 		if err != nil {
 			log.Printf("GenAIGenerate model mode: failed to marshal result: %v", err)
 			_ = WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to serialize response", nil)
@@ -348,15 +321,15 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 			Content: string(jsonBytes),
 			Model:   modelName,
 			Usage: g.Usage{
-				PromptTokens:  inputTokens,
-				OutputTokens:  outputTokens,
-				TotalTokens:   inputTokens + outputTokens,
+				PromptTokens: inputTokens,
+				OutputTokens: outputTokens,
+				TotalTokens:  inputTokens + outputTokens,
 			},
 		}
 
 		// Continue with response handling below
 		_ = WriteJSON(w, http.StatusOK, resp)
-		
+
 		// Emit telemetry (best-effort)
 		go func() {
 			if auth := GetAuthInfo(r.Context()); auth != nil {
@@ -368,9 +341,9 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 					"elapsedMs": time.Since(started).Milliseconds(),
 					"usage":     resp.Usage,
 					"params": map[string]any{
-						"temperature":        req.Temperature,
-						"maxOutputTokens":    req.MaxOutputTokens,
-						"strictJSONEnabled":  true,
+						"temperature":       req.Temperature,
+						"maxOutputTokens":   req.MaxOutputTokens,
+						"strictJSONEnabled": true,
 					},
 				})
 
@@ -394,6 +367,8 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Regular generation flow (unchanged for discuss mode)
+	// Log request details for debugging 502 errors
+	log.Printf("GenAIGenerate: starting regular flow (strictJSON=%v, model=%s, promptLen=%d)", req.StrictJSONEnabled, req.Model, len(req.Prompt))
 	resp, err := h.client.GenAIGenerate(ctx, req)
 	if err != nil {
 		// Log upstream error body for diagnostics (e.g., Gemini 400 with details)
@@ -402,6 +377,7 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		_ = WriteError(w, status, code, msg, details)
 		return
 	}
+	log.Printf("GenAIGenerate: completed successfully (model=%s, contentLen=%d)", resp.Model, len(resp.Content))
 	// Emit telemetry (best-effort)
 	go func() {
 		if auth := GetAuthInfo(r.Context()); auth != nil {
@@ -1021,7 +997,12 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Register Graph tools if enabled and interactions repo is available
+		// Log diagnostics for graph tools registration
+		log.Printf("[GraphTools] Registration check: projectID=%q (empty=%v), graphEnabled=%v, interactions=%v (nil=%v)", 
+			projectID, projectID == "", h.graphEnabled, h.interactions != nil, h.interactions == nil)
+		
 		if projectID != "" && h.graphEnabled && h.interactions != nil {
+			log.Printf("[GraphTools] Registering graph tools for projectID=%s streamID=%s", projectID, streamID)
 			// Create Graph tool executor
 			graphExecutor := NewGraphToolExecutor(
 				h.interactions,
@@ -1034,10 +1015,24 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 
 			// Register Graph tools in registry
 			reg.Register("create_graph", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
-				return graphExecutor.Execute(ctx, "create_graph", args)
+				log.Printf("[GraphTools] create_graph tool called")
+				result, err := graphExecutor.Execute(ctx, "create_graph", args)
+				if err != nil {
+					log.Printf("[GraphTools] ERROR in create_graph: %v", err)
+				} else {
+					log.Printf("[GraphTools] create_graph succeeded")
+				}
+				return result, err
 			})
 			reg.Register("update_graph", func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
-				return graphExecutor.Execute(ctx, "update_graph", args)
+				log.Printf("[GraphTools] update_graph tool called")
+				result, err := graphExecutor.Execute(ctx, "update_graph", args)
+				if err != nil {
+					log.Printf("[GraphTools] ERROR in update_graph: %v", err)
+				} else {
+					log.Printf("[GraphTools] update_graph succeeded")
+				}
+				return result, err
 			})
 
 			// Add Graph tool schemas to req.Tools if not already present
@@ -1047,11 +1042,20 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 
 			graphTools := getGraphToolSchemas()
+			addedCount := 0
 			for _, tool := range graphTools {
 				if !toolNames[tool.Name] {
 					req.Tools = append(req.Tools, tool)
+					addedCount++
+					log.Printf("[GraphTools] Added tool schema: %s", tool.Name)
+				} else {
+					log.Printf("[GraphTools] Tool schema already present: %s", tool.Name)
 				}
 			}
+			log.Printf("[GraphTools] Graph tools registered successfully: added %d tool schemas, total tools=%d", addedCount, len(req.Tools))
+		} else {
+			log.Printf("[GraphTools] Graph tools NOT registered: projectID empty=%v, graphEnabled=%v, interactions nil=%v", 
+				projectID == "", h.graphEnabled, h.interactions == nil)
 		}
 
 		// Register Web Search tool (uses Tavily API)
@@ -1165,7 +1169,7 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 
 		// Wrap registry with retryable executor for self-correction
 		retryableReg := gen_retry.NewRetryableToolExecutor(reg, h.client)
-		
+
 		// Set up callbacks for retry and correction events
 		retryableReg.SetCallbacks(
 			func(toolName string, attempt int, error *gen_retry.ToolCallError) {

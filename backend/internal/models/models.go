@@ -573,6 +573,7 @@ type ArtifactConfig struct {
 	Versions            []ArtifactVersion          `json:"versions" firestore:"versions"`                                           // version history (sorted by timestamp desc)
 	StructureGeneration *StructureGenerationConfig `json:"structureGeneration,omitempty" firestore:"structureGeneration,omitempty"` // how structure was created
 	GenerationSettings  GenerationSettings         `json:"generationSettings" firestore:"generationSettings"`                       // generation settings
+	UserRequest         *string                    `json:"userRequest,omitempty" firestore:"userRequest,omitempty"`                   // original user request/requirements for the document
 }
 
 // ArtifactSection defines a section of the artifact with its generation config

@@ -66,6 +66,7 @@ export const PagesPanel: React.FC<PagesPanelProps> = ({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
   const [artifactName, setArtifactName] = React.useState('');
+  const [userRequest, setUserRequest] = React.useState('');
   const [creating, setCreating] = React.useState(false);
   const [sectionAutoUpdate, setSectionAutoUpdate] = React.useState<Record<string, boolean>>({});
   const [orchestratorModel, setOrchestratorModel] = React.useState<string>('');
@@ -192,6 +193,7 @@ export const PagesPanel: React.FC<PagesPanelProps> = ({
       setSelectedTemplate(fullTemplate);
       setWizardStep('configure');
       setArtifactName(fullTemplate.name || '');
+      setUserRequest('');
       
       // Initialize models from template recommendations
       const recommendedOrch = fullTemplate.recommendedOrchestratorModel || 'gemini-fast';
@@ -237,6 +239,7 @@ export const PagesPanel: React.FC<PagesPanelProps> = ({
       setWizardStep('templates');
       setSelectedTemplate(null);
       setArtifactName('');
+      setUserRequest('');
       setSectionAutoUpdate({});
       setOrchestratorModel('');
       setDefaultModel('');
@@ -609,6 +612,7 @@ FORMAT REQUIREMENTS:
             preferredLanguage: 'en',
             systemPrompt: 'You are a helpful assistant.',
           },
+          userRequest: userRequest.trim() || undefined,
         },
       };
 
@@ -626,6 +630,7 @@ FORMAT REQUIREMENTS:
       setWizardStep('templates');
       setSelectedTemplate(null);
       setArtifactName('');
+      setUserRequest('');
       setSectionAutoUpdate({});
       setOrchestratorModel('');
       setDefaultModel('');
@@ -1043,8 +1048,203 @@ FORMAT REQUIREMENTS:
           </div>
         </div>
 
+        {/* Sections list */}
+        {sortedSections.length > 0 && (
+          <div>
+            <label
+              className="block text-13 mb-2"
+              style={{ color: 'var(--text-secondary-strong)' }}
+            >
+              Sections
+            </label>
+            <div className="space-y-2">
+              {sortedSections.map((section) => {
+                const isExpanded = expandedSections[section.id] || false;
+                return (
+                <div
+                  key={section.id}
+                  className="px-3 py-2 rounded"
+                  style={{
+                    backgroundColor: 'var(--white-06)',
+                    border: '1px solid var(--overlay-line-90)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExpandedSections((prev) => ({
+                        ...prev,
+                        [section.id]: !prev[section.id],
+                      }));
+                    }}
+                    className="w-full flex items-center justify-between text-left"
+                  >
+                    <div
+                      className="text-xs font-medium"
+                      style={{ color: 'var(--text-heading)' }}
+                    >
+                      {section.title}
+                      {section.required && (
+                        <span
+                          className="ml-1 text-[10px]"
+                          style={{ color: 'var(--text-tertiary-weak)' }}
+                        >
+                          (required)
+                        </span>
+                      )}
+                    </div>
+                    <svg
+                      className="w-3 h-3 transition-transform"
+                      style={{
+                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                        color: 'var(--text-secondary)',
+                      }}
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                    >
+                      <path
+                        d="M6 9l6 6 6-6"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                  {isExpanded && (
+                    <>
+                      {section.description && (
+                        <div
+                          className="text-[10px] mb-1 mt-2"
+                          style={{ color: 'var(--text-secondary-strong)' }}
+                        >
+                          {section.description}
+                        </div>
+                      )}
+                      {section.promptTemplate && (
+                        <div
+                          className="text-[10px] mt-1 pt-1"
+                          style={{
+                            color: 'var(--text-tertiary-weak)',
+                            borderTop: '1px solid var(--overlay-line-90)',
+                            fontStyle: 'italic',
+                          }}
+                        >
+                          {section.promptTemplate}
+                        </div>
+                      )}
+                      <div
+                        className="mt-2 pt-2 space-y-2"
+                        style={{
+                          borderTop: '1px solid var(--overlay-line-90)',
+                        }}
+                      >
+                        <div>
+                          <label
+                            className="block text-[10px] mb-1"
+                            style={{ color: 'var(--text-secondary-strong)' }}
+                          >
+                            Model
+                          </label>
+                          <select
+                            value={sectionModels[section.id] || defaultModel}
+                            onChange={(e) => {
+                              setSectionModels((prev) => ({
+                                ...prev,
+                                [section.id]: e.target.value,
+                              }));
+                            }}
+                            className="w-full text-[10px] px-2 py-1 rounded"
+                            style={{
+                              backgroundColor: 'var(--white-06)',
+                              border: '1px solid var(--overlay-line-90)',
+                              color: 'var(--text-heading)',
+                              outline: 'none',
+                            }}
+                          >
+                            <option value="gemini_fast">Gemini Fast</option>
+                            <option value="gemini_balanced">Gemini Balanced</option>
+                            <option value="gemini_quality">Gemini Quality</option>
+                            <option value="gpt_fast">GPT Fast</option>
+                            <option value="gpt_balanced">GPT Balanced</option>
+                            <option value="gpt_quality">GPT Quality</option>
+                            <option value="grok_fast">Grok Fast</option>
+                            <option value="grok_balanced">Grok Balanced</option>
+                            <option value="grok_quality">Grok Quality</option>
+                            <option value="claude_fast">Claude Fast</option>
+                            <option value="claude_balanced">Claude Balanced</option>
+                            <option value="deepseek_fast">DeepSeek Fast</option>
+                            <option value="deepseek_quality">DeepSeek Quality</option>
+                          </select>
+                        </div>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={sectionAutoUpdate[section.id] || false}
+                            onChange={(e) => {
+                              setSectionAutoUpdate((prev) => ({
+                                ...prev,
+                                [section.id]: e.target.checked,
+                              }));
+                            }}
+                            className="w-3 h-3"
+                            style={{
+                              accentColor: 'var(--accent-primary)',
+                            }}
+                          />
+                          <span
+                            className="text-[10px]"
+                            style={{ color: 'var(--text-secondary-strong)' }}
+                          >
+                            Auto-update
+                          </span>
+                        </label>
+                      </div>
+                    </>
+                  )}
+                </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* User request field */}
+        <div className="pt-4">
+          <label
+            className="block text-13 mb-2"
+            style={{ color: 'var(--text-secondary-strong)' }}
+          >
+            Document request (optional)
+          </label>
+          <textarea
+            value={userRequest}
+            onChange={(e) => setUserRequest(e.target.value)}
+            placeholder="Describe what this document should cover or focus on..."
+            rows={3}
+            className="w-full text-xs resize-none"
+            style={{
+              backgroundColor: 'var(--bg-input, transparent)',
+              border: '1px solid var(--border-input, var(--overlay-line-90))',
+              borderRadius: '8px',
+              padding: '10px 12px',
+              outline: 'none',
+              color: 'var(--text-heading)',
+              transition: 'all 0.2s ease',
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = 'var(--text-secondary)';
+              e.currentTarget.style.backgroundColor = 'var(--white-06)';
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = 'var(--overlay-line-90)';
+              e.currentTarget.style.backgroundColor = 'var(--bg-input, transparent)';
+            }}
+          />
+        </div>
+
         {/* Document auto-update settings */}
-        <div>
+        <div className="pt-4">
           <label className="flex items-center gap-2 cursor-pointer mb-2">
             <input
               type="checkbox"
@@ -1252,167 +1452,6 @@ FORMAT REQUIREMENTS:
             </div>
           )}
         </div>
-
-        {/* Sections list */}
-        {sortedSections.length > 0 && (
-          <div>
-            <label
-              className="block text-13 mb-2"
-              style={{ color: 'var(--text-secondary-strong)' }}
-            >
-              Sections
-            </label>
-            <div className="space-y-2">
-              {sortedSections.map((section) => {
-                const isExpanded = expandedSections[section.id] || false;
-                return (
-                <div
-                  key={section.id}
-                  className="px-3 py-2 rounded"
-                  style={{
-                    backgroundColor: 'var(--white-06)',
-                    border: '1px solid var(--overlay-line-90)',
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setExpandedSections((prev) => ({
-                        ...prev,
-                        [section.id]: !prev[section.id],
-                      }));
-                    }}
-                    className="w-full flex items-center justify-between text-left"
-                  >
-                    <div
-                      className="text-xs font-medium"
-                      style={{ color: 'var(--text-heading)' }}
-                    >
-                      {section.title}
-                      {section.required && (
-                        <span
-                          className="ml-1 text-[10px]"
-                          style={{ color: 'var(--text-tertiary-weak)' }}
-                        >
-                          (required)
-                        </span>
-                      )}
-                    </div>
-                    <svg
-                      className="w-3 h-3 transition-transform"
-                      style={{
-                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                        color: 'var(--text-secondary)',
-                      }}
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                    >
-                      <path
-                        d="M6 9l6 6 6-6"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                  {isExpanded && (
-                    <>
-                      {section.description && (
-                        <div
-                          className="text-[10px] mb-1 mt-2"
-                          style={{ color: 'var(--text-secondary-strong)' }}
-                        >
-                          {section.description}
-                        </div>
-                      )}
-                      {section.promptTemplate && (
-                        <div
-                          className="text-[10px] mt-1 pt-1"
-                          style={{
-                            color: 'var(--text-tertiary-weak)',
-                            borderTop: '1px solid var(--overlay-line-90)',
-                            fontStyle: 'italic',
-                          }}
-                        >
-                          {section.promptTemplate}
-                        </div>
-                      )}
-                      <div
-                        className="mt-2 pt-2 space-y-2"
-                        style={{
-                          borderTop: '1px solid var(--overlay-line-90)',
-                        }}
-                      >
-                        <div>
-                          <label
-                            className="block text-[10px] mb-1"
-                            style={{ color: 'var(--text-secondary-strong)' }}
-                          >
-                            Model
-                          </label>
-                          <select
-                            value={sectionModels[section.id] || defaultModel}
-                            onChange={(e) => {
-                              setSectionModels((prev) => ({
-                                ...prev,
-                                [section.id]: e.target.value,
-                              }));
-                            }}
-                            className="w-full text-[10px] px-2 py-1 rounded"
-                            style={{
-                              backgroundColor: 'var(--white-06)',
-                              border: '1px solid var(--overlay-line-90)',
-                              color: 'var(--text-heading)',
-                              outline: 'none',
-                            }}
-                          >
-                            <option value="gemini_fast">Gemini Fast</option>
-                            <option value="gemini_balanced">Gemini Balanced</option>
-                            <option value="gemini_quality">Gemini Quality</option>
-                            <option value="gpt_fast">GPT Fast</option>
-                            <option value="gpt_balanced">GPT Balanced</option>
-                            <option value="gpt_quality">GPT Quality</option>
-                            <option value="grok_fast">Grok Fast</option>
-                            <option value="grok_balanced">Grok Balanced</option>
-                            <option value="grok_quality">Grok Quality</option>
-                            <option value="claude_fast">Claude Fast</option>
-                            <option value="claude_balanced">Claude Balanced</option>
-                            <option value="deepseek_fast">DeepSeek Fast</option>
-                            <option value="deepseek_quality">DeepSeek Quality</option>
-                          </select>
-                        </div>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={sectionAutoUpdate[section.id] || false}
-                            onChange={(e) => {
-                              setSectionAutoUpdate((prev) => ({
-                                ...prev,
-                                [section.id]: e.target.checked,
-                              }));
-                            }}
-                            className="w-3 h-3"
-                            style={{
-                              accentColor: 'var(--accent-primary)',
-                            }}
-                          />
-                          <span
-                            className="text-[10px]"
-                            style={{ color: 'var(--text-secondary-strong)' }}
-                          >
-                            Auto-update
-                          </span>
-                        </label>
-                      </div>
-                    </>
-                  )}
-                </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* Generate button */}
         <div className="pt-2 flex justify-end">
@@ -1626,8 +1665,203 @@ FORMAT REQUIREMENTS:
               </div>
             </div>
 
+            {/* Sections list */}
+            {sortedSections.length > 0 && (
+              <div>
+                <label
+                  className="block text-13 mb-2"
+                  style={{ color: 'var(--text-secondary-strong)' }}
+                >
+                  Sections
+                </label>
+                <div className="space-y-2">
+                  {sortedSections.map((section) => {
+                    const isExpanded = expandedSections[section.id] || false;
+                    return (
+                    <div
+                      key={section.id}
+                      className="px-3 py-2 rounded"
+                      style={{
+                        backgroundColor: 'var(--white-06)',
+                        border: '1px solid var(--overlay-line-90)',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpandedSections((prev) => ({
+                            ...prev,
+                            [section.id]: !prev[section.id],
+                          }));
+                        }}
+                        className="w-full flex items-center justify-between text-left"
+                      >
+                        <div
+                          className="text-xs font-medium"
+                          style={{ color: 'var(--text-heading)' }}
+                        >
+                          {section.title}
+                          {section.required && (
+                            <span
+                              className="ml-1 text-[10px]"
+                              style={{ color: 'var(--text-tertiary-weak)' }}
+                            >
+                              (required)
+                            </span>
+                          )}
+                        </div>
+                        <svg
+                          className="w-3 h-3 transition-transform"
+                          style={{
+                            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                            color: 'var(--text-secondary)',
+                          }}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                        >
+                          <path
+                            d="M6 9l6 6 6-6"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                      {isExpanded && (
+                        <>
+                          {section.description && (
+                            <div
+                              className="text-[10px] mb-1 mt-2"
+                              style={{ color: 'var(--text-secondary-strong)' }}
+                            >
+                              {section.description}
+                            </div>
+                          )}
+                          {section.promptTemplate && (
+                            <div
+                              className="text-[10px] mt-1 pt-1"
+                              style={{
+                                color: 'var(--text-tertiary-weak)',
+                                borderTop: '1px solid var(--overlay-line-90)',
+                                fontStyle: 'italic',
+                              }}
+                            >
+                              {section.promptTemplate}
+                            </div>
+                          )}
+                          <div
+                            className="mt-2 pt-2 space-y-2"
+                            style={{
+                              borderTop: '1px solid var(--overlay-line-90)',
+                            }}
+                          >
+                            <div>
+                              <label
+                                className="block text-[10px] mb-1"
+                                style={{ color: 'var(--text-secondary-strong)' }}
+                              >
+                                Model
+                              </label>
+                              <select
+                                value={sectionModels[section.id] || defaultModel}
+                                onChange={(e) => {
+                                  setSectionModels((prev) => ({
+                                    ...prev,
+                                    [section.id]: e.target.value,
+                                  }));
+                                }}
+                                className="w-full text-[10px] px-2 py-1 rounded"
+                                style={{
+                                  backgroundColor: 'var(--white-06)',
+                                  border: '1px solid var(--overlay-line-90)',
+                                  color: 'var(--text-heading)',
+                                  outline: 'none',
+                                }}
+                              >
+                                <option value="gemini_fast">Gemini Fast</option>
+                                <option value="gemini_balanced">Gemini Balanced</option>
+                                <option value="gemini_quality">Gemini Quality</option>
+                                <option value="gpt_fast">GPT Fast</option>
+                                <option value="gpt_balanced">GPT Balanced</option>
+                                <option value="gpt_quality">GPT Quality</option>
+                                <option value="grok_fast">Grok Fast</option>
+                                <option value="grok_balanced">Grok Balanced</option>
+                                <option value="grok_quality">Grok Quality</option>
+                                <option value="claude_fast">Claude Fast</option>
+                                <option value="claude_balanced">Claude Balanced</option>
+                                <option value="deepseek_fast">DeepSeek Fast</option>
+                                <option value="deepseek_quality">DeepSeek Quality</option>
+                              </select>
+                            </div>
+                            <label className="flex items-center gap-1.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={sectionAutoUpdate[section.id] || false}
+                                onChange={(e) => {
+                                  setSectionAutoUpdate((prev) => ({
+                                    ...prev,
+                                    [section.id]: e.target.checked,
+                                  }));
+                                }}
+                                className="w-3 h-3"
+                                style={{
+                                  accentColor: 'var(--accent-primary)',
+                                }}
+                              />
+                              <span
+                                className="text-[10px]"
+                                style={{ color: 'var(--text-secondary-strong)' }}
+                              >
+                                Auto-update
+                              </span>
+                            </label>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* User request field */}
+            <div className="pt-4">
+              <label
+                className="block text-13 mb-2"
+                style={{ color: 'var(--text-secondary-strong)' }}
+              >
+                Document request (optional)
+              </label>
+              <textarea
+                value={userRequest}
+                onChange={(e) => setUserRequest(e.target.value)}
+                placeholder="Describe what this document should cover or focus on..."
+                rows={3}
+                className="w-full text-xs resize-none"
+                style={{
+                  backgroundColor: 'var(--bg-input, transparent)',
+                  border: '1px solid var(--border-input, var(--overlay-line-90))',
+                  borderRadius: '8px',
+                  padding: '10px 12px',
+                  outline: 'none',
+                  color: 'var(--text-heading)',
+                  transition: 'all 0.2s ease',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--text-secondary)';
+                  e.currentTarget.style.backgroundColor = 'var(--white-06)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--overlay-line-90)';
+                  e.currentTarget.style.backgroundColor = 'var(--bg-input, transparent)';
+                }}
+              />
+            </div>
+
             {/* Document auto-update settings */}
-            <div>
+            <div className="pt-4">
               <label className="flex items-center gap-2 cursor-pointer mb-2">
                 <input
                   type="checkbox"
@@ -1835,167 +2069,6 @@ FORMAT REQUIREMENTS:
                 </div>
               )}
             </div>
-
-            {/* Sections list */}
-            {sortedSections.length > 0 && (
-              <div>
-                <label
-                  className="block text-13 mb-2"
-                  style={{ color: 'var(--text-secondary-strong)' }}
-                >
-                  Sections
-                </label>
-                <div className="space-y-2">
-                  {sortedSections.map((section) => {
-                    const isExpanded = expandedSections[section.id] || false;
-                    return (
-                    <div
-                      key={section.id}
-                      className="px-3 py-2 rounded"
-                      style={{
-                        backgroundColor: 'var(--white-06)',
-                        border: '1px solid var(--overlay-line-90)',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setExpandedSections((prev) => ({
-                            ...prev,
-                            [section.id]: !prev[section.id],
-                          }));
-                        }}
-                        className="w-full flex items-center justify-between text-left"
-                      >
-                        <div
-                          className="text-xs font-medium"
-                          style={{ color: 'var(--text-heading)' }}
-                        >
-                          {section.title}
-                          {section.required && (
-                            <span
-                              className="ml-1 text-[10px]"
-                              style={{ color: 'var(--text-tertiary-weak)' }}
-                            >
-                              (required)
-                            </span>
-                          )}
-                        </div>
-                        <svg
-                          className="w-3 h-3 transition-transform"
-                          style={{
-                            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                            color: 'var(--text-secondary)',
-                          }}
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                        >
-                          <path
-                            d="M6 9l6 6 6-6"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      </button>
-                      {isExpanded && (
-                        <>
-                          {section.description && (
-                            <div
-                              className="text-[10px] mb-1 mt-2"
-                              style={{ color: 'var(--text-secondary-strong)' }}
-                            >
-                              {section.description}
-                            </div>
-                          )}
-                          {section.promptTemplate && (
-                            <div
-                              className="text-[10px] mt-1 pt-1"
-                              style={{
-                                color: 'var(--text-tertiary-weak)',
-                                borderTop: '1px solid var(--overlay-line-90)',
-                                fontStyle: 'italic',
-                              }}
-                            >
-                              {section.promptTemplate}
-                            </div>
-                          )}
-                          <div
-                            className="mt-2 pt-2 space-y-2"
-                            style={{
-                              borderTop: '1px solid var(--overlay-line-90)',
-                            }}
-                          >
-                            <div>
-                              <label
-                                className="block text-[10px] mb-1"
-                                style={{ color: 'var(--text-secondary-strong)' }}
-                              >
-                                Model
-                              </label>
-                              <select
-                                value={sectionModels[section.id] || defaultModel}
-                                onChange={(e) => {
-                                  setSectionModels((prev) => ({
-                                    ...prev,
-                                    [section.id]: e.target.value,
-                                  }));
-                                }}
-                                className="w-full text-[10px] px-2 py-1 rounded"
-                                style={{
-                                  backgroundColor: 'var(--white-06)',
-                                  border: '1px solid var(--overlay-line-90)',
-                                  color: 'var(--text-heading)',
-                                  outline: 'none',
-                                }}
-                              >
-                                <option value="gemini_fast">Gemini Fast</option>
-                                <option value="gemini_balanced">Gemini Balanced</option>
-                                <option value="gemini_quality">Gemini Quality</option>
-                                <option value="gpt_fast">GPT Fast</option>
-                                <option value="gpt_balanced">GPT Balanced</option>
-                                <option value="gpt_quality">GPT Quality</option>
-                                <option value="grok_fast">Grok Fast</option>
-                                <option value="grok_balanced">Grok Balanced</option>
-                                <option value="grok_quality">Grok Quality</option>
-                                <option value="claude_fast">Claude Fast</option>
-                                <option value="claude_balanced">Claude Balanced</option>
-                                <option value="deepseek_fast">DeepSeek Fast</option>
-                                <option value="deepseek_quality">DeepSeek Quality</option>
-                              </select>
-                            </div>
-                            <label className="flex items-center gap-1.5 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={sectionAutoUpdate[section.id] || false}
-                                onChange={(e) => {
-                                  setSectionAutoUpdate((prev) => ({
-                                    ...prev,
-                                    [section.id]: e.target.checked,
-                                  }));
-                                }}
-                                className="w-3 h-3"
-                                style={{
-                                  accentColor: 'var(--accent-primary)',
-                                }}
-                              />
-                              <span
-                                className="text-[10px]"
-                                style={{ color: 'var(--text-secondary-strong)' }}
-                              >
-                                Auto-update
-                              </span>
-                            </label>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {/* Generate button */}
             <div className="pt-2 flex justify-end">

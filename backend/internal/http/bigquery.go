@@ -26,10 +26,12 @@ func NewBigQueryHandler(service *services.BigQueryAIService, logger *log.Logger)
 
 // BigQueryRequest represents a natural language query request
 type BigQueryRequest struct {
-	Query      string `json:"query"`
-	ProjectID  string `json:"projectID,omitempty"`
-	DatasetID  string `json:"datasetID,omitempty"`
-	MaxResults int    `json:"maxResults,omitempty"`
+	Query             string `json:"query"`
+	ProjectID         string `json:"projectID,omitempty"`         // GCP project ID (BigQuery project)
+	DatasetID         string `json:"datasetID,omitempty"`         // BigQuery dataset ID
+	MaxResults        int    `json:"maxResults,omitempty"`         // Max results to return
+	TenantID          string `json:"tenantID,omitempty"`          // Tenant ID for filtering documents
+	DocumentProjectID string `json:"documentProjectID,omitempty"` // Document project ID for filtering (CoreDoc projectId)
 }
 
 // Query handles POST /api/v1/bigquery/query
@@ -57,7 +59,14 @@ func (h *BigQueryHandler) Query(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.logger != nil {
-		h.logger.Printf("[BigQueryHandler] Query request: query=%q, tenantID=%s", req.Query, auth.TenantID)
+		h.logger.Printf("[BigQueryHandler] Query request: query=%q, tenantID=%s, documentProjectID=%s, projectID=%s, datasetID=%s", 
+			req.Query, auth.TenantID, req.DocumentProjectID, req.ProjectID, req.DatasetID)
+	}
+
+	// Use tenantID from auth if not provided in request
+	tenantID := req.TenantID
+	if tenantID == "" {
+		tenantID = auth.TenantID
 	}
 
 	// Convert to service format
@@ -66,6 +75,13 @@ func (h *BigQueryHandler) Query(w http.ResponseWriter, r *http.Request) {
 		ProjectID:            req.ProjectID,
 		DatasetID:            req.DatasetID,
 		MaxResults:           req.MaxResults,
+		TenantID:             tenantID,
+		DocumentProjectID:    req.DocumentProjectID,
+	}
+
+	if h.logger != nil {
+		h.logger.Printf("[BigQueryHandler] Service request prepared: tenantID=%s, documentProjectID=%s", 
+			serviceReq.TenantID, serviceReq.DocumentProjectID)
 	}
 
 	// Execute query

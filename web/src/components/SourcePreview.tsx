@@ -321,6 +321,82 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
           )}
         </div>
 
+        {/* Polling Schedule section */}
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 8 }}>
+            Polling Schedule
+          </div>
+          <div style={{ 
+            padding: 10, 
+            borderRadius: 8, 
+            backgroundColor: 'var(--bg-sidebar)', 
+            border: '1px solid var(--overlay-line-90)',
+            fontSize: 11,
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-tertiary-weak)' }}>Last Polled:</span>
+                <span style={{ color: 'var(--text-secondary-strong)' }}>
+                  {source.lastPolledAt 
+                    ? new Date(source.lastPolledAt).toLocaleString('ru-RU', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                    : 'Never'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-tertiary-weak)' }}>Next Poll:</span>
+                <span style={{ 
+                  color: source.nextPollAt && new Date(source.nextPollAt) > new Date()
+                    ? 'var(--accent-success)'
+                    : source.nextPollAt
+                    ? 'var(--accent-primary)'
+                    : 'var(--text-tertiary-weak)'
+                }}>
+                  {source.nextPollAt 
+                    ? new Date(source.nextPollAt).toLocaleString('ru-RU', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                    : 'Not scheduled'}
+                </span>
+              </div>
+              {source.lastPolledAt && source.nextPollAt && (
+                <div style={{ 
+                  fontSize: 10, 
+                  color: 'var(--text-tertiary-weak)', 
+                  marginTop: 4,
+                  paddingTop: 6,
+                  borderTop: '1px solid var(--overlay-line-90)'
+                }}>
+                  {(() => {
+                    const now = new Date();
+                    const nextPoll = new Date(source.nextPollAt);
+                    const diffMs = nextPoll.getTime() - now.getTime();
+                    if (diffMs < 0) {
+                      const overdue = Math.abs(diffMs);
+                      const overdueHours = Math.floor(overdue / (1000 * 60 * 60));
+                      const overdueMinutes = Math.floor((overdue % (1000 * 60 * 60)) / (1000 * 60));
+                      return `Overdue by ${overdueHours}h ${overdueMinutes}m`;
+                    } else {
+                      const hours = Math.floor(diffMs / (1000 * 60 * 60));
+                      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                      return `In ${hours}h ${minutes}m`;
+                    }
+                  })()}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Ingest History section */}
         <div style={{ marginTop: 16 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 8 }}>

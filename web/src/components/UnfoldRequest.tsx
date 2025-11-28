@@ -32,7 +32,7 @@ interface UnfoldRequestProps {
   dangerTint?: boolean;
   showHighRiskTag?: boolean;
   onHighRiskTagClick?: () => void;
-  onModeChange?: (mode: 'text' | 'graph') => void; // Новый проп для смены режима
+  onModeChange?: (mode: 'text' | 'graph' | 'analytics' | 'prepare') => void; // Новый проп для смены режима
 }
 
 const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClear, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick, onModeChange }) => {
@@ -569,11 +569,11 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   }, []);
 
   // Новый стейт
-  const [mode, setMode] = React.useState<'text' | 'graph'>('text');
+  const [mode, setMode] = React.useState<'text' | 'graph' | 'analytics' | 'prepare'>('text');
 
   // вызываем onModeChange при смене
   const handleModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value as 'text' | 'graph';
+    const val = e.target.value as 'text' | 'graph' | 'analytics' | 'prepare';
     setMode(val);
     onModeChange?.(val);
   };
@@ -1185,17 +1185,38 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
             )}
           </div>
           <div className="flex items-center gap-2">
-            {/* Новый dropdown режимов */}
-            <select
-              aria-label={t('unfold.request.modeLabel')}
-              value={mode}
-              onChange={handleModeChange}
-              className="text-xs unfold-mode-select"
-              style={{ backgroundColor: 'var(--bg-input)', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px', colorScheme: theme === 'dark' ? 'dark' : 'light', outline: 'none', boxShadow: 'none' }}
-            >
-              <option value="text">{t('unfold.request.modeText')}</option>
-              <option value="graph">{t('unfold.request.modeGraph')}</option>
-            </select>
+            {/* Новый dropdown режимов - открывается вверх */}
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <select
+                aria-label={t('unfold.request.modeLabel')}
+                value={mode}
+                onChange={handleModeChange}
+                className="text-xs unfold-mode-select"
+                style={{ 
+                  backgroundColor: 'var(--bg-input)', 
+                  color: 'var(--text-heading)', 
+                  border: '1px solid var(--overlay-line-90)', 
+                  borderRadius: 8, 
+                  padding: '4px 8px', 
+                  colorScheme: theme === 'dark' ? 'dark' : 'light', 
+                  outline: 'none', 
+                  boxShadow: 'none',
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
+                  MozAppearance: 'none',
+                  backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'12\' viewBox=\'0 0 12 12\'%3E%3Cpath fill=\'%23666\' d=\'M6 3L1 8h10z\'/%3E%3C/svg%3E")',
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 6px center',
+                  paddingRight: '24px',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value="text">{t('unfold.request.modeText')}</option>
+                <option value="graph">{t('unfold.request.modeGraph')}</option>
+                <option value="analytics">{t('unfold.request.modeAnalytics')}</option>
+                <option value="prepare">{t('unfold.request.modePrepare')}</option>
+              </select>
+            </div>
             {showHighRiskTag && (
               <button
                 type="button"

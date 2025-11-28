@@ -87,4 +87,3 @@ func main() {
 
 	fmt.Printf("\n✅ Poller test completed successfully!\n")
 }
-

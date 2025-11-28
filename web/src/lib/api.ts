@@ -558,6 +558,234 @@ class ApiClient {
     return res.data as { indexed: boolean; reason?: string; error?: string };
   }
 
+  async docsCheckBigQueryStatus(projectId: string, docId: string): Promise<{ available: boolean; reason?: string; error?: string }> {
+    const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/bigquery-status`);
+    return res.data as { available: boolean; reason?: string; error?: string };
+  }
+
+  // Prepare mode: Stage 1 - Analyze documents and generate commands
+  async prepareAnalyze(projectId: string, userQuery: string): Promise<{
+    commands: Array<{
+      action: string;
+      documentId: string;
+      prompt: string;
+      reason: string;
+      priority?: number;
+    }>;
+    summary: string;
+  }> {
+    const response = await this.client.post(`/api/v1/projects/${projectId}/prepare/analyze`, {
+      userQuery,
+    });
+    return response.data;
+  }
+
+  // Prepare mode: Stage 2 - Apply modifications to a document
+  async prepareApply(projectId: string, documentId: string, prompt: string): Promise<{
+    success: boolean;
+    message: string;
+    documentId?: string;
+    error?: string;
+  }> {
+    const response = await this.client.post(`/api/v1/projects/${projectId}/prepare/apply`, {
+      documentId,
+      prompt,
+    });
+    return response.data;
+  }
+
+  async getBigQuerySchema(projectId: string): Promise<{
+    projectID: string;
+    datasetID: string;
+    schemaInfo: string;
+    tenantID: string;
+    projectIDFilter: string;
+  }> {
+    console.log(`[API] getBigQuerySchema called: projectId=${projectId}`);
+    try {
+      const res = await this.client.get(`/api/v1/projects/${projectId}/analytics/schema`);
+      console.log(`[API] getBigQuerySchema response:`, res.data);
+      return res.data;
+    } catch (error: any) {
+      console.error(`[API] getBigQuerySchema error:`, error);
+      throw error;
+    }
+  }
+
+  async generateSQL(projectId: string, query: string): Promise<{
+    sql: string;
+    explanation?: string;
+  }> {
+    console.log(`[API] generateSQL called: projectId=${projectId}, query=${query}`);
+    try {
+      // Get schema info first
+      const schemaData = await this.getBigQuerySchema(projectId);
+      
+      // Build prompt for SQL generation
+      const filterInstructions = `\n\nCRITICAL FILTERING REQUIREMENTS:
+- ALWAYS filter by tenantId = '${schemaData.tenantID}' when querying core_docs_metadata or documents_metadata tables
+- ALWAYS filter by projectId = '${schemaData.projectIDFilter}' when querying core_docs_metadata table
+- These filters MUST be included in WHERE clauses to ensure data isolation
+- Example: WHERE tenantId = '${schemaData.tenantID}' AND projectId = '${schemaData.projectIDFilter}'`;
+
+      const prompt = `You are a BigQuery SQL expert. Convert natural language to valid BigQuery SQL.
+
+PROJECT: ${schemaData.projectID}
+DATASET: ${schemaData.datasetID}
+
+SCHEMA:
+${schemaData.schemaInfo}
+
+AVAILABLE DATA:
+- core_docs_metadata: Document metadata (id, filename, contentType, storagePath, extractedText, parseMeta, createdAt, etc.)
+- documents_metadata: RAG document metadata
+- Files in GCS accessible via storagePath field
+- BigQuery can read CSV, JSON, Parquet, Avro directly from GCS using EXTERNAL TABLE
+${filterInstructions}
+USER QUERY:
+${query}
+
+GENERATE SQL:
+- Use \`${schemaData.projectID}.${schemaData.datasetID}.table_name\` format
+- Filter by tenantId = '${schemaData.tenantID}' AND projectId = '${schemaData.projectIDFilter}' when querying core_docs_metadata
+- For file content: use extractedText OR create EXTERNAL TABLE with format options
+- For ML/forecasting: use CREATE MODEL with model_type (ARIMA_PLUS for time series)
+- IMPORTANT: For TIMESTAMP fields, use DATE_TRUNC(timestamp_field, MONTH) or EXTRACT(YEAR FROM timestamp_field), EXTRACT(MONTH FROM timestamp_field) - NOT TIMESTAMP_TRUNC with MONTH
+- For DATE fields, use DATE_TRUNC(date_field, MONTH)
+- ARIMA_PLUS REQUIREMENTS (CRITICAL):
+  * Minimum 2-3 data points per time series (preferably 10+)
+  * Data must be ordered by timestamp
+  * If grouping by categories (time_series_id_col), ensure each category has sufficient data points
+  * If data is sparse, aggregate to fewer categories or use a single time series
+  * For forecasting, prefer single time series unless user explicitly asks for multiple series
+  * Use time_series_id_col ONLY if each category has at least 5-10 data points
+- If you need to create a model AND query it, use TWO statements separated by semicolon: CREATE MODEL ... AS SELECT ...; SELECT ... FROM ML.FORECAST(...);
+- Return ONLY SQL, no markdown code blocks, no explanations, no trailing backticks
+- Use BigQuery features flexibly
+
+Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
+
+      // Generate SQL using genaiGenerate
+      const genaiResponse = await this.genaiGenerate({
+        model: 'gemini_quality',
+        prompt,
+        systemInstruction: 'You are a BigQuery SQL expert. Generate only valid SQL queries without any explanations or markdown formatting. Handle complex queries with multiple CTEs, JOINs, and subqueries. Always optimize for performance by using appropriate filters and limits.',
+        temperature: 0.1,
+        maxOutputTokens: 4096,
+        webSearchEnabled: false,
+        toolCallingEnabled: false,
+        strictJSONEnabled: false,
+      });
+
+      let sqlQuery = (genaiResponse.content || '').trim();
+      
+      // Clean SQL: remove markdown code blocks and trailing backticks
+      sqlQuery = sqlQuery.replace(/^```sql\s*/i, '').replace(/^```\s*/, '').replace(/\s*```\s*$/, '');
+      sqlQuery = sqlQuery.replace(/`+$/, ''); // Remove trailing backticks
+      sqlQuery = sqlQuery.trim();
+
+      // Generate explanation
+      let explanation = '';
+      try {
+        const explanationResponse = await this.genaiGenerate({
+          model: 'gemini_fast',
+          prompt: `Explain what this BigQuery SQL query does in simple terms:\n\n${sqlQuery}\n\nProvide a brief explanation (1-2 sentences).`,
+          temperature: 0.3,
+          maxOutputTokens: 256,
+          webSearchEnabled: false,
+          toolCallingEnabled: false,
+          strictJSONEnabled: false,
+        });
+        explanation = (explanationResponse.content || '').trim();
+      } catch (explanationError) {
+        console.warn(`[API] Failed to generate explanation:`, explanationError);
+      }
+
+      console.log(`[API] generateSQL completed: sqlLength=${sqlQuery.length}, hasExplanation=${!!explanation}`);
+      
+      return {
+        sql: sqlQuery,
+        explanation: explanation || undefined,
+      };
+    } catch (error: any) {
+      console.error(`[API] generateSQL error:`, error);
+      throw error;
+    }
+  }
+
+  async executeSQL(projectId: string, sql: string, maxResults?: number): Promise<{
+    results: Array<Record<string, any>>;
+    rowCount: number;
+    error?: string;
+  }> {
+    console.log(`[API] executeSQL called: projectId=${projectId}, sqlLength=${sql.length}, maxResults=${maxResults}`);
+    try {
+      const res = await this.client.post(`/api/v1/projects/${projectId}/analytics/execute-sql`, {
+        sql,
+        maxResults,
+      }, {
+        timeout: 300000, // 5 minutes
+      });
+      console.log(`[API] executeSQL response:`, res.data);
+      console.log(`[API] executeSQL response has error:`, !!res.data?.error);
+      return res.data;
+    } catch (error: any) {
+      console.error(`[API] executeSQL error:`, error);
+      return {
+        results: [],
+        rowCount: 0,
+        error: error.response?.data?.error || error.response?.data?.message || error.message || 'Unknown error',
+      };
+    }
+  }
+
+  async queryBigQuery(projectId: string, query: string, maxResults?: number): Promise<{
+    sql: string;
+    results: Array<Record<string, any>>;
+    rowCount: number;
+    explanation?: string;
+    error?: string;
+    errorHistory?: string[];
+  }> {
+    console.log(`[API] queryBigQuery called: projectId=${projectId}, query=${query}, maxResults=${maxResults}`);
+    try {
+      // Set timeout to 5 minutes for BigQuery queries (they can take time)
+      const res = await Promise.race([
+        this.client.post(`/api/v1/projects/${projectId}/analytics/query`, {
+          query,
+          maxResults,
+        }, {
+          timeout: 300000, // 5 minutes
+        }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Request timeout after 5 minutes')), 300000)
+        )
+      ]) as any;
+      
+      console.log(`[API] queryBigQuery response:`, res.data);
+      console.log(`[API] queryBigQuery response has error:`, !!res.data?.error);
+      if (res.data?.errorHistory && res.data.errorHistory.length > 0) {
+        console.log(`[API] queryBigQuery error history:`, res.data.errorHistory);
+      }
+      return res.data;
+    } catch (error: any) {
+      console.error(`[API] queryBigQuery error:`, error);
+      console.error(`[API] queryBigQuery error details:`, {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        timeout: error.code === 'ECONNABORTED',
+      });
+      // Return error response structure
+      return {
+        sql: '',
+        results: [],
+        rowCount: 0,
+        error: error.response?.data?.error || error.response?.data?.message || error.message || 'Unknown error',
+      };
+    }
+  }
+
   async docsDownload(projectId: string, docId: string): Promise<Blob> {
     try {
       const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/download`, { responseType: 'blob' });
