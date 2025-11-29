@@ -34,6 +34,33 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
 )
 
+// tavilyClientAdapterForAgents адаптирует httphandlers.TavilyClient к agents.TavilySearchClient интерфейсу
+// Определен на уровне пакета для избежания циклических импортов
+type tavilyClientAdapterForAgents struct {
+	client *httphandlers.TavilyClient
+}
+
+func (a *tavilyClientAdapterForAgents) Search(ctx context.Context, query string, maxResults int) (*agents.TavilySearchResponse, error) {
+	resp, err := a.client.Search(ctx, query, maxResults)
+	if err != nil {
+		return nil, err
+	}
+	// Конвертировать httphandlers.TavilySearchResponse в agents.TavilySearchResponse
+	results := make([]agents.TavilySearchResult, 0, len(resp.Results))
+	for _, r := range resp.Results {
+		results = append(results, agents.TavilySearchResult{
+			Title:   r.Title,
+			URL:     r.URL,
+			Content: r.Content,
+			Score:   r.Score,
+		})
+	}
+	return &agents.TavilySearchResponse{
+		Query:   resp.Query,
+		Results: results,
+	}, nil
+}
+
 type server struct {
 	fbApp            *firebase.App
 	fs               *gcp.FirestoreClient
@@ -135,6 +162,7 @@ func main() {
 	var aiExecHandler *httphandlers.AIExecHandler
 	var metaHandler *httphandlers.MetaHandler
 	var agentsHandler *httphandlers.AgentsHandler
+	var agentJobsHandler *httphandlers.AgentJobsHandler
 	var verifiedHandler *httphandlers.VerifiedHandler
 	var bigqueryHandler *httphandlers.BigQueryHandler
 	var bigqueryAIService *services.BigQueryAIService
@@ -605,10 +633,152 @@ func main() {
 		// Wire to projects handler for cascade delete
 		s.projectsHandler = s.projectsHandler.WithMeta(metaEvents, metaAggProj, metaAggUser)
 
-		// Initialize Agent Registry
+		// Initialize Agent Registry (legacy agents: DataAgent, EntitiesAgent)
 		agentRegistry := agents.NewRegistry(exec, genaiClient, pub, logger).
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()), modelManager)
 		agentsHandler = httphandlers.NewAgentsHandler(agentRegistry, pub, logger)
+
+		// Initialize Agent Orchestrator (new capabilities-based system)
+		agentJobsRepo := repo.NewAgentJobsRepository(fsClient.Client())
+		capabilityRegistry := agents.NewCapabilityRegistry()
+
+		// Register basic capability executors (используем coreDocsRepo для DocumentRead/Write)
+		capabilityRegistry.Register(agents.NewDocumentReadExecutor(coreDocsRepo, logger))
+		capabilityRegistry.Register(agents.NewLLMGenerateExecutor(genaiClient, logger))
+		capabilityRegistry.Register(agents.NewDocumentWriteExecutor(coreDocsRepo, logger))
+
+		// Register advanced capability executors
+		if vertexSearchClient != nil {
+			capabilityRegistry.Register(agents.NewDataSearchExecutor(vertexSearchClient, logger))
+			logger.Printf("DataSearchExecutor registered with Vertex AI Search")
+		} else {
+			logger.Printf("WARNING: VertexSearchClient not configured, DataSearchExecutor will not be available")
+		}
+
+		// Register BigQuery executor if BigQuery is configured
+		if bqClient != nil {
+			capabilityRegistry.Register(agents.NewBigQueryQueryExecutor(bqClient, logger))
+			logger.Printf("BigQueryQueryExecutor registered")
+		}
+
+		// Register LLM Analyze executor
+		capabilityRegistry.Register(agents.NewLLMAnalyzeExecutor(genaiClient, logger))
+
+		// Register Entity Search executor (uses EntityResolver for deduplication)
+		if entityResolver != nil {
+			capabilityRegistry.Register(agents.NewEntitySearchExecutor(entitiesRepo, entityResolver, logger))
+			logger.Printf("EntitySearchExecutor registered")
+		} else {
+			logger.Printf("WARNING: EntityResolver not initialized, EntitySearchExecutor will not be available")
+		}
+
+		// Register Entity Deduplicate executor
+		if entityResolver != nil && genaiClient != nil {
+			capabilityRegistry.Register(agents.NewEntityDeduplicateExecutor(entitiesRepo, entityResolver, genaiClient, logger))
+			logger.Printf("EntityDeduplicateExecutor registered")
+		} else {
+			logger.Printf("WARNING: EntityResolver or GenAI client not initialized, EntityDeduplicateExecutor will not be available")
+		}
+
+		// Register Entity Relation Build executor
+		if entityResolver != nil && relationsRepo != nil {
+			capabilityRegistry.Register(agents.NewEntityRelationBuildExecutor(entitiesRepo, relationsRepo, entityResolver, logger))
+			logger.Printf("EntityRelationBuildExecutor registered")
+		} else {
+			logger.Printf("WARNING: EntityResolver or RelationsRepo not initialized, EntityRelationBuildExecutor will not be available")
+		}
+
+		// Register Entity Enrich executor
+		if entityEnricher != nil {
+			capabilityRegistry.Register(agents.NewEntityEnrichExecutor(entitiesRepo, entityEnricher, logger))
+			logger.Printf("EntityEnrichExecutor registered")
+		} else {
+			logger.Printf("WARNING: EntityEnricher not initialized, EntityEnrichExecutor will not be available")
+		}
+
+		// Register Entity Extract executor
+		if entityResolver != nil && genaiClient != nil {
+			capabilityRegistry.Register(agents.NewEntityExtractExecutor(entitiesRepo, entityResolver, genaiClient, logger))
+			logger.Printf("EntityExtractExecutor registered")
+		} else {
+			logger.Printf("WARNING: EntityResolver or GenAI client not initialized, EntityExtractExecutor will not be available")
+		}
+
+		// Register Entity Hierarchy Build executor
+		if entitiesRepo != nil && relationsRepo != nil {
+			capabilityRegistry.Register(agents.NewEntityHierarchyBuildExecutor(entitiesRepo, relationsRepo, logger))
+			logger.Printf("EntityHierarchyBuildExecutor registered")
+		} else {
+			logger.Printf("WARNING: EntitiesRepo or RelationsRepo not initialized, EntityHierarchyBuildExecutor will not be available")
+		}
+
+		// Register Conflict Detect executor
+		if conflictDetector != nil && claimsRepo != nil {
+			capabilityRegistry.Register(agents.NewConflictDetectExecutor(conflictDetector, claimsRepo, logger))
+			logger.Printf("ConflictDetectExecutor registered")
+		} else {
+			logger.Printf("WARNING: ConflictDetector or ClaimsRepo not initialized, ConflictDetectExecutor will not be available")
+		}
+
+		// Register Causal Link Detect executor
+		if causalDetector != nil && eventsRepo != nil {
+			capabilityRegistry.Register(agents.NewCausalLinkDetectExecutor(causalDetector, eventsRepo, logger))
+			logger.Printf("CausalLinkDetectExecutor registered")
+		} else {
+			logger.Printf("WARNING: CausalDetector or EventsRepo not initialized, CausalLinkDetectExecutor will not be available")
+		}
+
+		// Register Relation Find executor
+		if relationsRepo != nil {
+			capabilityRegistry.Register(agents.NewRelationFindExecutor(relationsRepo, logger))
+			logger.Printf("RelationFindExecutor registered")
+		} else {
+			logger.Printf("WARNING: RelationsRepo not initialized, RelationFindExecutor will not be available")
+		}
+
+		// Register Entity Validate executor
+		if entitiesRepo != nil {
+			capabilityRegistry.Register(agents.NewEntityValidateExecutor(entitiesRepo, logger))
+			logger.Printf("EntityValidateExecutor registered")
+		} else {
+			logger.Printf("WARNING: EntitiesRepo not initialized, EntityValidateExecutor will not be available")
+		}
+
+		// Register Entity Merge Attributes executor
+		if entitiesRepo != nil {
+			capabilityRegistry.Register(agents.NewEntityMergeAttributesExecutor(entitiesRepo, logger))
+			logger.Printf("EntityMergeAttributesExecutor registered")
+		} else {
+			logger.Printf("WARNING: EntitiesRepo not initialized, EntityMergeAttributesExecutor will not be available")
+		}
+
+		// Register WebSearch executor (Tavily) if available
+		// Используем уже инициализированный tavilyClient из строки 270
+		var agentTavilyAdapter agents.TavilySearchClient
+		if tavilyClient != nil {
+			// Создать адаптер для TavilyClient
+			agentTavilyAdapter = &tavilyClientAdapterForAgents{client: tavilyClient}
+			capabilityRegistry.Register(agents.NewWebSearchExecutor(agentTavilyAdapter, logger))
+			logger.Printf("WebSearchExecutor registered with Tavily")
+		} else {
+			logger.Printf("WARNING: TAVILY_API_KEY not set, WebSearchExecutor will not be available")
+		}
+
+		// Create agent orchestrator (используем другое имя чтобы избежать конфликта с discovery.Orchestrator)
+		agentOrchestrator := agents.NewAgentOrchestrator(agentJobsRepo, capabilityRegistry, pub, logger).
+			WithRepositories(coreDocsRepo, sourcesDocsRepo, entityRepo, eventRepo, interactions)
+
+		// Configure Tavily for orchestrator if available (через адаптер)
+		if agentTavilyAdapter != nil {
+			agentOrchestrator = agentOrchestrator.WithTavily(agentTavilyAdapter)
+		}
+
+		// BigQuery и GenAI клиенты уже инжектируются через injectDependencies в orchestrator
+		// на основе capability, поэтому отдельная конфигурация не требуется
+
+		// Create AgentJobsHandler
+		agentJobsHandler = httphandlers.NewAgentJobsHandler(agentOrchestrator, agentJobsRepo, pub, logger)
+		logger.Printf("Agent Orchestrator initialized")
 	}
 
 	// Get auth client for middleware
@@ -1068,7 +1238,7 @@ func main() {
 	// Discovery routes
 	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
 
-	// Agents routes
+	// Agents routes (legacy)
 	mux.Handle("/api/v1/agents", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if agentsHandler == nil {
 			httphandlers.WriteInternalError(w, "Agents not configured")
@@ -1076,6 +1246,54 @@ func main() {
 		}
 		agentsHandler.ListAgents(w, r)
 	})))
+
+	// Agent Jobs routes (new orchestrator-based system)
+	if agentJobsHandler != nil {
+		// Create agent job: POST /api/v1/projects/{projectId}/agent-jobs
+		// List agent jobs: GET /api/v1/projects/{projectId}/agent-jobs
+		// Get agent job: GET /api/v1/projects/{projectId}/agent-jobs/{jobId}
+		// Execute agent job: POST /api/v1/projects/{projectId}/agent-jobs/{jobId}/execute
+		// Pause agent job: POST /api/v1/projects/{projectId}/agent-jobs/{jobId}/pause
+		// Resume agent job: POST /api/v1/projects/{projectId}/agent-jobs/{jobId}/resume
+		// Update agent job steps: PUT /api/v1/projects/{projectId}/agent-jobs/{jobId}/steps
+		mux.Handle("/api/v1/projects/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			if strings.HasSuffix(path, "/agent-jobs") {
+				if r.Method == http.MethodPost {
+					agentJobsHandler.CreateAgentJob(w, r)
+					return
+				}
+				if r.Method == http.MethodGet {
+					agentJobsHandler.ListAgentJobs(w, r)
+					return
+				}
+			}
+			if strings.Contains(path, "/agent-jobs/") {
+				if strings.HasSuffix(path, "/execute") && r.Method == http.MethodPost {
+					agentJobsHandler.ExecuteAgentJob(w, r)
+					return
+				}
+				if strings.HasSuffix(path, "/pause") && r.Method == http.MethodPost {
+					agentJobsHandler.PauseAgentJob(w, r)
+					return
+				}
+				if strings.HasSuffix(path, "/resume") && r.Method == http.MethodPost {
+					agentJobsHandler.ResumeAgentJob(w, r)
+					return
+				}
+				if strings.HasSuffix(path, "/steps") && r.Method == http.MethodPut {
+					agentJobsHandler.UpdateAgentJobSteps(w, r)
+					return
+				}
+				// Get agent job: GET /api/v1/projects/{projectId}/agent-jobs/{jobId}
+				if r.Method == http.MethodGet {
+					agentJobsHandler.GetAgentJob(w, r)
+					return
+				}
+			}
+		})))
+		logger.Printf("Agent Jobs endpoints registered")
+	}
 
 	// Usage metrics handler
 	usageHandler := httphandlers.NewUsageHandler(repo.NewUsageMetricsRepository(fsClient.Client()), logger)

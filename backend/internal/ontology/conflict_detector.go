@@ -251,3 +251,24 @@ func (d *ConflictDetector) ResolveConflict(
 	return nil
 }
 
+// GetUncertaintiesForClaim получает все UncertaintyModel для указанного claim
+func (d *ConflictDetector) GetUncertaintiesForClaim(ctx context.Context, tenantID, claimID string) ([]*models.UncertaintyModel, error) {
+	allUncertainties, err := d.uncertaintyRepo.ListByTenant(ctx, tenantID, 1000)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*models.UncertaintyModel
+	for _, unc := range allUncertainties {
+		// Проверяем, относится ли uncertainty к этому claim
+		for _, ref := range unc.AffectedRefs {
+			if ref.ID == claimID {
+				result = append(result, unc)
+				break
+			}
+		}
+	}
+
+	return result, nil
+}
+

@@ -109,12 +109,13 @@ type SearchResult struct {
 
 // SearchDocument документ из результата поиска
 type SearchDocument struct {
-	ID         string                 `json:"id"`
-	Name       string                 `json:"name"`
-	URI        string                 `json:"uri"`
-	Title      string                 `json:"title,omitempty"`
-	StructData map[string]interface{} `json:"structData,omitempty"`
-	JSONData   string                 `json:"jsonData,omitempty"`
+	ID                string                 `json:"id"`
+	Name              string                 `json:"name"`
+	URI               string                 `json:"uri"`
+	Title             string                 `json:"title,omitempty"`
+	StructData        map[string]interface{} `json:"structData,omitempty"`
+	DerivedStructData map[string]interface{} `json:"derivedStructData,omitempty"` // Автоматически генерируемые данные из GCS
+	JSONData          string                 `json:"jsonData,omitempty"`
 }
 
 // Search выполняет поиск по документам в Vertex AI Search
@@ -202,13 +203,59 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 		return nil, fmt.Errorf("vertex AI search API error %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Логируем сырой ответ для отладки (первые 2000 символов)
+	if len(body) > 0 {
+		bodyPreview := string(body)
+		if len(bodyPreview) > 2000 {
+			bodyPreview = bodyPreview[:2000] + "..."
+		}
+		log.Printf("[VertexAISearch] Raw response preview (first 2000 chars): %s", bodyPreview)
+	}
+
 	var searchResp SearchResponse
 	if err := json.Unmarshal(body, &searchResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	log.Printf("[VertexAISearch] Found %d results", len(searchResp.Results))
+	
+	// Логируем структуру первого результата для отладки
+	if len(searchResp.Results) > 0 {
+		firstResult := searchResp.Results[0]
+		log.Printf("[VertexAISearch] Sample result: ID=%s, URI=%s, Title=%s", firstResult.ID, firstResult.Document.URI, firstResult.Document.Title)
+		if firstResult.Document.StructData != nil {
+			log.Printf("[VertexAISearch] Sample structData keys: %v", getMapKeys(firstResult.Document.StructData))
+			// Логируем первые несколько ключей-значений
+			count := 0
+			for k, v := range firstResult.Document.StructData {
+				if count < 5 {
+					log.Printf("[VertexAISearch] structData[%s] = %v", k, v)
+					count++
+				}
+			}
+		} else {
+			log.Printf("[VertexAISearch] Sample result has no structData")
+		}
+		// Логируем полный JSON первого результата для отладки (первые 500 символов)
+		if resultJSON, err := json.Marshal(firstResult); err == nil {
+			resultStr := string(resultJSON)
+			if len(resultStr) > 500 {
+				resultStr = resultStr[:500] + "..."
+			}
+			log.Printf("[VertexAISearch] Sample result JSON: %s", resultStr)
+		}
+	}
+	
 	return &searchResp, nil
+}
+
+// getMapKeys возвращает список ключей из map для логирования
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // IsConfigured проверяет, настроен ли клиент
@@ -220,6 +267,7 @@ func (c *VertexAISearchClient) IsConfigured() bool {
 type ImportDocumentsRequest struct {
 	GCSPath            string // gs://bucket/path pattern (например, gs://bucket/tenantId/**)
 	ReconciliationMode string // "INCREMENTAL" или "FULL"
+	DataSchema         string // "content" (plain text) или "document" (JSONL с structData)
 }
 
 // ImportDocuments импортирует документы из GCS в Vertex AI Search
@@ -247,13 +295,21 @@ func (c *VertexAISearchClient) ImportDocuments(ctx context.Context, req *ImportD
 		c.dataStoreID,
 	)
 
+	dataSchema := req.DataSchema
+	if dataSchema == "" {
+		dataSchema = "content" // По умолчанию для обратной совместимости
+	}
+
 	requestBody := map[string]interface{}{
 		"gcsSource": map[string]interface{}{
 			"inputUris":  []string{req.GCSPath},
-			"dataSchema": "content", // Для plain text файлов
+			"dataSchema": dataSchema,
 		},
 		"reconciliationMode": reconciliationMode,
 	}
+	
+	// Логируем параметры импорта для отладки
+	log.Printf("[VertexAISearch] Importing with dataSchema=%s, GCSPath=%s, reconciliationMode=%s", dataSchema, req.GCSPath, reconciliationMode)
 
 	bodyJSON, err := json.Marshal(requestBody)
 	if err != nil {

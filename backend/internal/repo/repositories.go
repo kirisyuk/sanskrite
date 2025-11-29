@@ -35,6 +35,7 @@ type MetaAnalysesRepository struct{ col *firestore.CollectionRef }
 type MetaAggregateProjectsRepository struct{ col *firestore.CollectionRef }
 type MetaAggregateUsersRepository struct{ col *firestore.CollectionRef }
 type SourceIngestHistoryRepository struct{ col *firestore.CollectionRef }
+type AgentJobsRepository struct{ col *firestore.CollectionRef }
 
 func NewUsersRepository(db *firestore.Client) *UsersRepository {
 	return &UsersRepository{col: db.Collection("core_users")}
@@ -74,6 +75,10 @@ func NewMetaAggregateUsersRepository(db *firestore.Client) *MetaAggregateUsersRe
 
 func NewSourceIngestHistoryRepository(db *firestore.Client) *SourceIngestHistoryRepository {
 	return &SourceIngestHistoryRepository{col: db.Collection("source_ingest_history")}
+}
+
+func NewAgentJobsRepository(db *firestore.Client) *AgentJobsRepository {
+	return &AgentJobsRepository{col: db.Collection("agent_jobs")}
 }
 
 // Create создает новую запись истории обработки

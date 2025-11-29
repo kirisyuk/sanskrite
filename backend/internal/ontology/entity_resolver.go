@@ -200,6 +200,8 @@ func (r *EntityResolver) normalizeName(name string) string {
 	normalized = strings.Join(strings.Fields(normalized), " ")
 	// Убираем диакритики и специальные символы для лучшего сравнения
 	normalized = r.removeDiacritics(normalized)
+	// Нормализуем общие вариации написания
+	normalized = r.normalizeCommonVariations(normalized)
 	return normalized
 }
 
@@ -253,6 +255,52 @@ func (r *EntityResolver) removeDiacritics(text string) string {
 		result = strings.ReplaceAll(result, old, new)
 	}
 	return result
+}
+
+// normalizeCommonVariations нормализует общие вариации написания
+// Например, "Китай" и "Кытай" должны быть одинаковыми
+func (r *EntityResolver) normalizeCommonVariations(text string) string {
+	// Маппинг общих вариаций написания
+	variations := map[string]string{
+		// Китай - разные транслитерации
+		"кытай":   "китай",
+		"kitay":   "китай",
+		"kitai":   "китай",
+		"china":   "китай",
+		"chinese": "китай",
+		// Япония
+		"япония": "япония",
+		"japan":  "япония",
+		"nippon": "япония",
+		// США
+		"сша":                       "соединенные штаты америки",
+		"usa":                       "соединенные штаты америки",
+		"united states":            "соединенные штаты америки",
+		"united states of america": "соединенные штаты америки",
+		// Россия
+		"россия":  "россия",
+		"russia":  "россия",
+		"rossiya": "россия",
+		// Казахстан
+		"казахстан":  "казахстан",
+		"kazakhstan": "казахстан",
+		"kazakstan":  "казахстан",
+	}
+
+	// Проверяем точное совпадение
+	if normalized, ok := variations[text]; ok {
+		return normalized
+	}
+
+	// Проверяем частичное совпадение (если текст содержит вариацию)
+	for variation, normalized := range variations {
+		if strings.Contains(text, variation) {
+			// Заменяем вариацию на нормализованную форму
+			text = strings.ReplaceAll(text, variation, normalized)
+		}
+	}
+
+	return text
 }
 
 // containsAlias проверяет, содержит ли список алиасов данное имя
@@ -418,14 +466,22 @@ EXISTING ENTITIES IN SYSTEM:
 INSTRUCTIONS:
 1. Check if the entity name refers to one of the existing entities (considering different spellings, transliterations, aliases)
    - Example: "Нвидиа" (Cyrillic) refers to "Nvidia" (Latin) - same company
+   - Example: "Китай" and "Кытай" refer to the same country (China) - different transliterations
    - Example: "Apple Inc." and "Apple" refer to the same entity
    - Example: "Microsoft Corp" and "Microsoft Corporation" refer to the same entity
+   - Example: "Япония" and "Japan" refer to the same country
 
-2. If you find a match, return the EXACT canonical name from the existing entities list (e.g., "Nvidia", not "Нвидиа")
+2. Pay special attention to:
+   - Cyrillic vs Latin transliterations (e.g., "Китай" vs "Kitay" vs "China")
+   - Different transliteration systems (e.g., "Кытай" vs "Китай" - both are China)
+   - Common name variations (e.g., "United States" vs "USA" vs "US")
+   - Abbreviations and full names (e.g., "IBM" vs "International Business Machines")
 
-3. If no match found but the entity is well-known, return its Wikidata Q-ID (e.g., "Q9686" for Nvidia)
+3. If you find a match, return the EXACT canonical name from the existing entities list (e.g., "Nvidia", not "Нвидиа")
 
-4. If the entity is not found and not well-known, return null for both fields
+4. If no match found but the entity is well-known, return its Wikidata Q-ID (e.g., "Q148" for China)
+
+5. If the entity is not found and not well-known, return null for both fields
 
 IMPORTANT: Use the exact canonical name from the existing entities list, not the input name.
 

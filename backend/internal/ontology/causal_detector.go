@@ -358,3 +358,20 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+// GetCausalLinksForEvent получает все CausalLink для указанного event
+func (d *CausalDetector) GetCausalLinksForEvent(ctx context.Context, tenantID, eventID string) ([]*models.CausalLink, error) {
+	allLinks, err := d.causalLinksRepo.ListByTenant(ctx, tenantID, 1000)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*models.CausalLink
+	for _, link := range allLinks {
+		// Проверяем, относится ли link к этому event (как cause или effect)
+		if link.CauseRef.ID == eventID || link.EffectRef.ID == eventID {
+			result = append(result, link)
+		}
+	}
+
+	return result, nil
+}

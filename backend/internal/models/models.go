@@ -1,6 +1,119 @@
 package models
 
-import "time"
+import (
+	"time"
+)
+
+// ============================================================================
+// Agent System Models
+// ============================================================================
+
+// AgentJobStatus статус выполнения job
+type AgentJobStatus string
+
+const (
+	AgentJobStatusPending   AgentJobStatus = "pending"   // Ожидает запуска
+	AgentJobStatusRunning   AgentJobStatus = "running"   // Выполняется
+	AgentJobStatusCompleted AgentJobStatus = "completed" // Успешно завершен
+	AgentJobStatusFailed    AgentJobStatus = "failed"    // Провален (критичный шаг упал)
+	AgentJobStatusPartial   AgentJobStatus = "partial"   // Частичный успех (некритичные шаги провалились)
+	AgentJobStatusPaused    AgentJobStatus = "paused"    // Приостановлен (ожидает команды от фронта)
+)
+
+// PlanMode режим планирования
+type PlanMode string
+
+const (
+	PlanModeAuto   PlanMode = "auto"   // Полностью автономное планирование
+	PlanModeManual PlanMode = "manual" // Явно заданные шаги
+	PlanModeHybrid PlanMode = "hybrid" // Начальный план + репланирование
+)
+
+// ExecutionStatus детализированный статус выполнения шага
+type ExecutionStatus string
+
+const (
+	ExecutionStatusSuccess    ExecutionStatus = "success"      // Полный успех
+	ExecutionStatusPartial    ExecutionStatus = "partial"      // Частичный успех (нужны дополнительные шаги)
+	ExecutionStatusFailed     ExecutionStatus = "failed"       // Провал
+	ExecutionStatusRetryNeeded ExecutionStatus = "retry_needed" // Требуется повторная попытка
+)
+
+// AgentStepStatus статус выполнения шага
+type AgentStepStatus string
+
+const (
+	AgentStepStatusPending   AgentStepStatus = "pending"   // Ожидает выполнения
+	AgentStepStatusRunning   AgentStepStatus = "running"   // Выполняется
+	AgentStepStatusCompleted AgentStepStatus = "completed" // Успешно завершен
+	AgentStepStatusFailed    AgentStepStatus = "failed"    // Провален
+	AgentStepStatusSkipped   AgentStepStatus = "skipped"   // Пропущен (некритичный шаг упал)
+)
+
+// AgentStep представляет один шаг выполнения агента
+type AgentStep struct {
+	ID         string                 `json:"id" firestore:"id"`
+	Capability string                 `json:"capability" firestore:"capability"` // Тип capability (например, "document_read")
+	Status     AgentStepStatus        `json:"status" firestore:"status"`         // "pending", "running", "completed", "failed", "skipped"
+
+	Input  map[string]interface{} `json:"input,omitempty" firestore:"input,omitempty"`   // Входные данные шага
+	Output map[string]interface{} `json:"output,omitempty" firestore:"output,omitempty"` // Результат шага
+	Error  *string                `json:"error,omitempty" firestore:"error,omitempty"`   // Ошибка если есть
+
+	RetryCount  int        `json:"retryCount" firestore:"retryCount"` // Количество попыток
+	StartedAt   *time.Time `json:"startedAt,omitempty" firestore:"startedAt,omitempty"`
+	CompletedAt *time.Time `json:"completedAt,omitempty" firestore:"completedAt,omitempty"`
+
+	// Для оркестрации: зависимости между шагами
+	DependsOn []string `json:"dependsOn,omitempty" firestore:"dependsOn,omitempty"` // ID шагов, от которых зависит этот шаг
+	NextSteps []string `json:"nextSteps,omitempty" firestore:"nextSteps,omitempty"` // ID следующих шагов (опционально, может определяться динамически)
+
+	// Метаданные
+	Message    string `json:"message,omitempty" firestore:"message,omitempty"` // Сообщение о прогрессе
+	IsCritical bool   `json:"isCritical" firestore:"isCritical"`              // Критичный шаг (сбой = остановка job)
+
+	// Детализированный статус выполнения
+	ExecutionStatus ExecutionStatus `json:"executionStatus,omitempty" firestore:"executionStatus,omitempty"` // "success" | "partial" | "failed" | "retry_needed"
+	Confidence      *float64        `json:"confidence,omitempty" firestore:"confidence,omitempty"`            // Уверенность в результате (0.0-1.0)
+	Retryable       bool            `json:"retryable" firestore:"retryable"`                                  // Можно ли повторить шаг
+	AlternativeCapabilities []string `json:"alternativeCapabilities,omitempty" firestore:"alternativeCapabilities,omitempty"` // Альтернативные capabilities
+	Reason          string          `json:"reason,omitempty" firestore:"reason,omitempty"`                     // Причина успеха/неудачи
+}
+
+// AgentJob представляет задачу агента с историей шагов
+type AgentJob struct {
+	ID        string                 `json:"id" firestore:"id"`
+	TenantID  string                 `json:"tenantId" firestore:"tenantId"`
+	ProjectID string                 `json:"projectId" firestore:"projectId"`
+	UserID    string                 `json:"userId" firestore:"userId"`
+	AgentID   string                 `json:"agentId" firestore:"agentId"` // ID агента (например, "document_preparation")
+
+	Status   AgentJobStatus          `json:"status" firestore:"status"`   // "pending", "running", "completed", "failed", "partial"
+	Progress float64                 `json:"progress" firestore:"progress"` // 0.0 - 1.0
+
+	Task   map[string]interface{} `json:"task" firestore:"task"`   // Исходная задача
+	Result map[string]interface{} `json:"result,omitempty" firestore:"result,omitempty"` // Финальный результат
+
+	Steps []AgentStep `json:"steps" firestore:"steps"` // История шагов
+
+	CreatedAt   time.Time  `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt" firestore:"updatedAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty" firestore:"completedAt,omitempty"`
+
+	// Управление выполнением
+	AutoMode bool `json:"autoMode" firestore:"autoMode"` // true = полностью автоматический, false = требует подтверждения шагов
+
+	// Планирование
+	UserQuery      string                 `json:"userQuery" firestore:"userQuery"`           // Исходный запрос на естественном языке
+	Intent         map[string]interface{} `json:"intent,omitempty" firestore:"intent,omitempty"`      // Понимание намерения (LLM)
+	Goal           map[string]interface{} `json:"goal,omitempty" firestore:"goal,omitempty"`           // Целевой результат (LLM)
+	PlanMode       PlanMode               `json:"planMode" firestore:"planMode"`                       // "auto" | "manual" | "hybrid"
+
+	// Репланирование
+	ReplanTriggered bool       `json:"replanTriggered" firestore:"replanTriggered"`          // Был ли запущен репланинг
+	ReplanCount     int         `json:"replanCount" firestore:"replanCount"`                  // Количество репланов
+	LastReplanAt    *time.Time  `json:"lastReplanAt,omitempty" firestore:"lastReplanAt,omitempty"`     // Время последнего реплана
+}
 
 // SourceDetails хранит параметры, специфичные для типа источника
 type SourceDetails struct {
