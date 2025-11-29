@@ -44,6 +44,10 @@ export const ModelContextPanel: React.FC = () => {
       if (it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end') {
         return false;
       }
+      // Exclude agent execution interactions (they are execution status, not chat content)
+      if (it.kind === 'agent.execution') {
+        return false;
+      }
       return true;
     });
 

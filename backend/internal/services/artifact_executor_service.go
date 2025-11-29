@@ -56,14 +56,14 @@ type SectionGenerationRequest struct {
 	GenerationSettings models.GenerationSettings
 	Model              string // Model alias (gemini_quality, gpt_fast, etc.)
 	StreamCallback     func(chunk string) error
-	SessionID          string // For WebSocket routing
-	ArtifactID         string // For WebSocket routing
-	TenantID           string // For WebSocket routing
-	ProjectID          string // For WebSocket routing
-	UserID             string // For usage tracking
-	StreamID           string // For ordering and FE filtering
+	SessionID          string                   // For WebSocket routing
+	ArtifactID         string                   // For WebSocket routing
+	TenantID           string                   // For WebSocket routing
+	ProjectID          string                   // For WebSocket routing
+	UserID             string                   // For usage tracking
+	StreamID           string                   // For ordering and FE filtering
 	FullStructure      []models.ArtifactSection // Full document structure to avoid duplication
-	UserRequest        *string                 // Original user request/requirements
+	UserRequest        *string                  // Original user request/requirements
 }
 
 // SectionGenerationResult contains the result of section generation

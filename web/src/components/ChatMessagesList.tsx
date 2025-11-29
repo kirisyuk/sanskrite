@@ -10,6 +10,7 @@ import { SectionMarker } from './SectionMarker';
 import { ActionInteraction } from './ActionInteraction';
 import { BringInIndicator } from './BringInIndicator';
 import { ResearchInteraction } from './ResearchInteraction';
+import { AgentExecutionInteraction } from './AgentExecutionInteraction';
 import { MessageActions } from './MessageActions';
 import { CollapsibleText } from './CollapsibleText';
 import { MarkdownRenderer } from '../lib/markdownComponents';
@@ -135,6 +136,16 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                   key={it.id}
                   interaction={it}
                   collapsedSections={collapsedSections}
+                />
+              );
+            }
+            
+            // Special rendering for agent execution interactions
+            if (it.kind === 'agent.execution') {
+              return (
+                <AgentExecutionInteraction
+                  key={it.id}
+                  interaction={it}
                 />
               );
             }

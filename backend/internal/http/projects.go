@@ -495,7 +495,7 @@ func (h *ProjectsHandler) CreateProjectDoc(w http.ResponseWriter, r *http.Reques
 	doc.ID = id
 	// Index CoreDoc for vector search if ExtractedText is available
 	if doc.ExtractedText != nil && h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
-		if err := h.indexCoreDoc(r.Context(), authInfo.TenantID, doc); err != nil {
+		if err := h.IndexCoreDoc(r.Context(), authInfo.TenantID, doc); err != nil {
 			h.logger.Printf("Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 		}
 	}
@@ -604,7 +604,7 @@ func (h *ProjectsHandler) CreateProjectDocFromText(w http.ResponseWriter, r *htt
 	}
 	// Index CoreDoc for vector search
 	if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
-		if err := h.indexCoreDoc(r.Context(), authInfo.TenantID, doc); err != nil {
+		if err := h.IndexCoreDoc(r.Context(), authInfo.TenantID, doc); err != nil {
 			h.logger.Printf("Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 		}
 	}
@@ -1143,7 +1143,7 @@ func (h *ProjectsHandler) QueryBigQuery(w http.ResponseWriter, r *http.Request) 
 	serviceReq := &services.QueryRequest{
 		NaturalLanguageQuery: req.Query,
 		TenantID:             auth.TenantID,
-		DocumentProjectID:   projectID,
+		DocumentProjectID:    projectID,
 		MaxResults:           req.MaxResults,
 	}
 
@@ -1308,10 +1308,10 @@ func (h *ProjectsHandler) GetBigQuerySchema(w http.ResponseWriter, r *http.Reque
 	datasetID := h.bigqueryAIService.DatasetID()
 
 	response := map[string]interface{}{
-		"projectID":      projectID_bq,
-		"datasetID":      datasetID,
-		"schemaInfo":     schemaInfo,
-		"tenantID":       auth.TenantID,
+		"projectID":       projectID_bq,
+		"datasetID":       datasetID,
+		"schemaInfo":      schemaInfo,
+		"tenantID":        auth.TenantID,
 		"projectIDFilter": projectID, // Document project ID for filtering
 	}
 
@@ -1409,10 +1409,10 @@ type PrepareAnalyzeRequest struct {
 
 // PrepareCommand represents a single command in the response
 type PrepareCommand struct {
-	Action     string `json:"action"`     // "update", "create", "delete", "merge"
-	DocumentID string `json:"documentId"` // ID of document to modify
-	Prompt     string `json:"prompt"`     // LLM prompt for how to modify the document
-	Reason     string `json:"reason"`     // Explanation of why this change is needed
+	Action     string `json:"action"`             // "update", "create", "delete", "merge"
+	DocumentID string `json:"documentId"`         // ID of document to modify
+	Prompt     string `json:"prompt"`             // LLM prompt for how to modify the document
+	Reason     string `json:"reason"`             // Explanation of why this change is needed
 	Priority   int    `json:"priority,omitempty"` // Optional priority (higher = more important)
 }
 
@@ -1537,10 +1537,10 @@ Return ONLY valid JSON, no markdown formatting.`, req.UserQuery, strings.Join(do
 
 	// Call LLM to generate commands
 	genReq := gen_combined.GenAIRequest{
-		Model:             "gemini-2.0-flash-exp", // Use fast model for analysis
-		Prompt:            prompt,
-		MaxOutputTokens:  4096,
-		Temperature:      0.3, // Lower temperature for more deterministic analysis
+		Model:           "gemini-2.0-flash-exp", // Use fast model for analysis
+		Prompt:          prompt,
+		MaxOutputTokens: 4096,
+		Temperature:     0.3, // Lower temperature for more deterministic analysis
 	}
 
 	resp, err := h.genaiClient.GenAIGenerate(r.Context(), genReq)
@@ -1592,10 +1592,10 @@ type PrepareApplyRequest struct {
 
 // PrepareApplyResponse represents the response from Prepare Apply endpoint
 type PrepareApplyResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message"`
 	DocumentID string `json:"documentId,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // PrepareApply handles POST /api/v1/projects/{id}/prepare/apply
@@ -1703,10 +1703,10 @@ If the document is a CSV, maintain CSV format. If it's JSON, maintain JSON forma
 
 	// Call LLM to generate modified content
 	genReq := gen_combined.GenAIRequest{
-		Model:             "gemini-2.0-flash-exp",
-		Prompt:            modifyPrompt,
-		MaxOutputTokens:   50000, // 50K tokens as per user requirement
-		Temperature:       0.3,
+		Model:           "gemini-2.0-flash-exp",
+		Prompt:          modifyPrompt,
+		MaxOutputTokens: 50000, // 50K tokens as per user requirement
+		Temperature:     0.3,
 	}
 
 	resp, err := h.genaiClient.GenAIGenerate(r.Context(), genReq)
@@ -2276,7 +2276,7 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 
 		// Index CoreDoc for vector search
 		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
-			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeEntities] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
 		}
@@ -2455,7 +2455,7 @@ Guidelines:
 
 		// Index CoreDoc for vector search
 		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
-			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeFacts] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
 		}
@@ -2632,7 +2632,7 @@ Rules: prefer precise timestamps if available; severity/confidence in 0..1.
 
 		// Index CoreDoc for vector search
 		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
-			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeEvents] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
 		}
@@ -2838,7 +2838,7 @@ Guidelines: keys stable and normalized; prefer domain-specific scope.
 
 		// Index CoreDoc for vector search
 		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
-			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeMetrics] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
 		}
@@ -3029,7 +3029,7 @@ Return STRICT JSON: { "decisions": [ {
 
 		// Index CoreDoc for vector search
 		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
-			if err := h.indexCoreDoc(ctx, tenantID, doc); err != nil {
+			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeDecisions] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
 		}
@@ -3162,8 +3162,9 @@ func getFullExtractedTextFromCoreDoc(ctx context.Context, cd *models.CoreDoc, st
 	return "", nil
 }
 
-// indexCoreDoc indexes a CoreDoc by creating/updating Document and Chunks with embeddings
-func (h *ProjectsHandler) indexCoreDoc(ctx context.Context, tenantID string, cd *models.CoreDoc) error {
+// IndexCoreDoc indexes a CoreDoc by creating/updating Document and Chunks with embeddings
+// This is exported so it can be used as a callback in CoreDocsRepo
+func (h *ProjectsHandler) IndexCoreDoc(ctx context.Context, tenantID string, cd *models.CoreDoc) error {
 	if h.docsRepo == nil || h.chunksRepo == nil || h.emb == nil {
 		// RAG not configured, skip indexing
 		if h.logger != nil {
@@ -3519,7 +3520,7 @@ func (h *ProjectsHandler) parseAndPersist(ctx context.Context, tenantID, project
 		_ = h.pub.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"projectId": projectID, "docId": cd.ID, "status": "parsed", "chars": chars, "ts": time.Now().UnixMilli()})
 	}
 	// Index CoreDoc for vector search
-	if err := h.indexCoreDoc(ctx, tenantID, cd); err != nil {
+	if err := h.IndexCoreDoc(ctx, tenantID, cd); err != nil {
 		h.logger.Printf("Warning: failed to index CoreDoc %s: %v", cd.ID, err)
 		// Don't fail parsing if indexing fails
 	}

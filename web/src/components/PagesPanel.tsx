@@ -307,6 +307,10 @@ export const PagesPanel: React.FC<PagesPanelProps> = ({
       if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind === 'queued.tasks') {
         return false;
       }
+      // Exclude agent execution interactions (they are execution status, not chat content)
+      if (it.kind === 'agent.execution') {
+        return false;
+      }
       // Only include user and assistant interactions (actual chat content)
       return it.kind === 'user' || it.kind === 'assistant';
     });

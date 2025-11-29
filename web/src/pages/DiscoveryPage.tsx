@@ -2102,20 +2102,89 @@ const DiscoveryPage: React.FC = () => {
                     // Show loading state
                     useGenaiChatStore.setState({ streaming: true, error: null });
 
-                    // Step 1: Analyze documents and generate commands
-                    let analyzeResponse: { commands: Array<{ action: string; documentId: string; prompt: string; reason: string; priority?: number }>; summary: string };
+                    // Create and execute agent job
                     try {
-                      console.log('[DiscoveryPage] Step 1: Analyzing documents and generating commands...');
-                      analyzeResponse = await api.prepareAnalyze(pid, text.trim());
-                      console.log('[DiscoveryPage] Analysis complete, commands:', analyzeResponse.commands.length);
-                      console.log('[DiscoveryPage] Summary:', analyzeResponse.summary);
-                    } catch (error: any) {
-                      console.error('[DiscoveryPage] Prepare analyze failed:', error);
-                      const errorMsg = error.response?.data?.message || error.message || 'Не удалось проанализировать документы';
-                      const assistantContent = `Ошибка анализа документов:\n\n**Ошибка:** ${errorMsg}\n\n*Проверьте логи сервера для деталей*`;
+                      console.log('[DiscoveryPage] Creating agent job for document preparation...');
+                      
+                      // Generate title for the job (async, non-blocking)
+                      const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
+                      const { generateAgentJobTitle } = await import('../lib/agentJobTitleGeneration');
+                      
+                      // Create job first (title will be updated later)
+                      const jobResponse = await api.createAgentJob(pid, {
+                        agentId: 'document_preparation_agent',
+                        task: {
+                          userQuery: text.trim(),
+                          planMode: 'auto',
+                        },
+                        autoMode: true,
+                      });
+                      
+                      console.log('[DiscoveryPage] Agent job created:', jobResponse.job.id);
+                      
+                      // Generate and update title asynchronously
+                      generateAgentJobTitle({
+                        jobId: jobResponse.job.id,
+                        userQuery: text.trim(),
+                        preferredLang,
+                      }).then((title) => {
+                        if (title) {
+                          api.updateAgentJob(pid, jobResponse.job.id, { title }).catch((e) => {
+                            console.warn('[DiscoveryPage] Failed to update job title:', e);
+                          });
+                        }
+                      }).catch((e) => {
+                        console.warn('[DiscoveryPage] Failed to generate job title:', e);
+                      });
+                      
+                      // Start execution (async, updates via WebSocket)
+                      await api.executeAgentJob(pid, jobResponse.job.id);
+                      console.log('[DiscoveryPage] Agent job execution started');
+                      
+                      // Show initial message
+                      const assistantContent = `**Подготовка документов запущена**\n\nАгент анализирует документы и планирует необходимые изменения. Прогресс будет отображаться в реальном времени через WebSocket обновления.`;
                       
                       const assistantInteraction: any = {
                         id: `temp-assistant-${Date.now()}`,
+                        projectId: pid,
+                        kind: 'assistant',
+                        subkind: 'prepare.started',
+                        content: assistantContent,
+                        replyTo: userInteractionServerId,
+                        createdAt: new Date(),
+                      };
+                      
+                      useGenaiChatStore.setState((st) => ({
+                        interactions: [...st.interactions, assistantInteraction as any],
+                        streaming: false,
+                      }));
+                      
+                      // Persist assistant interaction
+                      try {
+                        const persistedAssistant = await api.createProjectInteraction(pid, {
+                          kind: 'assistant',
+                          subkind: 'prepare.started',
+                          content: assistantContent,
+                          replyTo: userInteractionServerId,
+                        });
+                        const st = useGenaiChatStore.getState();
+                        const items = [...st.interactions];
+                        const idx = items.findIndex((it) => it.id === assistantInteraction.id);
+                        if (idx >= 0) {
+                          items[idx] = { ...items[idx], id: persistedAssistant.id } as any;
+                          useGenaiChatStore.setState({ interactions: items } as any);
+                        }
+                      } catch (e) {
+                        console.warn('[DiscoveryPage] Failed to persist assistant interaction:', e);
+                      }
+                      
+                    } catch (error: any) {
+                      console.error('[DiscoveryPage] Failed to create/execute agent job:', error);
+                      const errorMsg = error.response?.data?.message || error.message || 'Не удалось запустить агента';
+                      const assistantContent = `Ошибка запуска агента:\n\n**Ошибка:** ${errorMsg}\n\n*Проверьте логи сервера для деталей*`;
+                      
+                      const assistantInteraction: any = {
+                        id: `temp-assistant-error-${Date.now()}`,
                         projectId: pid,
                         kind: 'assistant',
                         subkind: 'prepare.error',
@@ -2132,151 +2201,15 @@ const DiscoveryPage: React.FC = () => {
                       
                       // Persist assistant interaction
                       try {
-                        const persistedAssistant = await api.createProjectInteraction(pid, assistantInteraction);
-                        useGenaiChatStore.setState((st) => ({
-                          interactions: st.interactions.map((i: any) =>
-                            i.id === assistantInteraction.id ? persistedAssistant : i
-                          ),
-                        }));
-                      } catch (persistError) {
-                        console.error('[DiscoveryPage] Failed to persist assistant interaction:', persistError);
-                      }
-                      
-                      return;
-                    }
-
-                    // Display analysis results
-                    let assistantContent = '';
-                    if (analyzeResponse.summary) {
-                      assistantContent += `**Анализ:** ${analyzeResponse.summary}\n\n`;
-                    }
-                    
-                    if (analyzeResponse.commands.length === 0) {
-                      assistantContent += '**Результат:** Документы не требуют изменений. Они готовы для аналитических запросов.';
-                    } else {
-                      assistantContent += `**Найдено команд:** ${analyzeResponse.commands.length}\n\n`;
-                      analyzeResponse.commands.forEach((cmd, idx) => {
-                        assistantContent += `### Команда ${idx + 1}: ${cmd.action}\n`;
-                        assistantContent += `- **Документ:** ${cmd.documentId}\n`;
-                        assistantContent += `- **Причина:** ${cmd.reason}\n`;
-                        assistantContent += `- **Инструкция:** ${cmd.prompt}\n\n`;
-                      });
-                      
-                      assistantContent += '\n**Применение изменений:**\n';
-                      assistantContent += 'Начинаю применять изменения к документам...\n\n';
-                    }
-
-                    const assistantInteractionLocalId = `temp-assistant-${Date.now()}`;
-                    const assistantInteraction: any = {
-                      id: assistantInteractionLocalId,
-                      projectId: pid,
-                      kind: 'assistant',
-                      subkind: 'prepare.analysis',
-                      content: assistantContent,
-                      replyTo: userInteractionServerId,
-                      createdAt: new Date(),
-                    };
-                    
-                    useGenaiChatStore.setState((st) => ({
-                      interactions: [...st.interactions, assistantInteraction as any]
-                    }));
-
-                    // Persist assistant interaction
-                    try {
-                      const persistedAssistant = await api.createProjectInteraction(pid, {
-                        kind: 'assistant',
-                        subkind: 'prepare.analysis',
-                        content: assistantContent,
-                        replyTo: userInteractionServerId,
-                      });
-                      const st = useGenaiChatStore.getState();
-                      const items = [...st.interactions];
-                      const idx = items.findIndex((it) => it.id === assistantInteractionLocalId);
-                      if (idx >= 0) {
-                        items[idx] = { ...items[idx], id: persistedAssistant.id } as any;
-                        useGenaiChatStore.setState({ interactions: items } as any);
-                      }
-                    } catch (e) {
-                      console.warn('[DiscoveryPage] Failed to persist assistant interaction:', e);
-                    }
-
-                    // Step 2: Apply commands sequentially
-                    if (analyzeResponse.commands.length > 0) {
-                      let successCount = 0;
-                      let errorCount = 0;
-                      const errors: string[] = [];
-
-                      for (const cmd of analyzeResponse.commands) {
-                        try {
-                          console.log(`[DiscoveryPage] Step 2: Applying command to document ${cmd.documentId}...`);
-                          const applyResponse = await api.prepareApply(pid, cmd.documentId, cmd.prompt);
-                          
-                          if (applyResponse.success) {
-                            successCount++;
-                            console.log(`[DiscoveryPage] Successfully applied changes to document ${cmd.documentId}`);
-                          } else {
-                            errorCount++;
-                            const errorMsg = applyResponse.error || 'Неизвестная ошибка';
-                            errors.push(`Документ ${cmd.documentId}: ${errorMsg}`);
-                            console.error(`[DiscoveryPage] Failed to apply changes to document ${cmd.documentId}:`, errorMsg);
-                          }
-                        } catch (error: any) {
-                          errorCount++;
-                          const errorMsg = error.response?.data?.message || error.message || 'Неизвестная ошибка';
-                          errors.push(`Документ ${cmd.documentId}: ${errorMsg}`);
-                          console.error(`[DiscoveryPage] Error applying command to document ${cmd.documentId}:`, error);
-                        }
-                      }
-
-                      // Display final results
-                      let finalContent = `**Результаты применения изменений:**\n\n`;
-                      finalContent += `- Успешно: ${successCount}\n`;
-                      finalContent += `- Ошибок: ${errorCount}\n\n`;
-                      
-                      if (errors.length > 0) {
-                        finalContent += `**Ошибки:**\n`;
-                        errors.forEach(err => {
-                          finalContent += `- ${err}\n`;
-                        });
-                      } else {
-                        finalContent += `Все изменения применены успешно. Документы готовы для аналитических запросов.`;
-                      }
-
-                      const finalInteraction: any = {
-                        id: `temp-assistant-final-${Date.now()}`,
-                        projectId: pid,
-                        kind: 'assistant',
-                        subkind: 'prepare.result',
-                        content: finalContent,
-                        replyTo: userInteractionServerId,
-                        createdAt: new Date(),
-                      };
-                      
-                      useGenaiChatStore.setState((st) => ({
-                        interactions: [...st.interactions, finalInteraction as any],
-                        streaming: false,
-                      }));
-
-                      // Persist final interaction
-                      try {
-                        const persistedFinal = await api.createProjectInteraction(pid, {
+                        await api.createProjectInteraction(pid, {
                           kind: 'assistant',
-                          subkind: 'prepare.result',
-                          content: finalContent,
+                          subkind: 'prepare.error',
+                          content: assistantContent,
                           replyTo: userInteractionServerId,
                         });
-                        const st = useGenaiChatStore.getState();
-                        const items = [...st.interactions];
-                        const idx = items.findIndex((it) => it.id === finalInteraction.id);
-                        if (idx >= 0) {
-                          items[idx] = { ...items[idx], id: persistedFinal.id } as any;
-                          useGenaiChatStore.setState({ interactions: items } as any);
-                        }
-                      } catch (e) {
-                        console.warn('[DiscoveryPage] Failed to persist final interaction:', e);
+                      } catch (persistError) {
+                        console.error('[DiscoveryPage] Failed to persist error interaction:', persistError);
                       }
-                    } else {
-                      useGenaiChatStore.setState({ streaming: false });
                     }
 
                   } catch (error: any) {

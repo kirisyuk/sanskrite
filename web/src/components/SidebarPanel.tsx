@@ -59,6 +59,10 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const deletingProjectIdsArray = useProjectsStore((s) => s.deletingProjectIds);
   const deletingProjectIds = React.useMemo(() => new Set(deletingProjectIdsArray), [deletingProjectIdsArray]);
+  
+  // Agent jobs state
+  const [agentJobs, setAgentJobs] = React.useState<any[]>([]);
+  const [agentJobsLoading, setAgentJobsLoading] = React.useState(false);
 
   // Group projects by date (Today, Yesterday, Later)
   const groupedProjects = React.useMemo(() => {
@@ -279,6 +283,82 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     );
   };
 
+  // Load agent jobs for the current project (only on project selection, updates via WebSocket)
+  React.useEffect(() => {
+    if (!currentProject?.id || currentProject.id === 'local-unfold') {
+      setAgentJobs([]);
+      return;
+    }
+
+    const loadJobs = async () => {
+      setAgentJobsLoading(true);
+      try {
+        const result = await api.listAgentJobs(currentProject.id, { limit: 50 });
+        setAgentJobs(result.jobs || []);
+      } catch (err) {
+        console.error('[SidebarPanel] Failed to load agent jobs', err);
+        setAgentJobs([]);
+      } finally {
+        setAgentJobsLoading(false);
+      }
+    };
+
+    loadJobs();
+  }, [currentProject?.id]);
+
+  // Render agent job row
+  const renderAgentJobRow = (job: any) => {
+    const getStatusIcon = () => {
+      if (job.status === 'running' || job.status === 'pending') {
+        return (
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: 'var(--text-secondary-strong)' }}>
+            <circle cx="12" cy="12" r="10" strokeWidth="2" strokeDasharray="32" strokeDashoffset="32" strokeLinecap="round">
+              <animate attributeName="stroke-dasharray" dur="1.5s" values="0 32;16 16;0 32;0 32" repeatCount="indefinite" />
+              <animate attributeName="stroke-dashoffset" dur="1.5s" values="0;-16;-32;-32" repeatCount="indefinite" />
+            </circle>
+          </svg>
+        );
+      } else if (job.status === 'completed') {
+        return (
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: 'var(--text-secondary-strong)' }}>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+        );
+      } else if (job.status === 'failed') {
+        return (
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: '#f87171' }}>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        );
+      } else if (job.status === 'partial') {
+        return (
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: 'var(--text-secondary-strong)' }}>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        );
+      }
+      return null;
+    };
+
+    const jobTitle = job.title || job.userQuery || 'Untitled Job';
+    return (
+      <div
+        key={job.id}
+        className="px-2 py-1 rounded text-xs flex items-center gap-2 ml-4"
+        style={{
+          backgroundColor: 'transparent',
+          color: 'var(--text-secondary-strong)',
+        }}
+        title={jobTitle}
+      >
+        {getStatusIcon()}
+        <span className="flex-1 truncate" style={{ color: 'var(--text-secondary-strong)' }}>
+          {jobTitle}
+        </span>
+      </div>
+    );
+  };
+
   const renderProjectGroup = (items: Project[], label: string) => {
     if (!items || items.length === 0) {
       return null;
@@ -288,7 +368,22 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         <div className="text-[11px] uppercase tracking-wide px-2" style={{ color: 'var(--text-tertiary-weak)' }}>
           {label}
         </div>
-        <div className="space-y-1">{items.map(renderProjectRow)}</div>
+        <div className="space-y-1">
+          {items.map((project) => {
+            const isSelected = currentProject?.id === project.id;
+            const projectJobs = isSelected ? agentJobs : [];
+            return (
+              <div key={project.id}>
+                {renderProjectRow(project)}
+                {isSelected && projectJobs.length > 0 && (
+                  <div className="mt-1 space-y-0.5">
+                    {projectJobs.map(renderAgentJobRow)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </>
     );
   };

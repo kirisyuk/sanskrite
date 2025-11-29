@@ -12,8 +12,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 
 	firebase "firebase.google.com/go/v4"
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
@@ -102,13 +102,30 @@ func (a *wikidataAdapterForEnricher) ConvertToEntity(ctx context.Context, entity
 }
 
 // Тестовая программа для проверки работы AgentOrchestrator
+// getProjectID пытается получить GCP project ID из различных источников
+func getProjectID() string {
+	// 1. Проверяем GCP_PROJECT_ID
+	if projectID := os.Getenv("GCP_PROJECT_ID"); projectID != "" {
+		return projectID
+	}
+	// 2. Проверяем GOOGLE_CLOUD_PROJECT (стандартная переменная GCP)
+	if projectID := os.Getenv("GOOGLE_CLOUD_PROJECT"); projectID != "" {
+		return projectID
+	}
+	// 3. Пытаемся получить из gcloud config (если доступен)
+	// Это будет работать только если gcloud установлен и настроен
+	return ""
+}
+
 func main() {
 	ctx := context.Background()
 
 	// Инициализация Firestore
-	projectID := os.Getenv("GCP_PROJECT_ID")
+	projectID := getProjectID()
 	if projectID == "" {
-		log.Fatal("GCP_PROJECT_ID is required")
+		log.Fatal("GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT environment variable is required.\n" +
+			"Set it via: export GCP_PROJECT_ID=your-project-id\n" +
+			"Or ensure gcloud is configured: gcloud config set project your-project-id")
 	}
 
 	opts := []option.ClientOption{}
@@ -130,7 +147,7 @@ func main() {
 	// Инициализация репозиториев
 	jobsRepo := repo.NewAgentJobsRepository(fsClient)
 	coreDocsRepo := repo.NewCoreDocsRepo(fsClient)
-	// docsRepo := repo.NewDocumentsRepository(fsClient) // Не используется в Scenario 5
+	docsRepo := repo.NewDocumentsRepository(fsClient) // Для поиска CoreDoc ID через Document
 	// chunksRepo := repo.NewChunksRepository(fsClient) // Не используется в Scenario 5
 
 	// Создание logger
@@ -168,7 +185,9 @@ func main() {
 	capabilityRegistry := agents.NewCapabilityRegistry()
 
 	// Регистрация исполнителей
-	capabilityRegistry.Register(agents.NewDocumentReadExecutor(coreDocsRepo, logger))
+	docReadExecutor := agents.NewDocumentReadExecutor(coreDocsRepo, logger)
+	docReadExecutor.WithDocumentsRepository(docsRepo) // Для поиска CoreDoc ID через Document
+	capabilityRegistry.Register(docReadExecutor)
 	capabilityRegistry.Register(agents.NewLLMGenerateExecutor(genaiClient, logger))
 	capabilityRegistry.Register(agents.NewDocumentWriteExecutor(coreDocsRepo, logger))
 
@@ -186,7 +205,7 @@ func main() {
 		logger.Printf("Loaded VERTEX_SEARCH_DATA_STORE_ID from env/secret: %s", vertexSearchDataStoreID)
 	}
 	vertexSearchClient := ai.NewVertexAISearchClient(projectID, vertexSearchLocation, vertexSearchDataStoreID, "")
-	capabilityRegistry.Register(agents.NewDataSearchExecutor(vertexSearchClient, logger))
+	capabilityRegistry.Register(agents.NewDataSearchExecutor(vertexSearchClient, docsRepo, logger))
 	logger.Printf("Vertex AI Search client registered for data_search capability (dataStore: %s)", vertexSearchDataStoreID)
 
 	// Tavily client для web_search (если доступен)
@@ -274,34 +293,76 @@ func main() {
 
 	// Создание orchestrator
 	orchestrator := agents.NewAgentOrchestrator(jobsRepo, capabilityRegistry, nil, logger).
-		WithRepositories(coreDocsRepo, nil, nil, nil, nil)
+		WithRepositories(coreDocsRepo, nil, nil, nil, nil).
+		WithGenAI(genaiClient) // Нужно для автоматического планирования
 
-	// Примечание: WithTavily, WithBigQuery, WithGenAI не нужны здесь,
+	// Примечание: WithTavily, WithBigQuery уже не нужны здесь,
 	// так как клиенты уже переданы в конструкторы capability executors
+	// Но WithGenAI нужен для PlanGenerateExecutor и ReplanExecutor
 
-	// Тестовый сценарий 5: Entity Search → Deduplicate → Build Relations
-	fmt.Println("\n=== Test Scenario 5: Entity Search → Deduplicate → Build Relations ===")
-	testScenario5(ctx, orchestrator, jobsRepo, entitiesRepo, relationsRepo, entityResolver)
+	// Определить какой тест запускать из аргументов командной строки
+	testToRun := ""
+	if len(os.Args) > 1 {
+		testToRun = os.Args[1]
+	}
 
-	// Тестовый сценарий 6: Все новые capabilities
-	fmt.Println("\n=== Test Scenario 6: All New Capabilities ===")
-	testScenario6(ctx, orchestrator, jobsRepo, entitiesRepo, relationsRepo, claimsRepo, eventsRepo, entityEnricher, conflictDetector, causalDetector, entityResolver, genaiClient)
-
-	// Тестовый сценарий 1: Простой job с 3 шагами
-	fmt.Println("\n=== Test Scenario 1: Simple 3-step job ===")
-	testScenario1(ctx, orchestrator, jobsRepo, coreDocsRepo)
+	// Запустить только указанный тест, или все если не указан
+	if testToRun == "" {
+		// Запустить все тесты
+		fmt.Println("\n=== Test Scenario 1: Simple 3-step job ===")
+		testScenario1(ctx, orchestrator, jobsRepo, coreDocsRepo)
+		fmt.Println("\n=== Test Scenario 5: Entity Search → Deduplicate → Build Relations ===")
+		testScenario5(ctx, orchestrator, jobsRepo, entitiesRepo, relationsRepo, entityResolver)
+		fmt.Println("\n=== Test Scenario 6: All New Capabilities ===")
+		testScenario6(ctx, orchestrator, jobsRepo, entitiesRepo, relationsRepo, claimsRepo, eventsRepo, entityEnricher, conflictDetector, causalDetector, entityResolver, genaiClient)
+		fmt.Println("\n=== Test Scenario 7: Auto Planning ===")
+		testScenario7AutoPlanning(ctx, orchestrator, jobsRepo, coreDocsRepo)
+		fmt.Println("\n=== Test Scenario 8: Replanning ===")
+		testScenario8Replanning(ctx, orchestrator, jobsRepo, coreDocsRepo)
+		fmt.Println("\n=== Test Scenario 9: Dynamic Supply Planning with Data Improvement ===")
+		testScenario9(ctx, orchestrator, jobsRepo, coreDocsRepo, fsClient)
+	} else {
+		// Запустить только указанный тест
+		switch testToRun {
+		case "1", "simple":
+			fmt.Println("\n=== Test Scenario 1: Simple 3-step job ===")
+			testScenario1(ctx, orchestrator, jobsRepo, coreDocsRepo)
+		case "5", "entity":
+			fmt.Println("\n=== Test Scenario 5: Entity Search → Deduplicate → Build Relations ===")
+			testScenario5(ctx, orchestrator, jobsRepo, entitiesRepo, relationsRepo, entityResolver)
+		case "6", "all-capabilities":
+			fmt.Println("\n=== Test Scenario 6: All New Capabilities ===")
+			testScenario6(ctx, orchestrator, jobsRepo, entitiesRepo, relationsRepo, claimsRepo, eventsRepo, entityEnricher, conflictDetector, causalDetector, entityResolver, genaiClient)
+		case "7", "auto-planning":
+			fmt.Println("\n=== Test Scenario 7: Auto Planning ===")
+			testScenario7AutoPlanning(ctx, orchestrator, jobsRepo, coreDocsRepo)
+		case "8", "replanning":
+			fmt.Println("\n=== Test Scenario 8: Replanning ===")
+			testScenario8Replanning(ctx, orchestrator, jobsRepo, coreDocsRepo)
+		case "9", "supply-planning":
+			fmt.Println("\n=== Test Scenario 9: Dynamic Supply Planning with Data Improvement ===")
+			testScenario9(ctx, orchestrator, jobsRepo, coreDocsRepo, fsClient)
+		default:
+			fmt.Printf("Unknown test scenario: %s\n", testToRun)
+			fmt.Println("Available scenarios: 1, 5, 6, 7, 8, 9")
+		}
+	}
 
 	// Тестовый сценарий 2: Поиск → Чтение → Анализ → Сохранение
 	// fmt.Println("\n=== Test Scenario 2: Search → Read → Analyze → Write ===")
 	// testScenario2(ctx, orchestrator, jobsRepo, coreDocsRepo, docsRepo, chunksRepo, emb)
+	_ = testScenario2 // Suppress unused function warning
 
 	// Тестовый сценарий 3: Job с некритичным шагом (должен продолжить при ошибке)
 	// fmt.Println("\n=== Test Scenario 3: Non-critical step failure handling ===")
 	// testScenario3(ctx, orchestrator, jobsRepo)
+	_ = testScenario3 // Suppress unused function warning
 
 	// Тестовый сценарий 4: BigQuery → Анализ → Сохранение отчета
 	// fmt.Println("\n=== Test Scenario 4: BigQuery → Analyze → Save Report ===")
 	// testScenario4(ctx, orchestrator, jobsRepo, coreDocsRepo)
+	_ = testScenario4       // Suppress unused function warning
+	_ = indexCoreDocForTest // Suppress unused function warning
 }
 
 func testScenario1(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, coreDocsRepo *repo.CoreDocsRepo) {
@@ -335,11 +396,11 @@ func testScenario1(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 
 	// Создать job
 	task := map[string]interface{}{
-		"userQuery": "Подготовить документы для аналитики",
+		"userQuery":   "Подготовить документы для аналитики",
 		"documentIds": []string{testDocID},
 	}
 
-	job, err := orchestrator.CreateJob(ctx, "test-tenant", "test-project", "test-user", "document_preparation", task, true)
+	job, err := orchestrator.CreateJob(ctx, "test-tenant", "test-project", "test-user", "document_preparation", task, true, "")
 	if err != nil {
 		log.Fatalf("Failed to create job: %v", err)
 	}
@@ -408,14 +469,14 @@ func testScenario1(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 	}
 }
 
-func testScenario2(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, coreDocsRepo *repo.CoreDocsRepo, docsRepo *repo.DocumentsRepository, chunksRepo *repo.ChunksRepository, emb ai.EmbeddingProvider) {
+func testScenario2(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, coreDocsRepo *repo.CoreDocsRepo, _ *repo.DocumentsRepository, _ *repo.ChunksRepository, _ ai.EmbeddingProvider) {
 	// Сценарий: Найти документ → Прочитать → Проанализировать → Сохранить изменения
 	fmt.Println("\n--- Scenario 2: Search → Read → Analyze → Write ---")
-	
+
 	// Используем реальный тенант и projectId из существующих документов
 	testTenantID := "kirisyuk@gmail.com"
 	testProjectID := "KtwHOHp0LTNAG63HrkC6" // Реальный projectId из пути GCS
-	
+
 	// Создать документ для поиска
 	searchDocID := "search-test-doc"
 	now := time.Now().UTC()
@@ -439,11 +500,11 @@ func testScenario2(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 	}
 
 	task := map[string]interface{}{
-		"userQuery": "Найти и улучшить документ о поставках",
+		"userQuery":   "Найти и улучшить документ о поставках",
 		"searchQuery": "поставки картофеля",
 	}
 
-	job, err := orchestrator.CreateJob(ctx, testTenantID, testProjectID, "test-user", "document_improvement", task, true)
+	job, err := orchestrator.CreateJob(ctx, testTenantID, testProjectID, "test-user", "document_improvement", task, true, "")
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		return
@@ -631,12 +692,12 @@ func indexCoreDocForTest(ctx context.Context, cd *models.CoreDoc, docsRepo *repo
 func testScenario3(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository) {
 	// Job где некритичный шаг падает, но job продолжается
 	fmt.Println("\n--- Scenario 3: Non-critical step failure ---")
-	
+
 	task := map[string]interface{}{
 		"userQuery": "Тест обработки ошибок",
 	}
 
-	job, err := orchestrator.CreateJob(ctx, "test-tenant", "test-project", "test-user", "error_handling_test", task, true)
+	job, err := orchestrator.CreateJob(ctx, "test-tenant", "test-project", "test-user", "error_handling_test", task, true, "")
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		return
@@ -717,15 +778,15 @@ func testScenario3(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 	}
 }
 
-func testScenario4(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, coreDocsRepo *repo.CoreDocsRepo) {
+func testScenario4(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, _ *repo.CoreDocsRepo) {
 	// Сценарий: BigQuery запрос → Анализ результатов → Сохранение отчета
 	fmt.Println("\n--- Scenario 4: BigQuery → Analyze → Save Report ---")
-	
+
 	task := map[string]interface{}{
 		"userQuery": "Проанализировать данные в BigQuery",
 	}
 
-	job, err := orchestrator.CreateJob(ctx, "test-tenant", "test-project", "test-user", "bigquery_analysis", task, true)
+	job, err := orchestrator.CreateJob(ctx, "test-tenant", "test-project", "test-user", "bigquery_analysis", task, true, "")
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		return
@@ -793,8 +854,7 @@ func testScenario4(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 	}
 }
 
-
-func testScenario5(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, entitiesRepo *repo.EntityRepository, relationsRepo *repo.RelationRepository, entityResolver *ontology.EntityResolver) {
+func testScenario5(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, entitiesRepo *repo.EntityRepository, relationsRepo *repo.RelationRepository, _ *ontology.EntityResolver) {
 	// Сценарий: Поиск сущностей → Дедупликация → Построение связей
 	fmt.Println("\n--- Scenario 5: Entity Search → Deduplicate → Build Relations ---")
 
@@ -894,7 +954,7 @@ func testScenario5(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 		"userQuery": "Найти и дедуплицировать сущности, затем построить связи",
 	}
 
-	job, err := orchestrator.CreateJob(ctx, testTenantID, testProjectID, "test-user", "entity_deduplication", task, true)
+	job, err := orchestrator.CreateJob(ctx, testTenantID, testProjectID, "test-user", "entity_deduplication", task, true, "")
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		return

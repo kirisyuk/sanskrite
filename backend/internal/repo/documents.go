@@ -263,8 +263,9 @@ func (r *DocumentsRepository) GetByExternalID(ctx context.Context, tenantID, sou
 var ErrInvalidCoreDoc = errors.New("invalid core doc")
 
 type CoreDocsRepo struct {
-	col          *firestore.CollectionRef
-	bigquerySync *gcp.BigQueryClient // Опциональная синхронизация с BigQuery
+	col              *firestore.CollectionRef
+	bigquerySync     *gcp.BigQueryClient                                                  // Опциональная синхронизация с BigQuery
+	indexingCallback func(ctx context.Context, tenantID string, cd *models.CoreDoc) error // Опциональная индексация в Vertex AI Search
 }
 
 func NewCoreDocsRepo(db *firestore.Client) *CoreDocsRepo {
@@ -274,6 +275,13 @@ func NewCoreDocsRepo(db *firestore.Client) *CoreDocsRepo {
 // WithBigQuerySync настраивает автоматическую синхронизацию метаданных с BigQuery
 func (r *CoreDocsRepo) WithBigQuerySync(bq *gcp.BigQueryClient) *CoreDocsRepo {
 	r.bigquerySync = bq
+	return r
+}
+
+// WithIndexingCallback настраивает автоматическую индексацию в Vertex AI Search
+// callback будет вызван асинхронно после создания/обновления CoreDoc
+func (r *CoreDocsRepo) WithIndexingCallback(callback func(ctx context.Context, tenantID string, cd *models.CoreDoc) error) *CoreDocsRepo {
+	r.indexingCallback = callback
 	return r
 }
 
@@ -309,6 +317,27 @@ func (r *CoreDocsRepo) Create(ctx context.Context, d *models.CoreDoc) (string, e
 		}(docCopy)
 	} else {
 		log.Printf("[CoreDocsRepo] WARNING: bigquerySync is nil, skipping sync for CoreDoc %s (%s)", d.ID, d.Filename)
+	}
+
+	// Индексация в Vertex AI Search асинхронно (best effort, не блокируем основной поток)
+	if r.indexingCallback != nil && d.ExtractedText != nil && *d.ExtractedText != "" {
+		docCopy := d // Capture doc for goroutine
+		tenantID := d.TenantID
+		go func(doc *models.CoreDoc) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[CoreDocsRepo] PANIC in indexing goroutine for CoreDoc %s: %v", doc.ID, r)
+				}
+			}()
+			indexCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			log.Printf("[CoreDocsRepo] Starting indexing goroutine for CoreDoc %s", doc.ID)
+			if err := r.indexingCallback(indexCtx, tenantID, doc); err != nil {
+				log.Printf("[CoreDocsRepo] Failed to index CoreDoc %s: %v", doc.ID, err)
+			} else {
+				log.Printf("[CoreDocsRepo] Successfully indexed CoreDoc %s", doc.ID)
+			}
+		}(docCopy)
 	}
 
 	return doc.ID, nil
@@ -347,6 +376,27 @@ func (r *CoreDocsRepo) Upsert(ctx context.Context, d *models.CoreDoc) error {
 		}(docCopy)
 	} else {
 		log.Printf("[CoreDocsRepo] WARNING: bigquerySync is nil, skipping sync for CoreDoc %s (%s)", d.ID, d.Filename)
+	}
+
+	// Индексация в Vertex AI Search асинхронно (best effort, не блокируем основной поток)
+	if r.indexingCallback != nil && d.ExtractedText != nil && *d.ExtractedText != "" {
+		docCopy := d // Capture doc for goroutine
+		tenantID := d.TenantID
+		go func(doc *models.CoreDoc) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[CoreDocsRepo] PANIC in indexing goroutine for CoreDoc %s: %v", doc.ID, r)
+				}
+			}()
+			indexCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			log.Printf("[CoreDocsRepo] Starting indexing goroutine for CoreDoc %s", doc.ID)
+			if err := r.indexingCallback(indexCtx, tenantID, doc); err != nil {
+				log.Printf("[CoreDocsRepo] Failed to index CoreDoc %s: %v", doc.ID, err)
+			} else {
+				log.Printf("[CoreDocsRepo] Successfully indexed CoreDoc %s", doc.ID)
+			}
+		}(docCopy)
 	}
 
 	return nil
@@ -641,24 +691,64 @@ func (r *DocumentsRepository) GetByCoreDocID(ctx context.Context, tenantID, core
 	if tenantID == "" || coreDocID == "" {
 		return nil, ErrInvalidDocument
 	}
-	// Query documents where attrs.coreDocId == coreDocID
-	q := r.col.Where("tenantId", "==", tenantID).Limit(100)
+	// Query documents where attrs.coreDocId == coreDocID using Firestore nested field query
+	// Firestore supports dot notation for nested fields: "attrs.coreDocId"
+	q := r.col.Where("tenantId", "==", tenantID).Where("attrs.coreDocId", "==", coreDocID).Limit(1)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
+		log.Printf("[DocumentsRepo] GetByCoreDocID query error: tenantID=%s, coreDocID=%s, error=%v", tenantID, coreDocID, err)
 		return nil, err
 	}
-	for _, d := range docs {
-		var doc models.Document
-		if err := d.DataTo(&doc); err != nil {
-			continue
-		}
-		if doc.Attrs != nil {
-			if v, ok := doc.Attrs["coreDocId"].(string); ok && v == coreDocID {
-				return &doc, nil
+	if len(docs) == 0 {
+		log.Printf("[DocumentsRepo] GetByCoreDocID: no documents found for tenantID=%s, coreDocID=%s", tenantID, coreDocID)
+		// Fallback: try without nested field query (in case attrs.coreDocId is not indexed)
+		// Get all documents for tenant and filter in memory
+		q2 := r.col.Where("tenantId", "==", tenantID).Limit(500)
+		allDocs, err2 := q2.Documents(ctx).GetAll()
+		if err2 == nil {
+			log.Printf("[DocumentsRepo] GetByCoreDocID fallback: found %d documents for tenant, searching in memory", len(allDocs))
+			// Логируем первые несколько coreDocId для отладки
+			foundCoreDocIds := make([]string, 0, 10)
+			for i, d := range allDocs {
+				var doc models.Document
+				if err := d.DataTo(&doc); err != nil {
+					continue
+				}
+				if doc.Attrs != nil {
+					if v, ok := doc.Attrs["coreDocId"].(string); ok && v != "" {
+						if v == coreDocID {
+							log.Printf("[DocumentsRepo] GetByCoreDocID fallback: found document %s with coreDocId %s", doc.ID, coreDocID)
+							return &doc, nil
+						}
+						// Собираем первые 10 coreDocId для логирования
+						if len(foundCoreDocIds) < 10 {
+							foundCoreDocIds = append(foundCoreDocIds, v)
+						}
+					}
+				}
+				// Логируем первые 3 документа для отладки
+				if i < 3 && doc.Attrs != nil {
+					attrsKeys := make([]string, 0, len(doc.Attrs))
+					for k := range doc.Attrs {
+						attrsKeys = append(attrsKeys, k)
+					}
+					log.Printf("[DocumentsRepo] GetByCoreDocID fallback: document %s, Attrs keys: %v", doc.ID, attrsKeys)
+				}
+			}
+			if len(foundCoreDocIds) > 0 {
+				log.Printf("[DocumentsRepo] GetByCoreDocID fallback: sample coreDocIds found: %v (looking for: %s)", foundCoreDocIds, coreDocID)
+			} else {
+				log.Printf("[DocumentsRepo] GetByCoreDocID fallback: no documents with coreDocId in Attrs found")
 			}
 		}
+		return nil, ErrInvalidDocument
 	}
-	return nil, ErrInvalidDocument
+	var doc models.Document
+	if err := docs[0].DataTo(&doc); err != nil {
+		return nil, err
+	}
+	log.Printf("[DocumentsRepo] GetByCoreDocID: found document %s with coreDocId %s", doc.ID, coreDocID)
+	return &doc, nil
 }
 
 // syncToBigQuery синхронизирует метаданные документа в BigQuery

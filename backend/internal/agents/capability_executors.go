@@ -18,16 +18,23 @@ import (
 
 // DocumentReadExecutor выполняет чтение документов
 type DocumentReadExecutor struct {
-	coreDocs *repo.CoreDocsRepo
-	logger   *log.Logger
+	coreDocs  *repo.CoreDocsRepo
+	documents *repo.DocumentsRepository // Опционально, для поиска CoreDoc ID через Document
+	logger    *log.Logger
 }
 
 // NewDocumentReadExecutor создает новый исполнитель для чтения документов
 func NewDocumentReadExecutor(coreDocs *repo.CoreDocsRepo, logger *log.Logger) *DocumentReadExecutor {
 	return &DocumentReadExecutor{
 		coreDocs: coreDocs,
-		logger:    logger,
+		logger:   logger,
 	}
+}
+
+// WithDocumentsRepository настраивает доступ к DocumentsRepository для поиска CoreDoc ID через Document
+func (e *DocumentReadExecutor) WithDocumentsRepository(documents *repo.DocumentsRepository) *DocumentReadExecutor {
+	e.documents = documents
+	return e
 }
 
 func (e *DocumentReadExecutor) Capability() Capability {
@@ -57,29 +64,141 @@ func (e *DocumentReadExecutor) Execute(ctx context.Context, stepCtx *AgentStepCo
 
 	documents := make([]map[string]interface{}, 0, len(docIDs))
 	for _, docID := range docIDs {
-		doc, err := e.coreDocs.Get(ctx, docID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read document %s: %w", docID, err)
+		// docID из data_search - это Document ID из пути GCS: gs://bucket/{tenantId}/{sourceId}/{docID}.txt
+		// Где docID - это Document.ID (Firestore ID), НЕ CoreDoc ID!
+		// Сначала ищем Document по ID (это Document ID в Firestore)
+		var docFromRAG *models.Document
+		var docErr error
+		if e.documents != nil {
+			docFromRAG, docErr = e.documents.GetByID(ctx, docID)
+			if docErr != nil || docFromRAG == nil {
+				// Если не нашли Document по ID, пробуем как CoreDoc ID (fallback)
+				if e.logger != nil {
+					if docErr != nil {
+						e.logger.Printf("[DocumentReadExecutor] Document %s not found by ID (Document ID from GCS path), trying as CoreDoc ID, error: %v", docID, docErr)
+					} else {
+						e.logger.Printf("[DocumentReadExecutor] Document %s not found by ID, trying as CoreDoc ID", docID)
+					}
+				}
+				// Пробуем найти Document по coreDocId в Attrs (docID может быть CoreDoc ID)
+				docFromRAG, docErr = e.documents.GetByCoreDocID(ctx, stepCtx.TenantID, docID)
+				if docErr != nil || docFromRAG == nil {
+					// Если не нашли Document, пробуем найти CoreDoc напрямую
+					doc, coreDocErr := e.coreDocs.Get(ctx, docID)
+					if coreDocErr == nil && doc != nil {
+						if e.logger != nil {
+							e.logger.Printf("[DocumentReadExecutor] Found CoreDoc %s directly (docID was CoreDoc ID)", docID)
+						}
+						// Проверить доступ
+						if doc.TenantID != stepCtx.TenantID || doc.ProjectID != stepCtx.ProjectID {
+							return nil, fmt.Errorf("access denied: CoreDoc %s belongs to different tenant/project", docID)
+						}
+						content := ""
+						if doc.ExtractedText != nil {
+							content = *doc.ExtractedText
+						}
+						documents = append(documents, map[string]interface{}{
+							"id":          doc.ID,
+							"filename":    doc.Filename,
+							"contentType": doc.ContentType,
+							"content":     content,
+							"sizeBytes":   doc.SizeBytes,
+						})
+						continue
+					}
+					// Не нашли ни Document, ни CoreDoc
+					return nil, fmt.Errorf("failed to read document %s: Document not found by ID and CoreDoc not found: %w", docID, docErr)
+				} else if e.logger != nil {
+					e.logger.Printf("[DocumentReadExecutor] Found Document %s by coreDocId (docID was CoreDoc ID)", docFromRAG.ID)
+				}
+			} else if e.logger != nil {
+				e.logger.Printf("[DocumentReadExecutor] Found Document %s by ID (Document ID from GCS path)", docID)
+			}
+		} else {
+			// Если documents repo не доступен, пробуем найти CoreDoc напрямую
+			doc, err := e.coreDocs.Get(ctx, docID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read document %s: %w", docID, err)
+			}
+			// Проверить доступ
+			if doc.TenantID != stepCtx.TenantID || doc.ProjectID != stepCtx.ProjectID {
+				return nil, fmt.Errorf("access denied: CoreDoc %s belongs to different tenant/project", docID)
+			}
+			content := ""
+			if doc.ExtractedText != nil {
+				content = *doc.ExtractedText
+			}
+			documents = append(documents, map[string]interface{}{
+				"id":          doc.ID,
+				"filename":    doc.Filename,
+				"contentType": doc.ContentType,
+				"content":     content,
+				"sizeBytes":   doc.SizeBytes,
+			})
+			continue
 		}
 
-		// Проверить доступ (tenantID и projectID должны совпадать)
-		if doc.TenantID != stepCtx.TenantID || doc.ProjectID != stepCtx.ProjectID {
-			return nil, fmt.Errorf("access denied for document %s", docID)
+		// Document найден (либо по ID, либо по coreDocId)
+		if docFromRAG != nil {
+			// Проверяем, есть ли coreDocId в Attrs
+			if coreDocID, ok := docFromRAG.Attrs["coreDocId"].(string); ok && coreDocID != "" {
+				if e.logger != nil {
+					e.logger.Printf("[DocumentReadExecutor] Found Document %s, coreDocId: %s", docFromRAG.ID, coreDocID)
+				}
+				// Пробуем получить CoreDoc по правильному ID
+				doc, err := e.coreDocs.Get(ctx, coreDocID)
+				if err != nil {
+					if e.logger != nil {
+						e.logger.Printf("[DocumentReadExecutor] CoreDoc %s (from Document) also not found, using Document content", coreDocID)
+					}
+					// Если и CoreDoc не найден, используем контент из Document
+					content := docFromRAG.FullText
+					documents = append(documents, map[string]interface{}{
+						"id":          coreDocID, // Возвращаем CoreDoc ID, если был найден
+						"filename":    docFromRAG.Title,
+						"contentType": docFromRAG.ContentType,
+						"content":     content,
+						"sizeBytes":   nil,
+					})
+					continue
+				}
+				// CoreDoc найден, используем его
+				// Проверить доступ (tenantID и projectID должны совпадать)
+				if doc.TenantID != stepCtx.TenantID || doc.ProjectID != stepCtx.ProjectID {
+					return nil, fmt.Errorf("access denied: CoreDoc %s belongs to different tenant/project", coreDocID)
+				}
+				// Получить контент из CoreDoc или Document
+				content := docFromRAG.FullText
+				if doc.ExtractedText != nil && *doc.ExtractedText != "" {
+					content = *doc.ExtractedText
+				}
+				documents = append(documents, map[string]interface{}{
+					"id":          doc.ID,
+					"filename":    doc.Filename,
+					"contentType": doc.ContentType,
+					"content":     content,
+					"sizeBytes":   doc.SizeBytes,
+				})
+				continue
+			} else {
+				// Document найден, но coreDocId нет - используем контент из Document
+				if e.logger != nil {
+					e.logger.Printf("[DocumentReadExecutor] Document %s found but no coreDocId, using Document content", docFromRAG.ID)
+				}
+				content := docFromRAG.FullText
+				documents = append(documents, map[string]interface{}{
+					"id":          docFromRAG.ID,
+					"filename":    docFromRAG.Title,
+					"contentType": docFromRAG.ContentType,
+					"content":     content,
+					"sizeBytes":   nil,
+				})
+				continue
+			}
 		}
-
-		// Получить содержимое документа
-		content := ""
-		if doc.ExtractedText != nil {
-			content = *doc.ExtractedText
-		}
-
-		documents = append(documents, map[string]interface{}{
-			"id":          doc.ID,
-			"filename":    doc.Filename,
-			"contentType": doc.ContentType,
-			"content":     content,
-			"sizeBytes":   doc.SizeBytes,
-		})
+		// Если мы дошли сюда, значит Document не был найден и CoreDoc тоже не был найден
+		// Это не должно произойти, так как мы уже обработали все случаи выше
+		return nil, fmt.Errorf("failed to read document %s: unexpected state - Document and CoreDoc not found", docID)
 	}
 
 	confidence := 1.0 // Полная уверенность при успешном чтении
@@ -89,7 +208,7 @@ func (e *DocumentReadExecutor) Execute(ctx context.Context, stepCtx *AgentStepCo
 			emptyCount++
 		}
 	}
-	
+
 	// Если некоторые документы пустые, снижаем уверенность
 	if emptyCount > 0 {
 		confidence = 0.8
@@ -156,23 +275,23 @@ func (e *LLMGenerateExecutor) Execute(ctx context.Context, stepCtx *AgentStepCon
 		Model:           model,
 		Prompt:          enhancedPrompt,
 		MaxOutputTokens: maxTokens,
-		Temperature:    0.7,
+		Temperature:     0.7,
 	}
 
 	resp, err := e.genaiClient.GenAIGenerate(ctx, req)
 	if err != nil {
 		// Временные ошибки можно повторить
-		retryable := strings.Contains(err.Error(), "timeout") || 
+		retryable := strings.Contains(err.Error(), "timeout") ||
 			strings.Contains(err.Error(), "rate limit") ||
 			strings.Contains(err.Error(), "temporary")
-		
+
 		confidence := 0.0
 		return &CapabilityResult{
-			Success:         false,
-			ExecutionStatus: models.ExecutionStatusFailed,
-			Confidence:      &confidence,
-			Retryable:       retryable,
-			Reason:          fmt.Sprintf("LLM generation failed: %v", err),
+			Success:                 false,
+			ExecutionStatus:         models.ExecutionStatusFailed,
+			Confidence:              &confidence,
+			Retryable:               retryable,
+			Reason:                  fmt.Sprintf("LLM generation failed: %v", err),
 			AlternativeCapabilities: []string{"llm_analyze"}, // Можно попробовать другой подход
 		}, fmt.Errorf("LLM generation failed: %w", err)
 	}
@@ -355,18 +474,6 @@ func newSuccessResult(output map[string]interface{}, message string, confidence 
 	}
 }
 
-// newFailedResult создает CapabilityResult с ошибкой
-func newFailedResult(err error, retryable bool) (*CapabilityResult, error) {
-	confidence := 0.0
-	return &CapabilityResult{
-		Success:         false,
-		ExecutionStatus: models.ExecutionStatusFailed,
-		Confidence:      &confidence,
-		Retryable:       retryable,
-		Reason:          err.Error(),
-	}, err
-}
-
 // DocumentWriteExecutor выполняет запись документов
 type DocumentWriteExecutor struct {
 	coreDocs *repo.CoreDocsRepo
@@ -377,7 +484,7 @@ type DocumentWriteExecutor struct {
 func NewDocumentWriteExecutor(coreDocs *repo.CoreDocsRepo, logger *log.Logger) *DocumentWriteExecutor {
 	return &DocumentWriteExecutor{
 		coreDocs: coreDocs,
-		logger:    logger,
+		logger:   logger,
 	}
 }
 
@@ -399,23 +506,54 @@ func (e *DocumentWriteExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 	docID := stepCtx.Input["documentId"].(string)
 	content := stepCtx.Input["content"].(string)
 
-	// Получить документ
+	// Получить документ или создать новый, если не существует
 	doc, err := e.coreDocs.Get(ctx, docID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get document: %w", err)
+		// Документ не существует - создаем новый
+		now := time.Now().UTC()
+		sizeBytes := int64(len(content))
+		filename := docID
+		if fn, ok := stepCtx.Input["filename"].(string); ok && fn != "" {
+			filename = fn
+		}
+
+		doc = &models.CoreDoc{
+			ID:            docID,
+			TenantID:      stepCtx.TenantID,
+			ProjectID:     stepCtx.ProjectID,
+			Filename:      filename,
+			ContentType:   "text/plain",
+			SizeBytes:     &sizeBytes,
+			ExtractedText: &content,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+
+		if e.logger != nil {
+			e.logger.Printf("[DocumentWriteExecutor] Creating new document %s", docID)
+		}
+	} else {
+		// Проверить доступ для существующего документа
+		if doc.TenantID != stepCtx.TenantID || doc.ProjectID != stepCtx.ProjectID {
+			return nil, fmt.Errorf("access denied")
+		}
+
+		// Обновить содержимое существующего документа
+		if e.logger != nil {
+			e.logger.Printf("[DocumentWriteExecutor] Updating existing document %s", docID)
+		}
 	}
 
-	// Проверить доступ
-	if doc.TenantID != stepCtx.TenantID || doc.ProjectID != stepCtx.ProjectID {
-		return nil, fmt.Errorf("access denied")
-	}
-
-	// Обновить содержимое
+	// Обновить/создать содержимое
 	doc.ExtractedText = &content
 	doc.UpdatedAt = time.Now().UTC()
+	if doc.SizeBytes != nil {
+		sizeBytes := int64(len(content))
+		doc.SizeBytes = &sizeBytes
+	}
 
 	if err := e.coreDocs.Upsert(ctx, doc); err != nil {
-		return nil, fmt.Errorf("failed to update document: %w", err)
+		return nil, fmt.Errorf("failed to upsert document: %w", err)
 	}
 
 	if e.logger != nil {
@@ -437,4 +575,3 @@ func (e *DocumentWriteExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 		Reason:          fmt.Sprintf("Document %s updated with %d characters", docID, len(content)),
 	}, nil
 }
-

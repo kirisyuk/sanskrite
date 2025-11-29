@@ -31,21 +31,21 @@ func NewBigQueryAIService(bqClient *gcp.BigQueryClient, genaiClient *gen_combine
 // QueryRequest represents a natural language query request
 type QueryRequest struct {
 	NaturalLanguageQuery string `json:"naturalLanguageQuery"`
-	ProjectID            string `json:"projectID,omitempty"`   // GCP project ID (BigQuery project)
-	DatasetID            string `json:"datasetID,omitempty"`   // BigQuery dataset ID
-	MaxResults           int    `json:"maxResults,omitempty"` // Max results to return
-	TenantID             string `json:"tenantID,omitempty"`    // Tenant ID for filtering documents
+	ProjectID            string `json:"projectID,omitempty"`         // GCP project ID (BigQuery project)
+	DatasetID            string `json:"datasetID,omitempty"`         // BigQuery dataset ID
+	MaxResults           int    `json:"maxResults,omitempty"`        // Max results to return
+	TenantID             string `json:"tenantID,omitempty"`          // Tenant ID for filtering documents
 	DocumentProjectID    string `json:"documentProjectID,omitempty"` // Document project ID for filtering (CoreDoc projectId)
 }
 
 // QueryResponse represents the result of query execution
 type QueryResponse struct {
-	SQL         string                   `json:"sql"`
-	Results     []map[string]interface{} `json:"results"`
-	RowCount    int64                    `json:"rowCount"`
-	Explanation string                   `json:"explanation,omitempty"`
-	Error       string                   `json:"error,omitempty"`
-	ErrorHistory []string                `json:"errorHistory,omitempty"` // History of errors during retries
+	SQL          string                   `json:"sql"`
+	Results      []map[string]interface{} `json:"results"`
+	RowCount     int64                    `json:"rowCount"`
+	Explanation  string                   `json:"explanation,omitempty"`
+	Error        string                   `json:"error,omitempty"`
+	ErrorHistory []string                 `json:"errorHistory,omitempty"` // History of errors during retries
 }
 
 // GenerateSQLResponse represents the result of SQL generation
@@ -125,9 +125,9 @@ func (s *BigQueryAIService) ExecuteQuery(ctx context.Context, req *QueryRequest)
 			}
 		}
 		return &QueryResponse{
-			SQL:         sqlQuery,
-			Explanation: explanation,
-			Error:       fmt.Sprintf("Failed to execute SQL after retries: %v", err),
+			SQL:          sqlQuery,
+			Explanation:  explanation,
+			Error:        fmt.Sprintf("Failed to execute SQL after retries: %v", err),
 			ErrorHistory: errorHistory,
 		}, nil
 	}
@@ -284,7 +284,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`,
 	}
 
 	sqlQuery := strings.TrimSpace(response.Content)
-	
+
 	// Check if response is empty
 	if sqlQuery == "" {
 		if s.logger != nil {
@@ -292,12 +292,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`,
 		}
 		return "", "", fmt.Errorf("generated SQL query is empty")
 	}
-	
+
 	// Remove markdown code blocks if present
 	sqlQuery = strings.TrimPrefix(sqlQuery, "```sql")
 	sqlQuery = strings.TrimPrefix(sqlQuery, "```")
 	sqlQuery = strings.TrimSpace(sqlQuery)
-	
+
 	// Remove trailing backticks (common AI mistake)
 	sqlQuery = strings.TrimSuffix(sqlQuery, "`")
 	sqlQuery = strings.TrimSuffix(sqlQuery, "```")
@@ -548,7 +548,7 @@ func (s *BigQueryAIService) ExecuteSQLOnly(ctx context.Context, sqlQuery string,
 
 	// Split SQL into individual statements (separated by semicolons)
 	statements := s.splitSQLStatements(sqlQuery)
-	
+
 	if s.logger != nil {
 		s.logger.Printf("[BigQueryAI] Found %d SQL statements to execute", len(statements))
 	}
@@ -558,19 +558,19 @@ func (s *BigQueryAIService) ExecuteSQLOnly(ctx context.Context, sqlQuery string,
 	// For SELECT statements, we return results
 	var lastResults []map[string]interface{}
 	var lastRowCount int64
-	
+
 	for i, stmt := range statements {
 		if strings.TrimSpace(stmt) == "" {
 			continue
 		}
-		
+
 		if s.logger != nil {
 			s.logger.Printf("[BigQueryAI] Executing statement %d/%d (length: %d)", i+1, len(statements), len(stmt))
 		}
-		
+
 		stmtUpper := strings.TrimSpace(strings.ToUpper(stmt))
 		isCreateModel := strings.HasPrefix(stmtUpper, "CREATE") && strings.Contains(stmtUpper, "MODEL")
-		
+
 		results, rowCount, err := s.executeSQL(ctx, stmt, maxResults)
 		if err != nil {
 			if s.logger != nil {
@@ -582,7 +582,7 @@ func (s *BigQueryAIService) ExecuteSQLOnly(ctx context.Context, sqlQuery string,
 				Error:    fmt.Sprintf("Failed to execute statement %d/%d: %v", i+1, len(statements), err),
 			}, nil
 		}
-		
+
 		// For CREATE MODEL, continue to next statement
 		// For SELECT/FORECAST, save results
 		if !isCreateModel {
@@ -613,34 +613,35 @@ func (s *BigQueryAIService) splitSQLStatements(sql string) []string {
 	inString := false
 	stringChar := byte(0)
 	escapeNext := false
-	
+
 	for i := 0; i < len(sql); i++ {
 		char := sql[i]
-		
+
 		if escapeNext {
 			current.WriteByte(char)
 			escapeNext = false
 			continue
 		}
-		
+
 		if char == '\\' {
 			escapeNext = true
 			current.WriteByte(char)
 			continue
 		}
-		
+
 		if !inString {
-			if char == '\'' || char == '"' || char == '`' {
+			switch char {
+			case '\'', '"', '`':
 				inString = true
 				stringChar = char
 				current.WriteByte(char)
-			} else if char == ';' {
+			case ';':
 				stmt := strings.TrimSpace(current.String())
 				if stmt != "" {
 					statements = append(statements, stmt)
 				}
 				current.Reset()
-			} else {
+			default:
 				current.WriteByte(char)
 			}
 		} else {
@@ -651,13 +652,13 @@ func (s *BigQueryAIService) splitSQLStatements(sql string) []string {
 			}
 		}
 	}
-	
+
 	// Add remaining statement
 	stmt := strings.TrimSpace(current.String())
 	if stmt != "" {
 		statements = append(statements, stmt)
 	}
-	
+
 	return statements
 }
 

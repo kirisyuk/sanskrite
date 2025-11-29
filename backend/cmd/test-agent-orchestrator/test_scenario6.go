@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/agents"
+	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
-	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 )
 
 // testScenario6 тестирует все новые capabilities
@@ -22,11 +22,11 @@ func testScenario6(
 	relationsRepo *repo.RelationRepository,
 	claimsRepo *repo.ClaimRepository,
 	eventsRepo *repo.EventRepository,
-	entityEnricher *ontology.EntityEnricher,
-	conflictDetector *ontology.ConflictDetector,
-	causalDetector *ontology.CausalDetector,
-	entityResolver *ontology.EntityResolver,
-	genaiClient *gen_combined.Client,
+	_ *ontology.EntityEnricher,
+	_ *ontology.ConflictDetector,
+	_ *ontology.CausalDetector,
+	_ *ontology.EntityResolver,
+	_ *gen_combined.Client,
 ) {
 	tenantID := "kirisyuk@gmail.com"
 	projectID := "KtwHOHp0LTNAG63HrkC6"
@@ -149,7 +149,7 @@ func testScenario6(
 		"testAllCapabilities": true,
 	}
 
-	job, err := orchestrator.CreateJob(ctx, tenantID, projectID, "test-user", "test_all_capabilities", task, true)
+	job, err := orchestrator.CreateJob(ctx, tenantID, projectID, "test-user", "test_all_capabilities", task, true, "")
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		return
@@ -283,4 +283,3 @@ func testScenario6(
 		}
 	}
 }
-

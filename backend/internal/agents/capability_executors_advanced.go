@@ -14,6 +14,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 // ============================================================================
@@ -107,11 +108,11 @@ func (e *WebSearchExecutor) Execute(ctx context.Context, stepCtx *AgentStepConte
 			"count":   len(results),
 			"query":   query,
 		},
-		Message:         fmt.Sprintf("Found %d results for query: %s", len(results), query),
-		ExecutionStatus: models.ExecutionStatusSuccess,
-		Confidence:      &confidence,
-		Retryable:       true, // Можно повторить при временных ошибках
-		Reason:          fmt.Sprintf("Web search completed, found %d results", len(results)),
+		Message:                 fmt.Sprintf("Found %d results for query: %s", len(results), query),
+		ExecutionStatus:         models.ExecutionStatusSuccess,
+		Confidence:              &confidence,
+		Retryable:               true, // Можно повторить при временных ошибках
+		Reason:                  fmt.Sprintf("Web search completed, found %d results", len(results)),
 		AlternativeCapabilities: []string{"data_search"}, // Можно попробовать поиск в документах
 	}, nil
 }
@@ -148,19 +149,46 @@ func (e *BigQueryQueryExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 		maxResults = int(mr)
 	}
 
+	// Автоматически добавляем project.dataset prefix если таблица указана без него
+	// Известные таблицы в нашем dataset
+	knownTables := []string{"core_docs_metadata", "documents_metadata", "documents_object_table", "core_docs_object_table", "core_docs_json_table"}
+	projectID := e.bigqueryClient.ProjectID()
+	datasetID := e.bigqueryClient.DatasetID()
+
+	for _, table := range knownTables {
+		// Заменяем только если таблица указана без полного пути
+		// Проверяем разные варианты: FROM table, JOIN table, таблица в начале
+		patterns := []string{
+			" " + table + " ",
+			" " + table + "\n",
+			" " + table + ";",
+			"FROM " + table,
+			"from " + table,
+			"JOIN " + table,
+			"join " + table,
+		}
+		fullTable := fmt.Sprintf("`%s.%s.%s`", projectID, datasetID, table)
+		for _, pattern := range patterns {
+			if strings.Contains(sql, pattern) {
+				replacement := strings.Replace(pattern, table, fullTable, 1)
+				sql = strings.Replace(sql, pattern, replacement, -1)
+			}
+		}
+	}
+
 	if e.logger != nil {
-		e.logger.Printf("[BigQueryQueryExecutor] Executing SQL query (length: %d)", len(sql))
+		e.logger.Printf("[BigQueryQueryExecutor] Executing SQL query (length: %d): %s", len(sql), sql)
 	}
 
 	// Выполнить запрос
 	iter, err := e.bigqueryClient.ExecuteQuery(ctx, sql)
 	if err != nil {
 		// Временные ошибки можно повторить
-		retryable := strings.Contains(err.Error(), "timeout") || 
+		retryable := strings.Contains(err.Error(), "timeout") ||
 			strings.Contains(err.Error(), "rate limit") ||
 			strings.Contains(err.Error(), "temporary") ||
 			strings.Contains(err.Error(), "quota")
-		
+
 		confidence := 0.0
 		return &CapabilityResult{
 			Success:         false,
@@ -182,10 +210,10 @@ func (e *BigQueryQueryExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 		}
 		if err != nil {
 			// Временные ошибки можно повторить
-			retryable := strings.Contains(err.Error(), "timeout") || 
+			retryable := strings.Contains(err.Error(), "timeout") ||
 				strings.Contains(err.Error(), "rate limit") ||
 				strings.Contains(err.Error(), "temporary")
-			
+
 			confidence := 0.0
 			return &CapabilityResult{
 				Success:         false,
@@ -270,18 +298,49 @@ func (e *LLMAnalyzeExecutor) Capability() Capability {
 }
 
 func (e *LLMAnalyzeExecutor) ValidateInput(input map[string]interface{}) error {
-	if _, ok := input["prompt"].(string); !ok {
-		return fmt.Errorf("prompt is required and must be a string")
+	// Принимаем либо prompt, либо text
+	_, hasPrompt := input["prompt"].(string)
+	_, hasText := input["text"].(string)
+	if !hasPrompt && !hasText {
+		return fmt.Errorf("prompt or text is required and must be a string")
 	}
-	if _, ok := input["schema"].(map[string]interface{}); !ok {
-		return fmt.Errorf("schema is required and must be a map")
-	}
+	// schema опциональна - если не указана, используем дефолтную
 	return nil
 }
 
 func (e *LLMAnalyzeExecutor) Execute(ctx context.Context, stepCtx *AgentStepContext) (*CapabilityResult, error) {
-	prompt := stepCtx.Input["prompt"].(string)
-	schema := stepCtx.Input["schema"].(map[string]interface{})
+	// Поддерживаем оба варианта: prompt или text
+	prompt := ""
+	if p, ok := stepCtx.Input["prompt"].(string); ok && p != "" {
+		prompt = p
+	} else if text, ok := stepCtx.Input["text"].(string); ok && text != "" {
+		// Если передан text вместо prompt, создаем промпт из text
+		analysisType := "general"
+		if at, ok := stepCtx.Input["analysisType"].(string); ok && at != "" {
+			analysisType = at
+		}
+		prompt = fmt.Sprintf("Analyze the following text and provide a %s analysis:\n\n%s", analysisType, text)
+	}
+
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt is empty after processing input")
+	}
+
+	// schema опциональна - если не указана, используем дефолтную
+	schema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"summary": map[string]interface{}{"type": "string"},
+			"findings": map[string]interface{}{
+				"type":  "array",
+				"items": map[string]interface{}{"type": "string"},
+			},
+			"metrics": map[string]interface{}{"type": "object"},
+		},
+	}
+	if s, ok := stepCtx.Input["schema"].(map[string]interface{}); ok {
+		schema = s
+	}
 	model := "gemini-2.0-flash-exp"
 	if m, ok := stepCtx.Input["model"].(string); ok {
 		model = m
@@ -302,18 +361,49 @@ func (e *LLMAnalyzeExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 		return nil, fmt.Errorf("LLM analysis failed: %w", err)
 	}
 
-	// Парсить JSON из Content
-	var analysisResult map[string]interface{}
-	if resp.Content != "" {
-		if err := json.Unmarshal([]byte(resp.Content), &analysisResult); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal analysis result: %w", err)
+	// Парсить JSON из Content, ToolCalls, или RawJSON
+	jsonContent := resp.Content
+
+	// Если Content пустой или не JSON, проверяем ToolCalls (для Gemini strict JSON mode)
+	if jsonContent == "" || (len(jsonContent) > 0 && jsonContent[0] != '{' && jsonContent[0] != '[') {
+		for _, tc := range resp.ToolCalls {
+			if tc.Name == "return_structured" && tc.Arguments != "" {
+				jsonContent = tc.Arguments
+				if e.logger != nil {
+					e.logger.Printf("[LLMAnalyzeExecutor] Extracted JSON from return_structured tool call")
+				}
+				break
+			}
 		}
-	} else if resp.RawJSON != "" {
-		if err := json.Unmarshal([]byte(resp.RawJSON), &analysisResult); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal raw JSON: %w", err)
-		}
-	} else {
+	}
+
+	// Если все еще пусто, используем RawJSON
+	if jsonContent == "" {
+		jsonContent = resp.RawJSON
+	}
+
+	// Очищаем markdown code fences если есть
+	jsonContent = strings.TrimSpace(jsonContent)
+	if strings.HasPrefix(jsonContent, "```json") {
+		jsonContent = strings.TrimPrefix(jsonContent, "```json")
+		jsonContent = strings.TrimSuffix(jsonContent, "```")
+		jsonContent = strings.TrimSpace(jsonContent)
+	} else if strings.HasPrefix(jsonContent, "```") {
+		jsonContent = strings.TrimPrefix(jsonContent, "```")
+		jsonContent = strings.TrimSuffix(jsonContent, "```")
+		jsonContent = strings.TrimSpace(jsonContent)
+	}
+
+	if jsonContent == "" {
 		return nil, fmt.Errorf("no JSON content in response")
+	}
+
+	var analysisResult map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonContent), &analysisResult); err != nil {
+		if e.logger != nil {
+			e.logger.Printf("[LLMAnalyzeExecutor] Failed to parse JSON, content preview: %s", jsonContent[:min(200, len(jsonContent))])
+		}
+		return nil, fmt.Errorf("failed to unmarshal analysis result: %w", err)
 	}
 
 	confidence := 0.9 // Высокая уверенность в LLM анализе
@@ -338,16 +428,19 @@ func (e *LLMAnalyzeExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 // DataSearchExecutor выполняет поиск данных в документах проекта через Vertex AI Search
 type DataSearchExecutor struct {
 	vertexSearchClient *ai.VertexAISearchClient
+	documentsRepo      *repo.DocumentsRepository // Для валидации существования документов
 	logger             *log.Logger
 }
 
 // NewDataSearchExecutor создает новый исполнитель для поиска данных
 func NewDataSearchExecutor(
 	vertexSearchClient *ai.VertexAISearchClient,
+	documentsRepo *repo.DocumentsRepository,
 	logger *log.Logger,
 ) *DataSearchExecutor {
 	return &DataSearchExecutor{
 		vertexSearchClient: vertexSearchClient,
+		documentsRepo:      documentsRepo,
 		logger:             logger,
 	}
 }
@@ -357,17 +450,32 @@ func (e *DataSearchExecutor) Capability() Capability {
 }
 
 func (e *DataSearchExecutor) ValidateInput(input map[string]interface{}) error {
+	// Поддерживаем оба варианта: "query" и "searchQuery"
 	if _, ok := input["query"].(string); !ok {
-		return fmt.Errorf("query is required and must be a string")
+		if _, ok := input["searchQuery"].(string); !ok {
+			return fmt.Errorf("query or searchQuery is required and must be a string")
+		}
 	}
 	return nil
 }
 
 func (e *DataSearchExecutor) Execute(ctx context.Context, stepCtx *AgentStepContext) (*CapabilityResult, error) {
-	searchQuery := stepCtx.Input["query"].(string)
+	// Поддерживаем оба варианта: "query" и "searchQuery"
+	var searchQuery string
+	if q, ok := stepCtx.Input["query"].(string); ok {
+		searchQuery = q
+	} else if sq, ok := stepCtx.Input["searchQuery"].(string); ok {
+		searchQuery = sq
+	} else {
+		return nil, fmt.Errorf("query or searchQuery is required and must be a string")
+	}
 	limit := 10
 	if l, ok := stepCtx.Input["limit"].(float64); ok {
 		limit = int(l)
+	}
+	// Минимальный limit 5, чтобы иметь запас после фильтрации устаревших документов из GCS
+	if limit < 5 {
+		limit = 5
 	}
 	projectID := stepCtx.ProjectID
 	tenantID := stepCtx.TenantID
@@ -467,7 +575,7 @@ func (e *DataSearchExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 					parts := strings.Split(uriWithoutPrefix, "/")
 					if len(parts) >= 3 {
 						docTenantID = parts[1] // tenantId из пути (после bucket)
-						sourceID := parts[2]    // sourceId (например, project:test-project)
+						sourceID := parts[2]   // sourceId (например, project:test-project)
 						if strings.HasPrefix(sourceID, "project:") {
 							docProjectID = strings.TrimPrefix(sourceID, "project:")
 						}
@@ -485,7 +593,7 @@ func (e *DataSearchExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 			parts := strings.Split(uriWithoutPrefix, "/")
 			if len(parts) >= 3 {
 				docTenantID = parts[1] // tenantId из пути (после bucket)
-				sourceID := parts[2]    // sourceId (например, project:test-project)
+				sourceID := parts[2]   // sourceId (например, project:test-project)
 				if strings.HasPrefix(sourceID, "project:") {
 					docProjectID = strings.TrimPrefix(sourceID, "project:")
 				}
@@ -527,11 +635,134 @@ func (e *DataSearchExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 		if result.Document.URI != "" {
 			match["uri"] = result.Document.URI
 		}
+
+		// Извлекаем coreDocId из разных источников
+		coreDocID := ""
+
+		// 1. Пробуем из structData (самый надежный источник)
+		// GCS metadata при загрузке содержит: tenantId, sourceId, documentId, title
+		// documentId - это Document.ID в Firestore!
 		if result.Document.StructData != nil {
 			match["structData"] = result.Document.StructData
+			if e.logger != nil && i == 0 {
+				structKeys := make([]string, 0, len(result.Document.StructData))
+				for k := range result.Document.StructData {
+					structKeys = append(structKeys, k)
+				}
+				e.logger.Printf("[DataSearchExecutor] structData keys: %v", structKeys)
+				// Логируем все значения для отладки
+				for k, v := range result.Document.StructData {
+					e.logger.Printf("[DataSearchExecutor] structData[%s] = %v", k, v)
+				}
+			}
+			// Проверяем documentId из GCS metadata - это Document.ID в Firestore!
+			if docID, ok := result.Document.StructData["documentId"].(string); ok && docID != "" {
+				// Это Document.ID из Firestore!
+				match["firestoreDocumentId"] = docID
+				if e.logger != nil && i == 0 {
+					e.logger.Printf("[DataSearchExecutor] Found documentId in structData (GCS metadata): %s - this is Document.ID in Firestore!", docID)
+				}
+			}
+			if cid, ok := result.Document.StructData["coreDocId"].(string); ok && cid != "" {
+				coreDocID = cid
+				if e.logger != nil && i == 0 {
+					e.logger.Printf("[DataSearchExecutor] Found coreDocId in structData: %s", coreDocID)
+				}
+			}
 		}
-		if result.Document.DerivedStructData != nil {
+
+		// 2. Если не нашли, пробуем из derivedStructData (может содержать coreDocId)
+		if coreDocID == "" && result.Document.DerivedStructData != nil {
 			match["derivedStructData"] = result.Document.DerivedStructData
+			if e.logger != nil && i == 0 {
+				derivedKeys := make([]string, 0, len(result.Document.DerivedStructData))
+				for k := range result.Document.DerivedStructData {
+					derivedKeys = append(derivedKeys, k)
+				}
+				e.logger.Printf("[DataSearchExecutor] derivedStructData keys: %v", derivedKeys)
+			}
+			if cid, ok := result.Document.DerivedStructData["coreDocId"].(string); ok && cid != "" {
+				coreDocID = cid
+				if e.logger != nil && i == 0 {
+					e.logger.Printf("[DataSearchExecutor] Found coreDocId in derivedStructData: %s", coreDocID)
+				}
+			}
+		}
+
+		// 3. Если не нашли, пробуем из title (title может содержать Document ID или CoreDoc ID)
+		if coreDocID == "" && result.Document.Title != "" {
+			// Title может быть Document ID или CoreDoc ID
+			// Попробуем использовать его как Document ID (будем искать Document и извлекать coreDocId из Attrs)
+			if e.logger != nil && i == 0 {
+				e.logger.Printf("[DataSearchExecutor] Title found: %s (will try as Document ID)", result.Document.Title)
+			}
+		}
+
+		// 4. Если не нашли, пробуем из derivedStructData.link (извлекаем docID из пути)
+		// Это может быть Document ID, а не CoreDoc ID!
+		extractedDocID := ""
+		if result.Document.DerivedStructData != nil {
+			if link, ok := result.Document.DerivedStructData["link"].(string); ok && link != "" {
+				// Формат: gs://bucket/tenantId/sourceId/docID.txt
+				// docID - это последняя часть пути без расширения
+				if strings.HasPrefix(link, "gs://") {
+					uriWithoutPrefix := strings.TrimPrefix(link, "gs://")
+					parts := strings.Split(uriWithoutPrefix, "/")
+					if len(parts) >= 4 {
+						docIDWithExt := parts[len(parts)-1] // последняя часть (docID.txt)
+						// Убираем расширение
+						if idx := strings.LastIndex(docIDWithExt, "."); idx > 0 {
+							extractedDocID = docIDWithExt[:idx]
+						} else {
+							extractedDocID = docIDWithExt
+						}
+						if e.logger != nil && i == 0 {
+							e.logger.Printf("[DataSearchExecutor] Extracted ID from link: %s (link: %s) - this may be Document ID, not CoreDoc ID", extractedDocID, link)
+						}
+					}
+				}
+			}
+		}
+
+		// Приоритет для documentIds:
+		// 1. firestoreDocumentId из structData (GCS metadata) - это Document.ID в Firestore!
+		// 2. coreDocId из structData - это CoreDoc ID (если используется)
+		// 3. extractedDocID из link пути GCS
+		// 4. result.ID из Vertex AI Search (внутренний ID, НЕ рекомендуется)
+
+		// Получаем firestoreDocumentId из match (установлен выше из structData)
+		firestoreDocID := ""
+		if fid, ok := match["firestoreDocumentId"].(string); ok && fid != "" {
+			firestoreDocID = fid
+		}
+
+		if firestoreDocID != "" {
+			// firestoreDocumentId - это Document.ID в Firestore (из GCS metadata)
+			match["documentId"] = firestoreDocID
+			if e.logger != nil && i == 0 {
+				e.logger.Printf("[DataSearchExecutor] Using firestoreDocumentId from GCS metadata: %s (Document.ID in Firestore)", firestoreDocID)
+			}
+		} else if coreDocID != "" {
+			// coreDocID - это CoreDoc ID
+			match["coreDocId"] = coreDocID
+			match["documentId"] = coreDocID
+			if e.logger != nil && i == 0 {
+				e.logger.Printf("[DataSearchExecutor] Using coreDocId: %s (CoreDoc ID)", coreDocID)
+			}
+		} else if extractedDocID != "" {
+			// extractedDocID из link - это Document ID в Firestore (из пути GCS)
+			match["documentId"] = extractedDocID
+			match["vertexSearchDocumentId"] = result.ID
+			if e.logger != nil && i == 0 {
+				e.logger.Printf("[DataSearchExecutor] Using extractedDocID from GCS path: %s", extractedDocID)
+			}
+		} else {
+			// Fallback: используем result.ID
+			match["documentId"] = result.ID
+			match["vertexSearchDocumentId"] = result.ID
+			if e.logger != nil && i == 0 {
+				e.logger.Printf("[DataSearchExecutor] WARNING: Using result.ID as fallback: %s", result.ID)
+			}
 		}
 		if result.Document.JSONData != "" {
 			match["jsonData"] = result.Document.JSONData
@@ -558,6 +789,59 @@ func (e *DataSearchExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 
 	matches := filteredMatches
 
+	// Извлекаем массив ID для document_read
+	// Валидируем существование Document в Firestore (GCS может содержать устаревшие файлы)
+	documentIds := make([]string, 0, len(matches))
+	for i, match := range matches {
+		var docID string
+		// Сначала пробуем firestoreDocumentId из GCS metadata (structData)
+		if firestoreDocID, ok := match["firestoreDocumentId"].(string); ok && firestoreDocID != "" {
+			docID = firestoreDocID
+			if e.logger != nil && i == 0 {
+				e.logger.Printf("[DataSearchExecutor] Using firestoreDocumentId from GCS metadata: %s", docID)
+			}
+		} else if coreDocID, ok := match["coreDocId"].(string); ok && coreDocID != "" {
+			// coreDocId - это CoreDoc ID
+			docID = coreDocID
+			if e.logger != nil && i == 0 {
+				e.logger.Printf("[DataSearchExecutor] Using coreDocId from match: %s", docID)
+			}
+		} else {
+			// Используем documentId из match (это extractedDocID из link)
+			if docIDFromMatch, ok := match["documentId"].(string); ok && docIDFromMatch != "" {
+				docID = docIDFromMatch
+				if e.logger != nil && i == 0 {
+					e.logger.Printf("[DataSearchExecutor] Using documentId from match: %s", docID)
+				}
+			} else if id, ok := match["id"].(string); ok && id != "" {
+				// Fallback: result.ID (внутренний ID Vertex AI Search, обычно не работает)
+				docID = id
+				if e.logger != nil && i == 0 {
+					e.logger.Printf("[DataSearchExecutor] Using result.ID as fallback: %s (may not work)", docID)
+				}
+			}
+		}
+
+		// Валидируем существование Document в Firestore
+		if docID != "" && e.documentsRepo != nil {
+			doc, err := e.documentsRepo.GetByID(ctx, docID)
+			if err != nil || doc == nil {
+				// Document не существует в Firestore - это устаревший файл в GCS
+				if e.logger != nil {
+					e.logger.Printf("[DataSearchExecutor] WARNING: Document %s not found in Firestore (stale GCS file), skipping", docID)
+				}
+				continue // Пропускаем этот результат
+			}
+			if e.logger != nil && i == 0 {
+				e.logger.Printf("[DataSearchExecutor] Validated Document %s exists in Firestore", docID)
+			}
+		}
+
+		if docID != "" {
+			documentIds = append(documentIds, docID)
+		}
+	}
+
 	confidence := 0.9 // Высокая уверенность при успешном поиске
 	if len(matches) == 0 {
 		confidence = 0.6 // Ниже если результатов нет
@@ -566,16 +850,17 @@ func (e *DataSearchExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 	return &CapabilityResult{
 		Success: true,
 		Output: map[string]interface{}{
-			"matches":  matches,
-			"count":    len(matches),
-			"query":    searchQuery,
+			"matches":       matches,
+			"documentIds":   documentIds, // Массив CoreDoc ID для использования в document_read
+			"count":         len(matches),
+			"query":         searchQuery,
 			"nextPageToken": searchResp.NextPageToken,
 		},
-		Message:         fmt.Sprintf("Found %d matching documents", len(matches)),
-		ExecutionStatus: models.ExecutionStatusSuccess,
-		Confidence:      &confidence,
-		Retryable:       true, // Можно повторить при временных ошибках
-		Reason:          fmt.Sprintf("Data search completed, found %d matching documents", len(matches)),
+		Message:                 fmt.Sprintf("Found %d matching documents", len(matches)),
+		ExecutionStatus:         models.ExecutionStatusSuccess,
+		Confidence:              &confidence,
+		Retryable:               true, // Можно повторить при временных ошибках
+		Reason:                  fmt.Sprintf("Data search completed, found %d matching documents", len(matches)),
 		AlternativeCapabilities: []string{"web_search"}, // Можно попробовать веб-поиск
 	}, nil
 }

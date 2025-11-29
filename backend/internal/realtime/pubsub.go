@@ -35,7 +35,8 @@ const (
 	// Unified analysis status (entities/facts/events/metrics/decisions)
 	EventAnalysisStatus EventType = "analysis.status"
 	// Agent execution updates
-	EventAgentUpdate EventType = "agent.update"
+	EventAgentUpdate     EventType = "agent.update"      // Общие обновления job (статус, прогресс)
+	EventAgentStepUpdate EventType = "agent.step.update" // Детальные обновления шагов (статус, output, ошибки)
 	// Interaction events (created/updated via tools)
 	EventInteractionCreated EventType = "interaction.created"
 	EventInteractionUpdated EventType = "interaction.updated"
@@ -140,8 +141,8 @@ func (p *Publisher) PublishJSON(ctx context.Context, et EventType, tenantID stri
 	if et == EventAnalysisStatus {
 		log.Printf("publisher: publishing %s for tenantId=%s, payload=%s", et, tenantID, string(b))
 	}
-	// DEBUG: log agent.update publications
-	if et == EventAgentUpdate {
+	// DEBUG: log agent.update and agent.step.update publications
+	if et == EventAgentUpdate || et == EventAgentStepUpdate {
 		log.Printf("publisher: publishing %s for tenantId=%s, payload=%s", et, tenantID, string(b))
 	}
 	// Determine whether to use ordering key for this topic (only for stream-like topics)
@@ -242,7 +243,7 @@ func routeTopicName(et EventType) string {
 		return TopicDiscoveryEvents
 	case strings.HasPrefix(string(et), "artifact.") || et == EventDocProcess:
 		return TopicArtifactEvents
-	case strings.HasPrefix(string(et), "interaction.") || et == EventAgentUpdate || et == EventChatOntologyProcess:
+	case strings.HasPrefix(string(et), "interaction.") || et == EventAgentUpdate || et == EventAgentStepUpdate || et == EventChatOntologyProcess:
 		return TopicInteractionEvents
 	case et == EventAnalysisStatus:
 		return TopicAnalysisEvents

@@ -120,26 +120,32 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 			m.Ack()
 			return
 		}
-		// Skip if explicitly completed or auto-paused due to errors
-		// Note: Sources can be manually reactivated by changing status back to "active" or "paused"
+		// Skip if explicitly completed
 		if ds.Status == "completed" {
 			m.Ack()
 			return
 		}
 		// Skip auto-paused sources (but allow manual "paused" status to be processed if they have active projects)
 		// Auto-paused sources have Status="paused" AND ErrorCount >= 10
-		// Manual paused sources can still be processed if they have active project links
+		// Manual paused sources (Status="paused" with ErrorCount < 10) can still be processed if they have active project links
+		// Sources with Status="active" are always allowed (if they have active projects)
 		if ds.Status == "paused" && ds.ErrorCount >= 10 {
 			w.logger.Printf("source poller: skipping auto-paused source %s (errorCount: %d, requires manual reactivation)", payload.SourceID, ds.ErrorCount)
 			m.Ack()
 			return
 		}
+		// Allow sources with Status="active" or Status="paused" (with ErrorCount < 10) to continue
+		// They will be checked for active projects below
 		// Check if source has at least one active project in rag_source_projects
 		// This is the primary activation mechanism - sources are activated per-project
 		if !w.hasActiveProjects(ctx, payload.TenantID, payload.SourceID) {
-			w.logger.Printf("source poller: skipping source %s - no active projects", payload.SourceID)
+			w.logger.Printf("source poller: skipping source %s - no active projects (status=%s, errorCount=%d)", payload.SourceID, ds.Status, ds.ErrorCount)
 			m.Ack()
 			return
+		}
+		// Log that we're processing a paused source (for debugging)
+		if ds.Status == "paused" {
+			w.logger.Printf("source poller: processing paused source %s (errorCount=%d, has active projects)", payload.SourceID, ds.ErrorCount)
 		}
 		// Respect NextPollAt if set in the future
 		if ds.NextPollAt != nil && time.Now().Before(*ds.NextPollAt) {

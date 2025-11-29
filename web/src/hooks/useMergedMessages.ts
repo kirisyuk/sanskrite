@@ -71,6 +71,10 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
         if (it.kind === 'ontology' && it.subkind === 'layout') {
           return false;
         }
+        // Exclude agent execution interactions (they are execution status, not chat content)
+        if (it.kind === 'agent.execution') {
+          return false;
+        }
         // Exclude Model chat interactions when in Discuss view (skip during streaming to save resources)
         if (shouldExcludeModelChat) {
           // Exclude all interactions with subkind='model.chat' (created from Model tab)

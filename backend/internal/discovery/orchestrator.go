@@ -277,22 +277,22 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 		ds, err := o.sources.Get(ctx, sourceID)
 		if err == nil && ds != nil {
 			now := time.Now().UTC()
-		ds.LastPolledAt = &now
-		// For IngestWeb, we don't track LastFoundAt separately as it's a single-page source
-		// Calculate next poll time based on cadence (assume no new content if existing document was updated)
-		interval := o.cadenceToDuration(ds, false)
-		next := now.Add(interval)
-		ds.NextPollAt = &next
-		// Reset backoff on successful ingest
-		zero := 0
-		ds.PollBackoffSec = &zero
-		if err := o.sources.Upsert(ctx, ds); err != nil {
-			o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
+			ds.LastPolledAt = &now
+			// For IngestWeb, we don't track LastFoundAt separately as it's a single-page source
+			// Calculate next poll time based on cadence (assume no new content if existing document was updated)
+			interval := o.cadenceToDuration(ds, false)
+			next := now.Add(interval)
+			ds.NextPollAt = &next
+			// Reset backoff on successful ingest
+			zero := 0
+			ds.PollBackoffSec = &zero
+			if err := o.sources.Upsert(ctx, ds); err != nil {
+				o.logger.Printf("orchestrator: failed to update NextPollAt for source %s: %v", sourceID, err)
+			}
 		}
 	}
-}
 
-return nil
+	return nil
 }
 
 // IngestTelegram ingests recent Telegram messages as documents and chunks
@@ -511,12 +511,12 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 func (o *Orchestrator) cadenceToDuration(ds *models.DataSource, foundNew bool) time.Duration {
 	// Default 30 minutes
 	def := 30 * time.Minute
-	
+
 	// If new content was found in current poll, use shorter interval
 	if foundNew {
 		return 10 * time.Minute
 	}
-	
+
 	// Try to infer from profile attached to this datasource via orchestrator.profiles
 	// Minimal implementation: look up profile and parse behaviorPatterns.publishingCadence keywords
 	// Since poller doesn't have direct access to profiles repo, fall back to LastFoundAt heuristics

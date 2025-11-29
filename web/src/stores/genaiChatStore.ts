@@ -2501,6 +2501,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         if (it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end') {
           return false;
         }
+        // Exclude agent execution interactions (they are execution status, not chat content)
+        if (it.kind === 'agent.execution') {
+          return false;
+        }
         return true;
       });
       
@@ -2529,11 +2533,15 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('eval.')) {
           return false;
         }
-        // Include document attachments in LLM context (they are context for LLM)
         // Exclude action, section markers (these are UI markers, not chat content)
         if (it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end') {
           return false;
         }
+        // Exclude agent execution interactions (they are execution status, not chat content)
+        if (it.kind === 'agent.execution') {
+          return false;
+        }
+        // Include document attachments in LLM context (they are context for LLM)
         return true;
       });
       

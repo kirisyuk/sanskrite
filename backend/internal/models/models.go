@@ -87,6 +87,7 @@ type AgentJob struct {
 	ProjectID string                 `json:"projectId" firestore:"projectId"`
 	UserID    string                 `json:"userId" firestore:"userId"`
 	AgentID   string                 `json:"agentId" firestore:"agentId"` // ID агента (например, "document_preparation")
+	Title     string                 `json:"title,omitempty" firestore:"title,omitempty"` // Название задачи (по аналогии с Project.displayName)
 
 	Status   AgentJobStatus          `json:"status" firestore:"status"`   // "pending", "running", "completed", "failed", "partial"
 	Progress float64                 `json:"progress" firestore:"progress"` // 0.0 - 1.0
@@ -113,6 +114,9 @@ type AgentJob struct {
 	ReplanTriggered bool       `json:"replanTriggered" firestore:"replanTriggered"`          // Был ли запущен репланинг
 	ReplanCount     int         `json:"replanCount" firestore:"replanCount"`                  // Количество репланов
 	LastReplanAt    *time.Time  `json:"lastReplanAt,omitempty" firestore:"lastReplanAt,omitempty"`     // Время последнего реплана
+
+	// Interaction для отображения в чате
+	InteractionID string `json:"interactionId,omitempty" firestore:"interactionId,omitempty"` // ID interaction для отображения выполнения в чате
 }
 
 // SourceDetails хранит параметры, специфичные для типа источника

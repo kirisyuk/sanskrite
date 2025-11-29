@@ -61,6 +61,7 @@ func (h *AgentJobsHandler) CreateAgentJob(w http.ResponseWriter, r *http.Request
 		AgentID string                 `json:"agentId"` // ID агента (например, "document_preparation")
 		Task    map[string]interface{} `json:"task"`    // Задача для агента
 		AutoMode bool                  `json:"autoMode,omitempty"` // Автоматический режим (default: true)
+		Title   string                 `json:"title,omitempty"` // Название задачи (опционально)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -84,7 +85,7 @@ func (h *AgentJobsHandler) CreateAgentJob(w http.ResponseWriter, r *http.Request
 
 	// Создать job (используем UID как UserID)
 	userID := auth.UID
-	job, err := h.orchestrator.CreateJob(r.Context(), auth.TenantID, projectID, userID, req.AgentID, req.Task, autoMode)
+	job, err := h.orchestrator.CreateJob(r.Context(), auth.TenantID, projectID, userID, req.AgentID, req.Task, autoMode, req.Title)
 	if err != nil {
 		h.logger.Printf("[AgentJobsHandler] Failed to create job: %v", err)
 		WriteInternalError(w, "Failed to create agent job")
@@ -340,6 +341,63 @@ func (h *AgentJobsHandler) ResumeAgentJob(w http.ResponseWriter, r *http.Request
 		"jobId":  jobID,
 		"status": "resumed",
 		"message": "Job execution resumed",
+	})
+}
+
+// UpdateAgentJob обрабатывает PATCH /api/v1/projects/{projectId}/agent-jobs/{jobId}
+// Обновляет поля AgentJob (например, title)
+func (h *AgentJobsHandler) UpdateAgentJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only PATCH is allowed", nil)
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	jobID := extractJobID(r.URL.Path)
+	if jobID == "" {
+		WriteBadRequest(w, "INVALID_PATH", "Job ID required")
+		return
+	}
+
+	var req struct {
+		Title *string `json:"title,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Invalid request body")
+		return
+	}
+
+	// Проверка доступа
+	job, err := h.jobsRepo.Get(r.Context(), jobID)
+	if err != nil {
+		WriteNotFound(w, "Agent job not found")
+		return
+	}
+
+	if job.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Обновить поля
+	if req.Title != nil {
+		job.Title = *req.Title
+	}
+
+	if err := h.jobsRepo.Update(r.Context(), job); err != nil {
+		h.logger.Printf("[AgentJobsHandler] Failed to update job: %v", err)
+		WriteInternalError(w, "Failed to update agent job")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"job": job,
 	})
 }
 

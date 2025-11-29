@@ -998,9 +998,9 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 
 		// Register Graph tools if enabled and interactions repo is available
 		// Log diagnostics for graph tools registration
-		log.Printf("[GraphTools] Registration check: projectID=%q (empty=%v), graphEnabled=%v, interactions=%v (nil=%v)", 
+		log.Printf("[GraphTools] Registration check: projectID=%q (empty=%v), graphEnabled=%v, interactions=%v (nil=%v)",
 			projectID, projectID == "", h.graphEnabled, h.interactions != nil, h.interactions == nil)
-		
+
 		if projectID != "" && h.graphEnabled && h.interactions != nil {
 			log.Printf("[GraphTools] Registering graph tools for projectID=%s streamID=%s", projectID, streamID)
 			// Create Graph tool executor
@@ -1054,7 +1054,7 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 			log.Printf("[GraphTools] Graph tools registered successfully: added %d tool schemas, total tools=%d", addedCount, len(req.Tools))
 		} else {
-			log.Printf("[GraphTools] Graph tools NOT registered: projectID empty=%v, graphEnabled=%v, interactions nil=%v", 
+			log.Printf("[GraphTools] Graph tools NOT registered: projectID empty=%v, graphEnabled=%v, interactions nil=%v",
 				projectID == "", h.graphEnabled, h.interactions == nil)
 		}
 

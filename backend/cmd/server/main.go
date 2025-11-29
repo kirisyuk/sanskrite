@@ -13,6 +13,7 @@ import (
 	firebase "firebase.google.com/go/v4"
 	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/paypal"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/services"
@@ -592,6 +593,13 @@ func main() {
 		// Wire RAG dependencies for CoreDoc indexing
 		if emb != nil {
 			s.projectsHandler = s.projectsHandler.WithRAG(docsRepo, chunksRepo, emb)
+			// Configure automatic indexing callback in CoreDocsRepo
+			// This ensures CoreDocs are automatically indexed when created/updated
+			projectsHandlerRef := s.projectsHandler // Capture reference for closure
+			coreDocsRepo = coreDocsRepo.WithIndexingCallback(func(ctx context.Context, tenantID string, cd *models.CoreDoc) error {
+				return projectsHandlerRef.IndexCoreDoc(ctx, tenantID, cd)
+			})
+			logger.Printf("Automatic CoreDoc indexing enabled in repository")
 		}
 		// Wire Vertex Search client if configured
 		if vertexSearchClient != nil {
@@ -643,13 +651,15 @@ func main() {
 		capabilityRegistry := agents.NewCapabilityRegistry()
 
 		// Register basic capability executors (используем coreDocsRepo для DocumentRead/Write)
-		capabilityRegistry.Register(agents.NewDocumentReadExecutor(coreDocsRepo, logger))
+		docReadExecutor := agents.NewDocumentReadExecutor(coreDocsRepo, logger)
+		docReadExecutor.WithDocumentsRepository(docsRepo) // Для поиска CoreDoc ID через Document
+		capabilityRegistry.Register(docReadExecutor)
 		capabilityRegistry.Register(agents.NewLLMGenerateExecutor(genaiClient, logger))
 		capabilityRegistry.Register(agents.NewDocumentWriteExecutor(coreDocsRepo, logger))
 
 		// Register advanced capability executors
 		if vertexSearchClient != nil {
-			capabilityRegistry.Register(agents.NewDataSearchExecutor(vertexSearchClient, logger))
+			capabilityRegistry.Register(agents.NewDataSearchExecutor(vertexSearchClient, docsRepo, logger))
 			logger.Printf("DataSearchExecutor registered with Vertex AI Search")
 		} else {
 			logger.Printf("WARNING: VertexSearchClient not configured, DataSearchExecutor will not be available")
@@ -1161,6 +1171,48 @@ func main() {
 				return
 			}
 		}
+		// Agent Jobs routes (new orchestrator-based system)
+		if agentJobsHandler != nil {
+			path := r.URL.Path
+			if strings.HasSuffix(path, "/agent-jobs") {
+				if r.Method == http.MethodPost {
+					agentJobsHandler.CreateAgentJob(w, r)
+					return
+				}
+				if r.Method == http.MethodGet {
+					agentJobsHandler.ListAgentJobs(w, r)
+					return
+				}
+			}
+			if strings.Contains(path, "/agent-jobs/") {
+				if strings.HasSuffix(path, "/execute") && r.Method == http.MethodPost {
+					agentJobsHandler.ExecuteAgentJob(w, r)
+					return
+				}
+				if strings.HasSuffix(path, "/pause") && r.Method == http.MethodPost {
+					agentJobsHandler.PauseAgentJob(w, r)
+					return
+				}
+				if strings.HasSuffix(path, "/resume") && r.Method == http.MethodPost {
+					agentJobsHandler.ResumeAgentJob(w, r)
+					return
+				}
+				if strings.HasSuffix(path, "/steps") && r.Method == http.MethodPut {
+					agentJobsHandler.UpdateAgentJobSteps(w, r)
+					return
+				}
+				// Update agent job: PATCH /api/v1/projects/{projectId}/agent-jobs/{jobId}
+				if r.Method == http.MethodPatch {
+					agentJobsHandler.UpdateAgentJob(w, r)
+					return
+				}
+				// Get agent job: GET /api/v1/projects/{projectId}/agent-jobs/{jobId}
+				if r.Method == http.MethodGet {
+					agentJobsHandler.GetAgentJob(w, r)
+					return
+				}
+			}
+		}
 
 		// fallback to default project by id handler
 		s.routeProjectsByID(w, r)
@@ -1246,54 +1298,6 @@ func main() {
 		}
 		agentsHandler.ListAgents(w, r)
 	})))
-
-	// Agent Jobs routes (new orchestrator-based system)
-	if agentJobsHandler != nil {
-		// Create agent job: POST /api/v1/projects/{projectId}/agent-jobs
-		// List agent jobs: GET /api/v1/projects/{projectId}/agent-jobs
-		// Get agent job: GET /api/v1/projects/{projectId}/agent-jobs/{jobId}
-		// Execute agent job: POST /api/v1/projects/{projectId}/agent-jobs/{jobId}/execute
-		// Pause agent job: POST /api/v1/projects/{projectId}/agent-jobs/{jobId}/pause
-		// Resume agent job: POST /api/v1/projects/{projectId}/agent-jobs/{jobId}/resume
-		// Update agent job steps: PUT /api/v1/projects/{projectId}/agent-jobs/{jobId}/steps
-		mux.Handle("/api/v1/projects/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path := r.URL.Path
-			if strings.HasSuffix(path, "/agent-jobs") {
-				if r.Method == http.MethodPost {
-					agentJobsHandler.CreateAgentJob(w, r)
-					return
-				}
-				if r.Method == http.MethodGet {
-					agentJobsHandler.ListAgentJobs(w, r)
-					return
-				}
-			}
-			if strings.Contains(path, "/agent-jobs/") {
-				if strings.HasSuffix(path, "/execute") && r.Method == http.MethodPost {
-					agentJobsHandler.ExecuteAgentJob(w, r)
-					return
-				}
-				if strings.HasSuffix(path, "/pause") && r.Method == http.MethodPost {
-					agentJobsHandler.PauseAgentJob(w, r)
-					return
-				}
-				if strings.HasSuffix(path, "/resume") && r.Method == http.MethodPost {
-					agentJobsHandler.ResumeAgentJob(w, r)
-					return
-				}
-				if strings.HasSuffix(path, "/steps") && r.Method == http.MethodPut {
-					agentJobsHandler.UpdateAgentJobSteps(w, r)
-					return
-				}
-				// Get agent job: GET /api/v1/projects/{projectId}/agent-jobs/{jobId}
-				if r.Method == http.MethodGet {
-					agentJobsHandler.GetAgentJob(w, r)
-					return
-				}
-			}
-		})))
-		logger.Printf("Agent Jobs endpoints registered")
-	}
 
 	// Usage metrics handler
 	usageHandler := httphandlers.NewUsageHandler(repo.NewUsageMetricsRepository(fsClient.Client()), logger)

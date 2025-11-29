@@ -964,6 +964,52 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
+   * Create Agent Job
+   */
+  async createAgentJob(projectId: string, request: {
+    agentId: string;
+    task: {
+      userQuery: string;
+      planMode?: string;
+      [key: string]: any;
+    };
+    autoMode?: boolean;
+    title?: string;
+  }): Promise<{ job: any }> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/agent-jobs`, request, {
+      timeout: 30000, // 30 seconds for job creation
+    });
+    return res.data;
+  }
+
+  /**
+   * Execute Agent Job
+   */
+  async executeAgentJob(projectId: string, jobId: string): Promise<void> {
+    await this.client.post(`/api/v1/projects/${projectId}/agent-jobs/${jobId}/execute`, {}, {
+      timeout: 10000, // 10 seconds for execution start (actual execution is async)
+    });
+  }
+
+  /**
+   * List Agent Jobs for a project
+   */
+  async listAgentJobs(projectId: string, options?: { status?: string; limit?: number }): Promise<{ jobs: any[]; count: number }> {
+    const params: any = {};
+    if (options?.status) params.status = options.status;
+    if (options?.limit) params.limit = options.limit;
+    const res = await this.client.get(`/api/v1/projects/${projectId}/agent-jobs`, { params });
+    return res.data;
+  }
+
+  /**
+   * Update Agent Job (e.g., to update title)
+   */
+  async updateAgentJob(projectId: string, jobId: string, updates: { title?: string }): Promise<void> {
+    await this.client.patch(`/api/v1/projects/${projectId}/agent-jobs/${jobId}`, updates);
+  }
+
+  /**
    * Execute Data Agent
    * @param projectId Project ID (required)
    * @param task Data Agent task

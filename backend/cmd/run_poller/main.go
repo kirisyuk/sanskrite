@@ -8,10 +8,10 @@ import (
 	"os"
 	"time"
 
-	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
-	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 func main() {
@@ -40,13 +40,13 @@ func main() {
 	// Initialize repositories
 	sourcesRepo := repo.NewDataSourcesRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
-	
+
 	// Create publisher for Pub/Sub
 	publisher, err := realtime.NewPublisher(ctx, *projectID)
 	if err != nil {
 		log.Fatalf("Failed to create Publisher: %v", err)
 	}
-	
+
 	// Create orchestrator (minimal setup for poller)
 	orchestrator := discovery.NewOrchestrator(nil, nil, nil, nil, sourcesRepo, publisher, logger)
 	orchestrator = orchestrator.WithSourceProjects(sourceProjectsRepo)
@@ -56,7 +56,7 @@ func main() {
 	poller := discovery.NewSourcePoller(psClient, "source.poll.due", orchestrator, logger)
 
 	fmt.Printf("Running PublishDue at %s...\n\n", time.Now().Format("2006-01-02 15:04:05"))
-	
+
 	if err := poller.PublishDue(ctx); err != nil {
 		log.Fatalf("PublishDue failed: %v", err)
 	}
@@ -64,4 +64,3 @@ func main() {
 	fmt.Printf("\n✅ PublishDue completed successfully!\n")
 	fmt.Printf("Check Pub/Sub topic 'source.poll.due' for published messages.\n")
 }
-

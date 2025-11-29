@@ -29,7 +29,7 @@ type BigQueryRequest struct {
 	Query             string `json:"query"`
 	ProjectID         string `json:"projectID,omitempty"`         // GCP project ID (BigQuery project)
 	DatasetID         string `json:"datasetID,omitempty"`         // BigQuery dataset ID
-	MaxResults        int    `json:"maxResults,omitempty"`         // Max results to return
+	MaxResults        int    `json:"maxResults,omitempty"`        // Max results to return
 	TenantID          string `json:"tenantID,omitempty"`          // Tenant ID for filtering documents
 	DocumentProjectID string `json:"documentProjectID,omitempty"` // Document project ID for filtering (CoreDoc projectId)
 }
@@ -59,7 +59,7 @@ func (h *BigQueryHandler) Query(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.logger != nil {
-		h.logger.Printf("[BigQueryHandler] Query request: query=%q, tenantID=%s, documentProjectID=%s, projectID=%s, datasetID=%s", 
+		h.logger.Printf("[BigQueryHandler] Query request: query=%q, tenantID=%s, documentProjectID=%s, projectID=%s, datasetID=%s",
 			req.Query, auth.TenantID, req.DocumentProjectID, req.ProjectID, req.DatasetID)
 	}
 
@@ -80,7 +80,7 @@ func (h *BigQueryHandler) Query(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.logger != nil {
-		h.logger.Printf("[BigQueryHandler] Service request prepared: tenantID=%s, documentProjectID=%s", 
+		h.logger.Printf("[BigQueryHandler] Service request prepared: tenantID=%s, documentProjectID=%s",
 			serviceReq.TenantID, serviceReq.DocumentProjectID)
 	}
 

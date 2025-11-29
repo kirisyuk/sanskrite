@@ -94,6 +94,11 @@ export function buildContext(options: BuildContextOptions = {}): {
       return;
     }
     
+    // Exclude agent execution interactions (they are execution status, not chat content)
+    if (it.kind === 'agent.execution') {
+      return;
+    }
+    
     // Check exclusions
     const shouldExclude = excludeKinds.some(excl => {
       if (it.kind !== excl.kind) return false;

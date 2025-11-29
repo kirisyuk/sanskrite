@@ -136,7 +136,7 @@ func (e *GraphToolExecutor) createGraph(ctx context.Context, args json.RawMessag
 	if e.logger != nil {
 		e.logger.Printf("[GraphToolExecutor] createGraph called with args length=%d", len(args))
 	}
-	
+
 	var params struct {
 		ChartTitle string          `json:"chartTitle"`
 		ChartType  string          `json:"chartType,omitempty"`
@@ -150,9 +150,9 @@ func (e *GraphToolExecutor) createGraph(ctx context.Context, args json.RawMessag
 		}
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
-	
+
 	if e.logger != nil {
-		e.logger.Printf("[GraphToolExecutor] createGraph params: chartTitle=%q, chartType=%q, tableRows=%d, sourcesCount=%d", 
+		e.logger.Printf("[GraphToolExecutor] createGraph params: chartTitle=%q, chartType=%q, tableRows=%d, sourcesCount=%d",
 			params.ChartTitle, params.ChartType, len(params.Table), len(params.Sources))
 	}
 
@@ -204,7 +204,7 @@ func (e *GraphToolExecutor) createGraph(ctx context.Context, args json.RawMessag
 		}
 		return nil, fmt.Errorf("failed to create interaction: %w", err)
 	}
-	
+
 	if e.logger != nil {
 		e.logger.Printf("[GraphToolExecutor] Interaction created successfully: interactionID=%s", interactionID)
 	}

@@ -11,13 +11,13 @@ import (
 	"syscall"
 	"time"
 
-	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
-	"github.com/igorkirisyuk/sanskrite/internal/discovery"
-	"github.com/igorkirisyuk/sanskrite/internal/repo"
-	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
+	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
+	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
 )
 
@@ -51,31 +51,31 @@ func main() {
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	chunksRepo := repo.NewChunksRepository(fsClient.Client())
 	ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
-	
+
 	// Create publisher
 	publisher, err := realtime.NewPublisher(ctx, *projectID)
 	if err != nil {
 		log.Fatalf("Failed to create Publisher: %v", err)
 	}
-	
+
 	// Create AI executor (minimal for embeddings)
 	exec := ai.NewAITaskExecutor(nil, nil)
-	
+
 	// Create crawler
 	wc := crawler.NewWebCrawler()
-	
+
 	// Create Telegram client
 	tgBase := strings.TrimSpace(os.Getenv("TELEGRAM_SERVICE_URL"))
 	if tgBase == "" {
 		logger.Printf("WARNING: TELEGRAM_SERVICE_URL is not set - Telegram features will be disabled")
 	}
 	tgClient := telegram.NewClient(tgBase)
-	
+
 	// Create orchestrator
 	orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, nil, sourcesRepo, publisher, logger)
 	orchestrator = orchestrator.WithSourceProjects(sourceProjectsRepo)
 	orchestrator = orchestrator.WithRAG(prov.NewRegistry(), docsRepo, chunksRepo)
-	
+
 	// Create embedding provider
 	emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 	orchestrator = orchestrator.WithEmbedding(emb)
@@ -112,4 +112,3 @@ func main() {
 
 	fmt.Printf("Worker stopped\n")
 }
-
