@@ -247,7 +247,7 @@ const DiscoveryPage: React.FC = () => {
   const [currentPerspectivePreset, setCurrentPerspectivePreset] =
     useState<string>('consulting');
   const [isAnalysisClosed, setIsAnalysisClosed] = useState(false);
-  const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph' | 'analytics' | 'prepare'>('text');
+  const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph' | 'analytics' | 'agent'>('text');
   const unfoldRequestRef = React.useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
@@ -2054,9 +2054,9 @@ const DiscoveryPage: React.FC = () => {
                   return;
                 }
 
-                // Handle Prepare mode separately
-                if (unfoldMode === 'prepare') {
-                  console.log('[DiscoveryPage] Prepare mode: processing document preparation request:', text);
+                // Handle Agent mode separately
+                if (unfoldMode === 'agent') {
+                  console.log('[DiscoveryPage] Agent mode: processing agent execution request:', text);
                   const pid = await genaiChat.ensureProject();
                   
                   try {
@@ -2069,7 +2069,7 @@ const DiscoveryPage: React.FC = () => {
                       id: userInteractionLocalId,
                       projectId: pid,
                       kind: 'user' as const,
-                      subkind: 'prepare.query',
+                      subkind: 'agent.query',
                       content: text.trim(),
                       createdAt,
                     };
@@ -2083,7 +2083,7 @@ const DiscoveryPage: React.FC = () => {
                     try {
                       const serverUserInteraction = await api.createProjectInteraction(pid, {
                         kind: 'user',
-                        subkind: 'prepare.query',
+                        subkind: 'agent.query',
                         content: text.trim(),
                       });
                       userInteractionServerId = serverUserInteraction.id;
@@ -2142,13 +2142,13 @@ const DiscoveryPage: React.FC = () => {
                       console.log('[DiscoveryPage] Agent job execution started');
                       
                       // Show initial message
-                      const assistantContent = `**Подготовка документов запущена**\n\nАгент анализирует документы и планирует необходимые изменения. Прогресс будет отображаться в реальном времени через WebSocket обновления.`;
+                      const assistantContent = `**Выполнение агента запущено**\n\nАгент анализирует задачу и планирует необходимые действия. Прогресс будет отображаться в реальном времени через WebSocket обновления.`;
                       
                       const assistantInteraction: any = {
                         id: `temp-assistant-${Date.now()}`,
                         projectId: pid,
                         kind: 'assistant',
-                        subkind: 'prepare.started',
+                        subkind: 'agent.started',
                         content: assistantContent,
                         replyTo: userInteractionServerId,
                         createdAt: new Date(),
@@ -2163,7 +2163,7 @@ const DiscoveryPage: React.FC = () => {
                       try {
                         const persistedAssistant = await api.createProjectInteraction(pid, {
                           kind: 'assistant',
-                          subkind: 'prepare.started',
+                          subkind: 'agent.started',
                           content: assistantContent,
                           replyTo: userInteractionServerId,
                         });
@@ -2187,7 +2187,7 @@ const DiscoveryPage: React.FC = () => {
                         id: `temp-assistant-error-${Date.now()}`,
                         projectId: pid,
                         kind: 'assistant',
-                        subkind: 'prepare.error',
+                        subkind: 'agent.error',
                         content: assistantContent,
                         replyTo: userInteractionServerId,
                         createdAt: new Date(),
@@ -2203,7 +2203,7 @@ const DiscoveryPage: React.FC = () => {
                       try {
                         await api.createProjectInteraction(pid, {
                           kind: 'assistant',
-                          subkind: 'prepare.error',
+                          subkind: 'agent.error',
                           content: assistantContent,
                           replyTo: userInteractionServerId,
                         });
@@ -2219,7 +2219,7 @@ const DiscoveryPage: React.FC = () => {
                       id: Date.now().toString() + '-ia-error',
                       projectId: pid,
                       kind: 'assistant' as const,
-                      subkind: 'prepare.error',
+                      subkind: 'agent.error',
                       content: errorContent,
                       createdAt: new Date().toISOString(),
                     };
@@ -2234,7 +2234,7 @@ const DiscoveryPage: React.FC = () => {
                     try {
                       await api.createProjectInteraction(pid, {
                         kind: 'assistant',
-                        subkind: 'prepare.error',
+                        subkind: 'agent.error',
                         content: errorContent,
                       });
                     } catch (e) {

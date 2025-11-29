@@ -32,7 +32,7 @@ interface UnfoldRequestProps {
   dangerTint?: boolean;
   showHighRiskTag?: boolean;
   onHighRiskTagClick?: () => void;
-  onModeChange?: (mode: 'text' | 'graph' | 'analytics' | 'prepare') => void; // Новый проп для смены режима
+  onModeChange?: (mode: 'text' | 'graph' | 'analytics' | 'agent') => void; // Новый проп для смены режима
 }
 
 const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClear, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick, onModeChange }) => {
@@ -569,11 +569,11 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   }, []);
 
   // Новый стейт
-  const [mode, setMode] = React.useState<'text' | 'graph' | 'analytics' | 'prepare'>('text');
+  const [mode, setMode] = React.useState<'text' | 'graph' | 'analytics' | 'agent'>('text');
 
   // вызываем onModeChange при смене
   const handleModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value as 'text' | 'graph' | 'analytics' | 'prepare';
+    const val = e.target.value as 'text' | 'graph' | 'analytics' | 'agent';
     setMode(val);
     onModeChange?.(val);
   };
@@ -1214,7 +1214,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                 <option value="text">{t('unfold.request.modeText')}</option>
                 <option value="graph">{t('unfold.request.modeGraph')}</option>
                 <option value="analytics">{t('unfold.request.modeAnalytics')}</option>
-                <option value="prepare">{t('unfold.request.modePrepare')}</option>
+                <option value="agent">{t('unfold.request.modeAgent')}</option>
               </select>
             </div>
             {showHighRiskTag && (
