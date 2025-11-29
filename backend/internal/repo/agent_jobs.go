@@ -49,6 +49,7 @@ func (r *AgentJobsRepository) Get(ctx context.Context, id string) (*models.Agent
 	if err := snap.DataTo(&job); err != nil {
 		return nil, err
 	}
+	job.ID = snap.Ref.ID // Set ID from Firestore document ID
 	return &job, nil
 }
 
@@ -127,6 +128,7 @@ func (r *AgentJobsRepository) ListByProject(ctx context.Context, tenantID, proje
 		if err := doc.DataTo(&job); err != nil {
 			continue
 		}
+		job.ID = doc.Ref.ID // Set ID from Firestore document ID
 		jobs = append(jobs, &job)
 	}
 	return jobs, nil
@@ -154,6 +156,7 @@ func (r *AgentJobsRepository) ListByStatus(ctx context.Context, tenantID string,
 		if err := doc.DataTo(&job); err != nil {
 			continue
 		}
+		job.ID = doc.Ref.ID // Set ID from Firestore document ID
 		jobs = append(jobs, &job)
 	}
 	return jobs, nil
@@ -187,6 +190,7 @@ func (r *AgentJobsRepository) ListByProjectAndStatus(ctx context.Context, tenant
 		if err := doc.DataTo(&job); err != nil {
 			continue
 		}
+		job.ID = doc.Ref.ID // Set ID from Firestore document ID
 		jobs = append(jobs, &job)
 	}
 	return jobs, nil

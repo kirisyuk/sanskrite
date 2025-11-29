@@ -27,6 +27,8 @@ interface SidebarPanelProps {
   currentMode?: 'chat' | 'perspectives' | 'models' | 'pages';
   projectId?: string | null;
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
+  onSelectJob?: (taskId: string | null) => void;
+  selectedJobTaskId?: string | null;
 }
 
 export const SidebarPanel: React.FC<SidebarPanelProps> = ({
@@ -51,6 +53,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   currentMode,
   projectId,
   onOpenDocument,
+  onSelectJob,
+  selectedJobTaskId,
 }) => {
   const { t } = useTranslation();
   const projects = useProjectsStore((s) => s.projects);
@@ -63,6 +67,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   // Agent jobs state
   const [agentJobs, setAgentJobs] = React.useState<any[]>([]);
   const [agentJobsLoading, setAgentJobsLoading] = React.useState(false);
+  const [deletingJobIds, setDeletingJobIds] = React.useState<Set<string>>(new Set());
 
   // Group projects by date (Today, Yesterday, Later)
   const groupedProjects = React.useMemo(() => {
@@ -341,20 +346,140 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     };
 
     const jobTitle = job.title || job.userQuery || 'Untitled Job';
+    // Use taskId from job if available, otherwise use id
+    const taskId = job.taskId || job.id;
+    const isSelected = selectedJobTaskId === taskId;
+    const isDeleting = deletingJobIds.has(job.id);
+    
+    const handleDeleteJob = async (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const targetProjectId = projectId || currentProject?.id;
+      if (!targetProjectId || targetProjectId === 'local-unfold' || isDeleting) {
+        console.log('[SidebarPanel] Cannot delete job:', { projectId, currentProjectId: currentProject?.id, isDeleting });
+        return;
+      }
+      
+      // Validate that we have a job ID and it's not a project ID
+      if (!job.id || job.id === targetProjectId) {
+        console.error('[SidebarPanel] Invalid job ID for deletion:', { 
+          jobId: job.id, 
+          projectId: targetProjectId,
+          job: job,
+          fullJob: JSON.stringify(job, null, 2)
+        });
+        alert('Cannot delete: invalid job ID. Job ID is missing or equals project ID.');
+        return;
+      }
+      
+      // Use job.id for deletion (it's the Firestore document ID)
+      const deleteUrl = `/api/v1/projects/${targetProjectId}/agent-jobs/${job.id}`;
+      console.log('[SidebarPanel] Deleting job:', { 
+        jobId: job.id, 
+        projectId: targetProjectId, 
+        jobTitle: jobTitle,
+        deleteUrl: deleteUrl,
+        job: job
+      });
+      
+      // Add to deleting set (show strikethrough)
+      setDeletingJobIds(prev => new Set(prev).add(job.id));
+      
+      // If this job is currently open, close it
+      if (isSelected) {
+        onSelectJob?.(null);
+      }
+      
+      try {
+        await api.deleteAgentJob(targetProjectId, job.id);
+        console.log('[SidebarPanel] Job deleted successfully:', { jobId: job.id });
+        // Remove from list and deleting set on success
+        setAgentJobs(prev => prev.filter(j => j.id !== job.id));
+        setDeletingJobIds(prev => {
+          const next = new Set(prev);
+          next.delete(job.id);
+          return next;
+        });
+      } catch (err) {
+        console.error('[SidebarPanel] Failed to delete job', err);
+        alert('Failed to delete job');
+        // Remove from deleting set on error
+        setDeletingJobIds(prev => {
+          const next = new Set(prev);
+          next.delete(job.id);
+          return next;
+        });
+      }
+    };
+    
     return (
       <div
         key={job.id}
-        className="px-2 py-1 rounded text-xs flex items-center gap-2 ml-4"
+        className="px-2 py-1 rounded text-xs flex items-center gap-2 ml-4 cursor-pointer group"
         style={{
-          backgroundColor: 'transparent',
+          backgroundColor: isSelected ? 'var(--white-10)' : 'transparent',
           color: 'var(--text-secondary-strong)',
+          opacity: isDeleting ? 0.5 : 1,
+          cursor: isDeleting ? 'default' : 'pointer',
         }}
         title={jobTitle}
+        onClick={(e) => {
+          if (!isDeleting) {
+            e.stopPropagation();
+            onSelectJob?.(taskId);
+          }
+        }}
+        onMouseEnter={(e) => {
+          if (!isSelected && !isDeleting) {
+            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--white-10)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isSelected && !isDeleting) {
+            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+          }
+        }}
       >
         {getStatusIcon()}
-        <span className="flex-1 truncate" style={{ color: 'var(--text-secondary-strong)' }}>
+        <span 
+          className="flex-1 truncate" 
+          style={{ 
+            color: isDeleting ? 'var(--text-tertiary-weak)' : 'var(--text-secondary-strong)',
+            textDecoration: isDeleting ? 'line-through' : 'none',
+          }}
+        >
           {jobTitle}
         </span>
+        {!isDeleting && (
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" style={{ position: 'relative', zIndex: 10 }}>
+            <button
+              className="p-1 rounded"
+              title="Delete job"
+              style={{ backgroundColor: 'transparent', position: 'relative', zIndex: 10 }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleDeleteJob(e);
+              }}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
+                />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
     );
   };
@@ -1118,6 +1243,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           </div>
         </div>
       </div>
+
     </>
   );
 };

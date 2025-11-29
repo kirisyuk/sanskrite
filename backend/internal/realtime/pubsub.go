@@ -22,6 +22,7 @@ const (
 	EventGroundRefresh    EventType = "ground.refresh"
 	EventSourcePoll       EventType = "source.poll"
 	EventSourcePollDue    EventType = "source.poll.due"
+	EventSourceCreated    EventType = "source.created" // Создание нового источника
 	// Artifact generation events
 	EventArtifactGenerationStarted   EventType = "artifact.generation.started"
 	EventArtifactSectionGenerating   EventType = "artifact.section.generating"

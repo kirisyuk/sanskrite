@@ -1003,10 +1003,47 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
+   * Get Agent Job by ID
+   * Returns full job details including steps, task, goal, etc.
+   */
+  async getAgentJob(projectId: string, jobId: string): Promise<{ job: any }> {
+    const res = await this.client.get(`/api/v1/projects/${projectId}/agent-jobs/${jobId}`);
+    return res.data;
+  }
+
+  /**
    * Update Agent Job (e.g., to update title)
    */
   async updateAgentJob(projectId: string, jobId: string, updates: { title?: string }): Promise<void> {
     await this.client.patch(`/api/v1/projects/${projectId}/agent-jobs/${jobId}`, updates);
+  }
+
+  /**
+   * Pause Agent Job
+   */
+  async pauseAgentJob(projectId: string, jobId: string): Promise<void> {
+    await this.client.post(`/api/v1/projects/${projectId}/agent-jobs/${jobId}/pause`);
+  }
+
+  /**
+   * Resume Agent Job
+   */
+  async resumeAgentJob(projectId: string, jobId: string): Promise<void> {
+    await this.client.post(`/api/v1/projects/${projectId}/agent-jobs/${jobId}/resume`);
+  }
+
+  /**
+   * Cancel Agent Job (stop execution)
+   */
+  async cancelAgentJob(projectId: string, jobId: string): Promise<void> {
+    await this.client.post(`/api/v1/projects/${projectId}/agent-jobs/${jobId}/cancel`);
+  }
+
+  /**
+   * Delete Agent Job
+   */
+  async deleteAgentJob(projectId: string, jobId: string): Promise<void> {
+    await this.client.delete(`/api/v1/projects/${projectId}/agent-jobs/${jobId}`);
   }
 
   /**

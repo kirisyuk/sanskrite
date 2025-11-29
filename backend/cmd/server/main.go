@@ -1197,8 +1197,17 @@ func main() {
 					agentJobsHandler.ResumeAgentJob(w, r)
 					return
 				}
+				if strings.HasSuffix(path, "/cancel") && r.Method == http.MethodPost {
+					agentJobsHandler.CancelAgentJob(w, r)
+					return
+				}
 				if strings.HasSuffix(path, "/steps") && r.Method == http.MethodPut {
 					agentJobsHandler.UpdateAgentJobSteps(w, r)
+					return
+				}
+				// Delete agent job: DELETE /api/v1/projects/{projectId}/agent-jobs/{jobId}
+				if r.Method == http.MethodDelete {
+					agentJobsHandler.DeleteAgentJob(w, r)
 					return
 				}
 				// Update agent job: PATCH /api/v1/projects/{projectId}/agent-jobs/{jobId}

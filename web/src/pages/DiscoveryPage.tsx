@@ -133,6 +133,7 @@ import { WorkspaceCanvas } from '../components/WorkspaceCanvas';
 import { TelegramAddModal } from '../components/TelegramAddModal';
 import { ChatMessagesList } from '../components/ChatMessagesList';
 import { RightDrawer } from '../components/RightDrawer';
+import { AgentJobDetails } from '../components/AgentJobDetails';
 
 const DiscoveryPage: React.FC = () => {
   const { t, i18n } = useTranslation();
@@ -251,6 +252,7 @@ const DiscoveryPage: React.FC = () => {
   const unfoldRequestRef = React.useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
+  const [selectedJobTaskId, setSelectedJobTaskId] = React.useState<string | null>(null);
   
   // Destructure modals hook
   const {
@@ -1271,6 +1273,8 @@ const DiscoveryPage: React.FC = () => {
         currentMode={unfoldSubView}
         projectId={genaiChat.projectId}
         onOpenDocument={setActiveDoc}
+        onSelectJob={setSelectedJobTaskId}
+        selectedJobTaskId={selectedJobTaskId}
       />
 
       {/* Floating Account and Settings buttons (visible only when sidebar is hidden) */}
@@ -1363,6 +1367,12 @@ const DiscoveryPage: React.FC = () => {
             projectId={workspaceProjectId}
             onClose={closeAllModals}
             onOpenDocument={setActiveDoc}
+          />
+        ) : selectedJobTaskId ? (
+          <AgentJobDetails
+            isOpen={selectedJobTaskId !== null}
+            taskId={selectedJobTaskId}
+            onClose={() => setSelectedJobTaskId(null)}
           />
         ) : showAdmin ? (
           <AdminModal

@@ -40,6 +40,13 @@ const (
 	CapabilityPlanGenerate Capability = "plan_generate" // Генерация плана из естественного языка
 	CapabilityReplan       Capability = "replan"        // Корректировка плана на основе результатов
 	CapabilityReflect      Capability = "reflect"       // Оценка прогресса относительно цели
+	CapabilityPlanCalibrate Capability = "plan_calibrate" // Промежуточный шаг калибровки - просмотр результатов и допланирование
+
+	// Управление источниками
+	CapabilitySourceList              Capability = "source_list"               // Список источников проекта
+	CapabilityTelegramChannelRead     Capability = "telegram_channel_read"     // Чтение данных из Telegram-канала
+	CapabilitySourceCreate            Capability = "source_create"             // Создание источника и привязка к проекту
+	CapabilityTelegramSourceDiscovery Capability = "telegram_source_discovery" // Автоматический поиск и добавление Telegram каналов
 )
 
 // IsCritical определяет критичность capability

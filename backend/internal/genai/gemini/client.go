@@ -358,19 +358,17 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 			"parts": []map[string]interface{}{{"text": prompt}},
 		}},
 	}
-	// Do NOT set response_mime_type when using function calling (unsupported)
-	if opts.MaxOutputTokens > 0 || opts.Temperature > 0 {
-		gc := map[string]interface{}{}
-		if opts.MaxOutputTokens > 0 {
-			gc["max_output_tokens"] = opts.MaxOutputTokens
-		}
-		if opts.Temperature > 0 {
-			gc["temperature"] = opts.Temperature
-		}
-		if len(gc) > 0 {
-			reqBody["generationConfig"] = gc
-		}
+	// Добавить response_mime_type для JSON output
+	gc := map[string]interface{}{
+		"response_mime_type": "application/json",
 	}
+	if opts.MaxOutputTokens > 0 {
+		gc["max_output_tokens"] = opts.MaxOutputTokens
+	}
+	if opts.Temperature > 0 {
+		gc["temperature"] = opts.Temperature
+	}
+	reqBody["generationConfig"] = gc
 	// response_schema is not supported on this endpoint; enforce JSON via response_mime_type only
 	toolsPayload := make([]map[string]interface{}, 0)
 	if len(tools) > 0 {
@@ -425,91 +423,10 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 	return gr, nil
 }
 
-// GenerateJSONStrict uses the v1beta Responses API with generation_config.response_schema
-// to enforce structured JSON output. This requires models that support structured output.
+// GenerateJSONStrict returns structured JSON using response_mime_type.
+// Simply delegates to GenerateJSON - no function calling needed.
 func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []Tool, jsonSchema map[string]interface{}, opts Options) (*GenerateResponse, error) {
-	// Enforce strict JSON via public v1beta generateContent using a function tool
-	// Strictness is achieved by requiring the model to call our tool with jsonSchema
-	model := c.modelFrom(opts)
-	reqBody := map[string]interface{}{
-		"contents": []map[string]interface{}{{
-			"role":  "user",
-			"parts": []map[string]interface{}{{"text": prompt}},
-		}},
-	}
-	if opts.MaxOutputTokens > 0 || opts.Temperature > 0 {
-		gc := map[string]interface{}{}
-		if opts.MaxOutputTokens > 0 {
-			gc["max_output_tokens"] = opts.MaxOutputTokens
-		}
-		if opts.Temperature > 0 {
-			gc["temperature"] = opts.Temperature
-		}
-		if len(gc) > 0 {
-			reqBody["generationConfig"] = gc
-		}
-	}
-	// Build a single required function tool carrying the schema
-	// Note: grounding + tools together is unsupported on public API; do NOT include search here
-	fdecls := make([]map[string]interface{}, 0, len(tools))
-	for _, t := range tools {
-		// If caller passed a schema, prefer it; otherwise use tool.Parameters
-		params := t.Parameters
-		if jsonSchema != nil {
-			params = jsonSchema
-		}
-		fdecls = append(fdecls, map[string]interface{}{
-			"name":        t.Name,
-			"description": t.Description,
-			"parameters":  sanitizeSchema(params),
-		})
-	}
-	// If no tool was provided, create a default return_structured
-	if len(fdecls) == 0 {
-		if jsonSchema == nil {
-			jsonSchema = map[string]interface{}{"type": "object"}
-		}
-		fdecls = append(fdecls, map[string]interface{}{
-			"name":        "return_structured",
-			"description": "Return strictly by schema",
-			"parameters":  sanitizeSchema(jsonSchema),
-		})
-	}
-	reqBody["tools"] = []map[string]interface{}{{"function_declarations": fdecls}}
-
-	b, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("x-goog-api-key", c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	rb, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("gemini error %d: %s", resp.StatusCode, string(rb))
-	}
-	var root map[string]interface{}
-	if err := json.Unmarshal(rb, &root); err != nil {
-		return nil, err
-	}
-	gr, err := c.parseGenerateRoot(root, model)
-	if err != nil {
-		return nil, err
-	}
-	gr.RawJSON = string(rb)
-	return gr, nil
+	return c.GenerateJSON(ctx, prompt, tools, jsonSchema, opts)
 }
 
 func (c *Client) parseGenerateRoot(root map[string]interface{}, model string) (*GenerateResponse, error) {
@@ -703,18 +620,18 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 		}
 	}
 	toolsPayload := make([]map[string]interface{}, 0)
-    if len(tools) > 0 {
-        fdecls := make([]map[string]interface{}, 0, len(tools))
-        for _, t := range tools {
-            fdecls = append(fdecls, map[string]interface{}{"name": t.Name, "description": t.Description, "parameters": t.Parameters})
-        }
-        // v1beta expects snake_case function_declarations
-        toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
-    }
-    if opts.GroundingEnabled || opts.Profile == ProfileQuality {
-        // v1beta expects snake_case google_search tool name
-        toolsPayload = append(toolsPayload, map[string]interface{}{"google_search": map[string]interface{}{}})
-    }
+	if len(tools) > 0 {
+		fdecls := make([]map[string]interface{}, 0, len(tools))
+		for _, t := range tools {
+			fdecls = append(fdecls, map[string]interface{}{"name": t.Name, "description": t.Description, "parameters": t.Parameters})
+		}
+		// v1beta expects snake_case function_declarations
+		toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
+	}
+	if opts.GroundingEnabled || opts.Profile == ProfileQuality {
+		// v1beta expects snake_case google_search tool name
+		toolsPayload = append(toolsPayload, map[string]interface{}{"google_search": map[string]interface{}{}})
+	}
 	if len(toolsPayload) > 0 {
 		reqBody["tools"] = toolsPayload
 	}
@@ -874,9 +791,9 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 			}
 			// Only emit event if it has a type and (text content or tool calls)
 			if evt.Type != "" && (evt.Text != "" || len(evt.ToolCalls) > 0) {
-			if onEvent != nil {
-				if err := onEvent(evt); err != nil {
-					_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
+				if onEvent != nil {
+					if err := onEvent(evt); err != nil {
+						_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
 					}
 				}
 			}

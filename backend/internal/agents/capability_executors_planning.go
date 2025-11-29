@@ -44,6 +44,7 @@ func (e *PlanGenerateExecutor) ValidateInput(input map[string]interface{}) error
 
 func (e *PlanGenerateExecutor) Execute(ctx context.Context, stepCtx *AgentStepContext) (*CapabilityResult, error) {
 	userQuery := stepCtx.Input["userQuery"].(string)
+	openDataDiscovery := isOpenDataDiscoveryQuery(userQuery)
 
 	// Получить список доступных capabilities
 	availableCapabilities := e.capabilityRegistry.List()
@@ -95,7 +96,7 @@ func (e *PlanGenerateExecutor) Execute(ctx context.Context, stepCtx *AgentStepCo
 					"properties": map[string]interface{}{
 						"id":         map[string]interface{}{"type": "string"},
 						"capability": map[string]interface{}{"type": "string"},
-						"input":      map[string]interface{}{"type": "object"},
+						"input":      map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "additionalProperties": true},
 						"dependsOn": map[string]interface{}{
 							"type":  "array",
 							"items": map[string]interface{}{"type": "string"},
@@ -108,6 +109,19 @@ func (e *PlanGenerateExecutor) Execute(ctx context.Context, stepCtx *AgentStepCo
 			},
 		},
 		"required": []string{"intent", "goal", "steps"},
+	}
+
+	specialInstructions := ""
+	if openDataDiscovery {
+		specialInstructions = `
+Special Guidance (external source discovery):
+- The user asks to discover/add external sources (Telegram/RSS/Web) where identifiers are unknown upfront.
+- Always begin with deterministic discovery steps using real values:
+  1. source_list — list current project sources to avoid duplicates.
+  2. web_search — run an actual internet search using keywords from the request (no placeholders).
+  3. plan_calibrate — analyze the search results, extract concrete channel usernames/URLs, and decide the next action.
+- Do NOT add telegram_channel_read or source_create steps until plan_calibrate has produced real channel usernames or URLs. Those steps will be injected dynamically once the data exists.
+- Keep the initial plan limited to those discovery steps (typically 3). Further steps will be generated after new information arrives.`
 	}
 
 	prompt := fmt.Sprintf(`You are a task planner for an agentic system. Your task is to create an execution plan for a user's request.
@@ -141,6 +155,9 @@ Rules and Guidelines:
 - Consider the logical flow: search → read → process → write
 - Only create steps where you can provide REAL, CONCRETE values - not placeholders, not empty strings, not "placeholder"
 - If you cannot provide real values, DO NOT create the step - it will fail immediately
+- ABSOLUTELY FORBIDDEN: never output strings containing "${", "placeholder", "TBD", "<pending>", "doc-id-from-previous-step", etc. If you do not have a real value yet, omit that step entirely and rely on plan_calibrate later.
+
+%s
 
 Important Capability Notes:
 - data_search: Searches documents within the project. Input: {"searchQuery": "query text", "limit": number}. Output: {"matches": [...], "documentIds": ["docId1", "docId2"], "count": N} - use "documentIds" array for document_read
@@ -148,14 +165,19 @@ Important Capability Notes:
 - document_write: Writes/updates document content. Input: {"documentId": "id", "content": "text"}. Creates document if it doesn't exist.
 - llm_generate: Generates text using LLM. Input: {"prompt": "text"}. Output: {"content": "generated text"}
 - llm_analyze: Performs structured analysis. Input: {"text": "content", "analysisType": "type"}. Output: {"analysis": {...}}
-- web_search: Searches the internet (use only when external information is needed)
+- web_search: Searches the internet (use only when external information is needed). Input: {"query": "search text", "maxResults": 5}. Output: {"results": [...], "count": N}
 - bigquery_query: Executes SQL queries against BigQuery for analytics. Input: {"sql": "SELECT...", "maxResults": 1000}. Output: {"results": [...], "rowCount": N}
-  BigQuery tables: core_docs_metadata (id, tenantId, projectId, filename, extractedText), documents_metadata
-  
-  For CSV analysis, parse extractedText (tab-separated values):
-  - Count rows: SELECT ARRAY_LENGTH(SPLIT(extractedText, '\n')) as row_count FROM core_docs_metadata WHERE filename='data.csv'
-  - Parse CSV columns: SELECT SPLIT(line, '\t')[SAFE_OFFSET(0)] as col1, SPLIT(line, '\t')[SAFE_OFFSET(1)] as col2 FROM core_docs_metadata, UNNEST(SPLIT(extractedText, '\n')) as line WHERE filename='data.csv' LIMIT 10
-  - Aggregate: Use SAFE_CAST to convert text to numbers for SUM/AVG
+- source_list: Lists data sources attached to the project. Input: {} (no input required). Output: {"sources": [{"id", "displayName", "kind", "status", "details"}], "count": N}
+- telegram_channel_read: Reads messages from a Telegram channel. Input: {"channelUsername": "@channel_name_without_at", "lastMessageId": 0}. Output: {"messages": [{"id", "text", "date", "link"}], "count": N}. IMPORTANT: channelUsername is REQUIRED and must be a valid Telegram channel username (without @).
+- source_create: Creates a new data source and attaches it to the project. Input: {"kind": "telegram_channel", "displayName": "Name", "projectId": "...", "channelUsername": "@channel"} (for telegram). Output: {"sourceId", "displayName", "kind", "status"}. Source is created in "paused" state.
+- plan_calibrate: Intermediate step to analyze results and adjust the plan. Use when you need to evaluate results before deciding next steps. Input: {"goal": {...}}. Output: {"extractedChannels": ["channel1", "channel2"], "channelUsername": "next_channel_to_check", "checkedChannels": ["already_checked"], "createdSources": ["sourceId1"], "goalAchieved": false, "additionalStepsNeeded": true}. IMPORTANT: Use ${stepId.channelUsername} to get the next channel to check, ${stepId.extractedChannels[0]} for first extracted channel.
+
+BigQuery tables: core_docs_metadata (id, tenantId, projectId, filename, extractedText), documents_metadata
+
+For CSV analysis, parse extractedText (tab-separated values):
+- Count rows: SELECT ARRAY_LENGTH(SPLIT(extractedText, '\n')) as row_count FROM core_docs_metadata WHERE filename='data.csv'
+- Parse CSV columns: SELECT SPLIT(line, '\t')[SAFE_OFFSET(0)] as col1, SPLIT(line, '\t')[SAFE_OFFSET(1)] as col2 FROM core_docs_metadata, UNNEST(SPLIT(extractedText, '\n')) as line WHERE filename='data.csv' LIMIT 10
+- Aggregate: Use SAFE_CAST to convert text to numbers for SUM/AVG
 
 CRITICAL: When referencing outputs from previous steps, use the EXACT field names from the output:
 - For data_search output, use: ${stepId.documentIds[0]} to get first document ID (NOT ${stepId.output.documentIds})
@@ -163,98 +185,52 @@ CRITICAL: When referencing outputs from previous steps, use the EXACT field name
 - For llm_generate output, use: ${stepId.content} to get generated text
 - Always use direct field access, NOT nested "output" wrapper
 
-IMPORTANT: You MUST return ONLY valid JSON. Do not include any explanatory text, markdown formatting, or code blocks. Return pure JSON starting with { and ending with }.
+IMPORTANT: You MUST return ONLY valid JSON matching this exact structure:
 
-Return JSON with fields: intent, goal, steps.`,
+{
+  "intent": {
+    "action": "What user wants to do",
+    "target": "What resources to work with",
+    "expectedOutcome": "What result is expected"
+  },
+  "goal": {
+    "description": "Description of desired result",
+    "successCriteria": ["criterion1", "criterion2"]
+  },
+  "steps": [
+    {
+      "id": "step1",
+      "capability": "capability_name",
+      "input": {"key": "value"},
+      "dependsOn": [],
+      "reason": "Why this step is needed",
+      "isCritical": false
+    }
+  ]
+}
+
+Do not include any explanatory text, markdown, or code blocks. Return ONLY the JSON object.`,
 		userQuery,
 		formatCapabilities(capabilityNames),
 		contextInfo,
+		specialInstructions,
 	)
 
-	result, err := e.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, gen_combined.Options{})
+	// Используем Gemini с ResponseFormat: "json" и SystemInstruction для надежного JSON вывода
+	result, err := e.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, gen_combined.Options{
+		ModelOverride: "gemini_fast",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate plan: %w", err)
 	}
 
-	// GenerateJSONStrict должен возвращать строгий JSON
-	// Для Gemini это может быть в ToolCalls с именем "return_structured"
 	jsonContent := result.Content
-	
-	// Если Content пустой или не начинается с JSON, проверяем ToolCalls (для Gemini strict JSON mode)
-	if (jsonContent == "" || (len(jsonContent) > 0 && jsonContent[0] != '{')) && len(result.ToolCalls) > 0 {
-		for _, tc := range result.ToolCalls {
-			if tc.Name == "return_structured" && tc.Arguments != "" {
-				jsonContent = tc.Arguments
-				if e.logger != nil {
-					e.logger.Printf("[PlanGenerateExecutor] Extracted JSON from return_structured tool call")
-				}
-				break
-			}
-		}
-	}
-	
-	// Если все еще пусто или не JSON, используем RawJSON
-	if jsonContent == "" || (len(jsonContent) > 0 && jsonContent[0] != '{') {
-		if result.RawJSON != "" {
-			jsonContent = result.RawJSON
-		}
-	}
-	
-	// Убираем markdown code fences если есть (на случай если LLM все же добавил их)
-	jsonContent = cleanJSONContent(jsonContent)
-	
-	// Попытка извлечь JSON из текста, если Content начинается с текста
-	if jsonContent == "" || (len(jsonContent) > 0 && jsonContent[0] != '{') {
-		// Ищем JSON объект в тексте
-		if idx := strings.Index(result.Content, "{"); idx != -1 {
-			// Находим последнюю закрывающую скобку
-			lastIdx := strings.LastIndex(result.Content, "}")
-			if lastIdx > idx {
-				jsonContent = result.Content[idx : lastIdx+1]
-				if e.logger != nil {
-					e.logger.Printf("[PlanGenerateExecutor] Extracted JSON from text content (idx: %d-%d)", idx, lastIdx+1)
-				}
-			}
-		}
-	}
-	
-	// Если JSON содержит "candidates" wrapper от Gemini API, извлекаем текст из него
-	if strings.Contains(jsonContent, `"candidates"`) && strings.Contains(jsonContent, `"parts"`) {
-		// Попробуем распарсить как Gemini response wrapper
-		var geminiWrapper struct {
-			Candidates []struct {
-				Content struct {
-					Parts []struct {
-						Text string `json:"text"`
-					} `json:"parts"`
-				} `json:"content"`
-			} `json:"candidates"`
-		}
-		if err := json.Unmarshal([]byte(jsonContent), &geminiWrapper); err == nil {
-			if len(geminiWrapper.Candidates) > 0 && len(geminiWrapper.Candidates[0].Content.Parts) > 0 {
-				extractedText := geminiWrapper.Candidates[0].Content.Parts[0].Text
-				// Очищаем markdown code fences
-				extractedText = strings.TrimSpace(extractedText)
-				if strings.HasPrefix(extractedText, "```json") {
-					extractedText = strings.TrimPrefix(extractedText, "```json")
-					extractedText = strings.TrimSuffix(extractedText, "```")
-					extractedText = strings.TrimSpace(extractedText)
-				} else if strings.HasPrefix(extractedText, "```") {
-					extractedText = strings.TrimPrefix(extractedText, "```")
-					extractedText = strings.TrimSuffix(extractedText, "```")
-					extractedText = strings.TrimSpace(extractedText)
-				}
-				jsonContent = extractedText
-				if e.logger != nil {
-					e.logger.Printf("[PlanGenerateExecutor] Extracted JSON from Gemini candidates wrapper")
-				}
-			}
-		}
-	}
-	
 	if jsonContent == "" {
-		return nil, fmt.Errorf("GenerateJSONStrict returned empty response (Content, ToolCalls, and RawJSON all empty)")
+		return nil, fmt.Errorf("GenerateJSONStrict returned empty response")
 	}
+
+	// Очищаем от markdown code fences
+	jsonContent = cleanJSONContent(jsonContent)
 
 	// Строгая типизация для плана
 	type PlanIntent struct {
@@ -353,15 +329,120 @@ Return JSON with fields: intent, goal, steps.`,
 
 // formatCapabilities форматирует список capabilities для промпта
 func formatCapabilities(caps []string) string {
-	result := ""
-	for i, cap := range caps {
-		result += fmt.Sprintf("- %s\n", cap)
-		if i >= 20 { // Ограничиваем до 20 для промпта
-			result += fmt.Sprintf("... и еще %d capabilities\n", len(caps)-20)
-			break
+	if len(caps) == 0 {
+		return "- (no capabilities registered)\n"
+	}
+
+	var sb strings.Builder
+	limit := min(len(caps), 20)
+	for i := 0; i < limit; i++ {
+		capName := caps[i]
+		desc := capabilityDescriptions[strings.ToLower(capName)]
+		if desc == "" {
+			desc = "Registered capability available to the agent."
+		}
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", capName, desc))
+	}
+	if len(caps) > limit {
+		sb.WriteString(fmt.Sprintf("... and %d more capabilities\n", len(caps)-limit))
+	}
+	return sb.String()
+}
+
+// fixInvalidJSONEscapes исправляет невалидные escape-последовательности в JSON
+// LLM иногда возвращает \' вместо ' что невалидно в JSON
+func fixInvalidJSONEscapes(content string) string {
+	// Заменяем \' на ' (невалидный escape в JSON)
+	content = strings.ReplaceAll(content, `\'`, `'`)
+	// Заменяем \` на ` (невалидный escape в JSON)
+	content = strings.ReplaceAll(content, "\\`", "`")
+	return content
+}
+
+// extractPureJSON извлекает чистый JSON объект из текста
+// Ищет первый сбалансированный JSON объект с учетом вложенности
+func extractPureJSON(content string) string {
+	if content == "" {
+		return ""
+	}
+
+	// Найти первую открывающую скобку
+	startIdx := strings.Index(content, "{")
+	if startIdx == -1 {
+		return ""
+	}
+
+	// Найти соответствующую закрывающую скобку с учетом вложенности
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := startIdx; i < len(content); i++ {
+		c := content[i]
+
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if c == '\\' && inString {
+			escaped = true
+			continue
+		}
+
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+
+		if inString {
+			continue
+		}
+
+		if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+			if depth == 0 {
+				return content[startIdx : i+1]
+			}
 		}
 	}
-	return result
+
+	return ""
+}
+
+var capabilityDescriptions = map[string]string{
+	"source_list":              "Lists current project data sources to avoid duplicates.",
+	"web_search":               "Searches the public internet for fresh information and URLs.",
+	"plan_calibrate":           "Analyzes previous steps and injects concrete follow-up actions with real parameters.",
+	"telegram_channel_read":    "Reads messages from a specific Telegram channel (requires channelUsername).",
+	"source_create":            "Creates a new data source (e.g., Telegram channel) and attaches it to the project.",
+	"document_read":            "Reads stored project documents by ID.",
+	"document_write":           "Creates or updates a project document.",
+	"data_search":              "Searches existing project documents by text query.",
+	"llm_generate":             "Generates free-form text using the LLM.",
+	"llm_analyze":              "Performs structured analysis of supplied content via LLM.",
+	"bigquery_query":           "Executes analytical SQL queries in BigQuery.",
+	"plan_generate":            "Creates an initial multi-step plan from the user request.",
+	"replan":                   "Updates the plan when existing steps fail or new data arrives.",
+	"reflect":                  "Evaluates progress toward the overall goal.",
+	"telegram_channel_reading": "Reads Telegram channel content (alias).",
+}
+
+func isOpenDataDiscoveryQuery(query string) bool {
+	q := strings.ToLower(query)
+	keywords := []string{
+		"telegram", "телеграм", "канал", "каналы", "каналов",
+		"источник", "источники", "источников", "rss", "web-source",
+		"найди", "подбери", "подбор", "source", "sources",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(q, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanJSONContent убирает markdown code fences из JSON
@@ -571,7 +652,7 @@ Return JSON with fields: updatedPlan (object with steps array and reason string)
 	// GenerateJSONStrict должен возвращать строгий JSON
 	// Для Gemini это может быть в ToolCalls с именем "return_structured"
 	jsonContent := result.Content
-	
+
 	// Если Content пустой, проверяем ToolCalls (для Gemini strict JSON mode)
 	if jsonContent == "" && len(result.ToolCalls) > 0 {
 		for _, tc := range result.ToolCalls {
@@ -584,12 +665,12 @@ Return JSON with fields: updatedPlan (object with steps array and reason string)
 			}
 		}
 	}
-	
+
 	// Если все еще пусто, используем RawJSON
 	if jsonContent == "" {
 		jsonContent = result.RawJSON
 	}
-	
+
 	jsonContent = cleanJSONContent(jsonContent)
 
 	// Строгая типизация для реплана
@@ -749,7 +830,7 @@ func (e *ReflectExecutor) Execute(ctx context.Context, stepCtx *AgentStepContext
 							"properties": map[string]interface{}{
 								"id":         map[string]interface{}{"type": "string"},
 								"capability": map[string]interface{}{"type": "string"},
-								"input":      map[string]interface{}{"type": "object"},
+								"input":      map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "additionalProperties": true},
 								"reason":     map[string]interface{}{"type": "string"},
 							},
 						},

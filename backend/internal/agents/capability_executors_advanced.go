@@ -341,7 +341,7 @@ func (e *LLMAnalyzeExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 	if s, ok := stepCtx.Input["schema"].(map[string]interface{}); ok {
 		schema = s
 	}
-	model := "gemini-2.0-flash-exp"
+	model := "gemini_fast"
 	if m, ok := stepCtx.Input["model"].(string); ok {
 		model = m
 	}

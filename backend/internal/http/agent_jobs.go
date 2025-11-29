@@ -454,6 +454,110 @@ func (h *AgentJobsHandler) UpdateAgentJobSteps(w http.ResponseWriter, r *http.Re
 	})
 }
 
+// CancelAgentJob обрабатывает POST /api/v1/projects/{projectId}/agent-jobs/{jobId}/cancel
+// Отменяет выполнение AgentJob
+func (h *AgentJobsHandler) CancelAgentJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	jobID := extractJobID(r.URL.Path)
+	if jobID == "" {
+		WriteBadRequest(w, "INVALID_PATH", "Job ID required")
+		return
+	}
+
+	// Проверка доступа
+	job, err := h.jobsRepo.Get(r.Context(), jobID)
+	if err != nil {
+		WriteNotFound(w, "Agent job not found")
+		return
+	}
+
+	if job.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	if err := h.orchestrator.CancelJob(r.Context(), jobID); err != nil {
+		h.logger.Printf("[AgentJobsHandler] Failed to cancel job: %v", err)
+		WriteInternalError(w, "Failed to cancel job")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"jobId":  jobID,
+		"status": "cancelled",
+		"message": "Job cancelled successfully",
+	})
+}
+
+// DeleteAgentJob обрабатывает DELETE /api/v1/projects/{projectId}/agent-jobs/{jobId}
+// Удаляет AgentJob
+func (h *AgentJobsHandler) DeleteAgentJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only DELETE is allowed", nil)
+		return
+	}
+
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	jobID := extractJobID(r.URL.Path)
+	if jobID == "" {
+		WriteBadRequest(w, "INVALID_PATH", "Job ID required")
+		return
+	}
+
+	// Проверка доступа
+	job, err := h.jobsRepo.Get(r.Context(), jobID)
+	if err != nil {
+		WriteNotFound(w, "Agent job not found")
+		return
+	}
+
+	if job.TenantID != auth.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Если job выполняется или приостановлен, сначала отменить его
+	// Это гарантирует, что горутина выполнения завершится и не останется висеть
+	if job.Status == models.AgentJobStatusRunning || 
+	   job.Status == models.AgentJobStatusPending || 
+	   job.Status == models.AgentJobStatusPaused {
+		if err := h.orchestrator.CancelJob(r.Context(), jobID); err != nil {
+			h.logger.Printf("[AgentJobsHandler] Failed to cancel job before delete: %v", err)
+			// Продолжаем удаление даже если отмена не удалась
+		}
+		// Дать время горутине завершиться (best effort)
+		// Горутина должна проверить контекст и завершиться при отмене
+	}
+
+	// Удалить job
+	if err := h.jobsRepo.Delete(r.Context(), jobID); err != nil {
+		h.logger.Printf("[AgentJobsHandler] Failed to delete job: %v", err)
+		WriteInternalError(w, "Failed to delete agent job")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"jobId":  jobID,
+		"status": "deleted",
+		"message": "Job deleted successfully",
+	})
+}
+
 // Helper functions
 
 func extractProjectID(path string) string {

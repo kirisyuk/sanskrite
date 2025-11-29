@@ -1836,13 +1836,30 @@ func (h *ProjectsHandler) DownloadProjectDoc(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	projectID, docID := parts[3], parts[5]
+	if h.logger != nil {
+		h.logger.Printf("[DownloadProjectDoc] projectID=%s, docID=%s, path=%s", projectID, docID, r.URL.Path)
+	}
 	project, err := h.repo.Get(r.Context(), projectID)
 	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[DownloadProjectDoc] Access denied for projectID=%s: err=%v", projectID, err)
+		}
 		WriteForbidden(w, "Access denied")
 		return
 	}
 	cd, err := h.coreDocs.Get(r.Context(), docID)
-	if err != nil || cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[DownloadProjectDoc] Document not found by ID: docID=%s, err=%v", docID, err)
+		}
+		WriteNotFound(w, "Document not found")
+		return
+	}
+	if cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[DownloadProjectDoc] Document access denied: docID=%s, cd.ProjectID=%s, cd.TenantID=%s, expectedProjectID=%s, expectedTenantID=%s", 
+				docID, cd.ProjectID, cd.TenantID, projectID, authInfo.TenantID)
+		}
 		WriteNotFound(w, "Document not found")
 		return
 	}
@@ -1879,6 +1896,10 @@ func (h *ProjectsHandler) DownloadProjectDoc(w http.ResponseWriter, r *http.Requ
 
 	// Regular documents: require storage
 	if cd.StoragePath == nil || !strings.HasPrefix(*cd.StoragePath, "gs://") {
+		if h.logger != nil {
+			h.logger.Printf("[DownloadProjectDoc] Document has no storagePath: docID=%s, StoragePath=%v, DocType=%v", 
+				docID, cd.StoragePath, cd.DocType)
+		}
 		WriteBadRequest(w, "NO_STORAGE", "Document has no storagePath")
 		return
 	}

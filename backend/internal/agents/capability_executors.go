@@ -503,22 +503,41 @@ func (e *DocumentWriteExecutor) ValidateInput(input map[string]interface{}) erro
 }
 
 func (e *DocumentWriteExecutor) Execute(ctx context.Context, stepCtx *AgentStepContext) (*CapabilityResult, error) {
-	docID := stepCtx.Input["documentId"].(string)
+	// documentId может быть либо реальным ID документа, либо filename (для обратной совместимости)
+	documentIdOrFilename := stepCtx.Input["documentId"].(string)
 	content := stepCtx.Input["content"].(string)
 
-	// Получить документ или создать новый, если не существует
-	doc, err := e.coreDocs.Get(ctx, docID)
+	// Получить filename из input или использовать documentId как fallback
+	filename := documentIdOrFilename
+	if fn, ok := stepCtx.Input["filename"].(string); ok && fn != "" {
+		filename = fn
+	}
+
+	// Попробовать найти документ по ID
+	doc, err := e.coreDocs.Get(ctx, documentIdOrFilename)
 	if err != nil {
-		// Документ не существует - создаем новый
+		// Если не найден по ID, попробовать найти по filename (для обратной совместимости)
+		docs, listErr := e.coreDocs.ListByProject(ctx, stepCtx.TenantID, stepCtx.ProjectID, 1000, nil)
+		if listErr == nil {
+			for _, d := range docs {
+				if d.Filename == documentIdOrFilename {
+					doc = d
+					err = nil
+					if e.logger != nil {
+						e.logger.Printf("[DocumentWriteExecutor] Found document by filename: filename=%s, id=%s", documentIdOrFilename, doc.ID)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if err != nil || doc == nil {
+		// Документ не существует - создаем новый с автоматически сгенерированным ID
 		now := time.Now().UTC()
 		sizeBytes := int64(len(content))
-		filename := docID
-		if fn, ok := stepCtx.Input["filename"].(string); ok && fn != "" {
-			filename = fn
-		}
 
 		doc = &models.CoreDoc{
-			ID:            docID,
 			TenantID:      stepCtx.TenantID,
 			ProjectID:     stepCtx.ProjectID,
 			Filename:      filename,
@@ -529,8 +548,16 @@ func (e *DocumentWriteExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 			UpdatedAt:     now,
 		}
 
+		// Использовать Create для генерации правильного ID
+		createdID, createErr := e.coreDocs.Create(ctx, doc)
+		if createErr != nil {
+			return nil, fmt.Errorf("failed to create document: %w", createErr)
+		}
+		doc.ID = createdID
+
 		if e.logger != nil {
-			e.logger.Printf("[DocumentWriteExecutor] Creating new document %s", docID)
+			e.logger.Printf("[DocumentWriteExecutor] Created new document with ID=%s, filename=%s (documentId from input was: %s)", 
+				doc.ID, filename, documentIdOrFilename)
 		}
 	} else {
 		// Проверить доступ для существующего документа
@@ -540,24 +567,23 @@ func (e *DocumentWriteExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 
 		// Обновить содержимое существующего документа
 		if e.logger != nil {
-			e.logger.Printf("[DocumentWriteExecutor] Updating existing document %s", docID)
+			e.logger.Printf("[DocumentWriteExecutor] Updating existing document %s", doc.ID)
+		}
+
+		// Обновить содержимое существующего документа
+		doc.ExtractedText = &content
+		doc.UpdatedAt = time.Now().UTC()
+		sizeBytes := int64(len(content))
+		doc.SizeBytes = &sizeBytes
+
+		// Обновить через Upsert
+		if err := e.coreDocs.Upsert(ctx, doc); err != nil {
+			return nil, fmt.Errorf("failed to upsert document: %w", err)
 		}
 	}
 
-	// Обновить/создать содержимое
-	doc.ExtractedText = &content
-	doc.UpdatedAt = time.Now().UTC()
-	if doc.SizeBytes != nil {
-		sizeBytes := int64(len(content))
-		doc.SizeBytes = &sizeBytes
-	}
-
-	if err := e.coreDocs.Upsert(ctx, doc); err != nil {
-		return nil, fmt.Errorf("failed to upsert document: %w", err)
-	}
-
 	if e.logger != nil {
-		e.logger.Printf("[DocumentWriteExecutor] Updated document %s, content length: %d", docID, len(content))
+		e.logger.Printf("[DocumentWriteExecutor] Updated document %s, content length: %d", doc.ID, len(content))
 	}
 
 	confidence := 1.0 // Полная уверенность при успешной записи
@@ -565,13 +591,13 @@ func (e *DocumentWriteExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 	return &CapabilityResult{
 		Success: true,
 		Output: map[string]interface{}{
-			"documentId": docID,
+			"documentId": doc.ID, // Возвращаем реальный ID документа
 			"updatedAt":  doc.UpdatedAt,
 		},
-		Message:         fmt.Sprintf("Document %s updated successfully", docID),
+		Message:         fmt.Sprintf("Document %s updated successfully", doc.ID),
 		ExecutionStatus: models.ExecutionStatusSuccess,
 		Confidence:      &confidence,
 		Retryable:       true, // Можно повторить при временных ошибках
-		Reason:          fmt.Sprintf("Document %s updated with %d characters", docID, len(content)),
+		Reason:          fmt.Sprintf("Document %s updated with %d characters", doc.ID, len(content)),
 	}, nil
 }

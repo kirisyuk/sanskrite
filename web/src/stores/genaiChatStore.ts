@@ -27,7 +27,7 @@ export interface StartStreamArgs {
   suppressUserEcho?: boolean;
 }
 
-type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action' | 'research' | 'ontology';
+type InteractionKind = 'user' | 'assistant' | 'system' | 'note' | 'section_start' | 'section_end' | 'action' | 'research' | 'ontology' | 'agent.execution';
 
 // Ontology entity subkinds
 export type OntologySubkind = 'entity' | 'event' | 'claim' | 'relation' | 'concept' | 'metricState' | 'trend' | 'causalLink' | 'scenario' | 'actionableItem';

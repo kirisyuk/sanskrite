@@ -679,24 +679,115 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     
     if (!contextWindow) return null;
     
-    // Calculate tokens used from interactions (ONLY prompt tokens, never totalTokens which includes completion)
-    let totalTokens = 0;
-    
-    // Sum up prompt tokens from interactions
-    // IMPORTANT: We only count prompt tokens, not totalTokens (which includes completion tokens)
-    for (const interaction of interactions) {
-      if (interaction.usage?.promptTokens) {
-        // Use actual prompt tokens if available
-        totalTokens += interaction.usage.promptTokens;
-      } else {
-        // Fallback: estimate from content (chars / 4)
-        // This includes document.attach interactions automatically
-        // We estimate only the prompt size, not completion
-        const content = interaction.summary || interaction.content || '';
-        totalTokens += Math.ceil(content.length / 4);
+    // Filter interactions the same way as in genaiChatStore.ts (llmContextInteractions)
+    // This ensures we only count interactions that actually go to LLM context
+    const llmContextInteractions = interactions.filter((it) => {
+      // Exclude ontology interactions (structured data, not chat content)
+      if (it.kind === 'ontology') {
+        return false;
       }
-      // DO NOT use totalTokens as fallback - it includes completion tokens which are not part of context
+      // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
+      if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+        return false;
+      }
+      // Exclude queued tasks interactions (they are metadata, not chat content)
+      if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind === 'queued.tasks') {
+        return false;
+      }
+      // Exclude perspective analysis interactions (kind='system' with subkind starting with 'perspective.' and ending with '.analysis')
+      if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.') && it.subkind.endsWith('.analysis')) {
+        return false;
+      }
+      // Exclude eval.* system messages (bias, stance, user_request, review evaluations)
+      if (it.kind === 'system' && typeof it.subkind === 'string' && it.subkind.startsWith('eval.')) {
+        return false;
+      }
+      // Exclude action, section markers (these are UI markers, not chat content)
+      if (it.kind === 'action' || it.kind === 'section_start' || it.kind === 'section_end') {
+        return false;
+      }
+      // Exclude agent execution interactions (they are execution status, not chat content)
+      if (it.kind === 'agent.execution') {
+        return false;
+      }
+      // Include document attachments in LLM context (they are context for LLM)
+      return true;
+    });
+    
+    // Separate pinned and regular interactions (same logic as genaiChatStore.ts)
+    const now = Date.now();
+    const twoDaysAgo = now - (2 * 24 * 60 * 60 * 1000); // 2 days in milliseconds
+    
+    const pinnedInteractions = llmContextInteractions.filter((it) => {
+      if (!it.metadata?.pinned) return false;
+      // Filter out pinned messages older than 2 days
+      const createdAt = it.createdAt ? new Date(it.createdAt).getTime() : 0;
+      return createdAt >= twoDaysAgo;
+    });
+    
+    const regularInteractions = llmContextInteractions.filter((it) => !it.metadata?.pinned);
+    
+    // Calculate tokens used from filtered interactions (ONLY prompt tokens, never totalTokens which includes completion)
+    // Use same logic as genaiChatStore.ts: pinned can use up to 90%, regular up to 70% of context window
+    const maxContextTokens = Math.floor(contextWindow * 0.7);
+    const maxPinnedTokens = Math.floor(contextWindow * 0.9);
+    
+    let pinnedTokens = 0;
+    let regularTokens = 0;
+    
+    // Calculate pinned interactions tokens (oldest first, truncate if needed)
+    const sortedPinned = [...pinnedInteractions].sort((a, b) => {
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return aTime - bTime; // Oldest first
+    });
+    
+    for (const interaction of sortedPinned) {
+      // Use summary if available, otherwise content (same as genaiChatStore.ts)
+      const text = (interaction.summary && interaction.summary.trim()) ? interaction.summary : interaction.content;
+      const tokens = interaction.usage?.promptTokens || Math.ceil(text.length / 4);
+      
+      // If adding this pinned message would exceed 90% limit, truncate oldest pinned messages
+      if (pinnedTokens + tokens > maxPinnedTokens && pinnedTokens > 0) {
+        const remainingTokens = maxPinnedTokens - pinnedTokens;
+        if (remainingTokens > 100) {
+          pinnedTokens += remainingTokens;
+        }
+        break;
+      }
+      
+      pinnedTokens += tokens;
     }
+    
+    // Calculate regular interactions tokens (newest first, truncate oldest if needed)
+    // Process from newest to oldest (same as genaiChatStore.ts: for (let i = regularInteractions.length - 1; i >= 0; i--))
+    const sortedRegular = [...regularInteractions].sort((a, b) => {
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bTime - aTime; // Newest first
+    });
+    
+    for (const interaction of sortedRegular) {
+      // Use summary if available, otherwise content (same as genaiChatStore.ts)
+      const text = (interaction.summary && interaction.summary.trim()) ? interaction.summary : interaction.content;
+      const tokens = interaction.usage?.promptTokens || Math.ceil(text.length / 4);
+      
+      // Check BEFORE adding tokens (same as genaiChatStore.ts: totalTokens + regularTokens + tokens > maxContextTokens)
+      // totalTokens in genaiChatStore = pinnedTokens, so we use pinnedTokens + regularTokens + tokens
+      if (pinnedTokens + regularTokens + tokens > maxContextTokens && regularTokens > 0) {
+        // Truncate oldest messages to fit within limit
+        const remainingTokens = maxContextTokens - pinnedTokens - regularTokens;
+        if (remainingTokens > 100) { // Only add if we have meaningful space left
+          regularTokens += remainingTokens;
+        }
+        // Stop processing older messages once we hit the limit
+        break;
+      }
+      
+      regularTokens += tokens;
+    }
+    
+    let totalTokens = pinnedTokens + regularTokens;
     
     // Add current stream usage if available (only prompt tokens)
     if (currentUsage?.promptTokens) {

@@ -19,7 +19,9 @@ import (
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/telegram"
 	"google.golang.org/api/option"
 )
 
@@ -291,6 +293,34 @@ func main() {
 	capabilityRegistry.Register(agents.NewEntityMergeAttributesExecutor(entitiesRepo, logger))
 	logger.Printf("All ontology capabilities registered")
 
+	// Регистрация executors для управления источниками
+	dataSourcesRepo := repo.NewDataSourcesRepository(fsClient)
+	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient)
+	
+	// Telegram client для чтения каналов
+	telegramServiceURL := os.Getenv("TELEGRAM_SERVICE_URL")
+	if telegramServiceURL == "" {
+		telegramServiceURL = "http://localhost:8081" // Default для локального тестирования
+		logger.Printf("WARNING: TELEGRAM_SERVICE_URL not set, using default: %s", telegramServiceURL)
+	}
+	telegramClient := telegram.NewClient(telegramServiceURL)
+	
+	// Publisher для WebSocket событий (может быть nil для тестов)
+	var publisher *realtime.Publisher
+	publisher, pubsubErr := realtime.NewPublisher(ctx, projectID)
+	if pubsubErr != nil {
+		logger.Printf("WARNING: Failed to create publisher: %v (WebSocket events will not be sent)", pubsubErr)
+		publisher = nil
+	}
+	
+	capabilityRegistry.Register(agents.NewSourceListExecutor(dataSourcesRepo, sourceProjectsRepo, logger))
+	capabilityRegistry.Register(agents.NewTelegramChannelReadExecutor(telegramClient, logger))
+	capabilityRegistry.Register(agents.NewSourceCreateExecutor(dataSourcesRepo, sourceProjectsRepo, publisher, logger))
+	
+	// PlanCalibrate executor
+	capabilityRegistry.Register(agents.NewPlanCalibrateExecutor(genaiClient, capabilityRegistry, logger))
+	logger.Printf("Source management capabilities registered")
+
 	// Создание orchestrator
 	orchestrator := agents.NewAgentOrchestrator(jobsRepo, capabilityRegistry, nil, logger).
 		WithRepositories(coreDocsRepo, nil, nil, nil, nil).
@@ -321,6 +351,8 @@ func main() {
 		testScenario8Replanning(ctx, orchestrator, jobsRepo, coreDocsRepo)
 		fmt.Println("\n=== Test Scenario 9: Dynamic Supply Planning with Data Improvement ===")
 		testScenario9(ctx, orchestrator, jobsRepo, coreDocsRepo, fsClient)
+		fmt.Println("\n=== Test Scenario 10: Automatic Telegram Source Discovery ===")
+		testScenario10(ctx, orchestrator, jobsRepo, dataSourcesRepo, sourceProjectsRepo, telegramClient, publisher, fsClient)
 	} else {
 		// Запустить только указанный тест
 		switch testToRun {
@@ -342,9 +374,12 @@ func main() {
 		case "9", "supply-planning":
 			fmt.Println("\n=== Test Scenario 9: Dynamic Supply Planning with Data Improvement ===")
 			testScenario9(ctx, orchestrator, jobsRepo, coreDocsRepo, fsClient)
+		case "10", "telegram-discovery":
+			fmt.Println("\n=== Test Scenario 10: Automatic Telegram Source Discovery ===")
+			testScenario10(ctx, orchestrator, jobsRepo, dataSourcesRepo, sourceProjectsRepo, telegramClient, publisher, fsClient)
 		default:
 			fmt.Printf("Unknown test scenario: %s\n", testToRun)
-			fmt.Println("Available scenarios: 1, 5, 6, 7, 8, 9")
+			fmt.Println("Available scenarios: 1, 5, 6, 7, 8, 9, 10")
 		}
 	}
 

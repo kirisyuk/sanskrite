@@ -330,30 +330,31 @@ func (o *AgentOrchestrator) executeSteps(
 
 	// Выполнять шаги пока есть готовые к выполнению
 	iterationCount := 0
-	maxIterations := 100 // Защита от бесконечного цикла
+	maxIterations := 30 // Защита от бесконечного цикла (уменьшено с 100)
 	for {
+		// Проверить отмену контекста
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("job cancelled: %w", ctx.Err())
+		default:
+		}
+
 		iterationCount++
 		if iterationCount > maxIterations {
 			return fmt.Errorf("deadlock: exceeded max iterations (%d) in executeSteps", maxIterations)
 		}
 
 		// Перезагрузить job из базы, чтобы получить актуальные Output от завершенных шагов
+		// и новые шаги, добавленные через addSuggestedSteps
 		reloadedJob, reloadErr := o.jobsRepo.Get(ctx, job.ID)
 		if reloadErr == nil {
-			// Обновить stepMap с актуальными данными из базы
-			for i := range reloadedJob.Steps {
-				if existingStep, ok := stepMap[reloadedJob.Steps[i].ID]; ok {
-					// Обновить Output, Status и Error из базы
-					existingStep.Output = reloadedJob.Steps[i].Output
-					existingStep.Status = reloadedJob.Steps[i].Status
-					existingStep.Error = reloadedJob.Steps[i].Error
-					existingStep.CompletedAt = reloadedJob.Steps[i].CompletedAt
-				} else {
-					// Если шаг не найден в stepMap, добавить его
-					stepMap[reloadedJob.Steps[i].ID] = &reloadedJob.Steps[i]
-				}
-			}
+			// ВАЖНО: Полностью перестроить stepMap чтобы указывал на элементы reloadedJob.Steps
+			// Иначе stepMap будет содержать указатели на старые объекты, а job.Steps - на новые
 			job = reloadedJob
+			stepMap = make(map[string]*models.AgentStep)
+			for i := range job.Steps {
+				stepMap[job.Steps[i].ID] = &job.Steps[i]
+			}
 		} else if o.logger != nil {
 			o.logger.Printf("[AgentOrchestrator] WARNING: Failed to reload job from DB: %v", reloadErr)
 		}
@@ -381,6 +382,13 @@ func (o *AgentOrchestrator) executeSteps(
 
 		// Выполнить готовые шаги (можно параллельно, но для простоты последовательно)
 		for _, stepID := range readySteps {
+			// Проверить отмену контекста перед выполнением каждого шага
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("job cancelled: %w", ctx.Err())
+			default:
+			}
+
 			step := stepMap[stepID]
 			if step.Status != models.AgentStepStatusPending {
 				continue
@@ -428,13 +436,19 @@ func (o *AgentOrchestrator) findReadySteps(
 	ready := []string{}
 
 	for _, step := range steps {
-		if step.Status != models.AgentStepStatusPending {
+		// Получить актуальный статус из stepMap (там он обновляется после выполнения)
+		actualStep, ok := stepMap[step.ID]
+		if !ok {
+			continue
+		}
+		
+		if actualStep.Status != models.AgentStepStatusPending {
 			continue
 		}
 
 		// Проверить зависимости
 		allDepsReady := true
-		for _, depID := range step.DependsOn {
+		for _, depID := range actualStep.DependsOn {
 			dep, ok := stepMap[depID]
 			if !ok {
 				allDepsReady = false
@@ -547,6 +561,18 @@ func (o *AgentOrchestrator) executeStep(
 	step.Output = result.Output
 	step.Message = result.Message
 	step.CompletedAt = &now
+	if result.ExecutionStatus != "" {
+		step.ExecutionStatus = result.ExecutionStatus
+	}
+	if result.Confidence != nil {
+		step.Confidence = result.Confidence
+	}
+	if result.Retryable {
+		step.Retryable = true
+	}
+	if result.Reason != "" {
+		step.Reason = result.Reason
+	}
 	if result.NextSteps != nil {
 		step.NextSteps = result.NextSteps
 	}
@@ -555,6 +581,28 @@ func (o *AgentOrchestrator) executeStep(
 	}
 
 	o.sendStepUpdate(ctx, onUpdate, job.ID, job.AgentID, job.TenantID, job.ProjectID, step, "completed")
+
+	// Если это plan_calibrate шаг и он предлагает новые шаги - добавить их
+	if step.Capability == string(CapabilityPlanCalibrate) && len(result.SuggestedSteps) > 0 {
+		if o.logger != nil {
+			o.logger.Printf("[AgentOrchestrator] Plan calibrate step %s suggested %d new steps", step.ID, len(result.SuggestedSteps))
+		}
+		// Добавить новые шаги к job
+		if err := o.addSuggestedSteps(ctx, job, result.SuggestedSteps, step.ID); err != nil {
+			if o.logger != nil {
+				o.logger.Printf("[AgentOrchestrator] Failed to add suggested steps: %v", err)
+			}
+			// Не прерываем выполнение, если не удалось добавить шаги
+		}
+	}
+
+	// Если результат предлагает репланирование - пометить job для репланирования
+	if result.SuggestsReplan {
+		if o.logger != nil {
+			o.logger.Printf("[AgentOrchestrator] Step %s suggests replanning: %s", step.ID, result.ReplanReason)
+		}
+		// Репланирование будет обработано в executeWithReplanning
+	}
 
 	if o.logger != nil {
 		o.logger.Printf("[AgentOrchestrator] Step %s completed successfully", step.ID)
@@ -930,6 +978,20 @@ func (o *AgentOrchestrator) ResumeJob(ctx context.Context, jobID string, onUpdat
 	return nil
 }
 
+// CancelJob отменяет выполнение job (останавливает и помечает как failed)
+func (o *AgentOrchestrator) CancelJob(ctx context.Context, jobID string) error {
+	o.mu.Lock()
+	activeJob, ok := o.activeJobs[jobID]
+	if ok && activeJob != nil {
+		activeJob.cancel()
+		delete(o.activeJobs, jobID)
+	}
+	o.mu.Unlock()
+
+	// Обновить статус на failed (отменено пользователем)
+	return o.jobsRepo.UpdateStatus(ctx, jobID, models.AgentJobStatusFailed, 0.0)
+}
+
 // generatePlan генерирует план выполнения для job
 func (o *AgentOrchestrator) generatePlan(ctx context.Context, job *models.AgentJob) error {
 	if o.genaiClient == nil {
@@ -1048,6 +1110,13 @@ func (o *AgentOrchestrator) executeWithReplanning(
 	repeatedErrorCount := 0 // Счетчик повторяющихся ошибок
 
 	for {
+		// Проверить отмену контекста перед началом выполнения
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("job cancelled: %w", ctx.Err())
+		default:
+		}
+
 		// Выполнить текущие шаги
 		err := o.executeSteps(ctx, job, onUpdate)
 		if err != nil && err.Error() != "deadlock: no ready steps but not all steps completed" {
@@ -1525,13 +1594,23 @@ func (o *AgentOrchestrator) getMapKeysString(m map[string]*models.AgentStep) []s
 
 // shouldReplan определяет, нужен ли репланинг
 func (o *AgentOrchestrator) shouldReplan(job *models.AgentJob) bool {
-	// Репланинг нужен если:
+	// Репланинг нужен ТОЛЬКО если:
 	// 1. Есть шаги с ExecutionStatusRetryNeeded
-	// 2. Есть шаги с SuggestsReplan = true (проверяется через CapabilityResult)
+	// 2. Есть шаги с ExecutionStatus = Partial и SuggestedSteps (и шаг НЕ plan_calibrate)
+	// 
+	// НЕ триггерим replan для plan_calibrate - его SuggestedSteps
+	// обрабатываются через addSuggestedSteps, полный replan не нужен
 
 	for _, step := range job.Steps {
 		if step.ExecutionStatus == models.ExecutionStatusRetryNeeded {
 			return true
+		}
+		// Проверяем шаги с частичным успехом и предложенными шагами
+		// НО НЕ для plan_calibrate - его шаги добавляются через addSuggestedSteps
+		if step.Capability != string(CapabilityPlanCalibrate) {
+			if step.ExecutionStatus == models.ExecutionStatusPartial && len(step.NextSteps) > 0 {
+				return true
+			}
 		}
 	}
 	return false
@@ -1559,6 +1638,80 @@ func (o *AgentOrchestrator) allStepsCompleted(job *models.AgentJob) bool {
 		}
 	}
 	return len(job.Steps) > 0
+}
+
+// addSuggestedSteps добавляет новые шаги из SuggestedSteps к job
+func (o *AgentOrchestrator) addSuggestedSteps(
+	ctx context.Context,
+	job *models.AgentJob,
+	suggestedSteps []SuggestedStep,
+	calibrateStepID string,
+) error {
+	if len(suggestedSteps) == 0 {
+		return nil
+	}
+
+	// Лимит на общее количество шагов
+	const maxTotalSteps = 15
+	if len(job.Steps)+len(suggestedSteps) > maxTotalSteps {
+		if o.logger != nil {
+			o.logger.Printf("[AgentOrchestrator] Refusing to add %d steps - would exceed max limit (%d total, limit: %d)",
+				len(suggestedSteps), len(job.Steps)+len(suggestedSteps), maxTotalSteps)
+		}
+		// Ограничиваем количество добавляемых шагов
+		remaining := maxTotalSteps - len(job.Steps)
+		if remaining <= 0 {
+			return fmt.Errorf("max steps limit reached (%d), cannot add more steps", maxTotalSteps)
+		}
+		suggestedSteps = suggestedSteps[:remaining]
+	}
+
+	// Найти максимальный индекс шага для генерации новых ID
+	maxIndex := 0
+	for _, step := range job.Steps {
+		// Парсим step.ID чтобы найти числовой индекс (например, "step1" -> 1)
+		var index int
+		if _, err := fmt.Sscanf(step.ID, "step%d", &index); err == nil {
+			if index > maxIndex {
+				maxIndex = index
+			}
+		}
+	}
+
+	// Создать новые шаги из SuggestedSteps
+	newSteps := make([]models.AgentStep, 0, len(suggestedSteps))
+	for i, suggested := range suggestedSteps {
+		stepID := fmt.Sprintf("step%d", maxIndex+i+1)
+		
+		// Определить критичность на основе capability
+		isCritical := Capability(suggested.Capability).IsCritical()
+
+		newStep := models.AgentStep{
+			ID:         stepID,
+			Capability: suggested.Capability,
+			Status:     models.AgentStepStatusPending,
+			Input:      suggested.Input,
+			DependsOn:  []string{calibrateStepID}, // Зависит от calibrate шага
+			IsCritical: isCritical,
+			Message:    suggested.Reason,
+		}
+
+		newSteps = append(newSteps, newStep)
+	}
+
+	// Добавить новые шаги к job
+	job.Steps = append(job.Steps, newSteps...)
+
+	// Обновить job в репозитории
+	if err := o.jobsRepo.Update(ctx, job); err != nil {
+		return fmt.Errorf("failed to update job with new steps: %w", err)
+	}
+
+	if o.logger != nil {
+		o.logger.Printf("[AgentOrchestrator] Added %d new steps to job %s from calibrate step %s", len(newSteps), job.ID, calibrateStepID)
+	}
+
+	return nil
 }
 
 // replan выполняет репланирование
