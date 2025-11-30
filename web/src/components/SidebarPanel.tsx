@@ -16,6 +16,7 @@ interface SidebarPanelProps {
   onShowSettings: () => void;
   onShowAccount: () => void;
   onShowAdmin: () => void;
+  onCloseAllModals?: () => void;
   editingProjectId: string | null;
   editingProjectName: string;
   editingInputRef: React.RefObject<HTMLInputElement | null>;
@@ -42,6 +43,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   onShowSettings,
   onShowAccount,
   onShowAdmin,
+  onCloseAllModals,
   editingProjectId,
   editingProjectName,
   editingInputRef,
@@ -68,6 +70,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   const [agentJobs, setAgentJobs] = React.useState<any[]>([]);
   const [agentJobsLoading, setAgentJobsLoading] = React.useState(false);
   const [deletingJobIds, setDeletingJobIds] = React.useState<Set<string>>(new Set());
+  // Track which project the agentJobs belong to, to prevent showing wrong agents during project switch
+  const [agentJobsProjectId, setAgentJobsProjectId] = React.useState<string | null>(null);
 
   // Group projects by date (Today, Yesterday, Later)
   const groupedProjects = React.useMemo(() => {
@@ -156,6 +160,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               projectName: project.displayName,
               currentProjectId: currentProject?.id,
             });
+            // Close all modals (workspace, admin, settings, account) when opening a chat
+            onCloseAllModals?.();
             setCurrentProject(project);
             if (isMobile) {
               onClose();
@@ -290,19 +296,37 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 
   // Load agent jobs for the current project (only on project selection, updates via WebSocket)
   React.useEffect(() => {
+    // Immediately clear agent jobs when project changes (synchronously)
     if (!currentProject?.id || currentProject.id === 'local-unfold') {
       setAgentJobs([]);
+      setAgentJobsProjectId(null);
       return;
     }
 
+    // Clear agent jobs immediately if switching to a different project
+    if (agentJobsProjectId !== currentProject.id) {
+      setAgentJobs([]);
+      setAgentJobsProjectId(null);
+    }
+
     const loadJobs = async () => {
+      // Capture the project ID at the start of the async operation
+      const projectIdForLoading = currentProject.id;
       setAgentJobsLoading(true);
       try {
-        const result = await api.listAgentJobs(currentProject.id, { limit: 50 });
-        setAgentJobs(result.jobs || []);
+        const result = await api.listAgentJobs(projectIdForLoading, { limit: 50 });
+        // Only set agent jobs if we're still on the same project (prevent race conditions)
+        if (currentProject?.id === projectIdForLoading) {
+          setAgentJobs(result.jobs || []);
+          setAgentJobsProjectId(projectIdForLoading);
+        }
       } catch (err) {
         console.error('[SidebarPanel] Failed to load agent jobs', err);
-        setAgentJobs([]);
+        // Only clear if we're still on the same project
+        if (currentProject?.id === projectIdForLoading) {
+          setAgentJobs([]);
+          setAgentJobsProjectId(null);
+        }
       } finally {
         setAgentJobsLoading(false);
       }
@@ -496,7 +520,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         <div className="space-y-1">
           {items.map((project) => {
             const isSelected = currentProject?.id === project.id;
-            const projectJobs = isSelected ? agentJobs : [];
+            // Only show agent jobs if they belong to the currently selected project
+            const projectJobs = (isSelected && agentJobsProjectId === project.id) ? agentJobs : [];
             return (
               <div key={project.id}>
                 {renderProjectRow(project)}
@@ -607,6 +632,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 
         <button
           onClick={() => {
+            // Close all modals (workspace, admin, settings, account) when creating new chat
+            onCloseAllModals?.();
             onResetChat();
           }}
           className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-300"
@@ -813,6 +840,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                     'transparent';
                 }}
                 onClick={() => {
+                  // Close all modals (workspace, admin, settings, account) when creating new chat
+                  onCloseAllModals?.();
                   onResetChat();
                   if (isMobile) {
                     onClose();

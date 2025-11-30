@@ -168,7 +168,13 @@ export const DiscussionFlow: React.FC<DiscussionFlowProps> = ({ onFirstResult, o
         return {
           ...data,
           blindSpots: normalizedBlindSpots,
-          thinkingTypes: normalizedThinkingTypes
+          thinkingTypes: normalizedThinkingTypes,
+          tags: data.tags && Array.isArray(data.tags) 
+            ? data.tags
+                .filter((tag: any) => typeof tag === 'string' && tag.trim().length > 0)
+                .slice(0, 7)
+                .map((tag: any) => tag.trim().slice(0, 50))
+            : undefined
         } as DiscussionFlowAnalysis;
       }
     } catch (e) {
@@ -837,6 +843,32 @@ User requirement: you should create your answer in ${langName} language. Use Eng
           <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
             <div className="text-12" style={textHeadingStyle}>
               {analysis.frame}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Tags */}
+      {analysis.tags && analysis.tags.length > 0 && (
+        <>
+          <div className="text-[11px] uppercase tracking-wide mb-1.5" style={textTertiaryWeakStyle}>
+            {t('unfold.discussionFlow.tags', { defaultValue: 'Tags' })}
+          </div>
+          <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--toolbar-bg)' }}>
+            <div className="flex flex-wrap gap-2">
+              {analysis.tags.map((tag, idx) => (
+                <span
+                  key={idx}
+                  className="inline-flex items-center px-2 py-1 rounded text-[11px] font-medium"
+                  style={{
+                    backgroundColor: 'var(--white-10)',
+                    color: 'var(--text-secondary-strong)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  {tag}
+                </span>
+              ))}
             </div>
           </div>
         </>

@@ -1262,6 +1262,7 @@ const DiscoveryPage: React.FC = () => {
         onShowSettings={openSettings}
         onShowAccount={openAccount}
         onShowAdmin={openAdmin}
+        onCloseAllModals={closeAllModals}
         editingProjectId={editingProjectId}
         editingProjectName={editingProjectName}
         editingInputRef={editingInputRef}

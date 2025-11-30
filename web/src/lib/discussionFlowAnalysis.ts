@@ -39,6 +39,7 @@ export interface DiscussionFlowAnalysis {
     rationale: string;
     triggerCategories: string[];
   };
+  tags?: string[]; // Chat tags (max 7) - topics, themes, or categories relevant to the discussion
 }
 
 /**
@@ -163,7 +164,12 @@ export async function generateDiscussionFlowAnalysis(
         ? `\n\nRECENT DISCUSSION CONTEXT (last ${recentPairs.length} message pairs):\n${recentPairs.map(pair => pair.map(m => `${m.role}: ${m.content}`).join('\n')).join('\n\n')}`
         : '';
       
-      transcript = `PREVIOUS ANALYSIS:\n${JSON.stringify(existingAnalysis, null, 2)}${recentContext}\n\nLAST MESSAGE PAIR (new):\n${lastPair.map(m => `${m.role}: ${m.content}`).join('\n')}`;
+      // Include previous tags in the transcript for incremental update
+      const previousTags = existingAnalysis.tags && existingAnalysis.tags.length > 0 
+        ? `\n\nPREVIOUS TAGS: ${JSON.stringify(existingAnalysis.tags)}`
+        : '';
+      
+      transcript = `PREVIOUS ANALYSIS:\n${JSON.stringify(existingAnalysis, null, 2)}${previousTags}${recentContext}\n\nLAST MESSAGE PAIR (new):\n${lastPair.map(m => `${m.role}: ${m.content}`).join('\n')}`;
     } else {
       // Full analysis: use all messages (limit to 70% of context)
       const messagesForAnalysis = chatMessages.filter(m => 
@@ -299,6 +305,18 @@ export async function generateDiscussionFlowAnalysis(
           },
           required: ['score', 'level', 'rationale', 'triggerCategories'],
           description: 'EU AI Act risk assessment for the most recent assistant response. High risk auto-triggers (must set level to High ONLY if the content provides PERSONAL, ACTIONABLE guidance): medical/mental health, self-harm/suicide/life threats, law/immigration/tax/finance/investments/insurance (personal advice only), relationships/abuse/children/vulnerable groups (personal situations only), safety/emergency (personal instructions). RISK LEVEL RULES: High: score in [0.7, 1], Medium: score in [0.3, 0.7), Low: score in [0, 0.3).'
+        },
+        tags: {
+          type: 'array',
+          minItems: 0,
+          maxItems: 7,
+          items: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 50,
+            description: 'A tag representing a topic, theme, or category relevant to the discussion. Tags should be concise, descriptive, and capture key aspects of the conversation.'
+          },
+          description: 'Chat tags (max 7) - topics, themes, or categories relevant to the discussion. Should reflect the main topics, domains, or themes discussed. Update tags based on the LAST MESSAGE PAIR and recent context - remove tags that are no longer relevant, add new ones if new topics emerge, keep existing ones that remain relevant. Always return the FINAL list of tags (not additions/deletions).'
         }
       },
       required: ['blindSpots', 'frameShiftRecommendations', 'frame', 'confidence']
@@ -366,6 +384,16 @@ What to UPDATE:
     - Отношения/абьюз/дети/уязвимые группы (только персональные ситуации и советы)
     - Безопасность/экстренные ситуации (персональные инструкции)
   * RISK LEVEL RULES: High: score in [0.7, 1], Medium: score in [0.3, 0.7), Low: score in [0, 0.3)
+- Tags:
+  * Review the PREVIOUS TAGS list (if provided in PREVIOUS ANALYSIS)
+  * Review the LAST MESSAGE PAIR and RECENT DISCUSSION CONTEXT to identify topics, themes, or categories
+  * Return the FINAL list of tags (max 7) - NOT additions/deletions, but the complete updated list
+  * Remove tags that are no longer relevant based on the new messages
+  * Add new tags if new topics or themes emerge
+  * Keep existing tags that remain relevant
+  * Tags should be concise (1-50 chars), descriptive, and capture key aspects of the discussion
+  * Focus on main topics, domains, or themes discussed - not minor details
+  * If no previous tags exist, generate initial tags based on the discussion content
 
 FRAME ASSESSMENT LOGIC (from consulting perspective):
 - Is this the right problem to solve?
@@ -456,6 +484,7 @@ CRITICAL REQUIREMENTS:
 - Frame shift recommendations should be specific and actionable - not generic advice
 - Only include frame shift recommendations if there is a meaningful way to reframe the discussion for better effectiveness
 - Confidence should be low if discussion has fewer than 3 message pairs, medium for 3-8 pairs, high for more than 8 pairs
+- Tags: Generate up to 7 tags representing main topics, themes, or categories discussed. Tags should be concise (1-50 chars), descriptive, and capture key aspects of the conversation. Focus on main topics/domains, not minor details.
 
 User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
 
@@ -666,6 +695,18 @@ ${transcript}`;
       
       if (validThinkingTypes.length > 0) {
         analysis.thinkingTypes = validThinkingTypes;
+      }
+    }
+    
+    // Extract tags if present
+    if (parsed.tags && Array.isArray(parsed.tags)) {
+      const validTags = parsed.tags
+        .filter((tag: any) => typeof tag === 'string' && tag.trim().length > 0)
+        .slice(0, 7)
+        .map((tag: any) => tag.trim().slice(0, 50)); // Limit to 50 chars per tag
+      
+      if (validTags.length > 0) {
+        analysis.tags = validTags;
       }
     }
 
