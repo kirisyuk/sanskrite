@@ -171,7 +171,9 @@ Return ONLY valid JSON matching this exact structure:
   ]
 }
 
-CRITICAL: Field names must match EXACTLY: "intent", "action", "target", "expectedOutcome", "goal", "description", "successCriteria", "steps", "id", "capability", "input", "dependsOn", "reason", "isCritical". All fields are REQUIRED except "dependsOn".`,
+CRITICAL: Field names must match EXACTLY: "intent", "action", "target", "expectedOutcome", "goal", "description", "successCriteria", "steps", "id", "capability", "input", "dependsOn", "reason", "isCritical". All fields are REQUIRED except "dependsOn".
+
+%s`,
 		userQuery,
 		formatCapabilities(capabilityNames),
 		contextInfo,

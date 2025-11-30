@@ -663,6 +663,19 @@ func (e *PlanCalibrateExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 		}
 	}
 
+	// Определяем, был ли последний элемент релевантным, на основе результатов валидации
+	lastItemRelevantFromValidation := false
+	if lastProcessedItem != "" {
+		for _, vr := range validationResults {
+			if itemID, ok := vr["itemId"].(string); ok && itemID == lastProcessedItem {
+				if relevant, ok := vr["relevant"].(bool); ok && relevant {
+					lastItemRelevantFromValidation = true
+					break
+				}
+			}
+		}
+	}
+
 	// Получить список доступных возможностей
 	availableCaps := formatAvailableCapabilities(e.capabilityRegistry)
 
@@ -675,11 +688,30 @@ PROJECT ID: %s
 AVAILABLE CAPABILITIES:
 %s
 
+CAPABILITY INPUT SCHEMAS (CRITICAL - Use EXACT field names):
+
+1. telegram_channel_read:
+   Required: {"channelUsername": "string"} (without @ prefix, e.g. "iqcash_admin")
+   Optional: {"lastMessageID": number, "maxMessages": number}
+
+2. source_create:
+   Required: {"kind": "telegram_channel", "channelUsername": "string", "projectId": "string"}
+   Optional: {"displayName": "string", "status": "string"}
+   Example: {"kind": "telegram_channel", "channelUsername": "iqcash_admin", "projectId": "PROJECT_ID_HERE"}
+
+3. llm_validate:
+   Required: {"content": "string", "goal": object, "itemId": "string"}
+   Example: {"content": "...", "goal": {"description": "..."}, "itemId": "channel_username"}
+
+4. plan_calibrate:
+   Optional: {"goal": object, "reason": "string"}
+
 CONTEXT & STATE:
 - Input Data (e.g. Search Results): %d items found
 - Items Already Processed (IDs/Names): %v
 - Created Resources: %d
 - Last Processed Item ID: "%s"
+- Last Item Validation Result: relevant=%v (computed from VALIDATION RESULTS below - if true, you MUST create a source for this item)
 
 INPUT DATA CONTENT:
 %s
@@ -693,14 +725,18 @@ VALIDATION RESULTS (from llm_validate):
 ITERATION STRATEGY (The Loop):
 1. ANALYZE Input Data to extract potential Items (IDs, Names, URLs) relevant to the Goal.
    - IMPORTANT: Extract items that can be processed with AVAILABLE CAPABILITIES.
-   - Example: If only 'telegram_channel_read' is available, extract Telegram channel usernames/links, NOT generic URLs.
+   - Example: If 'telegram_channel_read' is available, extract Telegram channel usernames (from t.me/username or @username patterns).
+   - If Input Data contains URLs/articles about channels, extract channel names from their content.
 2. FILTER out Items that are listed in "Items Already Processed".
 3. SELECT the NEXT single Item to process.
+   - Priority: Process actual Telegram channels (usernames) FIRST, not articles about them.
    - If an item was JUST processed (Last Processed Item), look at its Validation Result.
-   - If Validated & Relevant -> Plan creation step (e.g. source_create).
-   - If Validated & Not Relevant -> Skip.
-   - If Not Validated yet -> Plan validation step (llm_validate).
-4. IF a new Item is selected -> Plan the action step to fetch it using an AVAILABLE CAPABILITY.
+   - If Validated & Relevant -> Plan creation step (source_create) using the channel username.
+   - If Validated & Not Relevant -> Skip and move to next item.
+   - If Not Validated yet -> Plan validation step (llm_validate) with content from Last Action Results.
+4. IF a new Item is selected:
+   - If it's a Telegram channel username -> Plan telegram_channel_read to fetch its content.
+   - If it's a URL/article -> You might need to extract channel names from it first (but prefer direct channels).
 5. ALWAYS plan 'plan_calibrate' as the last step to continue the loop.
 
 DECISION LOGIC:
@@ -711,14 +747,28 @@ A. IF (No Item is currently being processed) OR (Last Item was fully handled):
    - Suggest: Action Step (MUST be from AVAILABLE CAPABILITIES) for this item.
    - Suggest: plan_calibrate.
 
-B. IF (Last Item was just fetched/read) AND (No Validation Result):
+B. IF (Last Item was just fetched/read) AND (No Validation Result exists in VALIDATION RESULTS):
    - Suggest: llm_validate to check relevance.
-   - Input: content from Last Action Results, goal, and itemId.
+   - Input: content from Last Action Results, goal, and itemId (use Last Processed Item ID).
    - Suggest: plan_calibrate.
 
-C. IF (Last Item was Validated) AND (Relevant == true):
-   - Suggest: Resource Creation Step (MUST be from AVAILABLE CAPABILITIES, e.g. source_create).
-   - Suggest: plan_calibrate.
+C. IF (Last Item Validation Result shows relevant=true) OR (Last Item was Validated and relevant=true in VALIDATION RESULTS):
+   - CRITICAL: Check "Last Item Validation Result" above - if it shows relevant=true, you MUST create a source for this item!
+   - IF relevant=true:
+     * Determine what was validated:
+       a) If Last Processed Item is a Telegram channel username (e.g. "iqcash_admin", "@iqcash_admin") -> Create source directly using this username
+       b) If Last Processed Item is a URL/article/itemId -> EXTRACT actual channel names from Last Action Results or Input Data content
+     * For case (b): Look at Last Action Results (telegram_channel_read output) or Input Data content to find channel mentions:
+       - Patterns: "@channel_name", "t.me/channel_name", "telegram.me/channel_name"
+       - Extract the FIRST channel name found (remove @ and t.me/ prefixes)
+       - Example: If content contains "@iqcash_admin" or "t.me/iqcash_admin", extract "iqcash_admin"
+     * Suggest: source_create with REAL extracted channelUsername: {"kind": "telegram_channel", "channelUsername": "EXTRACTED_NAME", "projectId": "ACTUAL_PROJECT_ID"}
+     * Example: If article mentions "@iqcash_admin", extract "iqcash_admin" and use {"kind": "telegram_channel", "channelUsername": "iqcash_admin", "projectId": "ACTUAL_PROJECT_ID"}
+     * NEVER use placeholders like ${step.field} - use the actual extracted channel name.
+     * Suggest: plan_calibrate.
+   - IF relevant=false:
+     * Log reason for skipping.
+     * Proceed to Logic A (Pick next item).
 
 D. IF (Last Item was Validated) AND (Relevant == false):
    - Log reason for skipping.
@@ -730,10 +780,14 @@ E. IF (All Items Processed) OR (Enough Resources Created):
 
 CRITICAL RULES:
 - Return ONLY valid JSON.
-- Use exact field names.
+- Use exact field names from CAPABILITY INPUT SCHEMAS above.
 - "extractedItems": List of all potential item IDs found in Input Data.
 - "nextItemToCheck": The specific ID of the item you decided to process next.
 - USE ONLY CAPABILITIES LISTED ABOVE. Do not hallucinate 'fetch_url' or others.
+- NEVER use placeholders like ${step.field}, ${step3.channelUsername}, "pending", "TBD" in input values.
+- ALWAYS use REAL values you extracted from Input Data or Last Action Results.
+- For telegram_channel_read: Extract channel username from URLs (t.me/username) or text, remove @ prefix.
+- For source_create: Use the actual channelUsername from the processed item, not a placeholder.
 
 JSON SCHEMA:
 {
@@ -755,7 +809,8 @@ JSON SCHEMA:
 		checkedChannels, // In universal context, these are "Processed Items"
 		len(createdSources),
 		lastProcessedItem,
-		formatWebSearchResults(webSearchResults), // Pass all results, let LLM extract
+		lastItemRelevantFromValidation,             // Pass computed validation result
+		formatWebSearchResults(webSearchResults),   // Pass all results, let LLM extract
 		formatTelegramResults(telegramReadResults), // TODO: Make this generic formatLastActionResults
 		formatValidationResults(validationResults),
 	)
@@ -1058,7 +1113,8 @@ JSON SCHEMA:
 		e.logger.Printf("[PlanCalibrateExecutor] Final nextItemToCheck: '%s'", nextItemToCheck)
 	}
 
-	lastItemRelevant := false
+	// Используем значение из анализа LLM, но если оно не установлено, используем вычисленное значение
+	lastItemRelevant := lastItemRelevantFromValidation
 	if rel, ok := analysis["lastItemRelevant"].(bool); ok {
 		lastItemRelevant = rel
 	}
@@ -1210,10 +1266,15 @@ func (e *PlanCalibrateExecutor) filterSuggestedSteps(steps []SuggestedStep) []Su
 				continue
 			}
 		case string(CapabilitySourceCreate):
+			kind, _ := step.Input["kind"].(string)
 			username, _ := step.Input["channelUsername"].(string)
-			displayName, _ := step.Input["displayName"].(string)
 			projectID, _ := step.Input["projectId"].(string)
-			if username == "" || isPlaceholderString(username) || displayName == "" || isPlaceholderString(displayName) || projectID == "" {
+			displayName, _ := step.Input["displayName"].(string)
+			// displayName is optional - it will be auto-generated if not provided
+			if kind == "" || isPlaceholderString(kind) ||
+				username == "" || isPlaceholderString(username) ||
+				projectID == "" || isPlaceholderString(projectID) ||
+				(displayName != "" && isPlaceholderString(displayName)) {
 				if e.logger != nil {
 					e.logger.Printf("[PlanCalibrateExecutor] Dropping source_create without concrete fields: %+v", step.Input)
 				}
