@@ -117,6 +117,10 @@ type AgentJob struct {
 
 	// Interaction для отображения в чате
 	InteractionID string `json:"interactionId,omitempty" firestore:"interactionId,omitempty"` // ID interaction для отображения выполнения в чате
+
+	// Shared State (Working Memory / Blackboard)
+	// Хранит контекст выполнения, доступный всем шагам
+	State map[string]interface{} `json:"state,omitempty" firestore:"state,omitempty"`
 }
 
 // SourceDetails хранит параметры, специфичные для типа источника

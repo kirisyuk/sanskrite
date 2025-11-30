@@ -188,14 +188,46 @@ func (e *TelegramChannelReadExecutor) Execute(ctx context.Context, stepCtx *Agen
 		e.logger.Printf("[TelegramChannelReadExecutor] Reading from channel @%s, lastMessageID=%d, maxMessages=%d", channelUsername, lastMessageID, maxMessages)
 	}
 
+	// Подготовка списка processed_channels (читаем текущий из State и добавляем этот)
+	processedChannels := make([]string, 0)
+	if stepCtx.State != nil {
+		if pc, ok := stepCtx.State["processed_channels"].([]interface{}); ok {
+			for _, c := range pc {
+				if s, ok := c.(string); ok {
+					processedChannels = append(processedChannels, s)
+				}
+			}
+		} else if pc, ok := stepCtx.State["processed_channels"].([]string); ok {
+			processedChannels = append(processedChannels, pc...)
+		}
+	}
+	// Добавляем текущий, если его еще нет
+	alreadyProcessed := false
+	for _, c := range processedChannels {
+		if c == channelUsername {
+			alreadyProcessed = true
+			break
+		}
+	}
+	if !alreadyProcessed {
+		processedChannels = append(processedChannels, channelUsername)
+	}
+
 	messages, err := e.telegramClient.FetchUpdates(ctx, channelUsername, lastMessageID)
 	if err != nil {
 		return &CapabilityResult{
-			Success:         false,
-			Error:           stringPtr(err.Error()),
+			Success: false,
+			Error:   stringPtr(err.Error()),
+			Output: map[string]interface{}{
+				"channel": channelUsername,
+				"error":   err.Error(),
+			},
 			ExecutionStatus: models.ExecutionStatusFailed,
 			Retryable:       true,
 			Reason:          fmt.Sprintf("Failed to fetch messages from @%s: %v", channelUsername, err),
+			StateUpdates: map[string]interface{}{
+				"processed_channels": processedChannels, // Сохраняем обновленный список
+			},
 		}, nil // Возвращаем nil error, так как это некритичная capability
 	}
 
@@ -237,6 +269,12 @@ func (e *TelegramChannelReadExecutor) Execute(ctx context.Context, stepCtx *Agen
 		Confidence:      &confidence,
 		Retryable:       true,
 		Reason:          fmt.Sprintf("Successfully read %d messages from @%s", len(messages), channelUsername),
+		StateUpdates: map[string]interface{}{
+			"active_content":     messagesData,
+			"last_read_item_id":  channelUsername,
+			"current_item_type":  "telegram_channel",
+			"processed_channels": processedChannels, // Сохраняем обновленный список
+		},
 	}, nil
 }
 
@@ -461,6 +499,86 @@ func (e *PlanCalibrateExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 	var telegramReadResults []map[string]interface{}
 	var checkedChannels []string
 	var createdSources []string
+	var validationResults []map[string]interface{} // Результаты валидации из llm_validate
+
+	// 1. Сначала проверяем Shared State (наиболее актуальный результат)
+	if stepCtx.State != nil {
+		if lastVal, ok := stepCtx.State["last_validation_result"].(map[string]interface{}); ok {
+			validationResults = append(validationResults, lastVal)
+			if e.logger != nil {
+				e.logger.Printf("[PlanCalibrateExecutor] Found validation result in Shared State: relevant=%v", lastVal["relevant"])
+			}
+		}
+		// Читаем результаты веб-поиска из State
+		if webResults, ok := stepCtx.State["web_search_results"].([]interface{}); ok {
+			// Преобразуем []interface{} (map[string]interface{}) в []map[string]interface{}
+			// для использования в webSearchResults
+			// Очищаем текущий список, если он был заполнен из PreviousOutputs (State приоритетнее)
+			if len(webSearchResults) > 0 {
+				if e.logger != nil {
+					e.logger.Printf("[PlanCalibrateExecutor] Overwriting web search results from PreviousOutputs with Shared State data")
+				}
+				webSearchResults = make([]map[string]interface{}, 0)
+			}
+
+			for _, r := range webResults {
+				if rm, ok := r.(map[string]interface{}); ok {
+					webSearchResults = append(webSearchResults, rm)
+				}
+			}
+			if e.logger != nil {
+				e.logger.Printf("[PlanCalibrateExecutor] Found %d web search results in Shared State", len(webSearchResults))
+			}
+		} else if webResultsMap, ok := stepCtx.State["web_search_results"].([]map[string]interface{}); ok {
+			// Если вдруг тип уже правильный (внутри одного процесса)
+			if len(webSearchResults) > 0 {
+				webSearchResults = make([]map[string]interface{}, 0)
+			}
+			webSearchResults = append(webSearchResults, webResultsMap...)
+			if e.logger != nil {
+				e.logger.Printf("[PlanCalibrateExecutor] Found %d web search results in Shared State (direct map)", len(webSearchResults))
+			}
+		}
+
+		// Читаем processed_channels из State (список всех обработанных каналов, даже неудачных)
+		if processed, ok := stepCtx.State["processed_channels"].([]interface{}); ok {
+			for _, c := range processed {
+				if s, ok := c.(string); ok {
+					// Добавляем в checkedChannels если еще нет
+					isNew := true
+					for _, existing := range checkedChannels {
+						if existing == s {
+							isNew = false
+							break
+						}
+					}
+					if isNew {
+						checkedChannels = append(checkedChannels, s)
+					}
+				}
+			}
+			if e.logger != nil {
+				e.logger.Printf("[PlanCalibrateExecutor] Found %d processed channels in Shared State", len(processed))
+			}
+		} else if processed, ok := stepCtx.State["processed_channels"].([]string); ok {
+			for _, s := range processed {
+				// Добавляем в checkedChannels если еще нет
+				isNew := true
+				for _, existing := range checkedChannels {
+					if existing == s {
+						isNew = false
+						break
+					}
+				}
+				if isNew {
+					checkedChannels = append(checkedChannels, s)
+				}
+			}
+			if e.logger != nil {
+				e.logger.Printf("[PlanCalibrateExecutor] Found %d processed channels in Shared State (string slice)", len(processed))
+			}
+		}
+	}
 
 	for stepID, output := range stepCtx.PreviousOutputs {
 		if e.logger != nil {
@@ -479,11 +597,42 @@ func (e *PlanCalibrateExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 		// Найти результаты telegram_channel_read
 		if channel, ok := output["channel"].(string); ok {
 			checkedChannels = append(checkedChannels, channel)
+
+			entry := map[string]interface{}{
+				"channel": channel,
+			}
+
 			if messages, ok := output["messages"].([]interface{}); ok && len(messages) > 0 {
-				telegramReadResults = append(telegramReadResults, map[string]interface{}{
-					"channel":  channel,
-					"messages": messages,
-				})
+				entry["messages"] = messages
+			} else if errStr, ok := output["error"].(string); ok {
+				entry["error"] = errStr
+			} else {
+				entry["status"] = "no_content"
+			}
+
+			telegramReadResults = append(telegramReadResults, entry)
+		}
+
+		// Найти результаты валидации (из llm_validate) - добавляем из истории, если их еще нет
+		if relevant, ok := output["relevant"].(bool); ok {
+			// Проверяем дубликаты (по itemId, если есть)
+			isDuplicate := false
+			itemID, _ := output["itemId"].(string)
+			for _, existing := range validationResults {
+				if existingID, ok := existing["itemId"].(string); ok && existingID == itemID && itemID != "" {
+					isDuplicate = true
+					break
+				}
+			}
+
+			if !isDuplicate {
+				validationResult := map[string]interface{}{
+					"relevant":   relevant,
+					"itemId":     output["itemId"],
+					"confidence": output["confidence"],
+					"reason":     output["reason"],
+				}
+				validationResults = append(validationResults, validationResult)
 			}
 		}
 
@@ -503,56 +652,112 @@ func (e *PlanCalibrateExecutor) Execute(ctx context.Context, stepCtx *AgentStepC
 		goalStr = goalStrRaw
 	}
 
-	// Строим промпт для анализа
-	prompt := fmt.Sprintf(`Analyze the current state and determine the next action.
+	// Определяем последний обработанный элемент
+	lastProcessedItem := ""
+	if len(checkedChannels) > 0 {
+		lastProcessedItem = checkedChannels[len(checkedChannels)-1]
+	} else if len(telegramReadResults) > 0 {
+		lastResult := telegramReadResults[len(telegramReadResults)-1]
+		if ch, ok := lastResult["channel"].(string); ok {
+			lastProcessedItem = ch
+		}
+	}
 
-PROJECT CONTEXT:
-- Project ID: %s
-- Goal: %s
+	// Получить список доступных возможностей
+	availableCaps := formatAvailableCapabilities(e.capabilityRegistry)
 
-CURRENT STATE:
-- Web search results found: %d
-- Telegram channels already checked: %v
-- Sources already created: %d
+	// Строим универсальный промпт для итератора
+	prompt := fmt.Sprintf(`You are an AI Agent acting as an ITERATIVE PLANNER. Your task is to process a list of items one by one to achieve a Goal.
 
-WEB SEARCH RESULTS (extract Telegram channel usernames from URLs like t.me/username or @username):
+GOAL: %s
+PROJECT ID: %s
+
+AVAILABLE CAPABILITIES:
 %s
 
-TELEGRAM CHANNELS READ (analyze if content is relevant to goal):
+CONTEXT & STATE:
+- Input Data (e.g. Search Results): %d items found
+- Items Already Processed (IDs/Names): %v
+- Created Resources: %d
+- Last Processed Item ID: "%s"
+
+INPUT DATA CONTENT:
 %s
 
-TASK:
-1. If web_search has results but no channels checked yet: extract ONE channel username and suggest telegram_channel_read
-2. If a channel was read: analyze if its content is relevant to the goal, then either:
-   - If relevant: suggest source_create for it
-   - If not relevant or already have enough sources: suggest checking next channel or mark goal achieved
-3. If all channels checked or enough sources created (2-3): set goalAchieved=true
+LAST ACTION RESULTS (e.g. Read/Fetch):
+%s
 
-IMPORTANT:
-- Extract channel usernames from t.me/USERNAME or @USERNAME patterns
-- Only suggest ONE step at a time
-- Use exact channelUsername without @ prefix
-- For source_create use projectId: "%s"
-- NEVER output placeholders like ${step3.channelUsername} or "pending" — return the exact usernames/IDs you observed above.
+VALIDATION RESULTS (from llm_validate):
+%s
 
-Return JSON in this EXACT format:
+ITERATION STRATEGY (The Loop):
+1. ANALYZE Input Data to extract potential Items (IDs, Names, URLs) relevant to the Goal.
+   - IMPORTANT: Extract items that can be processed with AVAILABLE CAPABILITIES.
+   - Example: If only 'telegram_channel_read' is available, extract Telegram channel usernames/links, NOT generic URLs.
+2. FILTER out Items that are listed in "Items Already Processed".
+3. SELECT the NEXT single Item to process.
+   - If an item was JUST processed (Last Processed Item), look at its Validation Result.
+   - If Validated & Relevant -> Plan creation step (e.g. source_create).
+   - If Validated & Not Relevant -> Skip.
+   - If Not Validated yet -> Plan validation step (llm_validate).
+4. IF a new Item is selected -> Plan the action step to fetch it using an AVAILABLE CAPABILITY.
+5. ALWAYS plan 'plan_calibrate' as the last step to continue the loop.
+
+DECISION LOGIC:
+
+A. IF (No Item is currently being processed) OR (Last Item was fully handled):
+   - Look at Input Data.
+   - Pick the FIRST item that is NOT in "Items Already Processed".
+   - Suggest: Action Step (MUST be from AVAILABLE CAPABILITIES) for this item.
+   - Suggest: plan_calibrate.
+
+B. IF (Last Item was just fetched/read) AND (No Validation Result):
+   - Suggest: llm_validate to check relevance.
+   - Input: content from Last Action Results, goal, and itemId.
+   - Suggest: plan_calibrate.
+
+C. IF (Last Item was Validated) AND (Relevant == true):
+   - Suggest: Resource Creation Step (MUST be from AVAILABLE CAPABILITIES, e.g. source_create).
+   - Suggest: plan_calibrate.
+
+D. IF (Last Item was Validated) AND (Relevant == false):
+   - Log reason for skipping.
+   - Proceed to Logic A (Pick next item).
+
+E. IF (All Items Processed) OR (Enough Resources Created):
+   - Set goalAchieved = true.
+   - additionalStepsNeeded = false.
+
+CRITICAL RULES:
+- Return ONLY valid JSON.
+- Use exact field names.
+- "extractedItems": List of all potential item IDs found in Input Data.
+- "nextItemToCheck": The specific ID of the item you decided to process next.
+- USE ONLY CAPABILITIES LISTED ABOVE. Do not hallucinate 'fetch_url' or others.
+
+JSON SCHEMA:
 {
-  "goalAchieved": false,
-  "additionalStepsNeeded": true,
-  "extractedChannels": ["channel1", "channel2"],
-  "nextChannelToCheck": "channel1",
-  "channelRelevant": false,
-  "suggestedSteps": [],
-  "reason": "explanation"
-}`,
-		stepCtx.ProjectID,
+  "goalAchieved": boolean,
+  "additionalStepsNeeded": boolean,
+  "extractedItems": ["id1", "id2"],
+  "nextItemToCheck": "id1" (or null),
+  "lastItemRelevant": boolean,
+  "suggestedSteps": [
+    { "capability": "...", "input": {...}, "reason": "...", "priority": 1 }
+  ],
+  "reason": "Detailed explanation of decision"
+}
+`,
 		goalStr,
-		len(webSearchResults),
-		checkedChannels,
-		len(createdSources),
-		formatWebSearchResults(webSearchResults),
-		formatTelegramResults(telegramReadResults),
 		stepCtx.ProjectID,
+		availableCaps,
+		len(webSearchResults),
+		checkedChannels, // In universal context, these are "Processed Items"
+		len(createdSources),
+		lastProcessedItem,
+		formatWebSearchResults(webSearchResults), // Pass all results, let LLM extract
+		formatTelegramResults(telegramReadResults), // TODO: Make this generic formatLastActionResults
+		formatValidationResults(validationResults),
 	)
 
 	// Определить JSON схему для строгого вывода
@@ -565,18 +770,18 @@ Return JSON in this EXACT format:
 			"additionalStepsNeeded": map[string]interface{}{
 				"type": "boolean",
 			},
-			"extractedChannels": map[string]interface{}{
+			"extractedItems": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "List of Telegram channel usernames extracted from web search results",
+				"description": "List of all potential item IDs (e.g. usernames, URLs) extracted from input",
 			},
-			"nextChannelToCheck": map[string]interface{}{
+			"nextItemToCheck": map[string]interface{}{
 				"type":        "string",
-				"description": "The next channel username to check (without @)",
+				"description": "The ID of the next item to process",
 			},
-			"channelRelevant": map[string]interface{}{
+			"lastItemRelevant": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Whether the last checked channel is relevant to the goal",
+				"description": "Whether the last processed item was relevant",
 			},
 			"suggestedSteps": map[string]interface{}{
 				"type": "array",
@@ -587,8 +792,7 @@ Return JSON in this EXACT format:
 							"type": "string",
 						},
 						"input": map[string]interface{}{
-							"type":        "object",
-							"description": "MUST contain REAL values, NOT placeholders like ${step.field}",
+							"type": "object",
 						},
 						"reason": map[string]interface{}{
 							"type": "string",
@@ -642,32 +846,45 @@ Return JSON in this EXACT format:
 		}
 	}
 
-	// Убираем markdown code fences если есть
+	// Убираем markdown code fences если есть (только для совместимости, GenerateJSONStrict не должен их возвращать)
 	jsonContent = cleanJSONContent(jsonContent)
 
-	// Попытка извлечь JSON из текста, если Content начинается с текста
-	if jsonContent == "" || (len(jsonContent) > 0 && jsonContent[0] != '{') {
-		// Ищем JSON объект в тексте
-		if idx := strings.Index(response.Content, "{"); idx != -1 {
-			// Находим последнюю закрывающую скобку
-			lastIdx := strings.LastIndex(response.Content, "}")
-			if lastIdx > idx {
-				jsonContent = response.Content[idx : lastIdx+1]
-				if e.logger != nil {
-					e.logger.Printf("[PlanCalibrateExecutor] Extracted JSON from text content")
-				}
-			}
-		}
+	// Строгая типизация: GenerateJSONStrict должен возвращать валидный JSON
+	// Если JSON невалиден - это ошибка, не пытаемся извлекать из текста
+	if jsonContent == "" {
+		return &CapabilityResult{
+			Success:         false,
+			Error:           stringPtr("GenerateJSONStrict returned empty JSON content"),
+			ExecutionStatus: models.ExecutionStatusFailed,
+			Retryable:       true,
+			Reason:          "LLM did not return valid JSON - this should not happen with GenerateJSONStrict",
+		}, nil
 	}
 
-	// Парсить ответ LLM
+	// Проверяем, что это валидный JSON (начинается с {)
+	if len(jsonContent) > 0 && jsonContent[0] != '{' {
+		return &CapabilityResult{
+			Success:         false,
+			Error:           stringPtr(fmt.Sprintf("GenerateJSONStrict returned non-JSON content (starts with '%c')", jsonContent[0])),
+			ExecutionStatus: models.ExecutionStatusFailed,
+			Retryable:       true,
+			Reason:          "LLM returned text instead of JSON - this violates strict JSON mode",
+		}, nil
+	}
+
+	// Парсить ответ LLM с строгой типизацией
 	var analysis map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonContent), &analysis); err != nil {
 		if e.logger != nil {
-			e.logger.Printf("[PlanCalibrateExecutor] Failed to parse JSON: %v, content: %s", err, jsonContent)
+			e.logger.Printf("[PlanCalibrateExecutor] Failed to parse JSON: %v, content preview: %s", err, jsonContent[:min(500, len(jsonContent))])
 		}
-		// Если не удалось распарсить как JSON, попробовать извлечь JSON из текста
-		analysis = parseJSONFromText(jsonContent)
+		return &CapabilityResult{
+			Success:         false,
+			Error:           stringPtr(fmt.Sprintf("Failed to parse JSON: %v", err)),
+			ExecutionStatus: models.ExecutionStatusFailed,
+			Retryable:       true,
+			Reason:          fmt.Sprintf("Invalid JSON returned by LLM: %v", err),
+		}, nil
 	}
 
 	goalAchieved := false
@@ -684,11 +901,14 @@ Return JSON in this EXACT format:
 	if stepsRaw, ok := analysis["suggestedSteps"].([]interface{}); ok {
 		for _, stepRaw := range stepsRaw {
 			if stepMap, ok := stepRaw.(map[string]interface{}); ok {
+				// Строгая типизация: используем ТОЛЬКО поле "capability" как объявлено в схеме
 				capability, _ := stepMap["capability"].(string)
 				if capability == "" {
-					if action, ok := stepMap["action"].(string); ok {
-						capability = action
+					// Пропускаем шаг без capability - это нарушение схемы
+					if e.logger != nil {
+						e.logger.Printf("[PlanCalibrateExecutor] Dropping step without 'capability' field (required by schema)")
 					}
+					continue
 				}
 				input := extractSuggestedInput(stepMap)
 				reason, _ := stepMap["reason"].(string)
@@ -709,25 +929,80 @@ Return JSON in this EXACT format:
 	// Отфильтровать шаги без конкретных параметров (например, с плейсхолдерами)
 	suggestedSteps = e.filterSuggestedSteps(suggestedSteps)
 
-	// ВАЖНО: Если мы добавляем шаги действий (чтение/создание), нужно обязательно добавить следующий шаг калибровки,
-	// чтобы цикл планирования продолжился после выполнения действия.
+	// УЛУЧШЕННАЯ ЛОГИКА: Создаем явные пары шагов для итерационных задач
+	// Паттерн: action_step → plan_calibrate (для проверки результата и продолжения)
 	if len(suggestedSteps) > 0 && !goalAchieved {
-		// Проверяем, нет ли уже шага калибровки в предложенных
-		hasCalibrate := false
-		for _, s := range suggestedSteps {
-			if s.Capability == string(CapabilityPlanCalibrate) {
-				hasCalibrate = true
-				break
+		// Проверяем, есть ли action-шаги (read, create) без последующего plan_calibrate
+		hasActionStep := false
+		hasCalibrateAfterAction := false
+
+		for i, s := range suggestedSteps {
+			// Определяем action-шаги
+			if s.Capability == string(CapabilityTelegramChannelRead) ||
+				s.Capability == string(CapabilitySourceCreate) {
+				hasActionStep = true
+				// Проверяем, есть ли plan_calibrate после этого action-шага
+				if i+1 < len(suggestedSteps) {
+					if suggestedSteps[i+1].Capability == string(CapabilityPlanCalibrate) {
+						hasCalibrateAfterAction = true
+					}
+				}
 			}
 		}
 
-		if !hasCalibrate {
-			suggestedSteps = append(suggestedSteps, SuggestedStep{
-				Capability: string(CapabilityPlanCalibrate),
-				Input:      stepCtx.Input, // Передаем тот же input (goal и т.д.)
-				Reason:     "Review results of the action and plan next steps",
-				Priority:   2,
-			})
+		// Если есть action-шаги, но нет plan_calibrate после них - добавляем
+		if hasActionStep && !hasCalibrateAfterAction {
+			// Находим последний action-шаг
+			lastActionIdx := -1
+			for i := len(suggestedSteps) - 1; i >= 0; i-- {
+				if suggestedSteps[i].Capability == string(CapabilityTelegramChannelRead) ||
+					suggestedSteps[i].Capability == string(CapabilitySourceCreate) {
+					lastActionIdx = i
+					break
+				}
+			}
+
+			// Добавляем plan_calibrate после последнего action-шага
+			if lastActionIdx >= 0 {
+				calibrateStep := SuggestedStep{
+					Capability: string(CapabilityPlanCalibrate),
+					Input:      stepCtx.Input, // Передаем тот же input (goal и т.д.)
+					Reason:     "Review results of the action, check relevance, and plan next steps",
+					Priority:   2,
+				}
+				// Вставляем после последнего action-шага
+				newSteps := make([]SuggestedStep, 0, len(suggestedSteps)+1)
+				newSteps = append(newSteps, suggestedSteps[:lastActionIdx+1]...)
+				newSteps = append(newSteps, calibrateStep)
+				if lastActionIdx+1 < len(suggestedSteps) {
+					newSteps = append(newSteps, suggestedSteps[lastActionIdx+1:]...)
+				}
+				suggestedSteps = newSteps
+
+				if e.logger != nil {
+					e.logger.Printf("[PlanCalibrateExecutor] Added plan_calibrate after action step at index %d", lastActionIdx)
+				}
+			}
+		}
+
+		// Если нет action-шагов, но есть plan_calibrate - это нормально (может быть финальная проверка)
+		// Если нет ни action, ни calibrate - добавляем calibrate для продолжения
+		if !hasActionStep {
+			hasCalibrate := false
+			for _, s := range suggestedSteps {
+				if s.Capability == string(CapabilityPlanCalibrate) {
+					hasCalibrate = true
+					break
+				}
+			}
+			if !hasCalibrate {
+				suggestedSteps = append(suggestedSteps, SuggestedStep{
+					Capability: string(CapabilityPlanCalibrate),
+					Input:      stepCtx.Input,
+					Reason:     "Review current state and plan next steps",
+					Priority:   2,
+				})
+			}
 		}
 	}
 
@@ -758,53 +1033,34 @@ Return JSON in this EXACT format:
 		e.logger.Printf("[PlanCalibrateExecutor] LLM analysis result: %+v", analysis)
 	}
 
-	extractedChannels := make([]string, 0)
-	if channels, ok := analysis["extractedChannels"].([]interface{}); ok {
-		for _, ch := range channels {
-			if chStr, ok := ch.(string); ok {
-				extractedChannels = append(extractedChannels, chStr)
+	extractedItems := make([]string, 0)
+	if items, ok := analysis["extractedItems"].([]interface{}); ok {
+		for _, item := range items {
+			if itemStr, ok := item.(string); ok {
+				extractedItems = append(extractedItems, itemStr)
 			}
 		}
 	}
 	if e.logger != nil {
-		e.logger.Printf("[PlanCalibrateExecutor] Extracted channels: %v", extractedChannels)
+		e.logger.Printf("[PlanCalibrateExecutor] Extracted items: %v", extractedItems)
 	}
 
-	nextChannelToCheck := ""
-	// Попробовать разные варианты где LLM может вернуть channelUsername
-	if next, ok := analysis["nextChannelToCheck"].(string); ok && next != "" {
-		nextChannelToCheck = next
+	// Строгая типизация: используем ТОЛЬКО поле "nextItemToCheck" как объявлено в схеме
+	nextItemToCheck := ""
+	if next, ok := analysis["nextItemToCheck"].(string); ok && next != "" {
+		nextItemToCheck = next
 	}
-	if nextChannelToCheck == "" {
-		if next, ok := analysis["channelUsername"].(string); ok && next != "" {
-			nextChannelToCheck = next
-		}
-	}
-	if nextChannelToCheck == "" {
-		if suggestedAction, ok := analysis["suggestedAction"].(map[string]interface{}); ok {
-			if ch, ok := suggestedAction["channelUsername"].(string); ok && ch != "" {
-				nextChannelToCheck = ch
-			}
-		}
-	}
-	if nextChannelToCheck == "" {
-		if params, ok := analysis["parameters"].(map[string]interface{}); ok {
-			if ch, ok := params["channelUsername"].(string); ok && ch != "" {
-				nextChannelToCheck = ch
-			}
-		}
-	}
-	// Если всё ещё пусто, но есть extractedChannels - взять первый
-	if nextChannelToCheck == "" && len(extractedChannels) > 0 {
-		nextChannelToCheck = extractedChannels[0]
+	// Fallback на extractedItems только если nextItemToCheck не указан
+	if nextItemToCheck == "" && len(extractedItems) > 0 {
+		nextItemToCheck = extractedItems[0]
 	}
 	if e.logger != nil {
-		e.logger.Printf("[PlanCalibrateExecutor] Final nextChannelToCheck: '%s' (analysis keys: %v)", nextChannelToCheck, getMapKeys(analysis))
+		e.logger.Printf("[PlanCalibrateExecutor] Final nextItemToCheck: '%s'", nextItemToCheck)
 	}
 
-	channelRelevant := false
-	if rel, ok := analysis["channelRelevant"].(bool); ok {
-		channelRelevant = rel
+	lastItemRelevant := false
+	if rel, ok := analysis["lastItemRelevant"].(bool); ok {
+		lastItemRelevant = rel
 	}
 
 	// НЕ устанавливаем SuggestsReplan если есть SuggestedSteps -
@@ -814,12 +1070,16 @@ Return JSON in this EXACT format:
 		Output: map[string]interface{}{
 			"goalAchieved":          goalAchieved,
 			"additionalStepsNeeded": additionalStepsNeeded,
-			"extractedChannels":     extractedChannels,
-			"nextChannelToCheck":    nextChannelToCheck,
-			"channelUsername":       nextChannelToCheck, // Алиас для совместимости с планами LLM
-			"channelRelevant":       channelRelevant,
-			"checkedChannels":       checkedChannels,
+			"extractedItems":        extractedItems,
+			"nextItemToCheck":       nextItemToCheck,
+			"lastItemRelevant":      lastItemRelevant,
+			"processedItems":        checkedChannels, // Use generic name in output
 			"createdSources":        createdSources,
+			// Legacy aliases for compatibility if needed by other components
+			"extractedChannels":  extractedItems,
+			"nextChannelToCheck": nextItemToCheck,
+			"channelRelevant":    lastItemRelevant,
+			"checkedChannels":    checkedChannels,
 		},
 		Message:         reason,
 		ExecutionStatus: executionStatus,
@@ -872,7 +1132,18 @@ func formatTelegramResults(results []map[string]interface{}) string {
 	var sb strings.Builder
 	for _, r := range results {
 		channel, _ := r["channel"].(string)
+
+		if errStr, ok := r["error"].(string); ok {
+			sb.WriteString(fmt.Sprintf("Channel @%s: FAILED - %s\n\n", channel, errStr))
+			continue
+		}
+
 		messages, _ := r["messages"].([]interface{})
+		if len(messages) == 0 {
+			sb.WriteString(fmt.Sprintf("Channel @%s: NO CONTENT (read successfully but found 0 messages)\n\n", channel))
+			continue
+		}
+
 		sb.WriteString(fmt.Sprintf("Channel @%s (%d messages):\n", channel, len(messages)))
 		// Show first 3 messages as sample
 		for i, msg := range messages {
@@ -886,6 +1157,21 @@ func formatTelegramResults(results []map[string]interface{}) string {
 			}
 		}
 		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func formatValidationResults(results []map[string]interface{}) string {
+	if len(results) == 0 {
+		return "No validation results yet."
+	}
+	var sb strings.Builder
+	for _, r := range results {
+		relevant, _ := r["relevant"].(bool)
+		itemId, _ := r["itemId"].(string)
+		confidence, _ := r["confidence"].(float64)
+		reason, _ := r["reason"].(string)
+		sb.WriteString(fmt.Sprintf("Item %s: relevant=%v, confidence=%.2f, reason=%s\n", itemId, relevant, confidence, reason))
 	}
 	return sb.String()
 }
@@ -998,19 +1284,4 @@ func extractSuggestedInput(stepMap map[string]interface{}) map[string]interface{
 	}
 
 	return fallback
-}
-
-func parseJSONFromText(text string) map[string]interface{} {
-	// Попытаться найти JSON в тексте
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start >= 0 && end > start {
-		jsonStr := text[start : end+1]
-		var result map[string]interface{}
-		if err := json.Unmarshal([]byte(jsonStr), &result); err == nil {
-			return result
-		}
-	}
-	// Если не удалось, вернуть пустой объект
-	return map[string]interface{}{}
 }

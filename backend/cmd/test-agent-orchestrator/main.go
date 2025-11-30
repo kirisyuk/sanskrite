@@ -239,6 +239,9 @@ func main() {
 	// LLM Analyze executor
 	capabilityRegistry.Register(agents.NewLLMAnalyzeExecutor(genaiClient, logger))
 
+	// LLM Validate executor (для проверки релевантности и итерационного создания шагов)
+	capabilityRegistry.Register(agents.NewLLMValidateExecutor(genaiClient, capabilityRegistry, logger))
+
 	// Entity repositories для ontology capabilities
 	entitiesRepo := repo.NewEntityRepository(fsClient)
 	relationsRepo := repo.NewRelationRepository(fsClient)
@@ -296,15 +299,15 @@ func main() {
 	// Регистрация executors для управления источниками
 	dataSourcesRepo := repo.NewDataSourcesRepository(fsClient)
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient)
-	
+
 	// Telegram client для чтения каналов
-	telegramServiceURL := os.Getenv("TELEGRAM_SERVICE_URL")
+	// Используем тот же подход, что и в server/main.go и run_worker/main.go
+	telegramServiceURL := strings.TrimSpace(os.Getenv("TELEGRAM_SERVICE_URL"))
 	if telegramServiceURL == "" {
-		telegramServiceURL = "http://localhost:8081" // Default для локального тестирования
-		logger.Printf("WARNING: TELEGRAM_SERVICE_URL not set, using default: %s", telegramServiceURL)
+		logger.Printf("WARNING: TELEGRAM_SERVICE_URL is not set - Telegram features will be disabled")
 	}
 	telegramClient := telegram.NewClient(telegramServiceURL)
-	
+
 	// Publisher для WebSocket событий (может быть nil для тестов)
 	var publisher *realtime.Publisher
 	publisher, pubsubErr := realtime.NewPublisher(ctx, projectID)
@@ -312,11 +315,11 @@ func main() {
 		logger.Printf("WARNING: Failed to create publisher: %v (WebSocket events will not be sent)", pubsubErr)
 		publisher = nil
 	}
-	
+
 	capabilityRegistry.Register(agents.NewSourceListExecutor(dataSourcesRepo, sourceProjectsRepo, logger))
 	capabilityRegistry.Register(agents.NewTelegramChannelReadExecutor(telegramClient, logger))
 	capabilityRegistry.Register(agents.NewSourceCreateExecutor(dataSourcesRepo, sourceProjectsRepo, publisher, logger))
-	
+
 	// PlanCalibrate executor
 	capabilityRegistry.Register(agents.NewPlanCalibrateExecutor(genaiClient, capabilityRegistry, logger))
 	logger.Printf("Source management capabilities registered")

@@ -35,6 +35,7 @@ const (
 	CapabilityBigQueryQuery       Capability = "bigquery_query"        // Запросы к BigQuery
 	CapabilityLLMGenerate         Capability = "llm_generate"          // Генерация через LLM
 	CapabilityLLMAnalyze          Capability = "llm_analyze"           // Анализ через LLM
+	CapabilityLLMValidate         Capability = "llm_validate"          // Валидация/проверка релевантности через LLM
 
 	// Планирование и репланирование
 	CapabilityPlanGenerate Capability = "plan_generate" // Генерация плана из естественного языка
@@ -76,6 +77,7 @@ type AgentStepContext struct {
 	Input      map[string]interface{}
 	DependsOn  []string // ID шагов, от которых зависит этот шаг
 	PreviousOutputs map[string]map[string]interface{} // Output предыдущих шагов (stepID -> output)
+	State      map[string]interface{} // Текущее состояние задачи (Working Memory)
 }
 
 // SuggestedStep предложенный следующий шаг
@@ -93,6 +95,9 @@ type CapabilityResult struct {
 	Error     *string                `json:"error,omitempty"`
 	Message   string                 `json:"message,omitempty"`
 	NextSteps []string               `json:"nextSteps,omitempty"` // Опциональные следующие шаги (определяются динамически)
+
+	// Обновление состояния (Shared Blackboard)
+	StateUpdates map[string]interface{} `json:"stateUpdates,omitempty"`
 
 	// Детализированный статус выполнения
 	ExecutionStatus models.ExecutionStatus `json:"executionStatus,omitempty"` // "success" | "partial" | "failed" | "retry_needed"

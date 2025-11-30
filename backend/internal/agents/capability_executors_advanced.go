@@ -108,12 +108,16 @@ func (e *WebSearchExecutor) Execute(ctx context.Context, stepCtx *AgentStepConte
 			"count":   len(results),
 			"query":   query,
 		},
-		Message:                 fmt.Sprintf("Found %d results for query: %s", len(results), query),
-		ExecutionStatus:         models.ExecutionStatusSuccess,
-		Confidence:              &confidence,
-		Retryable:               true, // Можно повторить при временных ошибках
-		Reason:                  fmt.Sprintf("Web search completed, found %d results", len(results)),
+		Message:         fmt.Sprintf("Found %d results for query: %s", len(results), query),
+		ExecutionStatus: models.ExecutionStatusSuccess,
+		Confidence:      &confidence,
+		Retryable:       true, // Можно повторить при временных ошибках
+		Reason:          fmt.Sprintf("Web search completed, found %d results", len(results)),
 		AlternativeCapabilities: []string{"data_search"}, // Можно попробовать поиск в документах
+		StateUpdates: map[string]interface{}{
+			"web_search_results": results,
+			"last_search_query":  query,
+		},
 	}, nil
 }
 
@@ -330,17 +334,40 @@ func (e *LLMAnalyzeExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"summary": map[string]interface{}{"type": "string"},
-			"findings": map[string]interface{}{
-				"type":  "array",
-				"items": map[string]interface{}{"type": "string"},
+			"summary": map[string]interface{}{
+				"type":        "string",
+				"description": "Summary of the analysis",
 			},
-			"metrics": map[string]interface{}{"type": "object"},
+			"findings": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Array of key findings from the analysis",
+			},
+			"metrics": map[string]interface{}{
+				"type":        "object",
+				"description": "Quantitative metrics from the analysis",
+			},
 		},
+		"required": []string{"summary", "findings"},
 	}
 	if s, ok := stepCtx.Input["schema"].(map[string]interface{}); ok {
 		schema = s
 	}
+
+	// Добавляем детальное описание JSON структуры в промпт
+	prompt = prompt + `
+
+CRITICAL: You MUST return ONLY valid JSON matching this EXACT structure:
+{
+  "summary": "Brief summary of the analysis",
+  "findings": ["finding1", "finding2", "finding3"],
+  "metrics": {
+    "key1": "value1",
+    "key2": "value2"
+  }
+}
+
+Field names must match EXACTLY: "summary", "findings", "metrics". Do not include any explanatory text, markdown, or code blocks. Return ONLY the JSON object.`
 	model := "gemini_fast"
 	if m, ok := stepCtx.Input["model"].(string); ok {
 		model = m
@@ -423,6 +450,324 @@ func (e *LLMAnalyzeExecutor) Execute(ctx context.Context, stepCtx *AgentStepCont
 		Retryable:       false,
 		Reason:          fmt.Sprintf("Analysis completed using %s", resp.Model),
 	}, nil
+}
+
+// LLMValidateExecutor выполняет проверку релевантности через LLM и итерационно создает следующие шаги
+// Используется для итерационных задач: проверяет элемент и создает следующий шаг (create или skip)
+type LLMValidateExecutor struct {
+	genaiClient        *gen_combined.Client
+	capabilityRegistry *CapabilityRegistry
+	logger             *log.Logger
+}
+
+// NewLLMValidateExecutor создает новый исполнитель для проверки релевантности
+func NewLLMValidateExecutor(
+	genaiClient *gen_combined.Client,
+	capabilityRegistry *CapabilityRegistry,
+	logger *log.Logger,
+) *LLMValidateExecutor {
+	return &LLMValidateExecutor{
+		genaiClient:        genaiClient,
+		capabilityRegistry: capabilityRegistry,
+		logger:             logger,
+	}
+}
+
+func (e *LLMValidateExecutor) Capability() Capability {
+	return CapabilityLLMValidate
+}
+
+func (e *LLMValidateExecutor) ValidateInput(input map[string]interface{}) error {
+	// Проверяем наличие контента для валидации
+	if _, ok := input["content"].(string); !ok {
+		if _, ok := input["text"].(string); !ok {
+			if _, ok := input["messages"].([]interface{}); !ok {
+				return fmt.Errorf("content, text, or messages is required for validation")
+			}
+		}
+	}
+	// goal опционален, но желателен для проверки релевантности
+	return nil
+}
+
+func (e *LLMValidateExecutor) Execute(ctx context.Context, stepCtx *AgentStepContext) (*CapabilityResult, error) {
+	if e.logger != nil {
+		e.logger.Printf("[LLMValidateExecutor] Validating relevance for job %s", stepCtx.JobID)
+	}
+
+	// Извлекаем метаданные элемента
+	itemID := ""
+	if ch, ok := stepCtx.Input["channelUsername"].(string); ok {
+		itemID = ch
+	} else if id, ok := stepCtx.Input["itemId"].(string); ok {
+		itemID = id
+	}
+
+	// Извлекаем контент для проверки
+	// 1. Сначала проверяем явный input
+	var contentToValidate string
+	if c, ok := stepCtx.Input["content"].(string); ok && len(c) > 20 { // Простая проверка на заглушки
+		contentToValidate = c
+	} else if t, ok := stepCtx.Input["text"].(string); ok && len(t) > 20 {
+		contentToValidate = t
+	} else if msgs, ok := stepCtx.Input["messages"].([]interface{}); ok && len(msgs) > 0 {
+		contentToValidate = formatMessagesForValidation(msgs)
+	}
+
+	// 2. Если контент не передан, ищем в Shared State (Best Practice)
+	if contentToValidate == "" && stepCtx.State != nil {
+		if activeContent, ok := stepCtx.State["active_content"]; ok {
+			if msgs, ok := activeContent.([]interface{}); ok {
+				contentToValidate = formatMessagesForValidation(msgs)
+				if e.logger != nil { e.logger.Printf("[LLMValidateExecutor] Used active_content from Shared State") }
+			} else if str, ok := activeContent.(string); ok {
+				contentToValidate = str
+				if e.logger != nil { e.logger.Printf("[LLMValidateExecutor] Used active_content from Shared State") }
+			}
+		}
+		// Ищем ID элемента в State
+		if itemID == "" {
+			if lastID, ok := stepCtx.State["last_read_item_id"].(string); ok {
+				itemID = lastID
+			}
+		}
+	}
+
+	// 3. Если контент не передан (или это заглушка), ищем в предыдущих шагах (Auto-Wiring)
+	if contentToValidate == "" || strings.Contains(strings.ToLower(contentToValidate), "message") { // Защита от "messages from..."
+		if e.logger != nil {
+			e.logger.Printf("[LLMValidateExecutor] Content not provided explicitly, searching in previous steps...")
+		}
+		
+		// Ищем в обратном порядке (от последнего к первому)
+		// Сначала ищем точное совпадение по itemId, если оно есть
+		found := false
+		
+		// Стратегия 1: Ищем telegram_channel_read с output.channel == itemID
+		if itemID != "" {
+			for _, depID := range stepCtx.DependsOn { // Сначала смотрим прямые зависимости
+				if output, ok := stepCtx.PreviousOutputs[depID]; ok {
+					if ch, ok := output["channel"].(string); ok && strings.EqualFold(ch, itemID) {
+						if msgs, ok := output["messages"].([]interface{}); ok {
+							contentToValidate = formatMessagesForValidation(msgs)
+							found = true
+							if e.logger != nil { e.logger.Printf("[LLMValidateExecutor] Found content in dependency step %s (matched itemId)", depID) }
+							break
+						}
+					}
+				}
+			}
+		}
+
+		// Стратегия 2: Если не нашли, берем последний шаг, который похож на source read
+		if !found {
+			// Сортировка ключей для детерминированного перебора (в реальном графе нужно идти по истории)
+			// В AgentStepContext PreviousOutputs - это map, порядок не гарантирован.
+			// Но обычно DependsOn содержит ID последнего шага.
+			for _, depID := range stepCtx.DependsOn {
+				if output, ok := stepCtx.PreviousOutputs[depID]; ok {
+					// Проверяем наличие сообщений
+					if msgs, ok := output["messages"].([]interface{}); ok && len(msgs) > 0 {
+						contentToValidate = formatMessagesForValidation(msgs)
+						// Если нашли messages и itemID был пуст, пытаемся узнать channel
+						if itemID == "" {
+							if ch, ok := output["channel"].(string); ok {
+								itemID = ch
+							}
+						}
+						found = true
+						if e.logger != nil { e.logger.Printf("[LLMValidateExecutor] Found messages in dependency step %s", depID) }
+						break
+					}
+					// Проверяем наличие контента (для документов)
+					if content, ok := output["content"].(string); ok && len(content) > 0 {
+						contentToValidate = content
+						found = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if contentToValidate == "" {
+		return nil, fmt.Errorf("no content to validate found in input or previous steps")
+	}
+
+	// Извлекаем цель для проверки релевантности
+	goalStr := ""
+	if goal, ok := stepCtx.Input["goal"].(map[string]interface{}); ok {
+		if desc, ok := goal["description"].(string); ok {
+			goalStr = desc
+		}
+	} else if goalStrRaw, ok := stepCtx.Input["goal"].(string); ok {
+		goalStr = goalStrRaw
+	}
+
+	// Универсальный валидатор - только проверка релевантности, без планирования следующих шагов
+	// Планирование следующих шагов происходит на основе результата валидации в других шагах
+	prompt := fmt.Sprintf(`You are validating whether content is relevant to a goal. This is a universal validation step that can be used in various contexts.
+
+VALIDATION REQUEST:
+- Goal: %s
+- Content to validate: %s
+- Item identifier: %s
+
+TASK:
+Analyze if the content above is relevant to the goal. Be strict - only mark as relevant if content truly matches the goal.
+
+CRITICAL: You MUST return ONLY valid JSON matching this EXACT structure. Do not include any explanatory text, markdown formatting, or code blocks. Return pure JSON starting with { and ending with }.
+
+Return JSON in this EXACT format:
+{
+  "relevant": true,
+  "confidence": 0.9,
+  "reason": "explanation of why relevant/not relevant"
+}
+
+Field names must match EXACTLY: "relevant" (boolean), "confidence" (number 0.0-1.0), "reason" (string). All three fields are REQUIRED.`,
+		goalStr,
+		contentToValidate,
+		itemID,
+	)
+
+	// JSON схема для строгого вывода - только результат валидации
+	schema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"relevant": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Whether the content is relevant to the goal",
+			},
+			"confidence": map[string]interface{}{
+				"type":        "number",
+				"description": "Confidence in relevance assessment (0.0-1.0)",
+			},
+			"reason": map[string]interface{}{
+				"type":        "string",
+				"description": "Explanation of why relevant/not relevant",
+			},
+		},
+		"required": []string{"relevant", "confidence", "reason"},
+	}
+
+	// Вызвать LLM для проверки релевантности
+	opts := gen_combined.Options{
+		Temperature: 0.2, // Низкая температура для более детерминированной проверки
+	}
+	response, err := e.genaiClient.GenerateJSONStrict(ctx, prompt, nil, schema, opts)
+	if err != nil {
+		return &CapabilityResult{
+			Success:         false,
+			Error:           stringPtr(err.Error()),
+			ExecutionStatus: models.ExecutionStatusFailed,
+			Retryable:       true,
+			Reason:          fmt.Sprintf("Failed to validate relevance: %v", err),
+		}, nil
+	}
+
+	// Извлечь JSON из ответа
+	jsonContent := response.Content
+	if jsonContent == "" || (len(jsonContent) > 0 && jsonContent[0] != '{') {
+		for _, tc := range response.ToolCalls {
+			if tc.Name == "return_structured" && tc.Arguments != "" {
+				jsonContent = tc.Arguments
+				break
+			}
+		}
+	}
+	if jsonContent == "" {
+		jsonContent = response.RawJSON
+	}
+
+	// Очищаем markdown code fences
+	jsonContent = strings.TrimSpace(jsonContent)
+	if strings.HasPrefix(jsonContent, "```json") {
+		jsonContent = strings.TrimPrefix(jsonContent, "```json")
+		jsonContent = strings.TrimSuffix(jsonContent, "```")
+		jsonContent = strings.TrimSpace(jsonContent)
+	} else if strings.HasPrefix(jsonContent, "```") {
+		jsonContent = strings.TrimPrefix(jsonContent, "```")
+		jsonContent = strings.TrimSuffix(jsonContent, "```")
+		jsonContent = strings.TrimSpace(jsonContent)
+	}
+
+	// Парсить результат валидации
+	var validationResult map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonContent), &validationResult); err != nil {
+		if e.logger != nil {
+			e.logger.Printf("[LLMValidateExecutor] Failed to parse JSON: %v, content: %s", err, jsonContent[:min(200, len(jsonContent))])
+		}
+		return nil, fmt.Errorf("failed to unmarshal validation result: %w", err)
+	}
+
+	relevant := false
+	if r, ok := validationResult["relevant"].(bool); ok {
+		relevant = r
+	}
+
+	confidence := 0.8
+	if c, ok := validationResult["confidence"].(float64); ok {
+		confidence = c
+	}
+
+	reason := ""
+	if r, ok := validationResult["reason"].(string); ok {
+		reason = r
+	}
+
+	if e.logger != nil {
+		e.logger.Printf("[LLMValidateExecutor] Validation result: relevant=%v, confidence=%.2f, reason=%s",
+			relevant, confidence, reason)
+	}
+
+	// Универсальный валидатор только возвращает результат валидации
+	// Планирование следующих шагов происходит на основе этого результата в других шагах
+	return &CapabilityResult{
+		Success: true,
+		Output: map[string]interface{}{
+			"relevant":   relevant,
+			"confidence": confidence,
+			"reason":     reason,
+			"itemId":     itemID, // Сохраняем идентификатор элемента для использования в следующих шагах
+		},
+		Message:         reason,
+		ExecutionStatus: models.ExecutionStatusSuccess,
+		Confidence:      &confidence,
+		Retryable:       false,
+		Reason:          reason,
+		SuggestsReplan:  false,
+		// НЕ создаем suggestedSteps здесь - планирование происходит на основе результата валидации
+		StateUpdates: map[string]interface{}{
+			"last_validation_result": map[string]interface{}{
+				"relevant":   relevant,
+				"confidence": confidence,
+				"reason":     reason,
+				"itemId":     itemID,
+			},
+		},
+	}, nil
+}
+
+// formatMessagesForValidation форматирует сообщения для валидации
+func formatMessagesForValidation(msgs []interface{}) string {
+	var sb strings.Builder
+	for i, msg := range msgs {
+		if i >= 15 { // Ограничиваем для промпта
+			sb.WriteString(fmt.Sprintf("\n... and %d more messages", len(msgs)-15))
+			break
+		}
+		if msgMap, ok := msg.(map[string]interface{}); ok {
+			if text, ok := msgMap["text"].(string); ok {
+				// Очищаем текст от лишних пробелов
+				text = strings.TrimSpace(text)
+				if text != "" {
+					sb.WriteString(fmt.Sprintf("- %s\n", text))
+				}
+			}
+		}
+	}
+	return sb.String()
 }
 
 // DataSearchExecutor выполняет поиск данных в документах проекта через Vertex AI Search

@@ -114,102 +114,64 @@ func (e *PlanGenerateExecutor) Execute(ctx context.Context, stepCtx *AgentStepCo
 	specialInstructions := ""
 	if openDataDiscovery {
 		specialInstructions = `
-Special Guidance (external source discovery):
-- The user asks to discover/add external sources (Telegram/RSS/Web) where identifiers are unknown upfront.
-- Always begin with deterministic discovery steps using real values:
-  1. source_list — list current project sources to avoid duplicates.
-  2. web_search — run an actual internet search using keywords from the request (no placeholders).
-  3. plan_calibrate — analyze the search results, extract concrete channel usernames/URLs, and decide the next action.
-- Do NOT add telegram_channel_read or source_create steps until plan_calibrate has produced real channel usernames or URLs. Those steps will be injected dynamically once the data exists.
-- Keep the initial plan limited to those discovery steps (typically 3). Further steps will be generated after new information arrives.`
+Special Guidance (Rolling Horizon Planning):
+- Do NOT try to plan the entire task from start to finish if it involves discovery or uncertain data.
+- Create ONLY the "Entry Strategy" (Discovery Phase) - the first 2-3 steps to gather information.
+- ALWAYS end your initial plan with a 'plan_calibrate' step. This step will analyze the discovery results and generate the next steps dynamically.
+
+CORRECT Initial Plan Structure:
+1. source_list (optional) - check what we already have
+2. web_search OR data_search - find new information/candidates
+3. plan_calibrate - analyze findings and decide what to do next
+
+WRONG Plan Structure (Anti-Pattern):
+1. web_search
+2. telegram_channel_read (WRONG: you don't know the channel yet)
+3. source_create (WRONG: you don't have data yet)
+4. ... (WRONG: guessing future steps)
+
+CRITICAL RULES:
+- NEVER create 'telegram_channel_read', 'document_read', or 'source_create' steps in the initial plan unless the user EXPLICITLY provided the IDs/URLs in the request.
+- If the user says "Find crypto channels", your plan is: 1. web_search "crypto channels", 2. plan_calibrate. STOP THERE.
+- Trust 'plan_calibrate' to handle the rest. It acts as a router/iterator.`
 	}
 
-	prompt := fmt.Sprintf(`You are a task planner for an agentic system. Your task is to create an execution plan for a user's request.
+	prompt := fmt.Sprintf(`You are a strategic task planner. Your goal is to create an INITIAL entry plan for a user request.
 
 User Request: "%s"
 
-Available Capabilities (tools):
+Available Capabilities:
 %s
 
 Project Context:
 %s
 
-Create an execution plan that includes:
-1. Intent Understanding: What the user wants to accomplish, what resources to work with, and what outcome is expected
-2. Goal Definition: Description of the desired result and success criteria
-3. Execution Steps: A sequence of steps using available capabilities
+PLANNING STRATEGY (Rolling Horizon):
+1. Discovery First: Plan only the steps needed to gather initial information (search, list).
+2. No Hallucinations: Do not create steps that require IDs or URLs you don't have yet.
+3. Calibrate: Always add 'plan_calibrate' as the final step of this initial plan. It will handle the dynamic generation of subsequent steps based on real data.
 
-Rules and Guidelines:
-- Each step must use one of the available capabilities
-- Specify dependencies between steps using dependsOn (IDs of previous steps)
-- Critical steps (isCritical: true) are those whose failure prevents task completion (e.g., document read/write operations)
-- Non-critical steps can be skipped on error without stopping the entire task
-- Step IDs must be unique (e.g., step1, step2, step3)
-- In the "reason" field, explain why this step is needed
-- For searching documents within the project, use data_search (searches project documents), NOT web_search (searches the internet)
-- If you need to find a document in the project, use data_search with a query in the input field
-- CRITICAL: NEVER use placeholder values like "doc-id-placeholder", "doc-id-from-step1", "placeholder", "summary-doc-id", etc. - these will FAIL
-- If a step depends on previous steps that haven't completed yet, you CANNOT provide values - DO NOT create that step
-- If data_search is used, subsequent document_read steps MUST wait for data_search to complete first (use dependsOn)
-- If data_search hasn't completed yet, DO NOT create document_read steps - they will fail
-- Consider the logical flow: search → read → process → write
-- Only create steps where you can provide REAL, CONCRETE values - not placeholders, not empty strings, not "placeholder"
-- If you cannot provide real values, DO NOT create the step - it will fail immediately
-- ABSOLUTELY FORBIDDEN: never output strings containing "${", "placeholder", "TBD", "<pending>", "doc-id-from-previous-step", etc. If you do not have a real value yet, omit that step entirely and rely on plan_calibrate later.
+Example for "Find and add crypto channels":
+- Step 1: web_search (query: "best crypto telegram channels")
+- Step 2: plan_calibrate (reason: "Analyze search results and iterate over found channels")
+-> STOP. Do not plan further.
 
-%s
+Example for "Summarize document X":
+- Step 1: data_search (query: "X")
+- Step 2: plan_calibrate (reason: "Check if document found and decide to read it")
+-> STOP.
 
-Important Capability Notes:
-- data_search: Searches documents within the project. Input: {"searchQuery": "query text", "limit": number}. Output: {"matches": [...], "documentIds": ["docId1", "docId2"], "count": N} - use "documentIds" array for document_read
-- document_read: Reads document content. Input: {"documentIds": ["id1", "id2"]} - requires Document IDs from data_search output's "documentIds" array. Returns content of the document.
-- document_write: Writes/updates document content. Input: {"documentId": "id", "content": "text"}. Creates document if it doesn't exist.
-- llm_generate: Generates text using LLM. Input: {"prompt": "text"}. Output: {"content": "generated text"}
-- llm_analyze: Performs structured analysis. Input: {"text": "content", "analysisType": "type"}. Output: {"analysis": {...}}
-- web_search: Searches the internet (use only when external information is needed). Input: {"query": "search text", "maxResults": 5}. Output: {"results": [...], "count": N}
-- bigquery_query: Executes SQL queries against BigQuery for analytics. Input: {"sql": "SELECT...", "maxResults": 1000}. Output: {"results": [...], "rowCount": N}
-- source_list: Lists data sources attached to the project. Input: {} (no input required). Output: {"sources": [{"id", "displayName", "kind", "status", "details"}], "count": N}
-- telegram_channel_read: Reads messages from a Telegram channel. Input: {"channelUsername": "@channel_name_without_at", "lastMessageId": 0}. Output: {"messages": [{"id", "text", "date", "link"}], "count": N}. IMPORTANT: channelUsername is REQUIRED and must be a valid Telegram channel username (without @).
-- source_create: Creates a new data source and attaches it to the project. Input: {"kind": "telegram_channel", "displayName": "Name", "projectId": "...", "channelUsername": "@channel"} (for telegram). Output: {"sourceId", "displayName", "kind", "status"}. Source is created in "paused" state.
-- plan_calibrate: Intermediate step to analyze results and adjust the plan. Use when you need to evaluate results before deciding next steps. Input: {"goal": {...}}. Output: {"extractedChannels": ["channel1", "channel2"], "channelUsername": "next_channel_to_check", "checkedChannels": ["already_checked"], "createdSources": ["sourceId1"], "goalAchieved": false, "additionalStepsNeeded": true}. IMPORTANT: Use ${stepId.channelUsername} to get the next channel to check, ${stepId.extractedChannels[0]} for first extracted channel.
-
-BigQuery tables: core_docs_metadata (id, tenantId, projectId, filename, extractedText), documents_metadata
-
-For CSV analysis, parse extractedText (tab-separated values):
-- Count rows: SELECT ARRAY_LENGTH(SPLIT(extractedText, '\n')) as row_count FROM core_docs_metadata WHERE filename='data.csv'
-- Parse CSV columns: SELECT SPLIT(line, '\t')[SAFE_OFFSET(0)] as col1, SPLIT(line, '\t')[SAFE_OFFSET(1)] as col2 FROM core_docs_metadata, UNNEST(SPLIT(extractedText, '\n')) as line WHERE filename='data.csv' LIMIT 10
-- Aggregate: Use SAFE_CAST to convert text to numbers for SUM/AVG
-
-CRITICAL: When referencing outputs from previous steps, use the EXACT field names from the output:
-- For data_search output, use: ${stepId.documentIds[0]} to get first document ID (NOT ${stepId.output.documentIds})
-- For document_read output, use: ${stepId.documents[0].content} to get content from first document
-- For llm_generate output, use: ${stepId.content} to get generated text
-- Always use direct field access, NOT nested "output" wrapper
-
-IMPORTANT: You MUST return ONLY valid JSON matching this exact structure:
-
+Output Format:
+Return ONLY valid JSON matching this exact structure:
 {
-  "intent": {
-    "action": "What user wants to do",
-    "target": "What resources to work with",
-    "expectedOutcome": "What result is expected"
-  },
-  "goal": {
-    "description": "Description of desired result",
-    "successCriteria": ["criterion1", "criterion2"]
-  },
+  "intent": { "action": "...", "target": "...", "expectedOutcome": "..." },
+  "goal": { "description": "...", "successCriteria": ["..."] },
   "steps": [
-    {
-      "id": "step1",
-      "capability": "capability_name",
-      "input": {"key": "value"},
-      "dependsOn": [],
-      "reason": "Why this step is needed",
-      "isCritical": false
-    }
+    { "id": "step1", "capability": "...", "input": {...}, "reason": "...", "isCritical": true }
   ]
 }
 
-Do not include any explanatory text, markdown, or code blocks. Return ONLY the JSON object.`,
+CRITICAL: Field names must match EXACTLY: "intent", "action", "target", "expectedOutcome", "goal", "description", "successCriteria", "steps", "id", "capability", "input", "dependsOn", "reason", "isCritical". All fields are REQUIRED except "dependsOn".`,
 		userQuery,
 		formatCapabilities(capabilityNames),
 		contextInfo,
@@ -631,9 +593,28 @@ Rules and Guidelines:
 - Look at the actual output structure of completed steps in the "Completed Steps" section above - check the JSON structure carefully
 - Example: if completed step1 (data_search) has output: {"count": 0, "documentIds": []}, then DO NOT create document_read steps - there are no documents to read
 
-IMPORTANT: You MUST return ONLY valid JSON. Do not include any explanatory text, markdown formatting, or code blocks. Return pure JSON starting with { and ending with }.
+IMPORTANT: You MUST return ONLY valid JSON matching this EXACT structure. Do not include any explanatory text, markdown formatting, or code blocks. Return pure JSON starting with { and ending with }.
 
-Return JSON with fields: updatedPlan (object with steps array and reason string), goalAchieved (boolean), nextSteps (array of step IDs).`,
+Return JSON in this EXACT format:
+{
+  "updatedPlan": {
+    "steps": [
+      {
+        "id": "step4",
+        "capability": "capability_name",
+        "input": {"key": "value"},
+        "dependsOn": ["step1"],
+        "reason": "Why this step is needed",
+        "isCritical": false
+      }
+    ],
+    "reason": "Explanation of plan changes"
+  },
+  "goalAchieved": false,
+  "nextSteps": ["step4", "step5"]
+}
+
+CRITICAL: Field names must match EXACTLY: "updatedPlan", "steps", "reason", "goalAchieved", "nextSteps", "id", "capability", "input", "dependsOn", "isCritical".`,
 		string(planJSON),
 		string(completedJSON),
 		string(failedJSON),
@@ -694,35 +675,24 @@ Return JSON with fields: updatedPlan (object with steps array and reason string)
 		NextSteps    []string    `json:"nextSteps,omitempty"`
 	}
 
+	// Строгая типизация: GenerateJSONStrict должен возвращать валидный JSON
+	if jsonContent == "" {
+		return nil, fmt.Errorf("GenerateJSONStrict returned empty JSON content")
+	}
+
+	// Проверяем, что это валидный JSON (начинается с {)
+	if len(jsonContent) > 0 && jsonContent[0] != '{' {
+		return nil, fmt.Errorf("GenerateJSONStrict returned non-JSON content (starts with '%c') - this violates strict JSON mode", jsonContent[0])
+	}
+
 	var replan ReplanResponse
 	if err := json.Unmarshal([]byte(jsonContent), &replan); err != nil {
 		if e.logger != nil {
-			// Показываем больше контекста для отладки
 			previewLen := min(1000, len(jsonContent))
 			e.logger.Printf("[ReplanExecutor] Failed to parse replan JSON: %v", err)
 			e.logger.Printf("[ReplanExecutor] JSON content preview (first %d chars): %s", previewLen, jsonContent[:previewLen])
-			// Пытаемся найти JSON в тексте, если LLM вернул текст с JSON внутри
-			if strings.Contains(jsonContent, "{") && strings.Contains(jsonContent, "}") {
-				// Пытаемся извлечь JSON из текста
-				startIdx := strings.Index(jsonContent, "{")
-				endIdx := strings.LastIndex(jsonContent, "}")
-				if startIdx < endIdx {
-					jsonExtracted := jsonContent[startIdx : endIdx+1]
-					e.logger.Printf("[ReplanExecutor] Attempting to extract JSON from text...")
-					if err2 := json.Unmarshal([]byte(jsonExtracted), &replan); err2 == nil {
-						e.logger.Printf("[ReplanExecutor] Successfully extracted JSON from text")
-					} else {
-						return nil, fmt.Errorf("failed to parse replan JSON (original error: %v, extraction error: %v): %s", err, err2, jsonContent[:previewLen])
-					}
-				} else {
-					return nil, fmt.Errorf("failed to parse replan JSON: %w, content preview: %s", err, jsonContent[:previewLen])
-				}
-			} else {
-				return nil, fmt.Errorf("failed to parse replan JSON: %w, content preview: %s", err, jsonContent[:previewLen])
-			}
-		} else {
-			return nil, fmt.Errorf("failed to parse replan: %w", err)
 		}
+		return nil, fmt.Errorf("failed to parse replan JSON (GenerateJSONStrict should return valid JSON): %w", err)
 	}
 
 	// Валидировать capabilities
@@ -870,9 +840,23 @@ Evaluation Criteria:
 - Missing: Identify gaps between current state and desired goal
 - Suggestions: Provide actionable recommendations with specific steps if needed
 
-IMPORTANT: You MUST return ONLY valid JSON. Do not include any explanatory text, markdown formatting, or code blocks. Return pure JSON starting with { and ending with }.
+IMPORTANT: You MUST return ONLY valid JSON matching this EXACT structure. Do not include any explanatory text, markdown formatting, or code blocks. Return pure JSON starting with { and ending with }.
 
-Return JSON with fields: progress (number 0.0-1.0), goalAchieved (boolean), missing (array of strings), suggestions (array of objects with action, step, reason).`,
+Return JSON in this EXACT format:
+{
+  "progress": 0.75,
+  "goalAchieved": false,
+  "missing": ["element1", "element2"],
+  "suggestions": [
+    {
+      "action": "action_description",
+      "step": {"capability": "capability_name", "input": {}},
+      "reason": "Why this suggestion"
+    }
+  ]
+}
+
+CRITICAL: Field names must match EXACTLY: "progress", "goalAchieved", "missing", "suggestions", "action", "step", "reason".`,
 		string(goalJSON),
 		string(completedJSON),
 		string(stateJSON),

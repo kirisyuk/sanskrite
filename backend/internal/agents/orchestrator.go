@@ -133,6 +133,7 @@ func (o *AgentOrchestrator) CreateJob(
 		Progress:  0.0,
 		Task:      task,
 		Steps:     []models.AgentStep{},
+		State:     make(map[string]interface{}), // Инициализация Shared State
 		AutoMode:  autoMode,
 		UserQuery: userQuery,
 		PlanMode:  planMode,
@@ -328,9 +329,13 @@ func (o *AgentOrchestrator) executeSteps(
 		stepMap[job.Steps[i].ID] = &job.Steps[i]
 	}
 
+	// Защита от бесконечного выполнения: лимит на общее количество выполненных шагов
+	const maxExecutedSteps = 50 // Максимальное количество шагов, которые могут быть выполнены
+	executedStepsCount := 0      // Счетчик выполненных шагов
+
 	// Выполнять шаги пока есть готовые к выполнению
 	iterationCount := 0
-	maxIterations := 30 // Защита от бесконечного цикла (уменьшено с 100)
+	maxIterations := 30 // Защита от deadlock в планировании (уменьшено с 100)
 	for {
 		// Проверить отмену контекста
 		select {
@@ -351,6 +356,10 @@ func (o *AgentOrchestrator) executeSteps(
 			// ВАЖНО: Полностью перестроить stepMap чтобы указывал на элементы reloadedJob.Steps
 			// Иначе stepMap будет содержать указатели на старые объекты, а job.Steps - на новые
 			job = reloadedJob
+			// Инициализируем State если он nil (для старых jobs без State)
+			if job.State == nil {
+				job.State = make(map[string]interface{})
+			}
 			stepMap = make(map[string]*models.AgentStep)
 			for i := range job.Steps {
 				stepMap[job.Steps[i].ID] = &job.Steps[i]
@@ -389,6 +398,14 @@ func (o *AgentOrchestrator) executeSteps(
 			default:
 			}
 
+			// Проверка лимита на количество выполненных шагов
+			if executedStepsCount >= maxExecutedSteps {
+				if o.logger != nil {
+					o.logger.Printf("[AgentOrchestrator] Job %s stopped: max executed steps limit reached (%d)", job.ID, maxExecutedSteps)
+				}
+				return fmt.Errorf("max executed steps limit reached (%d) - stopping to prevent infinite execution", maxExecutedSteps)
+			}
+
 			step := stepMap[stepID]
 			if step.Status != models.AgentStepStatusPending {
 				continue
@@ -412,6 +429,12 @@ func (o *AgentOrchestrator) executeSteps(
 				step.Message = fmt.Sprintf("Skipped due to failure: %v", err)
 				_ = o.jobsRepo.UpdateStep(ctx, job.ID, step.ID, *step)
 				o.sendStepUpdate(ctx, onUpdate, job.ID, job.AgentID, job.TenantID, job.ProjectID, step, "skipped")
+			} else {
+				// Шаг выполнен успешно - увеличиваем счетчик
+				executedStepsCount++
+				if o.logger != nil && executedStepsCount%10 == 0 {
+					o.logger.Printf("[AgentOrchestrator] Job %s: executed %d/%d steps", job.ID, executedStepsCount, maxExecutedSteps)
+				}
 			}
 		}
 
@@ -521,6 +544,11 @@ func (o *AgentOrchestrator) executeStep(
 		return fmt.Errorf("invalid input: %w", err)
 	}
 
+	// Инициализируем State если он nil (для старых jobs без State)
+	if job.State == nil {
+		job.State = make(map[string]interface{})
+	}
+
 	stepCtx := &AgentStepContext{
 		JobID:           job.ID,
 		StepID:          step.ID,
@@ -530,6 +558,7 @@ func (o *AgentOrchestrator) executeStep(
 		Input:           resolvedInput, // Используем разрешенные значения
 		DependsOn:       step.DependsOn,
 		PreviousOutputs: previousOutputs,
+		State:           job.State, // Передаем текущее состояние (Working Memory)
 	}
 
 	// Обновить статус шага на running
@@ -561,6 +590,27 @@ func (o *AgentOrchestrator) executeStep(
 	step.Output = result.Output
 	step.Message = result.Message
 	step.CompletedAt = &now
+
+	// Обновляем Shared State (Working Memory)
+	if len(result.StateUpdates) > 0 {
+		if job.State == nil {
+			job.State = make(map[string]interface{})
+		}
+		for k, v := range result.StateUpdates {
+			job.State[k] = v
+		}
+		if o.logger != nil {
+			o.logger.Printf("[AgentOrchestrator] Updated Shared State with keys: %v", o.getMapKeysInterface(result.StateUpdates))
+		}
+		// Сохраняем обновленный State в БД вместе с job
+		// (это будет сделано ниже при обновлении job, но пока мы обновляем только Step)
+		// TODO: Оптимизировать - сохранять Job целиком, а не только Step
+		// Пока обновляем Job отдельным вызовом для надежности
+		if err := o.jobsRepo.Update(ctx, job); err != nil {
+			o.logger.Printf("[AgentOrchestrator] Failed to update job state: %v", err)
+		}
+	}
+
 	if result.ExecutionStatus != "" {
 		step.ExecutionStatus = result.ExecutionStatus
 	}
@@ -583,6 +633,7 @@ func (o *AgentOrchestrator) executeStep(
 	o.sendStepUpdate(ctx, onUpdate, job.ID, job.AgentID, job.TenantID, job.ProjectID, step, "completed")
 
 	// Если это plan_calibrate шаг и он предлагает новые шаги - добавить их
+	// llm_validate НЕ создает suggestedSteps - он только возвращает результат валидации
 	if step.Capability == string(CapabilityPlanCalibrate) && len(result.SuggestedSteps) > 0 {
 		if o.logger != nil {
 			o.logger.Printf("[AgentOrchestrator] Plan calibrate step %s suggested %d new steps", step.ID, len(result.SuggestedSteps))
@@ -1012,17 +1063,22 @@ func (o *AgentOrchestrator) generatePlan(ctx context.Context, job *models.AgentJ
 		"agentID":   job.AgentID,
 	}
 
+	// Инициализируем State если он nil
+	if job.State == nil {
+		job.State = make(map[string]interface{})
+	}
 	stepCtx := &AgentStepContext{
-		JobID:     job.ID,
-		StepID:    "plan_generation",
-		TenantID:  job.TenantID,
-		ProjectID: job.ProjectID,
-		UserID:    job.UserID,
-		Input: map[string]interface{}{
+		JobID:           job.ID,
+		StepID:          "plan_generation",
+		TenantID:        job.TenantID,
+		ProjectID:       job.ProjectID,
+		UserID:          job.UserID,
+		Input:           map[string]interface{}{
 			"userQuery": job.UserQuery,
 			"context":   contextInfo,
 		},
 		PreviousOutputs: make(map[string]map[string]interface{}),
+		State:           job.State,
 	}
 
 	result, err := executor.Execute(ctx, stepCtx)
@@ -1651,19 +1707,26 @@ func (o *AgentOrchestrator) addSuggestedSteps(
 		return nil
 	}
 
-	// Лимит на общее количество шагов
-	const maxTotalSteps = 15
+	// Лимит на общее количество шагов в плане (защита от слишком большого плана)
+	const maxTotalSteps = 30
 	if len(job.Steps)+len(suggestedSteps) > maxTotalSteps {
 		if o.logger != nil {
-			o.logger.Printf("[AgentOrchestrator] Refusing to add %d steps - would exceed max limit (%d total, limit: %d)",
+			o.logger.Printf("[AgentOrchestrator] Refusing to add %d steps - would exceed max plan limit (%d total, limit: %d)",
 				len(suggestedSteps), len(job.Steps)+len(suggestedSteps), maxTotalSteps)
 		}
 		// Ограничиваем количество добавляемых шагов
 		remaining := maxTotalSteps - len(job.Steps)
 		if remaining <= 0 {
-			return fmt.Errorf("max steps limit reached (%d), cannot add more steps", maxTotalSteps)
+			// Если лимит достигнут, возвращаем ошибку, но не критичную - job продолжит выполнение
+			if o.logger != nil {
+				o.logger.Printf("[AgentOrchestrator] Max plan steps limit reached (%d) - no more steps can be added", maxTotalSteps)
+			}
+			return fmt.Errorf("max plan steps limit reached (%d), cannot add more steps", maxTotalSteps)
 		}
 		suggestedSteps = suggestedSteps[:remaining]
+		if o.logger != nil {
+			o.logger.Printf("[AgentOrchestrator] Truncated suggested steps to %d to fit within limit", remaining)
+		}
 	}
 
 	// Найти максимальный индекс шага для генерации новых ID
@@ -1680,23 +1743,37 @@ func (o *AgentOrchestrator) addSuggestedSteps(
 
 	// Создать новые шаги из SuggestedSteps
 	newSteps := make([]models.AgentStep, 0, len(suggestedSteps))
+	previousNewStepID := "" // ID предыдущего созданного шага для цепочки зависимостей
+
 	for i, suggested := range suggestedSteps {
 		stepID := fmt.Sprintf("step%d", maxIndex+i+1)
 		
 		// Определить критичность на основе capability
 		isCritical := Capability(suggested.Capability).IsCritical()
 
+		// Определяем зависимости:
+		// 1. Первый шаг в списке зависит от родительского calibrate-шага (calibrateStepID)
+		// 2. Последующие шаги зависят от ПРЕДЫДУЩЕГО нового шага (цепочка)
+		// Это гарантирует последовательное выполнение: action -> calibrate
+		dependsOn := []string{}
+		if i == 0 {
+			dependsOn = []string{calibrateStepID}
+		} else {
+			dependsOn = []string{previousNewStepID}
+		}
+
 		newStep := models.AgentStep{
 			ID:         stepID,
 			Capability: suggested.Capability,
 			Status:     models.AgentStepStatusPending,
 			Input:      suggested.Input,
-			DependsOn:  []string{calibrateStepID}, // Зависит от calibrate шага
+			DependsOn:  dependsOn,
 			IsCritical: isCritical,
 			Message:    suggested.Reason,
 		}
 
 		newSteps = append(newSteps, newStep)
+		previousNewStepID = stepID
 	}
 
 	// Добавить новые шаги к job
@@ -1761,19 +1838,24 @@ func (o *AgentOrchestrator) replan(ctx context.Context, job *models.AgentJob) er
 		}
 	}
 
+	// Инициализируем State если он nil
+	if job.State == nil {
+		job.State = make(map[string]interface{})
+	}
 	stepCtx := &AgentStepContext{
-		JobID:     job.ID,
-		StepID:    "replan",
-		TenantID:  job.TenantID,
-		ProjectID: job.ProjectID,
-		UserID:    job.UserID,
-		Input: map[string]interface{}{
+		JobID:           job.ID,
+		StepID:          "replan",
+		TenantID:        job.TenantID,
+		ProjectID:       job.ProjectID,
+		UserID:          job.UserID,
+		Input:           map[string]interface{}{
 			"currentPlan":    currentPlan,
 			"completedSteps": completedSteps,
 			"failedSteps":    failedSteps,
 			"currentGoal":    job.Goal,
 		},
 		PreviousOutputs: make(map[string]map[string]interface{}),
+		State:           job.State,
 	}
 
 	result, err := executor.Execute(ctx, stepCtx)
@@ -1787,8 +1869,8 @@ func (o *AgentOrchestrator) replan(ctx context.Context, job *models.AgentJob) er
 
 	// Проверить общее количество шагов (старые + новые)
 	totalSteps := len(job.Steps) + len(stepsRaw)
-	if totalSteps > 15 {
-		return fmt.Errorf("max steps limit exceeded: %d steps (limit: 15)", totalSteps)
+	if totalSteps > 30 {
+		return fmt.Errorf("max steps limit exceeded: %d steps (limit: 30)", totalSteps)
 	}
 
 	// Конвертировать в AgentStep с автозависимостями
@@ -1845,4 +1927,13 @@ func (o *AgentOrchestrator) replan(ctx context.Context, job *models.AgentJob) er
 	}
 
 	return nil
+}
+
+// getMapKeysInterface возвращает ключи мапы interface{} для логирования
+func (o *AgentOrchestrator) getMapKeysInterface(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
