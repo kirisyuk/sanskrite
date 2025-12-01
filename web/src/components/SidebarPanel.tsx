@@ -1,9 +1,11 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectsStore } from '../stores/projectsStore';
 import { api } from '../lib/api';
 import { isArtifact, type Artifact } from '../types/artifact';
 import type { CoreDoc, Project } from '../types/generated';
+import type { ProjectScenario } from '../types/projectScenario';
 
 interface SidebarPanelProps {
   isOpen: boolean;
@@ -25,7 +27,7 @@ interface SidebarPanelProps {
   onDeleteChat: (projectId: string, projectName: string) => void;
   onRenameChat: (projectId: string, newName: string) => void;
   onStartEditingProject: (projectId: string, currentName: string) => void;
-  currentMode?: 'chat' | 'perspectives' | 'models' | 'pages';
+  currentMode?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios';
   projectId?: string | null;
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
   onSelectJob?: (taskId: string | null) => void;
@@ -543,6 +545,16 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   const [editingPageName, setEditingPageName] = React.useState<string>('');
   const editingPageInputRef = React.useRef<HTMLInputElement>(null);
   const showPages = currentMode === 'pages';
+  const showScenarios = currentMode === 'scenarios';
+  
+  // Scenarios state
+  const [scenarios, setScenarios] = React.useState<ProjectScenario[]>([]);
+  const [scenariosLoading, setScenariosLoading] = React.useState(false);
+  const [expandedScenarios, setExpandedScenarios] = React.useState<Set<string>>(new Set());
+  const [showNewScenarioModal, setShowNewScenarioModal] = React.useState(false);
+  const [newScenarioTitle, setNewScenarioTitle] = React.useState('');
+  const [newScenarioParentId, setNewScenarioParentId] = React.useState<string | null>(null);
+  const [creatingScenario, setCreatingScenario] = React.useState(false);
   
   // Find project by projectId if currentProject doesn't match
   const displayProject = React.useMemo(() => {
@@ -602,6 +614,158 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       editingPageInputRef.current.select();
     }
   }, [editingPageId]);
+
+  // Load scenarios function
+  const loadScenarios = React.useCallback(async (forceLoad = false) => {
+    // Allow force load even if not in scenarios mode (for event-driven updates)
+    if (!forceLoad && (!showScenarios || !projectId || projectId === 'local-unfold')) {
+      console.log('[SidebarPanel] loadScenarios skipped', { showScenarios, projectId, forceLoad });
+      if (!showScenarios) {
+        setScenarios([]);
+      }
+      return;
+    }
+
+    if (!projectId || projectId === 'local-unfold') {
+      setScenarios([]);
+      return;
+    }
+
+    console.log('[SidebarPanel] Loading scenarios for project', projectId);
+    setScenariosLoading(true);
+    try {
+      // Load ALL scenarios for the project (not just root)
+      // Backend will return all scenarios, we'll filter root ones on client side
+      const allScenariosResponse = await api.scenariosList(projectId, null);
+      
+      // Ensure response is an array (handle null/undefined from empty list)
+      const allScenariosFlat = Array.isArray(allScenariosResponse) ? allScenariosResponse : [];
+      console.log('[SidebarPanel] Loaded all scenarios', allScenariosFlat.length);
+      
+      // Filter root scenarios (no parentId or parentId is null/empty)
+      const rootScenariosArray = allScenariosFlat.filter(s => !s.parentId || s.parentId === null || s.parentId === '');
+      console.log('[SidebarPanel] Root scenarios count', rootScenariosArray.length);
+      
+      // Build hierarchical structure from flat list (we already have all scenarios)
+      // No need to make additional API calls - we have everything
+      const allScenarios: ProjectScenario[] = [...allScenariosFlat];
+      
+      console.log('[SidebarPanel] Total scenarios loaded', allScenarios.length);
+      setScenarios(allScenarios);
+    } catch (err) {
+      console.error('[SidebarPanel] Failed to load scenarios', err);
+      setScenarios([]);
+    } finally {
+      setScenariosLoading(false);
+    }
+  }, [showScenarios, projectId, expandedScenarios]);
+
+  // Load scenarios when in scenarios mode or projectId changes
+  React.useEffect(() => {
+    if (showScenarios) {
+      loadScenarios();
+    }
+  }, [showScenarios, projectId, loadScenarios]);
+
+  // Listen for scenarios.updated event to refresh list
+  React.useEffect(() => {
+    const handleScenariosUpdated = (event: CustomEvent) => {
+      // Only refresh if the event is for the current project
+      const eventProjectId = event.detail?.projectId;
+      console.log('[SidebarPanel] scenarios.updated event received', { eventProjectId, projectId, showScenarios, currentMode });
+      if (eventProjectId === projectId) {
+        // Force reload even if not currently showing scenarios
+        // This ensures sidebar updates when user switches to scenarios mode
+        console.log('[SidebarPanel] Reloading scenarios after update event (force load)');
+        loadScenarios(true);
+      } else {
+        console.log('[SidebarPanel] Event projectId mismatch, skipping reload', { eventProjectId, projectId });
+      }
+    };
+
+    window.addEventListener('scenarios.updated', handleScenariosUpdated as EventListener);
+    return () => {
+      window.removeEventListener('scenarios.updated', handleScenariosUpdated as EventListener);
+    };
+  }, [projectId, loadScenarios, showScenarios, currentMode]);
+
+  // Build hierarchical tree structure from flat list
+  const buildScenarioTree = React.useCallback((scenariosList: ProjectScenario[]): Array<ProjectScenario & { children?: ProjectScenario[] }> => {
+    const scenarioMap = new Map<string, ProjectScenario & { children?: ProjectScenario[] }>();
+    const roots: Array<ProjectScenario & { children?: ProjectScenario[] }> = [];
+
+    // First pass: create map of all scenarios
+    scenariosList.forEach(scenario => {
+      scenarioMap.set(scenario.id, { ...scenario, children: [] });
+    });
+
+    // Second pass: build tree
+    scenariosList.forEach(scenario => {
+      const node = scenarioMap.get(scenario.id)!;
+      if (!scenario.parentId) {
+        roots.push(node);
+      } else {
+        const parent = scenarioMap.get(scenario.parentId);
+        if (parent) {
+          if (!parent.children) parent.children = [];
+          parent.children.push(node);
+        }
+      }
+    });
+
+    // Sort by order, then by createdAt
+    const sortScenarios = (nodes: Array<ProjectScenario & { children?: ProjectScenario[] }>) => {
+      nodes.sort((a, b) => {
+        if (a.order !== b.order) return a.order - b.order;
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
+      nodes.forEach(node => {
+        if (node.children) sortScenarios(node.children);
+      });
+    };
+
+    sortScenarios(roots);
+    return roots;
+  }, []);
+
+  const scenarioTree = React.useMemo(() => buildScenarioTree(scenarios), [scenarios, buildScenarioTree]);
+
+  // Handle scenario creation
+  const handleCreateScenario = React.useCallback(async () => {
+    if (!projectId || projectId === 'local-unfold' || !newScenarioTitle.trim() || creatingScenario) {
+      return;
+    }
+
+    setCreatingScenario(true);
+    try {
+      const newScenario = await api.scenarioCreate(projectId, {
+        title: newScenarioTitle.trim(),
+        parentId: newScenarioParentId,
+        status: 'active',
+      });
+      
+      // Refresh scenarios list
+      await loadScenarios();
+      
+      // Dispatch event for other components
+      window.dispatchEvent(new CustomEvent('scenarios.updated', { detail: { projectId } }));
+      
+      // Close modal
+      setShowNewScenarioModal(false);
+      setNewScenarioTitle('');
+      setNewScenarioParentId(null);
+      
+      // Expand parent if scenario was created as child
+      if (newScenarioParentId) {
+        setExpandedScenarios(prev => new Set(prev).add(newScenarioParentId!));
+      }
+    } catch (err) {
+      console.error('[SidebarPanel] Failed to create scenario', err);
+      alert('Failed to create scenario');
+    } finally {
+      setCreatingScenario(false);
+    }
+  }, [projectId, newScenarioTitle, newScenarioParentId, creatingScenario, loadScenarios]);
 
   if (!isOpen) {
     return (
@@ -763,6 +927,49 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   Pages
                 </h3>
               </div>
+            ) : currentMode === 'scenarios' ? (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    // Switch back to chat mode
+                    window.dispatchEvent(new CustomEvent('ui.switchMode', { detail: { mode: 'chat' } }));
+                  }}
+                  className="p-1 rounded transition-colors"
+                  style={{
+                    backgroundColor: 'transparent',
+                    color: 'var(--text-secondary-strong)',
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                      'var(--white-10)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                      'transparent';
+                  }}
+                  title="Back to chats"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M15 19l-7-7 7-7"
+                    />
+                  </svg>
+                </button>
+                <h3
+                  className="text-13 font-medium"
+                  style={{ color: 'var(--text-heading)' }}
+                >
+                  Scenarios
+                </h3>
+              </div>
             ) : (
             <h3
               className="text-13 font-medium"
@@ -803,9 +1010,9 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             </button>
           </div>
 
-          {/* New Chat action or Project name in Pages mode */}
+          {/* New Chat action or Project name in Pages/Scenarios mode */}
           <div className="mb-3">
-            {showPages ? (
+            {showPages || showScenarios ? (
               <div
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg"
                 style={{
@@ -1121,6 +1328,173 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   </div>
                 )}
               </>
+            ) : showScenarios ? (
+              <>
+                <div className="mb-3">
+                  <button
+                    type="button"
+                    aria-label="New Scenario"
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
+                    style={{
+                      backgroundColor: 'transparent',
+                      color: 'var(--text-heading)',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                        'var(--white-10)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                        'transparent';
+                    }}
+                    onClick={() => {
+                      setShowNewScenarioModal(true);
+                      setNewScenarioTitle('');
+                      setNewScenarioParentId(null);
+                    }}
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                    >
+                      <rect
+                        x="3.5"
+                        y="3.5"
+                        width="17"
+                        height="17"
+                        rx="3"
+                        strokeWidth={2}
+                      />
+                      <path
+                        strokeLinecap="round"
+                        strokeWidth={2}
+                        d="M12 8v8M8 12h8"
+                      />
+                    </svg>
+                    <span
+                      className="text-xs flex-1 text-left"
+                      style={{ color: 'var(--text-heading)' }}
+                    >
+                      New Scenario
+                    </span>
+                  </button>
+                </div>
+                <div
+                  className="text-[11px] uppercase tracking-wide mb-2"
+                  style={{ color: 'var(--text-tertiary-weak)' }}
+                >
+                  Scenarios ({scenarios.filter(s => !s.parentId).length})
+                </div>
+                {scenariosLoading ? (
+                  <div
+                    className="text-xs"
+                    style={{ color: 'var(--text-secondary-strong)' }}
+                  >
+                    Loading scenarios...
+                  </div>
+                ) : scenarioTree.length === 0 ? (
+                  <div
+                    className="text-xs"
+                    style={{ color: 'var(--text-secondary-strong)' }}
+                  >
+                    No scenarios yet
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {scenarioTree.map((scenario) => {
+                      const ScenarioItem: React.FC<{ scenario: ProjectScenario & { children?: ProjectScenario[] }; level?: number }> = ({ scenario, level = 0 }) => {
+                        const hasChildren = scenario.children && scenario.children.length > 0;
+                        const isExpanded = expandedScenarios.has(scenario.id);
+                        
+                        return (
+                          <div key={scenario.id}>
+                            <div
+                              className="px-2 py-1 rounded text-xs flex items-center gap-2 group"
+                              style={{
+                                backgroundColor: 'transparent',
+                                paddingLeft: `${8 + level * 16}px`,
+                              }}
+                              onMouseEnter={(e) => {
+                                (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                                  'var(--white-10)';
+                              }}
+                              onMouseLeave={(e) => {
+                                (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                                  'transparent';
+                              }}
+                            >
+                              <div className="flex items-center gap-1 flex-1 min-w-0">
+                                {hasChildren && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const wasExpanded = isExpanded;
+                                      setExpandedScenarios(prev => {
+                                        const next = new Set(prev);
+                                        if (wasExpanded) {
+                                          next.delete(scenario.id);
+                                        } else {
+                                          next.add(scenario.id);
+                                        }
+                                        return next;
+                                      });
+                                      // Children will be loaded automatically when expandedScenarios changes
+                                      // (via useEffect dependency on expandedScenarios)
+                                    }}
+                                    className="flex-shrink-0 w-3 h-3 flex items-center justify-center"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                  >
+                                    <svg
+                                      className="w-2 h-2"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                      style={{
+                                        transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                                        transition: 'transform 0.2s',
+                                      }}
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M9 5l7 7-7 7"
+                                      />
+                                    </svg>
+                                  </button>
+                                )}
+                                {!hasChildren && <div className="w-3 h-3" />}
+                                <span
+                                  className="flex-1 truncate cursor-pointer"
+                                  style={{ color: 'var(--text-heading)' }}
+                                  onClick={() => {
+                                    // TODO: Handle scenario click
+                                    console.log('[SidebarPanel] Scenario clicked', scenario.id);
+                                  }}
+                                >
+                                  {scenario.title}
+                                </span>
+                              </div>
+                            </div>
+                            {hasChildren && isExpanded && scenario.children && (
+                              <div>
+                                {scenario.children.map((child) => (
+                                  <ScenarioItem key={child.id} scenario={child} level={level + 1} />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      };
+                      
+                      return <ScenarioItem key={scenario.id} scenario={scenario} />;
+                    })}
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 <div
@@ -1273,6 +1647,189 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         </div>
       </div>
 
+      {/* New Scenario Modal */}
+      {showNewScenarioModal && createPortal(
+        <div 
+          className="fixed inset-0 z-[80] flex items-center justify-center" 
+          role="dialog" 
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowNewScenarioModal(false);
+            }
+          }}
+        >
+          <div 
+            className="absolute inset-0 bg-black/30" 
+            onClick={() => setShowNewScenarioModal(false)} 
+          />
+          <div 
+            className="relative w-full max-w-md rounded-xl border p-6" 
+            style={{ 
+              backgroundColor: 'var(--bg-elevated)', 
+              borderColor: 'var(--overlay-line-90)', 
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
+              maxHeight: '90vh',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4 flex-shrink-0">
+              <div className="text-lg font-medium" style={{ color: 'var(--text-heading)' }}>
+                New Scenario
+              </div>
+              <button 
+                onClick={() => setShowNewScenarioModal(false)} 
+                aria-label="Close" 
+                className="rounded-full p-1 transition-colors"
+                style={{ 
+                  color: 'var(--text-secondary-strong)',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                }}
+              >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor">
+                  <path d="M6 6l12 12M18 6L6 18" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-4" style={{ minHeight: 0 }}>
+              {/* Title input */}
+              <div>
+                <label
+                  className="block text-sm mb-2"
+                  style={{ color: 'var(--text-secondary-strong)' }}
+                >
+                  Title *
+                </label>
+                <input
+                  type="text"
+                  value={newScenarioTitle}
+                  onChange={(e) => setNewScenarioTitle(e.target.value)}
+                  placeholder="Enter scenario title"
+                  className="w-full px-3 py-2 rounded-lg text-sm"
+                  style={{
+                    backgroundColor: 'var(--bg-input, #1A1A1A)',
+                    color: 'var(--text-heading)',
+                    border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                    outline: 'none',
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newScenarioTitle.trim() && !creatingScenario) {
+                      handleCreateScenario();
+                    }
+                  }}
+                  autoFocus
+                />
+              </div>
+
+              {/* Parent selection */}
+              <div>
+                <label
+                  className="block text-sm mb-2"
+                  style={{ color: 'var(--text-secondary-strong)' }}
+                >
+                  Parent Scenario
+                </label>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  <label className="flex items-center gap-2 cursor-pointer py-1">
+                    <input
+                      type="radio"
+                      name="parent"
+                      checked={newScenarioParentId === null}
+                      onChange={() => setNewScenarioParentId(null)}
+                      className="w-4 h-4"
+                      style={{ accentColor: 'var(--accent)' }}
+                    />
+                    <span className="text-sm" style={{ color: 'var(--text-heading)' }}>
+                      Root (no parent)
+                    </span>
+                  </label>
+                  {scenarioTree.map((scenario) => {
+                    const renderScenarioOption = (s: ProjectScenario & { children?: ProjectScenario[] }, level = 0) => (
+                      <React.Fragment key={s.id}>
+                        <label 
+                          className="flex items-center gap-2 cursor-pointer py-1"
+                          style={{ paddingLeft: `${level * 20}px` }}
+                        >
+                          <input
+                            type="radio"
+                            name="parent"
+                            checked={newScenarioParentId === s.id}
+                            onChange={() => setNewScenarioParentId(s.id)}
+                            className="w-4 h-4"
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          <span className="text-sm truncate" style={{ color: 'var(--text-heading)' }}>
+                            {s.title}
+                          </span>
+                        </label>
+                        {s.children && s.children.map((child) => renderScenarioOption(child, level + 1))}
+                      </React.Fragment>
+                    );
+                    return renderScenarioOption(scenario);
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2 mt-4 pt-4 border-t flex-shrink-0" style={{ borderColor: 'var(--overlay-line-90)' }}>
+              <button
+                onClick={() => setShowNewScenarioModal(false)}
+                className="px-4 py-2 rounded-lg transition-colors text-sm"
+                style={{
+                  backgroundColor: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                }}
+                disabled={creatingScenario}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateScenario}
+                disabled={!newScenarioTitle.trim() || creatingScenario}
+                className="px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                style={{
+                  backgroundColor: newScenarioTitle.trim() && !creatingScenario 
+                    ? 'var(--accent)' 
+                    : 'var(--white-06)',
+                  color: newScenarioTitle.trim() && !creatingScenario 
+                    ? 'white' 
+                    : 'var(--text-tertiary-weak)',
+                  cursor: newScenarioTitle.trim() && !creatingScenario ? 'pointer' : 'not-allowed',
+                }}
+                onMouseEnter={(e) => {
+                  if (newScenarioTitle.trim() && !creatingScenario) {
+                    (e.currentTarget as HTMLButtonElement).style.opacity = '0.9';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (newScenarioTitle.trim() && !creatingScenario) {
+                    (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+                  }
+                }}
+              >
+                {creatingScenario ? 'Creating...' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </>
   );
 };

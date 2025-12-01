@@ -56,6 +56,7 @@ const (
 	TopicAnalysisEvents    = "hatlone.analysis.events"
 	TopicVerifiedStreams   = "hatlone.verified.streams"
 	TopicOperationsEvents  = "hatlone.operations.events"
+	TopicSourcePoll        = "source.poll"
 )
 
 // AggregatedTopics enumerates topics the new broker listens to (exported for cmds)
@@ -67,6 +68,7 @@ var AggregatedTopics = []string{
 	TopicAnalysisEvents,
 	TopicVerifiedStreams,
 	TopicOperationsEvents,
+	TopicSourcePoll,
 }
 
 var genaiStreamEventTypes = map[EventType]bool{
@@ -250,6 +252,8 @@ func routeTopicName(et EventType) string {
 		return TopicAnalysisEvents
 	case verifiedStreamEventTypes[et] || strings.HasPrefix(string(et), "verified.stream."):
 		return TopicVerifiedStreams
+	case et == EventSourcePoll || et == EventSourcePollDue:
+		return TopicSourcePoll
 	default:
 		return TopicOperationsEvents
 	}

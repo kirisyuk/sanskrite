@@ -1058,3 +1058,33 @@ type Voucher struct {
 	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
 }
+
+// ============================================================================
+// Project Scenarios (Сценарии проекта)
+// ============================================================================
+
+// ProjectScenario represents a scenario within a project
+// Scenarios can be organized hierarchically (parent-child relationships)
+type ProjectScenario struct {
+	ID          string    `json:"id" firestore:"id"`
+	TenantID    string    `json:"tenantId" firestore:"tenantId"`
+	ProjectID   string    `json:"projectId" firestore:"projectId"` // Parent project
+	ParentID    *string   `json:"parentId,omitempty" firestore:"parentId,omitempty"` // Optional parent scenario for hierarchy
+	
+	Title       string    `json:"title" firestore:"title"`
+	Description *string   `json:"description,omitempty" firestore:"description,omitempty"`
+	Status      string    `json:"status" firestore:"status"` // active, draft, archived
+	
+	// Order within parent (for sorting)
+	Order       int       `json:"order" firestore:"order"`
+	
+	// Metadata
+	Tags        []string  `json:"tags,omitempty" firestore:"tags,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty" firestore:"labels,omitempty"` // lang -> string
+	
+	// Timestamps
+	CreatedAt   time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt" firestore:"updatedAt"`
+	CreatedBy   string    `json:"createdBy" firestore:"createdBy"` // User ID
+	UpdatedBy   string    `json:"updatedBy" firestore:"updatedBy"` // User ID
+}

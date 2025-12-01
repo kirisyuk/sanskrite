@@ -16,7 +16,8 @@ func NewChunksRepository(db *firestore.Client) *ChunksRepository {
 }
 
 func (r *ChunksRepository) Upsert(ctx context.Context, c *models.Chunk) error {
-	if c == nil || c.ID == "" || c.DocID == "" || c.SourceID == "" || c.TenantID == "" {
+	// Allow empty TenantID for public sources (chunks are global)
+	if c == nil || c.ID == "" || c.DocID == "" || c.SourceID == "" {
 		return ErrInvalidDocument
 	}
 	if c.CreatedAt.IsZero() {
@@ -27,7 +28,8 @@ func (r *ChunksRepository) Upsert(ctx context.Context, c *models.Chunk) error {
 }
 
 func (r *ChunksRepository) Create(ctx context.Context, c *models.Chunk) (string, error) {
-	if c == nil || c.DocID == "" || c.SourceID == "" || c.TenantID == "" {
+	// Allow empty TenantID for public sources (chunks are global)
+	if c == nil || c.DocID == "" || c.SourceID == "" {
 		return "", ErrInvalidDocument
 	}
 	c.CreatedAt = time.Now().UTC()

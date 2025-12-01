@@ -924,11 +924,20 @@ cleanup_old_revisions() {
       continue
     fi
     
-    echo -e "${BLUE}[cleanup] Deleting revision: $revision_name${NC}" >&2
-    if gcloud run revisions delete "$revision_name" --region="$region" --quiet 2>/dev/null; then
-      echo "deleted" >&2
+    # Check if revision is retired (safe to delete)
+    local revision_status=$(gcloud run revisions describe "$revision_name" --region="$region" \
+      --format='value(status.conditions[?type=="Active"].status)' 2>/dev/null || echo "")
+    
+    # Only delete if revision is retired or status check failed (retry later)
+    if [[ "$revision_status" == "False" ]] || [[ -z "$revision_status" ]]; then
+      echo -e "${BLUE}[cleanup] Deleting revision: $revision_name${NC}" >&2
+      if gcloud run revisions delete "$revision_name" --region="$region" --quiet 2>/dev/null; then
+        echo "deleted" >&2
+      else
+        echo -e "${YELLOW}[cleanup] Failed to delete $revision_name (may still be retiring, will retry next deploy)${NC}" >&2
+      fi
     else
-      echo -e "${YELLOW}[cleanup] Failed to delete $revision_name (may be in use)${NC}" >&2
+      echo -e "${YELLOW}[cleanup] Skipping $revision_name (still active, will retry next deploy)${NC}" >&2
     fi
   done
   

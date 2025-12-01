@@ -83,6 +83,11 @@ export function useSourcesManagement() {
       });
       setShowAddTelegramModal(false);
       setTgInput('');
+      
+      // Notify about source update
+      window.dispatchEvent(new CustomEvent('sources.updated', { 
+        detail: { projectId: currentProject?.id } 
+      }));
     } catch (e: any) {
       setTgError(e?.message || 'Failed to add channel');
     } finally {

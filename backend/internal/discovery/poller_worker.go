@@ -99,6 +99,9 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 	w.sub.ReceiveSettings.Synchronous = false
 	w.sub.ReceiveSettings.MaxOutstandingMessages = 16
 	return w.sub.Receive(ctx, func(ctx context.Context, m *pubsub.Message) {
+		// Log receipt for debugging
+		// w.logger.Printf("source poller: received message %s", string(m.Data))
+
 		var payload struct {
 			TenantID string `json:"tenantId"`
 			SourceID string `json:"sourceId"`
@@ -109,6 +112,10 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 			m.Ack()
 			return
 		}
+		
+		// Log processing start
+		w.logger.Printf("source poller: processing message for source %s (kind: %s)", payload.SourceID, payload.Kind)
+
 		// Fetch datasource to enforce nextPollAt
 		dsRepo := w.orchestrator.sources
 		if dsRepo == nil {

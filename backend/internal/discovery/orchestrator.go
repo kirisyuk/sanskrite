@@ -512,6 +512,11 @@ func (o *Orchestrator) cadenceToDuration(ds *models.DataSource, foundNew bool) t
 	// Default 30 minutes
 	def := 30 * time.Minute
 
+	// If ds is nil, return default
+	if ds == nil {
+		return def
+	}
+
 	// If new content was found in current poll, use shorter interval
 	if foundNew {
 		return 10 * time.Minute

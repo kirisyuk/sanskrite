@@ -32,10 +32,11 @@ interface UnfoldRequestProps {
   dangerTint?: boolean;
   showHighRiskTag?: boolean;
   onHighRiskTagClick?: () => void;
-  onModeChange?: (mode: 'text' | 'graph' | 'analytics' | 'agent') => void; // Новый проп для смены режима
+  onModeChange?: (mode: 'text' | 'graph' | 'analytics' | 'agent' | 'analyze' | 'scenarios' | 'sources') => void; // Новый проп для смены режима
+  scenariosMode?: boolean; // Если true, показывать режимы для Scenarios (Analyze, Scenarios, Sources)
 }
 
-const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClear, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick, onModeChange }) => {
+const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClear, disabled, dangerTint, showHighRiskTag, onHighRiskTagClick, onModeChange, scenariosMode = false }) => {
   const { theme } = React.useContext(ThemeContext);
   const [showSettings, setShowSettings] = React.useState(false);
   const [showAdvanced, setShowAdvanced] = React.useState(false);
@@ -569,11 +570,13 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   }, []);
 
   // Новый стейт
-  const [mode, setMode] = React.useState<'text' | 'graph' | 'analytics' | 'agent'>('text');
+  const [mode, setMode] = React.useState<'text' | 'graph' | 'analytics' | 'agent' | 'analyze' | 'scenarios' | 'sources'>(
+    scenariosMode ? 'analyze' : 'text'
+  );
 
   // вызываем onModeChange при смене
   const handleModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value as 'text' | 'graph' | 'analytics' | 'agent';
+    const val = e.target.value as 'text' | 'graph' | 'analytics' | 'agent' | 'analyze' | 'scenarios' | 'sources';
     setMode(val);
     onModeChange?.(val);
   };
@@ -1302,10 +1305,20 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                   cursor: 'pointer'
                 }}
               >
-                <option value="text">{t('unfold.request.modeText')}</option>
-                <option value="graph">{t('unfold.request.modeGraph')}</option>
-                <option value="analytics">{t('unfold.request.modeAnalytics')}</option>
-                <option value="agent">{t('unfold.request.modeAgent')}</option>
+                {scenariosMode ? (
+                  <>
+                    <option value="analyze">Analyze</option>
+                    <option value="scenarios">Scenarios</option>
+                    <option value="sources">Sources</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="text">{t('unfold.request.modeText')}</option>
+                    <option value="graph">{t('unfold.request.modeGraph')}</option>
+                    <option value="analytics">{t('unfold.request.modeAnalytics')}</option>
+                    <option value="agent">{t('unfold.request.modeAgent')}</option>
+                  </>
+                )}
               </select>
             </div>
             {showHighRiskTag && (

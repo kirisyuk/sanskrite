@@ -56,6 +56,8 @@ type ProjectsHandler struct {
 	bigqueryAIService *services.BigQueryAIService
 	// GenAI client for Prepare mode
 	genaiClient *gen_combined.Client
+	// Project scenarios repository
+	projectScenarios *repo.ProjectScenariosRepository
 }
 
 // NewProjectsHandler creates a new ProjectsHandler
@@ -141,6 +143,12 @@ func (h *ProjectsHandler) WithBigQueryAI(service *services.BigQueryAIService) *P
 // WithGenAIClient wires GenAI client for Prepare mode
 func (h *ProjectsHandler) WithGenAIClient(client *gen_combined.Client) *ProjectsHandler {
 	h.genaiClient = client
+	return h
+}
+
+// WithProjectScenarios wires ProjectScenarios repository
+func (h *ProjectsHandler) WithProjectScenarios(repo *repo.ProjectScenariosRepository) *ProjectsHandler {
+	h.projectScenarios = repo
 	return h
 }
 
@@ -406,6 +414,13 @@ func (h *ProjectsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) 
 			for _, d := range docs {
 				_, _ = h.coreDocs.Delete(r.Context(), d.ID)
 			}
+		}
+	}
+
+	// Cascade: delete project scenarios for this project
+	if h.projectScenarios != nil {
+		if err := h.projectScenarios.DeleteByProject(r.Context(), authInfo.TenantID, projectID); err != nil {
+			h.logger.Printf("Warning: cascade delete scenarios for project %s: %v", projectID, err)
 		}
 	}
 
@@ -3644,4 +3659,341 @@ func (h *ProjectsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) 
 
 	h.logger.Printf("Successfully updated project %s", projectID)
 	WriteJSON(w, http.StatusOK, project)
+}
+
+// ============================================================================
+// Project Scenarios endpoints
+// ============================================================================
+
+// CreateProjectScenario handles POST /api/v1/projects/{id}/scenarios
+func (h *ProjectsHandler) CreateProjectScenario(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.projectScenarios == nil {
+		WriteInternalError(w, "Project scenarios repository is not configured")
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	// Extract projectId from path
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := pathParts[3]
+
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req struct {
+		Title       string            `json:"title"`
+		Description *string           `json:"description,omitempty"`
+		ParentID    *string           `json:"parentId,omitempty"`
+		Status      string            `json:"status,omitempty"`
+		Order       int               `json:"order,omitempty"`
+		Tags        []string          `json:"tags,omitempty"`
+		Labels      map[string]string  `json:"labels,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+	if req.Title == "" {
+		WriteBadRequest(w, "VALIDATION_ERROR", "title is required")
+		return
+	}
+
+	// Validate parent if provided
+	if req.ParentID != nil && *req.ParentID != "" {
+		parent, err := h.projectScenarios.Get(r.Context(), *req.ParentID)
+		if err != nil || parent == nil || parent.ProjectID != projectID || parent.TenantID != authInfo.TenantID {
+			WriteBadRequest(w, "VALIDATION_ERROR", "Invalid parent scenario")
+			return
+		}
+	}
+
+	now := time.Now().UTC()
+	scenario := &models.ProjectScenario{
+		TenantID:    authInfo.TenantID,
+		ProjectID:   projectID,
+		ParentID:    req.ParentID,
+		Title:       req.Title,
+		Description: req.Description,
+		Status:      req.Status,
+		Order:       req.Order,
+		Tags:        req.Tags,
+		Labels:      req.Labels,
+		CreatedBy:   authInfo.UID,
+		UpdatedBy:   authInfo.UID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	scenarioID, err := h.projectScenarios.Create(r.Context(), scenario)
+	if err != nil {
+		h.logger.Printf("Failed to create scenario: %v", err)
+		WriteInternalError(w, "Failed to create scenario")
+		return
+	}
+
+	scenario.ID = scenarioID
+	WriteJSON(w, http.StatusCreated, scenario)
+}
+
+// ListProjectScenarios handles GET /api/v1/projects/{id}/scenarios
+func (h *ProjectsHandler) ListProjectScenarios(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	if h.projectScenarios == nil {
+		WriteInternalError(w, "Project scenarios repository is not configured")
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 5 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID is required")
+		return
+	}
+	projectID := pathParts[3]
+
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Get optional parentId from query params
+	var parentID *string
+	if parentParam := r.URL.Query().Get("parentId"); parentParam != "" {
+		parentID = &parentParam
+	}
+
+	scenarios, err := h.projectScenarios.ListByProject(r.Context(), authInfo.TenantID, projectID, parentID)
+	if err != nil {
+		h.logger.Printf("Failed to list scenarios: %v", err)
+		WriteInternalError(w, "Failed to list scenarios")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, scenarios)
+}
+
+// GetProjectScenario handles GET /api/v1/projects/{id}/scenarios/{scenarioId}
+func (h *ProjectsHandler) GetProjectScenario(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	if h.projectScenarios == nil {
+		WriteInternalError(w, "Project scenarios repository is not configured")
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID and scenario ID are required")
+		return
+	}
+	projectID := pathParts[3]
+	scenarioID := pathParts[5]
+
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	scenario, err := h.projectScenarios.Get(r.Context(), scenarioID)
+	if err != nil {
+		h.logger.Printf("Failed to get scenario: %v", err)
+		WriteNotFound(w, "Scenario not found")
+		return
+	}
+
+	if scenario.ProjectID != projectID || scenario.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, scenario)
+}
+
+// UpdateProjectScenario handles PUT /api/v1/projects/{id}/scenarios/{scenarioId}
+func (h *ProjectsHandler) UpdateProjectScenario(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only PUT is allowed", nil)
+		return
+	}
+	if h.projectScenarios == nil {
+		WriteInternalError(w, "Project scenarios repository is not configured")
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID and scenario ID are required")
+		return
+	}
+	projectID := pathParts[3]
+	scenarioID := pathParts[5]
+
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Get existing scenario
+	scenario, err := h.projectScenarios.Get(r.Context(), scenarioID)
+	if err != nil {
+		h.logger.Printf("Failed to get scenario: %v", err)
+		WriteNotFound(w, "Scenario not found")
+		return
+	}
+
+	if scenario.ProjectID != projectID || scenario.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var updates models.ProjectScenario
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+
+	// Update allowed fields
+	if updates.Title != "" {
+		scenario.Title = updates.Title
+	}
+	if updates.Description != nil {
+		scenario.Description = updates.Description
+	}
+	if updates.Status != "" {
+		scenario.Status = updates.Status
+	}
+	if updates.Order != 0 {
+		scenario.Order = updates.Order
+	}
+	if updates.ParentID != nil {
+		// Validate parent if provided
+		if *updates.ParentID != "" {
+			parent, err := h.projectScenarios.Get(r.Context(), *updates.ParentID)
+			if err != nil || parent == nil || parent.ProjectID != projectID || parent.TenantID != authInfo.TenantID {
+				WriteBadRequest(w, "VALIDATION_ERROR", "Invalid parent scenario")
+				return
+			}
+		}
+		scenario.ParentID = updates.ParentID
+	}
+	if updates.Tags != nil {
+		scenario.Tags = updates.Tags
+	}
+	if updates.Labels != nil {
+		scenario.Labels = updates.Labels
+	}
+
+	scenario.UpdatedBy = authInfo.UID
+	scenario.UpdatedAt = time.Now().UTC()
+
+	if err := h.projectScenarios.Upsert(r.Context(), scenario); err != nil {
+		h.logger.Printf("Failed to update scenario: %v", err)
+		WriteInternalError(w, "Failed to update scenario")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, scenario)
+}
+
+// DeleteProjectScenario handles DELETE /api/v1/projects/{id}/scenarios/{scenarioId}
+func (h *ProjectsHandler) DeleteProjectScenario(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only DELETE is allowed", nil)
+		return
+	}
+	if h.projectScenarios == nil {
+		WriteInternalError(w, "Project scenarios repository is not configured")
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID and scenario ID are required")
+		return
+	}
+	projectID := pathParts[3]
+	scenarioID := pathParts[5]
+
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Get scenario to verify ownership
+	scenario, err := h.projectScenarios.Get(r.Context(), scenarioID)
+	if err != nil {
+		h.logger.Printf("Failed to get scenario: %v", err)
+		WriteNotFound(w, "Scenario not found")
+		return
+	}
+
+	if scenario.ProjectID != projectID || scenario.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Delete recursively (includes children)
+	if err := h.projectScenarios.DeleteRecursive(r.Context(), scenarioID); err != nil {
+		h.logger.Printf("Failed to delete scenario: %v", err)
+		WriteInternalError(w, "Failed to delete scenario")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Scenario deleted successfully",
+	})
 }

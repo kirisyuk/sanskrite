@@ -14,7 +14,7 @@ interface RightPanelButtonsProps {
   availUserAnalysis: boolean;
   availDiscussionFlow: boolean;
   hasQueuedTasks?: boolean; // Show button if there are queued tasks
-  unfoldSubView?: 'chat' | 'perspectives' | 'models' | 'pages'; // Show model-context button only in models subview
+  unfoldSubView?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios'; // Show model-context button only in models subview
 }
 
 export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({

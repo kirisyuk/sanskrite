@@ -813,6 +813,35 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return res.data as Blob;
   }
 
+  // Project Scenarios
+  async scenariosList(projectId: string, parentId?: string | null): Promise<import('../types/projectScenario').ProjectScenario[]> {
+    // If parentId is null or undefined, load all scenarios (backend will return all)
+    // If parentId is specified, backend will filter by parentId
+    const params = parentId !== null && parentId !== undefined ? `?parentId=${encodeURIComponent(parentId)}` : '';
+    const res = await this.client.get(`/api/v1/projects/${projectId}/scenarios${params}`);
+    return res.data as import('../types/projectScenario').ProjectScenario[];
+  }
+
+  async scenarioGet(projectId: string, scenarioId: string): Promise<import('../types/projectScenario').ProjectScenario> {
+    const res = await this.client.get(`/api/v1/projects/${projectId}/scenarios/${scenarioId}`);
+    return res.data as import('../types/projectScenario').ProjectScenario;
+  }
+
+  async scenarioCreate(projectId: string, data: import('../types/projectScenario').CreateProjectScenarioRequest): Promise<import('../types/projectScenario').ProjectScenario> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/scenarios`, data);
+    return res.data as import('../types/projectScenario').ProjectScenario;
+  }
+
+  async scenarioUpdate(projectId: string, scenarioId: string, data: import('../types/projectScenario').UpdateProjectScenarioRequest): Promise<import('../types/projectScenario').ProjectScenario> {
+    const res = await this.client.put(`/api/v1/projects/${projectId}/scenarios/${scenarioId}`, data);
+    return res.data as import('../types/projectScenario').ProjectScenario;
+  }
+
+  async scenarioDelete(projectId: string, scenarioId: string): Promise<{ success: boolean; message: string }> {
+    const res = await this.client.delete(`/api/v1/projects/${projectId}/scenarios/${scenarioId}`);
+    return res.data as { success: boolean; message: string };
+  }
+
   async suggestChatTitles(messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>, language?: string): Promise<string[]> {
     const transcript = messages.map(m => `- ${m.role}: ${m.text}`).join('\n');
     const lang = (language || (localStorage.getItem('preferredLanguage') || 'EN')).toLowerCase();

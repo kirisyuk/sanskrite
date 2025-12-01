@@ -98,6 +98,7 @@ import { ExperimentalPanel } from '../components/ExperimentalPanel';
 import { useSourcesManagement } from '../hooks/useSourcesManagement';
 import { useProjectsManagement } from '../hooks/useProjectsManagement';
 import { usePanelsManagement } from '../hooks/usePanelsManagement';
+import type { ProjectScenario } from '../types/projectScenario';
 import { useAnalysisManagement } from '../hooks/useAnalysisManagement';
 import { useChatManagement } from '../hooks/useChatManagement';
 import { useArtifactsAnalysis } from '../hooks/useArtifactsAnalysis';
@@ -222,7 +223,7 @@ const DiscoveryPage: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const [entitiesAnalyzing, setEntitiesAnalyzing] = useState(false);
-  const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives' | 'models' | 'pages'>(
+  const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios'>(
     'chat',
   );
   
@@ -248,7 +249,7 @@ const DiscoveryPage: React.FC = () => {
   const [currentPerspectivePreset, setCurrentPerspectivePreset] =
     useState<string>('consulting');
   const [isAnalysisClosed, setIsAnalysisClosed] = useState(false);
-  const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph' | 'analytics' | 'agent'>('text');
+  const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph' | 'analytics' | 'agent' | 'analyze' | 'scenarios' | 'sources'>('text');
   const unfoldRequestRef = React.useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const discoveryTimeoutRef = useRef<number | null>(null);
@@ -1544,6 +1545,31 @@ const DiscoveryPage: React.FC = () => {
                 >
                   Pages
                 </button>
+                {/* Divider */}
+                <div
+                  className="h-4 w-px"
+                  style={{
+                    backgroundColor: 'var(--overlay-line-90)',
+                    margin: '0 4px',
+                  }}
+                />
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={unfoldSubView === 'scenarios'}
+                  aria-controls="unfold-scenarios-panel"
+                  onClick={() => setUnfoldSubView('scenarios')}
+                  className="px-2 py-1 text-12 rounded"
+                  style={{
+                            background:
+                              unfoldSubView === 'scenarios'
+                                ? 'var(--white-10)'
+                                : 'transparent',
+                            color: 'var(--text-heading)',
+                  }}
+                >
+                  Scenarios
+                </button>
               </div>
             </div>
             {/* Perspectives content (full column) */}
@@ -1630,7 +1656,7 @@ const DiscoveryPage: React.FC = () => {
                         contentVisibility: 'auto',
                         containIntrinsicSize: '800px 600px',
                         display:
-                          unfoldSubView === 'perspectives' || unfoldSubView === 'pages' || unfoldSubView === 'models' ? 'none' : undefined,
+                          unfoldSubView === 'perspectives' || unfoldSubView === 'pages' || unfoldSubView === 'models' || unfoldSubView === 'scenarios' ? 'none' : undefined,
                       }}
                     >
               {(() => {
@@ -1834,6 +1860,18 @@ const DiscoveryPage: React.FC = () => {
               genaiChatInteractionsLength={genaiChatInteractionsLength}
               genaiChatMessagesLength={genaiChatMessagesLength}
             />
+            {/* Scenarios content area - empty for now */}
+            {unfoldSubView === 'scenarios' && (
+              <div
+                className="flex-1 overflow-y-auto px-1 min-h-[160px]"
+                style={{
+                  contentVisibility: 'auto',
+                  containIntrinsicSize: '800px 600px',
+                }}
+              >
+                {/* Empty state - content will be added later */}
+              </div>
+            )}
             {/* Input */}
             {unfoldSubView !== 'perspectives' && unfoldSubView !== 'pages' && (
             <div ref={unfoldRequestRef}>
@@ -1848,6 +1886,7 @@ const DiscoveryPage: React.FC = () => {
                             }))
                           }
               onModeChange={setUnfoldMode}
+              scenariosMode={unfoldSubView === 'scenarios'}
               onSubmit={async (text) => {
                 if (genaiChat.streaming || !text.trim()) return;
                 
@@ -2061,6 +2100,514 @@ const DiscoveryPage: React.FC = () => {
                     }
                   } finally {
                     useGenaiChatStore.setState({ streaming: false });
+                  }
+                      return;
+                }
+
+                // Handle Scenarios mode separately
+                if (unfoldMode === 'scenarios') {
+                  console.log('[DiscoveryPage] Scenarios mode: processing scenario modification request:', text);
+                  const pid = await genaiChat.ensureProject();
+                  
+                  if (!pid || pid === 'local-unfold') {
+                    console.warn('[DiscoveryPage] Cannot process scenarios for local project');
+                    return;
+                  }
+
+                  try {
+                    // Show loading state
+                    useGenaiChatStore.setState({ streaming: true, error: null });
+
+                    // Step 1: Load all scenarios for the project
+                    console.log('[DiscoveryPage] Step 1: Loading scenarios...');
+                    const allScenarios = await api.scenariosList(pid, null);
+                    const scenariosArray = Array.isArray(allScenarios) ? allScenarios : [];
+                    
+                    // Build hierarchical tree structure
+                    const buildScenarioTree = (scenariosList: ProjectScenario[]): Array<ProjectScenario & { children?: ProjectScenario[] }> => {
+                      const scenarioMap = new Map<string, ProjectScenario & { children?: ProjectScenario[] }>();
+                      const roots: Array<ProjectScenario & { children?: ProjectScenario[] }> = [];
+
+                      // First pass: create map of all scenarios
+                      scenariosList.forEach(scenario => {
+                        scenarioMap.set(scenario.id, { ...scenario, children: [] });
+                      });
+
+                      // Second pass: build tree
+                      scenariosList.forEach(scenario => {
+                        const node = scenarioMap.get(scenario.id)!;
+                        if (!scenario.parentId) {
+                          roots.push(node);
+                        } else {
+                          const parent = scenarioMap.get(scenario.parentId);
+                          if (parent) {
+                            if (!parent.children) parent.children = [];
+                            parent.children.push(node);
+                          }
+                        }
+                      });
+
+                      // Sort by order, then by createdAt
+                      const sortScenarios = (nodes: Array<ProjectScenario & { children?: ProjectScenario[] }>) => {
+                        nodes.sort((a, b) => {
+                          if (a.order !== b.order) return a.order - b.order;
+                          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+                        });
+                        nodes.forEach(node => {
+                          if (node.children) sortScenarios(node.children);
+                        });
+                      };
+
+                      sortScenarios(roots);
+                      return roots;
+                    };
+
+                    const scenarioTree = buildScenarioTree(scenariosArray);
+                    const scenariosJSON = JSON.stringify(scenarioTree, null, 2);
+
+                    // Step 2: Prepare JSON schema for delta changes
+                    const preferredLang = getPreferredLanguage();
+                    const langName = getLanguageName(preferredLang);
+                    const { useGenAISettings } = await import('../stores/genaiSettingsStore');
+                    const settings = useGenAISettings.getState();
+                    const evalModel = (settings.stanceModel && settings.stanceModel.trim()) ? settings.stanceModel : 'gemini_fast';
+
+                    const schema = {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        changes: {
+                          type: 'array',
+                          items: {
+                            oneOf: [
+                              {
+                                // CREATE
+                                type: 'object',
+                                additionalProperties: false,
+                                properties: {
+                                  action: { type: 'string', enum: ['create'] },
+                                  id: { type: 'string', pattern: '^temp_\\d+$', description: 'Temporary ID for new scenario (format: temp_1, temp_2, etc.). Required for hierarchical scenarios.' },
+                                  title: { type: 'string', minLength: 1, maxLength: 200 },
+                                  parentId: { type: ['string', 'null'], description: 'Parent scenario ID. Use temporary ID (temp_X) if parent is also being created, or existing scenario ID, or null for root.' },
+                                  description: { type: ['string', 'null'] },
+                                  order: { type: 'number', minimum: 0 }
+                                },
+                                required: ['action', 'id', 'title']
+                              },
+                              {
+                                // EDIT
+                                type: 'object',
+                                additionalProperties: false,
+                                properties: {
+                                  action: { type: 'string', enum: ['edit'] },
+                                  id: { type: 'string' },
+                                  title: { type: ['string', 'null'] },
+                                  description: { type: ['string', 'null'] },
+                                  parentId: { type: ['string', 'null'] },
+                                  order: { type: ['number', 'null'] }
+                                },
+                                required: ['action', 'id']
+                              },
+                              {
+                                // DELETE
+                                type: 'object',
+                                additionalProperties: false,
+                                properties: {
+                                  action: { type: 'string', enum: ['delete'] },
+                                  id: { type: 'string' }
+                                },
+                                required: ['action', 'id']
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      required: ['changes']
+                    } as any;
+
+                    const schemaText = JSON.stringify(schema, null, 2);
+
+                    // Step 3: Build prompt
+                    const prompt = `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.
+
+You are an expert scenario planner. Your task is to analyze the user's request and modify the existing scenario structure accordingly.
+
+CURRENT SCENARIOS (hierarchical structure):
+${scenariosJSON}
+
+USER REQUEST:
+${text.trim()}
+
+TASK:
+Analyze the user's request and determine what changes need to be made to the scenario structure. Return ONLY a delta of changes - what needs to be created, edited, or deleted.
+
+RULES:
+1. For CREATE: 
+   - MUST provide a temporary ID in format "temp_1", "temp_2", "temp_3", etc. (required)
+   - Provide title (required), parentId (null for root, or temporary ID if parent is also being created, or existing scenario ID), description (optional), order (optional)
+   - When creating hierarchical scenarios, use temporary IDs for parent references. For example: if creating "Parent" (temp_1) and "Child" (temp_2), set Child's parentId to "temp_1"
+   - Temporary IDs are only used during creation - the system will replace them with real IDs automatically
+2. For EDIT: Provide id (required, use existing scenario ID) and fields to update (title, description, parentId, order - only include fields that should change)
+3. For DELETE: Provide id (required, use existing scenario ID) - this will delete the scenario and all its children
+4. Apply changes in order: DELETE first, then EDIT, then CREATE
+5. For CREATE parentId validation:
+   - If parentId is null → creates root scenario
+   - If parentId is "temp_X" → parent is also being created in this batch (use temporary ID)
+   - If parentId is an existing scenario ID → parent already exists
+6. IMPORTANT: When creating multiple levels of hierarchy, use temporary IDs consistently. Example:
+   - Create "Level 1" with id="temp_1", parentId=null
+   - Create "Level 2" with id="temp_2", parentId="temp_1"
+   - Create "Level 3" with id="temp_3", parentId="temp_2"
+
+The JSON MUST conform EXACTLY to this schema (no additional keys, types must match):
+${schemaText}
+
+Return ONLY JSON, no markdown, no code fences, no explanations.`;
+
+                    const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
+
+                    // Step 4: Call LLM with strict JSON
+                    console.log('[DiscoveryPage] Step 2: Calling LLM for scenario changes...');
+                    const res = await api.genaiGenerate({
+                      model: evalModel,
+                      prompt,
+                      strictJSONEnabled: true,
+                      jsonSchema: schema,
+                      maxOutputTokens: 2048,
+                      webSearchEnabled: false,
+                      systemInstruction: langDirective,
+                    });
+
+                    // Step 5: Parse response
+                    let parsed: any = null;
+                    try {
+                      let contentToParse = res?.content || '';
+                      
+                      // Try rawJSON first if available
+                      const rawJSON = (res as any)?.rawJSON;
+                      if (typeof rawJSON === 'string' && rawJSON.trim()) {
+                        contentToParse = rawJSON;
+                      }
+                      
+                      // Remove markdown code fences if present
+                      contentToParse = contentToParse
+                        .replace(/^```json\s*/i, '')
+                        .replace(/^```\s*/i, '')
+                        .replace(/```\s*$/i, '')
+                        .trim();
+                      
+                      // Fix common JSON escaping issues
+                      contentToParse = contentToParse.replace(/\\'/g, "'");
+                      
+                      // Try to extract JSON from content
+                      if (contentToParse.startsWith('{') || contentToParse.startsWith('[')) {
+                        parsed = JSON.parse(contentToParse);
+                      } else {
+                        // Try to find JSON object in content
+                        const jsonMatch = contentToParse.match(/\{[\s\S]*\}/);
+                        if (jsonMatch && jsonMatch[0]) {
+                          parsed = JSON.parse(jsonMatch[0]);
+                        }
+                      }
+                    } catch (parseError) {
+                      console.error('[DiscoveryPage] Failed to parse LLM response:', parseError);
+                      throw new Error('Failed to parse LLM response as JSON');
+                    }
+
+                    if (!parsed || !parsed.changes || !Array.isArray(parsed.changes)) {
+                      throw new Error('Invalid response format: missing changes array');
+                    }
+
+                    // Step 6: Apply changes (DELETE first, then EDIT, then CREATE)
+                    console.log('[DiscoveryPage] Step 3: Applying changes...', parsed.changes);
+                    const changes = parsed.changes;
+                    const appliedChanges: string[] = [];
+                    const errors: string[] = [];
+
+                    // Sort changes: DELETE first, then EDIT, then CREATE
+                    const deleteChanges = changes.filter((c: any) => c.action === 'delete');
+                    const editChanges = changes.filter((c: any) => c.action === 'edit');
+                    const createChanges = changes.filter((c: any) => c.action === 'create');
+
+                    // Map for temporary ID -> real ID mapping
+                    const tempIdToRealId = new Map<string, string>();
+
+                    // Apply DELETE changes
+                    for (const change of deleteChanges) {
+                      try {
+                        await api.scenarioDelete(pid, change.id);
+                        appliedChanges.push(`Deleted scenario: ${change.id}`);
+                        console.log('[DiscoveryPage] Deleted scenario:', change.id);
+                      } catch (error: any) {
+                        const errorMsg = `Failed to delete scenario ${change.id}: ${error.message}`;
+                        errors.push(errorMsg);
+                        console.error('[DiscoveryPage]', errorMsg, error);
+                      }
+                    }
+
+                    // Apply EDIT changes
+                    for (const change of editChanges) {
+                      try {
+                        // Validate scenario exists
+                        const existingScenario = scenariosArray.find(s => s.id === change.id);
+                        if (!existingScenario) {
+                          errors.push(`Scenario ${change.id} not found for edit`);
+                          continue;
+                        }
+
+                        // Build update object (only include fields that are provided)
+                        const updateData: any = {};
+                        if (change.title !== undefined && change.title !== null) updateData.title = change.title;
+                        if (change.description !== undefined) updateData.description = change.description;
+                        
+                        // Handle parentId: replace temp ID with real ID if needed
+                        if (change.parentId !== undefined) {
+                          if (change.parentId === null) {
+                            updateData.parentId = null;
+                          } else if (change.parentId.startsWith('temp_')) {
+                            // Parent is being created in this batch - use real ID from map
+                            const realParentId = tempIdToRealId.get(change.parentId);
+                            if (realParentId) {
+                              updateData.parentId = realParentId;
+                            } else {
+                              errors.push(`Temporary parent ID ${change.parentId} not found in created scenarios`);
+                              continue;
+                            }
+                          } else {
+                            // Existing parent ID
+                            const parentExists = scenariosArray.find(s => s.id === change.parentId);
+                            if (!parentExists) {
+                              errors.push(`Parent scenario ${change.parentId} not found for edit`);
+                              continue;
+                            }
+                            updateData.parentId = change.parentId;
+                          }
+                        }
+                        
+                        if (change.order !== undefined && change.order !== null) updateData.order = change.order;
+
+                        if (Object.keys(updateData).length > 0) {
+                          await api.scenarioUpdate(pid, change.id, updateData);
+                          appliedChanges.push(`Updated scenario: ${change.id}`);
+                          console.log('[DiscoveryPage] Updated scenario:', change.id, updateData);
+                        }
+                      } catch (error: any) {
+                        const errorMsg = `Failed to edit scenario ${change.id}: ${error.message}`;
+                        errors.push(errorMsg);
+                        console.error('[DiscoveryPage]', errorMsg, error);
+                      }
+                    }
+
+                    // Apply CREATE changes - need to handle hierarchical creation
+                    // First, sort CREATE changes by dependency level (root scenarios first, then children)
+                    const createChangesSorted: any[] = [];
+                    const createChangesMap = new Map<string, any>();
+                    const processedTempIds = new Set<string>();
+
+                    // Build map of temp IDs
+                    createChanges.forEach((c: any) => {
+                      if (c.id && c.id.startsWith('temp_')) {
+                        createChangesMap.set(c.id, c);
+                      }
+                    });
+
+                    // Helper function to check if parent is ready (exists or already created)
+                    const isParentReady = (parentId: string | null | undefined): boolean => {
+                      if (!parentId || parentId === null) return true; // Root scenario
+                      if (parentId.startsWith('temp_')) {
+                        return processedTempIds.has(parentId); // Parent temp ID already processed
+                      }
+                      return scenariosArray.some(s => s.id === parentId); // Existing parent
+                    };
+
+                    // Process CREATE changes in levels (breadth-first)
+                    let remainingChanges = [...createChanges];
+                    let maxIterations = 100; // Safety limit
+                    let iteration = 0;
+
+                    while (remainingChanges.length > 0 && iteration < maxIterations) {
+                      iteration++;
+                      const readyChanges = remainingChanges.filter((c: any) => {
+                        const parentId = c.parentId;
+                        return isParentReady(parentId);
+                      });
+
+                      if (readyChanges.length === 0) {
+                        // Circular dependency or missing parent
+                        const stuck = remainingChanges.map((c: any) => `temp_${c.id || 'unknown'}`).join(', ');
+                        errors.push(`Cannot resolve parent dependencies for scenarios: ${stuck}`);
+                        break;
+                      }
+
+                      // Process ready changes
+                      for (const change of readyChanges) {
+                        try {
+                          // Determine real parentId
+                          let realParentId: string | null = null;
+                          if (change.parentId !== null && change.parentId !== undefined) {
+                            if (change.parentId.startsWith('temp_')) {
+                              // Parent was created in this batch - get real ID
+                              realParentId = tempIdToRealId.get(change.parentId) || null;
+                              if (!realParentId) {
+                                errors.push(`Temporary parent ID ${change.parentId} not found for scenario ${change.id}`);
+                                continue;
+                              }
+                            } else {
+                              // Existing parent ID - validate it exists
+                              const parentExists = scenariosArray.find(s => s.id === change.parentId);
+                              if (!parentExists) {
+                                errors.push(`Parent scenario ${change.parentId} not found for create`);
+                                continue;
+                              }
+                              realParentId = change.parentId;
+                            }
+                          }
+
+                          const createData: any = {
+                            title: change.title,
+                            parentId: realParentId,
+                            status: 'active',
+                          };
+                          if (change.description !== undefined && change.description !== null) {
+                            createData.description = change.description;
+                          }
+                          if (change.order !== undefined && change.order !== null) {
+                            createData.order = change.order;
+                          }
+
+                          const newScenario = await api.scenarioCreate(pid, createData);
+                          
+                          // Map temporary ID to real ID
+                          if (change.id && change.id.startsWith('temp_')) {
+                            tempIdToRealId.set(change.id, newScenario.id);
+                            processedTempIds.add(change.id);
+                          }
+                          
+                          appliedChanges.push(`Created scenario: ${newScenario.title} (${newScenario.id})`);
+                          console.log('[DiscoveryPage] Created scenario:', newScenario.id, newScenario.title, 'temp_id:', change.id);
+                        } catch (error: any) {
+                          const errorMsg = `Failed to create scenario ${change.id || change.title}: ${error.message}`;
+                          errors.push(errorMsg);
+                          console.error('[DiscoveryPage]', errorMsg, error);
+                        }
+                      }
+
+                      // Remove processed changes
+                      remainingChanges = remainingChanges.filter(c => !readyChanges.includes(c));
+                    }
+
+                    if (remainingChanges.length > 0) {
+                      errors.push(`Failed to create ${remainingChanges.length} scenario(s) due to unresolved dependencies`);
+                    }
+
+                    // Step 7: Build response message
+                    let assistantContent = '**Изменения сценариев применены:**\n\n';
+                    if (appliedChanges.length > 0) {
+                      assistantContent += appliedChanges.map(c => `✓ ${c}`).join('\n');
+                    }
+                    if (errors.length > 0) {
+                      assistantContent += '\n\n**Ошибки:**\n';
+                      assistantContent += errors.map(e => `✗ ${e}`).join('\n');
+                    }
+                    if (appliedChanges.length === 0 && errors.length === 0) {
+                      assistantContent += 'Нет изменений для применения.';
+                    }
+
+                    // Add user interaction
+                    const now = Date.now().toString();
+                    const createdAt = new Date().toISOString();
+                    const userInteractionLocalId = now + '-iu';
+                    const userInteraction = {
+                      id: userInteractionLocalId,
+                      projectId: pid,
+                      kind: 'user' as const,
+                      subkind: 'scenarios.modify',
+                      content: text.trim(),
+                      createdAt,
+                    };
+                    useGenaiChatStore.setState((st) => ({
+                      interactions: [...st.interactions, userInteraction as any]
+                    }));
+
+                    // Persist user interaction
+                    let userInteractionServerId = userInteractionLocalId;
+                    try {
+                      const serverUserInteraction = await api.createProjectInteraction(pid, {
+                        kind: 'user',
+                        subkind: 'scenarios.modify',
+                        content: text.trim(),
+                      });
+                      userInteractionServerId = serverUserInteraction.id;
+                      const st = useGenaiChatStore.getState();
+                      const items = [...st.interactions];
+                      const idx = items.findIndex((it) => it.id === userInteractionLocalId);
+                      if (idx >= 0) {
+                        items[idx] = { ...items[idx], id: userInteractionServerId } as any;
+                        useGenaiChatStore.setState({ interactions: items } as any);
+                      }
+                    } catch (e) {
+                      console.warn('[DiscoveryPage] Failed to persist user interaction:', e);
+                    }
+
+                    // Add assistant interaction
+                    const assistantInteraction: any = {
+                      id: `temp-assistant-${Date.now()}`,
+                      projectId: pid,
+                      kind: 'assistant',
+                      subkind: 'scenarios.modified',
+                      content: assistantContent,
+                      replyTo: userInteractionServerId,
+                      createdAt: new Date(),
+                    };
+                    
+                    useGenaiChatStore.setState((st) => ({
+                      interactions: [...st.interactions, assistantInteraction as any],
+                      streaming: false,
+                    }));
+
+                    // Persist assistant interaction
+                    try {
+                      const persistedAssistant = await api.createProjectInteraction(pid, {
+                        kind: 'assistant',
+                        subkind: 'scenarios.modified',
+                        content: assistantContent,
+                        replyTo: userInteractionServerId,
+                      });
+                      const st = useGenaiChatStore.getState();
+                      const items = [...st.interactions];
+                      const idx = items.findIndex((it) => it.id === assistantInteraction.id);
+                      if (idx >= 0) {
+                        items[idx] = { ...items[idx], id: persistedAssistant.id } as any;
+                        useGenaiChatStore.setState({ interactions: items } as any);
+                      }
+                    } catch (e) {
+                      console.warn('[DiscoveryPage] Failed to persist assistant interaction:', e);
+                    }
+
+                    // Step 8: Update sidebar
+                    console.log('[DiscoveryPage] Dispatching scenarios.updated event', { projectId: pid });
+                    window.dispatchEvent(new CustomEvent('scenarios.updated', { detail: { projectId: pid } }));
+
+                  } catch (error: any) {
+                    console.error('[DiscoveryPage] Failed to process scenario changes:', error);
+                    const errorMsg = error.response?.data?.message || error.message || 'Не удалось обработать изменения сценариев';
+                    
+                    const assistantContent = `Ошибка обработки изменений сценариев:\n\n**Ошибка:** ${errorMsg}\n\n*Проверьте логи для деталей*`;
+                    
+                    const assistantInteraction: any = {
+                      id: `temp-assistant-error-${Date.now()}`,
+                      projectId: pid,
+                      kind: 'assistant',
+                      subkind: 'scenarios.error',
+                      content: assistantContent,
+                      createdAt: new Date(),
+                    };
+                    
+                    useGenaiChatStore.setState((st) => ({
+                      interactions: [...st.interactions, assistantInteraction as any],
+                      streaming: false,
+                      error: errorMsg,
+                    }));
                   }
                   return;
                 }

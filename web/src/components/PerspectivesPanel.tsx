@@ -44,6 +44,20 @@ const PerspectivesPanel: React.FC<PerspectivesPanelProps> = ({ onPresetChange })
   const [dropdownPosition, setDropdownPosition] = React.useState<{ top: number; left: number; width: number } | null>(null);
   const genaiSettings = useGenAISettings();
 
+  // News cards state
+  const [theses, setTheses] = React.useState<Array<{ text: string; importance: number }>>([]);
+  const [newsArticles, setNewsArticles] = React.useState<Array<{ 
+    thesis: string; 
+    title: string; 
+    content: string; 
+    url?: string; 
+    date?: string;
+    loading: boolean;
+    error?: string;
+    expanded: boolean;
+  }>>([]);
+  const [loadingNews, setLoadingNews] = React.useState(false);
+
   // PERFORMANCE FIX: Subscribe only to lengths, not entire arrays
   const interactionsLength = useGenaiChatStore((s) => s.interactions.length);
   const messagesLength = useGenaiChatStore((s) => s.messages.length);
@@ -95,6 +109,326 @@ const PerspectivesPanel: React.FC<PerspectivesPanelProps> = ({ onPresetChange })
     // Analyze the entire chat transcript (no truncation)
     return joined;
   }, [getInteractions, getMessages, interactionsLength, messagesLength]);
+
+  // Get assistant interactions for thesis extraction
+  const getAssistantInteractions = React.useCallback(() => {
+    const interactions = getInteractions();
+    return interactions
+      .filter((it: any) => {
+        if (!it) return false;
+        // Only assistant interactions
+        if (it.kind !== 'assistant') return false;
+        // Exclude perspective interactions
+        if (it.kind === 'note' && typeof it.subkind === 'string' && it.subkind.startsWith('perspective.')) {
+          return false;
+        }
+        // Exclude model chat
+        if (it.subkind === 'model.chat') return false;
+        return true;
+      })
+      .slice(-10) // Last 10 assistant messages
+      .map((it: any) => String(it.content || '').trim())
+      .filter(Boolean);
+  }, [getInteractions, interactionsLength]);
+
+  // Extract theses from assistant interactions
+  const extractTheses = React.useCallback(async () => {
+    const assistantMessages = getAssistantInteractions();
+    if (assistantMessages.length === 0) {
+      setTheses([]);
+      return;
+    }
+
+    const langCode = (prefLangCode || 'EN').toLowerCase();
+    const langName = (() => {
+      switch (langCode) {
+        case 'ru': return 'Russian';
+        case 'en': return 'English';
+        case 'kk':
+        case 'kz': return 'Kazakh';
+        default: return 'Russian';
+      }
+    })();
+
+    const transcript = assistantMessages.join('\n\n---\n\n');
+
+    const thesisSchema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        theses: {
+          type: 'array',
+          minItems: 0,
+          maxItems: 7,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              text: {
+                type: 'string',
+                minLength: 10,
+                maxLength: 500,
+                description: 'A standalone, important, unusual thesis extracted from the conversation'
+              },
+              importance: {
+                type: 'number',
+                minimum: 0,
+                maximum: 1,
+                description: 'Importance score from 0 to 1'
+              }
+            },
+            required: ['text', 'importance']
+          }
+        }
+      },
+      required: ['theses']
+    };
+
+    const prompt = `User requirement: you should create your answer in ${langName} language.
+
+You are analyzing assistant messages from a conversation. Your task is to extract up to 7 standalone, important, and unusual theses (key points, insights, or claims) that would be interesting to explore further with current news.
+
+CRITICAL REQUIREMENTS:
+- Extract ONLY theses that are: (1) standalone and complete thoughts, (2) important to the discussion, (3) unusual or non-obvious
+- Each thesis should be a complete, self-contained statement (not a fragment)
+- Prioritize theses that would benefit from current news coverage
+- Sort by importance (highest first)
+- Each thesis text should be 10-500 characters
+- Return exactly 0-7 theses (fewer is fine if there aren't enough good ones)
+
+ASSISTANT MESSAGES:
+${transcript}
+
+Return ONLY JSON matching the schema exactly.`;
+
+    try {
+      const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
+      
+      const res = await api.genaiGenerate({
+        model: 'gemini_fast',
+        prompt,
+        strictJSONEnabled: true,
+        jsonSchema: thesisSchema,
+        maxOutputTokens: 2048,
+        webSearchEnabled: false,
+        systemInstruction: langDirective,
+      });
+
+      let parsed: any = null;
+      try {
+        const contentToParse = res?.content || (res as any)?.rawJSON || '';
+        parsed = JSON.parse(contentToParse);
+      } catch (e) {
+        console.error('[PerspectivesPanel] Failed to parse theses JSON', e, res);
+        setTheses([]);
+        return;
+      }
+
+      if (parsed?.theses && Array.isArray(parsed.theses)) {
+        const sortedTheses = parsed.theses
+          .sort((a: any, b: any) => (b.importance || 0) - (a.importance || 0))
+          .slice(0, 7);
+        setTheses(sortedTheses);
+      } else {
+        setTheses([]);
+      }
+    } catch (err: any) {
+      console.error('[PerspectivesPanel] Failed to extract theses', err);
+      setTheses([]);
+    }
+  }, [getAssistantInteractions, prefLangCode]);
+
+  // Fetch news article for a thesis
+  const fetchNewsForThesis = React.useCallback(async (thesis: string, index: number) => {
+    const langCode = (prefLangCode || 'EN').toLowerCase();
+    const langName = (() => {
+      switch (langCode) {
+        case 'ru': return 'Russian';
+        case 'en': return 'English';
+        case 'kk':
+        case 'kz': return 'Kazakh';
+        default: return 'Russian';
+      }
+    })();
+
+    const currentDate = new Date().toLocaleDateString(langCode === 'ru' ? 'ru-RU' : 'en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const newsSchema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        title: {
+          type: 'string',
+          minLength: 10,
+          maxLength: 200,
+          description: 'News article title'
+        },
+        content: {
+          type: 'string',
+          minLength: 100,
+          maxLength: 2000,
+          description: 'News article content in Markdown format'
+        },
+        url: {
+          type: 'string',
+          description: 'Source URL (optional)'
+        },
+        date: {
+          type: 'string',
+          description: 'Publication date (optional)'
+        }
+      },
+      required: ['title', 'content']
+    };
+
+    const prompt = `User requirement: you should create your answer in ${langName} language.
+
+You are a news researcher. Your task is to find and summarize the most current and relevant news article related to the following thesis.
+
+THESIS: ${thesis}
+
+CURRENT DATE: ${currentDate}
+
+CRITICAL REQUIREMENTS:
+- Search for the MOST RECENT and RELEVANT news related to this thesis
+- Use web search to find actual current news (not general knowledge)
+- Return a news article summary with:
+  - Title: Clear, engaging headline (10-200 chars)
+  - Content: Article summary in Markdown format (100-2000 chars). Include key facts, context, and recent developments
+  - URL: Source URL if available (optional)
+  - Date: Publication date if available (optional)
+- The content should be informative and based on actual current news, not general explanations
+- Write in ${langName} language
+
+Return ONLY JSON matching the schema exactly.`;
+
+    // Update loading state for this article
+    setNewsArticles((prev) => {
+      const updated = [...prev];
+      if (!updated[index]) {
+        updated[index] = {
+          thesis,
+          title: '',
+          content: '',
+          loading: true,
+          expanded: false,
+        };
+      } else {
+        updated[index] = { ...updated[index], loading: true, error: undefined };
+      }
+      return updated;
+    });
+
+    try {
+      const langDirective = `You MUST produce all output strictly in ${langName} language. Use English only for technical terms or code if they are standard industry terms.`;
+      
+      const res = await api.genaiGenerate({
+        model: 'gemini_fast',
+        prompt,
+        strictJSONEnabled: true,
+        jsonSchema: newsSchema,
+        maxOutputTokens: 2048,
+        webSearchEnabled: true,
+        systemInstruction: langDirective,
+      });
+
+      let parsed: any = null;
+      try {
+        const contentToParse = res?.content || (res as any)?.rawJSON || '';
+        parsed = JSON.parse(contentToParse);
+      } catch (e) {
+        console.error(`[PerspectivesPanel] Failed to parse news JSON for thesis ${index}`, e, res);
+        setNewsArticles((prev) => {
+          const updated = [...prev];
+          if (updated[index]) {
+            updated[index] = {
+              ...updated[index],
+              loading: false,
+              error: 'Failed to parse response',
+            };
+          }
+          return updated;
+        });
+        return;
+      }
+
+      if (parsed?.title && parsed?.content) {
+        setNewsArticles((prev) => {
+          const updated = [...prev];
+          updated[index] = {
+            thesis,
+            title: parsed.title,
+            content: parsed.content,
+            url: parsed.url,
+            date: parsed.date,
+            loading: false,
+            expanded: false,
+          };
+          return updated;
+        });
+      } else {
+        throw new Error('Invalid response format');
+      }
+    } catch (err: any) {
+      console.error(`[PerspectivesPanel] Failed to fetch news for thesis ${index}`, err);
+      setNewsArticles((prev) => {
+        const updated = [...prev];
+        if (updated[index]) {
+          updated[index] = {
+            ...updated[index],
+            loading: false,
+            error: err.message || 'Failed to fetch news',
+          };
+        }
+        return updated;
+      });
+    }
+  }, [prefLangCode]);
+
+  // Load news for all theses
+  const loadNewsForTheses = React.useCallback(async () => {
+    if (theses.length === 0) return;
+    
+    setLoadingNews(true);
+    setNewsArticles([]);
+
+    // Initialize articles array
+    const initialArticles = theses.map((thesis) => ({
+      thesis: thesis.text,
+      title: '',
+      content: '',
+      loading: true,
+      expanded: false,
+    }));
+    setNewsArticles(initialArticles);
+
+    // Fetch news sequentially for each thesis
+    for (let i = 0; i < theses.length; i++) {
+      await fetchNewsForThesis(theses[i].text, i);
+    }
+
+    setLoadingNews(false);
+  }, [theses, fetchNewsForThesis]);
+
+  // Refresh news (re-extract theses and load news)
+  const handleRefreshNews = React.useCallback(async () => {
+    setLoadingNews(true);
+    setTheses([]);
+    setNewsArticles([]);
+    
+    await extractTheses();
+  }, [extractTheses]);
+
+  // Auto-load news when theses are extracted
+  React.useEffect(() => {
+    if (theses.length > 0 && newsArticles.length === 0) {
+      void loadNewsForTheses();
+    }
+  }, [theses, newsArticles.length, loadNewsForTheses]);
 
   const presetToInstruction = React.useCallback((p: string) => {
     switch (p) {
@@ -308,6 +642,10 @@ Constraints:
     setRunSeconds(0);
     setSaving(false);
     setSavedAt(null);
+    // Reset news cards
+    setTheses([]);
+    setNewsArticles([]);
+    setLoadingNews(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -323,8 +661,27 @@ Constraints:
       setRunSeconds(0);
       setSaving(false);
       setSavedAt(null);
+      // Reset news cards
+      setTheses([]);
+      setNewsArticles([]);
+      setLoadingNews(false);
     }
   }, [interactionsLength, messagesLength]);
+
+  // Auto-load news on mount if there are assistant interactions and no perspective is loaded
+  React.useEffect(() => {
+    if (!loading && !mdText && !loadingNews && theses.length === 0 && newsArticles.length === 0) {
+      const assistantMessages = getAssistantInteractions();
+      if (assistantMessages.length > 0) {
+        // Small delay to avoid blocking initial render
+        const timer = setTimeout(() => {
+          void extractTheses();
+        }, 500);
+        return () => clearTimeout(timer);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, mdText, loadingNews, theses.length, newsArticles.length, interactionsLength]);
 
   const ensureProject = useGenaiChatStore((s) => s.ensureProject);
   const persistedByLocalId = useGenaiChatStore((s) => (s as any).persistedByLocalId);
@@ -780,21 +1137,180 @@ Constraints:
         style={{ contentVisibility: 'auto', containIntrinsicSize: '800px 600px' }}
       >
         <div className="space-y-2 py-2" style={{ minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
-          {/* Empty state placeholder (when no document and no loading) */}
+          {/* News cards grid (when no document and no loading) */}
           {!loading && !mdText && (
-            <div className="flex items-center justify-center" style={{ flex: 1, minHeight: '100%' }}>
-              <div 
-                className="max-w-md text-center px-6 py-8"
-              >
-                <div className="text-16" style={{ color: 'var(--text-heading)', lineHeight: '1.6', fontSize: 'clamp(18px, 2vw, 24px)', fontWeight: 500 }}>
-                  {t('unfold.perspectives.emptyState.description')}
+            <div className="flex flex-col flex-1" style={{ minHeight: 0 }}>
+              {/* Refresh button */}
+              <div className="flex items-center justify-between mb-3 px-1">
+                <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>
+                  {loadingNews ? 'Loading news...' : newsArticles.length > 0 ? `${newsArticles.length} articles` : 'No articles yet'}
                 </div>
-                {t('unfold.perspectives.emptyState.note') && (
-                  <div className="text-12" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5', marginTop: '12px' }}>
-                    {t('unfold.perspectives.emptyState.note')}
-                  </div>
-                )}
+                <button
+                  type="button"
+                  onClick={handleRefreshNews}
+                  disabled={loadingNews}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded text-xs transition-colors"
+                  style={{
+                    backgroundColor: loadingNews ? 'transparent' : 'var(--white-10)',
+                    color: loadingNews ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
+                    border: '1px solid var(--overlay-line-90)',
+                    cursor: loadingNews ? 'not-allowed' : 'pointer',
+                    opacity: loadingNews ? 0.6 : 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!loadingNews) {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-15)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!loadingNews) {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                    }
+                  }}
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M20 7h-5M20 7v5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M20 12a8 8 0 1 1-2.343-5.657" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  Refresh
+                </button>
               </div>
+
+              {/* News grid */}
+              {newsArticles.length > 0 || loadingNews ? (
+                <div 
+                  className="grid gap-4 overflow-y-auto flex-1"
+                  style={{
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                    gridAutoRows: 'min-content',
+                  }}
+                >
+                  {newsArticles.map((article, index) => (
+                    <div
+                      key={index}
+                      className="rounded-lg border cursor-pointer transition-all"
+                      style={{
+                        backgroundColor: 'var(--bg-sidebar)',
+                        borderColor: 'var(--overlay-line-90)',
+                        padding: '16px',
+                        minHeight: article.expanded ? 'auto' : '200px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                      }}
+                      onClick={() => {
+                        setNewsArticles((prev) => {
+                          const updated = [...prev];
+                          if (updated[index]) {
+                            updated[index] = { ...updated[index], expanded: !updated[index].expanded };
+                          }
+                          return updated;
+                        });
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--accent-primary)';
+                        (e.currentTarget as HTMLDivElement).style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--overlay-line-90)';
+                        (e.currentTarget as HTMLDivElement).style.boxShadow = 'none';
+                      }}
+                    >
+                      {article.loading ? (
+                        // Skeleton loader
+                        <div className="space-y-3 flex-1">
+                          <div style={{ height: 20, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                          </div>
+                          <div style={{ height: 16, width: '80%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                          </div>
+                          <div style={{ height: 12, width: '90%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                          </div>
+                          <div style={{ height: 12, width: '70%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                          </div>
+                        </div>
+                      ) : article.error ? (
+                        // Error state
+                        <div className="flex items-center justify-center flex-1" style={{ color: 'var(--accent-error)', fontSize: 12 }}>
+                          Error: {article.error}
+                        </div>
+                      ) : (
+                        // Article content
+                        <>
+                          <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-heading)' }}>
+                            {article.title}
+                          </h3>
+                          {(article.date || article.url) && (
+                            <div className="flex items-center gap-2 mb-2 text-xs" style={{ color: 'var(--text-tertiary-weak)' }}>
+                              {article.date && <span>{article.date}</span>}
+                              {article.url && (
+                                <a
+                                  href={article.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-xs"
+                                  style={{ color: 'var(--accent-primary)' }}
+                                >
+                                  Source →
+                                </a>
+                              )}
+                            </div>
+                          )}
+                          <div 
+                            className="text-xs flex-1"
+                            style={{ 
+                              color: 'var(--text-secondary-strong)',
+                              lineHeight: 1.5,
+                              overflow: article.expanded ? 'visible' : 'hidden',
+                              display: article.expanded ? 'block' : '-webkit-box',
+                              WebkitLineClamp: article.expanded ? undefined : 4,
+                              WebkitBoxOrient: 'vertical',
+                            }}
+                          >
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {article.content}
+                            </ReactMarkdown>
+                          </div>
+                          {!article.expanded && article.content.length > 200 && (
+                            <div className="mt-2 text-xs" style={{ color: 'var(--accent-primary)' }}>
+                              Click to expand →
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                // Empty state when no articles
+                <div className="flex items-center justify-center" style={{ flex: 1, minHeight: '100%' }}>
+                  <div className="max-w-md text-center px-6 py-8">
+                    <div className="text-16" style={{ color: 'var(--text-heading)', lineHeight: '1.6', fontSize: 'clamp(18px, 2vw, 24px)', fontWeight: 500 }}>
+                      {t('unfold.perspectives.emptyState.description')}
+                    </div>
+                    {t('unfold.perspectives.emptyState.note') && (
+                      <div className="text-12" style={{ color: 'var(--text-secondary-strong)', lineHeight: '1.5', marginTop: '12px' }}>
+                        {t('unfold.perspectives.emptyState.note')}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleRefreshNews}
+                      className="mt-4 px-4 py-2 rounded text-xs"
+                      style={{
+                        backgroundColor: 'var(--white-10)',
+                        color: 'var(--text-heading)',
+                        border: '1px solid var(--overlay-line-90)',
+                      }}
+                    >
+                      Load news from conversation
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

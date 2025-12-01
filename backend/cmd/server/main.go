@@ -285,6 +285,29 @@ func main() {
 		_ = emb // wired into orchestrator when ingest endpoints are added
 		orchestrator = orchestrator.WithRAG(reg, docsRepo, chunksRepo).WithEmbedding(emb)
 
+		// Start SourcePoller worker (listens for source.poll events)
+		// Always enable if we have pubsub and orchestrator
+		if pub != nil {
+			psClient := pub.Client()
+			// Ensure topic exists
+			topicName := "source.poll"
+			topic := psClient.Topic(topicName)
+			if exists, err := topic.Exists(ctx); err == nil && !exists {
+				_, _ = psClient.CreateTopic(ctx, topicName)
+			}
+			// Start worker
+			sourcePoller := discovery.NewSourcePoller(psClient, topicName, orchestrator, logger)
+			go func() {
+				// Use background context to survive request context cancellation
+				// But respect server shutdown via a separate context if needed
+				// For now, just run forever
+				if err := sourcePoller.Start(context.Background()); err != nil {
+					logger.Printf("SourcePoller worker failed: %v", err)
+				}
+			}()
+			logger.Printf("SourcePoller worker started on topic %s", topicName)
+		}
+
 		// Initialize GenAI handler with usage metrics and CoreDocs tools after all dependencies are ready
 		genaiHandler = httphandlers.NewGenAIHandler().
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
@@ -640,6 +663,9 @@ func main() {
 		metaHandler = httphandlers.NewMetaHandler(s.projs, interactions, metaEvents, metaAggProj, metaAggUser, exec, logger)
 		// Wire to projects handler for cascade delete
 		s.projectsHandler = s.projectsHandler.WithMeta(metaEvents, metaAggProj, metaAggUser)
+		// Wire project scenarios repository
+		projectScenariosRepo := repo.NewProjectScenariosRepository(fsClient.Client())
+		s.projectsHandler = s.projectsHandler.WithProjectScenarios(projectScenariosRepo)
 
 		// Initialize Agent Registry (legacy agents: DataAgent, EntitiesAgent)
 		agentRegistry := agents.NewRegistry(exec, genaiClient, pub, logger).
@@ -1616,6 +1642,36 @@ func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request) {
 		}
 		httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
 		return
+	}
+	// Check if path is /projects/{id}/scenarios
+	if strings.Contains(r.URL.Path, "/scenarios") {
+		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		// /api/v1/projects/{id}/scenarios or /api/v1/projects/{id}/scenarios/{scenarioId}
+		if len(pathParts) == 5 && pathParts[4] == "scenarios" {
+			// List or create scenarios
+			switch r.Method {
+			case http.MethodGet:
+				s.projectsHandler.ListProjectScenarios(w, r)
+			case http.MethodPost:
+				s.projectsHandler.CreateProjectScenario(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+			return
+		} else if len(pathParts) == 6 && pathParts[4] == "scenarios" {
+			// Get, update, or delete specific scenario
+			switch r.Method {
+			case http.MethodGet:
+				s.projectsHandler.GetProjectScenario(w, r)
+			case http.MethodPut:
+				s.projectsHandler.UpdateProjectScenario(w, r)
+			case http.MethodDelete:
+				s.projectsHandler.DeleteProjectScenario(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+			return
+		}
 	}
 
 	switch r.Method {

@@ -35,15 +35,21 @@ interface WorkspaceLibraryProps {
   onSourceDelete?: (sourceId: string) => void;
   onOpenDocument?: (doc: Document) => void;
   onExpand?: (projectId: string | null) => void;
+  onSourceAdded?: () => void;
 }
 
-const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({ 
+export interface WorkspaceLibraryRef {
+  reloadData: () => Promise<void>;
+}
+
+const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryProps>(({ 
   projectId, 
   onDocumentDelete,
   onSourceDelete,
   onOpenDocument,
   onExpand,
-}) => {
+  onSourceAdded,
+}, ref) => {
   const [documents, setDocuments] = React.useState<Document[]>([]);
   const [sources, setSources] = React.useState<Source[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -84,58 +90,89 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
   }, [editingDocId]);
 
   // Load documents and sources when projectId changes
-  React.useEffect(() => {
+  const loadData = React.useCallback(async () => {
     if (!projectId || projectId === 'local-unfold') return;
     
-    const loadData = async () => {
-      const startTime = performance.now();
-      console.log('[WorkspaceLibrary] Starting data load at', startTime);
-      setLoading(true);
-      try {
-        // Load documents, excluding automatic post documents - they will be shown separately
-        const docs = await api.docsList(projectId, 'post');
-        const docsTime = performance.now();
-        console.log('[WorkspaceLibrary] Document load completed at', docsTime, 'took', docsTime - startTime, 'ms');
-        setDocuments(docs || []);
+    const startTime = performance.now();
+    console.log('[WorkspaceLibrary] Starting data load at', startTime);
+    setLoading(true);
+    try {
+      // Load documents, excluding automatic post documents - they will be shown separately
+      const docs = await api.docsList(projectId, 'post');
+      const docsTime = performance.now();
+      console.log('[WorkspaceLibrary] Document load completed at', docsTime, 'took', docsTime - startTime, 'ms');
+      setDocuments(docs || []);
 
-        // Load sources
-        try {
-          const srcs = await api.getProjectSources(projectId);
-          const sourcesTime = performance.now();
-          console.log('[WorkspaceLibrary] Sources load completed at', sourcesTime, 'took', sourcesTime - docsTime, 'ms');
-          // Transform DataSource to Source format
-          const transformedSources: Source[] = (srcs || []).map((s: any) => {
-            // Extract displayName from various possible fields
-            let displayName = s.displayName || s.name;
-            if (!displayName && s.details) {
-              displayName = s.details.uri || s.details.channelUsername || s.details.url;
-            }
-            if (!displayName) {
-              displayName = s.kind || 'Unknown';
-            }
-            return {
-              id: s.id,
-              displayName,
-              kind: s.kind || 'unknown',
-              status: s.status || 'active',
-              lastPolledAt: s.lastPolledAt,
-              nextPollAt: s.nextPollAt,
-            };
-          });
-          setSources(transformedSources);
-        } catch (err) {
-          console.error('[WorkspaceLibrary] Failed to load sources', err);
-          setSources([]);
-        }
+      // Load sources
+      try {
+        const srcs = await api.getProjectSources(projectId);
+        const sourcesTime = performance.now();
+        console.log('[WorkspaceLibrary] Sources load completed at', sourcesTime, 'took', sourcesTime - docsTime, 'ms');
+        // Transform DataSource to Source format
+        const transformedSources: Source[] = (srcs || []).map((s: any) => {
+          // Extract displayName from various possible fields
+          let displayName = s.displayName || s.name;
+          if (!displayName && s.details) {
+            displayName = s.details.uri || s.details.channelUsername || s.details.url;
+          }
+          if (!displayName) {
+            displayName = s.kind || 'Unknown';
+          }
+          return {
+            id: s.id,
+            displayName,
+            kind: s.kind || 'unknown',
+            status: s.status || 'active',
+            lastPolledAt: s.lastPolledAt,
+            nextPollAt: s.nextPollAt,
+          };
+        });
+        setSources(transformedSources);
+        // Update store
+        setProjectSources(projectId, srcs || []);
       } catch (err) {
-        console.error('[WorkspaceLibrary] Failed to load documents', err);
-      } finally {
-        setLoading(false);
+        console.error('[WorkspaceLibrary] Failed to load sources', err);
+        setSources([]);
+      }
+    } catch (err) {
+      console.error('[WorkspaceLibrary] Failed to load documents', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, setProjectSources]);
+
+  // Expose reloadData via ref
+  React.useImperativeHandle(ref, () => ({
+    reloadData: async () => {
+      // Wait a bit for backend to process, then reload
+      setTimeout(() => {
+        loadData();
+      }, 500);
+    },
+  }), [loadData]);
+
+  // Load data when projectId changes
+  React.useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Listen for sources.updated event
+  React.useEffect(() => {
+    const handleSourcesUpdated = (event: CustomEvent) => {
+      if (event.detail?.projectId === projectId) {
+        console.log('[WorkspaceLibrary] sources.updated event received, reloading...');
+        // Reload with a small delay to ensure backend consistency
+        setTimeout(() => {
+          loadData();
+        }, 500);
       }
     };
 
-    loadData();
-  }, [projectId, setProjectSources]);
+    window.addEventListener('sources.updated', handleSourcesUpdated as EventListener);
+    return () => {
+      window.removeEventListener('sources.updated', handleSourcesUpdated as EventListener);
+    };
+  }, [projectId, loadData]);
   
   // Sync sources from store when they change (e.g., from WorkspaceCanvas)
   React.useEffect(() => {
@@ -675,7 +712,9 @@ const WorkspaceLibrary: React.FC<WorkspaceLibraryProps> = ({
       )}
     </div>
   );
-};
+});
+
+WorkspaceLibrary.displayName = 'WorkspaceLibrary';
 
 export default WorkspaceLibrary;
 

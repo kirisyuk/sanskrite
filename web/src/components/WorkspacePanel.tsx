@@ -4,7 +4,7 @@ import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { api } from '../lib/api';
 import { useModals } from '../hooks/useModals';
 import { WorkspaceToolbar } from './WorkspaceToolbar';
-import WorkspaceLibrary from './WorkspaceLibrary';
+import WorkspaceLibrary, { WorkspaceLibraryRef } from './WorkspaceLibrary';
 
 interface WorkspacePanelProps {
   currentProjectId: string | null;
@@ -284,14 +284,18 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   const { openWorkspace: fallbackOpenWorkspace } = useModals();
   const openWorkspace = onExpandWorkspace || fallbackOpenWorkspace;
 
+  const workspaceLibraryRef = React.useRef<WorkspaceLibraryRef>(null);
+
   // Handler for document added callback
   const handleDocumentAdded = React.useCallback(() => {
     // WorkspaceLibrary will reload its own data
+    workspaceLibraryRef.current?.reloadData();
   }, []);
 
   // Handler for source added callback
   const handleSourceAdded = React.useCallback(() => {
-    // WorkspaceLibrary will reload its own data
+    // Reload sources in WorkspaceLibrary
+    workspaceLibraryRef.current?.reloadData();
   }, []);
 
   return (
@@ -306,6 +310,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
       {/* Sources are now shown in WorkspaceLibrary below to avoid duplication */}
       <WorkspaceLibrary
+        ref={workspaceLibraryRef}
         projectId={genaiChat.projectId}
         onDocumentDelete={(docId: string) => {
           console.log('[DiscoveryPage] Document deleted', { docId });

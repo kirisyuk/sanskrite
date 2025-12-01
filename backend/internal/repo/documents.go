@@ -114,7 +114,8 @@ func (r *DocumentsRepository) deleteContent(ctx context.Context, d *models.Docum
 }
 
 func (r *DocumentsRepository) Upsert(ctx context.Context, d *models.Document) error {
-	if d == nil || d.ID == "" || d.SourceID == "" || d.TenantID == "" {
+	// Allow empty TenantID for public sources (documents are global)
+	if d == nil || d.ID == "" || d.SourceID == "" {
 		return ErrInvalidDocument
 	}
 	now := time.Now().UTC()

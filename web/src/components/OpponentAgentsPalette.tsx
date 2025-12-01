@@ -9,7 +9,7 @@ import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { getPreferredLanguage, getLanguageName } from '../lib/uiUtils';
 
 interface OpponentAgentsPaletteProps {
-  unfoldSubView: 'chat' | 'perspectives' | 'models' | 'pages';
+  unfoldSubView: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios';
   genaiChatInteractionsLength: number;
   genaiChatMessagesLength: number;
 }
