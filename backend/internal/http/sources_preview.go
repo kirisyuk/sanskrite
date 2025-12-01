@@ -52,7 +52,8 @@ func (h *DiscoveryHandler) PreviewTelegramChannel(w http.ResponseWriter, r *http
 	tgClient := telegram.NewClient(telegramServiceURL)
 
 	// Fetch updates (last 20 messages)
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	// Increased timeout to 45 seconds to account for cold starts and Telegram API delays
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 
 	messages, err := tgClient.FetchUpdates(ctx, channel, 0)
