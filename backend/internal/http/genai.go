@@ -309,17 +309,20 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		// Create response compatible with GenAIResponse format
 		// We need to get model name from task executor result, but ExecuteStructuredTask doesn't return it
 		// For now, use the requested model or fallback
-		modelName := req.Model
-		if modelName == "" {
-			modelName = "gemini_fast" // fallback
+		modelAlias := req.Model
+		if modelAlias == "" {
+			modelAlias = "gemini_fast" // fallback
 		}
+		
+		// Convert alias to actual model name for response
+		actualModelName := gen_combined.ConvertAliasToModel(modelAlias)
 
 		// Estimate usage (task executor doesn't return detailed usage)
 		outputChars := len(jsonBytes)
 		outputTokens := outputChars / 4
 		resp := gen_combined.GenAIResponse{
 			Content: string(jsonBytes),
-			Model:   modelName,
+			Model:   actualModelName, // Use actual model name, not alias
 			Usage: g.Usage{
 				PromptTokens: inputTokens,
 				OutputTokens: outputTokens,
@@ -1239,6 +1242,7 @@ func parseUpstreamError(err error) (int, string, string, interface{}) {
 	return http.StatusBadGateway, "GENAI_ERROR", s, map[string]any{"raw": s}
 }
 
+
 // saveUsageMetric saves a usage metric record
 // durationMs is optional (can be nil if timing not available)
 func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req gen_combined.GenAIRequest, resp gen_combined.GenAIResponse, projectID *string, interactionID *string, durationMs *int) error {
@@ -1246,21 +1250,30 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 		return nil
 	}
 
-	// Determine provider from model name
-	provider := h.determineProvider(resp.Model)
+	// Convert resp.Model from alias to actual model name if needed
+	// resp.Model might contain an alias (e.g., "gemini_fast") instead of actual model name (e.g., "gemini-2.5-flash-lite")
+	actualModelName := gen_combined.ConvertAliasToModel(resp.Model)
+	
+	// Determine provider from actual model name
+	provider := h.determineProvider(actualModelName)
 
 	// Calculate cost using modelManager (which handles tiered pricing for Gemini)
-	cost, err := h.modelManager.CalculateProcessingCost(resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens)
+	cost, err := h.modelManager.CalculateProcessingCost(actualModelName, resp.Usage.PromptTokens, resp.Usage.OutputTokens)
 	if err != nil {
 		// If model not found in manager, fallback to simple calculation
-		log.Printf("[saveUsageMetric] Model %s not found in modelManager, using fallback pricing", resp.Model)
-		cost = h.calculateFallbackCost(provider, resp.Model, resp.Usage.PromptTokens, resp.Usage.OutputTokens)
+		log.Printf("[saveUsageMetric] Model %s not found in modelManager, using fallback pricing", actualModelName)
+		cost = h.calculateFallbackCost(provider, actualModelName, resp.Usage.PromptTokens, resp.Usage.OutputTokens)
 	}
 
 	// Determine model alias if available
 	modelAlias := &req.Model
 	if req.Model == "" {
 		modelAlias = nil
+	} else {
+		// Normalize alias for consistency
+		normalizedAlias := strings.ToLower(strings.TrimSpace(req.Model))
+		normalizedAlias = strings.ReplaceAll(normalizedAlias, "-", "_")
+		modelAlias = &normalizedAlias
 	}
 
 	metric := &repo.UsageMetric{
@@ -1269,8 +1282,8 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 		ProjectID:     projectID,
 		InteractionID: interactionID,
 		Provider:      provider,
-		Model:         resp.Model,
-		ModelAlias:    modelAlias,
+		Model:         actualModelName, // Use actual model name, not alias
+		ModelAlias:    modelAlias,     // Store the alias separately
 		InputTokens:   resp.Usage.PromptTokens,
 		OutputTokens:  resp.Usage.OutputTokens,
 		TotalTokens:   resp.Usage.TotalTokens,

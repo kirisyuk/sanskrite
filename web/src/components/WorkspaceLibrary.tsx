@@ -3,10 +3,11 @@ import { api } from '../lib/api';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
+import { useProjectsStore } from '../stores/projectsStore';
 import { SourceItemWithActions } from './SourceItemWithActions';
 import SourcePreview from './SourcePreview';
 import { SourceDocumentsViewer } from './SourceDocumentsViewer';
-import type { DataSource } from '../types/generated';
+import type { DataSource, Project } from '../types/generated';
 
 interface Document {
   id: string;
@@ -70,6 +71,12 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
   const updateSourceStatus = useWorkspaceStore((s) => s.updateSourceStatus);
   const storeProjectSources = useWorkspaceStore((s) => projectId ? s.projectSources[projectId] : undefined);
   const sourceStatusUpdates = useWorkspaceStore((s) => s.sourceStatusUpdates);
+  
+  // Get current project for project type selector
+  const currentProject = useProjectsStore((s) => 
+    projectId ? s.projects.find((p: Project) => p.id === projectId) : null
+  );
+  const updateProject = useProjectsStore((s) => s.updateProject);
 
   // PERF: Track mount time
   React.useEffect(() => {
@@ -404,6 +411,20 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
     }
   };
 
+  // Handle project type change with optimistic update
+  // IMPORTANT: This hook must be defined before any conditional returns to follow Rules of Hooks
+  const handleProjectTypeChange = React.useCallback(async (newType: "studio" | null) => {
+    if (!projectId || projectId === 'local-unfold' || !currentProject) return;
+    
+    try {
+      // updateProject from store already does optimistic update and syncs with server
+      await updateProject(projectId, { projectType: newType });
+    } catch (error) {
+      console.error('[WorkspaceLibrary] Failed to update project type', error);
+      // Error handling and rollback is already done in updateProject
+    }
+  }, [projectId, currentProject, updateProject]);
+
   if (!projectId || projectId === 'local-unfold') {
     return (
       <div className="flex items-center justify-center py-8 text-center" style={{ color: 'var(--text-secondary)' }}>
@@ -436,40 +457,74 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
 
   return (
     <div className="space-y-4">
-      {/* Header with expand button - always visible if onExpand is provided */}
+      {/* Header with expand button and project type selector */}
       {onExpand && (
-        <div className="flex items-center justify-between mb-2">
-          <h4 className="text-xs font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
-            Workspace Library
-          </h4>
-          <button
-            type="button"
-            onClick={() => {
-              console.log('[WorkspaceLibrary] Expand clicked', { projectId });
-              onExpand?.(projectId);
-            }}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] font-medium transition-colors"
-            style={{
-              color: 'var(--text-heading)',
-              backgroundColor: 'var(--white-06)',
-              border: '1px solid var(--overlay-line-90)',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'var(--white-10)';
-              e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'var(--white-06)';
-              e.currentTarget.style.borderColor = 'var(--overlay-line-90)';
-            }}
-            title="Expand to full screen"
-            aria-label="Expand workspace library to full screen"
-          >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span>Expand</span>
-          </button>
+        <div className="space-y-2 mb-2">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
+              Workspace Library
+            </h4>
+            <button
+              type="button"
+              onClick={() => {
+                console.log('[WorkspaceLibrary] Expand clicked', { projectId });
+                onExpand?.(projectId);
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] font-medium transition-colors"
+              style={{
+                color: 'var(--text-heading)',
+                backgroundColor: 'var(--white-06)',
+                border: '1px solid var(--overlay-line-90)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = 'var(--white-10)';
+                e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'var(--white-06)';
+                e.currentTarget.style.borderColor = 'var(--overlay-line-90)';
+              }}
+              title="Expand to full screen"
+              aria-label="Expand workspace library to full screen"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>Expand</span>
+            </button>
+          </div>
+          
+          {/* Project Type Selector */}
+          {currentProject && (
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
+                Project Type:
+              </label>
+              <select
+                value={currentProject.projectType || ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  handleProjectTypeChange(value === 'studio' ? 'studio' : null);
+                }}
+                className="px-2 py-1 rounded text-[11px] transition-colors"
+                style={{
+                  backgroundColor: 'var(--bg-input, #1A1A1A)',
+                  color: 'var(--text-heading)',
+                  border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                  outline: 'none',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                }}
+              >
+                <option value="">None</option>
+                <option value="studio">Studio</option>
+              </select>
+            </div>
+          )}
         </div>
       )}
 

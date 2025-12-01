@@ -34,6 +34,230 @@ interface SidebarPanelProps {
   selectedJobTaskId?: string | null;
 }
 
+// Helper functions moved outside component to avoid recreation
+const getDaysSinceLastInteraction = (project: Project): number => {
+  const now = new Date();
+  const projectDate = project.lastInteractionAt 
+    ? new Date(project.lastInteractionAt) 
+    : new Date(project.createdAt);
+  const diffTime = Math.abs(now.getTime() - projectDate.getTime());
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  return diffDays;
+};
+
+const formatTimeAgo = (days: number): string => {
+  if (days < 14) {
+    return `${days}d`;
+  } else if (days < 30) {
+    const weeks = Math.floor(days / 7);
+    return `${weeks}w`;
+  } else {
+    const months = Math.floor(days / 30);
+    return `${months}m`;
+  }
+};
+
+// Memoized project row component moved outside to prevent unnecessary re-renders and recreation
+const ProjectRow = React.memo<{
+  project: Project;
+  isDeleting: boolean;
+  isSelected: boolean;
+  isEditing: boolean;
+  editingProjectName: string;
+  editingInputRef: React.RefObject<HTMLInputElement | null>;
+  onSelect: () => void;
+  onStartEditing: () => void;
+  onDelete: () => void;
+  onRename: (newName: string) => void;
+  onCancelEditing: () => void;
+  onEditingNameChange: (name: string) => void;
+  t: any; // Pass t function as prop
+}>(({ 
+  project, 
+  isDeleting, 
+  isSelected, 
+  isEditing, 
+  editingProjectName,
+  editingInputRef,
+  onSelect,
+  onStartEditing,
+  onDelete,
+  onRename,
+  onCancelEditing,
+  onEditingNameChange,
+  t,
+}) => {
+  const daysAgo = getDaysSinceLastInteraction(project);
+  const timeAgoLabel = daysAgo > 0 ? formatTimeAgo(daysAgo) : null;
+  return (
+    <div
+      className="px-2 py-1 rounded text-xs flex items-center gap-2 group cursor-pointer"
+      title={project.displayName}
+      onClick={() => {
+        if (!isEditing && !isDeleting) {
+          onSelect();
+        }
+      }}
+      style={{
+        backgroundColor: isSelected ? 'var(--white-10)' : 'transparent',
+        opacity: isDeleting ? 0.5 : 1,
+        cursor: isDeleting ? 'default' : 'pointer',
+      }}
+      onMouseEnter={(e) => {
+        if (!isSelected && !isEditing && !isDeleting) {
+          (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--white-10)';
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!isSelected && !isEditing) {
+          (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+        }
+      }}
+    >
+      {isEditing ? (
+        <>
+          <input
+            ref={editingInputRef}
+            type="text"
+            value={editingProjectName}
+            onChange={(e) => {
+              // Update local state for editing
+              onEditingNameChange(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                onRename(editingProjectName);
+              } else if (e.key === 'Escape') {
+                onCancelEditing();
+              }
+            }}
+            onBlur={() => {
+              onRename(editingProjectName);
+            }}
+            className="flex-1 px-1 py-0.5 rounded text-xs"
+            style={{
+              backgroundColor: 'var(--bg-input, #1A1A1A)',
+              color: 'var(--text-heading)',
+              border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+            }}
+            placeholder={t('unfold.sections.renameChatPlaceholder')}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </>
+      ) : (
+        <>
+          {/* Studio icon for Studio projects */}
+          {project.projectType === 'studio' && (
+            <div
+              className="flex-shrink-0 w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold"
+              style={{
+                backgroundColor: '#40E0D0', // Turquoise
+                color: '#000',
+              }}
+              title="Studio Project"
+            >
+              S
+            </div>
+          )}
+          <span
+            className="flex-1 truncate"
+            style={{
+              color: isDeleting ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
+              textDecoration: isDeleting ? 'line-through' : 'none',
+            }}
+          >
+            {project.displayName}
+          </span>
+          {!isDeleting && (
+            <div className="relative flex items-center justify-end flex-shrink-0" style={{ width: '56px' }}>
+              {timeAgoLabel && (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded absolute right-0 group-hover:opacity-0 group-hover:pointer-events-none transition-opacity"
+                  style={{
+                    color: 'var(--text-tertiary-weak)',
+                    backgroundColor: 'var(--white-5)',
+                  }}
+                >
+                  {timeAgoLabel}
+                </span>
+              )}
+              <div className="absolute right-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  className="p-1 rounded"
+                  title={t('unfold.sections.renameChat')}
+                  style={{ backgroundColor: 'transparent' }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onStartEditing();
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                    />
+                  </svg>
+                </button>
+                <button
+                  className="p-1 rounded"
+                  title={t('unfold.sections.deleteChat')}
+                  style={{ backgroundColor: 'transparent' }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  // Custom comparison to prevent re-renders when unrelated projects change
+  // Only compare editingProjectName if the project is being edited
+  const editingNameEqual = prevProps.isEditing && nextProps.isEditing
+    ? prevProps.editingProjectName === nextProps.editingProjectName
+    : !prevProps.isEditing && !nextProps.isEditing;
+  
+  return (
+    prevProps.project.id === nextProps.project.id &&
+    prevProps.project.displayName === nextProps.project.displayName &&
+    prevProps.project.lastInteractionAt === nextProps.project.lastInteractionAt &&
+    prevProps.project.createdAt === nextProps.project.createdAt &&
+    prevProps.project.projectType === nextProps.project.projectType &&
+    prevProps.isDeleting === nextProps.isDeleting &&
+    prevProps.isSelected === nextProps.isSelected &&
+    prevProps.isEditing === nextProps.isEditing &&
+    editingNameEqual &&
+    prevProps.t === nextProps.t // Compare translation function ref
+  );
+});
+
 export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   isOpen,
   onOpen,
@@ -61,12 +285,24 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   selectedJobTaskId,
 }) => {
   const { t } = useTranslation();
+  // PERFORMANCE: Subscribe to projects array directly, but use shallow comparison
+  // We need to track displayName changes for renamed projects
   const projects = useProjectsStore((s) => s.projects);
   const projectsLoading = useProjectsStore((s) => s.loading);
   const currentProject = useProjectsStore((s) => s.currentProject);
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const deletingProjectIdsArray = useProjectsStore((s) => s.deletingProjectIds);
   const deletingProjectIds = React.useMemo(() => new Set(deletingProjectIdsArray), [deletingProjectIdsArray]);
+  
+  // Memoize projects array with a stable reference to prevent unnecessary re-renders
+  // Create a signature string that includes displayName to detect changes
+  const projectsSignature = React.useMemo(() => 
+    projects.map((p) => `${p.id}:${p.displayName}:${p.lastInteractionAt || p.createdAt}`).join(','),
+    [projects]
+  );
+  
+  // Memoized projects array - will update when signature changes
+  const memoizedProjects = React.useMemo(() => projects, [projectsSignature]);
   
   // Agent jobs state
   const [agentJobs, setAgentJobs] = React.useState<any[]>([]);
@@ -77,7 +313,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 
   // Group projects by date (Today, Yesterday, Later)
   const groupedProjects = React.useMemo(() => {
-    if (!projects || projects.length === 0) {
+    if (!memoizedProjects || memoizedProjects.length === 0) {
       return { today: [], yesterday: [], later: [] };
     }
 
@@ -87,7 +323,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     yesterday.setDate(yesterday.getDate() - 1);
 
     // Sort projects by lastInteractionAt (if exists) or createdAt
-    const sortedProjects = [...projects].sort((a, b) => {
+    const sortedProjects = [...memoizedProjects].sort((a, b) => {
       const getTimestamp = (project: typeof projects[0]) => {
         if (project.lastInteractionAt) {
           return new Date(project.lastInteractionAt).getTime();
@@ -97,7 +333,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       return getTimestamp(b) - getTimestamp(a); // Newest first
     });
 
-    const grouped = { today: [] as typeof projects, yesterday: [] as typeof projects, later: [] as typeof projects };
+    const grouped = { today: [] as typeof memoizedProjects, yesterday: [] as typeof memoizedProjects, later: [] as typeof memoizedProjects };
 
     for (const project of sortedProjects) {
       const getDate = (project: typeof projects[0]) => {
@@ -120,181 +356,56 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     }
 
     return grouped;
-  }, [projects]);
+  }, [memoizedProjects]);
   
-  // Calculate days since last interaction
-  const getDaysSinceLastInteraction = (project: Project): number => {
-    const now = new Date();
-    const projectDate = project.lastInteractionAt 
-      ? new Date(project.lastInteractionAt) 
-      : new Date(project.createdAt);
-    const diffTime = Math.abs(now.getTime() - projectDate.getTime());
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
-  };
+  // Helper functions moved outside component
 
-  // Format days into human-readable format (d, w, m)
-  const formatTimeAgo = (days: number): string => {
-    if (days < 14) {
-      return `${days}d`;
-    } else if (days < 30) {
-      const weeks = Math.floor(days / 7);
-      return `${weeks}w`;
-    } else {
-      const months = Math.floor(days / 30);
-      return `${months}m`;
-    }
-  };
-
-  const renderProjectRow = (project: Project) => {
+  // Wrapper function to render project row with proper callbacks
+  // IMPORTANT: Only pass editingProjectName to the project being edited to prevent unnecessary re-renders
+  const renderProjectRow = React.useCallback((project: Project) => {
     const isDeleting = deletingProjectIds.has(project.id);
-    const daysAgo = getDaysSinceLastInteraction(project);
-    const timeAgoLabel = daysAgo > 0 ? formatTimeAgo(daysAgo) : null;
+    const isSelected = currentProject?.id === project.id;
+    const isEditing = editingProjectId === project.id;
+    
     return (
-      <div
+      <ProjectRow
         key={project.id}
-        className="px-2 py-1 rounded text-xs flex items-center gap-2 group cursor-pointer"
-        title={project.displayName}
-        onClick={() => {
-          if (editingProjectId !== project.id && !isDeleting) {
-            console.log('[SidebarPanel] Clicked on project', {
-              projectId: project.id,
-              projectName: project.displayName,
-              currentProjectId: currentProject?.id,
-            });
-            // Close all modals (workspace, admin, settings, account) when opening a chat
-            onCloseAllModals?.();
-            setCurrentProject(project);
-            if (isMobile) {
-              onClose();
-            }
+        project={project}
+        isDeleting={isDeleting}
+        isSelected={isSelected}
+        isEditing={isEditing}
+        editingProjectName={isEditing ? editingProjectName : ''}
+        editingInputRef={editingInputRef}
+        onEditingNameChange={onEditingProjectNameChange}
+        t={t}
+        onSelect={() => {
+          console.log('[SidebarPanel] Clicked on project', {
+            projectId: project.id,
+            projectName: project.displayName,
+            currentProjectId: currentProject?.id,
+          });
+          onCloseAllModals?.();
+          setCurrentProject(project);
+          if (isMobile) {
+            onClose();
           }
         }}
-        style={{
-          backgroundColor: currentProject?.id === project.id ? 'var(--white-10)' : 'transparent',
-          opacity: isDeleting ? 0.5 : 1,
-          cursor: isDeleting ? 'default' : 'pointer',
+        onStartEditing={() => {
+          onStartEditingProject(project.id, project.displayName);
         }}
-        onMouseEnter={(e) => {
-          if (currentProject?.id !== project.id && editingProjectId !== project.id && !isDeleting) {
-            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--white-10)';
-          }
+        onDelete={() => {
+          onDeleteChat(project.id, project.displayName);
         }}
-        onMouseLeave={(e) => {
-          if (currentProject?.id !== project.id && editingProjectId !== project.id) {
-            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
-          }
+        onRename={(newName: string) => {
+          onRenameChat(project.id, newName);
         }}
-      >
-        {editingProjectId === project.id ? (
-          <>
-            <input
-              ref={editingInputRef}
-              type="text"
-              value={editingProjectName}
-              onChange={(e) => onEditingProjectNameChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  onRenameChat(project.id, editingProjectName);
-                } else if (e.key === 'Escape') {
-                  onEditingProjectIdChange(null);
-                  onEditingProjectNameChange('');
-                }
-              }}
-              onBlur={() => {
-                onRenameChat(project.id, editingProjectName);
-              }}
-              className="flex-1 px-1 py-0.5 rounded text-xs"
-              style={{
-                backgroundColor: 'var(--bg-input, #1A1A1A)',
-                color: 'var(--text-heading)',
-                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
-              }}
-              placeholder={t('unfold.sections.renameChatPlaceholder')}
-              onClick={(e) => e.stopPropagation()}
-            />
-          </>
-        ) : (
-          <>
-            <span
-              className="flex-1 truncate"
-              style={{
-                color: isDeleting ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
-                textDecoration: isDeleting ? 'line-through' : 'none',
-              }}
-            >
-              {project.displayName}
-            </span>
-            {!isDeleting && (
-              <div className="relative flex items-center justify-end flex-shrink-0" style={{ width: '56px' }}>
-                {timeAgoLabel && (
-                  <span
-                    className="text-[10px] px-1.5 py-0.5 rounded absolute right-0 group-hover:opacity-0 group-hover:pointer-events-none transition-opacity"
-                    style={{
-                      color: 'var(--text-tertiary-weak)',
-                      backgroundColor: 'var(--white-5)',
-                    }}
-                  >
-                    {timeAgoLabel}
-                  </span>
-                )}
-                <div className="absolute right-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    className="p-1 rounded"
-                    title={t('unfold.sections.renameChat')}
-                    style={{ backgroundColor: 'transparent' }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onStartEditingProject(project.id, project.displayName);
-                    }}
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    className="p-1 rounded"
-                    title={t('unfold.sections.deleteChat')}
-                    style={{ backgroundColor: 'transparent' }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteChat(project.id, project.displayName);
-                    }}
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+        onCancelEditing={() => {
+          onEditingProjectIdChange(null);
+          onEditingProjectNameChange('');
+        }}
+      />
     );
-  };
+  }, [deletingProjectIds, currentProject, editingProjectId, editingProjectName, editingInputRef, onCloseAllModals, setCurrentProject, isMobile, onClose, onStartEditingProject, onDeleteChat, onRenameChat, onEditingProjectIdChange, onEditingProjectNameChange]);
 
   // Load agent jobs for the current project (only on project selection, updates via WebSocket)
   React.useEffect(() => {
@@ -510,7 +621,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     );
   };
 
-  const renderProjectGroup = (items: Project[], label: string) => {
+  const renderProjectGroup = React.useCallback((items: Project[], label: string) => {
     if (!items || items.length === 0) {
       return null;
     }
@@ -538,7 +649,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         </div>
       </>
     );
-  };
+  }, [currentProject, agentJobsProjectId, agentJobs, renderProjectRow, renderAgentJobRow]);
   const [pages, setPages] = React.useState<Artifact[]>([]);
   const [pagesLoading, setPagesLoading] = React.useState(false);
   const [editingPageId, setEditingPageId] = React.useState<string | null>(null);
@@ -564,8 +675,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       return currentProject;
     }
     // Otherwise find in projects list
-    return projects.find(p => p.id === projectId) || null;
-  }, [projectId, currentProject, projects]);
+    return memoizedProjects.find(p => p.id === projectId) || null;
+  }, [projectId, currentProject, memoizedProjects]);
 
   // Load pages function
   const loadPages = React.useCallback(async () => {
@@ -1504,11 +1615,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   {t('unfold.sections.chats')}
                 </div>
 
-                {projectsLoading && projects.length === 0 ? (
+                {projectsLoading && memoizedProjects.length === 0 ? (
                   <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
                     {t('unfold.sections.loadingChats')}
                   </div>
-                ) : projects.length === 0 ? (
+                ) : memoizedProjects.length === 0 ? (
                   <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
                     {t('unfold.sections.noChatsYet')}
                   </div>

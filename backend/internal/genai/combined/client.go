@@ -119,6 +119,48 @@ func canonicalizeAlias(s string) string {
 	return u
 }
 
+// ConvertAliasToModel converts a model alias (e.g., "gemini_fast") to the actual model name (e.g., "gemini-2.5-flash-lite")
+// This is exported so it can be used by other packages (e.g., http/genai.go, agents) to ensure consistent model name handling
+func ConvertAliasToModel(alias string) string {
+	if alias == "" {
+		return alias
+	}
+	
+	// Normalize alias using canonicalizeAlias
+	normalized := canonicalizeAlias(alias)
+	
+	// Map aliases to actual model names (same as normalizeOptionsFor* functions)
+	aliasMap := map[string]string{
+		// Gemini
+		"gemini_fast":     "gemini-2.5-flash-lite",
+		"gemini_balanced": "gemini-2.5-flash",
+		"gemini_quality":  "gemini-2.5-pro",
+		"gemini_preview":  "gemini-3-pro-preview",
+		// OpenAI
+		"gpt_fast":     "gpt-5-nano",
+		"gpt_balanced": "gpt-5-mini",
+		"gpt_quality":   "gpt-5.1",
+		// Grok
+		"grok_fast":     "grok-4-1-fast-non-reasoning",
+		"grok_balanced": "grok-4-1-fast-reasoning",
+		"grok_quality":  "grok-4-0709",
+		// Claude
+		"claude_fast":     "claude-haiku-4-5-20251001",
+		"claude_balanced": "claude-sonnet-4-5-20250929",
+		"claude_quality":  "claude-sonnet-4-5-20250929", // fallback to balanced
+		// DeepSeek
+		"deepseek_fast":    "deepseek-chat",
+		"deepseek_quality": "deepseek-reasoner",
+	}
+	
+	if actualModel, ok := aliasMap[normalized]; ok {
+		return actualModel
+	}
+	
+	// If not an alias, return as-is (might already be a real model name)
+	return alias
+}
+
 func route(opts Options) string {
 	m := canonicalizeAlias(opts.ModelOverride)
 	if m == "" {
@@ -1066,8 +1108,12 @@ func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIRes
 	systemInstruction := EnrichSystemInstructionWithMessages(req.SystemInstruction, req.Messages)
 
 	// Build base options (with enriched system instruction)
+	// Convert alias to actual model name immediately to ensure resp.Model always contains real model name
+	// Note: We convert here, but normalizeOptionsFor* functions will handle it again if needed
+	// This ensures that resp.Model always has the real model name, not alias
+	actualModelName := ConvertAliasToModel(req.Model)
 	opts := g.Options{
-		ModelOverride:     canonicalizeAlias(req.Model),
+		ModelOverride:     actualModelName, // Use actual model name directly (normalizeOptionsFor* will handle if it's still an alias)
 		Temperature:       req.Temperature,
 		MaxOutputTokens:   req.MaxOutputTokens,
 		GroundingEnabled:  req.WebSearchEnabled,

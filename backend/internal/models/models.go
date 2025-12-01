@@ -596,6 +596,14 @@ type WaitlistEntry struct {
 	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
 }
 
+// ProjectType represents the type/category of a project
+type ProjectType string
+
+const (
+	ProjectTypeStudio ProjectType = "studio"
+	// Future types can be added here, e.g., ProjectTypeWorkspace, ProjectTypeResearch
+)
+
 // Project соответствует Core.Projects
 type Project struct {
 	ID          string `json:"id" firestore:"id"`
@@ -615,6 +623,9 @@ type Project struct {
 
 	// View type for filtering (e.g., "discovery", "workspace")
 	View *string `json:"view,omitempty" firestore:"view"`
+
+	// ProjectType represents the project category (e.g., "studio" for advanced projects with automation, models, predictions)
+	ProjectType *ProjectType `json:"projectType,omitempty" firestore:"projectType"`
 
 	IsExternal                   *bool   `json:"isExternal,omitempty" firestore:"isExternal"`
 	LinkedProjectRef             *string `json:"linkedProjectRef,omitempty" firestore:"linkedProjectRef"`

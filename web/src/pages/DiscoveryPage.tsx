@@ -1549,8 +1549,11 @@ const DiscoveryPage: React.FC = () => {
                 <div
                   className="h-4 w-px"
                   style={{
-                    backgroundColor: 'var(--overlay-line-90)',
-                    margin: '0 4px',
+                    backgroundColor: theme === 'dark' 
+                      ? 'rgba(255, 255, 255, 0.2)' 
+                      : 'rgba(0, 0, 0, 0.15)',
+                    margin: '0 8px',
+                    flexShrink: 0,
                   }}
                 />
                 <button

@@ -3649,6 +3649,9 @@ func (h *ProjectsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) 
 	if updates.View != nil {
 		project.View = updates.View
 	}
+	if updates.ProjectType != nil {
+		project.ProjectType = updates.ProjectType
+	}
 
 	// Save
 	if err := h.repo.Upsert(r.Context(), project); err != nil {

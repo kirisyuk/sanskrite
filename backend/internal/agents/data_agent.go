@@ -933,11 +933,15 @@ func (a *DataAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, m
 		return
 	}
 
-	// Determine provider from model name (similar to genai.go)
-	provider := a.determineProvider(modelName)
+	// Convert model alias to actual model name if needed
+	// modelName might contain an alias (e.g., "gemini_fast") instead of actual model name (e.g., "gemini-2.5-flash-lite")
+	actualModelName := gen_combined.ConvertAliasToModel(modelName)
+	
+	// Determine provider from actual model name (similar to genai.go)
+	provider := a.determineProvider(actualModelName)
 
-	// Calculate cost
-	cost, err := a.modelManager.CalculateProcessingCost(modelName, inputTokens, outputTokens)
+	// Calculate cost using actual model name
+	cost, err := a.modelManager.CalculateProcessingCost(actualModelName, inputTokens, outputTokens)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Printf("[DataAgent] Failed to calculate cost: %v", err)
@@ -957,7 +961,7 @@ func (a *DataAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, m
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := a.usageMetricsRepo.CreateMetric(metricCtx, agentCtx.TenantID, agentCtx.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
+		_, err := a.usageMetricsRepo.CreateMetric(metricCtx, agentCtx.TenantID, agentCtx.UserID, provider, actualModelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
 		if err != nil && a.logger != nil {
 			a.logger.Printf("[DataAgent] Failed to save usage metric: %v", err)
 		}
