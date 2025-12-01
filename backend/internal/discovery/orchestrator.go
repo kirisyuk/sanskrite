@@ -454,7 +454,7 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 	durationMs := int(completedAt.Sub(startTime).Milliseconds())
 	status := "success"
 	if documentsProcessed == 0 {
-		status = "partial"
+		status = "empty"
 	}
 
 	// Записываем историю обработки

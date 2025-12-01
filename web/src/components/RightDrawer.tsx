@@ -117,7 +117,7 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
     
     try {
       // updateProject from store already does optimistic update and syncs with server
-      await updateProject(currentProjectId, { projectType: newType });
+      await updateProject(currentProjectId, { projectType: newType || undefined });
     } catch (error) {
       console.error('[RightDrawer] Failed to update project type', error);
       // Error handling and rollback is already done in updateProject

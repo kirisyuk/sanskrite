@@ -418,7 +418,7 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
     
     try {
       // updateProject from store already does optimistic update and syncs with server
-      await updateProject(projectId, { projectType: newType });
+      await updateProject(projectId, { projectType: newType || undefined });
     } catch (error) {
       console.error('[WorkspaceLibrary] Failed to update project type', error);
       // Error handling and rollback is already done in updateProject

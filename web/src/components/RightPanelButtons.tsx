@@ -15,6 +15,8 @@ interface RightPanelButtonsProps {
   availDiscussionFlow: boolean;
   hasQueuedTasks?: boolean; // Show button if there are queued tasks
   unfoldSubView?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios'; // Show model-context button only in models subview
+  onScrollToTop?: () => void; // Scroll to top of chat
+  onScrollToBottom?: () => void; // Scroll to bottom of chat
 }
 
 export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
@@ -26,6 +28,8 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
   availDiscussionFlow,
   hasQueuedTasks = false,
   unfoldSubView,
+  onScrollToTop,
+  onScrollToBottom,
 }) => {
   const { t } = useTranslation();
 
@@ -282,6 +286,62 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
             <circle cx="12" cy="10" r="3" />
           </svg>
         </button>
+      )}
+
+      {/* Scroll buttons - only in Discuss (chat) mode */}
+      {unfoldSubView === 'chat' && onScrollToTop && onScrollToBottom && (
+        <>
+          {/* Large gap before scroll buttons */}
+          <div style={{ marginTop: '32px' }} />
+          
+          {/* Scroll to top button */}
+          <button
+            type="button"
+            aria-label="Scroll to top"
+            title="Scroll to top"
+            onClick={onScrollToTop}
+            className="rounded-lg flex items-center justify-center transition-all duration-300"
+            style={getRightPanelButtonStyle(false)}
+            onMouseEnter={(e) => handleMouseEnter(e, false)}
+            onMouseLeave={(e) => handleMouseLeave(e, false)}
+          >
+            <svg
+              className="w-4 h-4"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M18 15l-6-6-6 6" />
+            </svg>
+          </button>
+
+          {/* Scroll to bottom button */}
+          <button
+            type="button"
+            aria-label="Scroll to bottom"
+            title="Scroll to bottom"
+            onClick={onScrollToBottom}
+            className="rounded-lg flex items-center justify-center transition-all duration-300"
+            style={getRightPanelButtonStyle(false)}
+            onMouseEnter={(e) => handleMouseEnter(e, false)}
+            onMouseLeave={(e) => handleMouseLeave(e, false)}
+          >
+            <svg
+              className="w-4 h-4"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        </>
       )}
     </div>
   );

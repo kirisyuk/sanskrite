@@ -531,7 +531,7 @@ type SourceIngestHistory struct {
 	TenantID           string                 `json:"tenantId" firestore:"tenantId"`
 	SourceID           string                 `json:"sourceId" firestore:"sourceId"`
 	Kind               string                 `json:"kind" firestore:"kind"`     // telegram_channel, rss, web
-	Status             string                 `json:"status" firestore:"status"` // success, error, partial
+	Status             string                 `json:"status" firestore:"status"` // success, error, partial, empty
 	Error              *string                `json:"error,omitempty" firestore:"error,omitempty"`
 	Params             map[string]interface{} `json:"params,omitempty" firestore:"params,omitempty"` // Параметры обработки (lastMessageID, URL, etc.)
 	DocumentsProcessed int                    `json:"documentsProcessed" firestore:"documentsProcessed"`

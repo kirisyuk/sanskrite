@@ -252,6 +252,19 @@ const DiscoveryPage: React.FC = () => {
   const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph' | 'analytics' | 'agent' | 'analyze' | 'scenarios' | 'sources'>('text');
   const unfoldRequestRef = React.useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+
+  // Scroll functions for chat navigation
+  const handleScrollToTop = React.useCallback(() => {
+    if (messagesRef.current) {
+      messagesRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, []);
+
+  const handleScrollToBottom = React.useCallback(() => {
+    if (messagesRef.current) {
+      messagesRef.current.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, []);
   const discoveryTimeoutRef = useRef<number | null>(null);
   const [selectedJobTaskId, setSelectedJobTaskId] = React.useState<string | null>(null);
   
@@ -371,6 +384,23 @@ const DiscoveryPage: React.FC = () => {
   React.useEffect(() => {
     setIsAnalysisClosed(false);
   }, [currentPerspectivePreset, unfoldSubView]);
+
+  // Reload interactions when switching from scenarios to chat to show scenario modification messages
+  const prevUnfoldSubViewRef = React.useRef<'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios' | undefined>(undefined);
+  React.useEffect(() => {
+    const prevUnfoldSubView = prevUnfoldSubViewRef.current;
+    prevUnfoldSubViewRef.current = unfoldSubView;
+    
+    // Only reload if switching from scenarios to chat
+    if (prevUnfoldSubView === 'scenarios' && unfoldSubView === 'chat' && genaiChatProjectId && genaiChatProjectId !== 'local-unfold') {
+      const store = useGenaiChatStore.getState();
+      // Only reload if not already hydrating to avoid duplicate calls
+      if (!store.hydrating) {
+        console.log('[DiscoveryPage] Reloading interactions after switching to chat from scenarios');
+        store.hydrateInteractions();
+      }
+    }
+  }, [unfoldSubView, genaiChatProjectId]);
 
   React.useEffect(() => {
     try {
@@ -507,6 +537,34 @@ const DiscoveryPage: React.FC = () => {
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
+  const [isSmartphone, setIsSmartphone] = React.useState(false);
+  React.useEffect(() => {
+    const checkSmartphone = () => {
+      setIsSmartphone(window.innerWidth <= 600);
+    };
+    checkSmartphone();
+    window.addEventListener('resize', checkSmartphone);
+    return () => window.removeEventListener('resize', checkSmartphone);
+  }, []);
+
+  // State for mode dropdown on smartphones
+  const [showModeDropdown, setShowModeDropdown] = React.useState(false);
+  const modeDropdownRef = React.useRef<HTMLDivElement>(null);
+
+  // Close mode dropdown on outside click
+  React.useEffect(() => {
+    if (!showModeDropdown) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const dropdown = modeDropdownRef.current;
+      const target = e.target as Node | null;
+      if (dropdown && dropdown.contains(target as Node)) return;
+      setShowModeDropdown(false);
+    }
+    document.addEventListener('mousedown', onDocMouseDown, { capture: true });
+    return () => document.removeEventListener('mousedown', onDocMouseDown, { capture: true } as any);
+  }, [showModeDropdown]);
   
   // Prevent body scroll on mobile when sidebar or drawer is open
   useEffect(() => {
@@ -1297,8 +1355,8 @@ const DiscoveryPage: React.FC = () => {
           gap: '16px',
         }}
       >
-        {/* 2% left margin for breathing room */}
-        <div style={{ width: '2%', minWidth: '2%', flexShrink: 0 }} />
+        {/* 2% left margin for breathing room (hidden on smartphones) */}
+        {!isSmartphone && <div style={{ width: '2%', minWidth: '2%', flexShrink: 0 }} />}
 
         {/* Chat area - flexible width */}
         <div
@@ -1449,7 +1507,7 @@ const DiscoveryPage: React.FC = () => {
           </div>
         ) : viewMode === 'unfold' ? (
                   <div
-                    className="w-full px-4 flex-1 flex flex-col min-h-0"
+                    className={`w-full flex-1 flex flex-col min-h-0 ${isSmartphone ? '' : 'px-4'}`}
                     style={{ position: 'relative' }}
                   >
             {/* Document viewer overlay - replaces chat area when open */}
@@ -1466,114 +1524,225 @@ const DiscoveryPage: React.FC = () => {
             <MetricOverlay />
             {/* Unfold subview toggle */}
             <div className="w-fit self-start mb-3">
-              <div 
-                className="inline-flex items-center gap-1 rounded-xl px-2 py-1" 
-                role="tablist" 
-                aria-label={t('unfold.sections.unfoldView')}
-                style={{
-                          backgroundColor:
-                            theme === 'light'
-                              ? 'rgba(0, 0, 0, 0.02)'
-                              : 'rgba(255, 255, 255, 0.04)',
-                }}
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={unfoldSubView === 'chat'}
-                  aria-controls="unfold-chat-panel"
-                  onClick={() => setUnfoldSubView('chat')}
-                  className="px-2 py-1 text-12 rounded"
+              {isSmartphone ? (
+                /* Dropdown for smartphones */
+                <div ref={modeDropdownRef} style={{ position: 'relative' }}>
+                  <button
+                    type="button"
+                    aria-label="Select view mode"
+                    aria-expanded={showModeDropdown}
+                    onClick={() => setShowModeDropdown(!showModeDropdown)}
+                    className="text-xs rounded flex items-center gap-1 px-3 py-1.5"
+                    style={{
+                      border: '1px solid var(--overlay-line-90)',
+                      background: 'var(--bg-input)',
+                      color: 'var(--text-heading)',
+                    }}
+                  >
+                    <span>
+                      {unfoldSubView === 'chat' ? 'Discuss' :
+                       unfoldSubView === 'models' ? 'Model' :
+                       unfoldSubView === 'perspectives' ? t('unfold.sections.perspectives') :
+                       unfoldSubView === 'pages' ? 'Pages' :
+                       unfoldSubView === 'scenarios' ? 'Scenarios' : 'Discuss'}
+                    </span>
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  </button>
+                  {showModeDropdown && (
+                    <div
+                      className="absolute top-full left-0 mt-1 rounded-lg border shadow-md overflow-hidden z-20"
+                      style={{
+                        background: 'var(--bg-elevated)',
+                        borderColor: 'var(--overlay-line-90)',
+                        minWidth: '120px',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnfoldSubView('chat');
+                          setShowModeDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                        style={{
+                          background: unfoldSubView === 'chat' ? 'var(--white-10)' : 'transparent',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Discuss
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnfoldSubView('models');
+                          setShowModeDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                        style={{
+                          background: unfoldSubView === 'models' ? 'var(--white-10)' : 'transparent',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Model
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnfoldSubView('perspectives');
+                          setShowModeDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                        style={{
+                          background: unfoldSubView === 'perspectives' ? 'var(--white-10)' : 'transparent',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        {t('unfold.sections.perspectives')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnfoldSubView('pages');
+                          setShowModeDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                        style={{
+                          background: unfoldSubView === 'pages' ? 'var(--white-10)' : 'transparent',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Pages
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnfoldSubView('scenarios');
+                          setShowModeDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                        style={{
+                          background: unfoldSubView === 'scenarios' ? 'var(--white-10)' : 'transparent',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Scenarios
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Buttons for larger screens */
+                <div 
+                  className="inline-flex items-center gap-1 rounded-xl px-2 py-1" 
+                  role="tablist" 
+                  aria-label={t('unfold.sections.unfoldView')}
                   style={{
-                            background:
-                              unfoldSubView === 'chat'
-                                ? 'var(--white-10)'
-                                : 'transparent',
-                            color: 'var(--text-heading)',
+                            backgroundColor:
+                              theme === 'light'
+                                ? 'rgba(0, 0, 0, 0.02)'
+                                : 'rgba(255, 255, 255, 0.04)',
                   }}
                 >
-                  Discuss
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={unfoldSubView === 'models'}
-                  aria-controls="unfold-models-panel"
-                  onClick={() => setUnfoldSubView('models')}
-                  className="px-2 py-1 text-12 rounded"
-                  style={{
-                            background:
-                              unfoldSubView === 'models'
-                                ? 'var(--white-10)'
-                                : 'transparent',
-                            color: 'var(--text-heading)',
-                  }}
-                >
-                  Model
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={unfoldSubView === 'perspectives'}
-                  aria-controls="unfold-perspectives-panel"
-                  onClick={() => setUnfoldSubView('perspectives')}
-                  className="px-2 py-1 text-12 rounded"
-                  style={{
-                            background:
-                              unfoldSubView === 'perspectives'
-                                ? 'var(--white-10)'
-                                : 'transparent',
-                            color: 'var(--text-heading)',
-                  }}
-                >
-                  {t('unfold.sections.perspectives')}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={unfoldSubView === 'pages'}
-                  aria-controls="unfold-pages-panel"
-                  onClick={() => setUnfoldSubView('pages')}
-                  className="px-2 py-1 text-12 rounded"
-                  style={{
-                            background:
-                              unfoldSubView === 'pages'
-                                ? 'var(--white-10)'
-                                : 'transparent',
-                            color: 'var(--text-heading)',
-                  }}
-                >
-                  Pages
-                </button>
-                {/* Divider */}
-                <div
-                  className="h-4 w-px"
-                  style={{
-                    backgroundColor: theme === 'dark' 
-                      ? 'rgba(255, 255, 255, 0.2)' 
-                      : 'rgba(0, 0, 0, 0.15)',
-                    margin: '0 8px',
-                    flexShrink: 0,
-                  }}
-                />
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={unfoldSubView === 'scenarios'}
-                  aria-controls="unfold-scenarios-panel"
-                  onClick={() => setUnfoldSubView('scenarios')}
-                  className="px-2 py-1 text-12 rounded"
-                  style={{
-                            background:
-                              unfoldSubView === 'scenarios'
-                                ? 'var(--white-10)'
-                                : 'transparent',
-                            color: 'var(--text-heading)',
-                  }}
-                >
-                  Scenarios
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={unfoldSubView === 'chat'}
+                    aria-controls="unfold-chat-panel"
+                    onClick={() => setUnfoldSubView('chat')}
+                    className="px-2 py-1 text-12 rounded"
+                    style={{
+                              background:
+                                unfoldSubView === 'chat'
+                                  ? 'var(--white-10)'
+                                  : 'transparent',
+                              color: 'var(--text-heading)',
+                    }}
+                  >
+                    Discuss
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={unfoldSubView === 'models'}
+                    aria-controls="unfold-models-panel"
+                    onClick={() => setUnfoldSubView('models')}
+                    className="px-2 py-1 text-12 rounded"
+                    style={{
+                              background:
+                                unfoldSubView === 'models'
+                                  ? 'var(--white-10)'
+                                  : 'transparent',
+                              color: 'var(--text-heading)',
+                    }}
+                  >
+                    Model
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={unfoldSubView === 'perspectives'}
+                    aria-controls="unfold-perspectives-panel"
+                    onClick={() => setUnfoldSubView('perspectives')}
+                    className="px-2 py-1 text-12 rounded"
+                    style={{
+                              background:
+                                unfoldSubView === 'perspectives'
+                                  ? 'var(--white-10)'
+                                  : 'transparent',
+                              color: 'var(--text-heading)',
+                    }}
+                  >
+                    {t('unfold.sections.perspectives')}
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={unfoldSubView === 'pages'}
+                    aria-controls="unfold-pages-panel"
+                    onClick={() => setUnfoldSubView('pages')}
+                    className="px-2 py-1 text-12 rounded"
+                    style={{
+                              background:
+                                unfoldSubView === 'pages'
+                                  ? 'var(--white-10)'
+                                  : 'transparent',
+                              color: 'var(--text-heading)',
+                    }}
+                  >
+                    Pages
+                  </button>
+                  {/* Divider */}
+                  <div
+                    className="h-4 w-px"
+                    style={{
+                      backgroundColor: theme === 'dark' 
+                        ? 'rgba(255, 255, 255, 0.2)' 
+                        : 'rgba(0, 0, 0, 0.15)',
+                      margin: '0 8px',
+                      flexShrink: 0,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={unfoldSubView === 'scenarios'}
+                    aria-controls="unfold-scenarios-panel"
+                    onClick={() => setUnfoldSubView('scenarios')}
+                    className="px-2 py-1 text-12 rounded"
+                    style={{
+                              background:
+                                unfoldSubView === 'scenarios'
+                                  ? 'var(--white-10)'
+                                  : 'transparent',
+                              color: 'var(--text-heading)',
+                    }}
+                  >
+                    Scenarios
+                  </button>
+                </div>
+              )}
             </div>
             {/* Perspectives content (full column) */}
             {unfoldSubView === 'perspectives' && (
@@ -1657,7 +1826,7 @@ const DiscoveryPage: React.FC = () => {
                       className="flex-1 overflow-y-auto px-1 min-h-[160px]"
                       style={{
                         contentVisibility: 'auto',
-                        containIntrinsicSize: '800px 600px',
+                        containIntrinsicSize: '0px 600px',
                         display:
                           unfoldSubView === 'perspectives' || unfoldSubView === 'pages' || unfoldSubView === 'models' || unfoldSubView === 'scenarios' ? 'none' : undefined,
                       }}
@@ -1869,7 +2038,7 @@ const DiscoveryPage: React.FC = () => {
                 className="flex-1 overflow-y-auto px-1 min-h-[160px]"
                 style={{
                   contentVisibility: 'auto',
-                  containIntrinsicSize: '800px 600px',
+                  containIntrinsicSize: '0px 600px',
                 }}
               >
                 {/* Empty state - content will be added later */}
@@ -3402,6 +3571,8 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
         <RightPanelButtons
           rightPanelType={rightPanelType}
           onPanelTypeChange={setRightPanelType}
+          onScrollToTop={handleScrollToTop}
+          onScrollToBottom={handleScrollToBottom}
           hasPinned={hasPinned}
           hasSections={hasSections}
           availUserAnalysis={availUserAnalysis}

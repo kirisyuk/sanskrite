@@ -279,7 +279,7 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsProject {
   updatedAt: string;
   lastInteractionAt?: string;
   view?: string;
-  projectType?: "studio" | null;
+  projectType?: string;
   isExternal?: boolean;
   linkedProjectRef?: string;
   sharingPolicy?: string;

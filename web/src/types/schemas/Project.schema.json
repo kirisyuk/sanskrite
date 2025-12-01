@@ -38,6 +38,9 @@
     "view": {
       "type": "string"
     },
+    "projectType": {
+      "type": "string"
+    },
     "isExternal": {
       "type": "boolean"
     },

@@ -424,16 +424,30 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <span style={{ 
-                      padding: '2px 6px', 
-                      borderRadius: 4, 
-                      backgroundColor: h.status === 'success' ? 'var(--accent-success)' : h.status === 'error' ? 'var(--accent-error)' : 'var(--accent-warning)',
-                      color: 'white',
-                      fontSize: 10,
-                      fontWeight: 600,
-                    }}>
-                      {h.status}
-                    </span>
+                    {(h.status === 'empty' || (h.status === 'partial' && (h.documentsProcessed || 0) === 0)) ? (
+                      <span style={{ 
+                        padding: '2px 6px', 
+                        borderRadius: 4, 
+                        backgroundColor: 'rgba(156, 163, 175, 0.1)',
+                        border: '1px solid rgba(156, 163, 175, 0.3)',
+                        color: 'rgb(156, 163, 175)',
+                        fontSize: 10,
+                        fontWeight: 600,
+                      }}>
+                        {h.status === 'empty' ? 'no updates' : 'No new messages'}
+                      </span>
+                    ) : (
+                      <span style={{ 
+                        padding: '2px 6px', 
+                        borderRadius: 4, 
+                        backgroundColor: h.status === 'success' ? 'var(--accent-success)' : h.status === 'error' ? 'var(--accent-error)' : 'var(--accent-warning)',
+                        color: 'white',
+                        fontSize: 10,
+                        fontWeight: 600,
+                      }}>
+                        {h.status}
+                      </span>
+                    )}
                     <span style={{ color: 'var(--text-tertiary-weak)', fontSize: 10 }}>
                       {h.completedAt ? new Date(h.completedAt).toLocaleString() : new Date(h.startedAt).toLocaleString()}
                     </span>

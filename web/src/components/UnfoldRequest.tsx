@@ -271,6 +271,30 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     return hasTouch && (isSmallScreen || isCoarsePointer);
   }, []);
 
+  // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
+  const isSmartphone = React.useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    // Smartphones are typically < 600px width (Galaxy Fold is ~512px folded, but we want to target smaller phones)
+    return window.matchMedia('(max-width: 600px)').matches;
+  }, []);
+
+  // State for tools dropdown on smartphones
+  const [showToolsDropdown, setShowToolsDropdown] = React.useState(false);
+  const toolsDropdownRef = React.useRef<HTMLDivElement>(null);
+
+  // Close tools dropdown on outside click
+  React.useEffect(() => {
+    if (!showToolsDropdown) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const dropdown = toolsDropdownRef.current;
+      const target = e.target as Node | null;
+      if (dropdown && dropdown.contains(target as Node)) return;
+      setShowToolsDropdown(false);
+    }
+    document.addEventListener('mousedown', onDocMouseDown, { capture: true });
+    return () => document.removeEventListener('mousedown', onDocMouseDown, { capture: true } as any);
+  }, [showToolsDropdown]);
+
   // Memoize onKeyDown handler
   const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Slash menu keyboard handling
@@ -1186,83 +1210,205 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               className="text-xs unfold-strength-select"
               style={{ backgroundColor: 'var(--bg-input)', color: 'var(--text-heading)', border: '1px solid var(--overlay-line-90)', borderRadius: 8, padding: '4px 8px', outline: 'none', boxShadow: 'none' }}
             >
-              <option value="fast">{t('unfold.request.strengthFast')}</option>
-              <option value="balanced" disabled={settings.provider === 'deepseek'}>{t('unfold.request.strengthBalanced')}</option>
-              <option value="quality">{t('unfold.request.strengthQuality')}</option>
-              {settings.provider === 'gemini' && <option value="preview">{t('unfold.request.strengthPreview')}</option>}
+              <option value="fast">{isSmartphone ? 'Fast' : t('unfold.request.strengthFast')}</option>
+              <option value="balanced" disabled={settings.provider === 'deepseek'}>{isSmartphone ? 'Balanced' : t('unfold.request.strengthBalanced')}</option>
+              <option value="quality">{isSmartphone ? 'Quality' : t('unfold.request.strengthQuality')}</option>
+              {settings.provider === 'gemini' && <option value="preview">{isSmartphone ? 'Preview' : t('unfold.request.strengthPreview')}</option>}
             </select>
-            {/* Web search toggle (synced with modal) */}
-            <button
-              type="button"
-              aria-label={t('unfold.request.webSearch')}
-              aria-pressed={settings.groundingEnabled}
-              title={t('unfold.request.webSearch')}
-              disabled={!providerCapabilities[settings.provider].grounding}
-              onClick={() => settings.setGrounding(!settings.groundingEnabled)}
-              className="text-xs rounded flex items-center gap-1"
-              style={{
-                padding: '4px 8px',
-                border: '1px solid var(--overlay-line-90)',
-                background: settings.groundingEnabled ? 'var(--white-10)' : 'transparent',
-                color: 'var(--text-heading)',
-                opacity: !providerCapabilities[settings.provider].grounding ? 0.5 : 1,
-              }}
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" strokeWidth={2} />
-                <path d="M3 12h18" strokeWidth={2} />
-                <path d="M12 3a15 15 0 010 18M12 3a15 15 0 000 18" strokeWidth={2} />
-              </svg>
-            </button>
-            {/* Tool usage toggle (mutually exclusive with web search) */}
-            <button
-              type="button"
-              aria-label={t('unfold.request.toolUsage')}
-              aria-pressed={settings.toolUsageEnabled}
-              title={t('unfold.request.toolUsage')}
-              disabled={!providerCapabilities[settings.provider].tools}
-              onClick={() => settings.setToolUsage(!settings.toolUsageEnabled)}
-              className="text-xs rounded flex items-center gap-1"
-              style={{
-                padding: '4px 8px',
-                border: '1px solid var(--overlay-line-90)',
-                background: settings.toolUsageEnabled ? 'var(--white-10)' : 'transparent',
-                color: 'var(--text-heading)',
-                opacity: !providerCapabilities[settings.provider].tools ? 0.5 : 1,
-              }}
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-              </svg>
-            </button>
-            {/* Research toggle (mutually exclusive with web search and tool usage) */}
-            <button
-              type="button"
-              aria-label={t('unfold.request.research')}
-              aria-pressed={settings.researchEnabled}
-              title={t('unfold.request.research')}
-              onClick={() => settings.setResearch(!settings.researchEnabled)}
-              className="text-xs rounded flex items-center gap-1"
-              style={{
-                padding: '4px 8px',
-                border: '1px solid var(--overlay-line-90)',
-                background: settings.researchEnabled ? 'var(--white-10)' : 'transparent',
-                color: 'var(--text-heading)',
-              }}
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                {/* Simple molecule: two atoms connected */}
-                <circle cx="8" cy="12" r="2.5" fill="currentColor" />
-                <circle cx="16" cy="12" r="2.5" fill="currentColor" />
-                {/* Connection line */}
-                <line x1="10.5" y1="12" x2="13.5" y2="12" strokeWidth={2} />
-                {/* Just a couple of small particles */}
-                <circle cx="4" cy="12" r="1" fill="currentColor" opacity={0.6} />
-                <circle cx="20" cy="12" r="1" fill="currentColor" opacity={0.6} />
-              </svg>
-            </button>
-            {/* Context usage indicator */}
-            {contextUsage && (
+            {/* Tools buttons - dropdown on smartphones, individual buttons on larger screens */}
+            {isSmartphone ? (
+              <div ref={toolsDropdownRef} style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  aria-label="Tools"
+                  aria-expanded={showToolsDropdown}
+                  title="Tools"
+                  onClick={() => setShowToolsDropdown(!showToolsDropdown)}
+                  className="text-xs rounded flex items-center gap-1"
+                  style={{
+                    padding: '4px 8px',
+                    border: '1px solid var(--overlay-line-90)',
+                    background: (settings.groundingEnabled || settings.toolUsageEnabled || settings.researchEnabled) ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)',
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                  </svg>
+                </button>
+                {showToolsDropdown && (
+                  <div
+                    className="absolute bottom-full left-0 mb-1 rounded-lg border shadow-md overflow-hidden z-20"
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      borderColor: 'var(--overlay-line-90)',
+                      minWidth: '140px',
+                    }}
+                  >
+                    {/* Web search */}
+                    <button
+                      type="button"
+                      aria-label={t('unfold.request.webSearch')}
+                      aria-pressed={settings.groundingEnabled}
+                      onClick={() => {
+                        const newValue = !settings.groundingEnabled;
+                        settings.setGrounding(newValue);
+                        if (newValue) {
+                          settings.setToolUsage(false);
+                          settings.setResearch(false);
+                        }
+                        setShowToolsDropdown(false);
+                      }}
+                      className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                      style={{
+                        background: settings.groundingEnabled ? 'var(--white-10)' : 'transparent',
+                        color: 'var(--text-heading)',
+                        opacity: !providerCapabilities[settings.provider].grounding ? 0.5 : 1,
+                      }}
+                      disabled={!providerCapabilities[settings.provider].grounding}
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                        <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                        <path d="M3 12h18" strokeWidth={2} />
+                        <path d="M12 3a15 15 0 010 18M12 3a15 15 0 000 18" strokeWidth={2} />
+                      </svg>
+                      <span>{t('unfold.request.webSearch')}</span>
+                    </button>
+                    {/* Tool usage */}
+                    <button
+                      type="button"
+                      aria-label={t('unfold.request.toolUsage')}
+                      aria-pressed={settings.toolUsageEnabled}
+                      onClick={() => {
+                        const newValue = !settings.toolUsageEnabled;
+                        settings.setToolUsage(newValue);
+                        if (newValue) {
+                          settings.setGrounding(false);
+                          settings.setResearch(false);
+                        }
+                        setShowToolsDropdown(false);
+                      }}
+                      className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                      style={{
+                        background: settings.toolUsageEnabled ? 'var(--white-10)' : 'transparent',
+                        color: 'var(--text-heading)',
+                        opacity: !providerCapabilities[settings.provider].tools ? 0.5 : 1,
+                      }}
+                      disabled={!providerCapabilities[settings.provider].tools}
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                      </svg>
+                      <span>{t('unfold.request.toolUsage')}</span>
+                    </button>
+                    {/* Research */}
+                    <button
+                      type="button"
+                      aria-label={t('unfold.request.research')}
+                      aria-pressed={settings.researchEnabled}
+                      onClick={() => {
+                        const newValue = !settings.researchEnabled;
+                        settings.setResearch(newValue);
+                        if (newValue) {
+                          settings.setGrounding(false);
+                          settings.setToolUsage(false);
+                        }
+                        setShowToolsDropdown(false);
+                      }}
+                      className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                      style={{
+                        background: settings.researchEnabled ? 'var(--white-10)' : 'transparent',
+                        color: 'var(--text-heading)',
+                      }}
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="8" cy="12" r="2.5" fill="currentColor" />
+                        <circle cx="16" cy="12" r="2.5" fill="currentColor" />
+                        <line x1="10.5" y1="12" x2="13.5" y2="12" strokeWidth={2} />
+                        <circle cx="4" cy="12" r="1" fill="currentColor" opacity={0.6} />
+                        <circle cx="20" cy="12" r="1" fill="currentColor" opacity={0.6} />
+                      </svg>
+                      <span>{t('unfold.request.research')}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                {/* Web search toggle (synced with modal) */}
+                <button
+                  type="button"
+                  aria-label={t('unfold.request.webSearch')}
+                  aria-pressed={settings.groundingEnabled}
+                  title={t('unfold.request.webSearch')}
+                  disabled={!providerCapabilities[settings.provider].grounding}
+                  onClick={() => settings.setGrounding(!settings.groundingEnabled)}
+                  className="text-xs rounded flex items-center gap-1"
+                  style={{
+                    padding: '4px 8px',
+                    border: '1px solid var(--overlay-line-90)',
+                    background: settings.groundingEnabled ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)',
+                    opacity: !providerCapabilities[settings.provider].grounding ? 0.5 : 1,
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                    <path d="M3 12h18" strokeWidth={2} />
+                    <path d="M12 3a15 15 0 010 18M12 3a15 15 0 000 18" strokeWidth={2} />
+                  </svg>
+                </button>
+                {/* Tool usage toggle (mutually exclusive with web search) */}
+                <button
+                  type="button"
+                  aria-label={t('unfold.request.toolUsage')}
+                  aria-pressed={settings.toolUsageEnabled}
+                  title={t('unfold.request.toolUsage')}
+                  disabled={!providerCapabilities[settings.provider].tools}
+                  onClick={() => settings.setToolUsage(!settings.toolUsageEnabled)}
+                  className="text-xs rounded flex items-center gap-1"
+                  style={{
+                    padding: '4px 8px',
+                    border: '1px solid var(--overlay-line-90)',
+                    background: settings.toolUsageEnabled ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)',
+                    opacity: !providerCapabilities[settings.provider].tools ? 0.5 : 1,
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                  </svg>
+                </button>
+                {/* Research toggle (mutually exclusive with web search and tool usage) */}
+                <button
+                  type="button"
+                  aria-label={t('unfold.request.research')}
+                  aria-pressed={settings.researchEnabled}
+                  title={t('unfold.request.research')}
+                  onClick={() => settings.setResearch(!settings.researchEnabled)}
+                  className="text-xs rounded flex items-center gap-1"
+                  style={{
+                    padding: '4px 8px',
+                    border: '1px solid var(--overlay-line-90)',
+                    background: settings.researchEnabled ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)',
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    {/* Simple molecule: two atoms connected */}
+                    <circle cx="8" cy="12" r="2.5" fill="currentColor" />
+                    <circle cx="16" cy="12" r="2.5" fill="currentColor" />
+                    {/* Connection line */}
+                    <line x1="10.5" y1="12" x2="13.5" y2="12" strokeWidth={2} />
+                    {/* Just a couple of small particles */}
+                    <circle cx="4" cy="12" r="1" fill="currentColor" opacity={0.6} />
+                    <circle cx="20" cy="12" r="1" fill="currentColor" opacity={0.6} />
+                  </svg>
+                </button>
+              </>
+            )}
+            {/* Context usage indicator - hidden on smartphones */}
+            {contextUsage && !isSmartphone && (
               <div
                 className="flex items-center justify-center rounded-full cursor-pointer"
                 style={{ width: 32, height: 32 }}
@@ -1279,48 +1425,50 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
             )}
           </div>
           <div className="flex items-center gap-2">
-            {/* Новый dropdown режимов - открывается вверх */}
-            <div style={{ position: 'relative', display: 'inline-block' }}>
-              <select
-                aria-label={t('unfold.request.modeLabel')}
-                value={mode}
-                onChange={handleModeChange}
-                className="text-xs unfold-mode-select"
-                style={{ 
-                  backgroundColor: 'var(--bg-input)', 
-                  color: 'var(--text-heading)', 
-                  border: '1px solid var(--overlay-line-90)', 
-                  borderRadius: 8, 
-                  padding: '4px 8px', 
-                  colorScheme: theme === 'dark' ? 'dark' : 'light', 
-                  outline: 'none', 
-                  boxShadow: 'none',
-                  appearance: 'none',
-                  WebkitAppearance: 'none',
-                  MozAppearance: 'none',
-                  backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'12\' viewBox=\'0 0 12 12\'%3E%3Cpath fill=\'%23666\' d=\'M6 3L1 8h10z\'/%3E%3C/svg%3E")',
-                  backgroundRepeat: 'no-repeat',
-                  backgroundPosition: 'right 6px center',
-                  paddingRight: '24px',
-                  cursor: 'pointer'
-                }}
-              >
-                {scenariosMode ? (
-                  <>
-                    <option value="analyze">Analyze</option>
-                    <option value="scenarios">Scenarios</option>
-                    <option value="sources">Sources</option>
-                  </>
-                ) : (
-                  <>
-                    <option value="text">{t('unfold.request.modeText')}</option>
-                    <option value="graph">{t('unfold.request.modeGraph')}</option>
-                    <option value="analytics">{t('unfold.request.modeAnalytics')}</option>
-                    <option value="agent">{t('unfold.request.modeAgent')}</option>
-                  </>
-                )}
-              </select>
-            </div>
+            {/* Новый dropdown режимов - открывается вверх (скрыт на смартфонах) */}
+            {!isSmartphone && (
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <select
+                  aria-label={t('unfold.request.modeLabel')}
+                  value={mode}
+                  onChange={handleModeChange}
+                  className="text-xs unfold-mode-select"
+                  style={{ 
+                    backgroundColor: 'var(--bg-input)', 
+                    color: 'var(--text-heading)', 
+                    border: '1px solid var(--overlay-line-90)', 
+                    borderRadius: 8, 
+                    padding: '4px 8px', 
+                    colorScheme: theme === 'dark' ? 'dark' : 'light', 
+                    outline: 'none', 
+                    boxShadow: 'none',
+                    appearance: 'none',
+                    WebkitAppearance: 'none',
+                    MozAppearance: 'none',
+                    backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'12\' viewBox=\'0 0 12 12\'%3E%3Cpath fill=\'%23666\' d=\'M6 3L1 8h10z\'/%3E%3C/svg%3E")',
+                    backgroundRepeat: 'no-repeat',
+                    backgroundPosition: 'right 6px center',
+                    paddingRight: '24px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {scenariosMode ? (
+                    <>
+                      <option value="analyze">Analyze</option>
+                      <option value="scenarios">Scenarios</option>
+                      <option value="sources">Sources</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="text">{t('unfold.request.modeText')}</option>
+                      <option value="graph">{t('unfold.request.modeGraph')}</option>
+                      <option value="analytics">{t('unfold.request.modeAnalytics')}</option>
+                      <option value="agent">{t('unfold.request.modeAgent')}</option>
+                    </>
+                  )}
+                </select>
+              </div>
+            )}
             {showHighRiskTag && (
               <button
                 type="button"
