@@ -35,6 +35,7 @@ type UsageMetric struct {
 
 	// Metadata
 	TaskType *string `json:"taskType,omitempty" firestore:"taskType,omitempty"` // e.g., "discovery.answer", "eval.stance", "genai.generate"
+	UseCase  *string `json:"useCase,omitempty" firestore:"useCase,omitempty"`   // Business purpose: "chat", "bias_analysis", "frame_decomposition", "source_processing", etc.
 	Kind     string  `json:"kind" firestore:"kind"`                             // "included" or "on_demand"
 
 	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
@@ -65,7 +66,8 @@ func (r *UsageMetricsRepository) Create(ctx context.Context, metric *UsageMetric
 // CreateMetric is a convenience method that creates a usage metric from individual parameters
 // This allows AITaskExecutor to save metrics without importing the UsageMetric struct
 // durationMs is optional (can be nil for backward compatibility)
-func (r *UsageMetricsRepository) CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error) {
+// useCase is optional (can be nil for backward compatibility)
+func (r *UsageMetricsRepository) CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error) {
 	metric := &UsageMetric{
 		TenantID:     tenantID,
 		UserID:       userID,
@@ -78,6 +80,7 @@ func (r *UsageMetricsRepository) CreateMetric(ctx context.Context, tenantID, use
 		CostUSD:      cost,
 		DurationMs:   durationMs,
 		TaskType:     taskType,
+		UseCase:      useCase,
 		Kind:         "included",
 	}
 	return r.Create(ctx, metric)

@@ -930,9 +930,29 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         
         const processedInteraction = processedServerItems[0];
         
-        // Check if interaction already exists (by ID or by graph data for graphs to avoid duplicates)
+        // Check if interaction already exists (by ID, originalMessageId, or by graph data for graphs to avoid duplicates)
         const existingIndex = s.interactions.findIndex((it) => {
           if (it.id === interactionId) return true;
+          // Also check by originalMessageId to catch duplicates from WebSocket events
+          const newOriginalMsgId = (processedInteraction as any).originalMessageId;
+          if (newOriginalMsgId && (it as any).originalMessageId === newOriginalMsgId) {
+            return true;
+          }
+          // For user interactions, also check by content and createdAt to catch duplicates
+          // This handles the case where WebSocket event arrives before local ID is updated
+          if (processedInteraction.kind === 'user' && it.kind === 'user') {
+            const newContent = processedInteraction.content;
+            const newCreatedAt = processedInteraction.createdAt;
+            if (newContent && it.content === newContent && 
+                newCreatedAt && it.createdAt === newCreatedAt) {
+              // Check if this is likely the same interaction (within 1 second)
+              const newTime = new Date(newCreatedAt).getTime();
+              const existingTime = new Date(it.createdAt).getTime();
+              if (Math.abs(newTime - existingTime) < 1000) {
+                return true;
+              }
+            }
+          }
           // For graphs, also check by graphData to avoid duplicates when tool result creates local interaction
           if (it.subkind === 'graph' && processedInteraction.subkind === 'graph') {
             const existingGraph = it.graphData;
@@ -1329,6 +1349,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         }
         break;
       }
+      // Check if interaction with same originalMessageId already exists to prevent duplicates
+      const existingByOriginalMsgId = suppressUserEcho ? null : s.interactions.find(
+        (it) => (it as any).originalMessageId === now + '-u' && it.kind === 'user'
+      );
       return ({
       messages: [
         ...pruned,
@@ -1344,7 +1368,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       // also record local interaction for user unless suppressed
       interactions: [
         ...s.interactions,
-        ...(suppressUserEcho ? [] : [{ 
+        ...(suppressUserEcho || existingByOriginalMsgId ? [] : [{ 
           id: now + '-iu', 
           projectId, 
           kind: 'user' as InteractionKind, 
@@ -1506,6 +1530,35 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               try { console.log('[Chat] Attaching documents to interaction', { docIds: attachedDocIds }); } catch {}
             }
             const resUser = await api.createProjectInteraction(projectId, payload);
+            
+            // Update local interaction with server ID to prevent duplicates from WebSocket events
+            set((st) => {
+              const items = [...st.interactions];
+              const localId = now + '-iu';
+              const idx = items.findIndex((it) => it.id === localId);
+              if (idx >= 0) {
+                // Check if already updated (prevent duplicate updates)
+                if (items[idx].id === resUser.id) {
+                  console.log('[Chat] User interaction already has server ID, skipping update', { interactionId: resUser.id });
+                  return {} as any;
+                }
+                console.log('[Chat] Updating user interaction ID', { localId, serverId: resUser.id, idx });
+                items[idx] = { ...items[idx], id: resUser.id } as LocalInteraction;
+                const map = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                map[localId] = resUser.id;
+                map[now + '-u'] = resUser.id;
+                return { interactions: items, persistedByLocalId: map } as any;
+              } else {
+                // Interaction not found - check if it was already added with server ID
+                const existingByServerId = items.find((it) => it.id === resUser.id);
+                if (existingByServerId) {
+                  console.log('[Chat] User interaction already exists with server ID, skipping', { interactionId: resUser.id });
+                  return {} as any;
+                }
+                console.warn('[Chat] User interaction not found for update', { localId, serverId: resUser.id, interactionsCount: items.length });
+              }
+              return {} as any;
+            });
             
             // Create non-displayable interactions for attached documents
             if (attachedDocIds && attachedDocIds.length > 0) {
@@ -1984,6 +2037,35 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 }
                 const resUser = await api.createProjectInteraction(projectId, payload);
                 
+                // Update local interaction with server ID to prevent duplicates from WebSocket events
+                set((st) => {
+                  const items = [...st.interactions];
+                  const localId = now + '-iu';
+                  const idx = items.findIndex((it) => it.id === localId);
+                  if (idx >= 0) {
+                    // Check if already updated (prevent duplicate updates)
+                    if (items[idx].id === resUser.id) {
+                      console.log('[Chat] User interaction already has server ID, skipping update', { interactionId: resUser.id });
+                      return {} as any;
+                    }
+                    console.log('[Chat] Updating user interaction ID', { localId, serverId: resUser.id, idx });
+                    items[idx] = { ...items[idx], id: resUser.id } as LocalInteraction;
+                    const map = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+                    map[localId] = resUser.id;
+                    map[now + '-u'] = resUser.id;
+                    return { interactions: items, persistedByLocalId: map } as any;
+                  } else {
+                    // Interaction not found - check if it was already added with server ID
+                    const existingByServerId = items.find((it) => it.id === resUser.id);
+                    if (existingByServerId) {
+                      console.log('[Chat] User interaction already exists with server ID, skipping', { interactionId: resUser.id });
+                      return {} as any;
+                    }
+                    console.warn('[Chat] User interaction not found for update', { localId, serverId: resUser.id, interactionsCount: items.length });
+                  }
+                  return {} as any;
+                });
+                
                 // Create non-displayable interactions for attached documents
                 if (attachedDocIds && attachedDocIds.length > 0) {
                   try {
@@ -2388,6 +2470,35 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           console.log('[Chat] Attaching documents to interaction', { docIds: attachedDocIds });
         }
         const res = await api.createProjectInteraction(projectId, payload);
+        
+        // Update local interaction with server ID to prevent duplicates from WebSocket events
+        set((st) => {
+          const items = [...st.interactions];
+          const localId = now + '-iu';
+          const idx = items.findIndex((it) => it.id === localId);
+          if (idx >= 0) {
+            // Check if already updated (prevent duplicate updates)
+            if (items[idx].id === res.id) {
+              console.log('[Chat] User interaction already has server ID, skipping update', { interactionId: res.id });
+              return {} as any;
+            }
+            console.log('[Chat] Updating user interaction ID', { localId, serverId: res.id, idx });
+            items[idx] = { ...items[idx], id: res.id } as LocalInteraction;
+            const map = { ...(st.persistedByLocalId || {}) } as Record<string, string>;
+            map[localId] = res.id;
+            map[now + '-u'] = res.id;
+            return { interactions: items, persistedByLocalId: map } as any;
+          } else {
+            // Interaction not found - check if it was already added with server ID
+            const existingByServerId = items.find((it) => it.id === res.id);
+            if (existingByServerId) {
+              console.log('[Chat] User interaction already exists with server ID, skipping', { interactionId: res.id });
+              return {} as any;
+            }
+            console.warn('[Chat] User interaction not found for update', { localId, serverId: res.id, interactionsCount: items.length });
+          }
+          return {} as any;
+        });
         
         // Create non-displayable interactions for attached documents
         if (attachedDocIds && attachedDocIds.length > 0) {

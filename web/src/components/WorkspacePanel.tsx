@@ -9,6 +9,7 @@ import WorkspaceLibrary, { WorkspaceLibraryRef } from './WorkspaceLibrary';
 interface WorkspacePanelProps {
   currentProjectId: string | null;
   onShowAddTelegramModalChange: (value: boolean) => void;
+  onShowAddRSSModalChange: (value: boolean) => void;
   onPreviewSource: (source: any) => void;
   onOpenDocument: (doc: any) => void;
   onExpandWorkspace?: (projectId: string | null) => void;
@@ -274,6 +275,7 @@ const renderSourceCard = (
 export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   currentProjectId,
   onShowAddTelegramModalChange,
+  onShowAddRSSModalChange,
   onPreviewSource,
   onOpenDocument,
   onExpandWorkspace,
@@ -306,6 +308,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         onDocumentAdded={handleDocumentAdded}
         onSourceAdded={handleSourceAdded}
         onShowTelegramModal={() => onShowAddTelegramModalChange(true)}
+        onShowRSSModal={() => onShowAddRSSModalChange(true)}
       />
 
       {/* Sources are now shown in WorkspaceLibrary below to avoid duplication */}

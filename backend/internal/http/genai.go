@@ -1253,6 +1253,7 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 	// Convert resp.Model from alias to actual model name if needed
 	// resp.Model might contain an alias (e.g., "gemini_fast") instead of actual model name (e.g., "gemini-2.5-flash-lite")
 	actualModelName := gen_combined.ConvertAliasToModel(resp.Model)
+	log.Printf("[saveUsageMetric] Model mapping: req.Model=%q, resp.Model=%q, actualModelName=%q", req.Model, resp.Model, actualModelName)
 	
 	// Determine provider from actual model name
 	provider := h.determineProvider(actualModelName)
@@ -1276,6 +1277,7 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 		modelAlias = &normalizedAlias
 	}
 
+	useCase := "chat"
 	metric := &repo.UsageMetric{
 		TenantID:      auth.TenantID,
 		UserID:        auth.UID,
@@ -1290,6 +1292,7 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 		CostUSD:       cost,
 		DurationMs:    durationMs,
 		TaskType:      nil,        // Can be set from context if needed
+		UseCase:       &useCase,    // Chat use case for user conversations
 		Kind:          "included", // Default to included, can be changed based on plan
 	}
 

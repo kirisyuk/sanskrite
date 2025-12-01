@@ -40,7 +40,7 @@ func NewRegistry(executor *ai.AITaskExecutor, genaiClient *gen_combined.Client, 
 
 // WithUsageMetrics sets usage metrics repository and model manager for all registered agents
 func (r *Registry) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 }, modelMgr interface {
 	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
 }) *Registry {

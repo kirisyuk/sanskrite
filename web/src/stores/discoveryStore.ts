@@ -715,7 +715,7 @@ interface DiscoveryState {
   correlationId: string | null;
   answer: string | null;
   interactions: Array<{ id: string; kind: string; content: string; createdAt: string }>;
-  pendingSources: Array<{ id: string; kind: 'web' | 'telegram'; status: string }>;
+  pendingSources: Array<{ id: string; kind: 'web' | 'telegram' | 'rss'; status: string }>;
   lastDocEvent?: any;
   lastAnalysisStatus?: { projectId: string; kind: string; status: 'started'|'done'|'failed'; elapsedMs?: number; count?: number; error?: string; ts: number } | undefined;
   connectWs: (tenantId: string) => Promise<void>;
@@ -725,13 +725,13 @@ interface DiscoveryState {
     projectId: string;
     queryText: string;
     language?: string;
-    sources: { web: string[]; telegram: string[] };
+    sources: { web: string[]; telegram: string[]; rss?: string[] };
   }) => Promise<{ correlationId: string }>;
   sendChatMessage: (projectId: string, message: string, language?: string) => Promise<string>;
   fetchProjectSources: (projectId: string) => Promise<void>;
   fetchProjectInteractions: (projectId: string) => Promise<void>;
   clearSources: () => void;
-  setPendingSources: (sources: Array<{ id: string; kind: 'web' | 'telegram'; status: string }>) => void;
+  setPendingSources: (sources: Array<{ id: string; kind: 'web' | 'telegram' | 'rss'; status: string }>) => void;
 }
 
 // Track processed stream.done events to prevent duplicates

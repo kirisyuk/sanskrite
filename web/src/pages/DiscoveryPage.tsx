@@ -132,6 +132,7 @@ import { AccountModal } from '../components/AccountModal';
 import { AdminModal } from '../components/AdminModal';
 import { WorkspaceCanvas } from '../components/WorkspaceCanvas';
 import { TelegramAddModal } from '../components/TelegramAddModal';
+import { RSSAddModal } from '../components/RSSAddModal';
 import { ChatMessagesList } from '../components/ChatMessagesList';
 import { RightDrawer } from '../components/RightDrawer';
 import { AgentJobDetails } from '../components/AgentJobDetails';
@@ -173,6 +174,13 @@ const DiscoveryPage: React.FC = () => {
     tgError,
     addTelegramSource,
     parseSourcesFromQuery,
+    showAddRSSModal,
+    setShowAddRSSModal,
+    rssInput,
+    setRssInput,
+    rssSubmitting,
+    rssError,
+    addRSSSource,
   } = sourcesManagement;
   
   const {
@@ -3498,6 +3506,17 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
           isSubmitting={tgSubmitting}
           error={tgError}
         />
+
+        {/* Add RSS modal */}
+        <RSSAddModal
+          isOpen={showAddRSSModal}
+          onClose={() => setShowAddRSSModal(false)}
+          input={rssInput}
+          onInputChange={setRssInput}
+          onSubmit={addRSSSource}
+          isSubmitting={rssSubmitting}
+          error={rssError}
+        />
         </>
         )}
         </div>
@@ -3519,6 +3538,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
           showAddSourceMenu={showAddSourceMenu}
           onShowAddSourceMenuChange={setShowAddSourceMenu}
           onShowAddTelegramModalChange={setShowAddTelegramModal}
+          onShowAddRSSModalChange={setShowAddRSSModal}
           onPreviewSource={setPreviewSource}
           onOpenDocument={setActiveDoc}
           onExpandWorkspace={openWorkspace}

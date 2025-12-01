@@ -40,6 +40,8 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
   const [documentsError, setDocumentsError] = React.useState<string | null>(null);
   const [ingestHistory, setIngestHistory] = React.useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
+  const [isHistoryExpanded, setIsHistoryExpanded] = React.useState(true);
+  const [isDocumentsExpanded, setIsDocumentsExpanded] = React.useState(true);
 
   React.useEffect(() => {
     function handleDown(e: MouseEvent) {
@@ -399,158 +401,224 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
 
         {/* Ingest History section */}
         <div style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 8 }}>
+          <button
+            onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12,
+              fontWeight: 600,
+              color: 'var(--text-heading)',
+              marginBottom: 8,
+              backgroundColor: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+            }}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              style={{
+                transform: isHistoryExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                transition: 'transform 0.2s',
+              }}
+            >
+              <path d="M4 2L8 6L4 10" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
             Ingest History ({ingestHistory.length})
-          </div>
-          {loadingHistory ? (
-            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
-              Loading history...
-            </div>
-          ) : ingestHistory.length === 0 ? (
-            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
-              No ingest history yet
-            </div>
-          ) : (
-            <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {ingestHistory.map((h: any) => (
-                <div
-                  key={h.id}
-                  style={{
-                    padding: 8,
-                    borderRadius: 8,
-                    backgroundColor: 'var(--bg-sidebar)',
-                    border: '1px solid var(--overlay-line-90)',
-                    fontSize: 11,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    {(h.status === 'empty' || (h.status === 'partial' && (h.documentsProcessed || 0) === 0)) ? (
-                      <span style={{ 
-                        padding: '2px 6px', 
-                        borderRadius: 4, 
-                        backgroundColor: 'rgba(156, 163, 175, 0.1)',
-                        border: '1px solid rgba(156, 163, 175, 0.3)',
-                        color: 'rgb(156, 163, 175)',
-                        fontSize: 10,
-                        fontWeight: 600,
-                      }}>
-                        {h.status === 'empty' ? 'no updates' : 'No new messages'}
-                      </span>
-                    ) : (
-                      <span style={{ 
-                        padding: '2px 6px', 
-                        borderRadius: 4, 
-                        backgroundColor: h.status === 'success' ? 'var(--accent-success)' : h.status === 'error' ? 'var(--accent-error)' : 'var(--accent-warning)',
-                        color: 'white',
-                        fontSize: 10,
-                        fontWeight: 600,
-                      }}>
-                        {h.status}
-                      </span>
-                    )}
-                    <span style={{ color: 'var(--text-tertiary-weak)', fontSize: 10 }}>
-                      {h.completedAt ? new Date(h.completedAt).toLocaleString() : new Date(h.startedAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <div style={{ color: 'var(--text-secondary-strong)', marginTop: 4 }}>
-                    <div>Processed: {h.documentsProcessed || 0} • Created: {h.documentsCreated || 0}</div>
-                    {h.durationMs && (
-                      <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 2 }}>
-                        Duration: {(h.durationMs / 1000).toFixed(1)}s
-                      </div>
-                    )}
-                    {h.error && (
-                      <div style={{ fontSize: 10, color: 'var(--accent-error)', marginTop: 2 }}>
-                        Error: {h.error}
-                      </div>
-                    )}
-                    {h.params && Object.keys(h.params).length > 0 && (
-                      <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 2 }}>
-                        Params: {JSON.stringify(h.params)}
-                      </div>
-                    )}
-                  </div>
+          </button>
+          {isHistoryExpanded && (
+            <>
+              {loadingHistory ? (
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
+                  Loading history...
                 </div>
-              ))}
-            </div>
+              ) : ingestHistory.length === 0 ? (
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
+                  No ingest history yet
+                </div>
+              ) : (
+                <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {ingestHistory.map((h: any) => (
+                    <div
+                      key={h.id}
+                      style={{
+                        padding: 8,
+                        borderRadius: 8,
+                        backgroundColor: 'var(--bg-sidebar)',
+                        border: '1px solid var(--overlay-line-90)',
+                        fontSize: 11,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        {(h.status === 'empty' || (h.status === 'partial' && (h.documentsProcessed || 0) === 0)) ? (
+                          <span style={{ 
+                            padding: '2px 6px', 
+                            borderRadius: 4, 
+                            backgroundColor: 'rgba(156, 163, 175, 0.1)',
+                            border: '1px solid rgba(156, 163, 175, 0.3)',
+                            color: 'rgb(156, 163, 175)',
+                            fontSize: 10,
+                            fontWeight: 600,
+                          }}>
+                            {h.status === 'empty' ? 'no updates' : 'No new messages'}
+                          </span>
+                        ) : (
+                          <span style={{ 
+                            padding: '2px 6px', 
+                            borderRadius: 4, 
+                            backgroundColor: h.status === 'success' ? 'var(--accent-success)' : h.status === 'error' ? 'var(--accent-error)' : 'var(--accent-warning)',
+                            color: 'white',
+                            fontSize: 10,
+                            fontWeight: 600,
+                          }}>
+                            {h.status}
+                          </span>
+                        )}
+                        <span style={{ color: 'var(--text-tertiary-weak)', fontSize: 10 }}>
+                          {h.completedAt ? new Date(h.completedAt).toLocaleString() : new Date(h.startedAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <div style={{ color: 'var(--text-secondary-strong)', marginTop: 4 }}>
+                        <div>Processed: {h.documentsProcessed || 0} • Created: {h.documentsCreated || 0}</div>
+                        {h.durationMs && (
+                          <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 2 }}>
+                            Duration: {(h.durationMs / 1000).toFixed(1)}s
+                          </div>
+                        )}
+                        {h.error && (
+                          <div style={{ fontSize: 10, color: 'var(--accent-error)', marginTop: 2 }}>
+                            Error: {h.error}
+                          </div>
+                        )}
+                        {h.params && Object.keys(h.params).length > 0 && (
+                          <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 2 }}>
+                            Params: {JSON.stringify(h.params)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* Messages/Documents section */}
         <div style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 8 }}>
+          <button
+            onClick={() => setIsDocumentsExpanded(!isDocumentsExpanded)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12,
+              fontWeight: 600,
+              color: 'var(--text-heading)',
+              marginBottom: 8,
+              backgroundColor: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+            }}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              style={{
+                transform: isDocumentsExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                transition: 'transform 0.2s',
+              }}
+            >
+              <path d="M4 2L8 6L4 10" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
             {source.kind === 'telegram_channel' ? 'Messages' : 'Documents'} ({documents.length})
-          </div>
-          {loadingDocs ? (
-            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
-              Loading messages...
-            </div>
-          ) : documentsError ? (
-            <div style={{ fontSize: 11, color: 'var(--accent-error)', padding: '8px 0' }}>
-              {documentsError}
-            </div>
-          ) : documents.length === 0 ? (
-            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
-              No messages yet
-            </div>
-          ) : (
-            <div style={{ maxHeight: 300, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {documents.map((doc: any) => (
-                <div
-                  key={doc.id}
-                  style={{
-                    padding: 8,
-                    borderRadius: 8,
-                    backgroundColor: 'var(--bg-sidebar)',
-                    border: '1px solid var(--overlay-line-90)',
-                  }}
-                >
-                  {(doc.fullText || doc.text) && (
-                    <div
-                      className="markdown"
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--text-secondary-strong)',
-                        lineHeight: 1.4,
-                        marginBottom: doc.url ? 4 : 0,
-                      }}
-                    >
-                      <MarkdownRenderer 
-                        content={doc.fullText || doc.text || ''} 
-                        skipWrapper={true}
-                        className=""
-                      />
-                    </div>
-                  )}
-                  {doc.title && doc.title !== doc.url && (
-                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 4 }}>
-                      {doc.title}
-                    </div>
-                  )}
-                  {doc.originPublishedAt && (
-                    <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 4 }}>
-                      {new Date(doc.originPublishedAt).toLocaleDateString()}
-                    </div>
-                  )}
-                  {doc.url && (
-                    <a
-                      href={doc.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        fontSize: 10,
-                        color: 'var(--accent-primary)',
-                        textDecoration: 'none',
-                        marginTop: 4,
-                        display: 'inline-block',
-                      }}
-                    >
-                      Open →
-                    </a>
-                  )}
+          </button>
+          {isDocumentsExpanded && (
+            <>
+              {loadingDocs ? (
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
+                  Loading messages...
                 </div>
-              ))}
-            </div>
+              ) : documentsError ? (
+                <div style={{ fontSize: 11, color: 'var(--accent-error)', padding: '8px 0' }}>
+                  {documentsError}
+                </div>
+              ) : documents.length === 0 ? (
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', padding: '8px 0' }}>
+                  No messages yet
+                </div>
+              ) : (
+                <div style={{ maxHeight: 300, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {documents.map((doc: any) => (
+                    <div
+                      key={doc.id}
+                      style={{
+                        padding: 8,
+                        borderRadius: 8,
+                        backgroundColor: 'var(--bg-sidebar)',
+                        border: '1px solid var(--overlay-line-90)',
+                      }}
+                    >
+                      {(doc.fullText || doc.text) && (
+                        <div
+                          className="markdown"
+                          style={{
+                            fontSize: 11,
+                            color: 'var(--text-secondary-strong)',
+                            lineHeight: 1.4,
+                            marginBottom: doc.url ? 4 : 0,
+                          }}
+                        >
+                          <MarkdownRenderer 
+                            content={doc.fullText || doc.text || ''} 
+                            skipWrapper={true}
+                            className=""
+                          />
+                        </div>
+                      )}
+                      {doc.title && doc.title !== doc.url && (
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 4 }}>
+                          {doc.title}
+                        </div>
+                      )}
+                      {doc.originPublishedAt && (
+                        <div style={{ fontSize: 10, color: 'var(--text-tertiary-weak)', marginTop: 4 }}>
+                          {new Date(doc.originPublishedAt).toLocaleDateString()}
+                        </div>
+                      )}
+                      {doc.url && (
+                        <a
+                          href={doc.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            fontSize: 10,
+                            color: 'var(--accent-primary)',
+                            textDecoration: 'none',
+                            marginTop: 4,
+                            display: 'inline-block',
+                          }}
+                        >
+                          Open →
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

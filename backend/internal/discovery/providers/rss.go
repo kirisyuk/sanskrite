@@ -2,19 +2,28 @@ package providers
 
 import (
 	"context"
-	"encoding/xml"
-	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/microcosm-cc/bluemonday"
+	"github.com/mmcdole/gofeed"
 )
 
 type RSSProvider struct {
 	client *http.Client
+	parser *gofeed.Parser
+	policy *bluemonday.Policy
 }
 
 func NewRSSProvider() *RSSProvider {
-	return &RSSProvider{client: &http.Client{Timeout: 20 * time.Second}}
+	fp := gofeed.NewParser()
+	fp.Client = &http.Client{Timeout: 20 * time.Second}
+	return &RSSProvider{
+		client: fp.Client,
+		parser: fp,
+		policy: bluemonday.StrictPolicy(), // Strips all HTML tags, keeps only text
+	}
 }
 
 func (p *RSSProvider) Key() string { return "rss" }
@@ -23,67 +32,75 @@ func (p *RSSProvider) Capability() Capability {
 	return Capability{SupportsPolling: true, SupportsWebhook: false, MaxItemsPerRun: 100, RateLimitPerMin: 120, PageLimit: 0}
 }
 
-// minimal RSS parsing
-type rssFeed struct {
-	Channel struct {
-		Title string    `xml:"title"`
-		Link  string    `xml:"link"`
-		Items []rssItem `xml:"item"`
-	} `xml:"channel"`
-}
-
-type rssItem struct {
-	GUID        string `xml:"guid"`
-	Title       string `xml:"title"`
-	Link        string `xml:"link"`
-	PubDate     string `xml:"pubDate"`
-	Description string `xml:"description"`
-	Content     string `xml:"encoded"`
-}
-
 func (p *RSSProvider) Ingest(ctx context.Context, tenantID string, sourceID string) ([]NormalizedDocument, error) {
 	// feed URL should be provided via Source config; in this minimal adapter assume sourceID is the URL
 	feedURL := sourceID
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
+	
+	// Use gofeed to parse the feed (handles RSS, Atom, JSON Feed)
+	feed, err := p.parser.ParseURLWithContext(feedURL, ctx)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	var feed rssFeed
-	if err := xml.Unmarshal(body, &feed); err != nil {
-		return nil, err
-	}
+
 	var out []NormalizedDocument
-	for _, it := range feed.Channel.Items {
+	for _, it := range feed.Items {
+		// Prioritize full content, fallback to description
 		text := it.Content
 		if strings.TrimSpace(text) == "" {
 			text = it.Description
 		}
+
+		// Determine publish date
 		var published *time.Time
-		if t, err := time.Parse(time.RFC1123Z, it.PubDate); err == nil {
-			published = &t
-		} else if t2, err2 := time.Parse(time.RFC1123, it.PubDate); err2 == nil {
-			published = &t2
+		if it.PublishedParsed != nil {
+			published = it.PublishedParsed
+		} else if it.UpdatedParsed != nil {
+			published = it.UpdatedParsed
 		}
+
+		// Extract authors
+		var authors []string
+		if it.Author != nil {
+			authors = append(authors, it.Author.Name)
+		}
+		for _, a := range it.Authors {
+			if a.Name != "" {
+				found := false
+				for _, existing := range authors {
+					if existing == a.Name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					authors = append(authors, a.Name)
+				}
+			}
+		}
+
+		// Construct external ID
+		extID := firstNonEmpty(it.GUID, it.Link, it.Title)
+		
+		// Determine document path
+		docPath := "rss/"
+		if feed.Link != "" {
+			docPath += feed.Link
+		} else {
+			docPath += "unknown"
+		}
+		docPath += "#" + extID
+
 		nd := NormalizedDocument{
-			ExternalID:        firstNonEmpty(it.GUID, it.Link, it.Title+"/"+it.PubDate),
+			ExternalID:        extID,
 			Title:             it.Title,
 			URL:               it.Link,
-			DocumentPath:      "rss/" + feed.Channel.Link + "#" + firstNonEmpty(it.GUID, it.Link),
-			FullText:          htmlToText(text),
-			Language:          "",
+			DocumentPath:      docPath,
+			FullText:          p.cleanHTML(text),
+			Language:          feed.Language,
 			ContentType:       "plainText",
 			DocumentType:      "article",
-			Authors:           nil,
-			SourceMeta:        map[string]any{"feedTitle": feed.Channel.Title},
+			Authors:           authors,
+			SourceMeta:        map[string]any{"feedTitle": feed.Title, "feedDescription": feed.Description},
 			OriginPublishedAt: published,
 		}
 		out = append(out, nd)
@@ -112,7 +129,7 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-func htmlToText(s string) string {
-	// very naive strip; real impl may use proper HTML to text
-	return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(s, "<br>", "\n"), "<br/>", "\n"))
+func (p *RSSProvider) cleanHTML(s string) string {
+	// Use bluemonday to strip all HTML tags and return clean text
+	return strings.TrimSpace(p.policy.Sanitize(s))
 }

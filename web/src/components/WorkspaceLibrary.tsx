@@ -417,8 +417,8 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
     if (!projectId || projectId === 'local-unfold' || !currentProject) return;
     
     try {
-      // updateProject from store already does optimistic update and syncs with server
-      await updateProject(projectId, { projectType: newType || undefined });
+      // Pass undefined to remove projectType, or the string value to set it
+      await updateProject(projectId, { projectType: newType === null ? undefined : newType });
     } catch (error) {
       console.error('[WorkspaceLibrary] Failed to update project type', error);
       // Error handling and rollback is already done in updateProject
@@ -443,27 +443,12 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
 
   const isEmpty = documents.length === 0 && sources.length === 0;
 
-  if (isEmpty) {
-    return (
-      <div className="flex flex-col items-center justify-center py-8 px-4" style={{ color: 'var(--text-secondary)' }}>
-        <svg className="w-12 h-12 mb-2 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <span className="text-xs text-center">Your workspace library is empty</span>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
-      {/* Header with expand button and project type selector */}
+      {/* Header with expand button */}
       {onExpand && (
-        <div className="space-y-2 mb-2">
-          <div className="flex items-center justify-between">
-            <h4 className="text-xs font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
-              Workspace Library
-            </h4>
+        <div className="mb-2">
+          <div className="flex items-center justify-end">
             <button
               type="button"
               onClick={() => {
@@ -493,38 +478,54 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
               <span>Expand</span>
             </button>
           </div>
-          
-          {/* Project Type Selector */}
-          {currentProject && (
-            <div className="flex items-center gap-2">
-              <label className="text-[10px] font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
-                Project Type:
-              </label>
-              <select
-                value={currentProject.projectType || ''}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  handleProjectTypeChange(value === 'studio' ? 'studio' : null);
-                }}
-                className="px-2 py-1 rounded text-[11px] transition-colors"
-                style={{
-                  backgroundColor: 'var(--bg-input, #1A1A1A)',
-                  color: 'var(--text-heading)',
-                  border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
-                  outline: 'none',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
-                }}
-              >
-                <option value="">None</option>
-                <option value="studio">Studio</option>
-              </select>
-            </div>
-          )}
+        </div>
+      )}
+
+      {/* Project data section - always visible when project is selected */}
+      {currentProject && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h4 className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary-strong)' }}>
+            Project data
+          </h4>
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
+              Type:
+            </label>
+            <select
+              value={currentProject.projectType || ''}
+              onChange={(e) => {
+                const value = e.target.value;
+                handleProjectTypeChange(value === 'studio' ? 'studio' : null);
+              }}
+              className="px-2 py-1 rounded text-[11px] transition-colors"
+              style={{
+                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                color: 'var(--text-heading)',
+                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                outline: 'none',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+              }}
+            >
+              <option value="">None</option>
+              <option value="studio">Studio</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state message */}
+      {isEmpty && (
+        <div className="flex flex-col items-center justify-center py-8 px-4" style={{ color: 'var(--text-secondary)' }}>
+          <svg className="w-12 h-12 mb-2 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="text-xs text-center">Your workspace library is empty</span>
         </div>
       )}
 

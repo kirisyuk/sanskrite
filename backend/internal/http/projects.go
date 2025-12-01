@@ -3629,9 +3629,22 @@ func (h *ProjectsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Parse update request
+	// Parse update request - first read raw JSON to check for explicit null values
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		WriteBadRequest(w, "INVALID_REQUEST", "Failed to read request body")
+		return
+	}
+
+	var rawUpdate map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &rawUpdate); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
+		return
+	}
+
+	// Now parse into struct
 	var updates models.Project
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+	if err := json.Unmarshal(bodyBytes, &updates); err != nil {
 		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
 		return
 	}
@@ -3649,7 +3662,18 @@ func (h *ProjectsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) 
 	if updates.View != nil {
 		project.View = updates.View
 	}
-	if updates.ProjectType != nil {
+	// Handle ProjectType: check if field was explicitly set in raw JSON
+	if projectTypeVal, exists := rawUpdate["projectType"]; exists {
+		h.logger.Printf("UpdateProject: explicit projectType update for %s: val=%v", projectID, projectTypeVal)
+		if projectTypeVal == nil {
+			// Explicit null - remove projectType
+			project.ProjectType = nil
+		} else if updates.ProjectType != nil {
+			// Explicit value - set it
+			project.ProjectType = updates.ProjectType
+		}
+	} else if updates.ProjectType != nil {
+		// Field not in raw JSON but was set in struct (shouldn't happen normally)
 		project.ProjectType = updates.ProjectType
 	}
 

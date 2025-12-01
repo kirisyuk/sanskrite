@@ -32,12 +32,20 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
     const shouldExcludeModelChat = excludeModelChat && !currentStreaming;
     
     const merged: MergedItem[] = [];
+    const seenIds = new Set<string>(); // Track seen interaction IDs to prevent duplicates
 
     // Add interactions first (user, assistant, and section markers)
     // This ensures interactions are processed before messages during streaming
     // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')
     interactions
       .filter((it) => {
+        // Deduplicate: skip if we've already seen this ID
+        if (it.id && seenIds.has(it.id)) {
+          return false;
+        }
+        if (it.id) {
+          seenIds.add(it.id);
+        }
         // Exclude perspective interactions
         if (
           it.kind === 'note' &&

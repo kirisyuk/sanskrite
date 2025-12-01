@@ -70,7 +70,7 @@ func (c *Client) modelFrom(opts Options) string {
 	if opts.ModelOverride != "" {
 		return opts.ModelOverride
 	}
-	return "gpt-5"
+	return "gpt-5-nano" // Default to cheapest model
 }
 
 // Generate uses Responses API (non-stream) and returns first text output; supports function tools

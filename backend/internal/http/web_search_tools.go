@@ -238,6 +238,7 @@ func (e *WebSearchToolExecutor) saveTavilyUsageMetric(ctx context.Context, query
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
+		useCase := "search"
 		_, err := e.usageMetricsRepo.CreateMetric(
 			metricCtx,
 			auth.TenantID,
@@ -250,6 +251,7 @@ func (e *WebSearchToolExecutor) saveTavilyUsageMetric(ctx context.Context, query
 			&taskType,
 			nil,                          // projectID (not available in tool context)
 			&durationMs,
+			&useCase,
 		)
 
 		if err != nil {

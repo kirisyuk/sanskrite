@@ -295,9 +295,9 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   const deletingProjectIds = React.useMemo(() => new Set(deletingProjectIdsArray), [deletingProjectIdsArray]);
   
   // Memoize projects array with a stable reference to prevent unnecessary re-renders
-  // Create a signature string that includes displayName to detect changes
+  // Create a signature string that includes displayName and projectType to detect changes
   const projectsSignature = React.useMemo(() => 
-    projects.map((p) => `${p.id}:${p.displayName}:${p.lastInteractionAt || p.createdAt}`).join(','),
+    projects.map((p) => `${p.id}:${p.displayName}:${p.lastInteractionAt || p.createdAt}:${p.projectType || ''}`).join(','),
     [projects]
   );
   

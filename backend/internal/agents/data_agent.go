@@ -20,7 +20,7 @@ type DataAgent struct {
 	genaiClient      *gen_combined.Client
 	logger           *log.Logger
 	usageMetricsRepo interface {
-		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 	}
 	modelManager interface {
 		CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
@@ -41,7 +41,7 @@ func NewDataAgent(genaiClient *gen_combined.Client, logger *log.Logger) *DataAge
 
 // WithUsageMetrics sets the usage metrics repository and model manager
 func (a *DataAgent) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 }, modelMgr interface {
 	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
 }) *DataAgent {
@@ -956,12 +956,22 @@ func (a *DataAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, m
 		projectIDPtr = &agentCtx.ProjectID
 	}
 
+	// Determine useCase from taskType
+	useCase := "document_processing"
+	if strings.HasPrefix(taskType, "data.") {
+		useCase = "document_processing"
+	}
+	var useCasePtr *string
+	if useCase != "" {
+		useCasePtr = &useCase
+	}
+
 	// Save asynchronously to avoid blocking
 	// Use a new context with timeout to avoid cancellation from parent context
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := a.usageMetricsRepo.CreateMetric(metricCtx, agentCtx.TenantID, agentCtx.UserID, provider, actualModelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
+		_, err := a.usageMetricsRepo.CreateMetric(metricCtx, agentCtx.TenantID, agentCtx.UserID, provider, actualModelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs, useCasePtr)
 		if err != nil && a.logger != nil {
 			a.logger.Printf("[DataAgent] Failed to save usage metric: %v", err)
 		}

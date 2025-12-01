@@ -68,6 +68,8 @@ export const UsageTab: React.FC = () => {
       outputTokens: number;
       totalTokens: number;
       costUSD: number;
+      taskType?: string;
+      useCase?: string; // Business purpose: "chat", "bias_analysis", "frame_decomposition", etc.
       kind: string;
       createdAt: string;
     }>;
@@ -457,7 +459,7 @@ export const UsageTab: React.FC = () => {
     const groups: Array<{
       model: string;
       modelAlias?: string;
-      kind: string;
+      useCase?: string;
       events: typeof sortedEvents;
       totalTokens: number;
       totalCost: number;
@@ -468,11 +470,12 @@ export const UsageTab: React.FC = () => {
     
     for (const event of sortedEvents) {
       const eventTime = new Date(event.createdAt).getTime();
-      const eventKey = `${event.model}:${event.modelAlias || ''}:${event.kind}`;
+      // Group by model + alias + useCase (not kind) - don't group same models with different use cases
+      const eventKey = `${event.model}:${event.modelAlias || ''}:${event.useCase || 'unknown'}`;
       
-      // First, try to find an existing group that matches model/alias/kind and is within time window
+      // First, try to find an existing group that matches model/alias/useCase and is within time window
       let foundGroup = groups.find(group => {
-        const groupKey = `${group.model}:${group.modelAlias || ''}:${group.kind}`;
+        const groupKey = `${group.model}:${group.modelAlias || ''}:${group.useCase || 'unknown'}`;
         if (groupKey !== eventKey) return false;
         
         const groupStartTime = group.startTime.getTime() - TIME_WINDOW_MS;
@@ -481,12 +484,12 @@ export const UsageTab: React.FC = () => {
         return eventTime >= groupStartTime && eventTime <= groupEndTime;
       });
       
-      // If not found by time window, check if this event is consecutive (same model, no other models in between)
-      // Find groups that match the same model/alias/kind and check if event is consecutive to them
+      // If not found by time window, check if this event is consecutive (same model/useCase, no other models in between)
+      // Find groups that match the same model/alias/useCase and check if event is consecutive to them
       if (!foundGroup) {
-        // Find all groups with matching model/alias/kind
+        // Find all groups with matching model/alias/useCase
         const matchingGroups = groups.filter(group => {
-          const groupKey = `${group.model}:${group.modelAlias || ''}:${group.kind}`;
+          const groupKey = `${group.model}:${group.modelAlias || ''}:${group.useCase || 'unknown'}`;
           return groupKey === eventKey;
         });
         
@@ -497,9 +500,9 @@ export const UsageTab: React.FC = () => {
             if (otherEvent.id === event.id) return false;
             
             const otherEventTime = new Date(otherEvent.createdAt).getTime();
-            const otherEventKey = `${otherEvent.model}:${otherEvent.modelAlias || ''}:${otherEvent.kind}`;
+            const otherEventKey = `${otherEvent.model}:${otherEvent.modelAlias || ''}:${otherEvent.useCase || 'unknown'}`;
             
-            // Check if other event is between startTime and endTime and has different model
+            // Check if other event is between startTime and endTime and has different model/useCase
             if (otherEventTime >= startTime && otherEventTime <= endTime && otherEventKey !== eventKey) {
               return true;
             }
@@ -549,7 +552,7 @@ export const UsageTab: React.FC = () => {
         groups.push({
           model: event.model,
           modelAlias: event.modelAlias,
-          kind: event.kind,
+          useCase: event.useCase,
           events: [event],
           totalTokens: event.totalTokens || 0,
           totalCost: event.costUSD || 0,
@@ -580,6 +583,15 @@ export const UsageTab: React.FC = () => {
     if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
     if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
     return tokens.toString();
+  };
+
+  const formatUseCase = (useCase: string) => {
+    if (!useCase) return 'Unknown';
+    // Convert snake_case to Title Case
+    return useCase
+      .split('_')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   };
 
   const formatTimeRange = (startTime: Date, endTime: Date) => {
@@ -797,8 +809,18 @@ export const UsageTab: React.FC = () => {
                   style={{ fontSize: '11px' }}
                 />
                 <Tooltip
+                  cursor={{
+                    stroke: theme === 'dark' ? 'var(--white-20)' : '#ccc',
+                    strokeWidth: 1,
+                    strokeDasharray: '3 3'
+                  }}
+                  wrapperStyle={{
+                    backgroundColor: theme === 'dark' ? 'var(--white-05)' : '#ffffff',
+                    border: '1px solid var(--overlay-line-90)',
+                    borderRadius: '6px',
+                  }}
                   contentStyle={{
-                    backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
+                    backgroundColor: theme === 'dark' ? 'var(--white-05)' : '#ffffff',
                     border: '1px solid var(--overlay-line-90)',
                     borderRadius: '6px',
                     color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
@@ -829,6 +851,12 @@ export const UsageTab: React.FC = () => {
                   strokeWidth={2}
                   name={t('account.tabs.usageDetails.total')}
                   dot={{ r: 3 }}
+                  activeDot={{ 
+                    r: 5, 
+                    fill: '#4285F4',
+                    stroke: theme === 'dark' ? 'var(--white-10)' : '#ffffff',
+                    strokeWidth: 2
+                  }}
                 />
                 <Line
                   type="monotone"
@@ -837,6 +865,12 @@ export const UsageTab: React.FC = () => {
                   strokeWidth={2}
                   name={t('account.tabs.usageDetails.input')}
                   dot={{ r: 3 }}
+                  activeDot={{ 
+                    r: 5, 
+                    fill: '#10A37F',
+                    stroke: theme === 'dark' ? 'var(--white-10)' : '#ffffff',
+                    strokeWidth: 2
+                  }}
                 />
                 <Line
                   type="monotone"
@@ -845,6 +879,12 @@ export const UsageTab: React.FC = () => {
                   strokeWidth={2}
                   name={t('account.tabs.usageDetails.output')}
                   dot={{ r: 3 }}
+                  activeDot={{ 
+                    r: 5, 
+                    fill: '#FF6B35',
+                    stroke: theme === 'dark' ? 'var(--white-10)' : '#ffffff',
+                    strokeWidth: 2
+                  }}
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -870,8 +910,16 @@ export const UsageTab: React.FC = () => {
                   style={{ fontSize: '11px' }}
                 />
                 <Tooltip
+                  cursor={{
+                    fill: theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'
+                  }}
+                  wrapperStyle={{
+                    backgroundColor: theme === 'dark' ? 'var(--white-05)' : '#ffffff',
+                    border: '1px solid var(--overlay-line-90)',
+                    borderRadius: '6px',
+                  }}
                   contentStyle={{
-                    backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
+                    backgroundColor: theme === 'dark' ? 'var(--white-05)' : '#ffffff',
                     border: '1px solid var(--overlay-line-90)',
                     borderRadius: '6px',
                     color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
@@ -896,7 +944,17 @@ export const UsageTab: React.FC = () => {
                     color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                   }}
                 />
-                <Bar dataKey="cost" fill="#10A37F" name={t('account.tabs.usageDetails.costUSD')} />
+                <Bar 
+                  dataKey="cost" 
+                  fill="#10A37F" 
+                  name={t('account.tabs.usageDetails.costUSD')}
+                  activeBar={{
+                    fill: '#10A37F',
+                    stroke: theme === 'dark' ? 'var(--white-10)' : '#ffffff',
+                    strokeWidth: 2,
+                    opacity: theme === 'dark' ? 0.9 : 0.8
+                  }}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -931,8 +989,16 @@ export const UsageTab: React.FC = () => {
                 tickFormatter={formatModelName}
               />
               <Tooltip
+                cursor={{
+                  fill: theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'
+                }}
+                wrapperStyle={{
+                  backgroundColor: theme === 'dark' ? 'var(--white-05)' : '#ffffff',
+                  border: '1px solid var(--overlay-line-90)',
+                  borderRadius: '6px',
+                }}
                 contentStyle={{
-                  backgroundColor: theme === 'dark' ? '#1a1a1a' : '#ffffff',
+                  backgroundColor: theme === 'dark' ? 'var(--white-05)' : '#ffffff',
                   border: '1px solid var(--overlay-line-90)',
                   borderRadius: '6px',
                   color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
@@ -971,7 +1037,16 @@ export const UsageTab: React.FC = () => {
                   color: theme === 'dark' ? 'var(--text-heading)' : 'var(--text-primary)',
                 }}
               />
-              <Bar dataKey="costUSD" name={t('account.tabs.usageDetails.costUSD')} radius={[0, 4, 4, 0]}>
+              <Bar 
+                dataKey="costUSD" 
+                name={t('account.tabs.usageDetails.costUSD')} 
+                radius={[0, 4, 4, 0]}
+                activeBar={{
+                  stroke: theme === 'dark' ? 'var(--white-10)' : '#ffffff',
+                  strokeWidth: 2,
+                  opacity: theme === 'dark' ? 0.9 : 0.8
+                }}
+              >
                 {modelData.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={getProviderColor(entry.provider)} />
                 ))}
@@ -991,11 +1066,11 @@ export const UsageTab: React.FC = () => {
                 // Export CSV functionality - export current page events
                 if (!eventsData?.events) return;
                 const csv = [
-                  [t('account.tabs.usageDetails.date'), t('account.tabs.usageDetails.model'), t('account.tabs.usageDetails.kind'), t('account.tabs.usageDetails.tokens'), t('account.tabs.usageDetails.cost')].join(','),
+                  [t('account.tabs.usageDetails.date'), t('account.tabs.usageDetails.model'), 'Use Case', t('account.tabs.usageDetails.tokens'), t('account.tabs.usageDetails.cost')].join(','),
                   ...eventsData.events.map(e => [
                     new Date(e.createdAt).toLocaleString(),
                     e.model,
-                    e.kind,
+                    e.useCase || 'unknown',
                     e.totalTokens,
                     e.costUSD.toFixed(4),
                   ].join(',')),
@@ -1024,7 +1099,7 @@ export const UsageTab: React.FC = () => {
                 <tr style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>
                   <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.date')}</th>
                   <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.model')}</th>
-                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.kind')}</th>
+                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>Use Case</th>
                   <th className="text-right py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.tokens')}</th>
                   <th className="text-right py-2 px-2" style={{ color: 'var(--text-tertiary-weak)' }}>{t('account.tabs.usageDetails.cost')}</th>
                 </tr>
@@ -1058,11 +1133,11 @@ export const UsageTab: React.FC = () => {
                       <span
                         className="px-2 py-0.5 rounded text-[10px]"
                         style={{
-                          backgroundColor: group.kind === 'included' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(251, 191, 36, 0.1)',
-                          color: group.kind === 'included' ? 'rgb(34, 197, 94)' : 'rgb(251, 191, 36)',
+                          backgroundColor: 'var(--white-10)',
+                          color: 'var(--text-secondary-strong)',
                         }}
                       >
-                        {group.kind}
+                        {group.useCase ? formatUseCase(group.useCase) : 'unknown'}
                       </span>
                     </td>
                     <td className="text-right py-2 px-2" style={{ color: 'var(--text-secondary-strong)' }}>

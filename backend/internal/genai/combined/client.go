@@ -185,17 +185,8 @@ func route(opts Options) string {
 
 // map alias to concrete provider model id
 func (c *Client) normalizeOptionsForGemini(opts Options) Options {
-	// Accept underscores, hyphens, spaces, dots and other variants
-	switch canonicalizeAlias(opts.ModelOverride) {
-	case "gemini_quality":
-		opts.ModelOverride = "gemini-2.5-pro"
-	case "gemini_fast":
-		opts.ModelOverride = "gemini-2.5-flash-lite"
-	case "gemini_balanced":
-		opts.ModelOverride = "gemini-2.5-flash"
-	case "gemini_preview":
-		opts.ModelOverride = "gemini-3-pro-preview"
-	}
+	// Use unified alias conversion
+	opts.ModelOverride = ConvertAliasToModel(opts.ModelOverride)
 	return opts
 }
 
@@ -239,31 +230,18 @@ func GetModelContextWindow(modelAlias string) int {
 }
 
 func (c *Client) normalizeOptionsForOpenAI(opts Options) oa.Options {
-	out := oa.Options{
-		ModelOverride:     canonicalizeAlias(opts.ModelOverride),
+	return oa.Options{
+		ModelOverride:     ConvertAliasToModel(opts.ModelOverride),
 		Temperature:       opts.Temperature,
 		MaxOutputTokens:   opts.MaxOutputTokens,
 		GroundingEnabled:  opts.GroundingEnabled,
 		SystemInstruction: opts.SystemInstruction,
 	}
-	switch out.ModelOverride {
-	case "gpt_quality":
-		out.ModelOverride = "gpt-5.1"
-	case "gpt_balanced":
-		out.ModelOverride = "gpt-5-mini"
-	case "gpt_fast":
-		out.ModelOverride = "gpt-5-nano"
-	}
-	return out
 }
 
 func (c *Client) normalizeOptionsForGrok(opts Options) gr.Options {
 	return gr.Options{
-		ModelOverride: map[string]string{
-			"grok_quality":  "grok-4-0709",
-			"grok_balanced": "grok-4-1-fast-reasoning",
-			"grok_fast":     "grok-4-1-fast-non-reasoning",
-		}[canonicalizeAlias(opts.ModelOverride)],
+		ModelOverride:     ConvertAliasToModel(opts.ModelOverride),
 		Temperature:       opts.Temperature,
 		MaxOutputTokens:   opts.MaxOutputTokens,
 		GroundingEnabled:  opts.GroundingEnabled,
@@ -273,12 +251,7 @@ func (c *Client) normalizeOptionsForGrok(opts Options) gr.Options {
 
 func (c *Client) normalizeOptionsForClaude(opts Options) cl.Options {
 	return cl.Options{
-		ModelOverride: map[string]string{
-			"claude_fast":     "claude-haiku-4-5-20251001",
-			"claude_balanced": "claude-sonnet-4-5-20250929",
-			// claude_quality (Opus) disabled in frontend - too expensive, fallback to balanced
-			"claude_quality": "claude-sonnet-4-5-20250929", // was: claude-opus-4-1-20250805
-		}[canonicalizeAlias(opts.ModelOverride)],
+		ModelOverride:     ConvertAliasToModel(opts.ModelOverride),
 		Temperature:       opts.Temperature,
 		MaxOutputTokens:   opts.MaxOutputTokens,
 		GroundingEnabled:  opts.GroundingEnabled,
@@ -288,10 +261,7 @@ func (c *Client) normalizeOptionsForClaude(opts Options) cl.Options {
 
 func (c *Client) normalizeOptionsForDeepSeek(opts Options) ds.Options {
 	return ds.Options{
-		ModelOverride: map[string]string{
-			"deepseek_fast":    "deepseek-chat",
-			"deepseek_quality": "deepseek-reasoner",
-		}[canonicalizeAlias(opts.ModelOverride)],
+		ModelOverride:     ConvertAliasToModel(opts.ModelOverride),
 		Temperature:       opts.Temperature,
 		MaxOutputTokens:   opts.MaxOutputTokens,
 		GroundingEnabled:  opts.GroundingEnabled,
@@ -570,7 +540,7 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 		// Use normalized model name (real model ID, not alias) for proper cost calculation
 		modelName := normalizedOpts.ModelOverride
 		if modelName == "" {
-			modelName = "gpt-5" // Default fallback
+			modelName = "gpt-5-nano" // Default to cheapest model
 		}
 		return onEvent(StreamEvent{Type: "done", Usage: convertedUsage, Model: modelName, SearchQueries: qs, Sources: srcs})
 	case "grok":

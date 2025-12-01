@@ -38,13 +38,14 @@ export async function generateFrameExpansions(
     if (!reverseMap[server as string]) reverseMap[server as string] = [];
     reverseMap[server as string].push(local);
   });
-  const localIds = reverseMap[assistantMessageId] || [];
+  // Fix: use serverId to lookup in reverseMap, as reverseMap keys are server IDs
+  const localIds = reverseMap[serverId] || [];
   
   // Check if expansion interaction already exists
   const existingExpansion = genaiChat.interactions.find((it) => 
     it.subkind === 'eval.frame_expansions' && 
     (it.replyTo === assistantMessageId || it.replyTo === serverId || localIds.includes(it.replyTo || '') ||
-     (it.relations && it.relations.some((r) => r.targetId === assistantMessageId || r.targetId === serverId)))
+     (it.relations && it.relations.some((r) => r.targetId === assistantMessageId || r.targetId === serverId || localIds.includes(r.targetId || ''))))
   );
   
   if (existingExpansion) {
@@ -217,6 +218,7 @@ ${truncatedAssistantContent}`;
       const expansionData = { expansions };
 
       // Add to local state first
+      // Fix: use serverId for replyTo/relations if available to ensure consistent linking
       useGenaiChatStore.setState((s) => ({
         interactions: [
           ...s.interactions,
@@ -227,8 +229,8 @@ ${truncatedAssistantContent}`;
             subkind: 'eval.frame_expansions',
             content: JSON.stringify(expansionData),
             contentSanitized: JSON.stringify(expansionData),
-            replyTo: assistantMessageId,
-            relations: [{ type: 'expands', targetId: assistantMessageId }],
+            replyTo: serverId, // Use resolved serverId
+            relations: [{ type: 'expands', targetId: serverId }], // Use resolved serverId
             createdAt: new Date().toISOString(),
           } as any,
         ],

@@ -1,7 +1,6 @@
 import React, { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
-import { useProjectsStore } from '../stores/projectsStore';
 import { ArtifactsPanelToolbar } from './ArtifactsPanelToolbar';
 import { WorkspacePanel } from './WorkspacePanel';
 import { AnalysisPanel } from './AnalysisPanel';
@@ -27,6 +26,7 @@ interface RightDrawerProps {
   showAddSourceMenu: boolean;
   onShowAddSourceMenuChange: (show: boolean) => void;
   onShowAddTelegramModalChange: (show: boolean) => void;
+  onShowAddRSSModalChange: (show: boolean) => void;
   onPreviewSource: (source: any) => void;
   onOpenDocument: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string }) => void;
   onExpandWorkspace?: (projectId: string | null) => void;
@@ -71,6 +71,7 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
   getPanelVisibilityStyles,
   currentProjectId,
   onShowAddTelegramModalChange,
+  onShowAddRSSModalChange,
   onPreviewSource,
   onOpenDocument,
   onExpandWorkspace,
@@ -103,26 +104,6 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
   const genaiChat = useGenaiChatStore();
   const drawerRef = useRef<HTMLDivElement>(null);
   
-  // Get current project for project type selector (workspace panel only)
-  const currentProject = useProjectsStore((s) => 
-    rightPanelType === 'workspace' && currentProjectId 
-      ? s.projects.find((p) => p.id === currentProjectId) 
-      : null
-  );
-  const updateProject = useProjectsStore((s) => s.updateProject);
-  
-  // Handle project type change with optimistic update
-  const handleProjectTypeChange = React.useCallback(async (newType: "studio" | null) => {
-    if (!currentProjectId || currentProjectId === 'local-unfold' || !currentProject) return;
-    
-    try {
-      // updateProject from store already does optimistic update and syncs with server
-      await updateProject(currentProjectId, { projectType: newType || undefined });
-    } catch (error) {
-      console.error('[RightDrawer] Failed to update project type', error);
-      // Error handling and rollback is already done in updateProject
-    }
-  }, [currentProjectId, currentProject, updateProject]);
 
   // Sync drawer width when resized natively
   React.useEffect(() => {
@@ -319,39 +300,6 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                                 ? 'Context'
                                 : 'Workspace'}
                   </h3>
-                  
-                  {/* Project Type Selector - only for workspace panel */}
-                  {rightPanelType === 'workspace' && currentProject && (
-                    <div className="flex items-center gap-2">
-                      <label className="text-[10px] font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
-                        Type:
-                      </label>
-                      <select
-                        value={currentProject.projectType || ''}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          handleProjectTypeChange(value === 'studio' ? 'studio' : null);
-                        }}
-                        className="px-2 py-1 rounded text-[11px] transition-colors"
-                        style={{
-                          backgroundColor: 'var(--bg-input, #1A1A1A)',
-                          color: 'var(--text-heading)',
-                          border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
-                          outline: 'none',
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.borderColor = 'var(--border-input-hover, rgba(255, 255, 255, 0.2))';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <option value="">None</option>
-                        <option value="studio">Studio</option>
-                      </select>
-                    </div>
-                  )}
                 </div>
                 
                 <button
@@ -416,6 +364,7 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                     <WorkspacePanel
                       currentProjectId={currentProjectId}
                       onShowAddTelegramModalChange={onShowAddTelegramModalChange}
+                      onShowAddRSSModalChange={onShowAddRSSModalChange}
                       onPreviewSource={onPreviewSource}
                       onOpenDocument={onOpenDocument}
                       onExpandWorkspace={onExpandWorkspace}

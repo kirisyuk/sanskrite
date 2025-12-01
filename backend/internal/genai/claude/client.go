@@ -74,7 +74,7 @@ func (c *Client) modelFrom(opts Options) string {
     if strings.TrimSpace(opts.ModelOverride) != "" {
         return opts.ModelOverride
     }
-    return "claude-3-5-sonnet-20240620"
+    return "claude-haiku-4-5-20251001" // Default to cheapest model
 }
 
 // Generate uses Anthropic Messages API with optional tool use

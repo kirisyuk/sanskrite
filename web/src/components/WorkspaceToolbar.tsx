@@ -13,6 +13,7 @@ export interface WorkspaceToolbarProps {
   onDocumentAdded?: () => void;
   onSourceAdded?: () => void;
   onShowTelegramModal?: () => void;
+  onShowRSSModal?: () => void;
   className?: string;
 }
 
@@ -21,6 +22,7 @@ export const WorkspaceToolbar: React.FC<WorkspaceToolbarProps> = ({
   onDocumentAdded,
   onSourceAdded,
   onShowTelegramModal,
+  onShowRSSModal,
   className = '',
 }) => {
   const { t } = useTranslation();
@@ -258,7 +260,10 @@ export const WorkspaceToolbar: React.FC<WorkspaceToolbarProps> = ({
             <button
               type="button"
               role="menuitem"
-              onClick={() => setShowAddSourceMenu(false)}
+              onClick={() => {
+                setShowAddSourceMenu(false);
+                onShowRSSModal?.();
+              }}
               className="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors"
               style={{
                 backgroundColor: 'transparent',

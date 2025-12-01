@@ -9,9 +9,13 @@ export function useSourcesManagement() {
   const [showAddSourceMenu, setShowAddSourceMenu] = useState(false);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
   const [showAddTelegramModal, setShowAddTelegramModal] = useState(false);
+  const [showAddRSSModal, setShowAddRSSModal] = useState(false);
   const [tgInput, setTgInput] = useState('');
+  const [rssInput, setRssInput] = useState('');
   const [tgSubmitting, setTgSubmitting] = useState(false);
+  const [rssSubmitting, setRssSubmitting] = useState(false);
   const [tgError, setTgError] = useState<string | null>(null);
+  const [rssError, setRssError] = useState<string | null>(null);
   
   const { executeDiscovery, fetchProjectSources } = useDiscoveryStore();
   const currentProject = useProjectsStore((s) => s.currentProject);
@@ -95,6 +99,50 @@ export function useSourcesManagement() {
     }
   };
 
+  const addRSSSource = async () => {
+    setRssError(null);
+    const url = rssInput.trim();
+    if (!url) {
+      setRssError('Enter RSS feed URL');
+      return;
+    }
+    
+    // Pre-seed skeleton (pending source)
+    const pending = {
+      id: url,
+      kind: 'rss' as const,
+      status: 'fetching',
+    };
+    const store = useDiscoveryStore.getState();
+    store.setPendingSources([...(store as any).pendingSources, pending]);
+    if (currentProject?.id) {
+      // Merge pending skeleton into visible list right away
+      fetchProjectSources(currentProject.id);
+    }
+
+    setRssSubmitting(true);
+    try {
+      const lang = getPreferredLanguage();
+      await executeDiscovery({
+        projectId: currentProject?.id || '',
+        queryText: url, 
+        language: lang,
+        sources: { web: [], telegram: [], rss: [url] },
+      });
+      setShowAddRSSModal(false);
+      setRssInput('');
+      
+      // Notify about source update
+      window.dispatchEvent(new CustomEvent('sources.updated', { 
+        detail: { projectId: currentProject?.id } 
+      }));
+    } catch (e: any) {
+      setRssError(e?.message || 'Failed to add RSS feed');
+    } finally {
+      setRssSubmitting(false);
+    }
+  };
+
   const parseSourcesFromQuery = (text: string) => {
     // Normalize accidental '@' before URLs (e.g., @https://...)
     const normalized = text.trim().replace(/@(?=https?:\/\/)/g, '');
@@ -152,11 +200,18 @@ export function useSourcesManagement() {
     addMenuRef,
     showAddTelegramModal,
     setShowAddTelegramModal,
+    showAddRSSModal,
+    setShowAddRSSModal,
     tgInput,
     setTgInput,
+    rssInput,
+    setRssInput,
     tgSubmitting,
+    rssSubmitting,
     tgError,
+    rssError,
     addTelegramSource,
+    addRSSSource,
     parseSourcesFromQuery,
   };
 }

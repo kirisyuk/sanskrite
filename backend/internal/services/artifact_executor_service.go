@@ -18,7 +18,7 @@ type ArtifactExecutorService struct {
 	contextSvc       *ArtifactContextService
 	publisher        *realtime.Publisher
 	usageMetricsRepo interface {
-		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 	}
 	modelManager interface {
 		CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
@@ -40,7 +40,7 @@ func NewArtifactExecutorService(
 
 // WithUsageMetrics sets the usage metrics repository and model manager
 func (s *ArtifactExecutorService) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 }, modelMgr interface {
 	CalculateProcessingCost(modelName string, inputTokens int, outputTokens int) (float64, error)
 }) *ArtifactExecutorService {
@@ -592,12 +592,22 @@ func (s *ArtifactExecutorService) saveUsageMetric(_ context.Context, tenantID, p
 		projectIDPtr = &projectID
 	}
 
+	// Determine useCase from taskType
+	useCase := "artifact_generation"
+	if strings.HasPrefix(taskType, "artifact.") {
+		useCase = "artifact_generation"
+	}
+	var useCasePtr *string
+	if useCase != "" {
+		useCasePtr = &useCase
+	}
+
 	// Save asynchronously to avoid blocking
 	// Use a new context with timeout to avoid cancellation from parent context
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := s.usageMetricsRepo.CreateMetric(metricCtx, tenantID, userID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
+		_, err := s.usageMetricsRepo.CreateMetric(metricCtx, tenantID, userID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs, useCasePtr)
 		if err != nil {
 			// Log error silently to avoid blocking
 		}

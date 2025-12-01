@@ -10,6 +10,7 @@ import { useProjectsStore } from '../stores/projectsStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { TelegramAddModal } from './TelegramAddModal';
+import { RSSAddModal } from './RSSAddModal';
 import { WorkspaceToolbar } from './WorkspaceToolbar';
 import { SourceItemWithActions } from './SourceItemWithActions';
 import SourcePreview from './SourcePreview';
@@ -303,6 +304,12 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   const [tgInput, setTgInput] = React.useState('');
   const [tgSubmitting, setTgSubmitting] = React.useState(false);
   const [tgError, setTgError] = React.useState<string | null>(null);
+
+  // State for RSS modal
+  const [showAddRSSModal, setShowAddRSSModal] = React.useState(false);
+  const [rssInput, setRssInput] = React.useState('');
+  const [rssSubmitting, setRssSubmitting] = React.useState(false);
+  const [rssError, setRssError] = React.useState<string | null>(null);
   
   // Обновляем только при реальных изменениях
   React.useEffect(() => {
@@ -723,6 +730,36 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
     }
   };
 
+  // Handler for adding RSS source
+  const handleAddRSSSource = async () => {
+    if (!projectId) return;
+    setRssError(null);
+    const url = rssInput.trim();
+    if (!url) {
+      setRssError('Enter RSS feed URL');
+      return;
+    }
+    
+    setRssSubmitting(true);
+    try {
+      // Use executeDiscovery to add RSS source
+      await api.executeDiscovery({
+        projectId,
+        queryText: '', // Empty query for source-only addition
+        language: 'EN',
+        sources: { web: [], telegram: [], rss: [url] },
+      });
+      setShowAddRSSModal(false);
+      setRssInput('');
+      // Reload sources for the project (with retry logic to handle async creation)
+      handleSourceAdded();
+    } catch (e: any) {
+      setRssError(e?.message || 'Failed to add RSS feed');
+    } finally {
+      setRssSubmitting(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -739,6 +776,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
               onDocumentAdded={handleDocumentAdded}
               onSourceAdded={handleSourceAdded}
               onShowTelegramModal={() => setShowAddTelegramModal(true)}
+              onShowRSSModal={() => setShowAddRSSModal(true)}
             />
           )}
         {loading && currentProjectsWithDocs.length === 0 ? (
@@ -844,19 +882,35 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
 
       {/* Telegram Add Modal */}
       {projectId && (
-        <TelegramAddModal
-          isOpen={showAddTelegramModal}
-          onClose={() => {
-            setShowAddTelegramModal(false);
-            setTgInput('');
-            setTgError(null);
-          }}
-          input={tgInput}
-          onInputChange={setTgInput}
-          onSubmit={handleAddTelegramSource}
-          isSubmitting={tgSubmitting}
-          error={tgError}
-        />
+        <>
+          <TelegramAddModal
+            isOpen={showAddTelegramModal}
+            onClose={() => {
+              setShowAddTelegramModal(false);
+              setTgInput('');
+              setTgError(null);
+            }}
+            input={tgInput}
+            onInputChange={setTgInput}
+            onSubmit={handleAddTelegramSource}
+            isSubmitting={tgSubmitting}
+            error={tgError}
+          />
+
+          <RSSAddModal
+            isOpen={showAddRSSModal}
+            onClose={() => {
+              setShowAddRSSModal(false);
+              setRssInput('');
+              setRssError(null);
+            }}
+            input={rssInput}
+            onInputChange={setRssInput}
+            onSubmit={handleAddRSSSource}
+            isSubmitting={rssSubmitting}
+            error={rssError}
+          />
+        </>
       )}
     </>
   );

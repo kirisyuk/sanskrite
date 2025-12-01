@@ -19,7 +19,7 @@ type AITaskExecutor struct {
 	aiServices       map[AIProvider]AIService
 	modelManager     *AIModelManager
 	usageMetricsRepo interface {
-		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
+		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 	} // Wrapper to avoid circular import
 }
 
@@ -48,7 +48,7 @@ func NewAITaskExecutor(aiServices []AIService, modelManager *AIModelManager) *AI
 // WithUsageMetrics sets the usage metrics repository for tracking AI usage
 // repo should be *repo.UsageMetricsRepository but we use interface to avoid circular import
 func (e *AITaskExecutor) WithUsageMetrics(repo interface {
-	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int) (string, error)
+	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 }) *AITaskExecutor {
 	e.usageMetricsRepo = repo
 	return e
@@ -595,6 +595,58 @@ func (e *AITaskExecutor) tryFixJSON(jsonStr string) string {
 	return fixed
 }
 
+// mapTaskTypeToUseCase maps TaskType to business use case category
+func mapTaskTypeToUseCase(taskType TaskType) string {
+	switch taskType {
+	// Chat and user interactions
+	case TaskTypeContentGeneration, TaskTypeNarrativeGeneration:
+		return "chat"
+
+	// Bias analysis
+	case TaskTypeEthicsValidation, TaskTypeNecessityValidation, TaskTypeStrategicValidation:
+		return "bias_analysis"
+
+	// Frame decomposition
+	case TaskTypeActionFrameDecomposition:
+		return "frame_decomposition"
+
+	// Source processing
+	case TaskTypeSummarization, TaskTypeContentAnalysis, TaskTypeTopicSuggestion,
+		TaskTypeTrendDetection, TaskTypeAnomalyDetection, TaskTypeCrossDomainInsight,
+		TaskTypePatternEnrichment, TaskTypeContentEnhancement, TaskTypePatternAnalysis,
+		TaskTypeInsightSynthesis, TaskTypeCrossThemeAnalysis, TaskTypeSignalVerification,
+		TaskTypeInquiryAnalysis, TaskTypeZoneRefinement, TaskTypeUncertaintyResolution:
+		return "source_processing"
+
+	// Document processing
+	case TaskTypeEntityExtraction, TaskTypeArtifactExtraction, TaskTypeOntologyMapping,
+		TaskTypeOntologyNodeSuggestion, TaskTypeDomainClassification, TaskTypeReportPlanning,
+		TaskTypeKnowledgeSynthesis, TaskTypeContextPlacement, TaskTypeContextInitiation,
+		TaskTypeContextPassport, TaskTypeTextProcessing, TaskTypeConsoleInterpretation,
+		TaskTypeEntityExtractionForConn, TaskTypeContextTitleRefresh, TaskTypeContextDeduplication,
+		TaskTypeIntraEventLinking, TaskTypeContextBriefing, TaskTypeCausalLinkClassification,
+		TaskTypeBatchCausalLinkClass, TaskTypeContextAnalysis, TaskTypeSeverityAnalysis,
+		TaskTypeCountryCodeMapping, TaskTypeConnectionStrengthAnalysis, TaskTypeAliasEnrichment:
+		return "document_processing"
+
+	// Search
+	case TaskTypeSearch:
+		return "search"
+
+	// Embeddings
+	case TaskTypeEmbeddingCalculation:
+		return "embedding_calculation"
+
+	// Image analysis
+	case TaskTypeImageAnalysis:
+		return "image_analysis"
+
+	// Default fallback
+	default:
+		return "other"
+	}
+}
+
 // saveUsageMetric saves usage metrics if repository is available and task has required metadata
 // Note: We use interface{} to avoid circular import with repo package
 func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelName string, inputTokens, outputTokens int, cost float64, durationMs *int) {
@@ -636,12 +688,19 @@ func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelN
 		projectIDPtr = &task.Project
 	}
 
+	// Map TaskType to UseCase
+	useCaseStr := mapTaskTypeToUseCase(task.TaskType)
+	var useCasePtr *string
+	if useCaseStr != "" {
+		useCasePtr = &useCaseStr
+	}
+
 	// Save asynchronously to avoid blocking
 	// Use a new context with timeout to avoid cancellation from parent context
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := e.usageMetricsRepo.CreateMetric(metricCtx, task.TenantID, task.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs)
+		_, err := e.usageMetricsRepo.CreateMetric(metricCtx, task.TenantID, task.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs, useCasePtr)
 		if err != nil {
 			log.Printf("[AITaskExecutor] Failed to save usage metric: %v", err)
 		}

@@ -32,7 +32,8 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
         if (!reverseMap[server as string]) reverseMap[server as string] = [];
         reverseMap[server as string].push(local);
       });
-      const localIds = reverseMap[messageId] || [];
+      // Fix: use serverId to lookup in reverseMap
+      const localIds = reverseMap[serverId] || [];
       const interactions = getInteractions();
       return !![...interactions].reverse().find((it: any) => 
         it.subkind === 'eval.bias' && 
@@ -192,14 +193,15 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
         if (!reverseMap[server as string]) reverseMap[server as string] = [];
         reverseMap[server as string].push(local);
       });
-      const localIds = reverseMap[messageId] || [];
+      // Fix: use serverId to lookup in reverseMap, as reverseMap keys are server IDs
+      const localIds = reverseMap[serverId] || [];
       
       // Find expansion interaction linked to this message
       const interactions = getInteractions();
       const expansionInteraction = interactions.find((it) => 
         it.subkind === 'eval.frame_expansions' && 
         (it.replyTo === messageId || it.replyTo === serverId || localIds.includes(it.replyTo || '') ||
-         (it.relations && it.relations.some((r) => r.targetId === messageId || r.targetId === serverId)))
+         (it.relations && it.relations.some((r) => r.targetId === messageId || r.targetId === serverId || localIds.includes(r.targetId || ''))))
       );
       
       if (expansionInteraction) {

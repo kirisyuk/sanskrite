@@ -8,6 +8,7 @@ interface ProjectsState {
   loading: boolean;
   error: string | null;
   deletingProjectIds: string[]; // Track projects being deleted for visual feedback
+  pendingUpdates: Record<string, { data: Partial<Project>; timestamp: number }>; // Track pending updates to preserve them during fetchProjects
   
   // Actions
   fetchProjects: (view?: string) => Promise<void>;
@@ -23,12 +24,43 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   loading: false,
   error: null,
   deletingProjectIds: [],
+  pendingUpdates: {},
 
   fetchProjects: async (view?: string) => {
     set({ loading: true, error: null });
     try {
       const projects = await api.listProjects(view);
-      set({ projects, loading: false });
+      const state = get();
+      
+      // Preserve pending local updates that haven't been synced yet (within last 5 seconds)
+      const now = Date.now();
+      const updatedProjectsMap = new Map<string, Project>();
+      
+      // Process server projects and apply pending updates
+      projects.forEach((serverProject: Project) => {
+        const pendingUpdate = state.pendingUpdates[serverProject.id];
+        // Use pending update if it exists and is recent (within 10 seconds)
+        if (pendingUpdate && (now - pendingUpdate.timestamp) < 10000) {
+          // Merge pending update with server data
+          updatedProjectsMap.set(serverProject.id, { ...serverProject, ...pendingUpdate.data });
+        } else {
+          updatedProjectsMap.set(serverProject.id, serverProject);
+        }
+      });
+      
+      // Convert map to array to ensure no duplicates
+      const updatedProjects = Array.from(updatedProjectsMap.values());
+      
+      set({ projects: updatedProjects, loading: false });
+      
+      // Update currentProject if it matches one of the fetched projects
+      const currentProjectId = state.currentProject?.id;
+      if (currentProjectId) {
+        const updatedCurrentProject = updatedProjects.find((p: Project) => p.id === currentProjectId);
+        if (updatedCurrentProject) {
+          set({ currentProject: updatedCurrentProject });
+        }
+      }
     } catch (error: any) {
       // Network errors are handled by the global error interceptor
       // Only set local error for non-network issues
@@ -67,27 +99,52 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     const project = state.projects.find((p) => p.id === projectId);
     const optimisticProject = project ? { ...project, ...data } : null;
     
+    // Track this update as pending
+    const pendingUpdates = { ...state.pendingUpdates };
+    pendingUpdates[projectId] = { data, timestamp: Date.now() };
+    
     if (optimisticProject) {
       set((state) => ({
         projects: state.projects.map((p) => (p.id === projectId ? optimisticProject as Project : p)),
         currentProject: state.currentProject?.id === projectId ? optimisticProject as Project : state.currentProject,
+        pendingUpdates,
       }));
     }
     
     // Then sync with server in background
     try {
       const updatedProject = await api.updateProject(projectId, data);
+      
+      // Do not remove from pending updates immediately to prevent race conditions with fetchProjects.
+      // Instead, schedule cleanup after a delay.
+      setTimeout(() => {
+        const currentStore = useProjectsStore.getState(); // Access store directly to get latest state
+        const currentPending = currentStore.pendingUpdates[projectId];
+        // Only delete if it matches the update we initiated (by timestamp)
+        if (currentPending && currentPending.timestamp === pendingUpdates[projectId].timestamp) {
+          const nextPending = { ...currentStore.pendingUpdates };
+          delete nextPending[projectId];
+          useProjectsStore.setState({ pendingUpdates: nextPending });
+        }
+      }, 10000);
+      
       set((state) => ({
         projects: state.projects.map((p) => (p.id === projectId ? updatedProject : p)),
         currentProject: state.currentProject?.id === projectId ? updatedProject : state.currentProject,
+        // Don't update pendingUpdates here, let the timeout handle it
       }));
       return updatedProject;
     } catch (error: any) {
+      // Remove from pending updates on error immediately
+      const newPendingUpdates = { ...state.pendingUpdates };
+      delete newPendingUpdates[projectId];
+      
       // Rollback on error
       if (project) {
         set((state) => ({
           projects: state.projects.map((p) => (p.id === projectId ? project : p)),
           currentProject: state.currentProject?.id === projectId ? project : state.currentProject,
+          pendingUpdates: newPendingUpdates,
         }));
       }
       // Network errors are handled by the global error interceptor

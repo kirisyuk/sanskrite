@@ -103,7 +103,7 @@ func (c *Client) modelFrom(opts Options) string {
 	if strings.TrimSpace(opts.ModelOverride) != "" {
 		return opts.ModelOverride
 	}
-	return "grok-4-0709"
+	return "grok-4-1-fast-non-reasoning" // Default to cheapest model
 }
 
 // GenerateWithMessages generates a response with custom message history

@@ -539,6 +539,7 @@ type ExecuteDiscoveryRequest struct {
 	Sources   struct {
 		Web      []string `json:"web"`
 		Telegram []string `json:"telegram"`
+		RSS      []string `json:"rss"`
 	} `json:"sources"`
 	CorrelationID *string `json:"correlationId,omitempty"`
 }
@@ -605,6 +606,7 @@ func (h *DiscoveryHandler) ExecuteDiscovery(w http.ResponseWriter, r *http.Reque
 	// Parse and canonicalize sources
 	var webSources []string
 	var telegramSources []string
+	var rssSources []string
 
 	for _, url := range req.Sources.Web {
 		// URL canonicalization would happen here
@@ -622,8 +624,15 @@ func (h *DiscoveryHandler) ExecuteDiscovery(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	if len(webSources) == 0 && len(telegramSources) == 0 {
-		WriteBadRequest(w, "VALIDATION_ERROR", "At least one source (web or telegram) is required")
+	for _, feed := range req.Sources.RSS {
+		canonical := strings.TrimSpace(feed)
+		if canonical != "" {
+			rssSources = append(rssSources, canonical)
+		}
+	}
+
+	if len(webSources) == 0 && len(telegramSources) == 0 && len(rssSources) == 0 {
+		WriteBadRequest(w, "VALIDATION_ERROR", "At least one source (web, telegram, or rss) is required")
 		return
 	}
 
@@ -644,6 +653,7 @@ func (h *DiscoveryHandler) ExecuteDiscovery(w http.ResponseWriter, r *http.Reque
 				Language:    lang,
 				WebSources:  webSources,
 				TgHandles:   telegramSources,
+				RSSFeeds:    rssSources,
 				Correlation: correlationID,
 				OwnerUID:    authInfo.UID,
 			})
@@ -657,6 +667,7 @@ func (h *DiscoveryHandler) ExecuteDiscovery(w http.ResponseWriter, r *http.Reque
 		"sourcesCount": map[string]int{
 			"web":      len(webSources),
 			"telegram": len(telegramSources),
+			"rss":      len(rssSources),
 		},
 	}
 

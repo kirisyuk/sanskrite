@@ -135,6 +135,7 @@ class ApiClient {
     sources: {
       web: string[];
       telegram: string[];
+      rss?: string[];
     };
     correlationId?: string;
   }): Promise<{ correlationId: string }> {
@@ -1194,6 +1195,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       totalTokens: number;
       costUSD: number;
       taskType?: string;
+      useCase?: string; // Business purpose: "chat", "bias_analysis", "frame_decomposition", etc.
       kind: string;
       createdAt: string;
     }>;
