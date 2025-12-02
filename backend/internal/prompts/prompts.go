@@ -160,7 +160,7 @@ REQUIRED JSON SCHEMA:
   "keyPoints": ["string"],
   "documentType": "article|post|report|announcement|interview|transcript|other",
   "outlinks": [{"url": "string", "kind": "reference|citation|internal|external"}],
-  "events": [{"title": "string", "dateISO": "YYYY-MM-DD or RFC3339", "context": "string?"}],
+  "events": [{"title": "string", "dateISO": "YYYY-MM-DD or RFC3339", "context": "string?", "participants": [{"entityName": "string", "role": "agent|target|mediator|mentioned|beneficiary|affected|other"}]}],
   "claims": [{"text": "string", "summary": "string?", "confidence": 0.0, "evidenceUrls": ["string"]}]
 }
 

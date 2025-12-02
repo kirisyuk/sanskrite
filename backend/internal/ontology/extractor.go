@@ -185,11 +185,18 @@ type ExtractedEntity struct {
 	Confidence float64 `json:"confidence"`
 }
 
+// ExtractedEventParticipant участник события с ролью
+type ExtractedEventParticipant struct {
+	EntityName string `json:"entityName"` // имя сущности (будет сопоставлено с Entity)
+	Role       string `json:"role"`       // agent, target, mediator, mentioned, etc.
+}
+
 // ExtractedEvent извлеченное событие
 type ExtractedEvent struct {
-	Title   string  `json:"title"`
-	DateISO string  `json:"dateISO"`
-	Context *string `json:"context,omitempty"`
+	Title       string                      `json:"title"`
+	DateISO     string                      `json:"dateISO"`
+	Context     *string                     `json:"context,omitempty"`
+	Participants []ExtractedEventParticipant `json:"participants,omitempty"` // участники с ролями
 }
 
 // ExtractedClaim извлеченное утверждение
@@ -365,8 +372,37 @@ func (e *OntologyExtractor) extractEvents(
 			},
 		}
 
-		// Добавляем участников из упомянутых entities
-		if len(entityIDs) > 0 {
+		// Добавляем участников из извлеченных данных или упомянутых entities
+		if len(ext.Participants) > 0 {
+			// Используем участников из извлеченных данных с ролями
+			participants := make([]models.Participant, 0, len(ext.Participants))
+			for _, p := range ext.Participants {
+				// Ищем Entity по имени
+				entityID, found := entityIDs[p.EntityName]
+				if !found {
+					// Пробуем найти по алиасам или нормализованному имени
+					canonicalName := strings.TrimSpace(p.EntityName)
+					entityID, found = entityIDs[canonicalName]
+					if !found {
+						// Пропускаем, если entity не найдена
+						continue
+					}
+				}
+				
+				// Определяем роль (по умолчанию "mentioned", если не указана)
+				role := strings.TrimSpace(p.Role)
+				if role == "" {
+					role = "mentioned"
+				}
+				
+				participants = append(participants, models.Participant{
+					EntityID: entityID,
+					Role:     role,
+				})
+			}
+			event.Participants = participants
+		} else if len(entityIDs) > 0 {
+			// Fallback: если участники не извлечены, используем все упомянутые entities с ролью "mentioned"
 			participants := make([]models.Participant, 0, len(entityIDs))
 			for _, entityID := range entityIDs {
 				participants = append(participants, models.Participant{
