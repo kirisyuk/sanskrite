@@ -586,22 +586,22 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
 
   const getIndexedStatus = React.useCallback((doc: CoreDoc): { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string } => {
     if (!doc.storagePath) {
-      return { status: 'not_indexed', text: 'Not indexed' };
+      return { status: 'not_indexed', text: t('unfold.workspace.notIndexed') };
     }
     
     const status = currentIndexStatuses[doc.id];
     if (!status) {
-      return { status: 'unknown', text: 'Unknown' };
+      return { status: 'unknown', text: t('unfold.workspace.unknown') };
     }
     
     if (status.loading) {
-      return { status: 'loading', text: 'Checking...' };
+      return { status: 'loading', text: t('unfold.workspace.checking') };
     }
     
     return status.indexed 
-      ? { status: 'indexed', text: 'Indexed' }
-      : { status: 'not_indexed', text: 'Not indexed' };
-  }, [currentIndexStatuses]);
+      ? { status: 'indexed', text: t('unfold.workspace.indexed') }
+      : { status: 'not_indexed', text: t('unfold.workspace.notIndexed') };
+  }, [currentIndexStatuses, t]);
 
   const getBigQueryStatus = React.useCallback((doc: CoreDoc): { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string } => {
     // Check status from store - don't assume based on storagePath
@@ -609,17 +609,17 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
     
     const status = currentBigQueryStatuses[doc.id];
     if (!status) {
-      return { status: 'unknown', text: 'Unknown' };
+      return { status: 'unknown', text: t('unfold.workspace.unknown') };
     }
     
     if (status.loading) {
-      return { status: 'loading', text: 'Checking...' };
+      return { status: 'loading', text: t('unfold.workspace.checking') };
     }
     
     return status.available 
-      ? { status: 'available', text: 'Analytics Ready' }
-      : { status: 'not_available', text: 'Not Analytics Ready' };
-  }, [currentBigQueryStatuses]);
+      ? { status: 'available', text: t('unfold.workspace.available') }
+      : { status: 'not_available', text: t('unfold.workspace.notAvailable') };
+  }, [currentBigQueryStatuses, t]);
 
   const getProjectSortTimestamp = React.useCallback((project: Project, fallback: number) => {
     const parseDate = (value?: string) => (value ? Date.parse(value) : NaN);

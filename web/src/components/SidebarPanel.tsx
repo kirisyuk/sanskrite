@@ -872,7 +872,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       }
     } catch (err) {
       console.error('[SidebarPanel] Failed to create scenario', err);
-      alert('Failed to create scenario');
+      alert(t('unfold.sections.failedToCreateScenario'));
     } finally {
       setCreatingScenario(false);
     }
@@ -1078,7 +1078,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   className="text-13 font-medium"
                   style={{ color: 'var(--text-heading)' }}
                 >
-                  Scenarios
+                  {t('unfold.sections.scenarios')}
                 </h3>
               </div>
             ) : (
@@ -1444,7 +1444,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                 <div className="mb-3">
                   <button
                     type="button"
-                    aria-label="New Scenario"
+                    aria-label={t('unfold.sections.newScenario')}
                     className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
                     style={{
                       backgroundColor: 'transparent',
@@ -1488,7 +1488,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                       className="text-xs flex-1 text-left"
                       style={{ color: 'var(--text-heading)' }}
                     >
-                      New Scenario
+                      {t('unfold.sections.newScenario')}
                     </span>
                   </button>
                 </div>
@@ -1496,21 +1496,21 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   className="text-[11px] uppercase tracking-wide mb-2"
                   style={{ color: 'var(--text-tertiary-weak)' }}
                 >
-                  Scenarios ({scenarios.filter(s => !s.parentId).length})
+                  {t('unfold.sections.scenarios')} ({scenarios.filter(s => !s.parentId).length})
                 </div>
                 {scenariosLoading ? (
                   <div
                     className="text-xs"
                     style={{ color: 'var(--text-secondary-strong)' }}
                   >
-                    Loading scenarios...
+                    {t('unfold.sections.loadingScenarios')}
                   </div>
                 ) : scenarioTree.length === 0 ? (
                   <div
                     className="text-xs"
                     style={{ color: 'var(--text-secondary-strong)' }}
                   >
-                    No scenarios yet
+                    {t('unfold.sections.noScenariosYet')}
                   </div>
                 ) : (
                   <div className="space-y-1">
@@ -1789,7 +1789,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           >
             <div className="flex items-center justify-between mb-4 flex-shrink-0">
               <div className="text-lg font-medium" style={{ color: 'var(--text-heading)' }}>
-                New Scenario
+                {t('unfold.sections.newScenario')}
               </div>
               <button 
                 onClick={() => setShowNewScenarioModal(false)} 
@@ -1818,13 +1818,13 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   className="block text-sm mb-2"
                   style={{ color: 'var(--text-secondary-strong)' }}
                 >
-                  Title *
+                  {t('unfold.sections.scenarioTitle')} *
                 </label>
                 <input
                   type="text"
                   value={newScenarioTitle}
                   onChange={(e) => setNewScenarioTitle(e.target.value)}
-                  placeholder="Enter scenario title"
+                  placeholder={t('unfold.sections.scenarioTitlePlaceholder')}
                   className="w-full px-3 py-2 rounded-lg text-sm"
                   style={{
                     backgroundColor: 'var(--bg-input, #1A1A1A)',
@@ -1847,7 +1847,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   className="block text-sm mb-2"
                   style={{ color: 'var(--text-secondary-strong)' }}
                 >
-                  Parent Scenario
+                  {t('unfold.sections.parentScenario')}
                 </label>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   <label className="flex items-center gap-2 cursor-pointer py-1">
@@ -1860,7 +1860,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                       style={{ accentColor: 'var(--accent)' }}
                     />
                     <span className="text-sm" style={{ color: 'var(--text-heading)' }}>
-                      Root (no parent)
+                      {t('unfold.sections.rootNoParent')}
                     </span>
                   </label>
                   {scenarioTree.map((scenario) => {
@@ -1908,7 +1908,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                 }}
                 disabled={creatingScenario}
               >
-                Cancel
+                {t('unfold.sections.renameChatCancel')}
               </button>
               <button
                 onClick={handleCreateScenario}
@@ -1934,7 +1934,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   }
                 }}
               >
-                {creatingScenario ? 'Creating...' : 'Create'}
+                {creatingScenario ? t('unfold.sections.creating') : t('unfold.sections.create')}
               </button>
             </div>
           </div>

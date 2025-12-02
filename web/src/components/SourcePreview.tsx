@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { DataSource } from '../types/generated';
 import { api } from '../lib/api';
 import { MarkdownRenderer } from '../lib/markdownComponents';
@@ -34,6 +35,7 @@ const closeBtnStyle: React.CSSProperties = {
 };
 
 export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, style }) => {
+  const { t } = useTranslation();
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const [documents, setDocuments] = React.useState<any[]>([]);
   const [loadingDocs, setLoadingDocs] = React.useState(false);
@@ -467,7 +469,7 @@ export const SourcePreview: React.FC<SourcePreviewProps> = ({ source, onClose, s
                             fontSize: 10,
                             fontWeight: 600,
                           }}>
-                            {h.status === 'empty' ? 'no updates' : 'No new messages'}
+                            {h.status === 'empty' ? t('unfold.source.noUpdates') : t('unfold.source.noNewMessages')}
                           </span>
                         ) : (
                           <span style={{ 

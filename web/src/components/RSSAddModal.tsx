@@ -3,6 +3,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 export interface RSSAddModalProps {
   isOpen: boolean;
@@ -23,13 +24,14 @@ export const RSSAddModal: React.FC<RSSAddModalProps> = ({
   isSubmitting,
   error,
 }) => {
+  const { t } = useTranslation();
   if (!isOpen) return null;
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Add RSS Feed"
+      aria-label={t('unfold.rss.addRSSFeed')}
       className="fixed inset-0 flex items-center justify-center"
       style={{ zIndex: 50 }}
     >
@@ -59,7 +61,7 @@ export const RSSAddModal: React.FC<RSSAddModalProps> = ({
             className="text-13 font-medium"
             style={{ color: 'var(--text-heading)' }}
           >
-            Add RSS Feed
+            {t('unfold.rss.addRSSFeed')}
           </div>
         </div>
 
@@ -69,7 +71,7 @@ export const RSSAddModal: React.FC<RSSAddModalProps> = ({
             className="text-xs"
             style={{ color: 'var(--text-secondary-strong)' }}
           >
-            Enter RSS feed URL (e.g. https://example.com/feed)
+            {t('unfold.rss.enterRSSUrl')}
           </div>
           
           <div className="flex items-center gap-2">
@@ -103,7 +105,7 @@ export const RSSAddModal: React.FC<RSSAddModalProps> = ({
               type="text"
               value={input}
               onChange={(e) => onInputChange(e.target.value)}
-              placeholder="https://example.com/feed.xml"
+              placeholder={t('unfold.rss.rssUrlPlaceholder')}
               className="flex-1 bg-transparent outline-none text-sm"
               style={{ color: 'var(--text-heading)' }}
               onKeyDown={(e) => {
@@ -152,7 +154,7 @@ export const RSSAddModal: React.FC<RSSAddModalProps> = ({
                 'transparent';
             }}
           >
-            Cancel
+            {t('unfold.sections.renameChatCancel')}
           </button>
           <button
             type="button"
@@ -165,7 +167,7 @@ export const RSSAddModal: React.FC<RSSAddModalProps> = ({
               opacity: isSubmitting ? 0.7 : 1,
             }}
           >
-            {isSubmitting ? 'Adding…' : 'Add'}
+            {isSubmitting ? t('unfold.rss.adding') : t('unfold.rss.add')}
           </button>
         </div>
       </div>

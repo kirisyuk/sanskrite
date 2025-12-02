@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../contexts/AuthContext';
 import { AuthLoading } from './AuthLoading';
 import lightLogo from '../assets/hatl-light-theme.png';
@@ -18,6 +19,7 @@ const PUBLIC_DOMAINS = [
 ];
 
 const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
+  const { t } = useTranslation();
   const { user, loading, signIn, signUp, resetPassword, signInWithGoogle } = useAuth();
   const { theme } = React.useContext(ThemeContext);
   const [currentView, setCurrentView] = useState<AuthView>('login');
@@ -32,7 +34,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
   const validateEmail = (email: string): { isValid: boolean; error?: string } => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      return { isValid: false, error: 'Please enter a valid email address' };
+      return { isValid: false, error: t('unfold.auth.enterValidEmail') };
     }
 
     if (currentView === 'signup' && accountType === 'corporate') {
@@ -40,7 +42,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
       if (PUBLIC_DOMAINS.includes(domain)) {
         return { 
           isValid: false, 
-          error: 'Corporate accounts cannot use public email domains like Gmail, Yahoo, etc. Please use your company email address.' 
+          error: t('unfold.auth.corporateEmailRestriction')
         };
       }
     }
@@ -60,10 +62,10 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
         await signIn(email, password);
       } else if (currentView === 'signup') {
         if (password !== confirmPassword) {
-          throw new Error('Passwords do not match');
+          throw new Error(t('unfold.auth.passwordsDoNotMatch'));
         }
         if (password.length < 6) {
-          throw new Error('Password must be at least 6 characters long');
+          throw new Error(t('unfold.auth.passwordMinLength'));
         }
         const emailValidation = validateEmail(email);
         if (!emailValidation.isValid) {
@@ -76,12 +78,12 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
           throw new Error(emailValidation.error || 'Invalid email');
         }
         await resetPassword(email);
-        setError('Password reset email sent. Check your inbox.');
+        setError(t('unfold.auth.passwordResetSent'));
         setTimeout(() => setCurrentView('login'), 2000);
         return;
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred');
+      setError(err.message || t('unfold.auth.anErrorOccurred'));
     } finally {
       setFormLoading(false);
     }
@@ -89,18 +91,18 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
 
   const getTitle = () => {
     switch (currentView) {
-      case 'login': return 'Sign In';
-      case 'signup': return 'Create Account';
-      case 'reset': return 'Reset Password';
+      case 'login': return t('unfold.auth.signIn');
+      case 'signup': return t('unfold.auth.createAccount');
+      case 'reset': return t('unfold.auth.resetPassword');
     }
   };
 
   const getSubmitText = () => {
-    if (formLoading) return 'Please wait...';
+    if (formLoading) return t('unfold.auth.pleaseWait');
     switch (currentView) {
-      case 'login': return 'Sign In';
-      case 'signup': return 'Create Account';
-      case 'reset': return 'Send Reset Email';
+      case 'login': return t('unfold.auth.signIn');
+      case 'signup': return t('unfold.auth.createAccount');
+      case 'reset': return t('unfold.auth.sendResetEmail');
     }
   };
 
@@ -121,7 +123,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
             <p className="auth-subtitle">
               {currentView === 'login' && ''}
               {currentView === 'signup' && ''}
-              {currentView === 'reset' && 'Enter your email to reset your password'}
+              {currentView === 'reset' && t('unfold.auth.resetPasswordMessage')}
             </p>
           </div>
 
@@ -133,14 +135,14 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                 className={`auth-tab ${currentView === 'login' ? 'active' : ''}`}
                 onClick={() => setCurrentView('login')}
               >
-                Sign In
+                {t('unfold.auth.signIn')}
               </button>
               <button
                 type="button"
                 className={`auth-tab ${currentView === 'signup' ? 'active' : ''}`}
                 onClick={() => setCurrentView('signup')}
               >
-                Create Account
+                {t('unfold.auth.createAccount')}
               </button>
             </div>
           )}
@@ -154,7 +156,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="email" className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-                Email address
+                {t('unfold.auth.emailAddress')}
               </label>
               <input
                 id="email"
@@ -164,7 +166,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                 required
                 disabled={formLoading}
                 className="auth-input"
-                placeholder="Enter your email"
+                placeholder={t('unfold.auth.enterEmail')}
               />
             </div>
 
@@ -172,7 +174,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
               <>
                 <div>
                   <label htmlFor="displayName" className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-                    Display Name (Optional)
+                    {t('unfold.auth.displayName')}
                   </label>
                   <input
                     id="displayName"
@@ -181,12 +183,12 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                     onChange={(e) => setDisplayName(e.target.value)}
                     disabled={formLoading}
                     className="auth-input"
-                    placeholder="Enter your display name"
+                    placeholder={t('unfold.auth.enterDisplayName')}
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
-                    Account Type
+                    {t('unfold.auth.accountType')}
                   </label>
                   <div className="flex space-x-4">
                     <label className="flex items-center cursor-pointer">
@@ -200,7 +202,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                         className="h-4 w-4"
                         style={{ accentColor: 'var(--accent-brand)' }}
                       />
-                      <span className="ml-2 text-sm" style={{ color: 'var(--text-primary)' }}>Personal</span>
+                      <span className="ml-2 text-sm" style={{ color: 'var(--text-primary)' }}>{t('unfold.auth.personal')}</span>
                     </label>
                     <label className="flex items-center cursor-pointer">
                       <input 
@@ -213,22 +215,22 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                         className="h-4 w-4"
                         style={{ accentColor: 'var(--accent-brand)' }}
                       />
-                      <span className="ml-2 text-sm" style={{ color: 'var(--text-primary)' }}>Corporate</span>
+                      <span className="ml-2 text-sm" style={{ color: 'var(--text-primary)' }}>{t('unfold.auth.corporate')}</span>
                     </label>
                   </div>
                   <div className="mt-2 text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
                     {accountType === 'corporate' ? (
                       <div>
-                        <p>Use your company email address (public domains like Gmail are not allowed)</p>
+                        <p>{t('unfold.auth.useCompanyEmail')}</p>
                         <p className="mt-1 font-medium">
-                          Corporate accounts share data within the domain:{' '}
+                          {t('unfold.auth.corporateAccountsShare')}{' '}
                           <span style={{ color: 'var(--accent-brand)' }}>
                             {email.includes('@') ? email.split('@')[1] : '[domain]'}
                           </span>
                         </p>
                       </div>
                     ) : (
-                      <p>Personal accounts use your email as a unique workspace</p>
+                      <p>{t('unfold.auth.personalAccountsWorkspace')}</p>
                     )}
                   </div>
                 </div>
@@ -238,7 +240,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
             {currentView !== 'reset' && (
               <div>
                 <label htmlFor="password" className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-                  Password
+                  {t('unfold.auth.password')}
                 </label>
                 <input
                   id="password"
@@ -248,7 +250,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                   required
                   disabled={formLoading}
                   className="auth-input"
-                  placeholder="Enter your password"
+                  placeholder={t('unfold.auth.enterPassword')}
                 />
               </div>
             )}
@@ -256,7 +258,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
             {currentView === 'signup' && (
               <div>
                 <label htmlFor="confirmPassword" className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-                  Confirm Password
+                  {t('unfold.auth.confirmPassword')}
                 </label>
                 <input
                   id="confirmPassword"
@@ -266,7 +268,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                   required
                   disabled={formLoading}
                   className="auth-input"
-                  placeholder="Confirm your password"
+                  placeholder={t('unfold.auth.confirmPasswordPlaceholder')}
                 />
               </div>
             )}
@@ -281,7 +283,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
 
             {currentView !== 'reset' && (
               <>
-                <div className="auth-divider">or</div>
+                <div className="auth-divider">{t('unfold.auth.or')}</div>
 
                 <button
                   type="button"
@@ -291,7 +293,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                     try {
                       await signInWithGoogle();
                     } catch (err: any) {
-                      setError(err.message || 'Failed to sign in with Google');
+                      setError(err.message || t('unfold.auth.failedToSignInWithGoogle'));
                     } finally {
                       setFormLoading(false);
                     }
@@ -317,7 +319,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                       d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
                     />
                   </svg>
-                  Sign in with Google
+                  {t('unfold.auth.signInWithGoogle')}
                 </button>
               </>
             )}
