@@ -58,8 +58,34 @@ func (w *SourcePoller) PublishDue(ctx context.Context) error {
 		// For public sources (TenantID=""), we need to check all tenants
 		if !w.hasActiveProjects(ctx, ds.TenantID, ds.ID) {
 			w.logger.Printf("source poller: skipping source %s - no active projects", ds.ID)
+			// Update NextPollAt to avoid "Overdue" status and immediate retry
+			// We'll check again after the standard cadence
+			interval := cadenceToDuration(ds)
+			next := now.Add(interval)
+			ds.NextPollAt = &next
+			// We don't update LastPolledAt because we didn't actually poll content
+			if err := w.orchestrator.sources.Upsert(ctx, ds); err != nil {
+				w.logger.Printf("source poller: failed to update NextPollAt for skipped source %s: %v", ds.ID, err)
+			}
 			continue
 		}
+
+		// Check for auto-paused sources (Status="paused" AND ErrorCount >= 10)
+		// We should skip them here to avoid spamming the worker, but we must update NextPollAt
+		if ds.Status == "paused" && ds.ErrorCount >= 10 {
+			// Allow manual override if we want to retry auto-paused sources occasionally
+			// For now, strictly skip as per original logic, but update schedule
+			w.logger.Printf("source poller: skipping auto-paused source %s (errorCount: %d)", ds.ID, ds.ErrorCount)
+			// Check again much later (e.g., 6 hours) or standard cadence
+			interval := cadenceToDuration(ds)
+			next := now.Add(interval)
+			ds.NextPollAt = &next
+			if err := w.orchestrator.sources.Upsert(ctx, ds); err != nil {
+				w.logger.Printf("source poller: failed to update NextPollAt for auto-paused source %s: %v", ds.ID, err)
+			}
+			continue
+		}
+
 		// If NextPollAt is not set, set an initial estimate based on cadence
 		// This ensures sources always have a NextPollAt value
 		if ds.NextPollAt == nil {
@@ -112,7 +138,7 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 			m.Ack()
 			return
 		}
-		
+
 		// Log processing start
 		w.logger.Printf("source poller: processing message for source %s (kind: %s)", payload.SourceID, payload.Kind)
 
@@ -137,16 +163,48 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 		// Manual paused sources (Status="paused" with ErrorCount < 10) can still be processed if they have active project links
 		// Sources with Status="active" are always allowed (if they have active projects)
 		if ds.Status == "paused" && ds.ErrorCount >= 10 {
-			w.logger.Printf("source poller: skipping auto-paused source %s (errorCount: %d, requires manual reactivation)", payload.SourceID, ds.ErrorCount)
-			m.Ack()
-			return
+			// Check if we should retry anyway based on backoff schedule
+			// If NextPollAt is due, we should retry even if auto-paused, to allow recovery
+			// But if NextPollAt is not set or in future, we skip
+			if ds.NextPollAt != nil && time.Now().Before(*ds.NextPollAt) {
+				w.logger.Printf("source poller: skipping auto-paused source %s (errorCount: %d, requires manual reactivation)", payload.SourceID, ds.ErrorCount)
+				m.Ack()
+				return
+			}
+			// If due, we'll try again below, hoping error clears.
+			// If it fails again, ErrorCount increments and backoff increases.
+			w.logger.Printf("source poller: retrying auto-paused source %s (errorCount: %d)", payload.SourceID, ds.ErrorCount)
 		}
 		// Allow sources with Status="active" or Status="paused" (with ErrorCount < 10) to continue
 		// They will be checked for active projects below
+		// Determine tenantID for processing (critical for public sources to track metrics under project tenant)
+		// For public sources (ds.TenantID == ""), we need to get tenantID from active project links
+		// This ensures usage metrics are tracked under the tenant that activated the source
+		processingTenantID := payload.TenantID
+		if processingTenantID == "" && ds.TenantID == "" {
+			// Public source - get tenantID from first active project link
+			if w.orchestrator != nil && w.orchestrator.sproj != nil {
+				activeStatus := "active"
+				links, err := w.orchestrator.sproj.ListBySource(ctx, "", payload.SourceID, &activeStatus)
+				if err == nil && len(links) > 0 {
+					processingTenantID = links[0].TenantID
+					w.logger.Printf("source poller: determined tenantID=%s for public source %s from active project", processingTenantID, payload.SourceID)
+				}
+			}
+		}
+
 		// Check if source has at least one active project in rag_source_projects
 		// This is the primary activation mechanism - sources are activated per-project
 		if !w.hasActiveProjects(ctx, payload.TenantID, payload.SourceID) {
 			w.logger.Printf("source poller: skipping source %s - no active projects (status=%s, errorCount=%d)", payload.SourceID, ds.Status, ds.ErrorCount)
+			m.Ack()
+			return
+		}
+
+		// For public sources, we must have a tenantID to track metrics correctly
+		// If we still don't have one, skip processing to avoid losing metrics
+		if processingTenantID == "" && ds.TenantID == "" {
+			w.logger.Printf("source poller: skipping public source %s - cannot determine tenantID for metrics tracking (no active projects found)", payload.SourceID)
 			m.Ack()
 			return
 		}
@@ -161,9 +219,9 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 		}
 
 		// Polling is best-effort and time-bound per message
-		// Increased timeout to 3 minutes to allow processing multiple messages with embeddings
-		// Telegram ingest can process 20-30 messages, each requiring embedding which can take 1-2 seconds
-		ctxP, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		// Increased timeout to 45 minutes to allow processing large RSS feeds or multiple Telegram messages
+		// Cloud Run timeout must be set correspondingly (e.g. 3600s)
+		ctxP, cancel := context.WithTimeout(ctx, 45*time.Minute)
 		defer cancel()
 
 		// Track if ingest was attempted and succeeded
@@ -174,7 +232,7 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 		case "rss":
 			if w.orchestrator.emb != nil && w.orchestrator.providersReg != nil && w.orchestrator.docs != nil && w.orchestrator.chunks != nil {
 				ingestAttempted = true
-				pollErr = w.orchestrator.IngestRSS(ctxP, payload.TenantID, payload.SourceID, w.orchestrator.emb)
+				pollErr = w.orchestrator.IngestRSS(ctxP, processingTenantID, payload.SourceID, w.orchestrator.emb)
 			} else {
 				w.logger.Printf("source poller: skipping RSS ingest for source %s - missing dependencies (emb=%v, providersReg=%v, docs=%v, chunks=%v)",
 					payload.SourceID, w.orchestrator.emb != nil, w.orchestrator.providersReg != nil, w.orchestrator.docs != nil, w.orchestrator.chunks != nil)
@@ -191,7 +249,7 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 						if dsTg.Details.LastProcessedMessageID != nil {
 							last = *dsTg.Details.LastProcessedMessageID
 						}
-						pollErr = w.orchestrator.IngestTelegram(ctxP, payload.TenantID, payload.SourceID, *dsTg.Details.ChannelUsername, last)
+						pollErr = w.orchestrator.IngestTelegram(ctxP, processingTenantID, payload.SourceID, *dsTg.Details.ChannelUsername, last)
 					} else {
 						w.logger.Printf("source poller: skipping Telegram ingest for source %s - missing dependencies (telegram=%v, docs=%v, chunks=%v, emb=%v)",
 							payload.SourceID, w.orchestrator.telegram != nil, w.orchestrator.docs != nil, w.orchestrator.chunks != nil, w.orchestrator.emb != nil)

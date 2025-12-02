@@ -26,8 +26,8 @@ func testScenario10(
 	jobsRepo *repo.AgentJobsRepository,
 	dataSourcesRepo *repo.DataSourcesRepository,
 	sourceProjectsRepo *repo.SourceProjectsRepository,
-	telegramClient *telegram.Client,
-	publisher *realtime.Publisher,
+	_ *telegram.Client,
+	_ *realtime.Publisher,
 	fsClient *firestore.Client,
 ) {
 	fmt.Println("\n=== Test Scenario 10: Automatic Telegram Source Discovery ===")

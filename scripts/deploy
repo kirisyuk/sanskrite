@@ -1020,7 +1020,7 @@ deploy_api() {
     --max-instances=3 \
     --cpu=1 \
     --memory=512Mi \
-    --timeout=300 \
+    --timeout=3600 \
     --set-env-vars "$env_vars" \
     --set-secrets "$paypal_secrets" \
     --clear-vpc-connector \

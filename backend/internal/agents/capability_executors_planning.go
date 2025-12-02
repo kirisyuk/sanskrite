@@ -313,69 +313,6 @@ func formatCapabilities(caps []string) string {
 	return sb.String()
 }
 
-// fixInvalidJSONEscapes исправляет невалидные escape-последовательности в JSON
-// LLM иногда возвращает \' вместо ' что невалидно в JSON
-func fixInvalidJSONEscapes(content string) string {
-	// Заменяем \' на ' (невалидный escape в JSON)
-	content = strings.ReplaceAll(content, `\'`, `'`)
-	// Заменяем \` на ` (невалидный escape в JSON)
-	content = strings.ReplaceAll(content, "\\`", "`")
-	return content
-}
-
-// extractPureJSON извлекает чистый JSON объект из текста
-// Ищет первый сбалансированный JSON объект с учетом вложенности
-func extractPureJSON(content string) string {
-	if content == "" {
-		return ""
-	}
-
-	// Найти первую открывающую скобку
-	startIdx := strings.Index(content, "{")
-	if startIdx == -1 {
-		return ""
-	}
-
-	// Найти соответствующую закрывающую скобку с учетом вложенности
-	depth := 0
-	inString := false
-	escaped := false
-
-	for i := startIdx; i < len(content); i++ {
-		c := content[i]
-
-		if escaped {
-			escaped = false
-			continue
-		}
-
-		if c == '\\' && inString {
-			escaped = true
-			continue
-		}
-
-		if c == '"' {
-			inString = !inString
-			continue
-		}
-
-		if inString {
-			continue
-		}
-
-		if c == '{' {
-			depth++
-		} else if c == '}' {
-			depth--
-			if depth == 0 {
-				return content[startIdx : i+1]
-			}
-		}
-	}
-
-	return ""
-}
-
 var capabilityDescriptions = map[string]string{
 	"source_list":              "Lists current project data sources to avoid duplicates.",
 	"web_search":               "Searches the public internet for fresh information and URLs.",

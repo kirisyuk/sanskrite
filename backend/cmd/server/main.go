@@ -285,6 +285,11 @@ func main() {
 		_ = emb // wired into orchestrator when ingest endpoints are added
 		orchestrator = orchestrator.WithRAG(reg, docsRepo, chunksRepo).WithEmbedding(emb)
 
+		// Wire ingest history repository EARLY to ensure poller has access to it
+		ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
+		orchestrator = orchestrator.WithIngestHistory(ingestHistoryRepo)
+		// We also wire it to sourcesHandler later, but orchestrator needs it now
+
 		// Start SourcePoller worker (listens for source.poll events)
 		// Always enable if we have pubsub and orchestrator
 		if pub != nil {
@@ -649,10 +654,9 @@ func main() {
 		if pub != nil {
 			sourcesHandler = sourcesHandler.WithPublisher(pub)
 		}
-		// Wire ingest history repository
-		ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
+		// Wire ingest history repository (already created and wired to orchestrator above)
 		sourcesHandler = sourcesHandler.WithIngestHistory(ingestHistoryRepo)
-		orchestrator = orchestrator.WithIngestHistory(ingestHistoryRepo)
+
 		if pub != nil {
 			s.projectsHandler = s.projectsHandler.WithPublisher(pub)
 		}

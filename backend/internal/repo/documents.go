@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/firestore"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
+	"golang.org/x/time/rate"
 )
 
 type DocumentsRepository struct {
@@ -19,6 +21,8 @@ type DocumentsRepository struct {
 	storage          *gcp.GCSClient
 	bucket           string
 	useGCS           bool
+	uploadLimiter    *rate.Limiter                                                                // Rate limiter for GCS uploads to prevent 429 errors
+	limiterMu        sync.Mutex                                                                   // Mutex to protect limiter initialization
 	vertexSearchSync func(ctx context.Context, tenantID string) (operationName string, err error) // Опциональная функция синхронизации с Vertex AI Search, возвращает operationName
 	bigquerySync     *gcp.BigQueryClient                                                          // Опциональная синхронизация с BigQuery
 }
@@ -37,10 +41,16 @@ func (r *DocumentsRepository) Collection() *firestore.CollectionRef {
 }
 
 // WithStorage configures the repository to use GCS for storing document content
+// Rate limiter is set to 10 requests per second (100ms between requests) to prevent GCS 429 errors
 func (r *DocumentsRepository) WithStorage(storage *gcp.GCSClient, bucket string) *DocumentsRepository {
 	r.storage = storage
 	r.bucket = bucket
 	r.useGCS = storage != nil && bucket != ""
+	// Initialize rate limiter: 10 requests per second (allows burst of 10)
+	// This prevents hitting GCS rate limits when processing many documents in quick succession
+	if r.useGCS {
+		r.uploadLimiter = rate.NewLimiter(rate.Limit(10), 10)
+	}
 	return r
 }
 
@@ -72,9 +82,17 @@ func (r *DocumentsRepository) getStoragePath(d *models.Document) string {
 // uploadContent uploads document content to GCS and returns the storage path
 // Если файл уже существует, он будет перезаписан (GCS UploadBytes перезаписывает по умолчанию)
 // Это означает, что обновления документов автоматически синхронизируются с Vertex AI Search
+// Rate limiting is applied to prevent GCS 429 errors when processing many documents
 func (r *DocumentsRepository) uploadContent(ctx context.Context, d *models.Document) (*string, error) {
 	if !r.useGCS || d.FullText == "" {
 		return nil, nil
+	}
+	// Apply rate limiting to prevent GCS 429 errors
+	if r.uploadLimiter != nil {
+		if err := r.uploadLimiter.Wait(ctx); err != nil {
+			// If context is cancelled, return error
+			return nil, fmt.Errorf("rate limiter wait failed: %w", err)
+		}
 	}
 	objectPath := r.getObjectPath(d)
 	contentType := "text/plain"

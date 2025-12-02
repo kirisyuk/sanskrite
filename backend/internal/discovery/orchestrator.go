@@ -630,6 +630,8 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	}
 	docs, err := p.Ingest(ctx, tenantID, feedURL)
 	if err != nil {
+		// Save the original error before shadowing
+		ingestErr := err
 		// Even on error, update LastPolledAt and NextPollAt to ensure polling continues
 		if o.sources != nil {
 			if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
@@ -646,10 +648,10 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 				ds.PollBackoffSec = &b
 				next := now.Add(time.Duration(b) * time.Second)
 				ds.NextPollAt = &next
-				
+
 				// Record ingestion history error
 				if o.ingestHistory != nil {
-					errStr := err.Error()
+					errStr := ingestErr.Error()
 					// Cannot measure duration accurately here as start time wasn't captured at top of function,
 					// but this is consistent with existing pattern.
 					// Ideally we should refactor to capture start time at top.
@@ -678,10 +680,12 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 		}
 		return err
 	}
-	
+
 	startTime := time.Now().UTC() // Start timing the processing part
 	documentsCreated, err := o.processProviderDocuments(ctx, tenantID, sourceID, docs, embed)
 	if err != nil {
+		// Save the original error before shadowing
+		processErr := err
 		// Even on error, update LastPolledAt and NextPollAt to ensure polling continues
 		if o.sources != nil {
 			if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
@@ -698,10 +702,10 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 				ds.PollBackoffSec = &b
 				next := now.Add(time.Duration(b) * time.Second)
 				ds.NextPollAt = &next
-				
+
 				// Record ingestion history error (processing phase)
 				if o.ingestHistory != nil {
-					errStr := err.Error()
+					errStr := processErr.Error()
 					completedAt := time.Now().UTC()
 					_, _ = o.ingestHistory.Create(ctx, &models.SourceIngestHistory{
 						TenantID:           tenantID,
@@ -750,7 +754,6 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 			CreatedAt:          startTime,
 		})
 	}
-
 
 	// Update LastPolledAt and NextPollAt in DataSource
 	if o.sources != nil {
@@ -1697,41 +1700,41 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 	// Let's use basic List or Get by URL if we had an index, but here we might iterate or rely on ID logic?
 	// Orchestrator's FindByCanonicalSource implementation is not visible here, assuming it handles RSSURL or we should implement logic.
 	// Actually, let's assume we create new if not found or use ListByKinds filter.
-	
-	// Since FindByCanonicalSource might not support RSSURL specifically without index, 
+
+	// Since FindByCanonicalSource might not support RSSURL specifically without index,
 	// and we want to be robust, let's try to find by basic filtering if needed or just create a new one with deterministic ID/lookup.
 	// However, sticking to pattern:
-	
+
 	// Note: In previous turns, repo logic wasn't fully shown, but processWebSource uses it.
 	// We'll try to use it if it supports generic lookups, or just search by listing.
 	// Optimization: assume URL is unique enough or rely on repo.
-	
+
 	// Better: use repo to find by details.rssUrl if possible.
 	// If not exposed, we can list all RSS (expensive) or just create new and rely on idempotency if repo handles it.
 	// Let's implement "Find or Create" pattern manually if needed or trust FindByCanonicalSource.
-	
+
 	// For now, let's trust FindByCanonicalSource handles it or we fallback to creation.
 	// Actually, for RSS, the ID is usually generated or we search.
-	
+
 	// NOTE: For this implementation, we'll assume FindByCanonicalSource works for RSS or we implement a fallback search.
 	// But to be safe, let's implement a robust find.
-	
+
 	// Find existing by URL
 	existing, err := o.sources.FindByCanonicalSource(ctx, in.TenantID, feedURL)
 	if err != nil {
 		o.logger.Printf("orchestrator: FindByCanonicalSource for %s error: %v", feedURL, err)
 	}
-	
+
 	createdNew := false
 	if existing != nil {
 		o.logger.Printf("orchestrator: found existing rss source %s (id=%s) for project %s", feedURL, existing.ID, in.ProjectID)
 		ds = existing
 		ds.LastSeen = time.Now().UTC()
 		needsUpdate = true
-		
+
 		// Ensure link
 		o.ensureProjectSourceLink(ctx, in.TenantID, in.ProjectID, ds.ID)
-		
+
 		if (ds.Status == "paused" || ds.Status == "completed") && o.profiles != nil {
 			if needsUpdate {
 				_ = o.sources.Upsert(ctx, ds)
@@ -1748,7 +1751,7 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 		o.logger.Printf("orchestrator: creating new rss source %s for project %s", feedURL, in.ProjectID)
 		initialInterval := o.cadenceToDuration(nil, false)
 		initialNext := now.Add(initialInterval)
-		
+
 		ds = &models.DataSource{
 			TenantID:    "", // Public
 			Pk:          "global",
@@ -1758,7 +1761,7 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 			OwnerUserID: in.OwnerUID,
 			Details:     models.SourceDetails{RSSURL: &feedURL},
 			CreatedAt:   now, UpdatedAt: now, FirstSeen: now, LastSeen: now,
-			NextPollAt:  &initialNext,
+			NextPollAt: &initialNext,
 		}
 		if createdID, err := o.sources.Create(ctx, ds); err != nil {
 			o.logger.Printf("orchestrator: failed to create rss source %s: %v", feedURL, err)
@@ -1767,11 +1770,11 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 			o.logger.Printf("orchestrator: created rss source %s with id=%s", feedURL, createdID)
 		}
 		createdNew = true
-		
+
 		// Ensure link
 		o.ensureProjectSourceLink(ctx, in.TenantID, in.ProjectID, ds.ID)
 	}
-	
+
 	msg := map[string]interface{}{
 		"correlationId": in.Correlation,
 		"projectId":     in.ProjectID,
@@ -1785,7 +1788,7 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 		msg["hint"] = "profilingNewSource"
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryStatus, in.TenantID, msg)
-	
+
 	// Fetch content for profiling and ingest
 	// We reuse the provider to get documents
 	if o.providersReg == nil {
@@ -1796,14 +1799,14 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 	if !ok {
 		return fmt.Errorf("rss provider not registered")
 	}
-	
+
 	// Fetch docs (this does network call)
 	docs, err := p.Ingest(ctx, in.TenantID, feedURL)
 	if err != nil {
 		o.logger.Printf("orchestrator: rss fetch error for %s: %v", feedURL, err)
 		return err
 	}
-	
+
 	// Ingest them (save to DB and chunks) if dependencies available
 	if o.docs != nil && o.chunks != nil && o.emb != nil {
 		// Use tenantID from input
@@ -1815,7 +1818,7 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 			o.logger.Printf("orchestrator: ingested %d rss docs for %s", count, feedURL)
 		}
 	}
-	
+
 	// Build text blob for profiling from recent docs (limit to e.g. 10 most recent)
 	var b strings.Builder
 	// docs are typically ordered by feed order, assume most recent first or standard feed order
@@ -1831,7 +1834,7 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 		b.WriteString(d.FullText)
 		b.WriteString("\n\n")
 	}
-	
+
 	// Persist context snapshot
 	if o.interactions != nil {
 		text := b.String()
@@ -1850,23 +1853,23 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 		bb, _ := json.Marshal(ctxObj)
 		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.context", Content: string(bb)})
 	}
-	
+
 	// Profile
 	prof, err := o.profile(ctx, ds.DisplayName, b.String(), in.Language)
 	if err != nil {
 		o.logger.Printf("orchestrator: profiling error for rss %s: %v", feedURL, err)
 		return err
 	}
-	
+
 	ds.Status = "paused"
 	if err := o.sources.Upsert(ctx, ds); err != nil {
 		return err
 	}
-	
+
 	if o.profiles != nil {
 		_ = o.profiles.Upsert(ctx, &models.SourceProfile{ID: ds.ID, TenantID: "", DataSourceID: ds.ID, SchemaVersion: "1.0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Profile: *prof})
 	}
-	
+
 	// Persist profile summary
 	if o.interactions != nil {
 		summary := summarizeProfile(prof)
@@ -1881,11 +1884,11 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 		b2, _ := json.Marshal(obj)
 		_, _ = o.interactions.Create(ctx, &repo.Interaction{TenantID: in.TenantID, ProjectID: in.ProjectID, Kind: "discovery.profile", Content: string(b2)})
 	}
-	
+
 	o.publishEvent(ctx, realtime.EventDiscoveryProfile, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
 		"projectId":     in.ProjectID, "sourceId": ds.ID, "profile": prof})
-		
+
 	return nil
 }
 

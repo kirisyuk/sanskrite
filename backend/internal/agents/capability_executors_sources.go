@@ -315,17 +315,18 @@ func (e *SourceCreateExecutor) ValidateInput(input map[string]interface{}) error
 	}
 
 	// Проверка обязательных полей в зависимости от kind
-	if kind == "telegram_channel" {
+	switch kind {
+	case "telegram_channel":
 		channelUsername, ok := input["channelUsername"].(string)
 		if !ok || channelUsername == "" {
 			return fmt.Errorf("channelUsername is required for telegram_channel kind")
 		}
-	} else if kind == "rss" {
+	case "rss":
 		rssURL, ok := input["rssUrl"].(string)
 		if !ok || rssURL == "" {
 			return fmt.Errorf("rssUrl is required for rss kind")
 		}
-	} else if kind == "web" {
+	case "web":
 		uri, ok := input["uri"].(string)
 		if !ok || uri == "" {
 			return fmt.Errorf("uri is required for web kind")
@@ -345,14 +346,15 @@ func (e *SourceCreateExecutor) Execute(ctx context.Context, stepCtx *AgentStepCo
 
 	// Построить SourceDetails
 	details := models.SourceDetails{}
-	if kind == "telegram_channel" {
+	switch kind {
+	case "telegram_channel":
 		channelUsername, _ := stepCtx.Input["channelUsername"].(string)
 		channelUsername = strings.TrimPrefix(strings.TrimSpace(channelUsername), "@")
 		details.ChannelUsername = &channelUsername
-	} else if kind == "rss" {
+	case "rss":
 		rssURL, _ := stepCtx.Input["rssUrl"].(string)
 		details.RSSURL = &rssURL
-	} else if kind == "web" {
+	case "web":
 		uri, _ := stepCtx.Input["uri"].(string)
 		details.URI = &uri
 	}
@@ -1149,14 +1151,6 @@ JSON SCHEMA:
 }
 
 // Helper functions
-
-func formatStepsForPrompt(steps []map[string]interface{}) string {
-	if len(steps) == 0 {
-		return "No completed steps yet."
-	}
-	b, _ := json.MarshalIndent(steps, "", "  ")
-	return string(b)
-}
 
 func formatAvailableCapabilities(registry *CapabilityRegistry) string {
 	capabilities := registry.List()
