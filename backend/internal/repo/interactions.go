@@ -32,10 +32,10 @@ type InteractionMetadata struct {
 
 // ResearchProgress represents progress state for research interactions
 type ResearchProgress struct {
-	Stage       string   `json:"stage" firestore:"stage"`       // planning|searching|generating
-	Status      string   `json:"status" firestore:"status"`     // in_progress|completed
-	SubQueries  []string `json:"subQueries,omitempty" firestore:"subQueries,omitempty"`
-	SourcesCount *int    `json:"sourcesCount,omitempty" firestore:"sourcesCount,omitempty"`
+	Stage        string   `json:"stage" firestore:"stage"`   // planning|searching|generating
+	Status       string   `json:"status" firestore:"status"` // in_progress|completed
+	SubQueries   []string `json:"subQueries,omitempty" firestore:"subQueries,omitempty"`
+	SourcesCount *int     `json:"sourcesCount,omitempty" firestore:"sourcesCount,omitempty"`
 }
 
 // ResearchSource represents a research source with metadata
@@ -46,12 +46,12 @@ type ResearchSource struct {
 }
 
 type Interaction struct {
-	ID               string  `json:"id" firestore:"id"`
-	TenantID         string  `json:"tenantId" firestore:"tenantId"`
-	ProjectID        string  `json:"projectId" firestore:"projectId"`
-	Kind             string  `json:"kind" firestore:"kind"` // e.g., "discovery.answer", "ontology"
-	Subkind          *string `json:"subkind,omitempty" firestore:"subkind,omitempty"` // For ontology: "entity", "event", "claim", "relation", "concept", "metricState", "trend", "causalLink", "scenario", "actionableItem", "layout" (UI state)
-	Content          string  `json:"content" firestore:"content"` // For ontology: full entity JSON (final state, not operation)
+	ID        string  `json:"id" firestore:"id"`
+	TenantID  string  `json:"tenantId" firestore:"tenantId"`
+	ProjectID string  `json:"projectId" firestore:"projectId"`
+	Kind      string  `json:"kind" firestore:"kind"`                           // e.g., "discovery.answer", "ontology"
+	Subkind   *string `json:"subkind,omitempty" firestore:"subkind,omitempty"` // For ontology: "entity", "event", "claim", "relation", "concept", "metricState", "trend", "causalLink", "scenario", "actionableItem", "layout" (UI state)
+	Content   string  `json:"content" firestore:"content"`                     // For ontology: full entity JSON (final state, not operation)
 	// Ontology-specific: entity ID extracted from content.id for deduplication
 	// Interactions store final states only - no operation field needed
 	OntologyEntityID *string `json:"ontologyEntityId,omitempty" firestore:"ontologyEntityId,omitempty"` // Entity ID from content (for quick lookup/deduplication)
@@ -89,24 +89,24 @@ type Interaction struct {
 		Triggers  []string `json:"triggers,omitempty" firestore:"triggers,omitempty"`
 	} `json:"highRisk,omitempty" firestore:"highRisk,omitempty"`
 	DiscussionFacts *struct {
-		Dependencies      *string `json:"dependencies,omitempty" firestore:"dependencies,omitempty"`           // What the decision/action depends on
-		Prerequisites     *string `json:"prerequisites,omitempty" firestore:"prerequisites,omitempty"`         // What must happen first
-		Participants      *string `json:"participants,omitempty" firestore:"participants,omitempty"`          // Who is involved (user, family, colleagues, clients)
-		ParticipantRoles  *string `json:"participantRoles,omitempty" firestore:"participantRoles,omitempty"`  // Roles and relationships between participants
+		Dependencies       *string `json:"dependencies,omitempty" firestore:"dependencies,omitempty"`             // What the decision/action depends on
+		Prerequisites      *string `json:"prerequisites,omitempty" firestore:"prerequisites,omitempty"`           // What must happen first
+		Participants       *string `json:"participants,omitempty" firestore:"participants,omitempty"`             // Who is involved (user, family, colleagues, clients)
+		ParticipantRoles   *string `json:"participantRoles,omitempty" firestore:"participantRoles,omitempty"`     // Roles and relationships between participants
 		AvailableResources *string `json:"availableResources,omitempty" firestore:"availableResources,omitempty"` // Not only constraints, but what is available
-		PreviousAttempts  *string `json:"previousAttempts,omitempty" firestore:"previousAttempts,omitempty"` // Previous attempts or experience
-		ResultFormat      *string `json:"resultFormat,omitempty" firestore:"resultFormat,omitempty"`         // Format of desired result
+		PreviousAttempts   *string `json:"previousAttempts,omitempty" firestore:"previousAttempts,omitempty"`     // Previous attempts or experience
+		ResultFormat       *string `json:"resultFormat,omitempty" firestore:"resultFormat,omitempty"`             // Format of desired result
 	} `json:"discussionFacts,omitempty" firestore:"discussionFacts,omitempty"`
-	OriginalMessageID *string   `json:"originalMessageId,omitempty" firestore:"originalMessageId,omitempty"`
-	CoreDocIDs        []string  `json:"coreDocIds,omitempty" firestore:"coreDocIds,omitempty"`
-	SearchQueries     []string  `json:"searchQueries,omitempty" firestore:"searchQueries,omitempty"`
-	Sources           []string  `json:"sources,omitempty" firestore:"sources,omitempty"`
+	OriginalMessageID *string  `json:"originalMessageId,omitempty" firestore:"originalMessageId,omitempty"`
+	CoreDocIDs        []string `json:"coreDocIds,omitempty" firestore:"coreDocIds,omitempty"`
+	SearchQueries     []string `json:"searchQueries,omitempty" firestore:"searchQueries,omitempty"`
+	Sources           []string `json:"sources,omitempty" firestore:"sources,omitempty"`
 	// Research-specific fields (optional, for research interactions)
 	ResearchQuery    *string           `json:"researchQuery,omitempty" firestore:"researchQuery,omitempty"`
-	ResearchProgress *ResearchProgress  `json:"researchProgress,omitempty" firestore:"researchProgress,omitempty"`
-	SubQueries       []string          `json:"subQueries,omitempty" firestore:"subQueries,omitempty"` // For research.result
-	ResearchSources  []ResearchSource   `json:"researchSources,omitempty" firestore:"researchSources,omitempty"` // For research.result
-	CreatedAt         time.Time `json:"createdAt" firestore:"createdAt"`
+	ResearchProgress *ResearchProgress `json:"researchProgress,omitempty" firestore:"researchProgress,omitempty"`
+	SubQueries       []string          `json:"subQueries,omitempty" firestore:"subQueries,omitempty"`           // For research.result
+	ResearchSources  []ResearchSource  `json:"researchSources,omitempty" firestore:"researchSources,omitempty"` // For research.result
+	CreatedAt        time.Time         `json:"createdAt" firestore:"createdAt"`
 }
 
 // UsageMeta captures token usage and related counters reported by providers
@@ -148,6 +148,29 @@ func (r *InteractionsRepository) Update(ctx context.Context, id string, updates 
 	delete(updates, "tenantId")
 	delete(updates, "projectId")
 	delete(updates, "createdAt")
+
+	// For nested objects like metadata, we need to merge them properly
+	// Get current document to merge nested fields
+	if metadata, ok := updates["metadata"].(map[string]interface{}); ok {
+		// Get current interaction to merge metadata properly
+		current, err := r.Get(ctx, id)
+		if err == nil && current != nil && current.Metadata != nil {
+			// Merge current metadata with updates
+			currentMeta := map[string]interface{}{}
+			if current.Metadata.Pinned != nil {
+				currentMeta["pinned"] = *current.Metadata.Pinned
+			}
+			if len(current.Metadata.Notes) > 0 {
+				currentMeta["notes"] = current.Metadata.Notes
+			}
+			// Apply updates to current metadata
+			for k, v := range metadata {
+				currentMeta[k] = v
+			}
+			updates["metadata"] = currentMeta
+		}
+	}
+
 	_, err := r.col.Doc(id).Set(ctx, updates, firestore.MergeAll)
 	return err
 }

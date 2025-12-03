@@ -359,8 +359,9 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 		}},
 	}
 	// Добавить response_mime_type для JSON output
-	gc := map[string]interface{}{
-		"response_mime_type": "application/json",
+	gc := map[string]interface{}{}
+	if len(tools) == 0 {
+		gc["response_mime_type"] = "application/json"
 	}
 	if opts.MaxOutputTokens > 0 {
 		gc["max_output_tokens"] = opts.MaxOutputTokens
@@ -368,7 +369,9 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 	if opts.Temperature > 0 {
 		gc["temperature"] = opts.Temperature
 	}
-	reqBody["generationConfig"] = gc
+	if len(gc) > 0 {
+		reqBody["generationConfig"] = gc
+	}
 	// response_schema is not supported on this endpoint; enforce JSON via response_mime_type only
 	toolsPayload := make([]map[string]interface{}, 0)
 	if len(tools) > 0 {
@@ -529,11 +532,13 @@ func (c *Client) GenerateConversation(ctx context.Context, contents []map[string
 		if opts.Temperature > 0 {
 			gc["temperature"] = opts.Temperature
 		}
-		switch opts.ResponseFormat {
-		case "json":
-			gc["response_mime_type"] = "application/json"
-		case "text":
-			gc["response_mime_type"] = "text/plain"
+		if len(tools) == 0 {
+			switch opts.ResponseFormat {
+			case "json":
+				gc["response_mime_type"] = "application/json"
+			case "text":
+				gc["response_mime_type"] = "text/plain"
+			}
 		}
 		if len(gc) > 0 {
 			reqBody["generationConfig"] = gc
@@ -609,11 +614,13 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 		if opts.Temperature > 0 {
 			gc["temperature"] = opts.Temperature
 		}
-		switch opts.ResponseFormat {
-		case "json":
-			gc["response_mime_type"] = "application/json"
-		case "text":
-			gc["response_mime_type"] = "text/plain"
+		if len(tools) == 0 {
+			switch opts.ResponseFormat {
+			case "json":
+				gc["response_mime_type"] = "application/json"
+			case "text":
+				gc["response_mime_type"] = "text/plain"
+			}
 		}
 		if len(gc) > 0 {
 			reqBody["generationConfig"] = gc

@@ -52,19 +52,19 @@ func (r *ProjectScenariosRepository) ListByProject(ctx context.Context, tenantID
 	// documents where the field is missing (which is common for root scenarios)
 	q := r.col.Where("tenantId", "==", tenantID).Where("projectId", "==", projectID)
 	q = q.OrderBy("order", firestore.Asc).OrderBy("createdAt", firestore.Asc)
-	
+
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var scenarios []*models.ProjectScenario
 	for _, d := range docs {
 		var s models.ProjectScenario
 		if err := d.DataTo(&s); err != nil {
 			continue
 		}
-		
+
 		// Filter by parentId if specified
 		if parentID != nil {
 			if *parentID == "" {
@@ -92,12 +92,12 @@ func (r *ProjectScenariosRepository) ListByParent(ctx context.Context, tenantID,
 		Where("parentId", "==", parentID).
 		OrderBy("order", firestore.Asc).
 		OrderBy("createdAt", firestore.Asc)
-	
+
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var scenarios []*models.ProjectScenario
 	for _, d := range docs {
 		var s models.ProjectScenario
@@ -139,7 +139,7 @@ func (r *ProjectScenariosRepository) DeleteByProject(ctx context.Context, tenant
 	if err != nil {
 		return err
 	}
-	
+
 	// Delete all scenarios recursively (including children)
 	for _, s := range scenarios {
 		if err := r.DeleteRecursive(ctx, s.ID); err != nil {
@@ -156,20 +156,20 @@ func (r *ProjectScenariosRepository) DeleteRecursive(ctx context.Context, id str
 	if err != nil {
 		return err
 	}
-	
+
 	// Get all children
 	children, err := r.ListByParent(ctx, scenario.TenantID, id)
 	if err != nil {
 		return err
 	}
-	
+
 	// Delete children recursively
 	for _, child := range children {
 		if err := r.DeleteRecursive(ctx, child.ID); err != nil {
 			return err
 		}
 	}
-	
+
 	// Delete this scenario
 	return r.Delete(ctx, id)
 }
@@ -183,4 +183,3 @@ func (r *ProjectScenariosRepository) CountByProject(ctx context.Context, tenantI
 	}
 	return len(docs), nil
 }
-

@@ -43,13 +43,8 @@ import { UserPositionAnalysis } from '../components/UserPositionAnalysis';
 import { LLMEvaluation } from '../components/LLMEvaluation';
 import { DiscussionFlow } from '../components/DiscussionFlow';
 import { TextTasksPanel, TextTask } from '../components/TextTasksPanel';
-import { ExperimentalResponsePanel } from '../components/ExperimentalResponsePanel';
 import { ModelGraph, useModelGraphHasNodes } from '../components/ModelGraph';
 import { ModelProcessingIndicator } from '../components/ModelProcessingIndicator';
-import {
-  generateExperimentalResponse,
-  ExperimentalResponse,
-} from '../lib/experimentalResponse';
 // TitleSuggestions removed - title generation now handled automatically in genaiChatStore.onDone
 import {
   toggleInteractionPin,
@@ -94,7 +89,6 @@ import { ArtifactsPanelToolbar } from '../components/ArtifactsPanelToolbar';
 import { ContextPanel } from '../components/ContextPanel';
 import { WorkspacePanel } from '../components/WorkspacePanel';
 import { AnalysisPanel } from '../components/AnalysisPanel';
-import { ExperimentalPanel } from '../components/ExperimentalPanel';
 import { useSourcesManagement } from '../hooks/useSourcesManagement';
 import { useProjectsManagement } from '../hooks/useProjectsManagement';
 import { usePanelsManagement } from '../hooks/usePanelsManagement';
@@ -362,7 +356,7 @@ const DiscoveryPage: React.FC = () => {
   );
   const genaiChatHydrating = useGenaiChatStore((state) => state.hydrating);
   const genaiChatStreaming = useGenaiChatStore((state) => state.streaming);
-  // Track only user interactions count to avoid triggering experimental response on every interaction update
+  // Track only user interactions count
   const userInteractionsCount = useGenaiChatStore(
     (state) =>
       state.interactions.filter((it: any) => it.kind === 'user').length,
@@ -516,10 +510,6 @@ const DiscoveryPage: React.FC = () => {
   
   // Destructure chat management
   const {
-    experimentalResponse,
-    setExperimentalResponse,
-    experimentalLoading,
-    setExperimentalLoading,
     queuedTasks,
     textTasks,
     textTasksApplying,
@@ -656,47 +646,6 @@ const DiscoveryPage: React.FC = () => {
   }, [projectId]); // Removed hydrateInteractions from dependencies - use getState() instead
 
 
-  // Track new user messages and generate experimental response when panel is open
-  // FIXED: Only trigger on actual new user messages, not on every interaction update
-  React.useEffect(() => {
-    if (rightPanelType !== 'experimental') return;
-    
-    const interactions = getInteractions();
-    const userInteractions = interactions.filter(
-      (it: any) => it.kind === 'user',
-    );
-    if (userInteractions.length === 0) return;
-    
-    const lastUserInteraction = userInteractions[userInteractions.length - 1];
-    const messageId = lastUserInteraction.id;
-    
-    // Skip if already processed or if no content
-    if (
-      !messageId ||
-      messageId === lastUserMessageIdRef.current ||
-      !lastUserInteraction.content?.trim()
-    ) {
-      return;
-    }
-    
-    // Generate experimental response for new user message
-    lastUserMessageIdRef.current = messageId;
-    setExperimentalLoading(true);
-    
-    generateExperimentalResponse(lastUserInteraction.content, messageId)
-      .then((response) => {
-        if (response) {
-          setExperimentalResponse(response);
-        }
-      })
-      .catch((error) => {
-        console.error('[ExperimentalResponse] Failed to generate', error);
-      })
-      .finally(() => {
-        setExperimentalLoading(false);
-      });
-  }, [userInteractionsCount, rightPanelType, getInteractions]);
-  
   // Track pinned status changes by subscribing to a hash of pinned interaction IDs
   // This ensures pinnedInteractions updates even when interactions array length doesn't change
   const pinnedIdsHash = useGenaiChatStore((s) => {
@@ -3577,8 +3526,6 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
           queuedTasks={queuedTasks}
           onApplyTasks={handleApplyTasks}
           textTasksApplying={textTasksApplying}
-          experimentalResponse={experimentalResponse}
-          experimentalLoading={experimentalLoading}
           sectionStarts={sectionStarts}
           pinnedInteractions={pinnedInteractions}
           messagesRef={messagesRef}

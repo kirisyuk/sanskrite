@@ -313,7 +313,7 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		if modelAlias == "" {
 			modelAlias = "gemini_fast" // fallback
 		}
-		
+
 		// Convert alias to actual model name for response
 		actualModelName := gen_combined.ConvertAliasToModel(modelAlias)
 
@@ -1242,7 +1242,6 @@ func parseUpstreamError(err error) (int, string, string, interface{}) {
 	return http.StatusBadGateway, "GENAI_ERROR", s, map[string]any{"raw": s}
 }
 
-
 // saveUsageMetric saves a usage metric record
 // durationMs is optional (can be nil if timing not available)
 func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req gen_combined.GenAIRequest, resp gen_combined.GenAIResponse, projectID *string, interactionID *string, durationMs *int) error {
@@ -1254,7 +1253,7 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 	// resp.Model might contain an alias (e.g., "gemini_fast") instead of actual model name (e.g., "gemini-2.5-flash-lite")
 	actualModelName := gen_combined.ConvertAliasToModel(resp.Model)
 	log.Printf("[saveUsageMetric] Model mapping: req.Model=%q, resp.Model=%q, actualModelName=%q", req.Model, resp.Model, actualModelName)
-	
+
 	// Determine provider from actual model name
 	provider := h.determineProvider(actualModelName)
 
@@ -1285,14 +1284,14 @@ func (h *GenAIHandler) saveUsageMetric(ctx context.Context, auth *AuthInfo, req 
 		InteractionID: interactionID,
 		Provider:      provider,
 		Model:         actualModelName, // Use actual model name, not alias
-		ModelAlias:    modelAlias,     // Store the alias separately
+		ModelAlias:    modelAlias,      // Store the alias separately
 		InputTokens:   resp.Usage.PromptTokens,
 		OutputTokens:  resp.Usage.OutputTokens,
 		TotalTokens:   resp.Usage.TotalTokens,
 		CostUSD:       cost,
 		DurationMs:    durationMs,
 		TaskType:      nil,        // Can be set from context if needed
-		UseCase:       &useCase,    // Chat use case for user conversations
+		UseCase:       &useCase,   // Chat use case for user conversations
 		Kind:          "included", // Default to included, can be changed based on plan
 	}
 

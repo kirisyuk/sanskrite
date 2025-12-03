@@ -131,14 +131,11 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            <path
-              d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <circle cx="12" cy="10" r="3" strokeWidth={2} />
+            <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
         </button>
       )}
@@ -160,18 +157,15 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
         >
-          <path
-            d="M9 21h6M12 3a6 6 0 0 1 6 6c0 2.5-1.5 4.5-3 6l-1 1H9l-1-1c-1.5-1.5-3-3.5-3-6a6 6 0 0 1 6-6z"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M9 8h6M9 12h4"
-            strokeWidth={2}
-            strokeLinecap="round"
-          />
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+          <polyline points="10 9 9 9 8 9" />
         </svg>
       </button>
 
@@ -196,43 +190,12 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
             strokeLinecap="round"
             strokeLinejoin="round"
           >
-            <line x1="12" y1="20" x2="12" y2="10" />
-            <line x1="18" y1="20" x2="18" y2="4" />
-            <line x1="6" y1="20" x2="6" y2="16" />
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
           </svg>
         </button>
       )}
-
-      {/* Experimental Response button */}
-      <button
-        type="button"
-        aria-label="Experimental Response"
-        title="Experimental Response"
-        onClick={() => handleButtonClick('experimental')}
-        className="rounded-lg flex items-center justify-center transition-all duration-300"
-        style={getRightPanelButtonStyle(rightPanelType === 'experimental')}
-        onMouseEnter={(e) => handleMouseEnter(e, rightPanelType === 'experimental')}
-        onMouseLeave={(e) => handleMouseLeave(e, rightPanelType === 'experimental')}
-      >
-        <svg
-          className="w-4 h-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-        >
-          <path
-            d="M9 2v6l-3 3v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-8l-3-3V2"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M9 2h6M12 10v4"
-            strokeWidth={2}
-            strokeLinecap="round"
-          />
-        </svg>
-      </button>
 
       {/* Pending Actions button - shows if there are queued tasks */}
       {hasQueuedTasks && (

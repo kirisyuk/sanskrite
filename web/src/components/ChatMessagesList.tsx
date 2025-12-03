@@ -1,7 +1,6 @@
 import React from 'react';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { handleEditTextDirect } from '../lib/textEditHandler';
-import { findEvalBiasInteraction } from '../lib/interactionHelpers';
 import { parseGraphData } from '../lib/graphDataParser';
 import { applyEditHighlight } from '../lib/editHighlight';
 import ChatMessage from './ChatMessage';
@@ -14,7 +13,6 @@ import { AgentExecutionInteraction } from './AgentExecutionInteraction';
 import { MessageActions } from './MessageActions';
 import { CollapsibleText } from './CollapsibleText';
 import { MarkdownRenderer } from '../lib/markdownComponents';
-import { EvaluationDetails } from './EvaluationDetails';
 import ChatGraphMessage from './ChatGraphMessage';
 import { ActionRow } from './ActionRow';
 import { ThinkingPlaceholder } from './ThinkingPlaceholder';
@@ -222,24 +220,6 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                           }}
                         />
                       </CollapsibleText>
-                      {/* Lightweight action row for USER: only evaluation, no buttons */}
-                      {(() => {
-                        try {
-                          const evalNode = findEvalBiasInteraction(
-                            it.id,
-                            genaiChat.interactions,
-                            genaiChat.persistedByLocalId || {},
-                          );
-                          if (!evalNode) return null;
-                          return (
-                            <div className="mt-1">
-                              <EvaluationDetails messageId={it.id} />
-                            </div>
-                          );
-                        } catch {
-                          return null;
-                        }
-                      })()}
                     </>
                   ) : (
                     <>
@@ -482,7 +462,8 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                         </>
                       )}
                       {/* Tags row: per-interaction chips for assistant - BEFORE ActionRow/EvaluationDetails */}
-                      {!isUser && !isError &&
+                      {/* Sources hidden for assistant messages - now shown in ActionRow */}
+                      {false && !isUser && !isError &&
                         (() => {
                           try {
                             const perQ = Array.isArray(

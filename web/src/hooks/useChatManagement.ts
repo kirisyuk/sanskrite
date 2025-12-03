@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
-import { generateExperimentalResponse, ExperimentalResponse } from '../lib/experimentalResponse';
 import { TextTask } from '../components/TextTasksPanel';
 import type { QueuedTask } from '../types/queuedTasks';
 import {
@@ -130,9 +129,6 @@ export function useAnalysisManagement() {
 }
 
 export function useChatManagement() {
-  const [experimentalResponse, setExperimentalResponse] = useState<ExperimentalResponse | null>(null);
-  const [experimentalLoading, setExperimentalLoading] = useState(false);
-  const lastUserMessageIdRef = useRef<string | null>(null);
   const [queuedTasks, setQueuedTasks] = useState<QueuedTask[]>([]);
   const [textTasksApplying, setTextTasksApplying] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
@@ -154,9 +150,6 @@ export function useChatManagement() {
     if (!projectId || projectId === 'local-unfold') {
       setQueuedTasks([]);
       setTextTasksApplying(false);
-      setExperimentalResponse(null);
-      setExperimentalLoading(false);
-      lastUserMessageIdRef.current = null;
       return;
     }
 
@@ -173,9 +166,6 @@ export function useChatManagement() {
         setTasksLoading(false);
       });
 
-    setExperimentalResponse(null);
-    setExperimentalLoading(false);
-    lastUserMessageIdRef.current = null;
   }, [projectId]);
 
   // Sync queued tasks when interactions change (in case queued.tasks interaction was updated externally)
@@ -204,44 +194,6 @@ export function useChatManagement() {
     }
   }, [projectId, interactionsLength, genaiChat.interactions, tasksLoading]);
 
-  // Track new user messages and generate experimental response when panel is open
-  useEffect(() => {
-    const rightPanelType = null; // This should come from props or context
-    if (rightPanelType !== 'experimental') return;
-    
-    const interactions = getInteractions();
-    const userInteractions = interactions.filter(
-      (it: any) => it.kind === 'user',
-    );
-    if (userInteractions.length === 0) return;
-    
-    const lastUserInteraction = userInteractions[userInteractions.length - 1];
-    const messageId = lastUserInteraction.id;
-    
-    if (
-      !messageId ||
-      messageId === lastUserMessageIdRef.current ||
-      !lastUserInteraction.content?.trim()
-    ) {
-      return;
-    }
-    
-    lastUserMessageIdRef.current = messageId;
-    setExperimentalLoading(true);
-    
-    generateExperimentalResponse(lastUserInteraction.content, messageId)
-      .then((response) => {
-        if (response) {
-          setExperimentalResponse(response);
-        }
-      })
-      .catch((error) => {
-        console.error('[ExperimentalResponse] Failed to generate', error);
-      })
-      .finally(() => {
-        setExperimentalLoading(false);
-      });
-  }, [userInteractionsCount, getInteractions]);
 
   const handleAddTextTask = useCallback(async (task: TextTask) => {
     if (!projectId || projectId === 'local-unfold') return;
@@ -484,10 +436,6 @@ export function useChatManagement() {
   }, [queuedTasks]);
 
   return {
-    experimentalResponse,
-    setExperimentalResponse,
-    experimentalLoading,
-    setExperimentalLoading,
     queuedTasks,
     textTasks, // Filtered text tasks for backward compatibility
     textTasksApplying,

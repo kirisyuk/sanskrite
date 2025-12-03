@@ -125,10 +125,10 @@ func ConvertAliasToModel(alias string) string {
 	if alias == "" {
 		return alias
 	}
-	
+
 	// Normalize alias using canonicalizeAlias
 	normalized := canonicalizeAlias(alias)
-	
+
 	// Map aliases to actual model names (same as normalizeOptionsFor* functions)
 	aliasMap := map[string]string{
 		// Gemini
@@ -139,7 +139,7 @@ func ConvertAliasToModel(alias string) string {
 		// OpenAI
 		"gpt_fast":     "gpt-5-nano",
 		"gpt_balanced": "gpt-5-mini",
-		"gpt_quality":   "gpt-5.1",
+		"gpt_quality":  "gpt-5.1",
 		// Grok
 		"grok_fast":     "grok-4-1-fast-non-reasoning",
 		"grok_balanced": "grok-4-1-fast-reasoning",
@@ -152,11 +152,11 @@ func ConvertAliasToModel(alias string) string {
 		"deepseek_fast":    "deepseek-chat",
 		"deepseek_quality": "deepseek-reasoner",
 	}
-	
+
 	if actualModel, ok := aliasMap[normalized]; ok {
 		return actualModel
 	}
-	
+
 	// If not an alias, return as-is (might already be a real model name)
 	return alias
 }

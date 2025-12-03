@@ -240,22 +240,15 @@ export const MessageItem = React.memo<MessageItemProps>(({
             </div>
           )}
           
-          {/* Action row: shows bias if available, else only buttons (assistant only) */}
-          {!isUser && (
-            <ActionRow
-              messageId={m.id}
-              isAssistant={!isUser}
-              content={m.content}
-            />
-          )}
+          {/* Action row: shows bias button and other actions */}
+          <ActionRow
+            messageId={m.id}
+            isAssistant={!isUser}
+            content={m.content}
+          />
           
-          {/* Show bias for user messages if available */}
-          {isUser && genaiChat.evaluations?.[m.id] && (
-            <EvaluationDetails messageId={m.id} />
-          )}
-          
-          {/* Tags row: per-message chips */}
-          {messageTags && (
+          {/* Tags row: per-message chips - hidden for assistant messages (sources now shown in ActionRow) */}
+          {messageTags && isUser && (
             <MessageTags
               messageId={m.id}
               queries={messageTags.queries}

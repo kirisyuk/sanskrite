@@ -183,6 +183,7 @@ const resources = {
           artifacts: 'Artifacts',
           agentInvoked: 'Agent invoked',
           youMightConsider: 'You might consider',
+          alternativeOpinion: 'Alternative opinion',
         },
         evidenceBuilder: {
           sourcesUsed: 'Sources Used:',
@@ -226,11 +227,11 @@ const resources = {
           showLess: 'Less...',
         },
         bias: {
-          neutral: 'Neutral position',
-          balanced: 'Balanced position',
-          subjective: 'Subjective position',
-          oneSided: 'One-sided position',
-          biased: 'Biased position',
+          neutral: 'Neutral',
+          balanced: 'Balanced',
+          subjective: 'Subjective',
+          oneSided: 'One-sided',
+          biased: 'Biased',
           tags: {
             confirmation_bias: 'Confirmation bias',
             selection_bias: 'Selection bias',
@@ -253,7 +254,7 @@ const resources = {
             availability_bias: 'The tendency to overestimate the likelihood of events with greater "availability" in memory, which can be influenced by how recent or emotionally charged memories are.',
             cultural_bias: 'The tendency to interpret and judge phenomena in terms particular to one\'s own culture, assuming one\'s own cultural norms are universal or superior.',
             geo_linguistic_bias: 'Prejudice or preference based on geographic location or linguistic background, leading to stereotyping or discrimination against certain regions or language groups.',
-            authority_bias: 'The tendency to attribute greater accuracy to the opinion of an authority figure and be more influenced by their viewpoint, regardless of the content.',
+            authority_bias: 'The tendency to attribute greater accuracy to the viewpoint of an authority figure and be more influenced by their perspective, regardless of the content.',
             safety_over_caution_skew: 'An excessive preference for safety measures or conservative approaches that may outweigh balanced risk assessment, potentially leading to over-cautious decisions.',
             overclaiming: 'Making assertions or claims that go beyond what can be supported by the available evidence, often with unwarranted confidence.',
             overgeneralization: 'Drawing broad conclusions from limited evidence or applying a pattern observed in a small sample to all cases without sufficient justification.',
@@ -753,6 +754,7 @@ const resources = {
           artifacts: 'Артефакты',
           agentInvoked: 'Вызван агент',
           youMightConsider: 'Вы можете рассмотреть',
+          alternativeOpinion: 'Альтернативное мнение',
         },
         evidenceBuilder: {
           sourcesUsed: 'Источники:',
@@ -796,11 +798,11 @@ const resources = {
           showLess: 'Меньше...',
         },
         bias: {
-          neutral: 'Нейтральная позиция',
-          balanced: 'Взвешенная позиция',
-          subjective: 'Субъективная позиция',
-          oneSided: 'Односторонняя позиция',
-          biased: 'Предвзятая позиция',
+          neutral: 'Нейтрально',
+          balanced: 'Взвешенно',
+          subjective: 'Субъективно',
+          oneSided: 'Односторонне',
+          biased: 'Предвзято',
           tags: {
             confirmation_bias: 'Подтверждающее предубеждение',
             selection_bias: 'Смещённая выборка',

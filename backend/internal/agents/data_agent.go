@@ -936,7 +936,7 @@ func (a *DataAgent) saveUsageMetric(_ context.Context, agentCtx *AgentContext, m
 	// Convert model alias to actual model name if needed
 	// modelName might contain an alias (e.g., "gemini_fast") instead of actual model name (e.g., "gemini-2.5-flash-lite")
 	actualModelName := gen_combined.ConvertAliasToModel(modelName)
-	
+
 	// Determine provider from actual model name (similar to genai.go)
 	provider := a.determineProvider(actualModelName)
 

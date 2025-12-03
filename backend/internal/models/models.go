@@ -33,9 +33,9 @@ const (
 type ExecutionStatus string
 
 const (
-	ExecutionStatusSuccess    ExecutionStatus = "success"      // Полный успех
-	ExecutionStatusPartial    ExecutionStatus = "partial"      // Частичный успех (нужны дополнительные шаги)
-	ExecutionStatusFailed     ExecutionStatus = "failed"       // Провал
+	ExecutionStatusSuccess     ExecutionStatus = "success"      // Полный успех
+	ExecutionStatusPartial     ExecutionStatus = "partial"      // Частичный успех (нужны дополнительные шаги)
+	ExecutionStatusFailed      ExecutionStatus = "failed"       // Провал
 	ExecutionStatusRetryNeeded ExecutionStatus = "retry_needed" // Требуется повторная попытка
 )
 
@@ -52,9 +52,9 @@ const (
 
 // AgentStep представляет один шаг выполнения агента
 type AgentStep struct {
-	ID         string                 `json:"id" firestore:"id"`
-	Capability string                 `json:"capability" firestore:"capability"` // Тип capability (например, "document_read")
-	Status     AgentStepStatus        `json:"status" firestore:"status"`         // "pending", "running", "completed", "failed", "skipped"
+	ID         string          `json:"id" firestore:"id"`
+	Capability string          `json:"capability" firestore:"capability"` // Тип capability (например, "document_read")
+	Status     AgentStepStatus `json:"status" firestore:"status"`         // "pending", "running", "completed", "failed", "skipped"
 
 	Input  map[string]interface{} `json:"input,omitempty" firestore:"input,omitempty"`   // Входные данные шага
 	Output map[string]interface{} `json:"output,omitempty" firestore:"output,omitempty"` // Результат шага
@@ -70,29 +70,29 @@ type AgentStep struct {
 
 	// Метаданные
 	Message    string `json:"message,omitempty" firestore:"message,omitempty"` // Сообщение о прогрессе
-	IsCritical bool   `json:"isCritical" firestore:"isCritical"`              // Критичный шаг (сбой = остановка job)
+	IsCritical bool   `json:"isCritical" firestore:"isCritical"`               // Критичный шаг (сбой = остановка job)
 
 	// Детализированный статус выполнения
-	ExecutionStatus ExecutionStatus `json:"executionStatus,omitempty" firestore:"executionStatus,omitempty"` // "success" | "partial" | "failed" | "retry_needed"
-	Confidence      *float64        `json:"confidence,omitempty" firestore:"confidence,omitempty"`            // Уверенность в результате (0.0-1.0)
-	Retryable       bool            `json:"retryable" firestore:"retryable"`                                  // Можно ли повторить шаг
-	AlternativeCapabilities []string `json:"alternativeCapabilities,omitempty" firestore:"alternativeCapabilities,omitempty"` // Альтернативные capabilities
-	Reason          string          `json:"reason,omitempty" firestore:"reason,omitempty"`                     // Причина успеха/неудачи
+	ExecutionStatus         ExecutionStatus `json:"executionStatus,omitempty" firestore:"executionStatus,omitempty"`                 // "success" | "partial" | "failed" | "retry_needed"
+	Confidence              *float64        `json:"confidence,omitempty" firestore:"confidence,omitempty"`                           // Уверенность в результате (0.0-1.0)
+	Retryable               bool            `json:"retryable" firestore:"retryable"`                                                 // Можно ли повторить шаг
+	AlternativeCapabilities []string        `json:"alternativeCapabilities,omitempty" firestore:"alternativeCapabilities,omitempty"` // Альтернативные capabilities
+	Reason                  string          `json:"reason,omitempty" firestore:"reason,omitempty"`                                   // Причина успеха/неудачи
 }
 
 // AgentJob представляет задачу агента с историей шагов
 type AgentJob struct {
-	ID        string                 `json:"id" firestore:"id"`
-	TenantID  string                 `json:"tenantId" firestore:"tenantId"`
-	ProjectID string                 `json:"projectId" firestore:"projectId"`
-	UserID    string                 `json:"userId" firestore:"userId"`
-	AgentID   string                 `json:"agentId" firestore:"agentId"` // ID агента (например, "document_preparation")
-	Title     string                 `json:"title,omitempty" firestore:"title,omitempty"` // Название задачи (по аналогии с Project.displayName)
+	ID        string `json:"id" firestore:"id"`
+	TenantID  string `json:"tenantId" firestore:"tenantId"`
+	ProjectID string `json:"projectId" firestore:"projectId"`
+	UserID    string `json:"userId" firestore:"userId"`
+	AgentID   string `json:"agentId" firestore:"agentId"`                 // ID агента (например, "document_preparation")
+	Title     string `json:"title,omitempty" firestore:"title,omitempty"` // Название задачи (по аналогии с Project.displayName)
 
-	Status   AgentJobStatus          `json:"status" firestore:"status"`   // "pending", "running", "completed", "failed", "partial"
-	Progress float64                 `json:"progress" firestore:"progress"` // 0.0 - 1.0
+	Status   AgentJobStatus `json:"status" firestore:"status"`     // "pending", "running", "completed", "failed", "partial"
+	Progress float64        `json:"progress" firestore:"progress"` // 0.0 - 1.0
 
-	Task   map[string]interface{} `json:"task" firestore:"task"`   // Исходная задача
+	Task   map[string]interface{} `json:"task" firestore:"task"`                         // Исходная задача
 	Result map[string]interface{} `json:"result,omitempty" firestore:"result,omitempty"` // Финальный результат
 
 	Steps []AgentStep `json:"steps" firestore:"steps"` // История шагов
@@ -105,15 +105,15 @@ type AgentJob struct {
 	AutoMode bool `json:"autoMode" firestore:"autoMode"` // true = полностью автоматический, false = требует подтверждения шагов
 
 	// Планирование
-	UserQuery      string                 `json:"userQuery" firestore:"userQuery"`           // Исходный запрос на естественном языке
-	Intent         map[string]interface{} `json:"intent,omitempty" firestore:"intent,omitempty"`      // Понимание намерения (LLM)
-	Goal           map[string]interface{} `json:"goal,omitempty" firestore:"goal,omitempty"`           // Целевой результат (LLM)
-	PlanMode       PlanMode               `json:"planMode" firestore:"planMode"`                       // "auto" | "manual" | "hybrid"
+	UserQuery string                 `json:"userQuery" firestore:"userQuery"`               // Исходный запрос на естественном языке
+	Intent    map[string]interface{} `json:"intent,omitempty" firestore:"intent,omitempty"` // Понимание намерения (LLM)
+	Goal      map[string]interface{} `json:"goal,omitempty" firestore:"goal,omitempty"`     // Целевой результат (LLM)
+	PlanMode  PlanMode               `json:"planMode" firestore:"planMode"`                 // "auto" | "manual" | "hybrid"
 
 	// Репланирование
-	ReplanTriggered bool       `json:"replanTriggered" firestore:"replanTriggered"`          // Был ли запущен репланинг
-	ReplanCount     int         `json:"replanCount" firestore:"replanCount"`                  // Количество репланов
-	LastReplanAt    *time.Time  `json:"lastReplanAt,omitempty" firestore:"lastReplanAt,omitempty"`     // Время последнего реплана
+	ReplanTriggered bool       `json:"replanTriggered" firestore:"replanTriggered"`               // Был ли запущен репланинг
+	ReplanCount     int        `json:"replanCount" firestore:"replanCount"`                       // Количество репланов
+	LastReplanAt    *time.Time `json:"lastReplanAt,omitempty" firestore:"lastReplanAt,omitempty"` // Время последнего реплана
 
 	// Interaction для отображения в чате
 	InteractionID string `json:"interactionId,omitempty" firestore:"interactionId,omitempty"` // ID interaction для отображения выполнения в чате
@@ -600,8 +600,10 @@ type WaitlistEntry struct {
 type ProjectType string
 
 const (
-	ProjectTypeStudio ProjectType = "studio"
-	// Future types can be added here, e.g., ProjectTypeWorkspace, ProjectTypeResearch
+	ProjectTypeStudio   ProjectType = "studio"
+	ProjectTypePersonal ProjectType = "personal"
+	ProjectTypeTeam     ProjectType = "team"
+	ProjectTypeResearch ProjectType = "research"
 )
 
 // Project соответствует Core.Projects
@@ -705,7 +707,7 @@ type ArtifactConfig struct {
 	Versions            []ArtifactVersion          `json:"versions" firestore:"versions"`                                           // version history (sorted by timestamp desc)
 	StructureGeneration *StructureGenerationConfig `json:"structureGeneration,omitempty" firestore:"structureGeneration,omitempty"` // how structure was created
 	GenerationSettings  GenerationSettings         `json:"generationSettings" firestore:"generationSettings"`                       // generation settings
-	UserRequest         *string                    `json:"userRequest,omitempty" firestore:"userRequest,omitempty"`                   // original user request/requirements for the document
+	UserRequest         *string                    `json:"userRequest,omitempty" firestore:"userRequest,omitempty"`                 // original user request/requirements for the document
 }
 
 // ArtifactSection defines a section of the artifact with its generation config
@@ -1077,25 +1079,25 @@ type Voucher struct {
 // ProjectScenario represents a scenario within a project
 // Scenarios can be organized hierarchically (parent-child relationships)
 type ProjectScenario struct {
-	ID          string    `json:"id" firestore:"id"`
-	TenantID    string    `json:"tenantId" firestore:"tenantId"`
-	ProjectID   string    `json:"projectId" firestore:"projectId"` // Parent project
-	ParentID    *string   `json:"parentId,omitempty" firestore:"parentId,omitempty"` // Optional parent scenario for hierarchy
-	
-	Title       string    `json:"title" firestore:"title"`
-	Description *string   `json:"description,omitempty" firestore:"description,omitempty"`
-	Status      string    `json:"status" firestore:"status"` // active, draft, archived
-	
+	ID        string  `json:"id" firestore:"id"`
+	TenantID  string  `json:"tenantId" firestore:"tenantId"`
+	ProjectID string  `json:"projectId" firestore:"projectId"`                   // Parent project
+	ParentID  *string `json:"parentId,omitempty" firestore:"parentId,omitempty"` // Optional parent scenario for hierarchy
+
+	Title       string  `json:"title" firestore:"title"`
+	Description *string `json:"description,omitempty" firestore:"description,omitempty"`
+	Status      string  `json:"status" firestore:"status"` // active, draft, archived
+
 	// Order within parent (for sorting)
-	Order       int       `json:"order" firestore:"order"`
-	
+	Order int `json:"order" firestore:"order"`
+
 	// Metadata
-	Tags        []string  `json:"tags,omitempty" firestore:"tags,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty" firestore:"labels,omitempty"` // lang -> string
-	
+	Tags   []string          `json:"tags,omitempty" firestore:"tags,omitempty"`
+	Labels map[string]string `json:"labels,omitempty" firestore:"labels,omitempty"` // lang -> string
+
 	// Timestamps
-	CreatedAt   time.Time `json:"createdAt" firestore:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt" firestore:"updatedAt"`
-	CreatedBy   string    `json:"createdBy" firestore:"createdBy"` // User ID
-	UpdatedBy   string    `json:"updatedBy" firestore:"updatedBy"` // User ID
+	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
+	CreatedBy string    `json:"createdBy" firestore:"createdBy"` // User ID
+	UpdatedBy string    `json:"updatedBy" firestore:"updatedBy"` // User ID
 }

@@ -5,13 +5,12 @@ import { ArtifactsPanelToolbar } from './ArtifactsPanelToolbar';
 import { WorkspacePanel } from './WorkspacePanel';
 import { AnalysisPanel } from './AnalysisPanel';
 import FindingsPanel from './FindingsPanel';
-import { ExperimentalPanel } from './ExperimentalPanel';
 import { ContextPanel } from './ContextPanel';
 import { PendingActionsPanel } from './PendingActionsPanel';
 import { ModelContextPanel } from './ModelContextPanel';
 
 interface RightDrawerProps {
-  rightPanelType: 'workspace' | 'artifacts' | 'experimental' | 'analysis' | 'context' | 'pending-actions' | 'model-context' | null;
+  rightPanelType: 'workspace' | 'artifacts' | 'analysis' | 'context' | 'pending-actions' | 'model-context' | null;
   viewMode: string;
   showAccount: boolean;
   showSettings: boolean;
@@ -47,9 +46,6 @@ interface RightDrawerProps {
   queuedTasks?: any[];
   onApplyTasks?: (taskIds: string[]) => void;
   textTasksApplying?: boolean;
-  // Experimental panel props
-  experimentalResponse: any;
-  experimentalLoading: boolean;
   // Context panel props
   sectionStarts: any[];
   pinnedInteractions: any[];
@@ -91,8 +87,6 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
   queuedTasks = [],
   onApplyTasks,
   textTasksApplying = false,
-  experimentalResponse,
-  experimentalLoading,
   sectionStarts,
   pinnedInteractions,
   messagesRef,
@@ -284,9 +278,7 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                   >
                     {rightPanelType === 'artifacts'
                       ? 'Workspace Artifacts'
-                      : rightPanelType === 'experimental'
-                        ? 'Experimental Response'
-                        : rightPanelType === 'analysis'
+                      : rightPanelType === 'analysis'
                           ? t('unfold.sections.analysis')
                           : rightPanelType === 'context'
                             ? t('unfold.sections.contextNavigation', {
@@ -392,16 +384,6 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                 {rightPanelType === 'artifacts' && (
                   <div style={getPanelVisibilityStyles(true)}>
                     <FindingsPanel projectId={genaiChat.projectId} />
-                  </div>
-                )}
-
-                {/* Experimental Response Panel */}
-                {rightPanelType === 'experimental' && (
-                  <div style={getPanelVisibilityStyles(true)}>
-                    <ExperimentalPanel
-                      response={experimentalResponse}
-                      loading={experimentalLoading}
-                    />
                   </div>
                 )}
 

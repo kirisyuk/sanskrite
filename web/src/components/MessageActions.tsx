@@ -14,11 +14,15 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
   interaction,
 }) => {
   const genaiChat = useGenaiChatStore();
-  const isPinned = !isUser && isInteractionPinned(interaction);
   const [isDeleteHovered, setIsDeleteHovered] = React.useState(false);
   const [isPinning, setIsPinning] = React.useState(false);
   const [optimisticPinned, setOptimisticPinned] = React.useState<boolean | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  
+  // Recalculate isPinned whenever interaction changes
+  const isPinned = React.useMemo(() => {
+    return !isUser && isInteractionPinned(interaction);
+  }, [isUser, interaction?.metadata?.pinned]);
   
   // Use optimistic state if available, otherwise use actual state
   const displayPinned = optimisticPinned !== null ? optimisticPinned : isPinned;
@@ -42,25 +46,32 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
     // Optimistic update: show new state immediately
     setOptimisticPinned(newPinnedState);
     
-    try {
-      await toggleInteractionPin(
-        genaiChat.projectId,
-        interactionId,
-        isPinned,
-      );
-      // Refresh interactions to update pin state
-      await genaiChat.hydrateInteractions();
-      // Clear optimistic state after successful update
-      setOptimisticPinned(null);
-    } catch (e) {
+    // Send request in background, don't wait for it
+    toggleInteractionPin(
+      genaiChat.projectId,
+      interactionId,
+      isPinned,
+    ).then(() => {
+      setIsPinning(false);
+      // Don't clear optimistic state immediately - let it persist until store updates
+      // The store will be updated via WebSocket or next hydrateInteractions
+      // We'll clear optimistic state when real state matches (via useEffect below)
+    }).catch((e) => {
       // Revert optimistic update on error
       setOptimisticPinned(null);
+      setIsPinning(false);
       alert('Failed to toggle pin. Please try again.');
       console.error('[Pin] Error:', e);
-    } finally {
-      setIsPinning(false);
-    }
+    });
   };
+
+  // Clear optimistic state when real state matches optimistic state
+  React.useEffect(() => {
+    if (optimisticPinned !== null && optimisticPinned === isPinned) {
+      // Real state now matches optimistic state, clear optimistic
+      setOptimisticPinned(null);
+    }
+  }, [optimisticPinned, isPinned]);
 
   const handleDelete = async () => {
     const targetName = isUser ? 'user message' : 'assistant response';

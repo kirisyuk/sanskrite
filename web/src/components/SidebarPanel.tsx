@@ -146,10 +146,10 @@ const ProjectRow = React.memo<{
         </>
       ) : (
         <>
-          {/* Studio icon for Studio projects */}
+          {/* Project type icons */}
           {project.projectType === 'studio' && (
             <div
-              className="flex-shrink-0 w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold"
+              className="flex-shrink-0 w-4 h-4 rounded-sm flex items-center justify-center text-[10px] font-bold"
               style={{
                 backgroundColor: '#40E0D0', // Turquoise
                 color: '#000',
@@ -157,6 +157,42 @@ const ProjectRow = React.memo<{
               title="Studio Project"
             >
               S
+            </div>
+          )}
+          {project.projectType === 'personal' && (
+            <div
+              className="flex-shrink-0 w-4 h-4 rounded-sm flex items-center justify-center text-[10px] font-bold"
+              style={{
+                backgroundColor: '#9B59B6', // Purple
+                color: '#FFF',
+              }}
+              title="Personal Project"
+            >
+              P
+            </div>
+          )}
+          {project.projectType === 'team' && (
+            <div
+              className="flex-shrink-0 w-4 h-4 rounded-sm flex items-center justify-center text-[10px] font-bold"
+              style={{
+                backgroundColor: '#3498DB', // Blue
+                color: '#FFF',
+              }}
+              title="Team Project"
+            >
+              T
+            </div>
+          )}
+          {project.projectType === 'research' && (
+            <div
+              className="flex-shrink-0 w-4 h-4 rounded-sm flex items-center justify-center text-[10px] font-bold"
+              style={{
+                backgroundColor: '#E67E22', // Orange
+                color: '#FFF',
+              }}
+              title="Research Project"
+            >
+              R
             </div>
           )}
           <span

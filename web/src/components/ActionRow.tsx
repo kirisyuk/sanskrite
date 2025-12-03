@@ -8,6 +8,7 @@ import { AGENT_PRESETS } from '../lib/agentPresets';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
 import { HATL_ONE_INSTRUCTIONS } from '../lib/hatlInstructions';
 import { getPreferredLanguage, getLanguageName, getAnchorRect, getSxSystemInstructionFull } from '../lib/uiUtils';
+import { ThemeContext } from './ThemeProvider';
 
 // Action row under assistant messages: shows bias details when available,
 // otherwise shows action buttons (Bring In, Copy) immediately after message
@@ -17,30 +18,41 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
   const persistedByLocalId = useGenaiChatStore((s) => (s as any).persistedByLocalId);
   const messageMeta = useGenaiChatStore((s) => s.messageMeta);
   const projectId = useGenaiChatStore((s) => s.projectId);
+  const evaluations = useGenaiChatStore((s) => (s as any).evaluations);
   
   // Get interactions only when needed via getState()
   const getInteractions = React.useCallback(() => useGenaiChatStore.getState().interactions, []);
   
   const { t } = useTranslation();
+  const { theme } = React.useContext(ThemeContext);
   const hasEvalBias = React.useMemo(() => {
+    // Check genaiChat.evaluations first (for user messages)
+    if (evaluations && evaluations[messageId]) {
+      return true;
+    }
+    // Then check interactions with subkind 'eval.bias'
     try {
       const map = persistedByLocalId || {};
-      const serverId = map[messageId];
-      // Build reverse map for bidirectional lookup
-      const reverseMap: Record<string, string[]> = {};
+      // Determine reliable server ID
+      const effectiveServerId = map[messageId] || messageId;
+      
+      // Collect all known IDs for this message (local, server, mapped)
+      const targetIds = new Set<string>();
+      targetIds.add(messageId);
+      if (effectiveServerId) targetIds.add(effectiveServerId);
+      
+      // Add all local IDs that map to the server ID
       Object.entries(map).forEach(([local, server]) => {
-        if (!reverseMap[server as string]) reverseMap[server as string] = [];
-        reverseMap[server as string].push(local);
+        if (server === effectiveServerId) targetIds.add(local);
       });
-      // Fix: use serverId to lookup in reverseMap
-      const localIds = reverseMap[serverId] || [];
+      
       const interactions = getInteractions();
       return !![...interactions].reverse().find((it: any) => 
         it.subkind === 'eval.bias' && 
-        (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
+        targetIds.has(it.replyTo || '')
       );
     } catch { return false; }
-  }, [getInteractions, interactionsLength, persistedByLocalId, messageId]);
+  }, [evaluations, getInteractions, interactionsLength, persistedByLocalId, messageId]);
   const settings = useGenAISettings();
   const [showBringIn, setShowBringIn] = React.useState(false);
   const [showAsk, setShowAsk] = React.useState(false);
@@ -51,6 +63,12 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
   const [paletteBringOpen, setPaletteBringOpen] = React.useState(false);
   const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
   const exportRef = React.useRef<HTMLDivElement | null>(null);
+  const [showReframe, setShowReframe] = React.useState(false);
+  const [showSources, setShowSources] = React.useState(false);
+  const [showBiasDetails, setShowBiasDetails] = React.useState(false);
+  const [showAlternativeAgents, setShowAlternativeAgents] = React.useState(false);
+  const alternativeAgentsRef = React.useRef<HTMLDivElement | null>(null);
+  const reframeRef = React.useRef<HTMLDivElement | null>(null);
   const interForMessage = React.useMemo(() => {
     try {
       const interactions = getInteractions();
@@ -133,6 +151,89 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
     document.addEventListener('mousedown', onDocClick, { capture: true });
     return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
   }, [exportMenuOpen]);
+  React.useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!showAlternativeAgents) return;
+      const el = alternativeAgentsRef.current;
+      if (el && !el.contains(e.target as Node)) setShowAlternativeAgents(false);
+    };
+    document.addEventListener('mousedown', onDocClick, { capture: true });
+    return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
+  }, [showAlternativeAgents]);
+  // Auto-scroll to reframe content when it expands
+  React.useEffect(() => {
+    if (!showReframe || !reframeRef.current) return;
+    // Use requestAnimationFrame to ensure DOM is updated
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (reframeRef.current) {
+            // Find the scrollable container (messages container)
+            const scrollableContainer = reframeRef.current.closest('[class*="overflow-y-auto"], [style*="overflow-y"]') as HTMLElement | null;
+            if (scrollableContainer) {
+              const reframeRect = reframeRef.current.getBoundingClientRect();
+              const containerRect = scrollableContainer.getBoundingClientRect();
+              // Check if reframe content is below visible area or partially visible
+              const isBelowViewport = reframeRect.bottom > containerRect.bottom;
+              const isAboveViewport = reframeRect.top < containerRect.top;
+              if (isBelowViewport || isAboveViewport) {
+                // Scroll to show the entire reframe content
+                reframeRef.current.scrollIntoView({
+                  behavior: 'smooth',
+                  block: 'nearest',
+                  inline: 'nearest',
+                });
+              }
+            } else {
+              // Fallback: use scrollIntoView on the element itself
+              reframeRef.current.scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest',
+                inline: 'nearest',
+              });
+            }
+          }
+        }, 50); // Small delay to ensure content is fully rendered
+      });
+    });
+  }, [showReframe]);
+  // Auto-scroll to alternative agents list when it expands
+  React.useEffect(() => {
+    if (!showAlternativeAgents || !alternativeAgentsRef.current) return;
+    // Use requestAnimationFrame to ensure DOM is updated
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (alternativeAgentsRef.current) {
+            // Find the scrollable container (messages container)
+            const scrollableContainer = alternativeAgentsRef.current.closest('[class*="overflow-y-auto"], [style*="overflow-y"]') as HTMLElement | null;
+            if (scrollableContainer) {
+              const agentsRect = alternativeAgentsRef.current.getBoundingClientRect();
+              const containerRect = scrollableContainer.getBoundingClientRect();
+              // Check if agents list is below visible area or partially visible
+              const isBelowViewport = agentsRect.bottom > containerRect.bottom;
+              const isAboveViewport = agentsRect.top < containerRect.top;
+              if (isBelowViewport || isAboveViewport) {
+                // Scroll to show the entire agents list
+                alternativeAgentsRef.current.scrollIntoView({
+                  behavior: 'smooth',
+                  block: 'nearest',
+                  inline: 'nearest',
+                });
+              }
+            } else {
+              // Fallback: use scrollIntoView on the element itself
+              alternativeAgentsRef.current.scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest',
+                inline: 'nearest',
+              });
+            }
+          }
+        }, 50); // Small delay to ensure content is fully rendered
+      });
+    });
+  }, [showAlternativeAgents]);
 
   const exportMarkdown = React.useCallback(async () => {
     try {
@@ -179,7 +280,9 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
       console.error('Failed to export to DOCX:', error);
     }
   }, [content, projectId, derivedHeaderText]);
-  if (!isAssistant || !content || !content.trim()) return null;
+  // For user messages, only show ActionRow if there's bias evaluation
+  // For assistant messages, show full ActionRow
+  if (!content || !content.trim()) return null;
   
   // Get frame expansions from interactions with subkind 'eval.frame_expansions'
   const frameExpansions = React.useMemo(() => {
@@ -222,17 +325,230 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
     }
   }, [getInteractions, interactionsLength, messageId, persistedByLocalId]);
   
+  // Get sources and search queries from interactions
+  const messageSources = React.useMemo(() => {
+    try {
+      const map = persistedByLocalId || {};
+      const serverId = map[messageId] || messageId;
+      
+      // Build reverse map for bidirectional lookup
+      const reverseMap: Record<string, string[]> = {};
+      Object.entries(map).forEach(([local, server]) => {
+        if (!reverseMap[server as string]) reverseMap[server as string] = [];
+        reverseMap[server as string].push(local);
+      });
+      const localIds = reverseMap[serverId] || [];
+      
+      // Find interaction linked to this message
+      const interactions = getInteractions();
+      const interaction = interactions.find((it) => 
+        (it.id === messageId || it.id === serverId || localIds.includes(it.id || '') ||
+         (it as any).originalMessageId === messageId || (it as any).originalMessageId === serverId)
+      ) as any;
+      
+      if (!interaction) return { queries: [], sources: [] };
+      
+      const perQ = Array.isArray(interaction.searchQueries) 
+        ? interaction.searchQueries.filter(Boolean)
+        : [];
+      const perS = Array.isArray(interaction.sources)
+        ? interaction.sources.filter(Boolean)
+        : [];
+      
+      return {
+        queries: perQ,
+        sources: perS.map((url: string) => ({ url })),
+      };
+    } catch {
+      return { queries: [], sources: [] };
+    }
+  }, [getInteractions, interactionsLength, messageId, persistedByLocalId]);
+  
+  // Get bias evaluation data for button color
+  const biasData = React.useMemo(() => {
+    if (!hasEvalBias) return null;
+    try {
+      // First check genaiChat.evaluations (for user messages)
+      if (evaluations && evaluations[messageId]) {
+        const ev = evaluations[messageId];
+        const level = Math.max(0, Math.min(1, Number(ev.biasLevel || 0)));
+        const hue = Math.round(120 * (1 - level));
+        const fill = theme === 'light' 
+          ? `hsl(${hue}, 70%, 50%)`
+          : `hsl(${hue}, 60%, 70%)`;
+        const bucketLabel = level <= 0.2 
+          ? 'neutral'
+          : level <= 0.4
+          ? 'balanced'
+          : level <= 0.6
+          ? 'subjective'
+          : level <= 0.8
+          ? 'oneSided'
+          : 'biased';
+        return { level, fill, bucketLabel };
+      }
+      
+      // Then check interactions with subkind 'eval.bias'
+      const map = persistedByLocalId || {};
+      // Determine reliable server ID
+      const effectiveServerId = map[messageId] || messageId;
+      
+      // Collect all known IDs for this message
+      const targetIds = new Set<string>();
+      targetIds.add(messageId);
+      if (effectiveServerId) targetIds.add(effectiveServerId);
+      
+      // Add all local IDs that map to the server ID
+      Object.entries(map).forEach(([local, server]) => {
+        if (server === effectiveServerId) targetIds.add(local);
+      });
+      
+      const interactions = getInteractions();
+      const found = [...interactions].reverse().find((it: any) => 
+        it.subkind === 'eval.bias' && 
+        targetIds.has(it.replyTo || '')
+      );
+      if (!found) return null;
+      try {
+        const ev = JSON.parse((found as any).content || (found as any).contentSanitized || '{}');
+        const level = Math.max(0, Math.min(1, Number(ev.biasLevel || 0)));
+        const hue = Math.round(120 * (1 - level));
+        // Use more saturated and darker color for light theme, lighter for dark theme
+        const fill = theme === 'light' 
+          ? `hsl(${hue}, 70%, 50%)`  // More saturated, darker for light theme
+          : `hsl(${hue}, 60%, 70%)`; // Lighter for dark theme
+        const bucketLabel = level <= 0.2 
+          ? 'neutral'
+          : level <= 0.4
+          ? 'balanced'
+          : level <= 0.6
+          ? 'subjective'
+          : level <= 0.8
+          ? 'oneSided'
+          : 'biased';
+        return { level, fill, bucketLabel };
+      } catch {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+  }, [hasEvalBias, evaluations, getInteractions, interactionsLength, messageId, persistedByLocalId, theme]);
+  
+  const hasReframeContent = frameExpansions && frameExpansions.length > 0;
+  const hasSources = (messageSources.queries.length > 0 || messageSources.sources.length > 0);
+  
   return (
-    <div className="mt-1" style={{ width: '100%', position: 'relative' }}>
-      <div className="flex items-center gap-2">
-        {hasEvalBias && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <EvaluationDetails messageId={messageId} />
-          </div>
+    <div className="mt-3" style={{ width: '100%', position: 'relative' }}>
+      <div className="flex items-start gap-2">
+        {hasEvalBias && biasData && (
+          <button
+            type="button"
+            onClick={() => setShowBiasDetails(!showBiasDetails)}
+            className="rounded-lg"
+            style={{ 
+              height: 24, 
+              backgroundColor: showBiasDetails ? biasData.fill : 'transparent', 
+              color: showBiasDetails ? (theme === 'light' ? '#000' : '#000') : 'var(--text-secondary-strong)', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 6, 
+              padding: '0 8px', 
+              border: `1px solid ${biasData.fill}` 
+            }}
+            onMouseEnter={(e) => { 
+              if (!showBiasDetails) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = biasData.fill;
+                (e.currentTarget as HTMLButtonElement).style.color = theme === 'light' ? '#000' : '#000';
+              }
+            }}
+            onMouseLeave={(e) => { 
+              if (!showBiasDetails) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary-strong)';
+              }
+            }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+            <span className="text-[11px]">{t(`unfold.bias.${biasData.bucketLabel}`, { defaultValue: biasData.bucketLabel })}</span>
+          </button>
         )}
-        <div className="ml-auto flex items-center gap-1" style={{ position: 'relative' }}>
-          {/* Error block for failed agent reply (Ask/Bring In) with retry/switch */}
-          {(() => {
+        {hasReframeContent && (
+          <button
+            type="button"
+            onClick={() => setShowReframe(!showReframe)}
+            className="rounded-lg"
+            style={{ 
+              height: 24, 
+              backgroundColor: showReframe ? 'var(--white-10)' : 'transparent', 
+              color: 'var(--text-secondary-strong)', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 6, 
+              padding: '0 8px', 
+              border: `1px solid ${showReframe ? 'var(--overlay-line-80)' : 'var(--overlay-line-90)'}` 
+            }}
+            onMouseEnter={(e) => { 
+              if (!showReframe) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+              }
+            }}
+            onMouseLeave={(e) => { 
+              if (!showReframe) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+              }
+            }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+              <path d="M3 21v-5h5" />
+            </svg>
+            <span className="text-[11px]">Reframe it?</span>
+          </button>
+        )}
+        {hasSources && (
+          <button
+            type="button"
+            onClick={() => setShowSources(!showSources)}
+            className="rounded-lg"
+            style={{ 
+              height: 24, 
+              backgroundColor: showSources ? 'var(--white-10)' : 'transparent', 
+              color: 'var(--text-secondary-strong)', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 6, 
+              padding: '0 8px', 
+              border: `1px solid ${showSources ? 'var(--overlay-line-80)' : 'var(--overlay-line-90)'}` 
+            }}
+            onMouseEnter={(e) => { 
+              if (!showSources) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+              }
+            }}
+            onMouseLeave={(e) => { 
+              if (!showSources) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+              }
+            }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 0 0 6.5 17H20" />
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+            </svg>
+            <span className="text-[11px]">Sources</span>
+          </button>
+        )}
+        {isAssistant && (
+          <div className="ml-auto flex items-center gap-1" style={{ position: 'relative' }}>
+            {/* Error block for failed agent reply (Ask/Bring In) with retry/switch */}
+            {(() => {
             try {
               const st = useGenaiChatStore.getState();
               const errText = st.error;
@@ -669,14 +985,17 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
             )}
           </div>
           {/* Refine button moved earlier (before Bring In) */}
-        </div>
+          </div>
+        )}
       </div>
-      {frameExpansions && frameExpansions.length > 0 && (
+      {showBiasDetails && hasEvalBias && (
         <div className="mt-2" style={{ width: '100%' }}>
+          <EvaluationDetails messageId={messageId} />
+        </div>
+      )}
+      {showReframe && frameExpansions && frameExpansions.length > 0 && (
+        <div ref={reframeRef} className="mt-2" style={{ width: '100%' }}>
           <div className="p-2" style={{ backgroundColor: 'var(--white-05)', borderLeft: '2px solid var(--overlay-line-90)' }}>
-            <div className="text-[11px] mb-1.5 font-medium" style={{ color: 'var(--text-heading)' }}>
-              {t('unfold.actions.youMightConsider')}
-            </div>
             <div className="space-y-1.5">
               {frameExpansions.map((exp: { question: string }, idx: number) => (
                 <div
@@ -715,6 +1034,335 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
                   {exp.question}
                 </div>
               ))}
+            </div>
+            {/* Alternative opinion button */}
+            <div className="mt-3" style={{ position: 'relative' }} ref={alternativeAgentsRef}>
+              <button
+                type="button"
+                onClick={() => setShowAlternativeAgents(!showAlternativeAgents)}
+                className="rounded-lg"
+                style={{ 
+                  height: 24, 
+                  backgroundColor: showAlternativeAgents ? 'var(--white-10)' : 'transparent', 
+                  color: 'var(--text-secondary-strong)', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: 6, 
+                  padding: '0 8px', 
+                  border: `1px solid ${showAlternativeAgents ? 'var(--overlay-line-80)' : 'var(--overlay-line-90)'}` 
+                }}
+                onMouseEnter={(e) => { 
+                  if (!showAlternativeAgents) {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                  }
+                }}
+                onMouseLeave={(e) => { 
+                  if (!showAlternativeAgents) {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                  }
+                }}
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 7a3 3 0 1 1 0 6a3 3 0 0 1 0-6" />
+                  <path d="M5 20c0-3.314 3.134-6 7-6s7 2.686 7 6" />
+                  <path d="M18 7v4M16 9h4" />
+                </svg>
+                <span className="text-[11px]">{t('unfold.actions.alternativeOpinion')}</span>
+              </button>
+              {/* Agents list */}
+              {showAlternativeAgents && (
+                <div
+                  className="mt-2 p-2 rounded-lg"
+                  style={{
+                    backgroundColor: 'var(--bg-elevated)',
+                    border: '1px solid var(--overlay-line-90)',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                    animation: 'fadeInScale 0.2s ease-out',
+                  }}
+                >
+                  {AGENT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      aria-label={preset.displayName}
+                      title={preset.description}
+                      onClick={async () => {
+                        setShowAlternativeAgents(false);
+                        try {
+                          const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
+                          const model = preset.modelAlias;
+                          // Get current date and time for temporal context
+                          const now = new Date();
+                          const currentDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+                          const currentTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short', timeZone: 'UTC' });
+                          const currentDateTime = `${currentDate} at ${currentTime} UTC`;
+                          const temporalContextInstruction = `CURRENT DATE AND TIME: ${currentDateTime}\nYou must be aware of the current temporal context. Use this information to evaluate the recency and relevance of information, events, and data.`;
+                          const sxSystemInstruction = (
+                            `Hidden-instructions protocol (do not show to users):\n` +
+                            `- When you need to output service instructions (entities, metrics to monitor, watchlist, relations), emit ONLY HTML comments of the form <!-- @sx:{JSON} -->.\n` +
+                            `- JSON must be valid and match v: \"1\" with one of types: entity_mark, monitor_metric, watchlist_add, link_reference.\n` +
+                            `- Do not duplicate @sx content in visible markdown. Keep normal answer readable.\n` +
+                            `- Examples: <!-- @sx:{\\\"v\\\":\\\"1\\\",\\\"type\\\":\\\"entity_mark\\\",\\\"id\\\":\\\"ent-001\\\",\\\"kind\\\":\\\"Person\\\",\\\"name\\\":\\\"…\\\",\\\"description\\\":\\\"…\\\"} -->`
+                          );
+                          const combinedSystemInstruction = [temporalContextInstruction, settings.systemInstruction || '', preset.params?.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
+                          const options: any = {
+                            profile: /_quality$/i.test(model) ? 'quality' : 'fast',
+                            modelOverride: model,
+                            groundingEnabled: preset.capabilities?.webSearch ?? settings.groundingEnabled,
+                            temperature: typeof preset.params?.temperature === 'number' ? preset.params?.temperature : settings.temperature,
+                            maxOutputTokens: settings.maxOutputTokens,
+                            systemInstruction: combinedSystemInstruction,
+                          };
+                          const preferredLang = getPreferredLanguage();
+                          const langName = getLanguageName(preferredLang);
+                          const st = useGenaiChatStore.getState();
+                          // Find the specific message that triggered Bring In and the previous user message
+                          // Use both messages and interactions, accounting for ID mapping
+                          const map = (st as any).persistedByLocalId || {};
+                          const serverMessageId = map[messageId] || messageId;
+                          
+                          // Build reverse map for bidirectional lookup
+                          const reverseMap: Record<string, string[]> = {};
+                          Object.entries(map).forEach(([local, server]) => {
+                            if (!reverseMap[server as string]) reverseMap[server as string] = [];
+                            reverseMap[server as string].push(local);
+                          });
+                          const localIds = reverseMap[messageId] || [];
+                          
+                          // Combine messages and interactions, prioritizing interactions (server-side data)
+                          const allItems = [...st.interactions, ...st.messages];
+                          
+                          // Find target message - try multiple ID variations
+                          const targetMsg = allItems.find((m: any) => 
+                            m.id === messageId || 
+                            m.id === serverMessageId || 
+                            (m as any).originalMessageId === messageId ||
+                            (m as any).originalMessageId === serverMessageId ||
+                            localIds.includes(m.id || '')
+                          ) || null;
+                          
+                          // Find target index in filtered list (for finding previous messages)
+                          const msgs = allItems.filter((m: any) => {
+                            const content = m.content || (m as any).contentSanitized || '';
+                            return content && content.trim();
+                          });
+                          
+                          const targetIdx = msgs.findIndex((m: any) => 
+                            m.id === messageId || 
+                            m.id === serverMessageId || 
+                            (m as any).originalMessageId === messageId ||
+                            (m as any).originalMessageId === serverMessageId ||
+                            localIds.includes(m.id || '')
+                          );
+                          
+                          // Collect context: find user messages before target (up to 3 for better context)
+                          const contextMessages: Array<{ role: string; content: string }> = [];
+                          if (targetIdx >= 0) {
+                            // Collect backwards from target message
+                            for (let i = targetIdx - 1; i >= 0 && contextMessages.length < 3; i--) {
+                              const msg = msgs[i];
+                              const role = (msg as any).role || (msg as any).kind || '';
+                              const isUser = role === 'user' || role === 'discovery.query';
+                              const isAssistant = role === 'assistant' || role === 'discovery.answer' || role === 'note';
+                              const content = (msg as any).content || (msg as any).contentSanitized || '';
+                              if (content && content.trim() && (isUser || isAssistant)) {
+                                contextMessages.unshift({ role: isUser ? 'user' : 'assistant', content });
+                              }
+                            }
+                            // Add target message itself
+                            if (targetMsg) {
+                              const targetContent = targetMsg.content || (targetMsg as any).contentSanitized || '';
+                              if (targetContent && targetContent.trim()) {
+                                contextMessages.push({ role: 'assistant', content: targetContent });
+                              }
+                            }
+                          }
+                          
+                          // Build transcript from collected context
+                          const transcript = contextMessages.map(m => 
+                            `${m.role.toUpperCase()}: ${m.content}`
+                          ).join('\n');
+                          
+                          // Include bias evaluation of this answer to help the agent calibrate its stance
+                          const biasBlock = (() => {
+                            try {
+                              const serverId = map[messageId];
+                              const localIds = reverseMap[messageId] || [];
+                              const interactions = getInteractions();
+                              const evalNode = [...interactions].reverse().find((it: any) => 
+                                it.subkind === 'eval.bias' && 
+                                (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
+                              );
+                              if (!evalNode) return '';
+                              const ev = JSON.parse((evalNode as any).content || '{}');
+                              const thLevel = (typeof ev.thoughtfulnessLevel === 'number' ? ev.thoughtfulnessLevel : ev.thoughtfulness);
+                              const obj = {
+                                biasLevel: ev.biasLevel,
+                                thoughtfulness: thLevel,
+                                thoughtfulnessLevel: thLevel,
+                                thoughtfulnessDimensions: ev.thoughtfulnessDimensions,
+                                categories: ev.categories || [],
+                              };
+                              return `\n\nAutomatic bias analysis (for your awareness; do not echo):\n${JSON.stringify(obj, null, 2)}`;
+                            } catch { return ''; }
+                          })();
+                          // Build prompt depending on agent
+                          const prompt = (() => {
+                            if ((preset.id && /evidence-builder/i.test(preset.id)) || /evidence builder/i.test(preset.displayName || '')) {
+                              return (
+                                `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if they are standard terms in target language.\n\n` +
+                                `You are ${preset.displayName}, an invited AI participant. Your role is to DEEPEN and VERIFY the ASSISTANT's answer by building a comprehensive evidence base.\n\n` +
+                                `CONTEXT (do not echo verbatim):\n${transcript}${biasBlock}\n\n` +
+                                `TASK:\n` +
+                                `1) Verify all factual claims and data points in the ASSISTANT's answer using authoritative, verifiable sources.\n` +
+                                `2) Expand on verified points with additional context and nuance.\n` +
+                                `3) Where logical approximations/assumptions are needed, state them explicitly, justify them, and explain how they are applied.\n` +
+                                `4) Explicitly flag any claims that cannot be verified or lack sufficient evidence.\n` +
+                                `5) Use web search to find authoritative sources when necessary.\n` +
+                                `6) All section titles/headings MUST be in ${langName} (preferred language).\n` +
+                                `7) You MAY think out of the box: propose deeper, unconventional yet logically sound chains of evidence and assumptions beyond typical domain practice; keep reasoning explicit, traceable, and transparent.\n\n` +
+                                `OUTPUT (do not include prefaces):\n` +
+                                `- Provide the deepened, verified response (same language and tone as the ASSISTANT).\n` +
+                                `- Integrate inline citations [1], [2] as needed.\n` +
+                                `\n---\nEVIDENCE SUMMARY\n\n` +
+                                `${t('unfold.evidenceBuilder.sourcesUsed')}\n` +
+                                `${t('unfold.evidenceBuilder.sourcesFormat')}\n` +
+                                `• Author, A. (Year). Title. Publisher. — Description\n` +
+                                `• Author, B. (Year). Title. URL — Description\n` +
+                                `${t('unfold.evidenceBuilder.sourcesCritical')}\n\n` +
+                                `${t('unfold.evidenceBuilder.assumptions')}\n• [Assumption]: How it was interpreted and applied\n[...]\n\n` +
+                                `${t('unfold.evidenceBuilder.couldNotVerify')}\n• [Claim lacking sufficient evidence]\n[...]\n`
+                              );
+                            }
+                            // Default counterpoint-style prompt for other agents
+                            return (
+                              `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\n` +
+                              `You are ${preset.displayName}, an invited AI participant analyzing an AI assistant's response to a user query.\n\n` +
+                              `YOUR TASK:\n` +
+                              `Evaluate the ASSISTANT's answer and provide an alternative perspective or counterpoint. If the ASSISTANT's response has limitations, biases, or missing viewpoints, articulate them constructively. Present a well-reasoned contribution that adds value through critical analysis or an alternative angle.\n\n` +
+                              `CRITICAL REQUIREMENTS FOR TONE AND STYLE:\n` +
+                              `1) Write for educated non-specialists, not for policy analysts or academics. Avoid bureaucratic jargon and acronyms without explanation.\n` +
+                              `2) Ground your analysis in real human context: who is affected? What are the practical consequences for people, communities, or organizations?\n` +
+                              `3) Use narrative and concrete examples alongside data. Tell a story, not a spreadsheet. Weave ideas into coherent prose rather than bullet-only lists.\n` +
+                              `4) Express uncertainty both qualitatively ("likely", "possibly", "unclear") AND quantitatively when logically justified. If you provide metrics (probabilities, confidence ranges, pro/con weights), wrap them in human-readable explanations:\n` +
+                              `   - Good: "This scenario is more likely to fail than succeed (roughly 60% risk vs 40% benefit), primarily because..."\n` +
+                              `   - Good: "The evidence base is fairly strong (about 78% of key claims have direct sources), though some projections rely on analogies..."\n` +
+                              `   - Bad: "Баланс веса: pro 40%, con 60%" (naked numbers without context)\n` +
+                              `   Always explain the reasoning behind your numbers: what base rates, analogies, or models inform them.\n` +
+                              `5) Acknowledge trade-offs and moral/values dimensions where relevant. Recognize that decisions affect real people's lives.\n` +
+                              `6) Structure your response for readability: use section headings (in ${langName}), short paragraphs, and strategic use of lists—but avoid purely mechanical formatting.\n` +
+                              `7) When citing sources or data, integrate them naturally into your narrative with brief inline explanations. Avoid dense citation blocks that interrupt flow.\n` +
+                              `8) FORMALIZATION OPTION: If the topic requires rigorous policy analysis, quantitative risk assessment, or regulatory evaluation, you may use structured analytical frameworks (pro/con weights, evidence quality metrics, probability ranges, scenario trees). However, you MUST:\n` +
+                              `   - Introduce each framework in plain language first (e.g., "To weigh the arguments systematically, I'll score the strength of evidence...")\n` +
+                              `   - Explain your methodology and assumptions explicitly\n` +
+                              `   - Connect metrics back to real-world consequences for people/organizations\n` +
+                              `   - Close with a human-readable synthesis, not just raw numbers\n\n` +
+                              `Do not ask clarifying questions or request additional input; rely only on the provided context.\n` +
+                              `Do not restate the prompt or context; respond directly with your perspective.\n\n` +
+                              `Context:\n${transcript}${biasBlock}\n\n` +
+                              `Your perspective:`
+                            );
+                          })();
+                          // Create indicator message before calling agent
+                          const indicatorContent = `${t('unfold.actions.agentInvoked')} ${preset.displayName}`;
+                          await useGenaiChatStore.getState().createIndicatorMessage(indicatorContent, 'action.bring_in', serverMessageId, { agentProfile: { provider: preset.provider, model: model, capabilities: { tools: !!preset.capabilities?.tools, webSearch: !!preset.capabilities?.webSearch, reasoning: !!preset.capabilities?.reasoning, refinePrevious: !!preset.capabilities?.refinePrevious }, params: preset.params } });
+                          await useGenaiChatStore.getState().startStream({ prompt, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: preset.displayName, agentProfile: { provider: preset.provider, model: model, capabilities: { tools: !!preset.capabilities?.tools, webSearch: !!preset.capabilities?.webSearch, reasoning: !!preset.capabilities?.reasoning, refinePrevious: !!preset.capabilities?.refinePrevious }, params: preset.params }, subkind: 'agent.bring_in', replyTo: serverMessageId }, suppressUserEcho: true });
+                        } catch (err) {
+                          console.error('[ActionRow] Failed to invoke alternative agent', err);
+                        }
+                      }}
+                      className="flex items-center gap-2 rounded-lg px-2 py-1 text-[11px] transition-colors"
+                      style={{
+                        backgroundColor: 'var(--white-10)',
+                        color: 'var(--text-secondary-strong)',
+                        border: '1px solid var(--overlay-line-90)',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-15)';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                      }}
+                    >
+                      {preset.icon || (
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="12" cy="12" r="10" />
+                          <path d="M12 16v-4M12 8h.01" />
+                        </svg>
+                      )}
+                      <span>{preset.displayName}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {showSources && hasSources && (
+        <div className="mt-2" style={{ width: '100%' }}>
+          <div className="p-2" style={{ backgroundColor: 'var(--white-05)', borderLeft: '2px solid var(--overlay-line-90)' }}>
+            <div className="text-[11px] mb-1.5 font-medium" style={{ color: 'var(--text-heading)' }}>
+              Sources:
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {messageSources.queries.map((q: string, i: number) => {
+                const words = String(q || '').trim().split(/\s+/);
+                const short = words.length > 3
+                  ? words.slice(0, 3).join(' ') + '…'
+                  : String(q || '');
+                return (
+                  <button
+                    key={`q-${i}`}
+                    type="button"
+                    className="px-2 py-0.5 rounded-full text-[10px] transition-colors"
+                    style={{
+                      backgroundColor: 'var(--white-10)',
+                      color: 'var(--text-secondary-strong)',
+                      border: 'none',
+                      cursor: 'default',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-15)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                    }}
+                  >
+                    {short}
+                  </button>
+                );
+              })}
+              {messageSources.sources.map((a: any, i: number) => {
+                const raw = String((a as any).url || '').replace(/^https?:\/\//i, '');
+                const parts = raw.split('/');
+                const host = parts[0] || '';
+                const tail = parts[1] ? `/${parts[1]}` : '';
+                const label = host + tail || (a as any).title || 'link';
+                return (
+                  <a
+                    key={`src-${i}`}
+                    href={(a as any).url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-2 py-0.5 rounded-full text-[10px] underline transition-colors"
+                    style={{
+                      backgroundColor: 'var(--white-10)',
+                      color: 'var(--text-secondary-strong)',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLAnchorElement).style.backgroundColor = 'var(--white-15)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLAnchorElement).style.backgroundColor = 'var(--white-10)';
+                    }}
+                  >
+                    {label}
+                  </a>
+                );
+              })}
             </div>
           </div>
         </div>

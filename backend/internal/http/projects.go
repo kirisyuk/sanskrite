@@ -1872,7 +1872,7 @@ func (h *ProjectsHandler) DownloadProjectDoc(w http.ResponseWriter, r *http.Requ
 	}
 	if cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
 		if h.logger != nil {
-			h.logger.Printf("[DownloadProjectDoc] Document access denied: docID=%s, cd.ProjectID=%s, cd.TenantID=%s, expectedProjectID=%s, expectedTenantID=%s", 
+			h.logger.Printf("[DownloadProjectDoc] Document access denied: docID=%s, cd.ProjectID=%s, cd.TenantID=%s, expectedProjectID=%s, expectedTenantID=%s",
 				docID, cd.ProjectID, cd.TenantID, projectID, authInfo.TenantID)
 		}
 		WriteNotFound(w, "Document not found")
@@ -1912,7 +1912,7 @@ func (h *ProjectsHandler) DownloadProjectDoc(w http.ResponseWriter, r *http.Requ
 	// Regular documents: require storage
 	if cd.StoragePath == nil || !strings.HasPrefix(*cd.StoragePath, "gs://") {
 		if h.logger != nil {
-			h.logger.Printf("[DownloadProjectDoc] Document has no storagePath: docID=%s, StoragePath=%v, DocType=%v", 
+			h.logger.Printf("[DownloadProjectDoc] Document has no storagePath: docID=%s, StoragePath=%v, DocType=%v",
 				docID, cd.StoragePath, cd.DocType)
 		}
 		WriteBadRequest(w, "NO_STORAGE", "Document has no storagePath")
@@ -3731,7 +3731,7 @@ func (h *ProjectsHandler) CreateProjectScenario(w http.ResponseWriter, r *http.R
 		Status      string            `json:"status,omitempty"`
 		Order       int               `json:"order,omitempty"`
 		Tags        []string          `json:"tags,omitempty"`
-		Labels      map[string]string  `json:"labels,omitempty"`
+		Labels      map[string]string `json:"labels,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
