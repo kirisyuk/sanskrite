@@ -2077,29 +2077,85 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                     const docInteractions: LocalInteraction[] = [];
                     for (const docId of attachedDocIds) {
                       const doc = docMap.get(docId);
-                      if (doc && doc.extractedText) {
-                        const docInteraction: LocalInteraction = {
-                          id: `${now}-doc-${docId}`,
-                          projectId,
+                      if (!doc) {
+                        console.warn('[Chat] Document not found in list', { docId });
+                        continue;
+                      }
+                      
+                      // Always download the full document content
+                      // For text files (CSV, TXT, etc.), docsDownload returns the original file which is the text
+                      // For other files, it returns the original, but that's better than using a preview
+                      let docContent = '';
+                      const docSizeBytes = doc.sizeBytes || 0;
+                      let contentSource = 'unknown';
+                      
+                      try {
+                        console.log('[Chat] Downloading full document content', { docId, filename: doc.filename, contentType: doc.contentType, sizeBytes: docSizeBytes });
+                        const blob = await api.docsDownload(projectId, docId);
+                        docContent = await new Response(blob).text();
+                        contentSource = 'download';
+                        console.log('[Chat] Downloaded document content', { 
+                          docId, 
+                          filename: doc.filename,
+                          contentLength: docContent.length,
+                          contentLengthKB: (docContent.length / 1024).toFixed(2),
+                          sizeBytes: docSizeBytes,
+                          sizeKB: (docSizeBytes / 1024).toFixed(2)
+                        });
+                      } catch (downloadErr) {
+                        // Fallback to extractedText if download fails
+                        if (doc.extractedText && doc.extractedText.length > 0) {
+                          console.warn('[Chat] Failed to download document, using extractedText fallback', { docId, error: downloadErr });
+                          docContent = doc.extractedText;
+                          contentSource = 'extractedText';
+                        } else {
+                          console.warn('[Chat] Failed to download document and no extractedText available', { docId, error: downloadErr });
+                          continue; // Skip this document if we can't get its content
+                        }
+                      }
+                      
+                      if (docContent.length === 0) {
+                        console.warn('[Chat] Document content is empty', { docId });
+                        continue;
+                      }
+                      
+                      // Calculate tokens added to context
+                      const contentChars = docContent.length;
+                      const contentTokens = Math.ceil(contentChars / 4);
+                      
+                      console.log('[Chat] Document added to context', {
+                        docId,
+                        filename: doc.filename,
+                        sizeBytes: docSizeBytes,
+                        sizeKB: (docSizeBytes / 1024).toFixed(2),
+                        contentChars,
+                        contentKB: (contentChars / 1024).toFixed(2),
+                        contentTokens,
+                        contentSource,
+                        ratio: docSizeBytes > 0 ? ((contentChars / docSizeBytes) * 100).toFixed(1) + '%' : 'N/A'
+                      });
+                      
+                      const docInteraction: LocalInteraction = {
+                        id: `${now}-doc-${docId}`,
+                        projectId,
+                        kind: 'system',
+                        subkind: 'document.attach',
+                        content: docContent,
+                        createdAt: new Date().toISOString(),
+                        replyTo: resUser.id, // Link to user interaction
+                      };
+                      docInteractions.push(docInteraction);
+                      
+                      // Persist on server
+                      try {
+                        await api.createProjectInteraction(projectId, {
                           kind: 'system',
                           subkind: 'document.attach',
-                          content: doc.extractedText,
-                          createdAt: new Date().toISOString(),
-                          replyTo: resUser.id, // Link to user interaction
-                        };
-                        docInteractions.push(docInteraction);
-                        
-                        // Persist on server
-                        try {
-                          await api.createProjectInteraction(projectId, {
-                            kind: 'system',
-                            subkind: 'document.attach',
-                            content: doc.extractedText,
-                            replyTo: resUser.id,
-                          });
-                        } catch (e) {
-                          console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
-                        }
+                          content: docContent,
+                          replyTo: resUser.id,
+                        });
+                      } catch (e) {
+                        console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
                       }
                     }
                     
@@ -2511,29 +2567,85 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             const docInteractions: LocalInteraction[] = [];
             for (const docId of attachedDocIds) {
               const doc = docMap.get(docId);
-              if (doc && doc.extractedText) {
-                const docInteraction: LocalInteraction = {
-                  id: `${now}-doc-${docId}`,
-                  projectId,
+              if (!doc) {
+                console.warn('[Chat] Document not found in list', { docId });
+                continue;
+              }
+              
+              // Always download the full document content
+              // For text files (CSV, TXT, etc.), docsDownload returns the original file which is the text
+              // For other files, it returns the original, but that's better than using a preview
+              let docContent = '';
+              const docSizeBytes = doc.sizeBytes || 0;
+              let contentSource = 'unknown';
+              
+              try {
+                console.log('[Chat] Downloading full document content', { docId, filename: doc.filename, contentType: doc.contentType, sizeBytes: docSizeBytes });
+                const blob = await api.docsDownload(projectId, docId);
+                docContent = await new Response(blob).text();
+                contentSource = 'download';
+                console.log('[Chat] Downloaded document content', { 
+                  docId, 
+                  filename: doc.filename,
+                  contentLength: docContent.length,
+                  contentLengthKB: (docContent.length / 1024).toFixed(2),
+                  sizeBytes: docSizeBytes,
+                  sizeKB: (docSizeBytes / 1024).toFixed(2)
+                });
+              } catch (downloadErr) {
+                // Fallback to extractedText if download fails
+                if (doc.extractedText && doc.extractedText.length > 0) {
+                  console.warn('[Chat] Failed to download document, using extractedText fallback', { docId, error: downloadErr });
+                  docContent = doc.extractedText;
+                  contentSource = 'extractedText';
+                } else {
+                  console.warn('[Chat] Failed to download document and no extractedText available', { docId, error: downloadErr });
+                  continue; // Skip this document if we can't get its content
+                }
+              }
+              
+              if (docContent.length === 0) {
+                console.warn('[Chat] Document content is empty', { docId });
+                continue;
+              }
+              
+              // Calculate tokens added to context
+              const contentChars = docContent.length;
+              const contentTokens = Math.ceil(contentChars / 4);
+              
+              console.log('[Chat] Document added to context', {
+                docId,
+                filename: doc.filename,
+                sizeBytes: docSizeBytes,
+                sizeKB: (docSizeBytes / 1024).toFixed(2),
+                contentChars,
+                contentKB: (contentChars / 1024).toFixed(2),
+                contentTokens,
+                contentSource,
+                ratio: docSizeBytes > 0 ? ((contentChars / docSizeBytes) * 100).toFixed(1) + '%' : 'N/A'
+              });
+              
+              const docInteraction: LocalInteraction = {
+                id: `${now}-doc-${docId}`,
+                projectId,
+                kind: 'system',
+                subkind: 'document.attach',
+                content: docContent,
+                createdAt: new Date().toISOString(),
+                replyTo: res.id, // Link to user interaction
+              };
+              docInteractions.push(docInteraction);
+              
+              // Persist on server
+              try {
+                await api.createProjectInteraction(projectId, {
                   kind: 'system',
                   subkind: 'document.attach',
-                  content: doc.extractedText,
-                  createdAt: new Date().toISOString(),
-                  replyTo: res.id, // Link to user interaction
-                };
-                docInteractions.push(docInteraction);
-                
-                // Persist on server
-                try {
-                  await api.createProjectInteraction(projectId, {
-                    kind: 'system',
-                    subkind: 'document.attach',
-                    content: doc.extractedText,
-                    replyTo: res.id,
-                  });
-                } catch (e) {
-                  console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
-                }
+                  content: docContent,
+                  replyTo: res.id,
+                });
+              } catch (e) {
+                console.warn('[Chat] Failed to persist document interaction', { docId, error: e });
               }
             }
             
