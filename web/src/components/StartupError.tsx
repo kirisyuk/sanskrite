@@ -1,16 +1,18 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import darkLogo from '../assets/hatl-dark-theme.png';
 
 type Props = { error?: Error | null; onRetry?: () => void };
 
 export default function StartupError({ error, onRetry }: Props) {
+  const { t } = useTranslation();
   return (
     <div data-theme="dark" className="min-h-screen flex flex-col items-center justify-center p-6">
       <img src={darkLogo} alt="hatl.one" className="h-4 w-auto mb-4" />
       <div className="w-full max-w-xl text-center">
-        <h1 className="text-xl font-semibold mb-2">We’re experiencing a temporary issue</h1>
+        <h1 className="text-xl font-semibold mb-2">{t('unfold.startup.temporaryIssue')}</h1>
         <p className="text-slate-300 mb-4">
-          Please try to reload the page in a minute. This issue is likely temporary.
+          {t('unfold.startup.reloadMessage')}
         </p>
         <br />
         {error && (
@@ -23,7 +25,7 @@ export default function StartupError({ error, onRetry }: Props) {
             className="btn btn-secondary"
             onClick={() => (onRetry ? onRetry() : window.location.reload())}
           >
-            Retry
+            {t('unfold.startup.retry')}
           </button>
         </div>
       </div>
