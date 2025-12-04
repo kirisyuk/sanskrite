@@ -28,13 +28,13 @@ interface ArtifactTemplate {
   recommendedFocus?: string;
 }
 
-interface PagesPanelProps {
+interface DynamicContentPanelProps {
   projectId: string | null;
   onOpenDocument: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
   onCreateFromTemplate?: (templateId: string) => void;
 }
 
-export const PagesPanel: React.FC<PagesPanelProps> = ({
+export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   projectId,
   onOpenDocument,
   onCreateFromTemplate,
@@ -97,7 +97,7 @@ export const PagesPanel: React.FC<PagesPanelProps> = ({
         const artifactsList = docs.filter((doc: CoreDoc) => isArtifact(doc)) as Artifact[];
         setArtifacts(artifactsList);
       } catch (err) {
-        console.error('[PagesPanel] Failed to load artifacts', err);
+        console.error('[DynamicContentPanel] Failed to load artifacts', err);
         setArtifacts([]);
       } finally {
         setLoading(false);
@@ -123,7 +123,7 @@ export const PagesPanel: React.FC<PagesPanelProps> = ({
         const templatesList = await api.listArtifactTemplates();
         setTemplates(templatesList || []);
       } catch (err) {
-        console.error('[PagesPanel] Failed to load templates', err);
+        console.error('[DynamicContentPanel] Failed to load templates', err);
         setTemplates([]);
       } finally {
         setTemplatesLoading(false);
@@ -226,7 +226,7 @@ export const PagesPanel: React.FC<PagesPanelProps> = ({
       // Initialize expanded sections (default: all collapsed)
       setExpandedSections({});
     } catch (err) {
-      console.error('[PagesPanel] Failed to load template', err);
+      console.error('[DynamicContentPanel] Failed to load template', err);
     }
   };
 
@@ -400,7 +400,7 @@ FORMAT REQUIREMENTS:
             content: response.content || '',
           };
         } catch (err: any) {
-          console.error(`[PagesPanel] Failed to generate section ${section.id}`, err);
+          console.error(`[DynamicContentPanel] Failed to generate section ${section.id}`, err);
           sectionsContent[section.id] = {
             content: '',
             error: err.message || 'Failed to generate content',
@@ -414,7 +414,7 @@ FORMAT REQUIREMENTS:
       // Move to preview step
       setWizardStep('preview');
     } catch (err) {
-      console.error('[PagesPanel] Failed to generate preview', err);
+      console.error('[DynamicContentPanel] Failed to generate preview', err);
     } finally {
       setGenerating(false);
     }
@@ -526,7 +526,7 @@ FORMAT REQUIREMENTS:
         },
       }));
     } catch (err: any) {
-      console.error(`[PagesPanel] Failed to refresh section ${sectionId}`, err);
+      console.error(`[DynamicContentPanel] Failed to refresh section ${sectionId}`, err);
       setGeneratedSections((prev) => ({
         ...prev,
         [sectionId]: {
@@ -628,7 +628,7 @@ FORMAT REQUIREMENTS:
       setArtifacts(artifactsList);
       
       // Dispatch event to notify SidebarPanel to refresh
-      window.dispatchEvent(new CustomEvent('pages.updated', { detail: { projectId } }));
+      window.dispatchEvent(new CustomEvent('content.updated', { detail: { projectId } }));
 
       // Reset wizard and open the created document
       setWizardStep('templates');
@@ -645,7 +645,7 @@ FORMAT REQUIREMENTS:
       setGenerationProgress({ current: 0, total: 0 });
       onOpenDocument(createdDoc);
     } catch (err) {
-      console.error('[PagesPanel] Failed to create artifact', err);
+      console.error('[DynamicContentPanel] Failed to create artifact', err);
     } finally {
       setCreating(false);
     }
@@ -655,7 +655,7 @@ FORMAT REQUIREMENTS:
     return (
       <div className="flex items-center justify-center py-8">
         <div className="animate-pulse text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
-          Loading pages...
+          Loading content...
         </div>
       </div>
     );
@@ -931,13 +931,13 @@ FORMAT REQUIREMENTS:
             className="block text-13 mb-2"
             style={{ color: 'var(--text-secondary-strong)' }}
           >
-            Page name
+            Content name
           </label>
           <input
             type="text"
             value={artifactName}
             onChange={(e) => setArtifactName(e.target.value)}
-            placeholder="Enter page name"
+            placeholder="Enter content name"
             className="w-full text-xs"
             style={{
               backgroundColor: 'transparent',
@@ -1548,13 +1548,13 @@ FORMAT REQUIREMENTS:
                 className="block text-13 mb-2"
                 style={{ color: 'var(--text-secondary-strong)' }}
               >
-                Page name
+                Content name
               </label>
               <input
                 type="text"
                 value={artifactName}
                 onChange={(e) => setArtifactName(e.target.value)}
-                placeholder="Enter page name"
+                placeholder="Enter content name"
                 className="w-full text-xs"
                 style={{
                   backgroundColor: 'transparent',
@@ -2145,7 +2145,7 @@ FORMAT REQUIREMENTS:
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-4 pt-2">
-          {/* Page name */}
+          {/* Content name */}
           <div>
             <h3
               className="text-sm font-medium mb-1"
@@ -2348,7 +2348,7 @@ FORMAT REQUIREMENTS:
   return (
     <div className="flex flex-col h-full" style={{ minHeight: 0 }}>
       <div className="flex-1 overflow-y-auto space-y-4 pt-2">
-      {/* Pages (Artifacts) section */}
+      {/* Dynamic Content (Artifacts) section */}
       {wizardStep === 'templates' && (
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -2356,7 +2356,7 @@ FORMAT REQUIREMENTS:
             className="text-[11px] uppercase tracking-wide"
             style={{ color: 'var(--text-tertiary-weak)' }}
           >
-            Pages ({artifacts.length})
+            Dynamic Content ({artifacts.length})
           </h4>
         </div>
         {artifacts.length === 0 ? (
@@ -2364,7 +2364,7 @@ FORMAT REQUIREMENTS:
             className="text-xs py-4 text-center"
             style={{ color: 'var(--text-secondary-strong)' }}
           >
-            No pages yet. Create one from a template below.
+            No dynamic content yet. Create one from a template below.
           </div>
         ) : (
           <div className="space-y-1">
@@ -2412,10 +2412,10 @@ FORMAT REQUIREMENTS:
                               const docs = await api.docsList(projectId);
                               const artifactsList = docs.filter((doc: CoreDoc) => isArtifact(doc)) as Artifact[];
                               setArtifacts(artifactsList);
-                              window.dispatchEvent(new CustomEvent('pages.updated', { detail: { projectId } }));
+                              window.dispatchEvent(new CustomEvent('content.updated', { detail: { projectId } }));
                             } catch (err) {
-                              console.error('[PagesPanel] Failed to rename artifact', err);
-                              alert('Failed to rename page');
+                              console.error('[DynamicContentPanel] Failed to rename artifact', err);
+                              alert('Failed to rename content');
                             }
                           }
                           setEditingArtifactId(null);
@@ -2438,7 +2438,7 @@ FORMAT REQUIREMENTS:
                             window.dispatchEvent(new CustomEvent('pages.updated', { detail: { projectId } }));
                           } catch (err) {
                             console.error('[PagesPanel] Failed to rename artifact', err);
-                            alert('Failed to rename page');
+                            alert('Failed to rename content');
                           }
                         }
                         setEditingArtifactId(null);
@@ -2483,8 +2483,8 @@ FORMAT REQUIREMENTS:
                     }}
                     className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded-full hover:bg-white/10 transition-all"
                     style={{ color: 'var(--text-secondary)' }}
-                    aria-label="Rename page"
-                    title="Rename page"
+                    aria-label="Rename content"
+                    title="Rename content"
                   >
                     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -2504,14 +2504,14 @@ FORMAT REQUIREMENTS:
                         setArtifacts(artifactsList);
                         window.dispatchEvent(new CustomEvent('pages.updated', { detail: { projectId } }));
                       } catch (err) {
-                        console.error('[PagesPanel] Failed to delete artifact', err);
-                        alert('Failed to delete page');
+                        console.error('[DynamicContentPanel] Failed to delete artifact', err);
+                        alert('Failed to delete content');
                       }
                     }}
                     className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded-full hover:bg-white/10 transition-all"
                     style={{ color: 'var(--text-secondary)' }}
-                    aria-label="Delete page"
-                    title="Delete page"
+                    aria-label="Delete content"
+                    title="Delete content"
                   >
                     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                       <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />

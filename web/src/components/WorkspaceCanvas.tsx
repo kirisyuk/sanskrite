@@ -23,7 +23,7 @@ export interface WorkspaceCanvasProps {
   isOpen: boolean;
   projectId?: string | null; // Optional: filter by project, null means all projects
   onClose: () => void;
-  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; extractedText?: string }) => void;
+  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; extractedText?: string; projectId?: string }) => void;
 }
 
 // Мемоизированный компонент документа
@@ -31,7 +31,7 @@ const DocumentItem = React.memo<{
   doc: CoreDoc;
   indexedStatus: { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
   bigqueryStatus: { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string };
-  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; extractedText?: string }) => void;
+  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; extractedText?: string; projectId?: string }) => void;
 }>(({ doc, indexedStatus, bigqueryStatus, onOpenDocument }) => {
   const getDocumentIcon = () => (
     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -66,6 +66,7 @@ const DocumentItem = React.memo<{
             docType: doc.docType,
             artifactConfig: doc.artifactConfig,
             extractedText: doc.extractedText,
+            projectId: doc.projectId,
           });
         }
       }}
@@ -155,7 +156,7 @@ const ProjectSection = React.memo<{
   indexStatuses: Record<string, { indexed: boolean; loading: boolean; lastChecked: number }>;
   getIndexedStatus: (doc: CoreDoc) => { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
   getBigQueryStatus: (doc: CoreDoc) => { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string };
-  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
+  onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; projectId?: string }) => void;
   onSourceStatusChange?: (sourceId: string, newStatus: 'active' | 'paused') => void;
   onSourceDelete?: (sourceId: string) => void;
   onSourcePreview?: (source: DataSource) => void;

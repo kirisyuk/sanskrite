@@ -184,6 +184,7 @@ const resources = {
           agentInvoked: 'Agent invoked',
           youMightConsider: 'You might consider',
           alternativeOpinion: 'Alternative opinion',
+          reframeIt: 'Reframe it?',
         },
         evidenceBuilder: {
           sourcesUsed: 'Sources Used:',
@@ -272,7 +273,10 @@ const resources = {
         sections: {
           navigation: 'Navigation',
           chat: 'Chat',
+          discuss: 'Discuss',
+          model: 'Model',
           perspectives: 'Perspectives',
+          dynamicContent: 'Dynamic Content',
           newChat: 'New Chat',
           workspace: 'Workspace',
           chats: 'Chats',
@@ -821,6 +825,7 @@ const resources = {
           agentInvoked: 'Вызван агент',
           youMightConsider: 'Вы можете рассмотреть',
           alternativeOpinion: 'Альтернативное мнение',
+          reframeIt: 'А что если?',
         },
         evidenceBuilder: {
           sourcesUsed: 'Источники:',
@@ -909,7 +914,10 @@ const resources = {
         sections: {
           navigation: 'Навигация',
           chat: 'Чат',
+          discuss: 'Обсудить',
+          model: 'Смоделировать',
           perspectives: 'Перспективы',
+          dynamicContent: 'Динамический контент',
           newChat: 'Новый чат',
           workspace: 'Рабочее пространство',
           chats: 'Чаты',
@@ -1562,7 +1570,10 @@ const resources = {
         sections: {
           navigation: 'Navigation',
           chat: 'Chat',
+          discuss: 'Diskutieren',
+          model: 'Modellieren',
           perspectives: 'Perspektiven',
+          dynamicContent: 'Dynamischer Inhalt',
           newChat: 'Neuer Chat',
           workspace: 'Arbeitsbereich',
           chats: 'Chats',
@@ -2011,7 +2022,10 @@ const resources = {
         sections: {
           navigation: 'Navegación',
           chat: 'Chat',
+          discuss: 'Discutir',
+          model: 'Modelar',
           perspectives: 'Perspectivas',
+          dynamicContent: 'Contenido Dinámico',
           newChat: 'Nuevo Chat',
           workspace: 'Espacio de trabajo',
           chats: 'Chats',
@@ -2457,7 +2471,10 @@ const resources = {
         sections: {
           navigation: 'Навигация',
           chat: 'Чат',
+          discuss: 'Талқылау',
+          model: 'Модельдеу',
           perspectives: 'Перспективалар',
+          dynamicContent: 'Динамикалық мазмұн',
           newChat: 'Жаңа чат',
           workspace: 'Жұмыс аймағы',
           chats: 'Чаттар',

@@ -325,7 +325,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ projectId, doc, onClose
   };
 
   return (
-    <div className="absolute inset-0 z-[70] rounded-xl" style={{ background: 'var(--bg-input)', border: '1px solid var(--overlay-line-90)', overflow: 'hidden' }}>
+    <div className="absolute inset-0 z-[100] rounded-xl" style={{ background: 'var(--bg-input)', border: '1px solid var(--overlay-line-90)', overflow: 'hidden' }}>
       <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: '1px solid var(--overlay-line-90)' }}>
         <div className="text-13" style={{ color: 'var(--text-heading)' }} title={doc.filename}>{headerTitle}</div>
         <div className="flex items-center gap-2">

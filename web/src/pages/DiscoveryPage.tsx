@@ -17,7 +17,7 @@ import PerspectivesPanel from '../components/PerspectivesPanel';
 import PerspectiveAnalysisPanel from '../components/PerspectiveAnalysisPanel';
 import AgentPalette from '../components/AgentPalette';
 import WorkspaceLibrary from '../components/WorkspaceLibrary';
-import { PagesPanel } from '../components/PagesPanel';
+import { DynamicContentPanel } from '../components/DynamicContentPanel';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
 import { getAverageTiming } from '../lib/timingCache';
@@ -589,6 +589,7 @@ const DiscoveryPage: React.FC = () => {
     docType?: string;
     artifactConfig?: any;
     extractedText?: string;
+    projectId?: string;
   }>(null);
   
   // PERFORMANCE FIX: Use selector to get interactions only when needed, not subscribe to entire array
@@ -1368,6 +1369,14 @@ const DiscoveryPage: React.FC = () => {
             overflow: 'hidden',
           }}
         >
+        {/* Document viewer overlay - renders above everything including WorkspaceCanvas */}
+        {activeDoc && (
+          <DocumentViewer
+            projectId={activeDoc.projectId || genaiChat.projectId || ''}
+            doc={activeDoc}
+            onClose={() => setActiveDoc(null)}
+          />
+        )}
         {showAccount ? (
           <AccountModal
             isOpen={showAccount}
@@ -1467,16 +1476,6 @@ const DiscoveryPage: React.FC = () => {
                     className={`w-full flex-1 flex flex-col min-h-0 ${isSmartphone ? '' : 'px-4'}`}
                     style={{ position: 'relative' }}
                   >
-            {/* Document viewer overlay - replaces chat area when open */}
-                    {activeDoc &&
-                      genaiChat.projectId &&
-                      genaiChat.projectId !== 'local-unfold' && (
-              <DocumentViewer
-                projectId={genaiChat.projectId}
-                doc={activeDoc}
-                onClose={() => setActiveDoc(null)}
-              />
-            )}
             {/* Metric overlay - replaces chat area when open */}
             <MetricOverlay />
             {/* Unfold subview toggle */}
@@ -1497,11 +1496,11 @@ const DiscoveryPage: React.FC = () => {
                     }}
                   >
                     <span>
-                      {unfoldSubView === 'chat' ? 'Discuss' :
-                       unfoldSubView === 'models' ? 'Model' :
+                      {unfoldSubView === 'chat' ? t('unfold.sections.discuss', { defaultValue: 'Discuss' }) :
+                       unfoldSubView === 'models' ? t('unfold.sections.model', { defaultValue: 'Model' }) :
                        unfoldSubView === 'perspectives' ? t('unfold.sections.perspectives') :
-                       unfoldSubView === 'pages' ? 'Pages' :
-                       unfoldSubView === 'scenarios' ? 'Scenarios' : 'Discuss'}
+                       unfoldSubView === 'pages' ? t('unfold.sections.dynamicContent', { defaultValue: 'Dynamic Content' }) :
+                       unfoldSubView === 'scenarios' ? t('unfold.sections.scenarios', { defaultValue: 'Scenarios' }) : t('unfold.sections.discuss', { defaultValue: 'Discuss' })}
                     </span>
                     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M6 9l6 6 6-6" />
@@ -1528,7 +1527,7 @@ const DiscoveryPage: React.FC = () => {
                           color: 'var(--text-heading)',
                         }}
                       >
-                        Discuss
+                        {t('unfold.sections.discuss', { defaultValue: 'Discuss' })}
                       </button>
                       <button
                         type="button"
@@ -1542,8 +1541,19 @@ const DiscoveryPage: React.FC = () => {
                           color: 'var(--text-heading)',
                         }}
                       >
-                        Model
+                        {t('unfold.sections.model', { defaultValue: 'Model' })}
                       </button>
+                      {/* Divider */}
+                      <div
+                        className="h-px w-full"
+                        style={{
+                          backgroundColor: theme === 'dark' 
+                            ? 'rgba(255, 255, 255, 0.2)' 
+                            : 'rgba(0, 0, 0, 0.15)',
+                          margin: '4px 0',
+                          flexShrink: 0,
+                        }}
+                      />
                       <button
                         type="button"
                         onClick={() => {
@@ -1570,7 +1580,7 @@ const DiscoveryPage: React.FC = () => {
                           color: 'var(--text-heading)',
                         }}
                       >
-                        Pages
+                        {t('unfold.sections.dynamicContent', { defaultValue: 'Dynamic Content' })}
                       </button>
                       <button
                         type="button"
@@ -1584,7 +1594,7 @@ const DiscoveryPage: React.FC = () => {
                           color: 'var(--text-heading)',
                         }}
                       >
-                        Scenarios
+                        {t('unfold.sections.scenarios', { defaultValue: 'Scenarios' })}
                       </button>
                     </div>
                   )}
@@ -1617,7 +1627,7 @@ const DiscoveryPage: React.FC = () => {
                               color: 'var(--text-heading)',
                     }}
                   >
-                    Discuss
+                    {t('unfold.sections.discuss', { defaultValue: 'Discuss' })}
                   </button>
                   <button
                     type="button"
@@ -1634,8 +1644,19 @@ const DiscoveryPage: React.FC = () => {
                               color: 'var(--text-heading)',
                     }}
                   >
-                    Model
+                    {t('unfold.sections.model', { defaultValue: 'Model' })}
                   </button>
+                  {/* Divider */}
+                  <div
+                    className="h-4 w-px"
+                    style={{
+                      backgroundColor: theme === 'dark' 
+                        ? 'rgba(255, 255, 255, 0.2)' 
+                        : 'rgba(0, 0, 0, 0.15)',
+                      margin: '0 8px',
+                      flexShrink: 0,
+                    }}
+                  />
                   <button
                     type="button"
                     role="tab"
@@ -1668,7 +1689,7 @@ const DiscoveryPage: React.FC = () => {
                               color: 'var(--text-heading)',
                     }}
                   >
-                    Pages
+                    {t('unfold.sections.dynamicContent', { defaultValue: 'Dynamic Content' })}
                   </button>
                   {/* Divider */}
                   <div
@@ -1696,7 +1717,7 @@ const DiscoveryPage: React.FC = () => {
                               color: 'var(--text-heading)',
                     }}
                   >
-                    Scenarios
+                    {t('unfold.sections.scenarios', { defaultValue: 'Scenarios' })}
                   </button>
                 </div>
               )}
@@ -1766,14 +1787,14 @@ const DiscoveryPage: React.FC = () => {
                 )}
               </div>
             )}
-            {/* Pages content */}
+            {/* Dynamic Content content */}
             {unfoldSubView === 'pages' && (
-              <PagesPanel
+              <DynamicContentPanel
                 projectId={genaiChat.projectId}
                 onOpenDocument={setActiveDoc}
                 onCreateFromTemplate={(templateId) => {
                   // TODO: Implement template-based artifact creation
-                  console.log('[PagesPanel] Create from template', templateId);
+                  console.log('[DynamicContentPanel] Create from template', templateId);
                 }}
                       />
             )}

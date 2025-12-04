@@ -195,6 +195,18 @@ const ProjectRow = React.memo<{
               R
             </div>
           )}
+          {project.projectType === 'learn' && (
+            <div
+              className="flex-shrink-0 w-4 h-4 rounded-sm flex items-center justify-center text-[10px] font-bold"
+              style={{
+                backgroundColor: '#2ECC71', // Green
+                color: '#FFF',
+              }}
+              title="Learn Project"
+            >
+              L
+            </div>
+          )}
           <span
             className="flex-1 truncate"
             style={{
@@ -739,18 +751,18 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     loadPages();
   }, [loadPages]);
 
-  // Listen for pages.updated event to refresh list
+  // Listen for content.updated event to refresh list
   React.useEffect(() => {
-    const handlePagesUpdated = (event: CustomEvent) => {
+    const handleContentUpdated = (event: CustomEvent) => {
       // Only refresh if the event is for the current project
       if (event.detail?.projectId === projectId && showPages) {
         loadPages();
       }
     };
 
-    window.addEventListener('pages.updated', handlePagesUpdated as EventListener);
+    window.addEventListener('content.updated', handleContentUpdated as EventListener);
     return () => {
-      window.removeEventListener('pages.updated', handlePagesUpdated as EventListener);
+      window.removeEventListener('content.updated', handleContentUpdated as EventListener);
     };
   }, [projectId, showPages, loadPages]);
 
@@ -1298,7 +1310,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   className="text-[11px] uppercase tracking-wide mb-2"
                   style={{ color: 'var(--text-tertiary-weak)' }}
                 >
-                  Pages ({pages.length})
+                  Dynamic Content ({pages.length})
                 </div>
                 {pagesLoading ? (
                   <div
@@ -1379,7 +1391,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                     try {
                                       await api.docsUpdate(projectId, page.id, { filename: newName });
                                       loadPages();
-                                      window.dispatchEvent(new CustomEvent('pages.updated', { detail: { projectId } }));
+                                      window.dispatchEvent(new CustomEvent('content.updated', { detail: { projectId } }));
                                     } catch (err) {
                                       console.error('[SidebarPanel] Failed to rename page', err);
                                       alert('Failed to rename page');

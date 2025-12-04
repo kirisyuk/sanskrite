@@ -1600,7 +1600,26 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.provider')}</label>
-                      <select value={settings.provider} onChange={(e) => settings.setProvider(e.target.value as any)} className="w-full">
+                      <select 
+                        value={settings.provider} 
+                        onChange={(e) => settings.setProvider(e.target.value as any)} 
+                        className="w-full"
+                        style={{
+                          backgroundColor: 'var(--bg-input)',
+                          color: 'var(--text-heading)',
+                          border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                          borderRadius: '8px',
+                          padding: '8px 12px',
+                          outline: 'none',
+                          fontSize: '14px',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                        }}
+                      >
                         <option value="openai">OpenAI</option>
                         <option value="gemini">Gemini</option>
                         <option value="grok">Grok</option>
@@ -1610,7 +1629,26 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                     </div>
                     <div>
                       <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.strength')}</label>
-                      <select value={settings.strength} onChange={(e) => settings.setStrength(e.target.value as any)} className="w-full">
+                      <select 
+                        value={settings.strength} 
+                        onChange={(e) => settings.setStrength(e.target.value as any)} 
+                        className="w-full"
+                        style={{
+                          backgroundColor: 'var(--bg-input)',
+                          color: 'var(--text-heading)',
+                          border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                          borderRadius: '8px',
+                          padding: '8px 12px',
+                          outline: 'none',
+                          fontSize: '14px',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                        }}
+                      >
                         <option value="fast">{t('unfold.request.strengthFast')}</option>
                         <option value="balanced">{t('unfold.request.strengthBalanced')}</option>
                         <option value="quality">{t('unfold.request.strengthQuality')}</option>
@@ -1622,7 +1660,26 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceProvider')}</label>
-                      <select value={settings.stanceProvider || 'gemini'} onChange={(e) => settings.setStanceProvider(e.target.value as any)} className="w-full">
+                      <select 
+                        value={settings.stanceProvider || 'gemini'} 
+                        onChange={(e) => settings.setStanceProvider(e.target.value as any)} 
+                        className="w-full"
+                        style={{
+                          backgroundColor: 'var(--bg-input)',
+                          color: 'var(--text-heading)',
+                          border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                          borderRadius: '8px',
+                          padding: '8px 12px',
+                          outline: 'none',
+                          fontSize: '14px',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                        }}
+                      >
                         <option value="openai">OpenAI</option>
                         <option value="gemini">Gemini</option>
                         <option value="grok">Grok</option>
@@ -1632,7 +1689,26 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                     </div>
                     <div>
                       <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceStrength')}</label>
-                      <select value={settings.stanceStrength || 'fast'} onChange={(e) => settings.setStanceStrength(e.target.value as any)} className="w-full">
+                      <select 
+                        value={settings.stanceStrength || 'fast'} 
+                        onChange={(e) => settings.setStanceStrength(e.target.value as any)} 
+                        className="w-full"
+                        style={{
+                          backgroundColor: 'var(--bg-input)',
+                          color: 'var(--text-heading)',
+                          border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                          borderRadius: '8px',
+                          padding: '8px 12px',
+                          outline: 'none',
+                          fontSize: '14px',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                        }}
+                      >
                         <option value="fast">{t('unfold.request.strengthFast')}</option>
                         <option value="balanced" disabled={(settings.stanceProvider || 'gemini') === 'deepseek'}>{t('unfold.request.strengthBalanced')}</option>
                         <option value="quality">{t('unfold.request.strengthQuality')}</option>
@@ -1650,7 +1726,34 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
               </div>
               <div>
                 <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.systemInstruction')}</label>
-                <textarea rows={3} value={settings.systemInstruction} onChange={(e) => settings.setSystemInstruction(e.target.value)} className="w-full" />
+                <textarea 
+                  rows={3} 
+                  value={settings.systemInstruction} 
+                  onChange={(e) => settings.setSystemInstruction(e.target.value)} 
+                  className="w-full"
+                  style={{
+                    backgroundColor: 'var(--bg-input)',
+                    color: 'var(--text-heading)',
+                    border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                    borderRadius: '8px',
+                    padding: '8px 12px',
+                    outline: 'none',
+                    fontSize: '14px',
+                    resize: 'vertical',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                  }}
+                />
               </div>
               {/* Advanced settings (collapsible) */}
               <div>
@@ -1676,17 +1779,99 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                   <div className="space-y-3 mt-2 pt-2" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
                     <div>
                       <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.stanceModel')}</label>
-                      <input value={settings.stanceModel || 'gemini_fast'} onChange={(e) => settings.setStanceModel(e.target.value as any)} className="w-full" />
+                      <input 
+                        value={settings.stanceModel || 'gemini_fast'} 
+                        onChange={(e) => settings.setStanceModel(e.target.value as any)} 
+                        className="w-full"
+                        style={{
+                          backgroundColor: 'var(--bg-input)',
+                          color: 'var(--text-heading)',
+                          border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                          borderRadius: '8px',
+                          padding: '8px 12px',
+                          outline: 'none',
+                          fontSize: '14px',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                        }}
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                        }}
+                        onBlur={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                        }}
+                      />
                       <div className="text-[11px] mt-1" style={{ color: 'var(--text-secondary)' }}>{t('unfold.request.settingsModal.stanceModelHelp')}</div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.temperature')}</label>
-                        <input type="number" step={0.1} min={0} max={2} value={settings.temperature} onChange={(e) => settings.setTemperature(parseFloat(e.target.value))} className="w-full" />
+                        <input 
+                          type="number" 
+                          step={0.1} 
+                          min={0} 
+                          max={2} 
+                          value={settings.temperature} 
+                          onChange={(e) => settings.setTemperature(parseFloat(e.target.value))} 
+                          className="w-full"
+                          style={{
+                            backgroundColor: 'var(--bg-input)',
+                            color: 'var(--text-heading)',
+                            border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                            borderRadius: '8px',
+                            padding: '8px 12px',
+                            outline: 'none',
+                            fontSize: '14px',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                          }}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                          }}
+                        />
                       </div>
                       <div>
                         <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>{t('unfold.request.settingsModal.maxTokens')}</label>
-                        <input type="number" min={16} max={8192} value={settings.maxOutputTokens} onChange={(e) => settings.setMaxOutputTokens(parseInt(e.target.value || '0', 10))} className="w-full" />
+                        <input 
+                          type="number" 
+                          min={16} 
+                          max={8192} 
+                          value={settings.maxOutputTokens} 
+                          onChange={(e) => settings.setMaxOutputTokens(parseInt(e.target.value || '0', 10))} 
+                          className="w-full"
+                          style={{
+                            backgroundColor: 'var(--bg-input)',
+                            color: 'var(--text-heading)',
+                            border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                            borderRadius: '8px',
+                            padding: '8px 12px',
+                            outline: 'none',
+                            fontSize: '14px',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                          }}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                          }}
+                        />
                       </div>
                     </div>
                     <div className="flex items-center justify-between">

@@ -413,7 +413,7 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
 
   // Handle project type change with optimistic update
   // IMPORTANT: This hook must be defined before any conditional returns to follow Rules of Hooks
-  const handleProjectTypeChange = React.useCallback(async (newType: "studio" | "personal" | "team" | "research" | null) => {
+  const handleProjectTypeChange = React.useCallback(async (newType: "studio" | "personal" | "team" | "research" | "learn" | null) => {
     if (!projectId || projectId === 'local-unfold' || !currentProject) return;
     
     try {
@@ -495,7 +495,7 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
               value={currentProject.projectType || ''}
               onChange={(e) => {
                 const value = e.target.value;
-                handleProjectTypeChange(value === '' ? null : value as "studio" | "personal" | "team" | "research");
+                handleProjectTypeChange(value === '' ? null : value as "studio" | "personal" | "team" | "research" | "learn");
               }}
               className="px-2 py-1 rounded text-[11px] transition-colors"
               style={{
@@ -516,6 +516,7 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
               <option value="personal">Personal</option>
               <option value="team">Team</option>
               <option value="research">Research</option>
+              <option value="learn">Learn</option>
             </select>
           </div>
         </div>

@@ -604,6 +604,7 @@ const (
 	ProjectTypePersonal ProjectType = "personal"
 	ProjectTypeTeam     ProjectType = "team"
 	ProjectTypeResearch ProjectType = "research"
+	ProjectTypeLearn    ProjectType = "learn"
 )
 
 // Project соответствует Core.Projects
