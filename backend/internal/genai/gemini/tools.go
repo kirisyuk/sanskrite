@@ -120,8 +120,15 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, toolDecls [
 	// Gemini doesn't support function calling in streaming mode, so use non-streaming Generate first
 	if len(toolDecls) > 0 {
 		_ = onEvent(StreamEvent{Type: "start"})
+
+		// Important: Disable Grounding for the first step if tools are present.
+		// Gemini does not support both tools and grounding in the same request.
+		// We prioritize tools for the first step to detect tool calls.
+		firstStepOpts := opts
+		firstStepOpts.GroundingEnabled = false
+
 		// Use non-streaming Generate for first request with tools
-		resp, err := c.Generate(ctx, prompt, toolDecls, opts)
+		resp, err := c.Generate(ctx, prompt, toolDecls, firstStepOpts)
 		if err != nil {
 			_ = onEvent(StreamEvent{Type: "error", Error: err.Error()})
 			return err
@@ -241,7 +248,18 @@ func (c *Client) StreamWithTools(ctx context.Context, prompt string, toolDecls [
 
 	// Use non-streaming Generate for continuation instead of StreamConversation
 	// This avoids streaming for tool calls - just get the final answer
-	resp2, err := c.GenerateConversation(ctx, contents, toolDecls, opts)
+
+	// Determine if we can enable grounding for the final response
+	finalTools := toolDecls
+	finalOpts := opts
+
+	// If Grounding is enabled, we must disable tools for the final response to avoid conflict.
+	// This means the model cannot perform multi-turn tool calls, but can provide a grounded response.
+	if opts.GroundingEnabled {
+		finalTools = nil
+	}
+
+	resp2, err := c.GenerateConversation(ctx, contents, finalTools, finalOpts)
 	if err != nil {
 		if isGeminiContinuationWarning(err) {
 			log.Printf("[Gemini StreamWithTools] Final continuation failed after tool execution, suppressing error: %v", err)

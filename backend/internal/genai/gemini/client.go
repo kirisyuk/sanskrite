@@ -556,7 +556,7 @@ func (c *Client) GenerateConversation(ctx context.Context, contents []map[string
 		}
 		toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
 	}
-	if opts.GroundingEnabled || opts.Profile == ProfileQuality {
+	if opts.GroundingEnabled {
 		toolsPayload = append(toolsPayload, map[string]interface{}{"google_search": map[string]interface{}{}})
 	}
 	if len(toolsPayload) > 0 {
@@ -635,7 +635,7 @@ func (c *Client) StreamConversation(ctx context.Context, contents []map[string]i
 		// v1beta expects snake_case function_declarations
 		toolsPayload = append(toolsPayload, map[string]interface{}{"function_declarations": fdecls})
 	}
-	if opts.GroundingEnabled || opts.Profile == ProfileQuality {
+	if opts.GroundingEnabled {
 		// v1beta expects snake_case google_search tool name
 		toolsPayload = append(toolsPayload, map[string]interface{}{"google_search": map[string]interface{}{}})
 	}
