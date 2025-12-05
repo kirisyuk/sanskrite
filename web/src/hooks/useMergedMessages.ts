@@ -147,7 +147,12 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
       stateMessages.forEach((m: any) => {
         const hasInteraction = interactions.some(
           (it) =>
-            (it as any).originalMessageId === m.id || it.id === m.id,
+            (it as any).originalMessageId === m.id ||
+            it.id === m.id ||
+            // Additional guard: avoid temporary duplicate user messages when server interaction lacks originalMessageId
+            (it.kind === 'user' &&
+              typeof it.content === 'string' &&
+              it.content === m.content),
         );
         if (!hasInteraction) {
           // Parse timestamp from id (format: "timestamp-role")

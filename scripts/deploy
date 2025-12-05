@@ -138,9 +138,13 @@ deploy_web() {
   cd "$WEB_DIR"
   
   # Install dependencies
-  if ! npm ci --no-audit --no-fund; then
-    echo -e "${RED}[web] Error: npm ci failed${NC}" >&2
-    exit 1
+  # Try npm ci first, fallback to npm install if it fails (e.g., locked files on Windows)
+  if ! npm ci --no-audit --no-fund 2>/dev/null; then
+    echo -e "${YELLOW}[web] npm ci failed, trying npm install...${NC}"
+    if ! npm install --no-audit --no-fund; then
+      echo -e "${RED}[web] Error: npm install failed${NC}" >&2
+      exit 1
+    fi
   fi
   
   # Build with environment variables

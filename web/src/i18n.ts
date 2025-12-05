@@ -184,6 +184,7 @@ const resources = {
           agentInvoked: 'Agent invoked',
           youMightConsider: 'You might consider',
           alternativeOpinion: 'Alternative opinion',
+          secondOpinion: 'Another well-founded opinion',
           reframeIt: 'Reframe it?',
         },
         evidenceBuilder: {
@@ -378,7 +379,7 @@ const resources = {
           indexed: 'Indexed',
           notIndexed: 'Not indexed',
           unknown: 'Unknown',
-          available: 'Available',
+          available: 'Analytics available',
           notAvailable: 'Not available',
         },
         selector: {
@@ -506,6 +507,11 @@ const resources = {
           textTasks: 'Text Tasks',
           applyTasks: 'Apply all tasks',
           removeTask: 'Remove task',
+        },
+        share: {
+          footer: {
+            tagline: 'hatl.one — cognitive environment that turns discussions into actions.',
+          },
         },
       },
       account: {
@@ -825,6 +831,7 @@ const resources = {
           agentInvoked: 'Вызван агент',
           youMightConsider: 'Вы можете рассмотреть',
           alternativeOpinion: 'Альтернативное мнение',
+          secondOpinion: 'Другое обоснованное мнение',
           reframeIt: 'А что если?',
         },
         evidenceBuilder: {
@@ -1019,7 +1026,7 @@ const resources = {
           indexed: 'Проиндексировано',
           notIndexed: 'Не проиндексировано',
           unknown: 'Неизвестно',
-          available: 'Доступно',
+          available: 'Аналитика доступна',
           notAvailable: 'Недоступно',
         },
         selector: {
@@ -1146,6 +1153,11 @@ const resources = {
           textTasks: 'Текстовые задания',
           applyTasks: 'Применить все задания',
           removeTask: 'Удалить задание',
+        },
+        share: {
+          footer: {
+            tagline: 'hatl.one — когнитивная среда, превращающая дискуссии в действия.',
+          },
         },
       },
       account: {
@@ -1623,6 +1635,11 @@ const resources = {
           creating: 'Wird erstellt...',
           failedToCreateScenario: 'Szenario konnte nicht erstellt werden',
         },
+        share: {
+          footer: {
+            tagline: 'hatl.one — kognitive Umgebung, die Diskussionen in Aktionen verwandelt.',
+          },
+        },
         startup: {
           temporaryIssue: 'Wir haben ein vorübergehendes Problem',
           reloadMessage: 'Bitte versuchen Sie, die Seite in einer Minute neu zu laden. Dieses Problem ist wahrscheinlich vorübergehend.',
@@ -1675,7 +1692,7 @@ const resources = {
           indexed: 'Indiziert',
           notIndexed: 'Nicht indiziert',
           unknown: 'Unbekannt',
-          available: 'Verfügbar',
+          available: 'Analytics verfügbar',
           notAvailable: 'Nicht verfügbar',
         },
         status: {
@@ -2072,6 +2089,11 @@ const resources = {
           creating: 'Creando...',
           failedToCreateScenario: 'No se pudo crear el escenario',
         },
+        share: {
+          footer: {
+            tagline: 'hatl.one — entorno cognitivo que convierte las discusiones en acciones.',
+          },
+        },
         startup: {
           temporaryIssue: 'Estamos experimentando un problema temporal',
           reloadMessage: 'Por favor, intente recargar la página en un minuto. Este problema probablemente sea temporal.',
@@ -2124,7 +2146,7 @@ const resources = {
           indexed: 'Indexado',
           notIndexed: 'No indexado',
           unknown: 'Desconocido',
-          available: 'Disponible',
+          available: 'Analytics disponible',
           notAvailable: 'No disponible',
         },
         status: {
@@ -2573,7 +2595,7 @@ const resources = {
           indexed: 'Индекстелген',
           notIndexed: 'Индекстелмеген',
           unknown: 'Белгісіз',
-          available: 'Қолжетімді',
+          available: 'Аналитика қолжетімді',
           notAvailable: 'Қолжетімсіз',
         },
         status: {
@@ -2615,6 +2637,11 @@ const resources = {
           textTasks: 'Мәтін тапсырмалары',
           applyTasks: 'Барлық тапсырмаларды қолдану',
           removeTask: 'Тапсырманы жою',
+        },
+        share: {
+          footer: {
+            tagline: 'hatl.one — талқылауларды іс-әрекеттерге айналдыратын когнитивті орта.',
+          },
         },
         perspectives: {
           chatEmptyState: {

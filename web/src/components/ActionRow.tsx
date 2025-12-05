@@ -325,6 +325,49 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
     }
   }, [getInteractions, interactionsLength, messageId, persistedByLocalId]);
   
+  // Get frame compliance check from interactions with subkind 'eval.frame_compliance'
+  const frameComplianceCheck = React.useMemo(() => {
+    try {
+      const map = persistedByLocalId || {};
+      const serverId = map[messageId] || messageId;
+      
+      // Build reverse map for bidirectional lookup
+      const reverseMap: Record<string, string[]> = {};
+      Object.entries(map).forEach(([local, server]) => {
+        if (!reverseMap[server as string]) reverseMap[server as string] = [];
+        reverseMap[server as string].push(local);
+      });
+      const localIds = reverseMap[serverId] || [];
+      
+      // Find compliance check interaction linked to this message
+      const interactions = getInteractions();
+      const complianceInteraction = interactions.find((it) => 
+        it.subkind === 'eval.frame_compliance' && 
+        (it.replyTo === messageId || it.replyTo === serverId || localIds.includes(it.replyTo || '') ||
+         (it.relations && it.relations.some((r) => r.targetId === messageId || r.targetId === serverId || localIds.includes(r.targetId || ''))))
+      );
+      
+      if (complianceInteraction) {
+        try {
+          const data = JSON.parse(complianceInteraction.content || complianceInteraction.contentSanitized || '{}');
+          if (data.confidence !== undefined && data.explanation && typeof data.explanation === 'string') {
+            // Only return if confidence >= 0.5
+            if (data.confidence >= 0.5) {
+              return { confidence: data.confidence, explanation: data.explanation };
+            }
+          }
+        } catch (e) {
+          console.warn('[ActionRow] Failed to parse frame compliance check', e);
+        }
+      }
+      
+      return undefined;
+    } catch (e) { 
+      // Silently fail - no need to log every time
+      return undefined; 
+    }
+  }, [getInteractions, interactionsLength, messageId, persistedByLocalId]);
+  
   // Get sources and search queries from interactions
   const messageSources = React.useMemo(() => {
     try {
@@ -1298,6 +1341,181 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+      {isAssistant && frameComplianceCheck && frameComplianceCheck.confidence >= 0.5 && (
+        <div className="mt-2" style={{ width: '100%' }}>
+          <div className="p-2" style={{ backgroundColor: 'var(--warning-10)', borderLeft: '2px solid var(--accent-warning)', borderRadius: '4px' }}>
+            <div className="text-[11px]" style={{ color: 'var(--text-heading)', lineHeight: '1.4' }}>
+              {frameComplianceCheck.explanation}
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const secondOpinionPreset = AGENT_PRESETS.find(p => p.id === 'second-opinion');
+                  if (!secondOpinionPreset) {
+                    console.error('[ActionRow] Second Opinion agent not found');
+                    return;
+                  }
+                  
+                  const tools = settings.enableTelegramTool ? [TelegramFetchUpdatesTool] : undefined;
+                  const model = secondOpinionPreset.modelAlias;
+                  
+                  // Get current date and time for temporal context
+                  const now = new Date();
+                  const currentDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+                  const currentTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short', timeZone: 'UTC' });
+                  const currentDateTime = `${currentDate} at ${currentTime} UTC`;
+                  const temporalContextInstruction = `CURRENT DATE AND TIME: ${currentDateTime}\nYou must be aware of the current temporal context. Use this information to evaluate the recency and relevance of information, events, and data.`;
+                  const sxSystemInstruction = getSxSystemInstructionFull();
+                  const combinedSystemInstruction = [temporalContextInstruction, settings.systemInstruction || '', secondOpinionPreset.params?.systemInstruction || '', HATL_ONE_INSTRUCTIONS, sxSystemInstruction].filter(Boolean).join('\n\n').trim() || undefined;
+                  
+                  const options: any = {
+                    profile: /_quality$/i.test(model) ? 'quality' : 'fast',
+                    modelOverride: model,
+                    groundingEnabled: secondOpinionPreset.capabilities?.webSearch ?? settings.groundingEnabled,
+                    temperature: typeof secondOpinionPreset.params?.temperature === 'number' ? secondOpinionPreset.params?.temperature : settings.temperature,
+                    maxOutputTokens: settings.maxOutputTokens,
+                    systemInstruction: combinedSystemInstruction,
+                  };
+                  
+                  const preferredLang = getPreferredLanguage();
+                  const langName = getLanguageName(preferredLang);
+                  const st = useGenaiChatStore.getState();
+                  
+                  // Find the specific assistant message and related user message
+                  const map = (st as any).persistedByLocalId || {};
+                  const serverMessageId = map[messageId] || messageId;
+                  
+                  // Build reverse map for bidirectional lookup
+                  const reverseMap: Record<string, string[]> = {};
+                  Object.entries(map).forEach(([local, server]) => {
+                    if (!reverseMap[server as string]) reverseMap[server as string] = [];
+                    reverseMap[server as string].push(local);
+                  });
+                  const localIds = reverseMap[serverMessageId] || [];
+                  
+                  // Combine messages and interactions
+                  const allItems = [...st.interactions, ...st.messages];
+                  
+                  // Find target assistant message
+                  const targetAssistantMsg = allItems.find((m: any) => 
+                    m.id === messageId || 
+                    m.id === serverMessageId || 
+                    (m as any).originalMessageId === messageId ||
+                    (m as any).originalMessageId === serverMessageId ||
+                    localIds.includes(m.id || '')
+                  ) || null;
+                  
+                  if (!targetAssistantMsg) {
+                    console.error('[ActionRow] Target assistant message not found');
+                    return;
+                  }
+                  
+                  // Find the last user message before this assistant message
+                  const assistantIdx = allItems.findIndex((m: any) => 
+                    m.id === messageId || 
+                    m.id === serverMessageId || 
+                    (m as any).originalMessageId === messageId ||
+                    (m as any).originalMessageId === serverMessageId ||
+                    localIds.includes(m.id || '')
+                  );
+                  
+                  let lastUserMsg: any = null;
+                  if (assistantIdx > 0) {
+                    // Search backwards for user message
+                    for (let i = assistantIdx - 1; i >= 0; i--) {
+                      const item = allItems[i];
+                      const role = (item as any).role || (item as any).kind || '';
+                      const isUser = role === 'user' || role === 'discovery.query';
+                      const content = (item as any).content || (item as any).contentSanitized || '';
+                      if (isUser && content && content.trim()) {
+                        lastUserMsg = item;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  // Build context with exactly 3 messages: user, assistant, compliance warning
+                  const contextMessages: Array<{ role: string; content: string }> = [];
+                  
+                  if (lastUserMsg) {
+                    const userContent = lastUserMsg.content || (lastUserMsg as any).contentSanitized || '';
+                    if (userContent.trim()) {
+                      contextMessages.push({ role: 'user', content: userContent });
+                    }
+                  }
+                  
+                  const assistantContent = targetAssistantMsg.content || (targetAssistantMsg as any).contentSanitized || '';
+                  if (assistantContent.trim()) {
+                    contextMessages.push({ role: 'assistant', content: assistantContent });
+                  }
+                  
+                  // Add compliance warning as a system message
+                  contextMessages.push({ 
+                    role: 'system', 
+                    content: `COMPLIANCE WARNING: ${frameComplianceCheck.explanation}` 
+                  });
+                  
+                  // Build transcript
+                  const transcript = contextMessages.map(m => 
+                    `${m.role.toUpperCase()}: ${m.content}`
+                  ).join('\n\n');
+                  
+                  // Build prompt for Second Opinion agent
+                  const prompt = (
+                    `User requirement: you should create your answer in ${langName} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\n` +
+                    `You are ${secondOpinionPreset.displayName}, an invited AI participant. Your role is to provide an alternative well-founded perspective considering the compliance warning.\n\n` +
+                    `CONTEXT:\n${transcript}\n\n` +
+                    `TASK:\n` +
+                    `1) Review the user's question, the assistant's response, and the compliance warning.\n` +
+                    `2) Provide an alternative well-founded perspective that:\n` +
+                    `   - Addresses the same question from a different angle\n` +
+                    `   - Challenges the assumptions identified in the compliance warning\n` +
+                    `   - Offers evidence-based alternative viewpoints\n` +
+                    `   - Remains constructive and respectful\n` +
+                    `3) Be less strict than Socratic Counterpoint - focus on offering alternatives rather than rigorous critique.\n` +
+                    `4) Write clearly and accessibly, using natural structure.\n` +
+                    `5) Prioritize practical insights.\n\n` +
+                    `OUTPUT:\n` +
+                    `Provide your alternative well-founded perspective directly, without prefaces or meta-commentary.`
+                  );
+                  
+                  // Create indicator message before calling agent
+                  const indicatorContent = `${t('unfold.actions.agentInvoked')} ${secondOpinionPreset.displayName}`;
+                  await useGenaiChatStore.getState().createIndicatorMessage(indicatorContent, 'action.bring_in', serverMessageId, { agentProfile: { provider: secondOpinionPreset.provider, model: model, capabilities: { tools: !!secondOpinionPreset.capabilities?.tools, webSearch: !!secondOpinionPreset.capabilities?.webSearch, reasoning: !!secondOpinionPreset.capabilities?.reasoning, refinePrevious: !!secondOpinionPreset.capabilities?.refinePrevious }, params: secondOpinionPreset.params } });
+                  await useGenaiChatStore.getState().startStream({ prompt, tools, options: { ...options, __lang: preferredLang }, agentMeta: { displayName: secondOpinionPreset.displayName, agentProfile: { provider: secondOpinionPreset.provider, model: model, capabilities: { tools: !!secondOpinionPreset.capabilities?.tools, webSearch: !!secondOpinionPreset.capabilities?.webSearch, reasoning: !!secondOpinionPreset.capabilities?.reasoning, refinePrevious: !!secondOpinionPreset.capabilities?.refinePrevious }, params: secondOpinionPreset.params }, subkind: 'agent.bring_in', replyTo: serverMessageId }, suppressUserEcho: true });
+                } catch (err) {
+                  console.error('[ActionRow] Failed to invoke Second Opinion agent', err);
+                }
+              }}
+              className="mt-2 rounded-lg px-2 py-1 text-[11px] transition-colors"
+              style={{
+                backgroundColor: 'var(--white-10)',
+                color: 'var(--text-secondary-strong)',
+                border: '1px solid var(--overlay-line-90)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-15)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+              }}
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 9c0 1.5-1.5 3-3 3s-3-1.5-3-3 1.5-3 3-3 3 1.5 3 3" />
+                <path d="M8 9H5c-1.5 0-3 1.5-3 3v2" />
+                <path d="M16 9c0 1.5 1.5 3 3 3s3-1.5 3-3-1.5-3-3-3-3 1.5-3 3" />
+                <path d="M16 9h3c1.5 0 3 1.5 3 3v2" />
+                <circle cx="12" cy="9" r="1.5" />
+              </svg>
+              <span>{t('unfold.actions.secondOpinion')}</span>
+            </button>
           </div>
         </div>
       )}

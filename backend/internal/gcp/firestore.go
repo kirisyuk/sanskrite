@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"cloud.google.com/go/firestore"
@@ -65,4 +66,45 @@ func (g *GCSClient) ReadObject(ctx context.Context, bucket, object string) ([]by
 	}
 	defer r.Close()
 	return io.ReadAll(r)
+}
+
+// UpdateMetadata updates metadata for an existing GCS object without re-uploading content
+func (g *GCSClient) UpdateMetadata(ctx context.Context, bucket, object string, metadata map[string]string) error {
+	obj := g.client.Bucket(bucket).Object(object)
+	attrs, err := obj.Attrs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get object attributes: %w", err)
+	}
+
+	// Merge new metadata with existing metadata
+	newMetadata := make(map[string]string)
+	if attrs.Metadata != nil {
+		for k, v := range attrs.Metadata {
+			newMetadata[k] = v
+		}
+	}
+	for k, v := range metadata {
+		newMetadata[k] = v
+	}
+
+	// Update object with new metadata
+	objAttrs := storage.ObjectAttrsToUpdate{
+		Metadata: newMetadata,
+	}
+	_, err = obj.Update(ctx, objAttrs)
+	return err
+}
+
+// GetMetadata retrieves metadata for a GCS object
+// Returns empty map (not nil) if metadata is empty, for easier iteration
+func (g *GCSClient) GetMetadata(ctx context.Context, bucket, object string) (map[string]string, error) {
+	obj := g.client.Bucket(bucket).Object(object)
+	attrs, err := obj.Attrs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get object attributes: %w", err)
+	}
+	if attrs.Metadata == nil {
+		return make(map[string]string), nil
+	}
+	return attrs.Metadata, nil
 }

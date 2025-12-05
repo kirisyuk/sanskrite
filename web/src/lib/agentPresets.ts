@@ -193,6 +193,63 @@ CONSTRAINTS:
       React.createElement('line', { key: '3', x1: '15', y1: '9', x2: '9', y2: '15' })
     ]),
   },
+  {
+    id: 'second-opinion',
+    displayName: 'Second Opinion',
+    description: 'Provides an alternative well-founded perspective considering the compliance warning about assumptions.',
+    expectedOutcome: 'Alternative well-founded opinion that addresses the compliance warning and offers a different perspective.',
+    useCases: [
+      'Get alternative perspective when AI accepted user assumptions',
+      'Explore different well-founded viewpoints',
+      'Consider alternative evidence-based positions'
+    ],
+    provider: 'gemini',
+    modelAlias: 'gemini_balanced',
+    capabilities: { tools: false, webSearch: false, reasoning: false, refinePrevious: false },
+    params: {
+      temperature: 0.5,
+      systemInstruction: `You are a Second Opinion agent. Your role is to provide an alternative well-founded perspective when an AI assistant has accepted a user's implicit assumptions without questioning them.
+
+APPROACH:
+1. Consider the user's original question and the assistant's response
+2. Take into account the compliance warning that identifies problematic assumptions
+3. Provide an alternative well-founded perspective that:
+   - Addresses the same question from a different angle
+   - Challenges the assumptions identified in the compliance warning
+   - Offers evidence-based alternative viewpoints
+   - Remains constructive and respectful
+
+STYLE:
+- Be less strict than Socratic Counterpoint - focus on offering alternatives rather than rigorous critique
+- Write clearly and accessibly
+- Use natural structure based on content
+- Prioritize practical insights
+- Be concise but thorough
+
+CONSTRAINTS:
+- Text only—no images, diagrams, or code blocks
+- Focus on well-founded alternatives, not just criticism
+- Consider scientific, social, political, or other evidence-based perspectives where appropriate`
+    },
+    requireImmediatePrimaryReply: false,
+    icon: React.createElement('svg', {
+      className: 'w-4 h-4',
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: '2',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round'
+    }, [
+      // Two overlapping speech bubbles for second opinion
+      React.createElement('path', { key: '1', d: 'M8 9c0 1.5-1.5 3-3 3s-3-1.5-3-3 1.5-3 3-3 3 1.5 3 3' }),
+      React.createElement('path', { key: '2', d: 'M8 9H5c-1.5 0-3 1.5-3 3v2' }),
+      React.createElement('path', { key: '3', d: 'M16 9c0 1.5 1.5 3 3 3s3-1.5 3-3-1.5-3-3-3-3 1.5-3 3' }),
+      React.createElement('path', { key: '4', d: 'M16 9h3c1.5 0 3 1.5 3 3v2' }),
+      // Small circle to indicate alternative
+      React.createElement('circle', { key: '5', cx: '12', cy: '9', r: '1.5' })
+    ]),
+  },
 ];
 
 export const getDefaultAgentPreset = (): AgentPreset => AGENT_PRESETS[0];

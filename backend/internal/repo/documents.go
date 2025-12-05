@@ -105,6 +105,15 @@ func (r *DocumentsRepository) uploadContent(ctx context.Context, d *models.Docum
 		"documentId": d.ID,
 		"title":      d.Title,
 	}
+	// Extract projectId from SourceID (format: project:projectId) or Attrs
+	if d.SourceID != "" && strings.HasPrefix(d.SourceID, "project:") {
+		projectID := strings.TrimPrefix(d.SourceID, "project:")
+		metadata["projectId"] = projectID
+	} else if d.Attrs != nil {
+		if pid, ok := d.Attrs["projectId"].(string); ok && pid != "" {
+			metadata["projectId"] = pid
+		}
+	}
 	if err := r.storage.UploadBytes(ctx, r.bucket, objectPath, []byte(d.FullText), contentType, metadata); err != nil {
 		return nil, fmt.Errorf("failed to upload document content to GCS: %w", err)
 	}

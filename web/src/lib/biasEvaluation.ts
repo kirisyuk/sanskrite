@@ -24,22 +24,26 @@ export async function evaluateBias(params: {
 }): Promise<void> {
   const { messageId, messageRole, textToEvaluate, contextText, evalModel, preferredLang } = params;
 
-  // Check if evaluation is already in progress for this message
-  if (evaluatingBias.has(messageId)) {
-    console.log('[BiasEval] Evaluation already in progress, skipping', { messageId, messageRole });
-    return;
-  }
-
-  // Check if eval.bias already exists for this message
   const genaiChat = useGenaiChatStore.getState();
   const map = (genaiChat as any).persistedByLocalId || {};
   const serverId = map[messageId] || messageId;
+  
+  // Build reverse map for bidirectional lookup
   const reverseMap: Record<string, string[]> = {};
   Object.entries(map).forEach(([local, server]) => {
     if (!reverseMap[server as string]) reverseMap[server as string] = [];
     reverseMap[server as string].push(local);
   });
-  const localIds = reverseMap[messageId] || [];
+  const localIds = reverseMap[serverId] || [];
+
+  // Check if evaluation is already in progress for this message (check all known IDs)
+  const allIds = [messageId, serverId, ...localIds];
+  if (allIds.some(id => evaluatingBias.has(id))) {
+    console.log('[BiasEval] Evaluation already in progress, skipping', { messageId, messageRole });
+    return;
+  }
+
+  // Check if eval.bias already exists for this message
   const existingEvalBias = [...genaiChat.interactions].reverse().find((it: any) => 
     it.subkind === 'eval.bias' && 
     (it.replyTo === messageId || (serverId && it.replyTo === serverId) || localIds.includes(it.replyTo || ''))
@@ -49,8 +53,8 @@ export async function evaluateBias(params: {
     return;
   }
 
-  // Mark as evaluating
-  evaluatingBias.add(messageId);
+  // Mark all IDs as evaluating
+  allIds.forEach(id => evaluatingBias.add(id));
 
   const langName = (() => {
     switch (preferredLang) {
@@ -379,10 +383,10 @@ ${evalInstruction} Return only the JSON.`;
       })();
     }
   } catch (e) {
-    console.warn('[BiasEval] Failed to create eval.bias', e);
+    console.warn('[BiasEval] Failed to evaluate', e);
   } finally {
-    // Always remove from evaluating set
-    evaluatingBias.delete(messageId);
+    // Remove from tracking
+    allIds.forEach(id => evaluatingBias.delete(id));
   }
 }
 

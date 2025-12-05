@@ -38,6 +38,8 @@ type GenAIHandler struct {
 	docsRepo     *repo.DocumentsRepository
 	chunksRepo   *repo.ChunksRepository
 	emb          ai.EmbeddingProvider
+	storage      StorageClient
+	bucket       string
 	// Graph tool dependencies (optional, wired via WithGraphTools)
 	graphEnabled bool
 	// Research mode dependencies (optional, wired via WithTavilyClient)
@@ -107,12 +109,16 @@ func (h *GenAIHandler) WithCoreDocsTools(
 	docsRepo *repo.DocumentsRepository,
 	chunksRepo *repo.ChunksRepository,
 	emb ai.EmbeddingProvider,
+	storage StorageClient,
+	bucket string,
 ) *GenAIHandler {
 	h.coreDocs = coreDocs
 	h.interactions = interactions
 	h.docsRepo = docsRepo
 	h.chunksRepo = chunksRepo
 	h.emb = emb
+	h.storage = storage
+	h.bucket = bucket
 	return h
 }
 
@@ -953,6 +959,8 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 				h.docsRepo,
 				h.chunksRepo,
 				h.emb,
+				h.storage,
+				h.bucket,
 				h.publisher,
 				auth.TenantID,
 				projectID,

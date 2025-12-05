@@ -766,7 +766,7 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 		if ds.LastFoundAt != nil {
 			lastFoundAtStr = ds.LastFoundAt.Format(time.RFC3339)
 		}
-		
+
 		m := map[string]interface{}{
 			"id":            ds.ID,
 			"tenantId":      ds.TenantID,
@@ -1103,7 +1103,7 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 	if body.Subkind != nil {
 		h.logger.Printf("CreateProjectInteraction: creating %s interaction with subkind=%s", k, *body.Subkind)
 	}
-	
+
 	id, err := h.interactionsRepo.Create(r.Context(), &repo.Interaction{
 		TenantID:                 authInfo.TenantID,
 		ProjectID:                projectID,
@@ -1380,15 +1380,31 @@ func (h *DiscoveryHandler) VertexAISearch(w http.ResponseWriter, r *http.Request
 	// Allow access to tenant's own documents + global documents
 	tenantFilter := fmt.Sprintf("tenantId:\"%s\" OR tenantId:\"global\"", auth.TenantID)
 
+	// Build project-aware filter
+	// Documents are indexed with sourceId="project:{projectID}" or projectId in metadata
+	// Try to filter by sourceId first (more reliable), fallback to projectId if available
+	projectSourceID := fmt.Sprintf("project:%s", projectID)
+	projectFilter := fmt.Sprintf(`(sourceId:"%s" OR sourceId:"global" OR projectId:"%s" OR projectId:"global")`, projectSourceID, projectID)
+
+	// Combine filters: tenant AND project
+	baseFilter := fmt.Sprintf("(%s) AND (%s)", tenantFilter, projectFilter)
+
 	// Combine with user-provided filter if present
-	finalFilter := tenantFilter
+	finalFilter := baseFilter
 	if body.Filter != "" {
-		finalFilter = fmt.Sprintf("(%s) AND (%s)", tenantFilter, body.Filter)
+		finalFilter = fmt.Sprintf("(%s) AND (%s)", baseFilter, body.Filter)
 	}
+
+	// Request more results for client-side filtering (in case Vertex AI Search doesn't support all filter fields)
+	requestPageSize := body.PageSize
+	if requestPageSize < 10 {
+		requestPageSize = 10 // Minimum to have buffer for filtering
+	}
+	requestPageSize = requestPageSize * 3 // Get 3x more for filtering
 
 	searchReq := &ai.SearchRequest{
 		Query:    body.Query,
-		PageSize: body.PageSize,
+		PageSize: requestPageSize,
 		Filter:   finalFilter,
 	}
 	if body.PageToken != "" {
@@ -1396,10 +1412,95 @@ func (h *DiscoveryHandler) VertexAISearch(w http.ResponseWriter, r *http.Request
 	}
 	searchResp, err := h.vertexSearchClient.Search(r.Context(), searchReq)
 	if err != nil {
-		h.logger.Printf("Vertex AI Search error: %v", err)
-		WriteInternalError(w, "Search failed")
-		return
+		// If filter fails (fields may not be indexed), try without project filter
+		if strings.Contains(err.Error(), "Unsupported field") || strings.Contains(err.Error(), "Invalid filter") {
+			h.logger.Printf("Vertex AI Search filter failed, trying without project filter: %v", err)
+			// Fallback to tenant-only filter
+			fallbackFilter := tenantFilter
+			if body.Filter != "" {
+				fallbackFilter = fmt.Sprintf("(%s) AND (%s)", tenantFilter, body.Filter)
+			}
+			searchReq.Filter = fallbackFilter
+			searchResp, err = h.vertexSearchClient.Search(r.Context(), searchReq)
+			if err != nil {
+				h.logger.Printf("Vertex AI Search error: %v", err)
+				WriteInternalError(w, "Search failed")
+				return
+			}
+		} else {
+			h.logger.Printf("Vertex AI Search error: %v", err)
+			WriteInternalError(w, "Search failed")
+			return
+		}
 	}
+
+	// Filter results client-side by projectId (in case Vertex AI Search filter didn't work)
+	// Extract projectId from structData, sourceId, or URI
+	filteredResults := make([]ai.SearchResult, 0, body.PageSize)
+	for _, result := range searchResp.Results {
+		docProjectID := ""
+		docTenantID := ""
+
+		// Try to get from structData
+		if result.Document.StructData != nil {
+			if pid, ok := result.Document.StructData["projectId"].(string); ok {
+				docProjectID = pid
+			}
+			if tid, ok := result.Document.StructData["tenantId"].(string); ok {
+				docTenantID = tid
+			}
+			// Also check sourceId for projectId (format: project:projectId)
+			if docProjectID == "" {
+				if sourceID, ok := result.Document.StructData["sourceId"].(string); ok {
+					if strings.HasPrefix(sourceID, "project:") {
+						docProjectID = strings.TrimPrefix(sourceID, "project:")
+					}
+				}
+			}
+		}
+
+		// If not found in structData, try to extract from URI (format: gs://bucket/tenantId/sourceId/docId.txt)
+		if docProjectID == "" && result.Document.URI != "" && strings.HasPrefix(result.Document.URI, "gs://") {
+			uriWithoutPrefix := strings.TrimPrefix(result.Document.URI, "gs://")
+			parts := strings.Split(uriWithoutPrefix, "/")
+			if len(parts) >= 3 {
+				docTenantID = parts[1] // tenantId from path
+				sourceID := parts[2]   // sourceId (e.g., project:test-project)
+				if strings.HasPrefix(sourceID, "project:") {
+					docProjectID = strings.TrimPrefix(sourceID, "project:")
+				}
+			}
+		}
+
+		// Filter by tenantId (required)
+		if docTenantID != "" && docTenantID != auth.TenantID && docTenantID != "global" {
+			continue // Skip documents from other tenants
+		}
+
+		// Filter by projectId (required)
+		// Allow documents from this project or global documents
+		if docProjectID != "" {
+			if docProjectID != projectID && docProjectID != "global" {
+				continue // Skip documents from other projects
+			}
+			// Document has projectId and it matches (projectID or global)
+			filteredResults = append(filteredResults, result)
+		} else {
+			// Document doesn't have projectId - might be old format
+			// Only include if we haven't filled the page yet (prefer documents with projectId)
+			if len(filteredResults) < body.PageSize {
+				filteredResults = append(filteredResults, result)
+			}
+		}
+
+		// Stop if we have enough results
+		if len(filteredResults) >= body.PageSize {
+			break
+		}
+	}
+
+	// Update response with filtered results
+	searchResp.Results = filteredResults
 	// Log search event if repository is available
 	if h.searchRepo != nil {
 		var docIDs []string

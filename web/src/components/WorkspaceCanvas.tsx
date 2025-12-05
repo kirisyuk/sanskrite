@@ -477,10 +477,10 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       for (const { project, documents } of currentProjectsWithDocs) {
         for (const doc of documents) {
           totalDocs++;
-          if (!doc.storagePath || doc.id === 'local-unfold') {
-            if (!doc.storagePath) docsWithoutStoragePath++;
+          if (doc.id === 'local-unfold') {
             continue;
           }
+          if (!doc.storagePath) docsWithoutStoragePath++;
           
           const existingStatus = indexStatuses[doc.id];
           // Check if we need to refresh (no status or status is older than 5 minutes)
@@ -537,7 +537,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       
       for (const { project, documents } of currentProjectsWithDocs) {
         for (const doc of documents) {
-          if (!doc.storagePath || doc.id === 'local-unfold') {
+          if (doc.id === 'local-unfold') {
             continue;
           }
           
@@ -586,10 +586,6 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   }, [isOpen, currentProjectsWithDocs, bigqueryStatusesKeys, setDocumentBigQueryStatus, getBigQueryStatuses]);
 
   const getIndexedStatus = React.useCallback((doc: CoreDoc): { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string } => {
-    if (!doc.storagePath) {
-      return { status: 'not_indexed', text: t('unfold.workspace.notIndexed') };
-    }
-    
     const status = currentIndexStatuses[doc.id];
     if (!status) {
       return { status: 'unknown', text: t('unfold.workspace.unknown') };

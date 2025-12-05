@@ -159,6 +159,10 @@ func (h *ShareHandler) GetPublicShare(w http.ResponseWriter, r *http.Request) {
 		Table      [][]any  `json:"table"`
 		Sources    []string `json:"sources"`
 	}
+	type PubRelation struct {
+		Type     string `json:"type"`
+		TargetID string `json:"targetId"`
+	}
 	type PubInteraction struct {
 		ID               string                    `json:"id"`
 		Kind             string                    `json:"kind"`
@@ -172,6 +176,7 @@ func (h *ShareHandler) GetPublicShare(w http.ResponseWriter, r *http.Request) {
 		CreatedAt        time.Time                 `json:"createdAt"`
 		Author           *PubAuthor                `json:"author,omitempty"`
 		Metadata         *repo.InteractionMetadata `json:"metadata,omitempty"`
+		Relations        []PubRelation             `json:"relations,omitempty"`
 	}
 	pub := struct {
 		V     string `json:"v"`
@@ -200,9 +205,16 @@ func (h *ShareHandler) GetPublicShare(w http.ResponseWriter, r *http.Request) {
 
 	// Map interactions (sanitize)
 	for _, it := range items {
-		// Only 'user' | 'assistant'
-		if it.Kind != "user" && it.Kind != "assistant" && it.Kind != "discovery.query" && it.Kind != "discovery.answer" {
-			continue
+		// Include 'user' | 'assistant' | 'system' (for compliance warnings and other evaluations)
+		// Also include 'note' with 'discussion.flow.analysis' subkind (for Discussion Frame)
+		// Also include legacy discovery.query/discovery.answer for backward compatibility
+		if it.Kind != "user" && it.Kind != "assistant" && it.Kind != "system" && it.Kind != "discovery.query" && it.Kind != "discovery.answer" {
+			// Include note interactions with discussion.flow.analysis subkind for Discussion Frame
+			if it.Kind == "note" && it.Subkind != nil && *it.Subkind == "discussion.flow.analysis" {
+				// Will be handled separately below
+			} else {
+				continue
+			}
 		}
 		kind := it.Kind
 		if kind == "discovery.query" {
@@ -210,6 +222,18 @@ func (h *ShareHandler) GetPublicShare(w http.ResponseWriter, r *http.Request) {
 		}
 		if kind == "discovery.answer" {
 			kind = "assistant"
+		}
+		// Keep 'note' kind for discussion.flow.analysis interactions (Discussion Frame)
+		if kind == "note" && it.Subkind != nil && *it.Subkind == "discussion.flow.analysis" {
+			kind = "note"
+		}
+		// Convert relations to PubRelation format
+		var relations []PubRelation
+		if len(it.Relations) > 0 {
+			relations = make([]PubRelation, len(it.Relations))
+			for i, rel := range it.Relations {
+				relations[i] = PubRelation{Type: rel.Type, TargetID: rel.TargetID}
+			}
 		}
 		pi := PubInteraction{
 			ID:               it.ID,
@@ -222,6 +246,7 @@ func (h *ShareHandler) GetPublicShare(w http.ResponseWriter, r *http.Request) {
 			Sources:          it.Sources,
 			CreatedAt:        it.CreatedAt,
 			Metadata:         it.Metadata,
+			Relations:        relations,
 		}
 		if it.Author != nil {
 			pi.Author = &PubAuthor{Kind: it.Author.Kind, DisplayName: it.Author.DisplayName}

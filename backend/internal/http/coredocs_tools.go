@@ -22,6 +22,8 @@ type CoreDocsToolExecutor struct {
 	docsRepo     *repo.DocumentsRepository
 	chunksRepo   *repo.ChunksRepository
 	emb          ai.EmbeddingProvider
+	storage      StorageClient
+	bucket       string
 	publisher    Publisher
 	tenantID     string
 	projectID    string
@@ -47,6 +49,8 @@ func NewCoreDocsToolExecutor(
 	docsRepo *repo.DocumentsRepository,
 	chunksRepo *repo.ChunksRepository,
 	emb ai.EmbeddingProvider,
+	storage StorageClient,
+	bucket string,
 	publisher Publisher,
 	tenantID, projectID, streamID string,
 	logger *log.Logger,
@@ -57,6 +61,8 @@ func NewCoreDocsToolExecutor(
 		docsRepo:     docsRepo,
 		chunksRepo:   chunksRepo,
 		emb:          emb,
+		storage:      storage,
+		bucket:       bucket,
 		publisher:    publisher,
 		tenantID:     tenantID,
 		projectID:    projectID,
@@ -336,14 +342,28 @@ func (e *CoreDocsToolExecutor) createCoreDoc(ctx context.Context, args json.RawM
 		return nil, fmt.Errorf("filename, contentType, and content are required")
 	}
 
-	// Persist to storage if available
-	var storagePath *string
-	// Note: storage would need to be passed to executor if we want to use it
-	// For now, store content in ExtractedText
-
 	now := time.Now().UTC()
 	size := int64(len([]byte(params.Content)))
 	status := "parsed"
+
+	// Upload content to GCS to ensure storagePath is always set
+	var storagePath *string
+	if e.storage != nil && e.bucket != "" {
+		objectPath := fmt.Sprintf("%s/%s/%d-%s", e.tenantID, e.projectID, time.Now().UnixNano(), sanitizeFilename(params.Filename))
+		metadata := map[string]string{
+			"tenantId":  e.tenantID,
+			"projectId": e.projectID,
+			"filename":  params.Filename,
+			"docType":   "tool_generated",
+		}
+		if err := e.storage.UploadBytes(ctx, e.bucket, objectPath, []byte(params.Content), params.ContentType, metadata); err == nil {
+			p := fmt.Sprintf("gs://%s/%s", e.bucket, objectPath)
+			storagePath = &p
+		} else if e.logger != nil {
+			e.logger.Printf("Warning: failed to upload tool-created CoreDoc to storage: %v", err)
+		}
+	}
+
 	coreDoc := &models.CoreDoc{
 		TenantID:      e.tenantID,
 		ProjectID:     e.projectID,
@@ -468,6 +488,22 @@ func (e *CoreDocsToolExecutor) updateCoreDoc(ctx context.Context, args json.RawM
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
 	return b, nil
+}
+
+// sanitizeFilename keeps ASCII letters, digits, dash, underscore, dot; replaces others with underscore
+func sanitizeFilename(name string) string {
+	b := make([]rune, 0, len(name))
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+			b = append(b, r)
+		} else {
+			b = append(b, '_')
+		}
+	}
+	if len(b) == 0 {
+		return "file"
+	}
+	return string(b)
 }
 
 // updateCoreDocFragment performs fragmentary updates to a CoreDoc

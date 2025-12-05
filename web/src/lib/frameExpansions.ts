@@ -20,11 +20,6 @@ export async function generateFrameExpansions(
   assistantContent: string,
   userMessages?: string[]
 ): Promise<void> {
-  // Check if generation is already in progress for this message
-  if (generatingExpansions.has(assistantMessageId)) {
-    return;
-  }
-
   const genaiChat = useGenaiChatStore.getState();
   const projectId = genaiChat.projectId;
   
@@ -40,6 +35,12 @@ export async function generateFrameExpansions(
   });
   // Fix: use serverId to lookup in reverseMap, as reverseMap keys are server IDs
   const localIds = reverseMap[serverId] || [];
+
+  // Check if generation is already in progress for this message (check all known IDs)
+  const allIds = [assistantMessageId, serverId, ...localIds];
+  if (allIds.some(id => generatingExpansions.has(id))) {
+    return;
+  }
   
   // Check if expansion interaction already exists
   const existingExpansion = genaiChat.interactions.find((it) => 
@@ -52,8 +53,8 @@ export async function generateFrameExpansions(
     return;
   }
 
-  // Mark as generating
-  generatingExpansions.add(assistantMessageId);
+  // Mark all IDs as generating
+  allIds.forEach(id => generatingExpansions.add(id));
 
   try {
     const settingsState = useGenAISettings.getState();
@@ -290,7 +291,7 @@ ${truncatedAssistantContent}`;
     console.warn('[FrameExpansions] Failed to generate expansions', e);
   } finally {
     // Always remove from generating set
-    generatingExpansions.delete(assistantMessageId);
+    allIds.forEach(id => generatingExpansions.delete(id));
   }
 }
 

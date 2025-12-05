@@ -318,7 +318,7 @@ func main() {
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
 			WithModelManager(modelManager).
 			WithAIExecutor(exec). // Wire task executor for model mode (structured tasks)
-			WithCoreDocsTools(coreDocsRepo, interactionsRepo, docsRepo, chunksRepo, emb).
+			WithCoreDocsTools(coreDocsRepo, interactionsRepo, docsRepo, chunksRepo, emb, gcsClient, bucket).
 			WithGraphTools(true) // Enable graph tools
 
 		// Initialize Tavily client (shared for both Research mode and Web Search tools)

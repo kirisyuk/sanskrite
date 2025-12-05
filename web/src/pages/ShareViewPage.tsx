@@ -6,13 +6,18 @@ import rehypeRaw from 'rehype-raw';
 import ChatGraphMessage from '../components/ChatGraphMessage';
 import ChatMessage from '../components/ChatMessage';
 import { api } from '../lib/api';
+import { useTranslation } from 'react-i18next';
+import { ThemeContext } from '../components/ThemeProvider';
+import logoDarkTheme from '../assets/hatl-dark-theme.png';
+import logoLightTheme from '../assets/hatl-light-theme.png';
 
 export default function ShareViewPage() {
   const { token } = useParams<{ token: string }>();
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [data, setData] = React.useState<any | null>(null);
-  const [theme, setTheme] = React.useState<'light' | 'dark'>('dark');
+  const { theme, setTheme } = React.useContext(ThemeContext);
+  const { t } = useTranslation();
 
   React.useEffect(() => {
     let mounted = true;
@@ -28,27 +33,66 @@ export default function ShareViewPage() {
     return () => { mounted = false; };
   }, [token]);
 
-  // Load theme from localStorage on mount and apply to document
-  React.useEffect(() => {
-    const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
-    if (savedTheme) {
-      setTheme(savedTheme);
-      document.documentElement.setAttribute('data-theme', savedTheme);
-    } else {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    }
-  }, []);
-
-  // Apply theme changes to document element
-  React.useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
-
   const toggleTheme = () => {
-    const newTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(newTheme);
-    localStorage.setItem('theme', newTheme);
+    setTheme(theme === 'dark' ? 'light' : 'dark');
   };
+
+  // Build map of compliance warnings by assistant message ID (via replyTo or relations)
+  // Must be called before early returns to follow React hooks rules
+  const items = React.useMemo(() => {
+    return Array.isArray(data?.interactions) ? data.interactions : [];
+  }, [data]);
+
+  const complianceWarnings = React.useMemo(() => {
+    const map: Record<string, { confidence: number; explanation: string }> = {};
+    items.forEach((it: any) => {
+      if (it.kind === 'system' && it.subkind === 'eval.frame_compliance') {
+        try {
+          const content = it.contentSanitized || it.content || '{}';
+          const parsed = JSON.parse(content);
+          if (parsed.confidence >= 0.5 && parsed.explanation) {
+            // Link via replyTo
+            if (it.replyTo) {
+              map[it.replyTo] = { confidence: parsed.confidence, explanation: parsed.explanation };
+            }
+            // Also check relations for targetId
+            if (it.relations && Array.isArray(it.relations)) {
+              it.relations.forEach((rel: any) => {
+                if (rel.targetId && (rel.type === 'compliance_check' || rel.type === 'evaluates')) {
+                  map[rel.targetId] = { confidence: parsed.confidence, explanation: parsed.explanation };
+                }
+              });
+            }
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+    });
+    return map;
+  }, [items]);
+
+  // Extract Discussion Frame from note interaction with discussion.flow.analysis subkind
+  const discussionFrame = React.useMemo(() => {
+    const analysisInteraction = items.find(
+      (it: any) => it.kind === 'note' && it.subkind === 'discussion.flow.analysis'
+    );
+    if (analysisInteraction?.content || analysisInteraction?.contentSanitized) {
+      try {
+        const content = analysisInteraction.contentSanitized || analysisInteraction.content || '{}';
+        const parsed = JSON.parse(content);
+        if (parsed.frame && typeof parsed.frame === 'string' && parsed.frame.trim()) {
+          return parsed.frame.trim();
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
+    return null;
+  }, [items]);
+
+  // State for Discussion Frame collapse
+  const [isFrameExpanded, setIsFrameExpanded] = React.useState(true);
 
   if (loading) {
     return (
@@ -77,7 +121,6 @@ export default function ShareViewPage() {
   }
 
   const proj = data.project || {};
-  const items = Array.isArray(data.interactions) ? data.interactions : [];
 
   return (
     <div className="min-h-screen" style={{ background: 'var(--bg-root)' }}>
@@ -121,12 +164,96 @@ export default function ShareViewPage() {
           </button>
         </div>
 
+        {/* Discussion Frame (collapsible) */}
+        {discussionFrame && (
+          <div className="mb-4 rounded-lg" style={{ 
+            backgroundColor: 'var(--bg-elevated)', 
+            border: '1px solid var(--overlay-line-90)',
+            overflow: 'hidden'
+          }}>
+            <button
+              onClick={() => setIsFrameExpanded(!isFrameExpanded)}
+              className="w-full flex items-center justify-between p-3 text-left"
+              style={{ 
+                color: 'var(--text-heading)',
+                cursor: 'pointer',
+                backgroundColor: 'transparent',
+                border: 'none'
+              }}
+            >
+              <span className="text-[13px] font-semibold" style={{ color: '#669999' }}>
+                Discussion Frame
+              </span>
+              <svg 
+                className="w-4 h-4 transition-transform" 
+                style={{ 
+                  transform: isFrameExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                  color: 'var(--text-secondary-strong)'
+                }}
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2"
+              >
+                <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+            {isFrameExpanded && (
+              <div className="px-3 pb-3" style={{ color: 'var(--text-secondary-strong)' }}>
+                <div className="text-[12px] leading-relaxed" style={{ 
+                  fontStyle: 'italic',
+                  color: 'var(--text-secondary-strong)'
+                }}>
+                  {discussionFrame}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Divider after Discussion Frame */}
+        {discussionFrame && (
+          <div className="mt-4 mb-4" style={{ borderTop: '1px solid var(--overlay-line-90)' }} />
+        )}
+
         {/* Messages */}
         <div className="space-y-2">
           {items.map((it: any) => {
             const isUser = it.kind === 'user';
+            const isSystem = it.kind === 'system';
             const content = (it.contentSanitized || it.content || '').toString();
             const gd = it.graphData;
+
+            // Skip note interactions with discussion.flow.analysis (shown separately as Discussion Frame)
+            if (it.kind === 'note' && it.subkind === 'discussion.flow.analysis') {
+              return null;
+            }
+
+            // Skip all system interactions with eval.* subkind (except eval.frame_compliance which is shown as compliance warning)
+            // These are metadata evaluations (bias, stance, etc.) and should not be displayed as messages
+            if (isSystem && it.subkind && it.subkind.startsWith('eval.')) {
+              if (it.subkind === 'eval.frame_compliance') {
+                // This will be shown as compliance warning after assistant message
+                return null;
+              }
+              // Skip all other eval.* system interactions (eval.bias, eval.stance, etc.)
+              return null;
+            }
+
+            // Skip assistant interactions that are pure metadata (empty content or only JSON evaluations)
+            // These might be evaluation metadata stored as assistant interactions
+            if (!isUser && !isSystem && (!content || content.trim() === '' || content.trim().startsWith('{'))) {
+              // Check if this looks like a JSON-only interaction (evaluation metadata)
+              try {
+                const parsed = JSON.parse(content);
+                // If it's a valid JSON object with evaluation-like structure, skip it
+                if (parsed && typeof parsed === 'object' && (parsed.biasLevel !== undefined || parsed.thoughtfulnessLevel !== undefined || parsed.expansions !== undefined)) {
+                  return null;
+                }
+              } catch {
+                // Not JSON, continue rendering
+              }
+            }
 
             // Special rendering for action.bring_in indicator messages
             if (isUser && it.subkind === 'action.bring_in') {
@@ -159,32 +286,77 @@ export default function ShareViewPage() {
 
             // Agent accent (if agent contribution)
             const isAgent = it.subkind?.startsWith('agent.');
+            const isAssistant = !isUser && !isSystem;
+
+            // Check for compliance warning for this assistant message
+            const complianceWarning = isAssistant ? complianceWarnings[it.id] : null;
 
             return (
-              <ChatMessage
-                key={it.id}
-                role={isUser ? 'user' : 'assistant'}
-                align={isUser ? 'right' : 'left'}
-                headerText={displayName}
-                leftAccent={isAgent}
-              >
-                {gd ? (
-                  <ChatGraphMessage
-                    chartTitle={gd.chartTitle}
-                    chartType={gd.chartType || 'line'}
-                    table={gd.table}
-                    sources={gd.sources}
-                  />
-                ) : (
-                  <div className="markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-                      {content}
-                    </ReactMarkdown>
+              <React.Fragment key={it.id}>
+                <ChatMessage
+                  role={isUser ? 'user' : 'assistant'}
+                  align={isUser ? 'right' : 'left'}
+                  headerText={displayName}
+                  leftAccent={isAgent}
+                >
+                  {gd ? (
+                    <ChatGraphMessage
+                      chartTitle={gd.chartTitle}
+                      chartType={gd.chartType || 'line'}
+                      table={gd.table}
+                      sources={gd.sources}
+                    />
+                  ) : (
+                    <div className="markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                        {content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+                </ChatMessage>
+                {/* Show compliance warning after assistant message */}
+                {isAssistant && complianceWarning && (
+                  <div className="mt-2" style={{ width: '100%' }}>
+                    <div className="p-2" style={{ backgroundColor: 'var(--warning-10)', borderLeft: '2px solid var(--accent-warning)', borderRadius: '4px' }}>
+                      <div className="text-[11px]" style={{ color: 'var(--text-heading)', lineHeight: '1.4' }}>
+                        {complianceWarning.explanation}
+                      </div>
+                    </div>
                   </div>
                 )}
-              </ChatMessage>
+              </React.Fragment>
             );
           })}
+        </div>
+
+        {/* Footer with logo and tagline */}
+        <div className="mt-8 pt-6" style={{ borderTop: '1px solid var(--overlay-line-90)' }}>
+          <div className="flex flex-col items-center gap-3">
+            {/* Dark theme logo */}
+            <img
+              src={logoDarkTheme}
+              alt="hatl.one"
+              className="h-4 w-auto"
+              style={{
+                display: theme === 'dark' ? 'block' : 'none',
+                filter: 'drop-shadow(0 0 2px rgba(0,0,0,0.6))',
+                opacity: 0.7,
+              }}
+            />
+            {/* Light theme logo */}
+            <img
+              src={logoLightTheme}
+              alt="hatl.one"
+              className="h-4 w-auto"
+              style={{
+                display: theme === 'light' ? 'block' : 'none',
+                opacity: 0.7,
+              }}
+            />
+            <div className="text-[11px]" style={{ color: 'var(--text-secondary)', textAlign: 'center' }}>
+              {t('unfold.share.footer.tagline')}
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -133,7 +133,7 @@ interface GenaiChatState {
   metricOverlayCache: Record<string, { key: string; metric: SxMonitorMetric; content: string; fetchedAt: string }>;
   // Mapping of local ids/message ids -> server interaction ids
   persistedByLocalId: Record<string, string>;
-  pendingAssistantMeta?: { displayName?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } };
+  pendingAssistantMeta?: { displayName?: string; subkind?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } };
   pendingAssistantOptions?: any;
   pendingAssistantPrompt?: string;
   pendingAssistantTools?: any[];
@@ -717,10 +717,22 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             }
             
             // Generate asynchronously without blocking hydration
+            // Skip compliance check for agent responses (they respond to previous messages, not direct user queries)
+            const isAgentResponse = lastAssistant.subkind?.startsWith('agent.') || !!(lastAssistant as any).agentProfile;
             (async () => {
               try {
                 const { generateFrameExpansions } = await import('../lib/frameExpansions');
                 await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+                
+                // Generate frame compliance check only for non-agent responses
+                if (!isAgentResponse) {
+                  try {
+                    const { generateFrameComplianceCheck } = await import('../lib/frameComplianceCheck');
+                    await generateFrameComplianceCheck(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+                  } catch (e) {
+                    console.warn('[hydrateInteractions] Failed to generate frameComplianceCheck', e);
+                  }
+                }
               } catch (e) {
                 console.warn('[hydrateInteractions] Failed to generate frameExpansions', e);
               }
@@ -3896,29 +3908,35 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         })();
 
-        // Generate frame expansions for assistant responses (includes both LLM responses and agent responses)
+        // Generate frame expansions for assistant responses (excludes agent responses)
         (async () => {
           try {
             if (!projectId || projectId === 'local-unfold') return;
+            // Check if this is an agent response - agents don't need compliance eval since they respond to previous messages, not direct user queries
+            const state = get();
+            const meta = state.pendingAssistantMeta;
+            const isAgentResponse = meta?.subkind?.startsWith('agent.') || !!meta?.agentProfile;
+            
             // Count all assistant interactions (including agents) to ensure we have at least 1 response
             // Count includes this one we're about to add, so we check if we'll have >= 1 after adding
             // Exclude ontology interactions and model.chat responses (they are structured data, not conversational content)
-            const currentAssistants = get().interactions.filter((it) => 
+            const currentAssistants = state.interactions.filter((it) => 
               it.kind === 'assistant' &&
               it.subkind !== 'model.chat'
             );
             // After adding this interaction, we'll have currentAssistants.length + 1
             if (currentAssistants.length + 1 < 1) {
-              console.log('[FrameExpansions] Skipping - need at least 1 assistant response');
               return;
             }
             // Generate expansions for the last assistant message
-            // Skip ontology interactions and model.chat responses (they are structured data, not conversational content)
+            // Skip ontology interactions, model.chat responses, and agent responses (they are structured data or responses to previous messages, not direct user queries)
             if (lastAssistant && 
                 lastAssistant.content && 
                 lastAssistant.content.trim() &&
                 (lastAssistant as any).kind !== 'ontology' &&
-                (lastAssistant as any).subkind !== 'model.chat') {
+                (lastAssistant as any).subkind !== 'model.chat' &&
+                !isAgentResponse) {
+              
               // Check if expansion interaction already exists
               const state = get();
               const map = (state as any).persistedByLocalId || {};
@@ -3937,7 +3955,6 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               );
               
               if (existingExpansion) {
-                console.log('[FrameExpansions] Already exists, skipping regeneration', { messageId: lastAssistant.id, expansionId: existingExpansion.id });
                 return;
               }
               
@@ -3991,8 +4008,47 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 }
               }
               
-              const { generateFrameExpansions } = await import('../lib/frameExpansions');
-              await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+              // Run frame expansions, compliance check, and bias evaluation in parallel to reduce latency
+              // Note: compliance check is skipped for agent responses (they respond to previous messages, not direct user queries)
+              const expansionsPromise = (async () => {
+                const { generateFrameExpansions } = await import('../lib/frameExpansions');
+                await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+              })();
+
+              const compliancePromise = isAgentResponse ? Promise.resolve() : (async () => {
+                try {
+                  const { generateFrameComplianceCheck } = await import('../lib/frameComplianceCheck');
+                  await generateFrameComplianceCheck(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+                } catch (e) {
+                  console.warn('[FrameComplianceCheck] generation failed', e);
+                }
+              })();
+
+              const biasPromise = (async () => {
+                try {
+                  const { evaluateBias } = await import('../lib/biasEvaluation');
+                  const settingsStateEval = useGenAISettings.getState();
+                  const evalModel = (settingsStateEval.stanceModel && settingsStateEval.stanceModel.trim())
+                    ? settingsStateEval.stanceModel
+                    : 'gemini_fast';
+                  const preferredLang = (typeof window !== 'undefined'
+                    ? (window.localStorage.getItem('preferredLanguage') || 'EN')
+                    : 'EN').toLowerCase();
+                  const contextText = userMessages.length > 0 ? userMessages[userMessages.length - 1] : undefined;
+                  await evaluateBias({
+                    messageId: lastAssistant.id,
+                    messageRole: 'assistant',
+                    textToEvaluate: lastAssistant.content,
+                    contextText,
+                    evalModel,
+                    preferredLang,
+                  });
+                } catch (e) {
+                  console.warn('[BiasEval] assistant eval failed', e);
+                }
+              })();
+
+              await Promise.all([expansionsPromise, compliancePromise, biasPromise]);
             }
           } catch (e) {
             console.warn('[FrameExpansions] generation failed', e);
