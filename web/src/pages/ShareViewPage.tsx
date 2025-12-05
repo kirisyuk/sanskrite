@@ -46,23 +46,29 @@ export default function ShareViewPage() {
   const complianceWarnings = React.useMemo(() => {
     const map: Record<string, { confidence: number; explanation: string }> = {};
     items.forEach((it: any) => {
-      if (it.kind === 'system' && it.subkind === 'eval.frame_compliance') {
+      // Check by subkind 'eval.frame_compliance' (ignore kind to be safe)
+      if (it.subkind === 'eval.frame_compliance') {
         try {
           const content = it.contentSanitized || it.content || '{}';
           const parsed = JSON.parse(content);
-          if (parsed.confidence >= 0.5 && parsed.explanation) {
-            // Link via replyTo
+          if (parsed.confidence >= 0.6 && parsed.explanation) {
+            const warning = { confidence: parsed.confidence, explanation: parsed.explanation };
+            // Collect all target IDs (replyTo and relations.targetId) to avoid duplicates
+            const targetIds = new Set<string>();
             if (it.replyTo) {
-              map[it.replyTo] = { confidence: parsed.confidence, explanation: parsed.explanation };
+              targetIds.add(it.replyTo);
             }
-            // Also check relations for targetId
             if (it.relations && Array.isArray(it.relations)) {
               it.relations.forEach((rel: any) => {
                 if (rel.targetId && (rel.type === 'compliance_check' || rel.type === 'evaluates')) {
-                  map[rel.targetId] = { confidence: parsed.confidence, explanation: parsed.explanation };
+                  targetIds.add(rel.targetId);
                 }
               });
             }
+            // Add warning once per target ID (avoid duplicates if replyTo == targetId)
+            targetIds.forEach(targetId => {
+              map[targetId] = warning;
+            });
           }
         } catch (e) {
           // Ignore parse errors
@@ -72,10 +78,11 @@ export default function ShareViewPage() {
     return map;
   }, [items]);
 
-  // Extract Discussion Frame from note interaction with discussion.flow.analysis subkind
+  // Extract Discussion Frame from interaction with discussion.flow.analysis subkind
+  // Check by subkind (ignore kind to be safe)
   const discussionFrame = React.useMemo(() => {
     const analysisInteraction = items.find(
-      (it: any) => it.kind === 'note' && it.subkind === 'discussion.flow.analysis'
+      (it: any) => it.subkind === 'discussion.flow.analysis'
     );
     if (analysisInteraction?.content || analysisInteraction?.contentSanitized) {
       try {
@@ -224,8 +231,8 @@ export default function ShareViewPage() {
             const content = (it.contentSanitized || it.content || '').toString();
             const gd = it.graphData;
 
-            // Skip note interactions with discussion.flow.analysis (shown separately as Discussion Frame)
-            if (it.kind === 'note' && it.subkind === 'discussion.flow.analysis') {
+            // Skip interactions with discussion.flow.analysis (shown separately as Discussion Frame)
+            if (it.subkind === 'discussion.flow.analysis') {
               return null;
             }
 
@@ -289,6 +296,7 @@ export default function ShareViewPage() {
             const isAssistant = !isUser && !isSystem;
 
             // Check for compliance warning for this assistant message
+            // Look up by message ID only (warnings are already mapped to message IDs in complianceWarnings)
             const complianceWarning = isAssistant ? complianceWarnings[it.id] : null;
 
             return (

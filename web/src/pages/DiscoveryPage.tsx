@@ -2038,7 +2038,12 @@ const DiscoveryPage: React.FC = () => {
               onModeChange={setUnfoldMode}
               scenariosMode={unfoldSubView === 'scenarios'}
               onSubmit={async (text) => {
-                if (genaiChat.streaming || !text.trim()) return;
+                // CRITICAL: Check fresh state from store, not stale component state
+                // genaiChat.streaming may be stale due to React batching/closure
+                const currentStreaming = useGenaiChatStore.getState().streaming;
+                if (currentStreaming || !text.trim()) {
+                  return;
+                }
                 
                 // Handle Analytics mode separately
                 if (unfoldMode === 'analytics') {

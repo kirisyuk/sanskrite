@@ -31,8 +31,9 @@ const DocumentItem = React.memo<{
   doc: CoreDoc;
   indexedStatus: { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
   bigqueryStatus: { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string };
+  vertexSearchAvailabilityStatus: { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string };
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; extractedText?: string; projectId?: string }) => void;
-}>(({ doc, indexedStatus, bigqueryStatus, onOpenDocument }) => {
+}>(({ doc, indexedStatus, bigqueryStatus, vertexSearchAvailabilityStatus, onOpenDocument }) => {
   const getDocumentIcon = () => (
     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
       <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -84,49 +85,70 @@ const DocumentItem = React.memo<{
             ? `${doc.filename.substring(0, 47)}...` 
             : doc.filename}
         </div>
-        <div className="flex items-center gap-2 mt-1 flex-wrap">
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded"
-            style={{
-              color: indexedStatus.status === 'indexed' 
-                ? 'var(--accent-success)' 
-                : indexedStatus.status === 'not_indexed'
-                ? 'var(--accent-primary)'
-                : indexedStatus.status === 'loading'
-                ? 'var(--text-secondary-strong)'
-                : 'var(--text-tertiary-weak)',
-              backgroundColor: indexedStatus.status === 'indexed'
-                ? 'var(--success-20)'
-                : indexedStatus.status === 'not_indexed'
-                ? 'rgba(255, 169, 77, 0.20)'
-                : indexedStatus.status === 'loading'
-                ? 'var(--white-06)'
-                : 'transparent',
-            }}
-          >
-            {indexedStatus.text}
-          </span>
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded"
-            style={{
-              color: bigqueryStatus.status === 'available' 
-                ? 'var(--accent-success)' 
-                : bigqueryStatus.status === 'not_available'
-                ? 'var(--accent-primary)'
-                : bigqueryStatus.status === 'loading'
-                ? 'var(--text-secondary-strong)'
-                : 'var(--text-tertiary-weak)',
-              backgroundColor: bigqueryStatus.status === 'available'
-                ? 'var(--success-20)'
-                : bigqueryStatus.status === 'not_available'
-                ? 'rgba(255, 169, 77, 0.20)'
-                : bigqueryStatus.status === 'loading'
-                ? 'var(--white-06)'
-                : 'transparent',
-            }}
-          >
-            {bigqueryStatus.text}
-          </span>
+        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+          {/* Indexed status - I */}
+          {(indexedStatus.status === 'indexed' || indexedStatus.status === 'not_indexed' || indexedStatus.status === 'loading') && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+              title={indexedStatus.text}
+              style={{
+                color: indexedStatus.status === 'indexed' 
+                  ? 'var(--accent-success)' 
+                  : indexedStatus.status === 'not_indexed'
+                  ? 'rgba(255, 169, 77, 1)'
+                  : 'var(--text-secondary-strong)',
+                backgroundColor: indexedStatus.status === 'indexed'
+                  ? 'var(--success-20)'
+                  : indexedStatus.status === 'not_indexed'
+                  ? 'rgba(255, 169, 77, 0.20)'
+                  : 'var(--white-06)',
+              }}
+            >
+              I
+            </span>
+          )}
+          {/* Analytics available - A */}
+          {(bigqueryStatus.status === 'available' || bigqueryStatus.status === 'not_available' || bigqueryStatus.status === 'loading') && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+              title={bigqueryStatus.text}
+              style={{
+                color: bigqueryStatus.status === 'available' 
+                  ? 'var(--accent-success)' 
+                  : bigqueryStatus.status === 'not_available'
+                  ? 'rgba(255, 169, 77, 1)'
+                  : 'var(--text-secondary-strong)',
+                backgroundColor: bigqueryStatus.status === 'available'
+                  ? 'var(--success-20)'
+                  : bigqueryStatus.status === 'not_available'
+                  ? 'rgba(255, 169, 77, 0.20)'
+                  : 'var(--white-06)',
+              }}
+            >
+              A
+            </span>
+          )}
+          {/* Vertex AI Search - S */}
+          {(vertexSearchAvailabilityStatus.status === 'available' || vertexSearchAvailabilityStatus.status === 'not_available' || vertexSearchAvailabilityStatus.status === 'loading') && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+              title={vertexSearchAvailabilityStatus.text}
+              style={{
+                color: vertexSearchAvailabilityStatus.status === 'available' 
+                  ? 'var(--accent-success)' 
+                  : vertexSearchAvailabilityStatus.status === 'not_available'
+                  ? 'rgba(255, 169, 77, 1)'
+                  : 'var(--text-secondary-strong)',
+                backgroundColor: vertexSearchAvailabilityStatus.status === 'available'
+                  ? 'var(--success-20)'
+                  : vertexSearchAvailabilityStatus.status === 'not_available'
+                  ? 'rgba(255, 169, 77, 0.20)'
+                  : 'var(--white-06)',
+              }}
+            >
+              S
+            </span>
+          )}
           {doc.sizeBytes && (
             <span
               className="text-[10px]"
@@ -156,12 +178,13 @@ const ProjectSection = React.memo<{
   indexStatuses: Record<string, { indexed: boolean; loading: boolean; lastChecked: number }>;
   getIndexedStatus: (doc: CoreDoc) => { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string };
   getBigQueryStatus: (doc: CoreDoc) => { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string };
+  getVertexSearchAvailabilityStatus: (doc: CoreDoc) => { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string };
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any; projectId?: string }) => void;
   onSourceStatusChange?: (sourceId: string, newStatus: 'active' | 'paused') => void;
   onSourceDelete?: (sourceId: string) => void;
   onSourcePreview?: (source: DataSource) => void;
   onViewDocuments?: (source: DataSource) => void;
-}>(({ project, documents, sources, discussionFrame, getIndexedStatus, getBigQueryStatus, onOpenDocument, onSourceStatusChange, onSourceDelete, onSourcePreview, onViewDocuments }) => {
+}>(({ project, documents, sources, discussionFrame, getIndexedStatus, getBigQueryStatus, getVertexSearchAvailabilityStatus, onOpenDocument, onSourceStatusChange, onSourceDelete, onSourcePreview, onViewDocuments }) => {
   return (
     <div className="mb-6">
       {/* Project header */}
@@ -241,6 +264,7 @@ const ProjectSection = React.memo<{
               doc={doc}
               indexedStatus={getIndexedStatus(doc)}
               bigqueryStatus={getBigQueryStatus(doc)}
+              vertexSearchAvailabilityStatus={getVertexSearchAvailabilityStatus(doc)}
               onOpenDocument={onOpenDocument}
             />
           ))}
@@ -425,6 +449,14 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   const getBigQueryStatuses = React.useCallback(() => useWorkspaceStore.getState().bigqueryStatuses, []);
   
   const [currentBigQueryStatuses, setCurrentBigQueryStatuses] = React.useState(() => getBigQueryStatuses());
+
+  // Vertex Search Availability statuses
+  const vertexSearchAvailabilityStatusesKeys = useWorkspaceStore((s) => Object.keys(s.vertexSearchAvailabilityStatuses).join(','));
+  const setDocumentVertexSearchAvailabilityStatus = useWorkspaceStore((s) => s.setDocumentVertexSearchAvailabilityStatus);
+  
+  const getVertexSearchAvailabilityStatuses = React.useCallback(() => useWorkspaceStore.getState().vertexSearchAvailabilityStatuses, []);
+  
+  const [currentVertexSearchAvailabilityStatuses, setCurrentVertexSearchAvailabilityStatuses] = React.useState(() => getVertexSearchAvailabilityStatuses());
   
   // Обновляем статусы только при реальных изменениях
   React.useEffect(() => {
@@ -461,6 +493,24 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       return hasChanges ? newStatuses : prevStatuses;
     });
   }, [bigqueryStatusesKeys, getBigQueryStatuses]);
+
+  // Обновляем Vertex Search Availability статусы только при реальных изменениях
+  React.useEffect(() => {
+    const newStatuses = getVertexSearchAvailabilityStatuses();
+    setCurrentVertexSearchAvailabilityStatuses((prevStatuses) => {
+      const currentKeys = Object.keys(prevStatuses).join(',');
+      const newKeys = Object.keys(newStatuses).join(',');
+      if (currentKeys !== newKeys) {
+        return newStatuses;
+      }
+      // Проверяем изменения в значениях
+      const hasChanges = Object.keys(newStatuses).some(
+        (key) => prevStatuses[key]?.available !== newStatuses[key]?.available ||
+                 prevStatuses[key]?.loading !== newStatuses[key]?.loading
+      );
+      return hasChanges ? newStatuses : prevStatuses;
+    });
+  }, [vertexSearchAvailabilityStatusesKeys, getVertexSearchAvailabilityStatuses]);
 
   // Check index status for documents - update in background, use cached if available
   React.useEffect(() => {
@@ -585,6 +635,61 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
     checkBigQueryStatuses();
   }, [isOpen, currentProjectsWithDocs, bigqueryStatusesKeys, setDocumentBigQueryStatus, getBigQueryStatuses]);
 
+  // Check Vertex Search Availability status for documents - update in background, use cached if available
+  React.useEffect(() => {
+    if (!isOpen || currentProjectsWithDocs.length === 0) return;
+
+    const checkVertexSearchAvailabilityStatuses = async () => {
+      const vertexStatuses = getVertexSearchAvailabilityStatuses();
+      // Collect all documents that need status check
+      const docsToCheck: Array<{ projectId: string; docId: string }> = [];
+      
+      for (const { project, documents } of currentProjectsWithDocs) {
+        for (const doc of documents) {
+          if (doc.id === 'local-unfold') {
+            continue;
+          }
+          if (!doc.storagePath) continue; // Skip docs without storagePath (they can't be in Vertex Search)
+          
+          const existingStatus = vertexStatuses[doc.id];
+          // Check if we need to refresh (no status or status is older than 5 minutes)
+          const needsCheck = !existingStatus || 
+            (Date.now() - existingStatus.lastChecked > 5 * 60 * 1000);
+          
+          if (needsCheck) {
+            docsToCheck.push({ projectId: project.id, docId: doc.id });
+            // Set loading state immediately
+            setDocumentVertexSearchAvailabilityStatus(doc.id, false, true);
+          }
+        }
+      }
+
+      if (docsToCheck.length > 0) {
+        console.log(`[WorkspaceCanvas] Vertex Search status check: to check=${docsToCheck.length}`);
+      }
+
+      // Check statuses in batches to avoid ERR_INSUFFICIENT_RESOURCES
+      // Process 10 checks at a time
+      const CHECK_BATCH_SIZE = 10;
+      for (let i = 0; i < docsToCheck.length; i += CHECK_BATCH_SIZE) {
+        const batch = docsToCheck.slice(i, i + CHECK_BATCH_SIZE);
+        const checkPromises = batch.map(async ({ projectId, docId }) => {
+          try {
+            const status = await api.docsCheckVertexSearchAvailability(projectId, docId);
+            setDocumentVertexSearchAvailabilityStatus(docId, status.available, false);
+          } catch (err) {
+            console.error(`[WorkspaceCanvas] Failed to check Vertex Search status for ${docId}`, err);
+            setDocumentVertexSearchAvailabilityStatus(docId, false, false);
+          }
+        });
+
+        await Promise.all(checkPromises);
+      }
+    };
+
+    checkVertexSearchAvailabilityStatuses();
+  }, [isOpen, currentProjectsWithDocs, vertexSearchAvailabilityStatusesKeys, setDocumentVertexSearchAvailabilityStatus, getVertexSearchAvailabilityStatuses]);
+
   const getIndexedStatus = React.useCallback((doc: CoreDoc): { status: 'indexed' | 'not_indexed' | 'unknown' | 'loading'; text: string } => {
     const status = currentIndexStatuses[doc.id];
     if (!status) {
@@ -617,6 +722,25 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
       ? { status: 'available', text: t('unfold.workspace.available') }
       : { status: 'not_available', text: t('unfold.workspace.notAvailable') };
   }, [currentBigQueryStatuses, t]);
+
+  const getVertexSearchAvailabilityStatus = React.useCallback((doc: CoreDoc): { status: 'available' | 'not_available' | 'unknown' | 'loading'; text: string } => {
+    if (!doc.storagePath) {
+      return { status: 'not_available', text: t('unfold.workspace.notAvailable') };
+    }
+    
+    const status = currentVertexSearchAvailabilityStatuses[doc.id];
+    if (!status) {
+      return { status: 'unknown', text: t('unfold.workspace.unknown') };
+    }
+    
+    if (status.loading) {
+      return { status: 'loading', text: t('unfold.workspace.checking') };
+    }
+    
+    return status.available 
+      ? { status: 'available', text: t('unfold.workspace.searchable') }
+      : { status: 'not_available', text: t('unfold.workspace.notSearchable') };
+  }, [currentVertexSearchAvailabilityStatuses, t]);
 
   const getProjectSortTimestamp = React.useCallback((project: Project, fallback: number) => {
     const parseDate = (value?: string) => (value ? Date.parse(value) : NaN);
@@ -799,6 +923,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
               indexStatuses={currentIndexStatuses}
               getIndexedStatus={getIndexedStatus}
               getBigQueryStatus={getBigQueryStatus}
+              getVertexSearchAvailabilityStatus={getVertexSearchAvailabilityStatus}
               onOpenDocument={onOpenDocument}
               onSourceStatusChange={(sourceId, newStatus) => {
                 // Update local state immediately

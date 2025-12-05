@@ -564,6 +564,11 @@ class ApiClient {
     return res.data as { available: boolean; reason?: string; error?: string };
   }
 
+  async docsCheckVertexSearchAvailability(projectId: string, docId: string): Promise<{ available: boolean; reason?: string; error?: string }> {
+    const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/vertex-search-availability`);
+    return res.data as { available: boolean; reason?: string; error?: string };
+  }
+
   // Prepare mode: Stage 1 - Analyze documents and generate commands
   async prepareAnalyze(projectId: string, userQuery: string): Promise<{
     commands: Array<{

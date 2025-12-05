@@ -1120,6 +1120,69 @@ func (h *ProjectsHandler) CheckDocumentBigQueryStatus(w http.ResponseWriter, r *
 	WriteJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "not_synced"})
 }
 
+// CheckDocumentVertexSearchAvailability checks if document is available in Vertex AI Search
+func (h *ProjectsHandler) CheckDocumentVertexSearchAvailability(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	if h.coreDocs == nil {
+		WriteInternalError(w, "Core docs repository is not configured")
+		return
+	}
+	if h.vertexSearchClient == nil || !h.vertexSearchClient.IsConfigured() {
+		// If Vertex Search is not configured, return not available
+		WriteJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "vertex_search_not_configured"})
+		return
+	}
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// /api/v1/projects/{id}/docs/{docId}/vertex-search-availability
+	if len(parts) < 7 {
+		WriteBadRequest(w, "INVALID_PATH", "Project and document ID are required")
+		return
+	}
+	projectID, docID := parts[3], parts[5]
+	// Verify project access
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+	// Get the document
+	cd, err := h.coreDocs.Get(r.Context(), docID)
+	if err != nil || cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
+		WriteNotFound(w, "Document not found")
+		return
+	}
+	// Check if document has storagePath (required for Vertex AI Search)
+	if cd.StoragePath == nil || *cd.StoragePath == "" {
+		WriteJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "no_storage_path"})
+		return
+	}
+
+	// Check availability in Vertex AI Search using CheckDocumentStatus
+	// This performs an actual search query to verify the document is searchable
+	available, err := h.vertexSearchClient.CheckDocumentStatus(r.Context(), *cd.StoragePath, authInfo.TenantID)
+	if err != nil {
+		// Log error but return not available (best effort)
+		h.logger.Printf("[ProjectsHandler] Failed to check Vertex Search availability for doc %s: %v", docID, err)
+		WriteJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "check_failed", "error": err.Error()})
+		return
+	}
+
+	if available {
+		WriteJSON(w, http.StatusOK, map[string]any{"available": true})
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "not_available"})
+}
+
 // QueryBigQuery handles POST /api/v1/projects/{id}/analytics/query
 // Executes a natural language query against BigQuery for documents in the project
 func (h *ProjectsHandler) QueryBigQuery(w http.ResponseWriter, r *http.Request) {

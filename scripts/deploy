@@ -956,6 +956,10 @@ deploy_api() {
   }
   echo -e "${GREEN}[api] Go build successful locally${NC}"
 
+  # Clean up any local binaries before Cloud Build (they're not needed, built in Docker)
+  echo -e "${BLUE}[api] Cleaning up local build artifacts...${NC}"
+  (cd "$API_DIR" && rm -f server ws-broker verified-proxy hatlone-ws main test-agent-orchestrator cmd/*/server cmd/*/ws-broker cmd/*/verified-proxy cmd/*/hatlone-ws cmd/*/main 2>/dev/null || true)
+
   echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
   local service="sanskrite-api"
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"

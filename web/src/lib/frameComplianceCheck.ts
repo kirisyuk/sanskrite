@@ -137,6 +137,8 @@ Example structure (in Russian):
 The analyzer may rephrase this sentence naturally, but must follow its essence and structure. Keep it concise (1-3 sentences, 20-500 characters total).
 
 CRITICAL REQUIREMENTS:
+- Analyze the user's message and the assistant's response as a whole, without losing details. Consider the full context and meaning of both messages.
+- Do NOT provide feedback on things that are already explicitly stated in the assistant's response. Focus only on implicit assumptions, unstated implications, or problematic framing that the assistant accepted without question.
 - Do NOT question political or other views where multiple valid opinions exist and there cannot be strict scientific justification
 - Focus on factual errors, logical flaws, and vulnerable assumptions that have well-founded alternatives
 - Only flag cases where the AI clearly went along with an ineffective frame that could harm the discussion

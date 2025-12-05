@@ -381,6 +381,8 @@ const resources = {
           unknown: 'Unknown',
           available: 'Analytics available',
           notAvailable: 'Not available',
+          searchable: 'Searchable',
+          notSearchable: 'Not searchable',
         },
         selector: {
           options: {
@@ -1028,6 +1030,8 @@ const resources = {
           unknown: 'Неизвестно',
           available: 'Аналитика доступна',
           notAvailable: 'Недоступно',
+          searchable: 'Доступно для поиска',
+          notSearchable: 'Недоступно для поиска',
         },
         selector: {
           options: {
@@ -1694,6 +1698,8 @@ const resources = {
           unknown: 'Unbekannt',
           available: 'Analytics verfügbar',
           notAvailable: 'Nicht verfügbar',
+          searchable: 'Durchsuchbar',
+          notSearchable: 'Nicht durchsuchbar',
         },
         status: {
           highRisk: 'Risikoreiches Gespräch',
@@ -2148,6 +2154,8 @@ const resources = {
           unknown: 'Desconocido',
           available: 'Analytics disponible',
           notAvailable: 'No disponible',
+          searchable: 'Buscable',
+          notSearchable: 'No buscable',
         },
         status: {
           highRisk: 'Conversación de alto riesgo',
@@ -2597,6 +2605,8 @@ const resources = {
           unknown: 'Белгісіз',
           available: 'Аналитика қолжетімді',
           notAvailable: 'Қолжетімсіз',
+          searchable: 'Іздеуге қолжетімді',
+          notSearchable: 'Іздеуге қолжетімсіз',
         },
         status: {
           highRisk: 'Жоғары тәуекелді сөйлесу',

@@ -952,15 +952,33 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
           // For user interactions, also check by content and createdAt to catch duplicates
           // This handles the case where WebSocket event arrives before local ID is updated
+          // Also handles race conditions where parallel calls create interactions with different IDs
           if (processedInteraction.kind === 'user' && it.kind === 'user') {
             const newContent = processedInteraction.content;
             const newCreatedAt = processedInteraction.createdAt;
-            if (newContent && it.content === newContent && 
-                newCreatedAt && it.createdAt === newCreatedAt) {
-              // Check if this is likely the same interaction (within 1 second)
-              const newTime = new Date(newCreatedAt).getTime();
-              const existingTime = new Date(it.createdAt).getTime();
-              if (Math.abs(newTime - existingTime) < 1000) {
+            if (newContent && it.content === newContent) {
+              // Check if this is likely the same interaction (within 2 seconds)
+              // Increased window to match startStream check and handle server timestamp differences
+              if (newCreatedAt && it.createdAt) {
+                const newTime = new Date(newCreatedAt).getTime();
+                const existingTime = new Date(it.createdAt).getTime();
+                if (Math.abs(newTime - existingTime) < 2000) {
+                  console.log('[addOrUpdateInteraction] Duplicate user message detected by content+time', {
+                    existingId: it.id,
+                    newId: interactionId,
+                    content: newContent.substring(0, 50),
+                    timeDiff: Math.abs(newTime - existingTime)
+                  });
+                  return true;
+                }
+              } else if (newContent === it.content) {
+                // If createdAt is missing but content matches exactly, treat as duplicate
+                // This handles edge cases where timestamps might not be set
+                console.log('[addOrUpdateInteraction] Duplicate user message detected by content only', {
+                  existingId: it.id,
+                  newId: interactionId,
+                  content: newContent.substring(0, 50)
+                });
                 return true;
               }
             }
@@ -1282,6 +1300,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       return;
     }
     
+    // Set streaming flag immediately to prevent parallel calls (race condition protection)
+    set({ streaming: true } as any);
+    
     // CRITICAL: Жесткая синхронизация - получаем projectId ДО отправки сообщения
     // Это гарантирует отсутствие гонок при создании нового проекта
     let projectId: string;
@@ -1362,9 +1383,33 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         break;
       }
       // Check if interaction with same originalMessageId already exists to prevent duplicates
+      // Also check by content + createdAt to catch duplicates from parallel calls (race condition)
       const existingByOriginalMsgId = suppressUserEcho ? null : s.interactions.find(
-        (it) => (it as any).originalMessageId === now + '-u' && it.kind === 'user'
+        (it) => {
+          if (it.kind !== 'user') return false;
+          // Check by originalMessageId
+          if ((it as any).originalMessageId === now + '-u') return true;
+          // Check by content + createdAt (within 2 seconds) to catch race conditions
+          // This handles the case where two parallel calls create interactions with different originalMessageIds
+          // but same content and nearly same time
+          if (it.content === prompt && it.createdAt) {
+            const itTime = new Date(it.createdAt).getTime();
+            const newTime = new Date(createdAt).getTime();
+            if (Math.abs(itTime - newTime) < 2000) {
+              return true;
+            }
+          }
+          return false;
+        }
       );
+      if (existingByOriginalMsgId && !suppressUserEcho) {
+        console.warn('[Chat] startStream: Duplicate user message detected, skipping interaction creation', {
+          existingId: existingByOriginalMsgId.id,
+          existingOriginalMsgId: (existingByOriginalMsgId as any).originalMessageId,
+          newOriginalMsgId: now + '-u',
+          content: prompt.substring(0, 50)
+        });
+      }
       return ({
       messages: [
         ...pruned,

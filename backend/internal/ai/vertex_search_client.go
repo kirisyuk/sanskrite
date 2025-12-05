@@ -368,10 +368,8 @@ func (c *VertexAISearchClient) ImportDocuments(ctx context.Context, req *ImportD
 	return operationName, nil
 }
 
-// CheckDocumentStatus проверяет, проиндексирован ли документ в Vertex AI Search
-// Note: Vertex AI Search doesn't store GCS URI in document metadata, so we use a heuristic approach:
-// - If documents exist in the index (search returns results), we assume the document is indexed
-// - This is not 100% accurate but works for most cases
+// CheckDocumentStatus проверяет, доступен ли конкретный документ в Vertex AI Search
+// Выполняет поиск с фильтром по tenantId и проверяет, что конкретный URI присутствует в результатах
 func (c *VertexAISearchClient) CheckDocumentStatus(ctx context.Context, documentURI string, tenantID string) (bool, error) {
 	if c.projectID == "" || c.location == "" || c.dataStoreID == "" {
 		return false, fmt.Errorf("vertex AI search not configured: project, location, or dataStoreID missing")
@@ -386,32 +384,49 @@ func (c *VertexAISearchClient) CheckDocumentStatus(ctx context.Context, document
 	if len(uriParts) == 0 {
 		return false, fmt.Errorf("invalid document URI format")
 	}
-	searchQuery := uriParts[len(uriParts)-1] // Use filename as search query
+	filename := uriParts[len(uriParts)-1]
+	// Remove .txt extension if present for better search
+	searchQuery := strings.TrimSuffix(filename, ".txt")
+	if searchQuery == "" {
+		searchQuery = filename
+	}
 
-	// Perform a simple search to check if documents exist in the index
-	// If we get results, it means the index is populated and documents are likely indexed
+	// Perform search with tenant filter to check if the specific document is available
+	// Filter by tenantId to ensure we only check documents for this tenant
+	filter := fmt.Sprintf(`tenantId:"%s"`, tenantID)
 	searchReq := &SearchRequest{
-		Query:    searchQuery, // Use filename as query
-		PageSize: 10,          // Get a few results to verify index is working
-		Filter:   "",          // No filter
+		Query:    searchQuery,
+		PageSize: 50, // Get more results to find the specific document
+		Filter:   filter,
 	}
 
 	searchResp, err := c.Search(ctx, searchReq)
 	if err != nil {
-		// If search returns an error, document is likely not indexed
+		// If search returns an error, document is likely not available
 		log.Printf("[VertexAISearch] CheckDocumentStatus search error for URI %s: %v", documentURI, err)
 		return false, nil
 	}
 
-	// If we get results, assume the document is indexed
-	// Note: This is a heuristic - Vertex AI Search doesn't expose GCS URI in document metadata
-	// A more accurate check would require tracking sync operations, but this works for most cases
-	if len(searchResp.Results) > 0 {
-		log.Printf("[VertexAISearch] CheckDocumentStatus: found %d results for query '%s' - assuming document %s is indexed", len(searchResp.Results), searchQuery, documentURI)
-		return true, nil
+	// Check if the specific document URI is in the search results
+	// This is more accurate than just checking if any results exist
+	for _, result := range searchResp.Results {
+		if result.Document.URI == documentURI {
+			log.Printf("[VertexAISearch] CheckDocumentStatus: found document %s in search results", documentURI)
+			return true, nil
+		}
+		// Also check structData for documentId or storagePath
+		if result.Document.StructData != nil {
+			if docID, ok := result.Document.StructData["documentId"].(string); ok && docID != "" {
+				// Check if URI contains this documentId
+				if strings.Contains(documentURI, docID) {
+					log.Printf("[VertexAISearch] CheckDocumentStatus: found document %s by documentId %s", documentURI, docID)
+					return true, nil
+				}
+			}
+		}
 	}
 
-	log.Printf("[VertexAISearch] CheckDocumentStatus: no results found for query '%s' - document %s may not be indexed yet", searchQuery, documentURI)
+	log.Printf("[VertexAISearch] CheckDocumentStatus: document %s not found in search results (found %d results for query '%s')", documentURI, len(searchResp.Results), searchQuery)
 	return false, nil
 }
 

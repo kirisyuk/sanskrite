@@ -33,6 +33,7 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
     
     const merged: MergedItem[] = [];
     const seenIds = new Set<string>(); // Track seen interaction IDs to prevent duplicates
+    const seenContent = new Map<string, string>(); // Track seen content for user messages to detect duplicates
 
     // Add interactions first (user, assistant, and section markers)
     // This ensures interactions are processed before messages during streaming
@@ -45,6 +46,21 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
         }
         if (it.id) {
           seenIds.add(it.id);
+        }
+        // Deduplicate user messages by content (handles race conditions in new chats)
+        // This prevents showing duplicate user messages when the same message is added
+        // to interactions multiple times with different IDs
+        if (it.kind === 'user' && it.content && typeof it.content === 'string') {
+          const contentKey = it.content.trim();
+          if (seenContent.has(contentKey)) {
+            console.warn('[useMergedMessages] Duplicate user message detected by content', {
+              existingId: seenContent.get(contentKey),
+              duplicateId: it.id,
+              content: contentKey.substring(0, 50)
+            });
+            return false;
+          }
+          seenContent.set(contentKey, it.id);
         }
         // Exclude perspective interactions
         if (

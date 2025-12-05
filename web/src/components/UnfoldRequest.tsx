@@ -43,6 +43,8 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   const settings = useGenAISettings();
   const hasHistory = useGenaiChatStore((s) => (s.messages && s.messages.length > 0) || (s.interactions && s.interactions.length > 0));
   const { t } = useTranslation();
+  // Ref to prevent double submit (handles fast double-click or double Enter)
+  const submittingRef = React.useRef(false);
   const [attachedDocs, setAttachedDocs] = React.useState<AttachedDoc[]>([]);
   const lastDocEvent = useDiscoveryStore((s: any) => s.lastDocEvent);
   const lastAnalysisStatus = useDiscoveryStore((s: any) => s.lastAnalysisStatus);
@@ -332,6 +334,13 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       
       if (!value.trim()) return;
       
+      // Prevent double submit (race condition protection)
+      if (submittingRef.current) {
+        console.log('[UnfoldRequest] Blocked double submit (keyboard)');
+        return;
+      }
+      submittingRef.current = true;
+      
       // Submit with current value
       onSubmit(value);
       
@@ -344,12 +353,23 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       
       // Notify parent if needed
       onClear?.();
+      
+      // Reset submitting flag after a short delay (allows next submit)
+      setTimeout(() => { submittingRef.current = false; }, 500);
     }
   }, [isMobile, isSlashInput, slashItems, showSlashMenu, slashActiveIdx, value, onSubmit, onClear]);
 
   // Click submit handler (same behavior as Ctrl/Cmd+Enter)
   const handleClickSubmit = React.useCallback(() => {
     if (!value.trim()) return;
+    
+    // Prevent double submit (race condition protection)
+    if (submittingRef.current) {
+      console.log('[UnfoldRequest] Blocked double submit (click)');
+      return;
+    }
+    submittingRef.current = true;
+    
     onSubmit(value);
     setValue('');
     setAttachedDocs([]);
@@ -358,6 +378,9 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
     setTextareaRows(3);
     
     onClear?.();
+    
+    // Reset submitting flag after a short delay (allows next submit)
+    setTimeout(() => { submittingRef.current = false; }, 500);
   }, [value, onSubmit, onClear]);
 
   // Hide slash menu on outside click or Escape is already handled in onKeyDown

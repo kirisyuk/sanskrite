@@ -351,8 +351,8 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
         try {
           const data = JSON.parse(complianceInteraction.content || complianceInteraction.contentSanitized || '{}');
           if (data.confidence !== undefined && data.explanation && typeof data.explanation === 'string') {
-            // Only return if confidence >= 0.5
-            if (data.confidence >= 0.5) {
+            // Only return if confidence >= 0.6
+            if (data.confidence >= 0.6) {
               return { confidence: data.confidence, explanation: data.explanation };
             }
           }
@@ -1344,7 +1344,7 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
           </div>
         </div>
       )}
-      {isAssistant && frameComplianceCheck && frameComplianceCheck.confidence >= 0.5 && (
+      {isAssistant && frameComplianceCheck && frameComplianceCheck.confidence >= 0.6 && (
         <div className="mt-2" style={{ width: '100%' }}>
           <div className="p-2" style={{ backgroundColor: 'var(--warning-10)', borderLeft: '2px solid var(--accent-warning)', borderRadius: '4px' }}>
             <div className="text-[11px]" style={{ color: 'var(--text-heading)', lineHeight: '1.4' }}>

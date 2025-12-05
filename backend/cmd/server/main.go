@@ -1105,6 +1105,10 @@ func main() {
 			s.projectsHandler.CheckDocumentBigQueryStatus(w, r)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/vertex-search-availability") && strings.Contains(r.URL.Path, "/docs/") && r.Method == http.MethodGet {
+			s.projectsHandler.CheckDocumentVertexSearchAvailability(w, r)
+			return
+		}
 		// Analytics endpoints: /api/v1/projects/{id}/analytics/*
 		if strings.Contains(r.URL.Path, "/analytics/") && strings.Contains(r.URL.Path, "/projects/") {
 			if strings.HasSuffix(r.URL.Path, "/analytics/schema") && r.Method == http.MethodGet {

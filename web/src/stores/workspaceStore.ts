@@ -22,6 +22,12 @@ interface DocumentBigQueryStatus {
   lastChecked: number;
 }
 
+interface DocumentVertexSearchAvailabilityStatus {
+  available: boolean;
+  loading: boolean;
+  lastChecked: number;
+}
+
 interface Source {
   id: string;
   displayName: string;
@@ -61,6 +67,7 @@ interface WorkspaceState {
   lastFetchTime: number | null;
   indexStatuses: Record<string, DocumentIndexStatus>; // docId -> status
   bigqueryStatuses: Record<string, DocumentBigQueryStatus>; // docId -> status
+  vertexSearchAvailabilityStatuses: Record<string, DocumentVertexSearchAvailabilityStatus>; // docId -> status
   projectSources: Record<string, DataSource[]>; // projectId -> sources
   sourceStatusUpdates: Record<string, number>; // sourceId -> timestamp of last status change
   
@@ -70,6 +77,7 @@ interface WorkspaceState {
   updateProjectDocs: (project: Project, documents: CoreDoc[], discussionFrame?: string) => void;
   setDocumentIndexStatus: (docId: string, indexed: boolean, loading?: boolean) => void;
   setDocumentBigQueryStatus: (docId: string, available: boolean, loading?: boolean) => void;
+  setDocumentVertexSearchAvailabilityStatus: (docId: string, available: boolean, loading?: boolean) => void;
   setProjectSources: (projectId: string, sources: DataSource[]) => void;
   updateSourceStatus: (sourceId: string, newStatus: 'active' | 'paused') => void;
   clear: () => void;
@@ -81,6 +89,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   lastFetchTime: null,
   indexStatuses: {},
   bigqueryStatuses: {},
+  vertexSearchAvailabilityStatuses: {},
   projectSources: {},
   sourceStatusUpdates: {},
 
@@ -144,6 +153,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     },
   })),
 
+  setDocumentVertexSearchAvailabilityStatus: (docId, available, loading = false) => set((state) => ({
+    vertexSearchAvailabilityStatuses: {
+      ...state.vertexSearchAvailabilityStatuses,
+      [docId]: {
+        available,
+        loading,
+        lastChecked: Date.now(),
+      },
+    },
+  })),
+
   setProjectSources: (projectId, sources) => set((state) => ({
     projectSources: {
       ...state.projectSources,
@@ -181,6 +201,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     lastFetchTime: null,
     indexStatuses: {},
     bigqueryStatuses: {},
+    vertexSearchAvailabilityStatuses: {},
     projectSources: {},
     sourceStatusUpdates: {},
   }),

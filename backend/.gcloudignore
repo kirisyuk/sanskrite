@@ -5,6 +5,8 @@ server
 ws-broker
 main
 verified-proxy
+hatlone-ws
+test-agent-orchestrator
 *.exe
 *.dll
 *.dylib
@@ -15,6 +17,7 @@ cmd/*/main
 cmd/*/server
 cmd/*/ws-broker
 cmd/*/verified-proxy
+cmd/*/hatlone-ws
 
 # Log files
 *.log
