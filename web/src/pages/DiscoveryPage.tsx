@@ -228,7 +228,6 @@ const DiscoveryPage: React.FC = () => {
   const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios'>(
     'chat',
   );
-  
   // Check if Model graph has nodes (for empty state)
   const modelGraphHasNodes = useModelGraphHasNodes();
   const processingCommands = useGenaiChatStore((s) => s.processingCommands);
@@ -277,6 +276,7 @@ const DiscoveryPage: React.FC = () => {
     showAdmin,
     showWorkspace,
     workspaceProjectId,
+    settingsParams,
     staticPage,
     setStaticPage,
     isAdmin,
@@ -286,6 +286,10 @@ const DiscoveryPage: React.FC = () => {
     openWorkspace,
     closeAllModals,
   } = modals;
+
+  const handleOpenSettings = React.useCallback((params?: { initialTab?: 'personal' | 'corporate' | 'guardians'; highlightCheckbox?: 'disableBiasEvaluation' | 'disableFrameExpansion' | 'disableComplianceEvaluation' }) => {
+    openSettings(params);
+  }, [openSettings]);
   
   // Destructure chat timers hook
   const { genaiThinkingSeconds, averageTimingSeconds } = chatTimers;
@@ -1386,6 +1390,8 @@ const DiscoveryPage: React.FC = () => {
           <SettingsModal
             isOpen={showSettings}
             onClose={closeAllModals}
+            initialTab={settingsParams?.initialTab}
+            highlightCheckbox={settingsParams?.highlightCheckbox}
           />
         ) : showWorkspace ? (
           <WorkspaceCanvas
@@ -1970,6 +1976,7 @@ const DiscoveryPage: React.FC = () => {
                       onEditFinish={handleEditFinish}
                       onEditError={handleEditError}
                       onEditUpdate={handleEditUpdate}
+                      onOpenSettings={handleOpenSettings}
                     />
                   </div>
                 );

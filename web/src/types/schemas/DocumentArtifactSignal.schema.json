@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/igorkirisyuk/sanskrite/internal/models/document-artifact-signal",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "documentArtifactId": {
+      "type": "string",
+      "description": "Reference to CoreDoc (dynamic_artifact)"
+    },
+    "signalId": {
+      "type": "string",
+      "description": "Reference to ListeningSignal"
+    },
+    "priority": {
+      "type": "number",
+      "description": "Priority for signal matching (higher = more important)"
+    },
+    "isActive": {
+      "type": "boolean",
+      "description": "Whether this link is active"
+    },
+    "lastUsedSnapshotId": {
+      "type": "string",
+      "description": "ID of SignalSnapshotRef that was last used for artifact generation"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "createdBy": {
+      "type": "string",
+      "description": "User ID"
+    }
+  },
+  "required": ["id", "documentArtifactId", "signalId", "priority", "isActive", "createdAt", "updatedAt", "createdBy"]
+}
+

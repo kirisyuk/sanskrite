@@ -37,6 +37,10 @@ type MetaAggregateUsersRepository struct{ col *firestore.CollectionRef }
 type SourceIngestHistoryRepository struct{ col *firestore.CollectionRef }
 type AgentJobsRepository struct{ col *firestore.CollectionRef }
 type ProjectScenariosRepository struct{ col *firestore.CollectionRef }
+type ListeningSignalsRepository struct{ col *firestore.CollectionRef }
+type DocumentArtifactSignalsRepository struct{ col *firestore.CollectionRef }
+type SignalHistoryRepository struct{ col *firestore.CollectionRef }
+type SignalSnapshotRefsRepository struct{ col *firestore.CollectionRef }
 
 func NewUsersRepository(db *firestore.Client) *UsersRepository {
 	return &UsersRepository{col: db.Collection("core_users")}
@@ -84,6 +88,22 @@ func NewAgentJobsRepository(db *firestore.Client) *AgentJobsRepository {
 
 func NewProjectScenariosRepository(db *firestore.Client) *ProjectScenariosRepository {
 	return &ProjectScenariosRepository{col: db.Collection("project_scenarios")}
+}
+
+func NewListeningSignalsRepository(db *firestore.Client) *ListeningSignalsRepository {
+	return &ListeningSignalsRepository{col: db.Collection("listening_signals")}
+}
+
+func NewDocumentArtifactSignalsRepository(db *firestore.Client) *DocumentArtifactSignalsRepository {
+	return &DocumentArtifactSignalsRepository{col: db.Collection("document_artifact_signals")}
+}
+
+func NewSignalHistoryRepository(db *firestore.Client) *SignalHistoryRepository {
+	return &SignalHistoryRepository{col: db.Collection("signal_history")}
+}
+
+func NewSignalSnapshotRefsRepository(db *firestore.Client) *SignalSnapshotRefsRepository {
+	return &SignalSnapshotRefsRepository{col: db.Collection("signal_snapshot_refs")}
 }
 
 // Create создает новую запись истории обработки

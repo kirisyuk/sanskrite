@@ -316,6 +316,9 @@ func (h *UsersHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if updates.Age != nil {
 		userToUpdate.Age = updates.Age
 	}
+	if updates.RecommendationSettings != nil {
+		userToUpdate.RecommendationSettings = updates.RecommendationSettings
+	}
 
 	// Admin can update role and status (for now, simplified - no admin check)
 	// if authInfo.IsSystem {

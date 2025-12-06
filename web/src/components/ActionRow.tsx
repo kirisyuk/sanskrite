@@ -12,7 +12,12 @@ import { ThemeContext } from './ThemeProvider';
 
 // Action row under assistant messages: shows bias details when available,
 // otherwise shows action buttons (Bring In, Copy) immediately after message
-export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; content?: string }> = ({ messageId, isAssistant, content }) => {
+export const ActionRow: React.FC<{ 
+  messageId: string; 
+  isAssistant: boolean; 
+  content?: string;
+  onOpenSettings?: (params?: { initialTab?: 'personal' | 'corporate' | 'guardians'; highlightCheckbox?: 'disableBiasEvaluation' | 'disableFrameExpansion' | 'disableComplianceEvaluation' }) => void;
+}> = ({ messageId, isAssistant, content, onOpenSettings }) => {
   // PERFORMANCE FIX: Subscribe only to specific values, not entire arrays
   const interactionsLength = useGenaiChatStore((s) => s.interactions.length);
   const persistedByLocalId = useGenaiChatStore((s) => (s as any).persistedByLocalId);
@@ -1350,9 +1355,10 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
             <div className="text-[11px]" style={{ color: 'var(--text-heading)', lineHeight: '1.4' }}>
               {frameComplianceCheck.explanation}
             </div>
-            <button
-              type="button"
-              onClick={async () => {
+            <div className="mt-2" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={async () => {
                 try {
                   const secondOpinionPreset = AGENT_PRESETS.find(p => p.id === 'second-opinion');
                   if (!secondOpinionPreset) {
@@ -1491,7 +1497,7 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
                   console.error('[ActionRow] Failed to invoke Second Opinion agent', err);
                 }
               }}
-              className="mt-2 rounded-lg px-2 py-1 text-[11px] transition-colors"
+              className="rounded-lg px-2 py-1 text-[11px] transition-colors"
               style={{
                 backgroundColor: 'var(--white-10)',
                 color: 'var(--text-secondary-strong)',
@@ -1516,6 +1522,34 @@ export const ActionRow: React.FC<{ messageId: string; isAssistant: boolean; cont
               </svg>
               <span>{t('unfold.actions.secondOpinion')}</span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (onOpenSettings) {
+                  onOpenSettings({
+                    initialTab: 'guardians',
+                    highlightCheckbox: 'disableComplianceEvaluation',
+                  });
+                }
+              }}
+              className="rounded-lg px-2 py-1 text-[11px] transition-colors"
+              style={{
+                backgroundColor: 'transparent',
+                color: 'var(--text-secondary)',
+                border: 'none',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary-strong)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
+              }}
+            >
+              {t('unfold.actions.doNotSuggest')}
+            </button>
+          </div>
           </div>
         </div>
       )}

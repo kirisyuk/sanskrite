@@ -194,6 +194,11 @@
               "type": "string",
               "enum": ["on_new_message", "daily", "weekly", "on_new_document"]
             },
+            "scheduleTime": {
+              "type": "string",
+              "description": "Time of day for scheduled updates (HH:MM format, UTC), e.g., \"09:00\" for 9 AM",
+              "pattern": "^([0-1][0-9]|2[0-3]):[0-5][0-9]$"
+            },
             "conditions": {
               "type": "object",
               "properties": {

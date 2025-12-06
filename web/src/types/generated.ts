@@ -68,6 +68,10 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsCoreDoc {
     autoUpdateEnabled: boolean;
     autoUpdateConfig?: {
       trigger: 'on_new_message' | 'daily' | 'weekly' | 'on_new_document';
+      /**
+       * Time of day for scheduled updates (HH:MM format, UTC), e.g., "09:00" for 9 AM
+       */
+      scheduleTime?: string;
       conditions?: {
         minNewMessages?: number;
         minContextChange?: number;
@@ -267,6 +271,74 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDocument {
   vertexSearchIndexedAt?: string;
 }
 
+export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDocumentArtifactSignal {
+  id: string;
+  /**
+   * Reference to CoreDoc (dynamic_artifact)
+   */
+  documentArtifactId: string;
+  /**
+   * Reference to ListeningSignal
+   */
+  signalId: string;
+  /**
+   * Priority for signal matching (higher = more important)
+   */
+  priority: number;
+  /**
+   * Whether this link is active
+   */
+  isActive: boolean;
+  /**
+   * ID of SignalSnapshotRef that was last used for artifact generation
+   */
+  lastUsedSnapshotId?: string;
+  createdAt: string;
+  updatedAt: string;
+  /**
+   * User ID
+   */
+  createdBy: string;
+  [k: string]: any;
+}
+
+export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsListeningSignal {
+  id: string;
+  /**
+   * Display name for the signal
+   */
+  name: string;
+  /**
+   * Text signal that is being "listened" to
+   */
+  signal: string;
+  /**
+   * Set of common search query strings
+   */
+  searchQueries: string[];
+  /**
+   * Required: tenant ID
+   */
+  tenantId: string;
+  /**
+   * Optional: if null, signal is for entire tenant
+   */
+  projectId?: string;
+  description?: string;
+  tags?: string[];
+  /**
+   * Whether signal is currently active
+   */
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /**
+   * User ID
+   */
+  createdBy: string;
+  [k: string]: any;
+}
+
 export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsProject {
   id: string;
   pk: string;
@@ -290,6 +362,77 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsProject {
   enableRiskProfileSuggestions?: boolean;
   aiguided?: boolean;
   verifiedCode?: string;
+}
+
+export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsSignalHistory {
+  id: string;
+  /**
+   * Reference to ListeningSignal
+   */
+  signalId: string;
+  /**
+   * When signal was detected
+   */
+  detectedAt: string;
+  /**
+   * Source of detection (e.g., "document", "search", "conversation")
+   */
+  source: string;
+  /**
+   * ID of source document/interaction/etc
+   */
+  sourceId?: string;
+  /**
+   * Type of match
+   */
+  matchType: 'exact' | 'fuzzy' | 'semantic' | 'search_query';
+  /**
+   * Confidence score (0-1)
+   */
+  matchScore: number;
+  /**
+   * Text that matched the signal
+   */
+  matchedText: string;
+  /**
+   * Additional context around the match
+   */
+  context: string;
+  /**
+   * DocumentArtifact IDs that were triggered
+   */
+  triggeredArtifacts?: string[];
+  tenantId: string;
+  projectId?: string;
+  createdAt: string;
+  [k: string]: any;
+}
+
+export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsSignalSnapshotRef {
+  id: string;
+  /**
+   * Reference to ListeningSignal
+   */
+  signalId: string;
+  /**
+   * Reference to CoreDoc (docType="signal_snapshot")
+   */
+  snapshotDocId: string;
+  /**
+   * When snapshot was captured
+   */
+  capturedAt: string;
+  /**
+   * Whether this snapshot is still active/relevant
+   */
+  isActive: boolean;
+  /**
+   * DocumentArtifact IDs that have used this snapshot
+   */
+  usedInArtifacts?: string[];
+  createdAt: string;
+  updatedAt: string;
+  [k: string]: any;
 }
 
 export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsSourceProfile {
@@ -403,6 +546,11 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsUser {
   };
   assignedGoalIds?: string[];
   assignedInitiativeIds?: string[];
+  recommendationSettings?: {
+    disableBiasEvaluation?: boolean;
+    disableFrameExpansion?: boolean;
+    disableComplianceEvaluation?: boolean;
+  };
 }
 
 
@@ -410,6 +558,10 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsUser {
 export type CoreDoc = HttpsGithubComIgorkirisyukSanskriteInternalModelsCoreDoc;
 export type DataSource = HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource;
 export type Document = HttpsGithubComIgorkirisyukSanskriteInternalModelsDocument;
+export type DocumentArtifactSignal = HttpsGithubComIgorkirisyukSanskriteInternalModelsDocumentArtifactSignal;
+export type ListeningSignal = HttpsGithubComIgorkirisyukSanskriteInternalModelsListeningSignal;
 export type Project = HttpsGithubComIgorkirisyukSanskriteInternalModelsProject;
+export type SignalHistory = HttpsGithubComIgorkirisyukSanskriteInternalModelsSignalHistory;
+export type SignalSnapshotRef = HttpsGithubComIgorkirisyukSanskriteInternalModelsSignalSnapshotRef;
 export type SourceProfile = HttpsGithubComIgorkirisyukSanskriteInternalModelsSourceProfile;
 export type User = HttpsGithubComIgorkirisyukSanskriteInternalModelsUser;

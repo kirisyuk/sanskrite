@@ -185,6 +185,7 @@ const resources = {
           youMightConsider: 'You might consider',
           alternativeOpinion: 'Alternative opinion',
           secondOpinion: 'Another well-founded opinion',
+          doNotSuggest: 'Do not suggest',
           reframeIt: 'Reframe it?',
         },
         evidenceBuilder: {
@@ -403,6 +404,16 @@ const resources = {
           metrics: 'Metrics',
           unit: 'Unit: {{unit}}',
           frequency: 'Frequency: {{frequency}}',
+          templateCreationHint: 'The system can automatically create a template based on your request.',
+          createTemplateBasedOnRequest: 'Create template based on request',
+          createTemplateManually: 'I prefer to create the template manually',
+          editTemplate: 'Edit template',
+          deleteTemplate: 'Delete template',
+          saveTemplate: 'Save Template',
+          cancel: 'Cancel',
+          confirmDeleteTemplate: 'Are you sure you want to delete "{{name}}"?',
+          deleteSection: 'Delete section',
+          confirmDeleteSection: 'Are you sure you want to delete section "{{name}}"?',
         },
         sources: {
           addSource: 'Add source',
@@ -440,6 +451,11 @@ const resources = {
               'What should we look into?',
               'Let\'s get the conversation started.',
             ],
+            actionButtons: {
+              discuss: 'Discuss',
+              research: 'Research',
+              learn: 'Learn',
+            },
           },
           modelEmptyState: {
             descriptions: [
@@ -616,6 +632,7 @@ const resources = {
         tabs: {
           personal: 'Personal Data',
           corporate: 'Corporate',
+          guardians: 'Guardians',
         },
         personal: {
           fullName: 'Full name',
@@ -648,6 +665,15 @@ const resources = {
           jobTitlePlaceholder: 'Title',
           department: 'Department',
           departmentPlaceholder: 'Department',
+        },
+        guardians: {
+          recommendations: 'Recommendations',
+          disableBiasEvaluation: 'Do not recommend bias evaluation',
+          disableBiasEvaluationDescription: 'Prevents the system from suggesting bias and thoughtfulness evaluation for messages.',
+          disableFrameExpansion: 'Do not recommend frame expansion',
+          disableFrameExpansionDescription: 'Prevents the system from suggesting alternative perspectives and frame expansions for responses.',
+          disableComplianceEvaluation: 'Do not recommend compliance evaluation',
+          disableComplianceEvaluationDescription: 'Prevents the system from suggesting compliance warnings and alternative perspectives when potential issues are detected. The system will also stop monitoring cases where AI implicitly supports the user\'s line of reasoning when there are explicit contradictions in the source data.',
         },
       },
     },
@@ -834,6 +860,7 @@ const resources = {
           youMightConsider: 'Вы можете рассмотреть',
           alternativeOpinion: 'Альтернативное мнение',
           secondOpinion: 'Другое обоснованное мнение',
+          doNotSuggest: 'Не предлагать',
           reframeIt: 'А что если?',
         },
         evidenceBuilder: {
@@ -1051,6 +1078,16 @@ const resources = {
           metrics: 'Метрики',
           unit: 'Единица: {{unit}}',
           frequency: 'Частота: {{frequency}}',
+          templateCreationHint: 'Система может самостоятельно создать шаблон по вашему запросу.',
+          createTemplateBasedOnRequest: 'Создать шаблон на основе запроса',
+          createTemplateManually: 'Я предпочитаю создать шаблон вручную',
+          editTemplate: 'Редактировать шаблон',
+          deleteTemplate: 'Удалить шаблон',
+          saveTemplate: 'Сохранить шаблон',
+          cancel: 'Отмена',
+          confirmDeleteTemplate: 'Вы уверены, что хотите удалить "{{name}}"?',
+          deleteSection: 'Удалить раздел',
+          confirmDeleteSection: 'Вы уверены, что хотите удалить раздел "{{name}}"?',
         },
         sources: {
           addSource: 'Добавить источник',
@@ -1088,6 +1125,11 @@ const resources = {
               'На что стоит обратить внимание?',
               'Давайте начнём беседу.',
             ],
+            actionButtons: {
+              discuss: 'Обсудить',
+              research: 'Исследовать',
+              learn: 'Выучить',
+            },
           },
           modelEmptyState: {
             descriptions: [
@@ -1264,6 +1306,7 @@ const resources = {
         tabs: {
           personal: 'Личные данные',
           corporate: 'Корпоративные',
+          guardians: 'Защитники',
         },
         personal: {
           fullName: 'Полное имя',
@@ -1296,6 +1339,15 @@ const resources = {
           jobTitlePlaceholder: 'Должность',
           department: 'Отдел',
           departmentPlaceholder: 'Отдел',
+        },
+        guardians: {
+          recommendations: 'Рекомендации',
+          disableBiasEvaluation: 'Не рекомендовать оценку предвзятости',
+          disableBiasEvaluationDescription: 'Предотвращает предложения системы оценивать предвзятость и вдумчивость сообщений.',
+          disableFrameExpansion: 'Не рекомендовать расширение рамок',
+          disableFrameExpansionDescription: 'Предотвращает предложения системы предлагать альтернативные перспективы и расширения рамок для ответов.',
+          disableComplianceEvaluation: 'Не рекомендовать оценку соответствия',
+          disableComplianceEvaluationDescription: 'Предотвращает предложения системы показывать предупреждения о соответствии и альтернативные перспективы при обнаружении потенциальных проблем. Система также перестанет отслеживать случаи, когда ИИ неявно поддерживает ход мысли пользователя при наличии явных противоречий в исходных данных.',
         },
       },
     },
@@ -1701,6 +1753,16 @@ const resources = {
           searchable: 'Durchsuchbar',
           notSearchable: 'Nicht durchsuchbar',
         },
+        artifacts: {
+          noArtifactsYet: 'Noch keine Artefakte.',
+          entities: 'Entitäten',
+          metrics: 'Metriken',
+          unit: 'Einheit: {{unit}}',
+          frequency: 'Häufigkeit: {{frequency}}',
+          templateCreationHint: 'Das System kann automatisch eine Vorlage basierend auf Ihrer Anfrage erstellen.',
+          createTemplateBasedOnRequest: 'Vorlage basierend auf Anfrage erstellen',
+          createTemplateManually: 'Ich bevorzuge es, die Vorlage manuell zu erstellen',
+        },
         status: {
           highRisk: 'Risikoreiches Gespräch',
           thinking: 'Denke... {{seconds}}s',
@@ -1738,6 +1800,11 @@ const resources = {
               'Worauf sollten wir schauen?',
               'Lass uns das Gespräch beginnen.',
             ],
+            actionButtons: {
+              discuss: 'Diskutieren',
+              research: 'Erforschen',
+              learn: 'Lernen',
+            },
           },
           modelEmptyState: {
             descriptions: [
@@ -2156,6 +2223,16 @@ const resources = {
           notAvailable: 'No disponible',
           searchable: 'Buscable',
           notSearchable: 'No buscable',
+        },
+        artifacts: {
+          noArtifactsYet: 'Aún no hay artefactos.',
+          entities: 'Entidades',
+          metrics: 'Métricas',
+          unit: 'Unidad: {{unit}}',
+          frequency: 'Frecuencia: {{frequency}}',
+          templateCreationHint: 'El sistema puede crear automáticamente una plantilla basada en su solicitud.',
+          createTemplateBasedOnRequest: 'Crear plantilla basada en solicitud',
+          createTemplateManually: 'Prefiero crear la plantilla manualmente',
         },
         status: {
           highRisk: 'Conversación de alto riesgo',
@@ -2628,6 +2705,16 @@ const resources = {
           errorMessage: 'Өкінішке орай, сұрауды өңдеу мүмкін болмады. Біз техникалық ақауды тіркеп алдық және жағдайды талдаудамыз. Кішігірім уақыттан кейін қайталап көріңіз.',
           showMore: 'Көбірек...',
           showLess: 'Азырақ...',
+        },
+        artifacts: {
+          noArtifactsYet: 'Артефактілер әлі жоқ.',
+          entities: 'Объектілер',
+          metrics: 'Метрикалар',
+          unit: 'Бірлік: {{unit}}',
+          frequency: 'Жиілік: {{frequency}}',
+          templateCreationHint: 'Жүйе сіздің сұрауыңыз бойынша шаблонды дербес жасай алады.',
+          createTemplateBasedOnRequest: 'Сұрау негізінде шаблон жасау',
+          createTemplateManually: 'Мен шаблонды қолмен жасауды ұсынамын',
         },
         discussionFlow: {
           frame: 'Талқылау рамкасы',

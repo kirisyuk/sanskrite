@@ -87,6 +87,21 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "recommendationSettings": {
+      "type": "object",
+      "properties": {
+        "disableBiasEvaluation": {
+          "type": "boolean"
+        },
+        "disableFrameExpansion": {
+          "type": "boolean"
+        },
+        "disableComplianceEvaluation": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,

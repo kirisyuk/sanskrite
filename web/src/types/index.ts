@@ -12,7 +12,7 @@ export { default as CoreDocSchema } from "../types/schemas/CoreDoc.schema.json";
 // Auto-generated TypeScript types
 // Note: We intentionally do not re-export all generated types here to avoid
 // linter/tooling issues with type-only re-exports. Import them directly from './generated' when needed.
-export type { User, Project, DataSource } from './generated';
+export type { User, Project, DataSource, ListeningSignal, DocumentArtifactSignal, SignalHistory, SignalSnapshotRef } from './generated';
 
 // === Manually maintained types ===
 // These types are manually maintained because they come from backend/internal/repo

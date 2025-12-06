@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/igorkirisyuk/sanskrite/internal/models/signal-snapshot-ref",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "signalId": {
+      "type": "string",
+      "description": "Reference to ListeningSignal"
+    },
+    "snapshotDocId": {
+      "type": "string",
+      "description": "Reference to CoreDoc (docType=\"signal_snapshot\")"
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When snapshot was captured"
+    },
+    "isActive": {
+      "type": "boolean",
+      "description": "Whether this snapshot is still active/relevant"
+    },
+    "usedInArtifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "DocumentArtifact IDs that have used this snapshot"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": ["id", "signalId", "snapshotDocId", "capturedAt", "isActive", "createdAt", "updatedAt"]
+}
+

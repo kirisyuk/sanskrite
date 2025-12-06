@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/igorkirisyuk/sanskrite/internal/models/signal-history",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "signalId": {
+      "type": "string",
+      "description": "Reference to ListeningSignal"
+    },
+    "detectedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When signal was detected"
+    },
+    "source": {
+      "type": "string",
+      "description": "Source of detection (e.g., \"document\", \"search\", \"conversation\")"
+    },
+    "sourceId": {
+      "type": "string",
+      "description": "ID of source document/interaction/etc"
+    },
+    "matchType": {
+      "type": "string",
+      "enum": ["exact", "fuzzy", "semantic", "search_query"],
+      "description": "Type of match"
+    },
+    "matchScore": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence score (0-1)"
+    },
+    "matchedText": {
+      "type": "string",
+      "description": "Text that matched the signal"
+    },
+    "context": {
+      "type": "string",
+      "description": "Additional context around the match"
+    },
+    "triggeredArtifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "DocumentArtifact IDs that were triggered"
+    },
+    "tenantId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": ["id", "signalId", "detectedAt", "source", "matchType", "matchScore", "matchedText", "context", "tenantId", "createdAt"]
+}
+

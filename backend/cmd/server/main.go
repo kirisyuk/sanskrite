@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,31 @@ func (a *tavilyClientAdapterForAgents) Search(ctx context.Context, query string,
 	}
 	return &agents.TavilySearchResponse{
 		Query:   resp.Query,
+		Results: results,
+	}, nil
+}
+
+// tavilyAdapterForSignalMonitoring адаптирует httphandlers.TavilyClient к SignalMonitoringService интерфейсу
+type tavilyAdapterForSignalMonitoring struct {
+	client *httphandlers.TavilyClient
+}
+
+func (a *tavilyAdapterForSignalMonitoring) Search(ctx context.Context, query string, maxResults int) (*services.TavilySearchResponse, error) {
+	resp, err := a.client.Search(ctx, query, maxResults)
+	if err != nil {
+		return nil, err
+	}
+	// Конвертировать httphandlers.TavilySearchResponse в services.TavilySearchResponse
+	results := make([]services.TavilySearchResult, 0, len(resp.Results))
+	for _, r := range resp.Results {
+		results = append(results, services.TavilySearchResult{
+			Title:   r.Title,
+			URL:     r.URL,
+			Content: r.Content,
+			Score:   r.Score,
+		})
+	}
+	return &services.TavilySearchResponse{
 		Results: results,
 	}, nil
 }
@@ -148,6 +174,11 @@ func main() {
 	var artifactTemplateService *services.ArtifactTemplateService
 	var artifactTemplatesHandler *httphandlers.ArtifactTemplatesHandler
 	var artifactGenerationHandler *httphandlers.ArtifactGenerationHandler
+	var artifactSchedulerService *services.ArtifactSchedulerService
+	var signalMonitoringService *services.SignalMonitoringService
+	var listeningSignalsHandler *httphandlers.ListeningSignalsHandler
+	var documentArtifactSignalsHandler *httphandlers.DocumentArtifactSignalsHandler
+	var signalHistoryHandler *httphandlers.SignalHistoryHandler
 
 	// Subscription & Voucher repositories and service
 	subsRepo := repo.NewSubscriptionsRepository(fsClient.Client())
@@ -276,6 +307,56 @@ func main() {
 		artifactsHandlerForSaver := httphandlers.NewArtifactsHandler(coreDocsRepo).WithStorage(gcsClient, bucket)
 		artifactOrchestratorService = artifactOrchestratorService.WithStorageSaver(artifactsHandlerForSaver)
 		artifactGenerationHandler = httphandlers.NewArtifactGenerationHandler(artifactOrchestratorService)
+		
+		// Initialize signal repositories and handlers
+		listeningSignalsRepo := repo.NewListeningSignalsRepository(fsClient.Client())
+		documentArtifactSignalsRepo := repo.NewDocumentArtifactSignalsRepository(fsClient.Client())
+		signalHistoryRepo := repo.NewSignalHistoryRepository(fsClient.Client())
+		signalSnapshotRefsRepo := repo.NewSignalSnapshotRefsRepository(fsClient.Client())
+		listeningSignalsHandler = httphandlers.NewListeningSignalsHandler(listeningSignalsRepo)
+		documentArtifactSignalsHandler = httphandlers.NewDocumentArtifactSignalsHandler(documentArtifactSignalsRepo)
+		signalHistoryHandler = httphandlers.NewSignalHistoryHandler(signalHistoryRepo, documentArtifactSignalsRepo)
+		
+		// Initialize signal monitoring service
+		signalMonitoringService = services.NewSignalMonitoringService(
+			listeningSignalsRepo,
+			signalSnapshotRefsRepo,
+			coreDocsRepo,
+			docsRepo,
+			exec,
+		).WithGenAIClient(genaiClient) // Wire GenAI client for structured output
+		
+		// Configure thresholds from env vars
+		if minRelevance := os.Getenv("SIGNAL_MIN_RELEVANCE_SCORE"); minRelevance != "" {
+			if score, err := strconv.ParseFloat(minRelevance, 64); err == nil && score >= 0 && score <= 1 {
+				signalMonitoringService = signalMonitoringService.WithRelevanceThreshold(score)
+			}
+		}
+		if minConfidence := os.Getenv("SIGNAL_MIN_CONFIDENCE"); minConfidence != "" {
+			if score, err := strconv.ParseFloat(minConfidence, 64); err == nil && score >= 0 && score <= 1 {
+				signalMonitoringService = signalMonitoringService.WithConfidenceThreshold(score)
+			}
+		}
+		
+		// Set check interval from env var (default: 6 hours)
+		if checkInterval := os.Getenv("SIGNAL_MONITORING_INTERVAL"); checkInterval != "" {
+			if parsed, err := time.ParseDuration(checkInterval); err == nil && parsed >= 5*time.Minute {
+				signalMonitoringService = signalMonitoringService.WithCheckInterval(parsed)
+			} else {
+				log.Printf("invalid SIGNAL_MONITORING_INTERVAL: %s, using default 6h", checkInterval)
+			}
+		}
+		
+		// Initialize artifact scheduler service
+		artifactSchedulerService = services.NewArtifactSchedulerService(coreDocsRepo, artifactOrchestratorService)
+		// Set check interval from env var (default: 1 hour)
+		if checkInterval := os.Getenv("ARTIFACT_SCHEDULER_INTERVAL"); checkInterval != "" {
+			if parsed, err := time.ParseDuration(checkInterval); err == nil && parsed >= 5*time.Minute {
+				artifactSchedulerService = artifactSchedulerService.WithCheckInterval(parsed)
+			} else {
+				log.Printf("invalid ARTIFACT_SCHEDULER_INTERVAL: %s, using default 1h", checkInterval)
+			}
+		}
 		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger).WithProfiles(s.sprofs).WithSourceProjects(sourceProjectsRepo)
 		// Provider registry
 		reg := prov.NewRegistry()
@@ -327,6 +408,13 @@ func main() {
 		if tavilyClient != nil {
 			genaiHandler = genaiHandler.WithTavilyClient(tavilyClient)
 			logger.Printf("Tavily client initialized (shared for Research mode and Web Search tools)")
+			
+			// Add Tavily client to signal monitoring service if it exists
+			if signalMonitoringService != nil {
+				tavilyAdapter := &tavilyAdapterForSignalMonitoring{client: tavilyClient}
+				signalMonitoringService = signalMonitoringService.WithTavilyClient(tavilyAdapter)
+				logger.Printf("Signal monitoring service: Tavily web search enabled")
+			}
 		} else {
 			logger.Printf("Tavily client disabled: TAVILY_API_KEY not set (Research mode and Web Search will not work)")
 		}
@@ -597,6 +685,29 @@ func main() {
 				}
 			}()
 		}
+
+		// Artifact scheduler (runs periodically to check for scheduled updates)
+		// Can be disabled via DISABLE_ARTIFACT_SCHEDULER=true when using Cloud Scheduler
+		if os.Getenv("DISABLE_ARTIFACT_SCHEDULER") != "true" && artifactSchedulerService != nil {
+			go func() {
+				ctxScheduler, cancelScheduler := context.WithCancel(ctx)
+				defer cancelScheduler()
+				artifactSchedulerService.Start(ctxScheduler)
+			}()
+			logger.Printf("Artifact scheduler started (check interval: %v)", artifactSchedulerService.CheckInterval())
+		}
+
+		// Signal monitoring service (runs periodically to monitor signals and create snapshots)
+		// Can be disabled via DISABLE_SIGNAL_MONITORING=true
+		if os.Getenv("DISABLE_SIGNAL_MONITORING") != "true" && signalMonitoringService != nil {
+			go func() {
+				ctxMonitor, cancelMonitor := context.WithCancel(ctx)
+				defer cancelMonitor()
+				signalMonitoringService.Start(ctxMonitor)
+			}()
+			logger.Printf("Signal monitoring service started (check interval: %v)", signalMonitoringService.CheckInterval())
+		}
+
 		cacheRepo := repo.NewProcessedContentRepository(fsClient.Client())
 		interactions := repo.NewInteractionsRepository(fsClient.Client())
 		orchestrator = orchestrator.WithCache(cacheRepo).WithInteractions(interactions)
@@ -1205,6 +1316,60 @@ func main() {
 				return
 			}
 		}
+		// Listening Signals routes: /projects/{id}/listening-signals
+		// Note: handlers are passed via closure from main()
+		if strings.Contains(r.URL.Path, "/listening-signals") && listeningSignalsHandler != nil {
+			path := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+			// Check for /projects/{id}/listening-signals/{signalId}/activate or /deactivate
+			if len(path) >= 6 && path[4] == "listening-signals" {
+				signalID := path[5]
+				action := ""
+				if len(path) >= 7 {
+					action = path[6]
+				}
+				if action == "activate" && r.Method == http.MethodPost {
+					// Extract signal ID from path and call handler
+					// Handler will parse path itself
+					listeningSignalsHandler.ActivateSignal(w, r)
+					return
+				}
+				if action == "deactivate" && r.Method == http.MethodPost {
+					listeningSignalsHandler.DeactivateSignal(w, r)
+					return
+				}
+				// Get/Update/Delete signal by ID: /projects/{id}/listening-signals/{signalId}
+				if signalID != "" && len(path) == 6 {
+					switch r.Method {
+					case http.MethodGet:
+						listeningSignalsHandler.GetSignal(w, r)
+					case http.MethodPatch, http.MethodPut:
+						listeningSignalsHandler.UpdateSignal(w, r)
+					case http.MethodDelete:
+						listeningSignalsHandler.DeleteSignal(w, r)
+					default:
+						httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+					}
+					return
+				}
+			}
+			// List/Create signals: /projects/{id}/listening-signals
+			if strings.HasSuffix(r.URL.Path, "/listening-signals") {
+				switch r.Method {
+				case http.MethodPost:
+					listeningSignalsHandler.CreateSignal(w, r)
+				case http.MethodGet:
+					listeningSignalsHandler.ListSignals(w, r)
+				default:
+					httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+				}
+				return
+			}
+		}
+		// Signal History route: /projects/{id}/signal-history
+		if strings.HasSuffix(r.URL.Path, "/signal-history") && r.Method == http.MethodGet && signalHistoryHandler != nil {
+			signalHistoryHandler.ListByTenant(w, r)
+			return
+		}
 		// Agent Jobs routes (new orchestrator-based system)
 		if agentJobsHandler != nil {
 			path := r.URL.Path
@@ -1258,7 +1423,8 @@ func main() {
 		}
 
 		// fallback to default project by id handler
-		s.routeProjectsByID(w, r)
+		// Pass signal handlers via closure
+		s.routeProjectsByID(w, r, listeningSignalsHandler, signalHistoryHandler)
 	})))
 
 	// Rules routes
@@ -1283,6 +1449,51 @@ func main() {
 		}
 		httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
 	})))
+
+	// Listening Signals routes (tenant-wide and by ID)
+	if listeningSignalsHandler != nil {
+		// List/Create tenant-wide signals: /api/v1/listening-signals
+		mux.Handle("/api/v1/listening-signals", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPost:
+				listeningSignalsHandler.CreateSignal(w, r)
+			case http.MethodGet:
+				listeningSignalsHandler.ListSignals(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+		})))
+		// Get/Update/Delete/Activate/Deactivate signal: /api/v1/listening-signals/:id
+		mux.Handle("/api/v1/listening-signals/", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+			if len(path) >= 4 {
+				action := path[3]
+				switch action {
+				case "activate":
+					if r.Method == http.MethodPost {
+						listeningSignalsHandler.ActivateSignal(w, r)
+						return
+					}
+				case "deactivate":
+					if r.Method == http.MethodPost {
+						listeningSignalsHandler.DeactivateSignal(w, r)
+						return
+					}
+				}
+			}
+			// Default: Get/Update/Delete by ID
+			switch r.Method {
+			case http.MethodGet:
+				listeningSignalsHandler.GetSignal(w, r)
+			case http.MethodPatch, http.MethodPut:
+				listeningSignalsHandler.UpdateSignal(w, r)
+			case http.MethodDelete:
+				listeningSignalsHandler.DeleteSignal(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+		})))
+	}
 
 	// Webhooks
 	mux.Handle("/api/v1/webhooks/", http.HandlerFunc(webhooksHandler.Handle))
@@ -1313,6 +1524,113 @@ func main() {
 			return
 		}
 		httphandlers.WriteJSON(w, http.StatusOK, map[string]string{"message": "Billing cycle processed successfully"})
+	}))
+
+	// Artifact scheduler endpoint (for Cloud Scheduler)
+	// Accepts x-functions-key header or Cloud Scheduler requests (User-Agent: Google-Cloud-Scheduler)
+	// Optional query params: tenantId, projectId (if not provided, processes all)
+	mux.Handle("/api/v1/artifacts/scheduled-update", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+			return
+		}
+		// Check for system call with function key or Cloud Scheduler
+		hasFunctionKey := r.Header.Get("x-functions-key") != ""
+		isCloudScheduler := r.Header.Get("User-Agent") == "Google-Cloud-Scheduler"
+		if !hasFunctionKey && !isCloudScheduler {
+			httphandlers.WriteUnauthorized(w, "System access required")
+			return
+		}
+		if artifactSchedulerService == nil {
+			httphandlers.WriteInternalError(w, "Artifact scheduler service not initialized")
+			return
+		}
+		tenantID := r.URL.Query().Get("tenantId")
+		projectID := r.URL.Query().Get("projectId")
+		if tenantID != "" && projectID != "" {
+			// Process specific project
+			if err := artifactSchedulerService.ProcessProjectArtifacts(r.Context(), tenantID, projectID); err != nil {
+				logger.Printf("Artifact scheduled update failed for project %s: %v", projectID, err)
+				httphandlers.WriteInternalError(w, "Failed to process scheduled updates")
+				return
+			}
+			httphandlers.WriteJSON(w, http.StatusOK, map[string]string{"message": "Scheduled updates processed successfully", "projectId": projectID})
+		} else {
+			// Process all projects (if possible)
+			// Note: This requires listing all projects, which might not be available
+			// In production, Cloud Scheduler should call this endpoint per-project
+			if err := artifactSchedulerService.ProcessAllProjects(r.Context()); err != nil {
+				logger.Printf("Artifact scheduled update failed: %v", err)
+				httphandlers.WriteInternalError(w, "Failed to process scheduled updates")
+				return
+			}
+			httphandlers.WriteJSON(w, http.StatusOK, map[string]string{"message": "Scheduled updates processed successfully"})
+		}
+	}))
+
+	// Signal monitoring endpoint (for Cloud Scheduler or manual trigger)
+	// Accepts x-functions-key header or Cloud Scheduler requests (User-Agent: Google-Cloud-Scheduler)
+	// Optional query params: tenantId, projectId (if not provided, processes all)
+	mux.Handle("/api/v1/signals/process", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+			return
+		}
+		// Check for system call with function key or Cloud Scheduler
+		hasFunctionKey := r.Header.Get("x-functions-key") != ""
+		isCloudScheduler := r.Header.Get("User-Agent") == "Google-Cloud-Scheduler"
+		if !hasFunctionKey && !isCloudScheduler {
+			httphandlers.WriteUnauthorized(w, "System access required")
+			return
+		}
+		if signalMonitoringService == nil {
+			httphandlers.WriteInternalError(w, "Signal monitoring service not initialized")
+			return
+		}
+		tenantID := r.URL.Query().Get("tenantId")
+		projectIDParam := r.URL.Query().Get("projectId")
+		
+		if tenantID != "" {
+			// Process signals for specific tenant (optionally filtered by project)
+			var projectID *string
+			if projectIDParam != "" {
+				projectID = &projectIDParam
+			}
+			if err := signalMonitoringService.ProcessAllActiveSignals(r.Context(), tenantID, projectID); err != nil {
+				logger.Printf("Signal processing failed for tenant %s: %v", tenantID, err)
+				httphandlers.WriteInternalError(w, "Failed to process signals")
+				return
+			}
+			httphandlers.WriteJSON(w, http.StatusOK, map[string]string{
+				"message": "Signals processed successfully",
+				"tenantId": tenantID,
+			})
+		} else {
+			// Process all signals across all tenants
+			signals, err := signalMonitoringService.ListAllActiveSignals(r.Context())
+			if err != nil {
+				logger.Printf("Failed to list signals: %v", err)
+				httphandlers.WriteInternalError(w, "Failed to list signals")
+				return
+			}
+			
+			successCount := 0
+			errorCount := 0
+			for _, signal := range signals {
+				if err := signalMonitoringService.ProcessSignal(r.Context(), signal); err != nil {
+					errorCount++
+					continue
+				}
+				successCount++
+			}
+			
+			httphandlers.WriteJSON(w, http.StatusOK, map[string]interface{}{
+				"message": "Signal processing completed",
+				"processed": successCount,
+				"errors": errorCount,
+				"total": len(signals),
+			})
+		}
 	}))
 
 	// Public share endpoint (unauthenticated)
@@ -1436,6 +1754,35 @@ func main() {
 		// /api/v1/artifacts/{id}/versions/{versionId}/restore
 		if len(parts) >= 7 && parts[4] == "versions" && parts[6] == "restore" && r.Method == http.MethodPost {
 			artifactGenerationHandler.RestoreVersion(w, r)
+			return
+		}
+		// /api/v1/artifacts/{artifactId}/signals
+		if len(parts) >= 4 && parts[3] == "signals" && documentArtifactSignalsHandler != nil {
+			switch r.Method {
+			case http.MethodPost:
+				documentArtifactSignalsHandler.CreateLink(w, r)
+			case http.MethodGet:
+				documentArtifactSignalsHandler.ListLinksByArtifact(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+			return
+		}
+		// /api/v1/artifacts/{artifactId}/signals/{linkId}
+		if len(parts) >= 5 && parts[3] == "signals" && documentArtifactSignalsHandler != nil {
+			switch r.Method {
+			case http.MethodPatch, http.MethodPut:
+				documentArtifactSignalsHandler.UpdateLink(w, r)
+			case http.MethodDelete:
+				documentArtifactSignalsHandler.DeleteLink(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+			return
+		}
+		// /api/v1/artifacts/{artifactId}/signal-history
+		if len(parts) >= 4 && parts[3] == "signal-history" && r.Method == http.MethodGet && signalHistoryHandler != nil {
+			signalHistoryHandler.ListByArtifact(w, r)
 			return
 		}
 
@@ -1631,7 +1978,7 @@ func (s *server) routeProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 // routeProjectsByID routes /api/v1/projects/{id} to appropriate handler based on method
-func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request) {
+func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request, listeningSignalsHandler *httphandlers.ListeningSignalsHandler, signalHistoryHandler *httphandlers.SignalHistoryHandler) {
 	// Check if path is /projects/{id}/datasources
 	if strings.HasSuffix(r.URL.Path, "/datasources") {
 		s.discoveryHandler.ListProjectSources(w, r)

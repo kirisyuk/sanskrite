@@ -34,14 +34,31 @@ func NewArtifactTemplateService(
 }
 
 // GetTemplate retrieves a template by ID (system or custom)
-func (s *ArtifactTemplateService) GetTemplate(ctx context.Context, id string) (*models.ArtifactTemplate, error) {
+// For custom templates, tenantID is required to ensure access control
+func (s *ArtifactTemplateService) GetTemplate(ctx context.Context, id string, tenantID *string) (*models.ArtifactTemplate, error) {
 	// First check system templates
 	if template, err := templates.GetSystemTemplate(id); err == nil {
 		return template, nil
 	}
 
 	// If not found in system templates, check Firestore
-	return s.repo.Get(ctx, id)
+	template, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// For custom templates, verify tenant access
+	if template.Type == "custom" {
+		if template.TenantID == nil {
+			// Custom template without tenantID - should not happen, but deny access
+			return nil, errors.New("template not found")
+		}
+		if tenantID == nil || *template.TenantID != *tenantID {
+			return nil, errors.New("template not found")
+		}
+	}
+
+	return template, nil
 }
 
 // ListAvailableTemplates returns all templates available to a tenant
@@ -69,7 +86,11 @@ func (s *ArtifactTemplateService) ListAvailableTemplates(
 
 	// 3. Tenant-specific templates
 	tenantTemplates, err := s.repo.ListByTenant(ctx, tenantID)
-	if err == nil {
+	if err != nil {
+		// Log error but don't fail - return what we have (system + public templates)
+		// This allows the API to work even if tenant templates query fails (e.g., index not ready)
+		fmt.Printf("[ArtifactTemplateService] Failed to list tenant templates for tenantID=%s: %v\n", tenantID, err)
+	} else {
 		// Filter by category if specified
 		if category != nil {
 			filtered := make([]*models.ArtifactTemplate, 0)
@@ -107,11 +128,16 @@ func (s *ArtifactTemplateService) CreateCustomTemplate(
 // PublishToCommunity publishes a template to the community
 func (s *ArtifactTemplateService) PublishToCommunity(
 	ctx context.Context,
-	templateID, userID string,
+	templateID, tenantID, userID string,
 ) error {
 	template, err := s.repo.Get(ctx, templateID)
 	if err != nil {
 		return err
+	}
+
+	// System templates cannot be republished
+	if template.Type == "system" {
+		return errors.New("system templates are already public")
 	}
 
 	// Check ownership
@@ -119,14 +145,23 @@ func (s *ArtifactTemplateService) PublishToCommunity(
 		return errors.New("unauthorized: only template creator can publish")
 	}
 
+	// For custom templates, verify tenant access
+	if template.Type == "custom" {
+		if template.TenantID == nil || *template.TenantID != tenantID {
+			return errors.New("unauthorized")
+		}
+	}
+
 	template.IsPublic = true
 	template.Type = "community"
+	// Remove tenantID when publishing to community (becomes global)
+	template.TenantID = nil
 
 	return s.repo.Update(ctx, template)
 }
 
-// UpdateTemplate updates an existing template (owner-only)
-func (s *ArtifactTemplateService) UpdateTemplate(ctx context.Context, t *models.ArtifactTemplate, userID string) error {
+// UpdateTemplate updates an existing template (owner-only, tenant-scoped)
+func (s *ArtifactTemplateService) UpdateTemplate(ctx context.Context, t *models.ArtifactTemplate, tenantID, userID string) error {
 	if t == nil || t.ID == "" {
 		return errors.New("invalid template")
 	}
@@ -134,8 +169,21 @@ func (s *ArtifactTemplateService) UpdateTemplate(ctx context.Context, t *models.
 	if err != nil {
 		return err
 	}
+	// System templates cannot be updated
+	if existing.Type == "system" {
+		return errors.New("system templates cannot be updated")
+	}
+	// Check ownership
 	if existing.CreatedBy != userID {
 		return errors.New("unauthorized")
+	}
+	// For custom templates, verify tenant access
+	if existing.Type == "custom" {
+		if existing.TenantID == nil || *existing.TenantID != tenantID {
+			return errors.New("unauthorized")
+		}
+		// Ensure tenantID is preserved
+		t.TenantID = existing.TenantID
 	}
 	// Preserve immutable fields
 	t.CreatedBy = existing.CreatedBy
@@ -143,17 +191,29 @@ func (s *ArtifactTemplateService) UpdateTemplate(ctx context.Context, t *models.
 	t.UsageCount = existing.UsageCount
 	t.Rating = existing.Rating
 	t.RatingCount = existing.RatingCount
+	t.Type = existing.Type // Preserve type
 	return s.repo.Update(ctx, t)
 }
 
-// DeleteTemplate deletes a template (owner-only)
-func (s *ArtifactTemplateService) DeleteTemplate(ctx context.Context, id, userID string) error {
+// DeleteTemplate deletes a template (owner-only, tenant-scoped)
+func (s *ArtifactTemplateService) DeleteTemplate(ctx context.Context, id, tenantID, userID string) error {
 	existing, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return err
 	}
+	// System templates cannot be deleted
+	if existing.Type == "system" {
+		return errors.New("system templates cannot be deleted")
+	}
+	// Check ownership
 	if existing.CreatedBy != userID {
 		return errors.New("unauthorized")
+	}
+	// For custom templates, verify tenant access
+	if existing.Type == "custom" {
+		if existing.TenantID == nil || *existing.TenantID != tenantID {
+			return errors.New("unauthorized")
+		}
 	}
 	return s.repo.Delete(ctx, id)
 }

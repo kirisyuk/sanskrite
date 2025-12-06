@@ -48,6 +48,7 @@ interface ChatMessagesListProps {
   onEditFinish: (id: string) => void;
   onEditError: (id: string, error: string) => void;
   onEditUpdate: (id: string, content: string) => void;
+  onOpenSettings?: (params?: { initialTab?: 'personal' | 'corporate' | 'guardians'; highlightCheckbox?: 'disableBiasEvaluation' | 'disableFrameExpansion' | 'disableComplianceEvaluation' }) => void;
 }
 
 export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
@@ -68,6 +69,7 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
   onEditFinish,
   onEditError,
   onEditUpdate,
+  onOpenSettings,
 }) => {
   return (
     <>
@@ -704,6 +706,7 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                             it.contentSanitized ||
                             it.content
                           }
+                          onOpenSettings={onOpenSettings}
                         />
                       )}
                     </>

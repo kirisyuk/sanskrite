@@ -583,6 +583,18 @@ type User struct {
 
 	AssignedGoalIDs       []string `json:"assignedGoalIds,omitempty" firestore:"assignedGoalIds"`
 	AssignedInitiativeIDs []string `json:"assignedInitiativeIds,omitempty" firestore:"assignedInitiativeIds"`
+
+	// Recommendation settings - if true, don't recommend these evaluations
+	RecommendationSettings *RecommendationSettings `json:"recommendationSettings,omitempty" firestore:"recommendationSettings"`
+}
+
+// RecommendationSettings controls which evaluation recommendations are disabled
+// If a field is true, that recommendation is disabled (not shown)
+// Default values are false (recommendations are enabled)
+type RecommendationSettings struct {
+	DisableBiasEvaluation      bool `json:"disableBiasEvaluation" firestore:"disableBiasEvaluation"`
+	DisableFrameExpansion      bool `json:"disableFrameExpansion" firestore:"disableFrameExpansion"`
+	DisableComplianceEvaluation bool `json:"disableComplianceEvaluation" firestore:"disableComplianceEvaluation"`
 }
 
 // WaitlistEntry represents an email awaiting access approval
@@ -661,7 +673,8 @@ type ExternalDocRef struct {
 
 // CoreDoc represents a project-scoped document the user attached to a project.
 // It can be stored in our storage (StoragePath) or referenced externally (External).
-// Can also be a dynamic artifact with generation config (DocType = "dynamic_artifact").
+// Can also be a dynamic artifact with generation config (DocType = "dynamic_artifact")
+// or a signal snapshot (DocType = "signal_snapshot").
 type CoreDoc struct {
 	ID          string  `json:"id" firestore:"id"`
 	TenantID    string  `json:"tenantId" firestore:"tenantId"`
@@ -744,9 +757,10 @@ type ArtifactContextSources struct {
 
 // ArtifactAutoUpdate defines auto-update behavior
 type ArtifactAutoUpdate struct {
-	Trigger     string                     `json:"trigger" firestore:"trigger"`                             // "on_new_message" | "daily" | "weekly" | "on_new_document"
-	Conditions  *ArtifactUpdateConditions  `json:"conditions,omitempty" firestore:"conditions,omitempty"`   // conditions for triggering update
-	SmartUpdate *ArtifactSmartUpdateConfig `json:"smartUpdate,omitempty" firestore:"smartUpdate,omitempty"` // smart update configuration
+	Trigger      string                     `json:"trigger" firestore:"trigger"`                               // "on_new_message" | "daily" | "weekly" | "on_new_document"
+	ScheduleTime *string                     `json:"scheduleTime,omitempty" firestore:"scheduleTime,omitempty"` // Time of day for scheduled updates (HH:MM format, UTC), e.g., "09:00" for 9 AM
+	Conditions   *ArtifactUpdateConditions  `json:"conditions,omitempty" firestore:"conditions,omitempty"`     // conditions for triggering update
+	SmartUpdate  *ArtifactSmartUpdateConfig `json:"smartUpdate,omitempty" firestore:"smartUpdate,omitempty"`   // smart update configuration
 }
 
 // ArtifactUpdateConditions defines when to trigger auto-update
@@ -1101,4 +1115,95 @@ type ProjectScenario struct {
 	UpdatedAt time.Time `json:"updatedAt" firestore:"updatedAt"`
 	CreatedBy string    `json:"createdBy" firestore:"createdBy"` // User ID
 	UpdatedBy string    `json:"updatedBy" firestore:"updatedBy"` // User ID
+}
+
+// ============================================================================
+// Signal System Models
+// ============================================================================
+
+// ListeningSignal represents a signal that the system listens for
+// Signals are used to trigger updates for dynamic artifacts
+type ListeningSignal struct {
+	ID          string   `json:"id" firestore:"id"`
+	Name        string   `json:"name" firestore:"name"`                 // Display name for the signal
+	Signal      string   `json:"signal" firestore:"signal"`             // Text signal that is being "listened" to
+	SearchQueries []string `json:"searchQueries" firestore:"searchQueries"` // Set of common search query strings
+	TenantID    string   `json:"tenantId" firestore:"tenantId"`         // Required: tenant ID
+	ProjectID   *string  `json:"projectId,omitempty" firestore:"projectId,omitempty"` // Optional: if nil, signal is for entire tenant
+	
+	// Metadata
+	Description *string `json:"description,omitempty" firestore:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty" firestore:"tags,omitempty"`
+	
+	// Status
+	IsActive    bool    `json:"isActive" firestore:"isActive"` // Whether signal is currently active
+	
+	// Timestamps
+	CreatedAt   time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt" firestore:"updatedAt"`
+	CreatedBy   string    `json:"createdBy" firestore:"createdBy"` // User ID
+}
+
+// SignalSnapshotRef represents a link between a signal and its snapshot (CoreDoc with docType="signal_snapshot")
+// This allows tracking which snapshots belong to which signals and which artifacts have used them
+type SignalSnapshotRef struct {
+	ID                string   `json:"id" firestore:"id"`
+	SignalID          string   `json:"signalId" firestore:"signalId"`                       // Reference to ListeningSignal
+	SnapshotDocID     string   `json:"snapshotDocId" firestore:"snapshotDocId"`               // Reference to CoreDoc (docType="signal_snapshot")
+	
+	// Metadata
+	CapturedAt        time.Time `json:"capturedAt" firestore:"capturedAt"`                    // When snapshot was captured
+	IsActive          bool     `json:"isActive" firestore:"isActive"`                        // Whether this snapshot is still active/relevant
+	
+	// Usage tracking
+	UsedInArtifacts   []string `json:"usedInArtifacts,omitempty" firestore:"usedInArtifacts,omitempty"` // DocumentArtifact IDs that have used this snapshot
+	
+	// Timestamps
+	CreatedAt         time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt" firestore:"updatedAt"`
+}
+
+// DocumentArtifactSignal represents a many-to-one relationship between signals and document-artifacts
+// One document-artifact can have many signals
+type DocumentArtifactSignal struct {
+	ID                string   `json:"id" firestore:"id"`
+	DocumentArtifactID string   `json:"documentArtifactId" firestore:"documentArtifactId"` // Reference to CoreDoc (dynamic_artifact)
+	SignalID          string   `json:"signalId" firestore:"signalId"`                       // Reference to ListeningSignal
+	
+	// Metadata
+	Priority          int      `json:"priority" firestore:"priority"` // Priority for signal matching (higher = more important)
+	IsActive          bool     `json:"isActive" firestore:"isActive"` // Whether this link is active
+	
+	// Snapshot tracking
+	LastUsedSnapshotID *string  `json:"lastUsedSnapshotId,omitempty" firestore:"lastUsedSnapshotId,omitempty"` // ID of SignalSnapshotRef that was last used for artifact generation
+	
+	// Timestamps
+	CreatedAt         time.Time `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt" firestore:"updatedAt"`
+	CreatedBy         string    `json:"createdBy" firestore:"createdBy"` // User ID
+}
+
+// SignalHistory represents history of signal detections/matches
+type SignalHistory struct {
+	ID                string    `json:"id" firestore:"id"`
+	SignalID          string    `json:"signalId" firestore:"signalId"` // Reference to ListeningSignal
+	
+	// Detection details
+	DetectedAt        time.Time `json:"detectedAt" firestore:"detectedAt"` // When signal was detected
+	Source            string    `json:"source" firestore:"source"`         // Source of detection (e.g., "document", "search", "conversation")
+	SourceID          *string   `json:"sourceId,omitempty" firestore:"sourceId,omitempty"` // ID of source document/interaction/etc
+	MatchType         string    `json:"matchType" firestore:"matchType"`    // "exact", "fuzzy", "semantic", "search_query"
+	MatchScore        float64   `json:"matchScore" firestore:"matchScore"` // Confidence score (0-1)
+	MatchedText       string    `json:"matchedText" firestore:"matchedText"` // Text that matched the signal
+	Context           string    `json:"context" firestore:"context"`         // Additional context around the match
+	
+	// Related artifacts that should be updated
+	TriggeredArtifacts []string `json:"triggeredArtifacts,omitempty" firestore:"triggeredArtifacts,omitempty"` // DocumentArtifact IDs that were triggered
+	
+	// Metadata
+	TenantID          string    `json:"tenantId" firestore:"tenantId"`
+	ProjectID         *string   `json:"projectId,omitempty" firestore:"projectId,omitempty"`
+	
+	// Timestamps
+	CreatedAt         time.Time `json:"createdAt" firestore:"createdAt"`
 }

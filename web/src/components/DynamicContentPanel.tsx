@@ -56,6 +56,22 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   const [generationProgress, setGenerationProgress] = React.useState<{ current: number; total: number }>({ current: 0, total: 0 });
   const [refreshingSectionId, setRefreshingSectionId] = React.useState<string | null>(null);
 
+  // Create template wizard state
+  const [showCreateTemplateWizard, setShowCreateTemplateWizard] = React.useState(false);
+  const [templateUserRequest, setTemplateUserRequest] = React.useState('');
+  const [isGeneratingTemplate, setIsGeneratingTemplate] = React.useState(false);
+  const [generatedTemplateStructure, setGeneratedTemplateStructure] = React.useState<any[] | null>(null);
+  const [generatedTemplateName, setGeneratedTemplateName] = React.useState<string>('');
+  const [isSavingTemplate, setIsSavingTemplate] = React.useState(false);
+  
+  // Edit template state
+  const [editingTemplateId, setEditingTemplateId] = React.useState<string | null>(null);
+  const [editingTemplateName, setEditingTemplateName] = React.useState<string>('');
+  const [editingTemplateDescription, setEditingTemplateDescription] = React.useState<string>('');
+  const [editingTemplateSections, setEditingTemplateSections] = React.useState<any[]>([]);
+  const [isSavingEditedTemplate, setIsSavingEditedTemplate] = React.useState(false);
+  const [deletingTemplateId, setDeletingTemplateId] = React.useState<string | null>(null);
+
   // Detect mobile device
   React.useEffect(() => {
     const checkMobile = () => {
@@ -82,6 +98,7 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   const [autoUpdateCheckQuality, setAutoUpdateCheckQuality] = React.useState(false);
   const [autoUpdateMinQualityThreshold, setAutoUpdateMinQualityThreshold] = React.useState<number>(0.7);
   const [autoUpdateNotifyOnUpdate, setAutoUpdateNotifyOnUpdate] = React.useState(false);
+  const [autoUpdateScheduleTime, setAutoUpdateScheduleTime] = React.useState<string>('09:00');
 
   // Load artifacts
   React.useEffect(() => {
@@ -121,6 +138,8 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       setTemplatesLoading(true);
       try {
         const templatesList = await api.listArtifactTemplates();
+        console.log('[DynamicContentPanel] Loaded templates:', templatesList);
+        console.log('[DynamicContentPanel] Templates with type custom:', templatesList?.filter((t: any) => t.type === 'custom'));
         setTemplates(templatesList || []);
       } catch (err) {
         console.error('[DynamicContentPanel] Failed to load templates', err);
@@ -163,9 +182,29 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
     }
   };
 
-  // Group templates by category and sort alphabetically within each category
-  const groupedTemplates = React.useMemo(() => {
-    const grouped = templates.reduce((acc, template) => {
+  // Separate templates into system and custom
+  const { systemTemplates, customTemplates } = React.useMemo(() => {
+    const system: ArtifactTemplate[] = [];
+    const custom: ArtifactTemplate[] = [];
+    
+    templates.forEach(template => {
+      console.log('[DynamicContentPanel] Template:', { id: template.id, name: template.name, type: template.type, hasType: 'type' in template });
+      if (template.type === 'system') {
+        system.push(template);
+      } else if (template.type === 'custom') {
+        custom.push(template);
+      } else {
+        console.warn('[DynamicContentPanel] Template without recognized type:', template);
+      }
+    });
+    
+    console.log('[DynamicContentPanel] Separated templates:', { system: system.length, custom: custom.length });
+    return { systemTemplates: system, customTemplates: custom };
+  }, [templates]);
+
+  // Group system templates by category
+  const groupedSystemTemplates = React.useMemo(() => {
+    const grouped = systemTemplates.reduce((acc, template) => {
       const category = template.category || 'Other';
       if (!acc[category]) {
         acc[category] = [];
@@ -174,7 +213,6 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       return acc;
     }, {} as Record<string, ArtifactTemplate[]>);
 
-    // Sort categories alphabetically and templates within each category
     return Object.entries(grouped)
       .map(([category, categoryTemplates]) => ({
         category,
@@ -185,7 +223,30 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       .sort((a, b) => 
         a.category.localeCompare(b.category, undefined, { sensitivity: 'base' })
       );
-  }, [templates]);
+  }, [systemTemplates]);
+
+  // Group custom templates by category
+  const groupedCustomTemplates = React.useMemo(() => {
+    const grouped = customTemplates.reduce((acc, template) => {
+      const category = template.category || 'Other';
+      if (!acc[category]) {
+        acc[category] = [];
+      }
+      acc[category].push(template);
+      return acc;
+    }, {} as Record<string, ArtifactTemplate[]>);
+
+    return Object.entries(grouped)
+      .map(([category, categoryTemplates]) => ({
+        category,
+        templates: categoryTemplates.sort((a, b) => 
+          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        ),
+      }))
+      .sort((a, b) => 
+        a.category.localeCompare(b.category, undefined, { sensitivity: 'base' })
+      );
+  }, [customTemplates]);
 
   const handleTemplateSelect = async (templateId: string) => {
     try {
@@ -236,10 +297,19 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       setGeneratedSections({});
       setGenerationProgress({ current: 0, total: 0 });
     } else if (wizardStep === 'configure') {
+      // If it's a generated template, go back to template creation wizard
+      if (selectedTemplate?.id === 'generated-template') {
+        setWizardStep('templates');
+        setShowCreateTemplateWizard(true);
+        setSelectedTemplate(null);
+        setArtifactName('');
+        setUserRequest(templateUserRequest); // Keep the user request
+      } else {
       setWizardStep('templates');
       setSelectedTemplate(null);
       setArtifactName('');
       setUserRequest('');
+      }
       setSectionAutoUpdate({});
       setOrchestratorModel('');
       setDefaultModel('');
@@ -256,6 +326,7 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       setExpandedSections({});
       setGeneratedSections({});
       setGenerationProgress({ current: 0, total: 0 });
+      setGeneratedTemplateStructure(null);
     }
   };
 
@@ -591,6 +662,7 @@ FORMAT REQUIREMENTS:
 
       const autoUpdateConfig = documentAutoUpdateEnabled ? {
         trigger: autoUpdateTrigger,
+        scheduleTime: (autoUpdateTrigger === 'daily' || autoUpdateTrigger === 'weekly') ? autoUpdateScheduleTime : undefined,
         conditions: Object.keys(conditions).length > 0 ? conditions : undefined,
         smartUpdate: smartUpdate,
       } : undefined;
@@ -687,15 +759,130 @@ FORMAT REQUIREMENTS:
     </div>
   );
 
+  // TemplateDisplay component - displays template name and sections
+  const TemplateDisplay = ({ template }: { template: ArtifactTemplate }) => {
+    const sortedSections = [...(template.defaultStructure || [])].sort((a, b) => a.order - b.order);
+    
+    return (
+      <div>
+        <div className="mb-2">
+          <h5 className="text-xs font-medium mb-1" style={{ color: 'var(--text-tertiary-weak)' }}>
+            Template Name
+          </h5>
+          <h4 className="text-base font-semibold" style={{ color: 'var(--text-heading)' }}>
+            {template.name}
+          </h4>
+          {template.description && (
+            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary-strong)' }}>
+              {template.description}
+            </p>
+          )}
+        </div>
+        
+        {sortedSections.length > 0 && (
+          <div>
+            <label className="block text-13 mb-2" style={{ color: 'var(--text-secondary-strong)' }}>
+              Sections
+            </label>
+            <div className="space-y-2">
+              {sortedSections.map((section) => {
+                const isExpanded = expandedSections[section.id] || false;
+                return (
+                  <div
+                    key={section.id}
+                    className="px-3 py-2 rounded"
+                    style={{
+                      backgroundColor: 'var(--white-06)',
+                      border: '1px solid var(--overlay-line-90)',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpandedSections((prev) => ({
+                          ...prev,
+                          [section.id]: !prev[section.id],
+                        }));
+                      }}
+                      className="w-full flex items-center justify-between text-left"
+                    >
+                      <div className="text-xs font-medium" style={{ color: 'var(--text-heading)' }}>
+                        {section.title}
+                        {section.required && (
+                          <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                            (required)
+                          </span>
+                        )}
+                      </div>
+                      <svg
+                        className="w-3 h-3 transition-transform"
+                        style={{
+                          transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                          color: 'var(--text-secondary)',
+                        }}
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                      >
+                        <path d="M6 9l6 6 6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    {isExpanded && (
+                      <>
+                        {section.description && (
+                          <div className="text-[10px] mb-1 mt-2" style={{ color: 'var(--text-secondary-strong)' }}>
+                            {section.description}
+                          </div>
+                        )}
+                        {section.promptTemplate && (
+                          <div
+                            className="text-[10px] mt-1 pt-1"
+                            style={{
+                              color: 'var(--text-tertiary-weak)',
+                              borderTop: '1px solid var(--overlay-line-90)',
+                              fontStyle: 'italic',
+                            }}
+                          >
+                            {section.promptTemplate}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Templates list component (reusable)
   const TemplatesList = ({ 
     compact = false, 
     selectedTemplateId,
-    onTemplateSelect 
+    onTemplateSelect,
+    templates: templatesToShow,
+    groupedTemplates: groupedTemplatesToShow,
+    widerColumns = false,
+    isCustomTemplates = false,
+    onEditTemplate,
+    onDeleteTemplate,
+    editingTemplateId,
+    deletingTemplateId,
   }: { 
     compact?: boolean;
     selectedTemplateId?: string | null;
     onTemplateSelect: (templateId: string) => void;
+    templates: ArtifactTemplate[];
+    groupedTemplates: Array<{ category: string; templates: ArtifactTemplate[] }>;
+    widerColumns?: boolean;
+    isCustomTemplates?: boolean;
+    onEditTemplate?: (template: ArtifactTemplate) => void;
+    onDeleteTemplate?: (templateId: string) => void;
+    editingTemplateId?: string | null;
+    deletingTemplateId?: string | null;
   }) => {
     if (templatesLoading) {
       return (
@@ -707,22 +894,15 @@ FORMAT REQUIREMENTS:
         </div>
       );
     }
-    if (templates.length === 0) {
-      return (
-        <div
-          className="text-xs py-2 text-center"
-          style={{ color: 'var(--text-secondary-strong)' }}
-        >
-          No templates available
-        </div>
-      );
+    if (templatesToShow.length === 0) {
+      return null; // Empty state handled by parent
     }
 
     if (compact) {
       // Compact vertical list for desktop sidebar
       return (
         <div className="space-y-1">
-          {groupedTemplates.map(({ category, templates: categoryTemplates }) => (
+          {groupedTemplatesToShow.map(({ category, templates: categoryTemplates }) => (
             <div key={category}>
               <div
                 className="text-[10px] uppercase tracking-wide mb-1 px-2"
@@ -784,7 +964,7 @@ FORMAT REQUIREMENTS:
     // Full list for mobile or templates view
     return (
       <div className="space-y-4">
-        {groupedTemplates.map(({ category, templates: categoryTemplates }) => (
+        {groupedTemplatesToShow.map(({ category, templates: categoryTemplates }) => (
           <div key={category}>
             <div
               className="text-[10px] uppercase tracking-wide mb-1.5"
@@ -792,38 +972,42 @@ FORMAT REQUIREMENTS:
             >
               {category}
             </div>
-            <div 
-              className="grid gap-1"
+            <div className="space-y-3">
+              {categoryTemplates.map((template) => {
+                const isEditing = editingTemplateId === template.id;
+                const isDeleting = deletingTemplateId === template.id;
+                
+                return (
+                  <div key={template.id}>
+                    <div
+                      className="px-2 py-1.5 rounded text-xs flex items-start gap-2 group"
               style={{
-                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, max-content))',
-              }}
-            >
-              {categoryTemplates.map((template) => (
-                <div
-                  key={template.id}
-                  className="px-2 py-1.5 rounded text-xs flex items-start gap-2 group cursor-pointer"
-                  style={{
-                    backgroundColor: 'transparent',
+                    backgroundColor: isEditing ? 'var(--white-10)' : 'transparent',
                     maxWidth: 'fit-content',
+                        opacity: isDeleting ? 0.5 : 1,
                   }}
                   onMouseEnter={(e) => {
+                        if (!isEditing && !isDeleting) {
                     (e.currentTarget as HTMLDivElement).style.backgroundColor =
                       'var(--white-10)';
+                        }
                   }}
                   onMouseLeave={(e) => {
+                        if (!isEditing) {
                     (e.currentTarget as HTMLDivElement).style.backgroundColor =
                       'transparent';
+                        }
                   }}
-                  onClick={() => onTemplateSelect(template.id)}
                 >
                   <div className="flex-shrink-0 mt-0.5" style={{ color: 'var(--text-secondary)' }}>
                     {getTemplateIcon()}
                   </div>
-                  <div className="min-w-0" style={{ maxWidth: '300px' }}>
+                      <div className="min-w-0 flex-1" style={{ maxWidth: '300px' }}>
                     <div
-                      className="font-medium truncate"
+                          className="font-medium truncate cursor-pointer"
                       style={{ color: 'var(--text-heading)' }}
                       title={template.name}
+                          onClick={() => !isEditing && !isDeleting && onTemplateSelect(template.id)}
                     >
                       {template.name}
                       {template.isFeatured && (
@@ -860,14 +1044,677 @@ FORMAT REQUIREMENTS:
                       </div>
                     )}
                   </div>
+                      {isCustomTemplates && !isEditing && !isDeleting && (
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                          <button
+                            className="p-1 rounded"
+                            title={t('artifacts.editTemplate', { defaultValue: 'Edit template' })}
+                            style={{ backgroundColor: 'transparent' }}
+                            onMouseEnter={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onEditTemplate) {
+                                onEditTemplate(template);
+                              }
+                            }}
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            className="p-1 rounded"
+                            title={t('artifacts.deleteTemplate', { defaultValue: 'Delete template' })}
+                            style={{ backgroundColor: 'transparent' }}
+                            onMouseEnter={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onDeleteTemplate) {
+                                onDeleteTemplate(template.id);
+                              }
+                            }}
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
+                              />
+                            </svg>
+                          </button>
                 </div>
-              ))}
+                      )}
+                    </div>
+                    
+                    {/* Edit form */}
+                    {isEditing && (
+                      <EditTemplateForm
+                        template={template}
+                        onSave={async (name, description, sections) => {
+                          await api.updateArtifactTemplate(template.id, {
+                            name,
+                            description,
+                            defaultStructure: sections.map((section: any) => ({
+                              id: section.id,
+                              title: section.title,
+                              order: section.order,
+                              description: section.description || '',
+                              promptTemplate: section.promptTemplate || section.prompt || '',
+                              required: section.required !== undefined ? section.required : true,
+                              editable: section.editable !== undefined ? section.editable : true,
+                            })),
+                          });
+                          
+                          // Reload templates
+                          const templatesList = await api.listArtifactTemplates();
+                          setTemplates(templatesList);
+                          
+                          // Reset editing state
+                          setEditingTemplateId(null);
+                          setEditingTemplateName('');
+                          setEditingTemplateDescription('');
+                          setEditingTemplateSections([]);
+                          
+                          alert('Template updated successfully!');
+                        }}
+                        onCancel={() => {
+                          setEditingTemplateId(null);
+                          setEditingTemplateName('');
+                          setEditingTemplateDescription('');
+                          setEditingTemplateSections([]);
+                        }}
+                      />
+                    )}
+                    {false && isEditing && (
+                      <div 
+                        className="mt-3 pt-3 pb-3 border-t border-b" 
+                        style={{ borderColor: 'var(--overlay-line-90)' }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <div className="space-y-4">
+                          {/* Template Name */}
+                          <div>
+                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                              Template Name
+                            </label>
+                            <input
+                              type="text"
+                              value={editingTemplateName}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                setEditingTemplateName(e.target.value);
+                              }}
+                              onFocus={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-full px-2 py-1.5 rounded text-xs"
+                              style={{
+                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                color: 'var(--text-heading)',
+                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                              }}
+                            />
+                          </div>
+                          
+                          {/* Template Description */}
+                          <div>
+                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                              Description
+                            </label>
+                            <textarea
+                              value={editingTemplateDescription}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                setEditingTemplateDescription(e.target.value);
+                              }}
+                              onFocus={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                              rows={2}
+                              className="w-full px-2 py-1.5 rounded text-xs"
+                              style={{
+                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                color: 'var(--text-heading)',
+                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                                resize: 'vertical',
+                              }}
+                            />
+                          </div>
+                          
+                          {/* Sections */}
+                          {editingTemplateSections.length > 0 && (
+                            <div>
+                              <label className="block text-xs font-medium mb-2" style={{ color: 'var(--text-secondary-strong)' }}>
+                                Sections
+                              </label>
+                              <div className="space-y-2">
+                                {editingTemplateSections.map((section: any, index: number) => {
+                                  const isExpanded = expandedSections[`edit-${section.id}`] || false;
+                                  return (
+                                    <div
+                                      key={section.id}
+                                      className="px-3 py-2 rounded"
+                                      style={{
+                                        backgroundColor: 'var(--white-06)',
+                                        border: '1px solid var(--overlay-line-90)',
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setExpandedSections((prev) => ({
+                                            ...prev,
+                                            [`edit-${section.id}`]: !prev[`edit-${section.id}`],
+                                          }));
+                                        }}
+                                        className="w-full flex items-center justify-between text-left mb-2"
+                                      >
+                                        <div className="text-xs font-medium" style={{ color: 'var(--text-heading)' }}>
+                                          {section.title}
+                                          {section.required && (
+                                            <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                                              (required)
+                                            </span>
+                                          )}
+                                        </div>
+                                        <svg
+                                          className="w-3 h-3 transition-transform"
+                                          style={{
+                                            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                            color: 'var(--text-secondary)',
+                                          }}
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          stroke="currentColor"
+                                        >
+                                          <path d="M6 9l6 6 6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                        </svg>
+                                      </button>
+                                      {isExpanded && (
+                                        <div 
+                                          className="space-y-2 mt-2 pt-2 border-t" 
+                                          style={{ borderColor: 'var(--overlay-line-90)' }}
+                                          onClick={(e) => e.stopPropagation()}
+                                          onMouseDown={(e) => e.stopPropagation()}
+                                        >
+                                          <div>
+                                            <label className="block text-[10px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                                              Title
+                                            </label>
+                                            <input
+                                              type="text"
+                                              value={section.title}
+                                              onChange={(e) => {
+                                                e.stopPropagation();
+                                                const updated = [...editingTemplateSections];
+                                                updated[index].title = e.target.value;
+                                                setEditingTemplateSections(updated);
+                                              }}
+                                              onFocus={(e) => e.stopPropagation()}
+                                              onClick={(e) => e.stopPropagation()}
+                                              className="w-full px-2 py-1 rounded text-xs"
+                                              style={{
+                                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                                color: 'var(--text-heading)',
+                                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                                              }}
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="block text-[10px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                                              Description
+                                            </label>
+                                            <textarea
+                                              value={section.description || ''}
+                                              onChange={(e) => {
+                                                e.stopPropagation();
+                                                const updated = [...editingTemplateSections];
+                                                updated[index].description = e.target.value;
+                                                setEditingTemplateSections(updated);
+                                              }}
+                                              onFocus={(e) => e.stopPropagation()}
+                                              onClick={(e) => e.stopPropagation()}
+                                              rows={2}
+                                              className="w-full px-2 py-1 rounded text-xs"
+                                              style={{
+                                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                                color: 'var(--text-heading)',
+                                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                                                resize: 'vertical',
+                                              }}
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="block text-[10px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                                              Prompt Template
+                                            </label>
+                                            <textarea
+                                              value={section.promptTemplate || section.prompt || ''}
+                                              onChange={(e) => {
+                                                e.stopPropagation();
+                                                const updated = [...editingTemplateSections];
+                                                updated[index].promptTemplate = e.target.value;
+                                                setEditingTemplateSections(updated);
+                                              }}
+                                              onFocus={(e) => e.stopPropagation()}
+                                              onClick={(e) => e.stopPropagation()}
+                                              rows={3}
+                                              className="w-full px-2 py-1 rounded text-xs"
+                                              style={{
+                                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                                color: 'var(--text-heading)',
+                                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                                                resize: 'vertical',
+                                              }}
+                                            />
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-4 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            disabled={isSavingEditedTemplate}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!editingTemplateName.trim() || editingTemplateSections.length === 0) {
+                                alert('Template name and sections are required.');
+                                return;
+                              }
+                              setIsSavingEditedTemplate(true);
+                              try {
+                                await api.updateArtifactTemplate(template.id, {
+                                  name: editingTemplateName,
+                                  description: editingTemplateDescription,
+                                  defaultStructure: editingTemplateSections.map((section: any) => ({
+                                    id: section.id,
+                                    title: section.title,
+                                    order: section.order,
+                                    description: section.description || '',
+                                    promptTemplate: section.promptTemplate || section.prompt || '',
+                                    required: section.required !== undefined ? section.required : true,
+                                    editable: section.editable !== undefined ? section.editable : true,
+                                  })),
+                                });
+                                
+                                // Reload templates
+                                const templatesList = await api.listArtifactTemplates();
+                                setTemplates(templatesList);
+                                
+                                // Reset editing state
+                                setEditingTemplateId(null);
+                                setEditingTemplateName('');
+                                setEditingTemplateDescription('');
+                                setEditingTemplateSections([]);
+                                
+                                alert('Template updated successfully!');
+                              } catch (error: any) {
+                                console.error('Error updating template:', error);
+                                alert(`Failed to update template: ${error.message || 'Unknown error'}`);
+                              } finally {
+                                setIsSavingEditedTemplate(false);
+                              }
+                            }}
+                            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded text-xs font-medium"
+                            style={{
+                              backgroundColor: 'var(--accent-primary)',
+                              color: 'white',
+                              border: 'none',
+                              cursor: isSavingEditedTemplate ? 'not-allowed' : 'pointer',
+                              opacity: isSavingEditedTemplate ? 0.6 : 1,
+                            }}
+                          >
+                            {isSavingEditedTemplate ? 'Saving...' : t('artifacts.saveTemplate', { defaultValue: 'Save Template' })}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isSavingEditedTemplate}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingTemplateId(null);
+                              setEditingTemplateName('');
+                              setEditingTemplateDescription('');
+                              setEditingTemplateSections([]);
+                            }}
+                            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded text-xs font-medium"
+                            style={{
+                              backgroundColor: 'transparent',
+                              color: 'var(--text-secondary-strong)',
+                              border: '1px solid var(--overlay-line-90)',
+                              cursor: isSavingEditedTemplate ? 'not-allowed' : 'pointer',
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isSavingEditedTemplate) {
+                                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            {t('artifacts.cancel', { defaultValue: 'Cancel' })}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}
       </div>
     );
   };
+  
+  // Separate EditTemplateForm component to prevent re-renders
+  const EditTemplateForm = React.memo(({ 
+    template,
+    onSave,
+    onCancel,
+  }: {
+    template: ArtifactTemplate;
+    onSave: (name: string, description: string, sections: any[]) => Promise<void>;
+    onCancel: () => void;
+  }) => {
+    const { t } = useTranslation();
+    const [localName, setLocalName] = React.useState(template.name);
+    const [localDescription, setLocalDescription] = React.useState(template.description || '');
+    const [localSections, setLocalSections] = React.useState([...(template.defaultStructure || [])].sort((a, b) => a.order - b.order));
+    const [saving, setSaving] = React.useState(false);
+    const [localExpandedSections, setLocalExpandedSections] = React.useState<Record<string, boolean>>({});
+    
+    return (
+      <div 
+        className="mt-3 pt-3 pb-3 border-t border-b" 
+        style={{ borderColor: 'var(--overlay-line-90)' }}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="space-y-4">
+          {/* Template Name */}
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+              Template Name
+            </label>
+            <input
+              type="text"
+              value={localName}
+              onChange={(e) => setLocalName(e.target.value)}
+              onFocus={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full px-2 py-1.5 rounded text-xs"
+              style={{
+                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                color: 'var(--text-heading)',
+                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+              }}
+            />
+          </div>
+          
+          {/* Template Description */}
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+              Description
+            </label>
+            <textarea
+              value={localDescription}
+              onChange={(e) => setLocalDescription(e.target.value)}
+              onFocus={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              rows={2}
+              className="w-full px-2 py-1.5 rounded text-xs"
+              style={{
+                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                color: 'var(--text-heading)',
+                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                resize: 'vertical',
+              }}
+            />
+          </div>
+          
+          {/* Sections */}
+          {localSections.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium mb-2" style={{ color: 'var(--text-secondary-strong)' }}>
+                Sections
+              </label>
+              <div className="space-y-2">
+                {localSections.map((section: any, index: number) => {
+                  const isExpanded = localExpandedSections[`edit-${section.id}`] || false;
+                  return (
+                    <div
+                      key={section.id}
+                      className="px-3 py-2 rounded group"
+                      style={{
+                        backgroundColor: 'var(--white-06)',
+                        border: '1px solid var(--overlay-line-90)',
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLocalExpandedSections((prev) => ({
+                              ...prev,
+                              [`edit-${section.id}`]: !prev[`edit-${section.id}`],
+                            }));
+                          }}
+                          className="flex-1 flex items-center justify-between text-left mb-2"
+                        >
+                          <div className="text-xs font-medium" style={{ color: 'var(--text-heading)' }}>
+                            {section.title}
+                            {section.required && (
+                              <span className="ml-1 text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                                (required)
+                              </span>
+                            )}
+                          </div>
+                          <svg
+                            className="w-3 h-3 transition-transform flex-shrink-0"
+                            style={{
+                              transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                              color: 'var(--text-secondary)',
+                            }}
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                          >
+                            <path d="M6 9l6 6 6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(t('artifacts.confirmDeleteSection', { name: section.title, defaultValue: `Are you sure you want to delete section "${section.title}"?` }))) {
+                                const updated = localSections.filter((s: any) => s.id !== section.id);
+                                setLocalSections(updated);
+                              }
+                            }}
+                            className="p-1 rounded"
+                            title={t('artifacts.deleteSection', { defaultValue: 'Delete section' })}
+                            style={{ backgroundColor: 'transparent' }}
+                            onMouseEnter={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                      {isExpanded && (
+                        <div 
+                          className="space-y-2 mt-2 pt-2 border-t" 
+                          style={{ borderColor: 'var(--overlay-line-90)' }}
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <div>
+                            <label className="block text-[10px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                              Title
+                            </label>
+                            <input
+                              type="text"
+                              value={section.title}
+                              onChange={(e) => {
+                                const updated = [...localSections];
+                                updated[index].title = e.target.value;
+                                setLocalSections(updated);
+                              }}
+                              onFocus={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-full px-2 py-1 rounded text-xs"
+                              style={{
+                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                color: 'var(--text-heading)',
+                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                              }}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                              Description
+                            </label>
+                            <textarea
+                              value={section.description || ''}
+                              onChange={(e) => {
+                                const updated = [...localSections];
+                                updated[index].description = e.target.value;
+                                setLocalSections(updated);
+                              }}
+                              onFocus={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                              rows={2}
+                              className="w-full px-2 py-1 rounded text-xs"
+                              style={{
+                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                color: 'var(--text-heading)',
+                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                                resize: 'vertical',
+                              }}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                              Prompt Template
+                            </label>
+                            <textarea
+                              value={section.promptTemplate || section.prompt || ''}
+                              onChange={(e) => {
+                                const updated = [...localSections];
+                                updated[index].promptTemplate = e.target.value;
+                                setLocalSections(updated);
+                              }}
+                              onFocus={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                              rows={3}
+                              className="w-full px-2 py-1 rounded text-xs"
+                              style={{
+                                backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                color: 'var(--text-heading)',
+                                border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                                resize: 'vertical',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="mt-4 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (!localName.trim() || localSections.length === 0) {
+                alert('Template name and sections are required.');
+                return;
+              }
+              setSaving(true);
+              try {
+                await onSave(localName, localDescription, localSections);
+              } finally {
+                setSaving(false);
+              }
+            }}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded text-xs font-medium"
+            style={{
+              backgroundColor: 'var(--accent-primary)',
+              color: 'white',
+              border: 'none',
+              cursor: saving ? 'not-allowed' : 'pointer',
+              opacity: saving ? 0.6 : 1,
+            }}
+          >
+            {saving ? 'Saving...' : t('artifacts.saveTemplate', { defaultValue: 'Save Template' })}
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancel();
+            }}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded text-xs font-medium"
+            style={{
+              backgroundColor: 'transparent',
+              color: 'var(--text-secondary-strong)',
+              border: '1px solid var(--overlay-line-90)',
+              cursor: saving ? 'not-allowed' : 'pointer',
+            }}
+            onMouseEnter={(e) => {
+              if (!saving) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+            }}
+          >
+            {t('artifacts.cancel', { defaultValue: 'Cancel' })}
+          </button>
+        </div>
+      </div>
+    );
+  });
 
   // Wizard view - configure artifact from template
   if (wizardStep === 'configure' && selectedTemplate) {
@@ -917,6 +1764,8 @@ FORMAT REQUIREMENTS:
               <TemplatesList
                 selectedTemplateId={selectedTemplate.id}
                 onTemplateSelect={handleTemplateSelect}
+                templates={templates}
+                groupedTemplates={[...groupedSystemTemplates, ...groupedCustomTemplates]}
               />
             </div>
 
@@ -1293,6 +2142,32 @@ FORMAT REQUIREMENTS:
                 </select>
               </div>
 
+              {(autoUpdateTrigger === 'daily' || autoUpdateTrigger === 'weekly') && (
+                <div>
+                  <label
+                    className="block text-[11px] mb-1.5"
+                    style={{ color: 'var(--text-secondary-strong)' }}
+                  >
+                    Schedule Time (UTC)
+                  </label>
+                  <input
+                    type="time"
+                    value={autoUpdateScheduleTime}
+                    onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
+                    className="w-full text-xs px-2 py-1.5 rounded"
+                    style={{
+                      backgroundColor: 'var(--white-06)',
+                      border: '1px solid var(--overlay-line-90)',
+                      color: 'var(--text-heading)',
+                      outline: 'none',
+                    }}
+                  />
+                  <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                    Time when the update should run (24-hour format)
+                  </p>
+                </div>
+              )}
+
               <div>
                 <label
                   className="block text-[11px] mb-1.5"
@@ -1533,6 +2408,8 @@ FORMAT REQUIREMENTS:
             compact={true}
             selectedTemplateId={selectedTemplate.id}
             onTemplateSelect={handleTemplateSelect}
+            templates={templates}
+            groupedTemplates={[...groupedSystemTemplates, ...groupedCustomTemplates]}
           />
         </div>
 
@@ -1909,6 +2786,32 @@ FORMAT REQUIREMENTS:
                       <option value="on_new_document">On new document</option>
                     </select>
                   </div>
+
+                  {(autoUpdateTrigger === 'daily' || autoUpdateTrigger === 'weekly') && (
+                    <div>
+                      <label
+                        className="block text-[11px] mb-1.5"
+                        style={{ color: 'var(--text-secondary-strong)' }}
+                      >
+                        Schedule Time (UTC)
+                      </label>
+                      <input
+                        type="time"
+                        value={autoUpdateScheduleTime}
+                        onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
+                        className="w-full text-xs px-2 py-1.5 rounded"
+                        style={{
+                          backgroundColor: 'var(--white-06)',
+                          border: '1px solid var(--overlay-line-90)',
+                          color: 'var(--text-heading)',
+                          outline: 'none',
+                        }}
+                      />
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                        Time when the update should run (24-hour format)
+                      </p>
+                    </div>
+                  )}
 
                   <div>
                     <label
@@ -2527,13 +3430,15 @@ FORMAT REQUIREMENTS:
 
       {/* Templates section */}
       {wizardStep === 'templates' && (
-      <div className="mt-6">
+      <div className="mt-6 space-y-6">
+        {/* System Templates */}
+        <div>
         <div className="mb-2">
           <h4
             className="text-[11px] uppercase tracking-wide"
             style={{ color: 'var(--text-tertiary-weak)' }}
           >
-            Templates ({templates.length})
+              System Templates ({systemTemplates.length})
           </h4>
         </div>
         <button
@@ -2557,7 +3462,7 @@ FORMAT REQUIREMENTS:
             <div style={{ color: 'var(--text-secondary)' }}>
               {getFolderIcon()}
             </div>
-            <span>{showTemplates ? 'Hide templates' : 'Show templates'}</span>
+              <span>{showTemplates ? 'Hide system templates' : 'Show system templates'}</span>
           </div>
           <svg
             className="w-3 h-3 transition-transform"
@@ -2580,12 +3485,588 @@ FORMAT REQUIREMENTS:
 
         {showTemplates && (
           <div className="mt-2">
+              {systemTemplates.length === 0 ? (
+                <div
+                  className="text-xs py-2 text-center"
+                  style={{ color: 'var(--text-secondary-strong)' }}
+                >
+                  No system templates available
+                </div>
+              ) : (
             <TemplatesList
               onTemplateSelect={handleTemplateSelect}
+                  templates={systemTemplates}
+                  groupedTemplates={groupedSystemTemplates}
             />
+              )}
           </div>
         )}
       </div>
+
+        {/* Custom Templates */}
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <h4
+              className="text-[11px] uppercase tracking-wide"
+              style={{ color: 'var(--text-tertiary-weak)' }}
+            >
+              Custom Templates ({customTemplates.length})
+            </h4>
+          </div>
+
+          {/* Custom Templates List */}
+          {customTemplates.length === 0 ? (
+            <div
+              className="text-xs py-2 text-left"
+              style={{ 
+                color: 'var(--text-secondary-strong)',
+              }}
+            >
+              No custom templates yet. Create your first one below.
+            </div>
+          ) : (
+            <TemplatesList
+              onTemplateSelect={handleTemplateSelect}
+              templates={customTemplates}
+              groupedTemplates={groupedCustomTemplates}
+              widerColumns={true}
+              isCustomTemplates={true}
+              onEditTemplate={(template) => {
+                setEditingTemplateId(template.id);
+                setEditingTemplateName(template.name);
+                setEditingTemplateDescription(template.description || '');
+                setEditingTemplateSections([...(template.defaultStructure || [])].sort((a, b) => a.order - b.order));
+              }}
+              onDeleteTemplate={async (templateId) => {
+                              const template = customTemplates.find(t => t.id === templateId);
+                              if (!template) return;
+                              
+                              if (!confirm(t('artifacts.confirmDeleteTemplate', { name: template.name, defaultValue: `Are you sure you want to delete "${template.name}"?` }))) {
+                                return;
+                              }
+                
+                setDeletingTemplateId(templateId);
+                try {
+                  await api.deleteArtifactTemplate(templateId);
+                  
+                  // Reload templates
+                  const templatesList = await api.listArtifactTemplates();
+                  setTemplates(templatesList);
+                  
+                  alert('Template deleted successfully!');
+                } catch (error: any) {
+                  console.error('Error deleting template:', error);
+                  alert(`Failed to delete template: ${error.message || 'Unknown error'}`);
+                } finally {
+                  setDeletingTemplateId(null);
+                }
+              }}
+              editingTemplateId={editingTemplateId}
+              deletingTemplateId={deletingTemplateId}
+            />
+          )}
+
+          {/* Create Custom Template Button */}
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => {
+                setShowCreateTemplateWizard(true);
+                setTemplateUserRequest('');
+              }}
+              className="inline-flex items-center gap-2 px-2 py-1.5 rounded text-xs"
+              style={{
+                backgroundColor: 'var(--white-10)',
+                color: 'var(--text-heading)',
+                border: '1px dashed var(--overlay-line-90)',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                  'var(--white-15)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                  'var(--white-10)';
+              }}
+            >
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>Create custom template</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      )}
+
+      {/* Create Template Wizard */}
+      {wizardStep === 'templates' && showCreateTemplateWizard && (
+        <div className="mt-6">
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4
+                className="text-[11px] uppercase tracking-wide"
+                style={{ color: 'var(--text-tertiary-weak)' }}
+              >
+                Create Custom Template
+              </h4>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCreateTemplateWizard(false);
+                  setTemplateUserRequest('');
+                }}
+                className="text-xs"
+                style={{ color: 'var(--text-secondary-strong)' }}
+              >
+                Cancel
+              </button>
+            </div>
+            
+            {/* Explanation */}
+            <div
+              className="text-xs mb-3"
+              style={{
+                color: 'var(--text-secondary-strong)',
+              }}
+            >
+              {t('artifacts.templateCreationHint', { defaultValue: 'The system can automatically create a template based on your request.' })}
+            </div>
+
+            {/* User request field */}
+            <div>
+              <label
+                className="block text-13 mb-2"
+                style={{ color: 'var(--text-secondary-strong)' }}
+              >
+                Template request
+              </label>
+              <textarea
+                value={templateUserRequest}
+                onChange={(e) => setTemplateUserRequest(e.target.value)}
+                placeholder="Describe what kind of template you need. For example: 'Meeting summary template with action items and decisions'..."
+                rows={4}
+                className="w-full text-xs resize-none"
+                style={{
+                  backgroundColor: 'var(--bg-input, transparent)',
+                  border: '1px solid var(--border-input, var(--overlay-line-90))',
+                  borderRadius: '8px',
+                  padding: '10px 12px',
+                  outline: 'none',
+                  color: 'var(--text-heading)',
+                  transition: 'all 0.2s ease',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--text-secondary)';
+                  e.currentTarget.style.backgroundColor = 'var(--white-06)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--overlay-line-90)';
+                  e.currentTarget.style.backgroundColor = 'var(--bg-input, transparent)';
+                }}
+              />
+              <div className="mt-3 flex flex-col items-start gap-2">
+                <button
+                  type="button"
+                  disabled={isGeneratingTemplate}
+                  onClick={async () => {
+                    if (!templateUserRequest.trim()) {
+                      alert('Please enter a template request');
+                      return;
+                    }
+                    setIsGeneratingTemplate(true);
+                    try {
+                      // Generate template structure based on user request
+                      const prompt = `You are an expert at creating document templates for a dynamic document generation system.
+
+Context:
+This system creates templates for dynamic documents. The system allows transforming traditional discussions into various artifacts, including documents. The system will automatically provide all necessary informational context for document generation. Your task is to create a document template structure based on the user's request.
+
+User Request: ${templateUserRequest}
+
+Generate a JSON object with the following structure:
+{
+  "name": "Template name (concise, descriptive, 3-8 words that capture the essence of the template)",
+  "sections": [
+    {
+      "id": "unique identifier (lowercase, underscores, e.g., \"executive_summary\")",
+      "title": "section title (clear and descriptive)",
+      "order": numeric order (starting from 1),
+      "description": "what this section should contain (1-2 sentences)",
+      "promptTemplate": "detailed prompt for generating this section's content (should be comprehensive and specific, 2-4 sentences)",
+      "required": boolean indicating if section is required (true for essential sections, false for optional),
+      "editable": boolean indicating if user can edit/remove (usually true)
+    }
+  ]
+}
+
+Requirements:
+- The template name should be concise, professional, and clearly describe what kind of document this template creates
+- The structure should be logical, comprehensive, and appropriate for the user's request
+- Include 4-8 sections depending on the complexity of the request
+- Each section should have a clear purpose and contribute to the overall document
+- Prompts should be detailed enough to guide content generation
+- Section order should follow logical flow (introduction → main content → conclusion)
+
+Return ONLY a valid JSON object. Do not include markdown code fences or any additional text.
+
+Example format:
+{
+  "name": "Meeting Summary Template",
+  "sections": [
+    {
+      "id": "executive_summary",
+      "title": "Executive Summary",
+      "order": 1,
+      "description": "High-level overview for decision makers",
+      "promptTemplate": "Provide a concise executive summary that highlights the key points, main conclusions, and recommendations. Focus on the most important information that decision makers need to know.",
+      "required": true,
+      "editable": true
+    }
+  ]
+}`;
+
+                      const response = await api.aiStructured({
+                        prompt,
+                        minCapabilityScore: 7,
+                        maxOutputSize: 8192,
+                      });
+
+                      if (!response.ok || !response.result) {
+                        throw new Error('Failed to generate template structure');
+                      }
+
+                      // Parse and validate response
+                      const result = response.result;
+                      if (!result || typeof result !== 'object') {
+                        throw new Error('Invalid response format: expected object');
+                      }
+
+                      // Extract name and sections
+                      const templateName = result.name || templateUserRequest.trim().slice(0, 50) || 'Generated Template';
+                      let sections = result.sections;
+                      
+                      if (!Array.isArray(sections)) {
+                        throw new Error('Invalid response format: expected sections array');
+                      }
+
+                      // Validate each section has required fields
+                      sections = sections.map((section: any, index: number) => ({
+                        id: section.id || `section_${index + 1}`,
+                        title: section.title || `Section ${index + 1}`,
+                        order: typeof section.order === 'number' ? section.order : index + 1,
+                        description: section.description || '',
+                        promptTemplate: section.promptTemplate || section.prompt || '',
+                        required: section.required !== undefined ? section.required : true,
+                        editable: section.editable !== undefined ? section.editable : true,
+                      }));
+
+                      // Sort by order
+                      sections.sort((a: any, b: any) => a.order - b.order);
+
+                      // Store generated structure and name for display in template creation wizard
+                      setGeneratedTemplateStructure(sections);
+                      setGeneratedTemplateName(templateName);
+                      
+                      console.log('Generated template structure:', { name: templateName, sections });
+                    } catch (error: any) {
+                      console.error('Error generating template structure:', error);
+                      alert(`Failed to generate template structure: ${error.message || 'Unknown error'}`);
+                    } finally {
+                      setIsGeneratingTemplate(false);
+                    }
+                  }}
+                  className="inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded text-xs"
+                  style={{
+                    backgroundColor: isGeneratingTemplate ? 'var(--white-05)' : 'var(--white-10)',
+                    color: isGeneratingTemplate ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
+                    border: '1px solid var(--overlay-line-90)',
+                    cursor: isGeneratingTemplate ? 'not-allowed' : 'pointer',
+                    opacity: isGeneratingTemplate ? 0.6 : 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isGeneratingTemplate) {
+                      e.currentTarget.style.backgroundColor = 'var(--white-15)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isGeneratingTemplate) {
+                      e.currentTarget.style.backgroundColor = 'var(--white-10)';
+                    }
+                  }}
+                >
+                  {isGeneratingTemplate ? 'Generating...' : t('artifacts.createTemplateBasedOnRequest', { defaultValue: 'Create template based on request' })}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // TODO: Switch to manual template creation mode
+                    console.log('Manual template creation clicked');
+                  }}
+                  className="text-xs text-left"
+                  style={{
+                    color: 'var(--text-secondary-strong)',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    padding: 0,
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = 'var(--text-heading)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--text-secondary-strong)';
+                  }}
+                >
+                  {t('artifacts.createTemplateManually', { defaultValue: 'I prefer to create the template manually' })}
+                </button>
+              </div>
+
+              {/* Generated Template Structure Display */}
+              {generatedTemplateStructure && generatedTemplateStructure.length > 0 && (
+                <div className="mt-4 space-y-4">
+                  {/* Template Name */}
+                  {generatedTemplateName && (
+                    <div>
+                      <div
+                        className="text-xs font-medium mb-1"
+                        style={{ color: 'var(--text-tertiary-weak)' }}
+                      >
+                        Template Name
+                      </div>
+                      <div
+                        className="text-sm font-semibold"
+                        style={{ color: 'var(--text-heading)' }}
+                      >
+                        {generatedTemplateName}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Sections List */}
+                  <div>
+                    <label
+                      className="block text-13 mb-2"
+                      style={{ color: 'var(--text-secondary-strong)' }}
+                    >
+                      Sections ({generatedTemplateStructure.length})
+                    </label>
+                    <div className="space-y-2">
+                      {generatedTemplateStructure.map((section: any, index: number) => {
+                        const isExpanded = expandedSections[`gen-${section.id}`] || false;
+                        return (
+                          <div
+                            key={section.id}
+                            className="px-3 py-2 rounded group"
+                            style={{
+                              backgroundColor: 'var(--white-06)',
+                              border: '1px solid var(--overlay-line-90)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div
+                                  className="text-xs font-medium mb-1"
+                                  style={{ color: 'var(--text-heading)' }}
+                                >
+                                  {section.title}
+                                  {section.required && (
+                                    <span
+                                      className="ml-1 text-[10px]"
+                                      style={{ color: 'var(--text-tertiary-weak)' }}
+                                    >
+                                      (required)
+                                    </span>
+                                  )}
+                                </div>
+                                {section.description && (
+                                  <div
+                                    className="text-[10px] mb-1"
+                                    style={{ color: 'var(--text-secondary-strong)' }}
+                                  >
+                                    {section.description}
+                                  </div>
+                                )}
+                                {section.promptTemplate && !isExpanded && (
+                                  <div
+                                    className="text-[10px] mt-1 pt-1 line-clamp-2"
+                                    style={{
+                                      color: 'var(--text-tertiary-weak)',
+                                      borderTop: '1px solid var(--overlay-line-90)',
+                                      fontStyle: 'italic',
+                                    }}
+                                  >
+                                    {section.promptTemplate}
+                                  </div>
+                                )}
+                                {isExpanded && (
+                                  <div className="mt-2 pt-2 border-t" style={{ borderColor: 'var(--overlay-line-90)' }}>
+                                    <label className="block text-[10px] mb-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                                      Prompt Template
+                                    </label>
+                                    <textarea
+                                      value={section.promptTemplate || ''}
+                                      onChange={(e) => {
+                                        const updated = [...generatedTemplateStructure];
+                                        updated[index].promptTemplate = e.target.value;
+                                        setGeneratedTemplateStructure(updated);
+                                      }}
+                                      rows={4}
+                                      className="w-full px-2 py-1 rounded text-xs"
+                                      style={{
+                                        backgroundColor: 'var(--bg-input, #1A1A1A)',
+                                        color: 'var(--text-heading)',
+                                        border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                                        resize: 'vertical',
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setExpandedSections((prev) => ({
+                                      ...prev,
+                                      [`gen-${section.id}`]: !prev[`gen-${section.id}`],
+                                    }));
+                                  }}
+                                  className="p-1 rounded"
+                                  title={isExpanded ? 'Collapse' : 'Edit prompt'}
+                                  style={{ backgroundColor: 'transparent' }}
+                                  onMouseEnter={(e) => {
+                                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                                  }}
+                                >
+                                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d={isExpanded 
+                                        ? "M6 9l6 6 6-6" 
+                                        : "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                      }
+                                    />
+                                  </svg>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm(t('artifacts.confirmDeleteSection', { name: section.title, defaultValue: `Are you sure you want to delete section "${section.title}"?` }))) {
+                                      const updated = generatedTemplateStructure.filter((s: any) => s.id !== section.id);
+                                      setGeneratedTemplateStructure(updated);
+                                    }
+                                  }}
+                                  className="p-1 rounded"
+                                  title={t('artifacts.deleteSection', { defaultValue: 'Delete section' })}
+                                  style={{ backgroundColor: 'transparent' }}
+                                  onMouseEnter={(e) => {
+                                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                                  }}
+                                >
+                                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M6 7h12M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"
+                                    />
+                                  </svg>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Save Button */}
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      disabled={isSavingTemplate}
+                      onClick={async () => {
+                        if (!generatedTemplateName.trim() || !generatedTemplateStructure || generatedTemplateStructure.length === 0) {
+                          alert('Template structure is incomplete');
+                          return;
+                        }
+                        setIsSavingTemplate(true);
+                        try {
+                          const templateToSave = {
+                            name: generatedTemplateName,
+                            description: `Template generated based on: ${templateUserRequest.trim().slice(0, 100)}`,
+                            category: 'Custom',
+                            type: 'custom',
+                            defaultStructure: generatedTemplateStructure.map((section: any) => ({
+                              id: section.id,
+                              title: section.title,
+                              order: section.order,
+                              description: section.description || '',
+                              promptTemplate: section.promptTemplate || section.prompt || '',
+                              required: section.required !== undefined ? section.required : true,
+                              editable: section.editable !== undefined ? section.editable : true,
+                            })),
+                            recommendedFormat: 'text',
+                            recommendedFocus: 'analysis',
+                          };
+
+                          await api.createArtifactTemplate(templateToSave);
+                          
+                          // Reload templates list
+                          const templatesList = await api.listArtifactTemplates();
+                          setTemplates(templatesList);
+                          
+                          // Reset wizard state
+                          setGeneratedTemplateStructure(null);
+                          setGeneratedTemplateName('');
+                          setTemplateUserRequest('');
+                          setShowCreateTemplateWizard(false);
+                          
+                          alert('Template saved successfully!');
+                        } catch (error: any) {
+                          console.error('Error saving template:', error);
+                          alert(`Failed to save template: ${error.message || 'Unknown error'}`);
+                        } finally {
+                          setIsSavingTemplate(false);
+                        }
+                      }}
+                      className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded text-xs font-medium"
+                      style={{
+                        backgroundColor: 'var(--accent-primary)',
+                        color: 'white',
+                        border: 'none',
+                        cursor: isSavingTemplate ? 'not-allowed' : 'pointer',
+                        opacity: isSavingTemplate ? 0.6 : 1,
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSavingTemplate) {
+                          e.currentTarget.style.opacity = '0.9';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSavingTemplate) {
+                          e.currentTarget.style.opacity = '1';
+                        }
+                      }}
+                    >
+                      {isSavingTemplate ? 'Saving...' : 'Save to templates'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
       </div>
     </div>

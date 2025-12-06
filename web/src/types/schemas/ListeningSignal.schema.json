@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/igorkirisyuk/sanskrite/internal/models/listening-signal",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name for the signal"
+    },
+    "signal": {
+      "type": "string",
+      "description": "Text signal that is being \"listened\" to"
+    },
+    "searchQueries": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Set of common search query strings"
+    },
+    "tenantId": {
+      "type": "string",
+      "description": "Required: tenant ID"
+    },
+    "projectId": {
+      "type": "string",
+      "description": "Optional: if null, signal is for entire tenant"
+    },
+    "description": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "isActive": {
+      "type": "boolean",
+      "description": "Whether signal is currently active"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "createdBy": {
+      "type": "string",
+      "description": "User ID"
+    }
+  },
+  "required": ["id", "name", "signal", "searchQueries", "tenantId", "isActive", "createdAt", "updatedAt", "createdBy"]
+}
+

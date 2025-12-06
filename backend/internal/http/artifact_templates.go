@@ -60,9 +60,9 @@ func (h *ArtifactTemplatesHandler) GetTemplate(w http.ResponseWriter, r *http.Re
 	}
 	templateID := pathParts[3]
 
-	template, err := h.service.GetTemplate(r.Context(), templateID)
+	template, err := h.service.GetTemplate(r.Context(), templateID, &auth.TenantID)
 	if err != nil {
-		WriteInternalError(w, "Failed to get template")
+		WriteNotFound(w, "Template not found")
 		return
 	}
 
@@ -135,7 +135,7 @@ func (h *ArtifactTemplatesHandler) UpdateTemplate(w http.ResponseWriter, r *http
 	req.ID = templateID
 
 	// Get existing template to check ownership
-	existing, err := h.service.GetTemplate(r.Context(), templateID)
+	existing, err := h.service.GetTemplate(r.Context(), templateID, &auth.TenantID)
 	if err != nil {
 		WriteNotFound(w, "Template not found")
 		return
@@ -147,7 +147,11 @@ func (h *ArtifactTemplatesHandler) UpdateTemplate(w http.ResponseWriter, r *http
 		return
 	}
 
-	if err := h.service.UpdateTemplate(r.Context(), &req, auth.UID); err != nil {
+	if err := h.service.UpdateTemplate(r.Context(), &req, auth.TenantID, auth.UID); err != nil {
+		if err.Error() == "system templates cannot be updated" {
+			WriteForbidden(w, "System templates cannot be updated")
+			return
+		}
 		WriteInternalError(w, "Failed to update template")
 		return
 	}
@@ -172,7 +176,7 @@ func (h *ArtifactTemplatesHandler) DeleteTemplate(w http.ResponseWriter, r *http
 	templateID := pathParts[3]
 
 	// Get existing template to check ownership
-	existing, err := h.service.GetTemplate(r.Context(), templateID)
+	existing, err := h.service.GetTemplate(r.Context(), templateID, &auth.TenantID)
 	if err != nil {
 		WriteNotFound(w, "Template not found")
 		return
@@ -184,7 +188,11 @@ func (h *ArtifactTemplatesHandler) DeleteTemplate(w http.ResponseWriter, r *http
 		return
 	}
 
-	if err := h.service.DeleteTemplate(r.Context(), templateID, auth.UID); err != nil {
+	if err := h.service.DeleteTemplate(r.Context(), templateID, auth.TenantID, auth.UID); err != nil {
+		if err.Error() == "system templates cannot be deleted" {
+			WriteForbidden(w, "System templates cannot be deleted")
+			return
+		}
 		WriteInternalError(w, "Failed to delete template")
 		return
 	}
@@ -208,8 +216,12 @@ func (h *ArtifactTemplatesHandler) PublishTemplate(w http.ResponseWriter, r *htt
 	}
 	templateID := pathParts[3]
 
-	err := h.service.PublishToCommunity(r.Context(), templateID, auth.UID)
+	err := h.service.PublishToCommunity(r.Context(), templateID, auth.TenantID, auth.UID)
 	if err != nil {
+		if err.Error() == "system templates are already public" {
+			WriteBadRequest(w, "SYSTEM_TEMPLATE", "System templates are already public")
+			return
+		}
 		WriteInternalError(w, "Failed to publish template")
 		return
 	}

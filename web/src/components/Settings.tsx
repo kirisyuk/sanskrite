@@ -5,7 +5,7 @@ import { ThemeContext } from './ThemeProvider';
 import { useUIStore } from '../stores/uiStore';
 import { useTranslation } from 'react-i18next';
 
-type TabKey = 'personal' | 'corporate';
+type TabKey = 'personal' | 'corporate' | 'guardians';
 
 // Popular countries with ISO 3166-1 alpha-2 codes
 const COUNTRIES = [
@@ -38,8 +38,14 @@ const COUNTRIES = [
   { code: 'AR', name: 'Argentina' },
 ];
 
-export const Settings: React.FC = () => {
-  const [active, setActive] = React.useState<TabKey>('personal');
+export interface SettingsProps {
+  initialTab?: TabKey;
+  highlightCheckbox?: 'disableBiasEvaluation' | 'disableFrameExpansion' | 'disableComplianceEvaluation';
+}
+
+export const Settings: React.FC<SettingsProps> = ({ initialTab, highlightCheckbox }) => {
+  const [active, setActive] = React.useState<TabKey>(initialTab || 'personal');
+  const [glowingCheckbox, setGlowingCheckbox] = React.useState<string | null>(null);
   const [fullName, setFullName] = React.useState('');
   const [language, setLanguage] = React.useState('EN');
   const [countryCode, setCountryCode] = React.useState('');
@@ -52,6 +58,11 @@ export const Settings: React.FC = () => {
   const [company, setCompany] = React.useState('');
   const [jobTitle, setJobTitle] = React.useState('');
   const [department, setDepartment] = React.useState('');
+  const [recommendationSettings, setRecommendationSettings] = React.useState({
+    disableBiasEvaluation: false,
+    disableFrameExpansion: false,
+    disableComplianceEvaluation: false,
+  });
   const { currentUser } = useAuth();
   const countryInputRef = React.useRef<HTMLInputElement>(null);
   const { i18n, t } = useTranslation();
@@ -71,7 +82,26 @@ export const Settings: React.FC = () => {
   const tabs: { key: TabKey; label: string }[] = [
     { key: 'personal', label: t('settings.tabs.personal') },
     { key: 'corporate', label: t('settings.tabs.corporate') },
+    { key: 'guardians', label: t('settings.tabs.guardians') },
   ];
+
+  // Handle initial tab and highlight checkbox
+  React.useEffect(() => {
+    if (initialTab) {
+      setActive(initialTab);
+    }
+  }, [initialTab]);
+
+  React.useEffect(() => {
+    if (highlightCheckbox) {
+      setGlowingCheckbox(highlightCheckbox);
+      // Remove glow after 2 seconds
+      const timer = setTimeout(() => {
+        setGlowingCheckbox(null);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [highlightCheckbox]);
 
   React.useEffect(() => {
     const storedLang = localStorage.getItem('preferredLanguage');
@@ -93,6 +123,13 @@ export const Settings: React.FC = () => {
         if (user.companyRef) setCompany(user.companyRef);
         if (user.jobTitle) setJobTitle(user.jobTitle);
         if (user.department) setDepartment(user.department);
+        if (user.recommendationSettings) {
+          setRecommendationSettings({
+            disableBiasEvaluation: user.recommendationSettings.disableBiasEvaluation || false,
+            disableFrameExpansion: user.recommendationSettings.disableFrameExpansion || false,
+            disableComplianceEvaluation: user.recommendationSettings.disableComplianceEvaluation || false,
+          });
+        }
       }).catch(() => {});
     }
   }, [currentUser]);
@@ -400,6 +437,111 @@ export const Settings: React.FC = () => {
                   className="w-full"
                   style={{ backgroundColor: 'transparent', border: 'none', outline: 'none', color: 'var(--text-heading)', padding: '8px 0' }}
                 />
+              </div>
+            </div>
+          )}
+          {active === 'guardians' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-13" style={{ color: 'var(--text-secondary-strong)', marginBottom: '12px' }}>{t('settings.guardians.recommendations')}</label>
+                <div className="space-y-3">
+                  <div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={recommendationSettings.disableBiasEvaluation}
+                        onChange={async (e) => {
+                          const newSettings = { ...recommendationSettings, disableBiasEvaluation: e.target.checked };
+                          setRecommendationSettings(newSettings);
+                          try {
+                            if (currentUser?.uid) {
+                              await api.updateUser(currentUser.uid, { recommendationSettings: newSettings });
+                            }
+                          } catch (err) {
+                            console.error('Failed to save recommendation settings:', err);
+                          }
+                        }}
+                        style={{ 
+                          width: '16px', 
+                          height: '16px', 
+                          cursor: 'pointer',
+                          boxShadow: glowingCheckbox === 'disableBiasEvaluation' 
+                            ? '0 0 8px 2px var(--accent-warning), 0 0 12px 4px var(--accent-warning)' 
+                            : 'none',
+                          transition: glowingCheckbox === 'disableBiasEvaluation' ? 'box-shadow 0.3s ease' : 'none',
+                        }}
+                      />
+                      <span className="text-13" style={{ color: 'var(--text-heading)' }}>{t('settings.guardians.disableBiasEvaluation')}</span>
+                    </label>
+                    <div className="text-12 mt-1 ml-6" style={{ color: 'var(--text-secondary)' }}>
+                      {t('settings.guardians.disableBiasEvaluationDescription')}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={recommendationSettings.disableFrameExpansion}
+                        onChange={async (e) => {
+                          const newSettings = { ...recommendationSettings, disableFrameExpansion: e.target.checked };
+                          setRecommendationSettings(newSettings);
+                          try {
+                            if (currentUser?.uid) {
+                              await api.updateUser(currentUser.uid, { recommendationSettings: newSettings });
+                            }
+                          } catch (err) {
+                            console.error('Failed to save recommendation settings:', err);
+                          }
+                        }}
+                        style={{ 
+                          width: '16px', 
+                          height: '16px', 
+                          cursor: 'pointer',
+                          boxShadow: glowingCheckbox === 'disableFrameExpansion' 
+                            ? '0 0 8px 2px var(--accent-warning), 0 0 12px 4px var(--accent-warning)' 
+                            : 'none',
+                          transition: glowingCheckbox === 'disableFrameExpansion' ? 'box-shadow 0.3s ease' : 'none',
+                        }}
+                      />
+                      <span className="text-13" style={{ color: 'var(--text-heading)' }}>{t('settings.guardians.disableFrameExpansion')}</span>
+                    </label>
+                    <div className="text-12 mt-1 ml-6" style={{ color: 'var(--text-secondary)' }}>
+                      {t('settings.guardians.disableFrameExpansionDescription')}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={recommendationSettings.disableComplianceEvaluation}
+                        onChange={async (e) => {
+                          const newSettings = { ...recommendationSettings, disableComplianceEvaluation: e.target.checked };
+                          setRecommendationSettings(newSettings);
+                          try {
+                            if (currentUser?.uid) {
+                              await api.updateUser(currentUser.uid, { recommendationSettings: newSettings });
+                            }
+                          } catch (err) {
+                            console.error('Failed to save recommendation settings:', err);
+                          }
+                        }}
+                        style={{ 
+                          width: '16px', 
+                          height: '16px', 
+                          cursor: 'pointer',
+                          boxShadow: glowingCheckbox === 'disableComplianceEvaluation' 
+                            ? '0 0 8px 2px var(--accent-warning), 0 0 12px 4px var(--accent-warning)' 
+                            : 'none',
+                          transition: glowingCheckbox === 'disableComplianceEvaluation' ? 'box-shadow 0.3s ease' : 'none',
+                        }}
+                      />
+                      <span className="text-13" style={{ color: 'var(--text-heading)' }}>{t('settings.guardians.disableComplianceEvaluation')}</span>
+                    </label>
+                    <div className="text-12 mt-1 ml-6" style={{ color: 'var(--text-secondary)' }}>
+                      {t('settings.guardians.disableComplianceEvaluationDescription')}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}

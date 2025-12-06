@@ -840,19 +840,21 @@ except:
     fi
   done
 
-  # 5. Ensure Cloud Scheduler job only when deploying API
+  # 5. Ensure Cloud Scheduler jobs only when deploying API
   if [[ "$TARGET_API" -eq 1 ]]; then
-    echo -e "${BLUE}[infra] Ensuring Cloud Scheduler job (optional)...${NC}"
+    echo -e "${BLUE}[infra] Ensuring Cloud Scheduler jobs (optional)...${NC}"
     if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
-      JOB_NAME="sanskrite-source-poller"
       SVC_URL=$(gcloud run services describe sanskrite-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
-      # Ensure admin token env on API (if not set, generate ephemeral weak token for dev; recommend overriding in CI/prod)
-      ADMIN_TOKEN=${ADMIN_JOB_TOKEN:-}
-      if [[ -z "$ADMIN_TOKEN" ]]; then
-        ADMIN_TOKEN=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
-        gcloud run services update sanskrite-api --region "$REGION" --update-env-vars "ADMIN_JOB_TOKEN=$ADMIN_TOKEN" --quiet || true
-      fi
+      
       if [[ -n "$SVC_URL" ]]; then
+        # 5a. Source poller job
+        JOB_NAME="sanskrite-source-poller"
+        # Ensure admin token env on API (if not set, generate ephemeral weak token for dev; recommend overriding in CI/prod)
+        ADMIN_TOKEN=${ADMIN_JOB_TOKEN:-}
+        if [[ -z "$ADMIN_TOKEN" ]]; then
+          ADMIN_TOKEN=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
+          gcloud run services update sanskrite-api --region "$REGION" --update-env-vars "ADMIN_JOB_TOKEN=$ADMIN_TOKEN" --quiet || true
+        fi
         # Create or update a job that calls admin publish-due with header X-Job-Token
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
@@ -873,8 +875,34 @@ except:
             --attempt-deadline=60s \
             --quiet || true
         fi
+        echo -e "${GREEN}[infra] ✓${NC} Source poller scheduler job ensured"
+        
+        # 5b. Artifact scheduler job (checks for scheduled artifact updates)
+        JOB_NAME="sanskrite-artifact-scheduler"
+        # Schedule: every hour at minute 0 (e.g., 00:00, 01:00, 02:00, ...)
+        # This checks all artifacts and triggers updates for those with daily/weekly schedules
+        if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
+          gcloud scheduler jobs update http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="0 * * * *" \
+            --uri="$SVC_URL/api/v1/artifacts/scheduled-update" \
+            --http-method=POST \
+            --update-headers="User-Agent=Google-Cloud-Scheduler" \
+            --attempt-deadline=300s \
+            --quiet || true
+        else
+          gcloud scheduler jobs create http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="0 * * * *" \
+            --uri="$SVC_URL/api/v1/artifacts/scheduled-update" \
+            --http-method=POST \
+            --headers="User-Agent=Google-Cloud-Scheduler" \
+            --attempt-deadline=300s \
+            --quiet || true
+        fi
+        echo -e "${GREEN}[infra] ✓${NC} Artifact scheduler job ensured (runs hourly)"
       else
-        echo -e "${YELLOW}[infra] Skipping scheduler job (api url not resolved).${NC}"
+        echo -e "${YELLOW}[infra] Skipping scheduler jobs (api url not resolved).${NC}"
       fi
     else
       echo -e "${YELLOW}[infra] Cloud Scheduler API not enabled or not available; skipping job creation.${NC}"
@@ -1002,7 +1030,7 @@ deploy_api() {
   # Note: VERTEX_SEARCH_LOCATION must be "global" for Discovery Engine Data Stores
   # Data Stores are created in "global" region, but search API uses the same location
   local vertex_search_ds_id="${VERTEX_SEARCH_DATA_STORE_ID_VALUE:-rag-documents-store}"
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
   
   # Add Redis env vars if available
   if [[ -n "$redis_host" ]]; then

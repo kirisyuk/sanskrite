@@ -5,6 +5,11 @@ import { api } from '../lib/api';
 type ModalType = 'settings' | 'account' | 'admin' | 'workspace' | null;
 type StaticPageType = 'privacy' | 'terms' | null;
 
+export interface SettingsModalParams {
+  initialTab?: 'personal' | 'corporate' | 'guardians';
+  highlightCheckbox?: 'disableBiasEvaluation' | 'disableFrameExpansion' | 'disableComplianceEvaluation';
+}
+
 /**
  * Hook для управления модальными окнами и статическими страницами
  */
@@ -14,6 +19,7 @@ export function useModals() {
   const [staticPage, setStaticPage] = useState<StaticPageType>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [workspaceProjectId, setWorkspaceProjectId] = useState<string | null>(null);
+  const [settingsParams, setSettingsParams] = useState<SettingsModalParams | null>(null);
 
   // Background-load user preferred language and admin status
   useEffect(() => {
@@ -44,10 +50,12 @@ export function useModals() {
   const closeAllModals = useCallback(() => {
     setActiveModal(null);
     setStaticPage(null);
+    setSettingsParams(null);
   }, []);
 
-  const openSettings = useCallback(() => {
+  const openSettings = useCallback((params?: SettingsModalParams) => {
     closeAllModals();
+    setSettingsParams(params || null);
     setActiveModal('settings');
   }, [closeAllModals]);
 
@@ -80,6 +88,7 @@ export function useModals() {
     showAdmin: activeModal === 'admin',
     showWorkspace: activeModal === 'workspace',
     workspaceProjectId,
+    settingsParams,
     staticPage,
     setStaticPage,
     isAdmin,

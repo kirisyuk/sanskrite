@@ -11,11 +11,15 @@ import { ModalWithHeader } from './ModalWithHeader';
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: 'personal' | 'corporate' | 'guardians';
+  highlightCheckbox?: 'disableBiasEvaluation' | 'disableFrameExpansion' | 'disableComplianceEvaluation';
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
+  initialTab,
+  highlightCheckbox,
 }) => {
   const { t } = useTranslation();
 
@@ -26,7 +30,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       title={t('unfold.sections.settings')}
       onClose={onClose}
     >
-      <Settings />
+      <Settings initialTab={initialTab} highlightCheckbox={highlightCheckbox} />
     </ModalWithHeader>
   );
 };
