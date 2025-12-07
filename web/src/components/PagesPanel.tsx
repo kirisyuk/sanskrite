@@ -73,7 +73,8 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   const [defaultModel, setDefaultModel] = React.useState<string>('');
   const [sectionModels, setSectionModels] = React.useState<Record<string, string>>({});
   const [documentAutoUpdateEnabled, setDocumentAutoUpdateEnabled] = React.useState(false);
-  const [autoUpdateTrigger, setAutoUpdateTrigger] = React.useState<'on_new_message' | 'daily' | 'weekly' | 'on_new_document'>('on_new_message');
+  const [autoUpdateTrigger, setAutoUpdateTrigger] = React.useState<'on_new_message' | 'time_based' | 'on_new_document'>('time_based');
+  const [autoUpdateScheduleType, setAutoUpdateScheduleType] = React.useState<'daily' | 'weekly'>('daily');
   const [expandedSections, setExpandedSections] = React.useState<Record<string, boolean>>({});
   const [autoUpdateMinNewMessages, setAutoUpdateMinNewMessages] = React.useState<number | undefined>(undefined);
   const [autoUpdateMinContextChange, setAutoUpdateMinContextChange] = React.useState<number | undefined>(undefined);
@@ -82,6 +83,9 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   const [autoUpdateCheckQuality, setAutoUpdateCheckQuality] = React.useState(false);
   const [autoUpdateMinQualityThreshold, setAutoUpdateMinQualityThreshold] = React.useState<number>(0.7);
   const [autoUpdateNotifyOnUpdate, setAutoUpdateNotifyOnUpdate] = React.useState(false);
+  const [autoUpdateScheduleTime, setAutoUpdateScheduleTime] = React.useState<string>('09:00');
+  const [showContextTriggers, setShowContextTriggers] = React.useState(false);
+  const [showConditions, setShowConditions] = React.useState(false);
 
   // Load artifacts
   React.useEffect(() => {
@@ -214,7 +218,10 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       
       // Initialize document auto-update (default: false)
       setDocumentAutoUpdateEnabled(false);
-      setAutoUpdateTrigger('on_new_message');
+      setAutoUpdateTrigger('time_based');
+      setAutoUpdateScheduleType('daily');
+      setShowContextTriggers(false);
+      setShowConditions(false);
       setAutoUpdateMinNewMessages(undefined);
       setAutoUpdateMinContextChange(undefined);
       setAutoUpdateKeywords('');
@@ -245,7 +252,10 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       setDefaultModel('');
       setSectionModels({});
       setDocumentAutoUpdateEnabled(false);
-      setAutoUpdateTrigger('on_new_message');
+      setAutoUpdateTrigger('time_based');
+      setAutoUpdateScheduleType('daily');
+      setShowContextTriggers(false);
+      setShowConditions(false);
       setAutoUpdateMinNewMessages(undefined);
       setAutoUpdateMinContextChange(undefined);
       setAutoUpdateKeywords('');
@@ -589,8 +599,12 @@ FORMAT REQUIREMENTS:
         notifyOnUpdate: autoUpdateNotifyOnUpdate,
       } : undefined;
 
+      // For time_based trigger, use scheduleType as the actual trigger (daily/weekly)
+      const actualTrigger = autoUpdateTrigger === 'time_based' ? autoUpdateScheduleType : autoUpdateTrigger;
+      
       const autoUpdateConfig = documentAutoUpdateEnabled ? {
-        trigger: autoUpdateTrigger,
+        trigger: actualTrigger,
+        scheduleTime: autoUpdateTrigger === 'time_based' ? autoUpdateScheduleTime : undefined,
         conditions: Object.keys(conditions).length > 0 ? conditions : undefined,
         smartUpdate: smartUpdate,
       } : undefined;
@@ -640,7 +654,8 @@ FORMAT REQUIREMENTS:
       setDefaultModel('');
       setSectionModels({});
       setDocumentAutoUpdateEnabled(false);
-      setAutoUpdateTrigger('on_new_message');
+      setAutoUpdateTrigger('time_based');
+      setAutoUpdateScheduleType('daily');
       setGeneratedSections({});
       setGenerationProgress({ current: 0, total: 0 });
       onOpenDocument(createdDoc);
@@ -1287,11 +1302,79 @@ FORMAT REQUIREMENTS:
                   }}
                 >
                   <option value="on_new_message">On new message</option>
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
+                  <option value="time_based">Time-based</option>
                   <option value="on_new_document">On new document</option>
                 </select>
               </div>
+
+              {autoUpdateTrigger === 'time_based' && (
+                <div className="space-y-3">
+                  <div>
+                    <label
+                      className="block text-[11px] mb-1.5"
+                      style={{ color: 'var(--text-secondary-strong)' }}
+                    >
+                      Schedule Type
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAutoUpdateScheduleType('daily')}
+                        className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                        style={{
+                          backgroundColor: autoUpdateScheduleType === 'daily' 
+                            ? 'var(--white-10)' 
+                            : 'var(--white-06)',
+                          border: '1px solid var(--overlay-line-90)',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Daily
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAutoUpdateScheduleType('weekly')}
+                        className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                        style={{
+                          backgroundColor: autoUpdateScheduleType === 'weekly' 
+                            ? 'var(--white-10)' 
+                            : 'var(--white-06)',
+                          border: '1px solid var(--overlay-line-90)',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Weekly
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label
+                      className="block text-[11px] mb-1.5"
+                      style={{ color: 'var(--text-secondary-strong)' }}
+                    >
+                      Schedule Time (UTC)
+                    </label>
+                    <input
+                      type="time"
+                      value={autoUpdateScheduleTime}
+                      onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
+                      className="w-full text-xs px-2 py-1.5 rounded"
+                      style={{
+                        backgroundColor: 'var(--white-06)',
+                        border: '1px solid var(--overlay-line-90)',
+                        color: 'var(--text-heading)',
+                        outline: 'none',
+                      }}
+                    />
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                      {autoUpdateScheduleType === 'daily' 
+                        ? 'Time when the update should run each day (24-hour format)' 
+                        : 'Time when the update should run each week (24-hour format)'}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label
@@ -1388,6 +1471,7 @@ FORMAT REQUIREMENTS:
                     </span>
                   </label>
                 </div>
+                )}
               </div>
 
               <div>
@@ -1904,19 +1988,157 @@ FORMAT REQUIREMENTS:
                       }}
                     >
                       <option value="on_new_message">On new message</option>
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
+                      <option value="time_based">Time-based</option>
                       <option value="on_new_document">On new document</option>
                     </select>
                   </div>
 
+                  {autoUpdateTrigger === 'time_based' && (
+                    <div className="space-y-3">
+                      <div>
+                        <label
+                          className="block text-[11px] mb-1.5"
+                          style={{ color: 'var(--text-secondary-strong)' }}
+                        >
+                          Schedule Type
+                        </label>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setAutoUpdateScheduleType('daily')}
+                            className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                            style={{
+                              backgroundColor: autoUpdateScheduleType === 'daily' 
+                                ? 'var(--white-10)' 
+                                : 'var(--white-06)',
+                              border: '1px solid var(--overlay-line-90)',
+                              color: 'var(--text-heading)',
+                            }}
+                          >
+                            Daily
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAutoUpdateScheduleType('weekly')}
+                            className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                            style={{
+                              backgroundColor: autoUpdateScheduleType === 'weekly' 
+                                ? 'var(--white-10)' 
+                                : 'var(--white-06)',
+                              border: '1px solid var(--overlay-line-90)',
+                              color: 'var(--text-heading)',
+                            }}
+                          >
+                            Weekly
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label
+                          className="block text-[11px] mb-1.5"
+                          style={{ color: 'var(--text-secondary-strong)' }}
+                        >
+                          Schedule Time (UTC)
+                        </label>
+                        <input
+                          type="time"
+                          value={autoUpdateScheduleTime}
+                          onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
+                          className="w-full text-xs px-2 py-1.5 rounded"
+                          style={{
+                            backgroundColor: 'var(--white-06)',
+                            border: '1px solid var(--overlay-line-90)',
+                            color: 'var(--text-heading)',
+                            outline: 'none',
+                          }}
+                        />
+                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                          {autoUpdateScheduleType === 'daily' 
+                            ? 'Time when the update should run each day (24-hour format)' 
+                            : 'Time when the update should run each week (24-hour format)'}
+                        </p>
+                      </div>
+                      
+                      <button
+                        type="button"
+                        onClick={() => setShowContextTriggers(!showContextTriggers)}
+                        className="w-full text-xs px-3 py-1.5 rounded transition-colors text-left"
+                        style={{
+                          backgroundColor: showContextTriggers 
+                            ? 'var(--white-10)' 
+                            : 'var(--white-06)',
+                          border: '1px solid var(--overlay-line-90)',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Context update signals
+                      </button>
+                    </div>
+                  )}
+
+                  {showContextTriggers && (
+                    <div className="space-y-3">
+                      <div style={{ borderTop: '1px solid var(--overlay-line-90)' }}></div>
+                      
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="text-xs px-3 py-1.5 rounded transition-colors flex items-center gap-2"
+                          style={{
+                            backgroundColor: 'var(--white-06)',
+                            border: '1px solid var(--overlay-line-90)',
+                            color: 'var(--text-heading)',
+                          }}
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3M22 12.5a10 10 0 01-18.8 4.2"/>
+                          </svg>
+                          <span>Collect automatically</span>
+                        </button>
+                        
+                        <button
+                          type="button"
+                          className="text-xs px-3 py-1.5 rounded transition-colors flex items-center gap-2"
+                          style={{
+                            backgroundColor: 'var(--white-06)',
+                            border: '1px solid var(--overlay-line-90)',
+                            color: 'var(--text-heading)',
+                          }}
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 5v14M5 12h14"/>
+                          </svg>
+                          <span>Add</span>
+                        </button>
+                      </div>
+                      
+                      <div style={{ borderBottom: '1px solid var(--overlay-line-90)' }}></div>
+                    </div>
+                  )}
+
                   <div>
-                    <label
-                      className="block text-[11px] mb-1.5"
+                    <button
+                      type="button"
+                      onClick={() => setShowConditions(!showConditions)}
+                      className="flex items-center gap-2 mb-1.5 cursor-pointer"
                       style={{ color: 'var(--text-secondary-strong)' }}
                     >
-                      Conditions
-                    </label>
+                      <svg 
+                        className="w-3 h-3 transition-transform"
+                        style={{ transform: showConditions ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                        viewBox="0 0 24 24" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        strokeWidth="2" 
+                        strokeLinecap="round" 
+                        strokeLinejoin="round"
+                      >
+                        <path d="M9 18l6-6-6-6"/>
+                      </svg>
+                      <span className="text-[11px]">Conditions</span>
+                    </button>
+                    {showConditions && (
                     <div className="space-y-2">
                       <div className="grid grid-cols-2 gap-2">
                         <div>
@@ -2005,6 +2227,7 @@ FORMAT REQUIREMENTS:
                         </span>
                       </label>
                     </div>
+                    )}
                   </div>
 
                   <div>

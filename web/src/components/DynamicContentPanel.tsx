@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getPreferredLanguage, getLanguageName } from '../lib/uiUtils';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
+import { useGenAISettings } from '../stores/genaiSettingsStore';
 
 interface ArtifactTemplate {
   id: string;
@@ -89,7 +90,8 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   const [defaultModel, setDefaultModel] = React.useState<string>('');
   const [sectionModels, setSectionModels] = React.useState<Record<string, string>>({});
   const [documentAutoUpdateEnabled, setDocumentAutoUpdateEnabled] = React.useState(false);
-  const [autoUpdateTrigger, setAutoUpdateTrigger] = React.useState<'on_new_message' | 'daily' | 'weekly' | 'on_new_document'>('on_new_message');
+  const [autoUpdateTrigger, setAutoUpdateTrigger] = React.useState<'on_new_message' | 'time_based' | 'on_new_document'>('time_based');
+  const [autoUpdateScheduleType, setAutoUpdateScheduleType] = React.useState<'daily' | 'weekly'>('daily');
   const [expandedSections, setExpandedSections] = React.useState<Record<string, boolean>>({});
   const [autoUpdateMinNewMessages, setAutoUpdateMinNewMessages] = React.useState<number | undefined>(undefined);
   const [autoUpdateMinContextChange, setAutoUpdateMinContextChange] = React.useState<number | undefined>(undefined);
@@ -99,6 +101,198 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   const [autoUpdateMinQualityThreshold, setAutoUpdateMinQualityThreshold] = React.useState<number>(0.7);
   const [autoUpdateNotifyOnUpdate, setAutoUpdateNotifyOnUpdate] = React.useState(false);
   const [autoUpdateScheduleTime, setAutoUpdateScheduleTime] = React.useState<string>('09:00');
+  const [showContextTriggers, setShowContextTriggers] = React.useState(false);
+  const [showConditions, setShowConditions] = React.useState(false);
+  const [isCollectingSignals, setIsCollectingSignals] = React.useState(false);
+  const [collectedSignals, setCollectedSignals] = React.useState<any>(null);
+  
+  const genAISettings = useGenAISettings();
+
+  // Function to collect context change signals from discussion
+  const handleCollectAutomatically = React.useCallback(async () => {
+    if (!projectId || isCollectingSignals) return;
+    
+    setIsCollectingSignals(true);
+    setCollectedSignals(null);
+    
+    try {
+      const chatStore = useGenaiChatStore.getState();
+      
+      // Get interactions from current project, filter only user and assistant
+      const interactions = chatStore.interactions.filter((it: any) => {
+        if (!it) return false;
+        if (it.projectId !== projectId) return false;
+        return it.kind === 'user' || it.kind === 'assistant';
+      });
+      
+      if (interactions.length === 0) {
+        setIsCollectingSignals(false);
+        return;
+      }
+      
+      // Sort by createdAt (newest first)
+      const sortedInteractions = [...interactions].sort((a, b) => {
+        const timeA = new Date(a.createdAt).getTime();
+        const timeB = new Date(b.createdAt).getTime();
+        return timeB - timeA;
+      });
+      
+      // Find first user interaction
+      const firstUserInteraction = interactions.find((it: any) => it.kind === 'user');
+      
+      // Build context: newest first + first user interaction
+      const contextMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+      const usedIds = new Set<string>();
+      
+      // Add first user interaction if exists
+      if (firstUserInteraction && firstUserInteraction.id !== sortedInteractions[0]?.id) {
+        const content = String(firstUserInteraction.content || '').trim();
+        if (content) {
+          contextMessages.push({
+            role: 'user',
+            content: content,
+          });
+          usedIds.add(firstUserInteraction.id);
+        }
+      }
+      
+      // Add messages from newest to oldest, limit to 150000 tokens (chars/4)
+      let totalChars = 0;
+      const maxChars = 150000 * 4; // 150000 tokens * 4 chars per token
+      
+      for (const it of sortedInteractions) {
+        if (usedIds.has(it.id)) continue;
+        
+        const content = String(it.content || '').trim();
+        if (!content) continue;
+        
+        const contentChars = content.length;
+        if (totalChars + contentChars > maxChars) {
+          // Try to add partial content if possible
+          const remainingChars = maxChars - totalChars;
+          if (remainingChars > 100) { // Only if meaningful content remains
+            contextMessages.push({
+              role: it.kind === 'user' ? 'user' : 'assistant',
+              content: content.substring(0, remainingChars) + '...',
+            });
+          }
+          break;
+        }
+        
+        contextMessages.push({
+          role: it.kind === 'user' ? 'user' : 'assistant',
+          content: content,
+        });
+        usedIds.add(it.id);
+        totalChars += contentChars;
+      }
+      
+      // Reverse to have chronological order (oldest first)
+      contextMessages.reverse();
+      
+      // Create JSON schema for ListeningSignal structure
+      const jsonSchema = {
+        type: 'object',
+        properties: {
+          signals: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                signal: { type: 'string' },
+                searchQueries: {
+                  type: 'array',
+                  items: { type: 'string' },
+                },
+                description: { type: 'string' },
+              },
+              required: ['name', 'signal', 'searchQueries'],
+            },
+          },
+        },
+        required: ['signals'],
+      };
+      
+      // Build prompt
+      const prompt = `You are analyzing a discussion to identify context change signals - data points that are stable enough to track but potentially changeable over time.
+
+Your task:
+1. Analyze the discussion conversation below
+2. Identify stable data points that represent potentially changeable information (e.g., metrics, statuses, decisions, plans, market conditions, etc.)
+3. For each identified data point, create a signal with:
+   - A descriptive name
+   - The signal text (what to listen for)
+   - Search queries that would help detect changes to this signal
+   - An optional description
+
+Focus on:
+- Metrics and numbers that may change (e.g., "market share", "user count", "revenue target")
+- Statuses and states that may evolve (e.g., "project status", "partnership status", "compliance status")
+- Decisions and plans that may be updated (e.g., "product roadmap", "hiring plan", "expansion strategy")
+- Market conditions and trends (e.g., "competitor activity", "regulatory changes", "technology adoption")
+
+Be thoughtful and selective - only include signals that are:
+- Clearly discussed in the conversation
+- Stable enough to be tracked over time
+- Potentially changeable (not static facts)
+
+The JSON MUST conform EXACTLY to this schema (no additional keys, types must match):
+${JSON.stringify(jsonSchema, null, 2)}
+
+DISCUSSION:
+${contextMessages.map((m, i) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n')}`;
+      
+      // Get model from settings
+      const provider = genAISettings.provider || 'gemini';
+      const { mapProviderStrengthToModel } = await import('../stores/genaiSettingsStore');
+      const model = mapProviderStrengthToModel(provider, 'balanced');
+      
+      // Call LLM with structured output
+      const res = await api.genaiGenerate({
+        model: model,
+        prompt: prompt,
+        strictJSONEnabled: true,
+        jsonSchema: jsonSchema,
+        maxOutputTokens: 4096,
+        webSearchEnabled: false,
+        projectId: projectId,
+      });
+      
+      // Parse response
+      let parsed: any = null;
+      try {
+        if (typeof res?.content === 'string') {
+          const s = res.content.trim();
+          if (s.startsWith('{') || s.startsWith('[')) parsed = JSON.parse(s);
+        }
+        const rawJSON = (res as any)?.rawJSON;
+        if (!parsed && typeof rawJSON === 'string') {
+          const s2 = rawJSON.trim();
+          if (s2.startsWith('{') || s2.startsWith('[')) parsed = JSON.parse(s2);
+        }
+        if (!parsed && typeof res?.content === 'string') {
+          const m = res.content.match(/\{[\s\S]*\}/);
+          if (m && m[0]) {
+            parsed = JSON.parse(m[0]);
+          }
+        }
+      } catch (pe) {
+        console.warn('[CollectSignals] parse failed', pe, { contentPreview: (res?.content || '').slice(0, 200) });
+      }
+      
+      if (parsed && parsed.signals && Array.isArray(parsed.signals)) {
+        setCollectedSignals(parsed);
+      } else {
+        setCollectedSignals({ error: 'Failed to parse signals', raw: res });
+      }
+    } catch (error) {
+      console.error('[CollectSignals] Failed to collect signals', error);
+      setCollectedSignals({ error: String(error) });
+    } finally {
+      setIsCollectingSignals(false);
+    }
+  }, [projectId, isCollectingSignals, genAISettings]);
 
   // Load artifacts
   React.useEffect(() => {
@@ -275,7 +469,10 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       
       // Initialize document auto-update (default: false)
       setDocumentAutoUpdateEnabled(false);
-      setAutoUpdateTrigger('on_new_message');
+      setAutoUpdateTrigger('time_based');
+      setAutoUpdateScheduleType('daily');
+      setShowContextTriggers(false);
+      setShowConditions(false);
       setAutoUpdateMinNewMessages(undefined);
       setAutoUpdateMinContextChange(undefined);
       setAutoUpdateKeywords('');
@@ -315,7 +512,10 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       setDefaultModel('');
       setSectionModels({});
       setDocumentAutoUpdateEnabled(false);
-      setAutoUpdateTrigger('on_new_message');
+      setAutoUpdateTrigger('time_based');
+      setAutoUpdateScheduleType('daily');
+      setShowContextTriggers(false);
+      setShowConditions(false);
       setAutoUpdateMinNewMessages(undefined);
       setAutoUpdateMinContextChange(undefined);
       setAutoUpdateKeywords('');
@@ -660,9 +860,12 @@ FORMAT REQUIREMENTS:
         notifyOnUpdate: autoUpdateNotifyOnUpdate,
       } : undefined;
 
+      // For time_based trigger, use scheduleType as the actual trigger (daily/weekly)
+      const actualTrigger = autoUpdateTrigger === 'time_based' ? autoUpdateScheduleType : autoUpdateTrigger;
+      
       const autoUpdateConfig = documentAutoUpdateEnabled ? {
-        trigger: autoUpdateTrigger,
-        scheduleTime: (autoUpdateTrigger === 'daily' || autoUpdateTrigger === 'weekly') ? autoUpdateScheduleTime : undefined,
+        trigger: actualTrigger,
+        scheduleTime: autoUpdateTrigger === 'time_based' ? autoUpdateScheduleTime : undefined,
         conditions: Object.keys(conditions).length > 0 ? conditions : undefined,
         smartUpdate: smartUpdate,
       } : undefined;
@@ -712,7 +915,8 @@ FORMAT REQUIREMENTS:
       setDefaultModel('');
       setSectionModels({});
       setDocumentAutoUpdateEnabled(false);
-      setAutoUpdateTrigger('on_new_message');
+      setAutoUpdateTrigger('time_based');
+      setAutoUpdateScheduleType('daily');
       setGeneratedSections({});
       setGenerationProgress({ current: 0, total: 0 });
       onOpenDocument(createdDoc);
@@ -2136,45 +2340,175 @@ FORMAT REQUIREMENTS:
                   }}
                 >
                   <option value="on_new_message">On new message</option>
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
+                  <option value="time_based">Time-based</option>
                   <option value="on_new_document">On new document</option>
                 </select>
               </div>
 
-              {(autoUpdateTrigger === 'daily' || autoUpdateTrigger === 'weekly') && (
-                <div>
-                  <label
-                    className="block text-[11px] mb-1.5"
-                    style={{ color: 'var(--text-secondary-strong)' }}
-                  >
-                    Schedule Time (UTC)
-                  </label>
-                  <input
-                    type="time"
-                    value={autoUpdateScheduleTime}
-                    onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
-                    className="w-full text-xs px-2 py-1.5 rounded"
+              {autoUpdateTrigger === 'time_based' && (
+                <div className="space-y-3">
+                  <div>
+                    <label
+                      className="block text-[11px] mb-1.5"
+                      style={{ color: 'var(--text-secondary-strong)' }}
+                    >
+                      Schedule Type
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAutoUpdateScheduleType('daily')}
+                        className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                        style={{
+                          backgroundColor: autoUpdateScheduleType === 'daily' 
+                            ? 'var(--white-10)' 
+                            : 'var(--white-06)',
+                          border: '1px solid var(--overlay-line-90)',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Daily
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAutoUpdateScheduleType('weekly')}
+                        className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                        style={{
+                          backgroundColor: autoUpdateScheduleType === 'weekly' 
+                            ? 'var(--white-10)' 
+                            : 'var(--white-06)',
+                          border: '1px solid var(--overlay-line-90)',
+                          color: 'var(--text-heading)',
+                        }}
+                      >
+                        Weekly
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label
+                      className="block text-[11px] mb-1.5"
+                      style={{ color: 'var(--text-secondary-strong)' }}
+                    >
+                      Schedule Time (UTC)
+                    </label>
+                    <input
+                      type="time"
+                      value={autoUpdateScheduleTime}
+                      onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
+                      className="w-full text-xs px-2 py-1.5 rounded"
+                      style={{
+                        backgroundColor: 'var(--white-06)',
+                        border: '1px solid var(--overlay-line-90)',
+                        color: 'var(--text-heading)',
+                        outline: 'none',
+                      }}
+                    />
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                      {autoUpdateScheduleType === 'daily' 
+                        ? 'Time when the update should run each day (24-hour format)' 
+                        : 'Time when the update should run each week (24-hour format)'}
+                    </p>
+                  </div>
+                  
+                  <button
+                    type="button"
+                    onClick={() => setShowContextTriggers(!showContextTriggers)}
+                    className="w-full text-xs px-3 py-1.5 rounded transition-colors text-left"
                     style={{
-                      backgroundColor: 'var(--white-06)',
+                      backgroundColor: showContextTriggers 
+                        ? 'var(--white-10)' 
+                        : 'var(--white-06)',
                       border: '1px solid var(--overlay-line-90)',
                       color: 'var(--text-heading)',
-                      outline: 'none',
                     }}
-                  />
-                  <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
-                    Time when the update should run (24-hour format)
-                  </p>
+                  >
+                    Context update signals
+                  </button>
                 </div>
               )}
 
+                  {showContextTriggers && (
+                    <div className="space-y-3">
+                      <div style={{ borderTop: '1px solid var(--overlay-line-90)' }}></div>
+                      
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCollectAutomatically}
+                          disabled={isCollectingSignals}
+                          className="text-xs px-3 py-1.5 rounded transition-colors flex items-center gap-2"
+                          style={{
+                            backgroundColor: 'var(--white-06)',
+                            border: '1px solid var(--overlay-line-90)',
+                            color: 'var(--text-heading)',
+                            opacity: isCollectingSignals ? 0.6 : 1,
+                            cursor: isCollectingSignals ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3M22 12.5a10 10 0 01-18.8 4.2"/>
+                          </svg>
+                          <span>Collect automatically</span>
+                        </button>
+                        
+                        <button
+                          type="button"
+                          className="text-xs px-3 py-1.5 rounded transition-colors flex items-center gap-2"
+                          style={{
+                            backgroundColor: 'var(--white-06)',
+                            border: '1px solid var(--overlay-line-90)',
+                            color: 'var(--text-heading)',
+                          }}
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 5v14M5 12h14"/>
+                          </svg>
+                          <span>Add</span>
+                        </button>
+                      </div>
+                      
+                      {isCollectingSignals && (
+                        <div className="text-xs py-2" style={{ color: 'var(--text-secondary-strong)' }}>
+                          We're collecting context change signals based on your discussion
+                        </div>
+                      )}
+                      
+                      {collectedSignals && !isCollectingSignals && (
+                        <div className="mt-2 p-3 rounded" style={{ backgroundColor: 'var(--white-06)', border: '1px solid var(--overlay-line-90)' }}>
+                          <pre className="text-[10px] whitespace-pre-wrap overflow-auto" style={{ color: 'var(--text-heading)', maxHeight: '400px' }}>
+                            {JSON.stringify(collectedSignals, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                      
+                      <div style={{ borderBottom: '1px solid var(--overlay-line-90)' }}></div>
+                    </div>
+                  )}
+
               <div>
-                <label
-                  className="block text-[11px] mb-1.5"
+                <button
+                  type="button"
+                  onClick={() => setShowConditions(!showConditions)}
+                  className="flex items-center gap-2 mb-1.5 cursor-pointer"
                   style={{ color: 'var(--text-secondary-strong)' }}
                 >
-                  Conditions
-                </label>
+                  <svg 
+                    className="w-3 h-3 transition-transform"
+                    style={{ transform: showConditions ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    strokeWidth="2" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round"
+                  >
+                    <path d="M9 18l6-6-6-6"/>
+                  </svg>
+                  <span className="text-[11px]">Conditions</span>
+                </button>
+                {showConditions && (
                 <div className="space-y-2">
                   <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -2263,6 +2597,7 @@ FORMAT REQUIREMENTS:
                     </span>
                   </label>
                 </div>
+                )}
               </div>
 
               <div>
@@ -2781,45 +3116,175 @@ FORMAT REQUIREMENTS:
                       }}
                     >
                       <option value="on_new_message">On new message</option>
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
+                      <option value="time_based">Time-based</option>
                       <option value="on_new_document">On new document</option>
                     </select>
                   </div>
 
-                  {(autoUpdateTrigger === 'daily' || autoUpdateTrigger === 'weekly') && (
-                    <div>
-                      <label
-                        className="block text-[11px] mb-1.5"
-                        style={{ color: 'var(--text-secondary-strong)' }}
-                      >
-                        Schedule Time (UTC)
-                      </label>
-                      <input
-                        type="time"
-                        value={autoUpdateScheduleTime}
-                        onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
-                        className="w-full text-xs px-2 py-1.5 rounded"
+                  {autoUpdateTrigger === 'time_based' && (
+                    <div className="space-y-3">
+                      <div>
+                        <label
+                          className="block text-[11px] mb-1.5"
+                          style={{ color: 'var(--text-secondary-strong)' }}
+                        >
+                          Schedule Type
+                        </label>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setAutoUpdateScheduleType('daily')}
+                            className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                            style={{
+                              backgroundColor: autoUpdateScheduleType === 'daily' 
+                                ? 'var(--white-10)' 
+                                : 'var(--white-06)',
+                              border: '1px solid var(--overlay-line-90)',
+                              color: 'var(--text-heading)',
+                            }}
+                          >
+                            Daily
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAutoUpdateScheduleType('weekly')}
+                            className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                            style={{
+                              backgroundColor: autoUpdateScheduleType === 'weekly' 
+                                ? 'var(--white-10)' 
+                                : 'var(--white-06)',
+                              border: '1px solid var(--overlay-line-90)',
+                              color: 'var(--text-heading)',
+                            }}
+                          >
+                            Weekly
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label
+                          className="block text-[11px] mb-1.5"
+                          style={{ color: 'var(--text-secondary-strong)' }}
+                        >
+                          Schedule Time (UTC)
+                        </label>
+                        <input
+                          type="time"
+                          value={autoUpdateScheduleTime}
+                          onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
+                          className="w-full text-xs px-2 py-1.5 rounded"
+                          style={{
+                            backgroundColor: 'var(--white-06)',
+                            border: '1px solid var(--overlay-line-90)',
+                            color: 'var(--text-heading)',
+                            outline: 'none',
+                          }}
+                        />
+                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                          {autoUpdateScheduleType === 'daily' 
+                            ? 'Time when the update should run each day (24-hour format)' 
+                            : 'Time when the update should run each week (24-hour format)'}
+                        </p>
+                      </div>
+                      
+                      <button
+                        type="button"
+                        onClick={() => setShowContextTriggers(!showContextTriggers)}
+                        className="w-full text-xs px-3 py-1.5 rounded transition-colors text-left"
                         style={{
-                          backgroundColor: 'var(--white-06)',
+                          backgroundColor: showContextTriggers 
+                            ? 'var(--white-10)' 
+                            : 'var(--white-06)',
                           border: '1px solid var(--overlay-line-90)',
                           color: 'var(--text-heading)',
-                          outline: 'none',
                         }}
-                      />
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
-                        Time when the update should run (24-hour format)
-                      </p>
+                      >
+                        Context update signals
+                      </button>
+                    </div>
+                  )}
+
+                  {showContextTriggers && (
+                    <div className="space-y-3">
+                      <div style={{ borderTop: '1px solid var(--overlay-line-90)' }}></div>
+                      
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCollectAutomatically}
+                          disabled={isCollectingSignals}
+                          className="text-xs px-3 py-1.5 rounded transition-colors flex items-center gap-2"
+                          style={{
+                            backgroundColor: 'var(--white-06)',
+                            border: '1px solid var(--overlay-line-90)',
+                            color: 'var(--text-heading)',
+                            opacity: isCollectingSignals ? 0.6 : 1,
+                            cursor: isCollectingSignals ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3M22 12.5a10 10 0 01-18.8 4.2"/>
+                          </svg>
+                          <span>Collect automatically</span>
+                        </button>
+                        
+                        <button
+                          type="button"
+                          className="text-xs px-3 py-1.5 rounded transition-colors flex items-center gap-2"
+                          style={{
+                            backgroundColor: 'var(--white-06)',
+                            border: '1px solid var(--overlay-line-90)',
+                            color: 'var(--text-heading)',
+                          }}
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 5v14M5 12h14"/>
+                          </svg>
+                          <span>Add</span>
+                        </button>
+                      </div>
+                      
+                      {isCollectingSignals && (
+                        <div className="text-xs py-2" style={{ color: 'var(--text-secondary-strong)' }}>
+                          We're collecting context change signals based on your discussion
+                        </div>
+                      )}
+                      
+                      {collectedSignals && !isCollectingSignals && (
+                        <div className="mt-2 p-3 rounded" style={{ backgroundColor: 'var(--white-06)', border: '1px solid var(--overlay-line-90)' }}>
+                          <pre className="text-[10px] whitespace-pre-wrap overflow-auto" style={{ color: 'var(--text-heading)', maxHeight: '400px' }}>
+                            {JSON.stringify(collectedSignals, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                      
+                      <div style={{ borderBottom: '1px solid var(--overlay-line-90)' }}></div>
                     </div>
                   )}
 
                   <div>
-                    <label
-                      className="block text-[11px] mb-1.5"
+                    <button
+                      type="button"
+                      onClick={() => setShowConditions(!showConditions)}
+                      className="flex items-center gap-2 mb-1.5 cursor-pointer"
                       style={{ color: 'var(--text-secondary-strong)' }}
                     >
-                      Conditions
-                    </label>
+                      <svg 
+                        className="w-3 h-3 transition-transform"
+                        style={{ transform: showConditions ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                        viewBox="0 0 24 24" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        strokeWidth="2" 
+                        strokeLinecap="round" 
+                        strokeLinejoin="round"
+                      >
+                        <path d="M9 18l6-6-6-6"/>
+                      </svg>
+                      <span className="text-[11px]">Conditions</span>
+                    </button>
+                    {showConditions && (
                     <div className="space-y-2">
                       <div className="grid grid-cols-2 gap-2">
                         <div>
@@ -2908,6 +3373,7 @@ FORMAT REQUIREMENTS:
                         </span>
                       </label>
                     </div>
+                    )}
                   </div>
 
                   <div>
