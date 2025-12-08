@@ -4,6 +4,7 @@ import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
 import { useProjectsStore } from '../stores/projectsStore';
+import { useGenAISettings, getModelContextWindow, mapProviderStrengthToModel } from '../stores/genaiSettingsStore';
 import { SourceItemWithActions } from './SourceItemWithActions';
 import SourcePreview from './SourcePreview';
 import { SourceDocumentsViewer } from './SourceDocumentsViewer';
@@ -19,6 +20,7 @@ interface Document {
   extractedText?: string;
   docType?: string;
   artifactConfig?: any;
+  isLoading?: boolean; // Flag for skeleton state
 }
 
 interface Source {
@@ -37,6 +39,7 @@ interface WorkspaceLibraryProps {
   onOpenDocument?: (doc: Document) => void;
   onExpand?: (projectId: string | null) => void;
   onSourceAdded?: () => void;
+  currentMode?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios';
 }
 
 export interface WorkspaceLibraryRef {
@@ -50,6 +53,7 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
   onOpenDocument,
   onExpand,
   onSourceAdded,
+  currentMode,
 }, ref) => {
   const [documents, setDocuments] = React.useState<Document[]>([]);
   const [sources, setSources] = React.useState<Source[]>([]);
@@ -61,6 +65,126 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
   const setPendingAttachedDocIds = useGenaiChatStore((state) => state.setPendingAttachedDocIds);
   const [previewSource, setPreviewSource] = React.useState<DataSource | null>(null);
   const [documentsViewSource, setDocumentsViewSource] = React.useState<DataSource | null>(null);
+  
+  // Get current model settings for context window calculation
+  const genAISettings = useGenAISettings();
+  const currentModel = React.useMemo(() => {
+    return mapProviderStrengthToModel(genAISettings.provider, genAISettings.strength);
+  }, [genAISettings.provider, genAISettings.strength]);
+  const contextWindow = React.useMemo(() => {
+    return getModelContextWindow(currentModel);
+  }, [currentModel]);
+  
+  // Estimate document size in tokens
+  // Uses extractedText if available (more accurate), otherwise estimates from sizeBytes
+  // Skip calculation in scenarios mode to avoid unnecessary work
+  const estimateDocumentTokens = React.useCallback((doc: Document): number => {
+    // In scenarios mode, skip token calculation - not needed
+    if (currentMode === 'scenarios') {
+      return 0;
+    }
+    
+    // Check if it's a CSV/TSV file first
+    const isCSV = doc.filename.toLowerCase().endsWith('.csv') || 
+                  doc.filename.toLowerCase().endsWith('.tsv') ||
+                  doc.contentType?.includes('csv') ||
+                  doc.contentType?.includes('tab-separated');
+    
+    if (doc.extractedText) {
+      // More accurate: use actual text length
+      return Math.ceil(doc.extractedText.length / 4); // ~4 chars per token
+    }
+    
+    // Check sizeBytes - use strict check (not just truthy, but > 0)
+    if (doc.sizeBytes != null && doc.sizeBytes > 0) {
+      // Estimate: for text files, sizeBytes ≈ text length
+      // For other files (PDF, DOCX), extracted text is usually smaller than file size
+      // Use conservative estimate: assume 50% of file size is text for non-text files
+      const isTextFile = doc.contentType?.includes('text/') || 
+                        doc.filename.endsWith('.txt') || 
+                        doc.filename.endsWith('.md') ||
+                        isCSV;
+      const estimatedTextLength = isTextFile ? doc.sizeBytes : Math.floor(doc.sizeBytes * 0.5);
+      return Math.ceil(estimatedTextLength / 4);
+    }
+    
+    // No size info available - check file extension and content type
+    // For CSV/TSV files without size info, be conservative and block if we can't determine size
+    // This prevents large CSV files from being attached when size info is missing
+    if (isCSV) {
+      // CSV files without size info - assume they're too large (conservative approach)
+      // This prevents 4MB CSV files from being attached when sizeBytes is missing
+      // Return a very large number to ensure it's blocked
+      return 10_000_000; // 10M tokens - definitely too large
+    }
+    
+    // For other files without size info, allow attachment (might be small files)
+    // This is a temporary solution - ideally we should always have sizeBytes
+    return 0;
+  }, [currentMode]);
+  
+  // Calculate total tokens from already attached documents
+  // Skip calculation in scenarios mode to avoid unnecessary work
+  const attachedDocsTokens = React.useMemo(() => {
+    if (currentMode === 'scenarios') {
+      return 0; // Skip calculation in scenarios mode
+    }
+    let total = 0;
+    for (const docId of pendingAttachedDocIds) {
+      const doc = documents.find(d => d.id === docId);
+      if (doc) {
+        total += estimateDocumentTokens(doc);
+      }
+    }
+    return total;
+  }, [pendingAttachedDocIds, documents, estimateDocumentTokens, currentMode]);
+  
+  // Check if document fits in available context
+  // Uses 70% of context window (same as contextBuilder.ts)
+  // Skip context checks in scenarios mode - they're not needed there
+  const canAttachDocument = React.useCallback((doc: Document, excludeDocId?: string): boolean => {
+    // In scenarios mode, skip context size checks - documents can always be attached
+    if (currentMode === 'scenarios') {
+      return true;
+    }
+    
+    const docTokens = estimateDocumentTokens(doc);
+    
+    // If document is extremely large (e.g., CSV without size info), always block
+    if (docTokens >= 10_000_000) {
+      return false;
+    }
+    
+    if (!contextWindow || contextWindow === 0) {
+      // No context window info - but still check if document is obviously too large
+      // For CSV files > 1MB, block even without context window info
+      if (doc.sizeBytes && doc.sizeBytes > 1024 * 1024) {
+        const isCSV = doc.filename.toLowerCase().endsWith('.csv') || 
+                      doc.filename.toLowerCase().endsWith('.tsv');
+        if (isCSV) {
+          return false;
+        }
+      }
+      // No context window info - allow attachment for small files
+      return true;
+    }
+    
+    const maxContextTokens = Math.floor(contextWindow * 0.7);
+    
+    // Calculate tokens from attached documents, excluding the current document if specified
+    let currentAttachedTokens = attachedDocsTokens;
+    if (excludeDocId && pendingAttachedDocIds.includes(excludeDocId)) {
+      const excludedDoc = documents.find(d => d.id === excludeDocId);
+      if (excludedDoc) {
+        currentAttachedTokens -= estimateDocumentTokens(excludedDoc);
+      }
+    }
+    
+    const totalTokens = currentAttachedTokens + docTokens;
+    const fits = totalTokens <= maxContextTokens;
+    
+    return fits;
+  }, [contextWindow, attachedDocsTokens, estimateDocumentTokens, pendingAttachedDocIds, documents, currentModel, currentMode]);
   
   // Subscribe to WebSocket document events
   const lastDocEvent = useDiscoveryStore((state: any) => state.lastDocEvent);
@@ -108,7 +232,16 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
       const docs = await api.docsList(projectId, 'post');
       const docsTime = performance.now();
       console.log('[WorkspaceLibrary] Document load completed at', docsTime, 'took', docsTime - startTime, 'ms');
-      setDocuments(docs || []);
+      
+      // Merge with loading documents - preserve skeletons that haven't loaded yet
+      setDocuments(prevDocs => {
+        const loadingDocs = prevDocs.filter(d => d.isLoading);
+        const loadedDocIds = new Set((docs || []).map((d: Document) => d.id));
+        // Keep only loading docs that haven't been loaded yet
+        const stillLoadingDocs = loadingDocs.filter(d => !loadedDocIds.has(d.id));
+        // Combine loaded docs with still loading docs
+        return [...(docs || []), ...stillLoadingDocs];
+      });
 
       // Load sources
       try {
@@ -260,11 +393,18 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
         const existingDoc = prev.find(d => d.id === eventDocId);
         
         if (existingDoc) {
-          // Update existing document status
+          // Update existing document status and remove loading flag if it was loading
+          // Also update filename if provided in event
+          const updatedDoc: Document = {
+            ...existingDoc,
+            parseStatus: eventStatus,
+            isLoading: false,
+          };
+          if (lastDocEvent.filename && lastDocEvent.filename !== existingDoc.filename) {
+            updatedDoc.filename = lastDocEvent.filename;
+          }
           const updated = prev.map(doc => 
-            doc.id === eventDocId 
-              ? { ...doc, parseStatus: eventStatus }
-              : doc
+            doc.id === eventDocId ? updatedDoc : doc
           );
           console.log('[WorkspaceLibrary] Updated document status:', { 
             docId: eventDocId, 
@@ -273,41 +413,55 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
           });
           return updated;
         } else {
-          // Document doesn't exist yet - fetch it from API
+          // Document doesn't exist yet - add skeleton immediately
+          const eventFilename = lastDocEvent.filename || 'Loading...';
+          const skeletonDoc: Document = {
+            id: eventDocId,
+            filename: eventFilename,
+            parseStatus: eventStatus,
+            isLoading: true,
+          };
+          
+          console.log('[WorkspaceLibrary] Adding skeleton document:', { 
+            docId: eventDocId, 
+            filename: eventFilename, 
+            status: eventStatus 
+          });
+          
+          // Fetch full document data from API
           api.docsList(projectId, 'post').then(docs => {
             const newDoc = docs?.find((d: Document) => d.id === eventDocId);
             if (newDoc) {
               setDocuments(prevDocs => {
-                // Avoid duplicates - check if document was added while we were fetching
+                // Replace skeleton with real document
                 const existing = prevDocs.find(d => d.id === eventDocId);
                 if (existing) {
-                  // Document was added while fetching - update its status
-                  console.log('[WorkspaceLibrary] Document added while fetching, updating status:', { 
+                  console.log('[WorkspaceLibrary] Replacing skeleton with real document:', { 
                     docId: eventDocId, 
-                    oldStatus: existing.parseStatus, 
-                    newStatus: eventStatus 
+                    filename: newDoc.filename 
                   });
                   return prevDocs.map(doc => 
                     doc.id === eventDocId 
-                      ? { ...doc, parseStatus: eventStatus }
+                      ? { ...newDoc, parseStatus: eventStatus, isLoading: false }
                       : doc
                   );
                 }
-                // Add new document with updated parseStatus from event
-                console.log('[WorkspaceLibrary] Adding new document with status:', { 
-                  docId: eventDocId, 
-                  filename: newDoc.filename, 
-                  status: eventStatus 
-                });
-                return [...prevDocs, { ...newDoc, parseStatus: eventStatus }];
+                // If skeleton was removed, just add the real document
+                return [...prevDocs, { ...newDoc, parseStatus: eventStatus, isLoading: false }];
               });
             } else {
               console.warn('[WorkspaceLibrary] Document not found in API response:', { docId: eventDocId });
+              // Remove skeleton if document not found
+              setDocuments(prevDocs => prevDocs.filter(d => d.id !== eventDocId));
             }
           }).catch(err => {
             console.error('[WorkspaceLibrary] Failed to fetch new document:', err);
+            // Remove skeleton on error
+            setDocuments(prevDocs => prevDocs.filter(d => d.id !== eventDocId));
           });
-          return prev; // Return unchanged while fetching
+          
+          // Return with skeleton added
+          return [...prev, skeletonDoc];
         }
       });
     }
@@ -377,6 +531,12 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
     if (e) e.stopPropagation();
     if (!projectId || projectId === 'local-unfold') return;
     
+    // Ask for confirmation before deleting
+    const confirmed = window.confirm(`Are you sure you want to delete "${doc.filename}"?\n\nThis action cannot be undone.`);
+    if (!confirmed) {
+      return;
+    }
+    
     try {
       await api.docsDelete(projectId, doc.id);
       setDocuments(prev => prev.filter(d => d.id !== doc.id));
@@ -384,6 +544,7 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
       console.log('[WorkspaceLibrary] Document deleted', { docId: doc.id });
     } catch (err) {
       console.error('[WorkspaceLibrary] Failed to delete document', err);
+      alert('Failed to delete document. Please try again.');
     }
   };
 
@@ -403,10 +564,21 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
 
   const handleDocumentToggle = (docId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const doc = documents.find(d => d.id === docId);
+    if (!doc) return;
+    
     const isAttached = pendingAttachedDocIds.includes(docId);
     if (isAttached) {
       setPendingAttachedDocIds(pendingAttachedDocIds.filter(id => id !== docId));
     } else {
+      // Check if document fits in context before adding (exclude it from attached tokens check)
+      if (!canAttachDocument(doc, docId)) {
+        const docTokens = estimateDocumentTokens(doc);
+        const maxContextTokens = contextWindow ? Math.floor(contextWindow * 0.7) : 0;
+        const currentAttachedTokens = attachedDocsTokens;
+        alert(`Document "${doc.filename}" is too large to fit in context.\n\nEstimated tokens: ${docTokens.toLocaleString()}\nAlready attached: ${currentAttachedTokens.toLocaleString()} tokens\nAvailable context: ${maxContextTokens.toLocaleString()} tokens (70% of ${contextWindow.toLocaleString()})\n\nTry switching to a model with a larger context window or remove some attached documents.`);
+        return;
+      }
       setPendingAttachedDocIds([...pendingAttachedDocIds, docId]);
     }
   };
@@ -542,6 +714,50 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
           <div className="space-y-1">
             {documents.map((doc) => {
               const isAttached = pendingAttachedDocIds.includes(doc.id);
+              // When checking if document can be attached, exclude it from attached tokens if it's already attached
+              const canAttach = canAttachDocument(doc, doc.id);
+              // Only calculate tokens if not in scenarios mode (to avoid unnecessary work)
+              const docTokens = currentMode !== 'scenarios' ? estimateDocumentTokens(doc) : 0;
+              const maxContextTokens = contextWindow ? Math.floor(contextWindow * 0.7) : Infinity;
+              
+              // Render skeleton loader for loading documents
+              if (doc.isLoading) {
+                return (
+                  <div
+                    key={doc.id}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded"
+                  >
+                    {/* Checkbox placeholder */}
+                    <div className="flex-shrink-0 w-4 h-4 rounded" style={{ backgroundColor: 'var(--white-06)' }} />
+
+                    {/* Icon and file info skeleton */}
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      {/* Icon skeleton */}
+                      <div className="flex-shrink-0 w-5 h-5 rounded" style={{ backgroundColor: 'var(--white-06)' }} />
+
+                      {/* File info skeleton */}
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div 
+                          className="h-3 rounded animate-pulse" 
+                          style={{ 
+                            backgroundColor: 'var(--white-06)',
+                            width: doc.filename === 'Loading...' ? '60%' : '80%'
+                          }} 
+                        />
+                        <div 
+                          className="h-2 rounded animate-pulse" 
+                          style={{ 
+                            backgroundColor: 'var(--white-06)',
+                            width: '40%'
+                          }} 
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+              
+              // Render normal document
               return (
                 <div
                   key={doc.id}
@@ -551,15 +767,27 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
                   <input
                     type="checkbox"
                     checked={isAttached}
+                    disabled={!canAttach && !isAttached}
                     onChange={() => {}}
-                    onClick={(e) => handleDocumentToggle(doc.id, e)}
-                    className="flex-shrink-0 w-4 h-4 rounded cursor-pointer"
+                    onClick={(e) => {
+                      if (!canAttach && !isAttached) {
+                        e.stopPropagation();
+                        return;
+                      }
+                      handleDocumentToggle(doc.id, e);
+                    }}
+                    className="flex-shrink-0 w-4 h-4 rounded"
                     style={{ 
                       accentColor: 'var(--accent-primary)',
-                      cursor: 'pointer'
+                      cursor: canAttach || isAttached ? 'pointer' : 'not-allowed',
+                      opacity: !canAttach ? 0.5 : 1, // Gray out if doesn't fit, even if already attached
                     }}
-                    aria-label="Attach to context"
-                    title="Attach to context for next message"
+                    aria-label={canAttach || isAttached ? "Attach to context" : "Document too large for context"}
+                    title={!canAttach 
+                      ? `Document too large (${docTokens.toLocaleString()} tokens, max ${maxContextTokens.toLocaleString()} tokens). ${isAttached ? 'Consider removing it from context.' : 'Switch to a model with larger context window.'}`
+                      : isAttached 
+                        ? "Remove from context"
+                        : "Attach to context for next message"}
                   />
 
                   {/* Icon and file info - clickable to open */}

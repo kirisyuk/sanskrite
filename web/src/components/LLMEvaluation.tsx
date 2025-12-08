@@ -133,6 +133,13 @@ Respond concisely in the specified language (${lang}). Use short bullet points w
               try {
                 const preferredLang = (typeof window !== 'undefined' ? (window.localStorage.getItem('preferredLanguage') || 'EN') : 'EN').toLowerCase();
                 
+                // Skip evaluation for agent responses and scenario messages (they are system responses, not conversational content)
+                const isAgentResponse = (lastAssistant as any)?.subkind?.startsWith('agent.') || !!(lastAssistant as any)?.agentProfile;
+                const isScenarioMessage = (lastAssistant as any)?.subkind?.startsWith('scenarios.');
+                if (isAgentResponse || isScenarioMessage) {
+                  return;
+                }
+                
                 // Find previous USER message as context
                 let prevUserText: string | null = null;
                 try {

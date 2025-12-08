@@ -717,24 +717,25 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             }
             
             // Generate asynchronously without blocking hydration
-            // Skip compliance check for agent responses (they respond to previous messages, not direct user queries)
+            // Skip evaluations for agent responses and scenario messages (they are system responses, not conversational content)
             const isAgentResponse = lastAssistant.subkind?.startsWith('agent.') || !!(lastAssistant as any).agentProfile;
+            const isScenarioMessage = lastAssistant.subkind?.startsWith('scenarios.');
             (async () => {
-              try {
-                const { generateFrameExpansions } = await import('../lib/frameExpansions');
-                await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
-                
-                // Generate frame compliance check only for non-agent responses
-                if (!isAgentResponse) {
+              // Skip frame expansions and compliance check for agent responses and scenario messages
+              if (!isAgentResponse && !isScenarioMessage) {
+                try {
+                  const { generateFrameExpansions } = await import('../lib/frameExpansions');
+                  await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+                  
                   try {
                     const { generateFrameComplianceCheck } = await import('../lib/frameComplianceCheck');
                     await generateFrameComplianceCheck(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
                   } catch (e) {
                     console.warn('[hydrateInteractions] Failed to generate frameComplianceCheck', e);
                   }
+                } catch (e) {
+                  console.warn('[hydrateInteractions] Failed to generate frameExpansions', e);
                 }
-              } catch (e) {
-                console.warn('[hydrateInteractions] Failed to generate frameExpansions', e);
               }
             })();
           }
@@ -3957,10 +3958,11 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         (async () => {
           try {
             if (!projectId || projectId === 'local-unfold') return;
-            // Check if this is an agent response - agents don't need compliance eval since they respond to previous messages, not direct user queries
+            // Check if this is an agent response or scenario message - these don't need evaluations since they are system responses, not conversational content
             const state = get();
             const meta = state.pendingAssistantMeta;
             const isAgentResponse = meta?.subkind?.startsWith('agent.') || !!meta?.agentProfile;
+            const isScenarioMessage = meta?.subkind?.startsWith('scenarios.');
             
             // Count all assistant interactions (including agents) to ensure we have at least 1 response
             // Count includes this one we're about to add, so we check if we'll have >= 1 after adding
@@ -4054,13 +4056,17 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               }
               
               // Run frame expansions, compliance check, and bias evaluation in parallel to reduce latency
-              // Note: compliance check is skipped for agent responses (they respond to previous messages, not direct user queries)
-              const expansionsPromise = (async () => {
-                const { generateFrameExpansions } = await import('../lib/frameExpansions');
-                await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+              // Note: all evaluations are skipped for agent responses and scenario messages (they are system responses, not conversational content)
+              const expansionsPromise = (isAgentResponse || isScenarioMessage) ? Promise.resolve() : (async () => {
+                try {
+                  const { generateFrameExpansions } = await import('../lib/frameExpansions');
+                  await generateFrameExpansions(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
+                } catch (e) {
+                  console.warn('[FrameExpansions] generation failed', e);
+                }
               })();
 
-              const compliancePromise = isAgentResponse ? Promise.resolve() : (async () => {
+              const compliancePromise = (isAgentResponse || isScenarioMessage) ? Promise.resolve() : (async () => {
                 try {
                   const { generateFrameComplianceCheck } = await import('../lib/frameComplianceCheck');
                   await generateFrameComplianceCheck(lastAssistant.id, lastAssistant.content, userMessages.length > 0 ? userMessages : undefined);
@@ -4069,7 +4075,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 }
               })();
 
-              const biasPromise = (async () => {
+              const biasPromise = (isAgentResponse || isScenarioMessage) ? Promise.resolve() : (async () => {
                 try {
                   const { evaluateBias } = await import('../lib/biasEvaluation');
                   const settingsStateEval = useGenAISettings.getState();

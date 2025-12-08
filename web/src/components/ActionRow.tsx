@@ -358,7 +358,11 @@ export const ActionRow: React.FC<{
           if (data.confidence !== undefined && data.explanation && typeof data.explanation === 'string') {
             // Only return if confidence >= 0.6
             if (data.confidence >= 0.6) {
-              return { confidence: data.confidence, explanation: data.explanation };
+              return { 
+                confidence: data.confidence, 
+                explanation: data.explanation,
+                interactionId: complianceInteraction.id 
+              };
             }
           }
         } catch (e) {
@@ -1351,8 +1355,60 @@ export const ActionRow: React.FC<{
       )}
       {isAssistant && frameComplianceCheck && frameComplianceCheck.confidence >= 0.6 && (
         <div className="mt-2" style={{ width: '100%' }}>
-          <div className="p-2" style={{ backgroundColor: 'var(--warning-10)', borderLeft: '2px solid var(--accent-warning)', borderRadius: '4px' }}>
-            <div className="text-[11px]" style={{ color: 'var(--text-heading)', lineHeight: '1.4' }}>
+          <div className="p-2" style={{ backgroundColor: 'var(--warning-10)', borderLeft: '2px solid var(--accent-warning)', borderRadius: '4px', position: 'relative' }}>
+            <button
+              type="button"
+              onClick={async (e) => {
+                e.stopPropagation();
+                if (!frameComplianceCheck.interactionId) return;
+                
+                const confirmed = window.confirm('Are you sure you want to delete this compliance warning?');
+                if (!confirmed) return;
+                
+                try {
+                  const projectId = useGenaiChatStore.getState().projectId;
+                  if (projectId && projectId !== 'local-unfold') {
+                    const { api } = await import('../lib/api');
+                    await api.deleteProjectInteraction(projectId, frameComplianceCheck.interactionId);
+                  }
+                  
+                  // Remove from local state
+                  useGenaiChatStore.setState((s) => ({
+                    interactions: s.interactions.filter((it) => it.id !== frameComplianceCheck.interactionId)
+                  }));
+                } catch (err) {
+                  console.error('[ActionRow] Failed to delete compliance warning', err);
+                  alert('Failed to delete compliance warning');
+                }
+              }}
+              style={{
+                position: 'absolute',
+                top: '4px',
+                right: '4px',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-secondary)',
+                opacity: 0.7,
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.opacity = '1';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.opacity = '0.7';
+              }}
+              title="Delete compliance warning"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+            <div className="text-[11px]" style={{ color: 'var(--text-heading)', lineHeight: '1.4', paddingRight: '20px' }}>
               {frameComplianceCheck.explanation}
             </div>
             <div className="mt-2" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

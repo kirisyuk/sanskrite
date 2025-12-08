@@ -573,6 +573,18 @@ function handleResearchEvent(
                     ? (window.localStorage.getItem('preferredLanguage') || 'EN') 
                     : 'EN').toLowerCase();
                   
+                  // Skip evaluation for agent responses and scenario messages (they are system responses, not conversational content)
+                  try {
+                    const { useGenaiChatStore: genaiStore } = await import('./genaiChatStore');
+                    const allInts = genaiStore.getState().interactions;
+                    const interaction = allInts.find((it) => it.id === res.id);
+                    const isAgentResponse = interaction?.subkind?.startsWith('agent.') || !!(interaction as any)?.agentProfile;
+                    const isScenarioMessage = interaction?.subkind?.startsWith('scenarios.');
+                    if (isAgentResponse || isScenarioMessage) {
+                      return;
+                    }
+                  } catch {}
+                  
                   // Find previous USER message as context (research query)
                   let prevUserText: string | null = null;
                   try {

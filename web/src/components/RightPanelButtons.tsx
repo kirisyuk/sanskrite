@@ -88,10 +88,22 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
         aria-label={t('unfold.sections.toggleWorkspaceLibrary')}
         title={t('unfold.sections.toggleWorkspaceLibrary')}
         className="mirror-doc-btn rounded-lg flex items-center justify-center transition-all duration-300"
-        style={getRightPanelButtonStyle(rightPanelType === 'workspace')}
+        style={{
+          ...getRightPanelButtonStyle(rightPanelType === 'workspace'),
+          backgroundColor: rightPanelType === 'workspace' ? '#669999' : '#669999',
+          color: 'white',
+        }}
         onClick={() => handleButtonClick('workspace')}
-        onMouseEnter={(e) => handleMouseEnter(e, rightPanelType === 'workspace')}
-        onMouseLeave={(e) => handleMouseLeave(e, rightPanelType === 'workspace')}
+        onMouseEnter={(e) => {
+          if (rightPanelType !== 'workspace') {
+            e.currentTarget.style.backgroundColor = '#7aa3a3'; // Slightly lighter on hover
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (rightPanelType !== 'workspace') {
+            e.currentTarget.style.backgroundColor = '#669999';
+          }
+        }}
       >
         <svg
           className="w-4 h-4"

@@ -3211,8 +3211,10 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// Cascade delete: find and delete associated Document and Chunks
+	var hasRAGDocument bool
 	if h.docsRepo != nil && h.chunksRepo != nil {
 		if doc, err := h.docsRepo.GetByCoreDocID(r.Context(), authInfo.TenantID, docID); err == nil && doc != nil {
+			hasRAGDocument = true
 			// Delete all chunks for this document
 			if err := h.chunksRepo.DeleteByDoc(r.Context(), authInfo.TenantID, doc.ID); err != nil {
 				h.logger.Printf("Warning: failed to delete chunks for doc %s: %v", doc.ID, err)
@@ -3230,6 +3232,16 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 		if err := h.storage.DeleteObject(r.Context(), bucket, object); err != nil {
 			h.logger.Printf("Warning: failed to delete original file from GCS for doc %s: %v", docID, err)
 		}
+	}
+
+	// If document was not indexed in RAG, still sync Vertex AI Search to remove it
+	// (documents without RAG indexing are still synced to Vertex AI Search for semantic search)
+	if !hasRAGDocument && h.vertexSearchClient != nil && h.vertexSearchClient.IsConfigured() {
+		go func(tenantID string) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			h.syncCoreDocsToVertexSearch(syncCtx, tenantID)
+		}(authInfo.TenantID)
 	}
 
 	// Delete extracted text from GCS if it was stored there
@@ -3290,6 +3302,69 @@ func getFullExtractedTextFromCoreDoc(ctx context.Context, cd *models.CoreDoc, st
 	return "", nil
 }
 
+// shouldSkipRAGIndexing determines if a document should be excluded from RAG indexing
+// based on file type and size. Returns true if indexing should be skipped.
+func shouldSkipRAGIndexing(cd *models.CoreDoc) bool {
+	const sizeThreshold = 300 * 1024 // 300KB
+	
+	// TODO: Add ForceRAGIndexing flag to CoreDoc model to allow forced indexing
+	// of documents that would normally be excluded (e.g., large CSV files for RAG)
+	// if cd.ForceRAGIndexing != nil && *cd.ForceRAGIndexing {
+	//     return false // Force indexing even if normally excluded
+	// }
+	
+	// Get file extension
+	filename := strings.ToLower(cd.Filename)
+	ext := filepath.Ext(filename)
+	
+	// Always exclude logs and SQL dumps regardless of size
+	if ext == ".log" || ext == ".sql" || ext == ".dump" {
+		return true
+	}
+	
+	// Check size - if SizeBytes is not set, we can't determine size, so allow indexing
+	if cd.SizeBytes == nil {
+		return false
+	}
+	sizeBytes := *cd.SizeBytes
+	
+	// Check content type and extension for data file types
+	contentType := strings.ToLower(cd.ContentType)
+	
+	// CSV/TSV files > 300KB
+	if strings.Contains(contentType, "text/csv") || strings.Contains(contentType, "application/csv") || ext == ".csv" {
+		return sizeBytes > sizeThreshold
+	}
+	if strings.Contains(contentType, "tab-separated") || ext == ".tsv" {
+		return sizeBytes > sizeThreshold
+	}
+	
+	// Excel files > 300KB
+	if strings.Contains(contentType, "spreadsheet") || 
+		strings.Contains(contentType, "application/vnd.ms-excel") ||
+		strings.Contains(contentType, "application/vnd.openxmlformats-officedocument.spreadsheetml") ||
+		ext == ".xlsx" || ext == ".xls" {
+		return sizeBytes > sizeThreshold
+	}
+	
+	// JSON files > 300KB
+	if strings.Contains(contentType, "application/json") || strings.Contains(contentType, "text/json") || ext == ".json" {
+		return sizeBytes > sizeThreshold
+	}
+	
+	// XML files > 300KB
+	if strings.Contains(contentType, "application/xml") || strings.Contains(contentType, "text/xml") || ext == ".xml" {
+		return sizeBytes > sizeThreshold
+	}
+	
+	// Parquet and Avro files (always exclude if detected)
+	if ext == ".parquet" || ext == ".avro" {
+		return true
+	}
+	
+	return false
+}
+
 // IndexCoreDoc indexes a CoreDoc by creating/updating Document and Chunks with embeddings
 // This is exported so it can be used as a callback in CoreDocsRepo
 func (h *ProjectsHandler) IndexCoreDoc(ctx context.Context, tenantID string, cd *models.CoreDoc) error {
@@ -3300,6 +3375,20 @@ func (h *ProjectsHandler) IndexCoreDoc(ctx context.Context, tenantID string, cd 
 		}
 		return nil
 	}
+	
+	// Check if document should be excluded from RAG indexing
+	if shouldSkipRAGIndexing(cd) {
+		if h.logger != nil {
+			sizeStr := "unknown"
+			if cd.SizeBytes != nil {
+				sizeStr = fmt.Sprintf("%d bytes", *cd.SizeBytes)
+			}
+			h.logger.Printf("indexCoreDoc: skipping RAG indexing for doc %s (file type/size exclusion: %s, size=%s)", 
+				cd.ID, cd.Filename, sizeStr)
+		}
+		return nil
+	}
+	
 	// Allow indexing for dynamic artifacts so they are searchable (RAG/Vertex)
 
 	// Get full extracted text

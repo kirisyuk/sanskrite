@@ -386,6 +386,16 @@ const DiscoveryPage: React.FC = () => {
     }
   }, [genaiChatInteractionsLength, genaiChatMessagesLength]);
 
+  // Auto-switch from Dynamic Content, Perspectives, or Scenarios tabs if project becomes empty
+  React.useEffect(() => {
+    const isEmpty = !genaiChatProjectId || genaiChatProjectId === 'local-unfold' || (genaiChatInteractionsLength === 0 && genaiChatMessagesLength === 0);
+    if (isEmpty && (unfoldSubView === 'pages' || unfoldSubView === 'perspectives' || unfoldSubView === 'scenarios')) {
+      try {
+        setUnfoldSubView('chat');
+      } catch {}
+    }
+  }, [genaiChatProjectId, genaiChatInteractionsLength, genaiChatMessagesLength, unfoldSubView]);
+
   // Reset analysis closed state when preset changes or switching to perspectives
   React.useEffect(() => {
     setIsAnalysisClosed(false);
@@ -1549,59 +1559,67 @@ const DiscoveryPage: React.FC = () => {
                       >
                         {t('unfold.sections.model', { defaultValue: 'Model' })}
                       </button>
-                      {/* Divider */}
-                      <div
-                        className="h-px w-full"
-                        style={{
-                          backgroundColor: theme === 'dark' 
-                            ? 'rgba(255, 255, 255, 0.2)' 
-                            : 'rgba(0, 0, 0, 0.15)',
-                          margin: '4px 0',
-                          flexShrink: 0,
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setUnfoldSubView('perspectives');
-                          setShowModeDropdown(false);
-                        }}
-                        className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
-                        style={{
-                          background: unfoldSubView === 'perspectives' ? 'var(--white-10)' : 'transparent',
-                          color: 'var(--text-heading)',
-                        }}
-                      >
-                        {t('unfold.sections.perspectives')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setUnfoldSubView('pages');
-                          setShowModeDropdown(false);
-                        }}
-                        className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
-                        style={{
-                          background: unfoldSubView === 'pages' ? 'var(--white-10)' : 'transparent',
-                          color: 'var(--text-heading)',
-                        }}
-                      >
-                        {t('unfold.sections.dynamicContent', { defaultValue: 'Dynamic Content' })}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setUnfoldSubView('scenarios');
-                          setShowModeDropdown(false);
-                        }}
-                        className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
-                        style={{
-                          background: unfoldSubView === 'scenarios' ? 'var(--white-10)' : 'transparent',
-                          color: 'var(--text-heading)',
-                        }}
-                      >
-                        {t('unfold.sections.scenarios', { defaultValue: 'Scenarios' })}
-                      </button>
+                      {genaiChatProjectId && genaiChatProjectId !== 'local-unfold' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
+                        <>
+                          {/* Divider */}
+                          <div
+                            className="h-px w-full"
+                            style={{
+                              backgroundColor: theme === 'dark' 
+                                ? 'rgba(255, 255, 255, 0.2)' 
+                                : 'rgba(0, 0, 0, 0.15)',
+                              margin: '4px 0',
+                              flexShrink: 0,
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUnfoldSubView('perspectives');
+                              setShowModeDropdown(false);
+                            }}
+                            className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                            style={{
+                              background: unfoldSubView === 'perspectives' ? 'var(--white-10)' : 'transparent',
+                              color: 'var(--text-heading)',
+                            }}
+                          >
+                            {t('unfold.sections.perspectives')}
+                          </button>
+                        </>
+                      )}
+                      {genaiChatProjectId && genaiChatProjectId !== 'local-unfold' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUnfoldSubView('pages');
+                            setShowModeDropdown(false);
+                          }}
+                          className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                          style={{
+                            background: unfoldSubView === 'pages' ? 'var(--white-10)' : 'transparent',
+                            color: 'var(--text-heading)',
+                          }}
+                        >
+                          {t('unfold.sections.dynamicContent', { defaultValue: 'Dynamic Content' })}
+                        </button>
+                      )}
+                      {genaiChatProjectId && genaiChatProjectId !== 'local-unfold' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUnfoldSubView('scenarios');
+                            setShowModeDropdown(false);
+                          }}
+                          className="w-full text-left px-3 py-2 flex items-center gap-2 text-xs"
+                          style={{
+                            background: unfoldSubView === 'scenarios' ? 'var(--white-10)' : 'transparent',
+                            color: 'var(--text-heading)',
+                          }}
+                        >
+                          {t('unfold.sections.scenarios', { defaultValue: 'Scenarios' })}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1652,79 +1670,89 @@ const DiscoveryPage: React.FC = () => {
                   >
                     {t('unfold.sections.model', { defaultValue: 'Model' })}
                   </button>
-                  {/* Divider */}
-                  <div
-                    className="h-4 w-px"
-                    style={{
-                      backgroundColor: theme === 'dark' 
-                        ? 'rgba(255, 255, 255, 0.2)' 
-                        : 'rgba(0, 0, 0, 0.15)',
-                      margin: '0 8px',
-                      flexShrink: 0,
-                    }}
-                  />
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={unfoldSubView === 'perspectives'}
-                    aria-controls="unfold-perspectives-panel"
-                    onClick={() => setUnfoldSubView('perspectives')}
-                    className="px-2 py-1 text-12 rounded"
-                    style={{
-                              background:
-                                unfoldSubView === 'perspectives'
-                                  ? 'var(--white-10)'
-                                  : 'transparent',
-                              color: 'var(--text-heading)',
-                    }}
-                  >
-                    {t('unfold.sections.perspectives')}
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={unfoldSubView === 'pages'}
-                    aria-controls="unfold-pages-panel"
-                    onClick={() => setUnfoldSubView('pages')}
-                    className="px-2 py-1 text-12 rounded"
-                    style={{
-                              background:
-                                unfoldSubView === 'pages'
-                                  ? 'var(--white-10)'
-                                  : 'transparent',
-                              color: 'var(--text-heading)',
-                    }}
-                  >
-                    {t('unfold.sections.dynamicContent', { defaultValue: 'Dynamic Content' })}
-                  </button>
-                  {/* Divider */}
-                  <div
-                    className="h-4 w-px"
-                    style={{
-                      backgroundColor: theme === 'dark' 
-                        ? 'rgba(255, 255, 255, 0.2)' 
-                        : 'rgba(0, 0, 0, 0.15)',
-                      margin: '0 8px',
-                      flexShrink: 0,
-                    }}
-                  />
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={unfoldSubView === 'scenarios'}
-                    aria-controls="unfold-scenarios-panel"
-                    onClick={() => setUnfoldSubView('scenarios')}
-                    className="px-2 py-1 text-12 rounded"
-                    style={{
-                              background:
-                                unfoldSubView === 'scenarios'
-                                  ? 'var(--white-10)'
-                                  : 'transparent',
-                              color: 'var(--text-heading)',
-                    }}
-                  >
-                    {t('unfold.sections.scenarios', { defaultValue: 'Scenarios' })}
-                  </button>
+                  {genaiChatProjectId && genaiChatProjectId !== 'local-unfold' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
+                    <>
+                      {/* Divider */}
+                      <div
+                        className="h-4 w-px"
+                        style={{
+                          backgroundColor: theme === 'dark' 
+                            ? 'rgba(255, 255, 255, 0.2)' 
+                            : 'rgba(0, 0, 0, 0.15)',
+                          margin: '0 8px',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={unfoldSubView === 'perspectives'}
+                        aria-controls="unfold-perspectives-panel"
+                        onClick={() => setUnfoldSubView('perspectives')}
+                        className="px-2 py-1 text-12 rounded"
+                        style={{
+                                  background:
+                                    unfoldSubView === 'perspectives'
+                                      ? 'var(--white-10)'
+                                      : 'transparent',
+                                  color: 'var(--text-heading)',
+                        }}
+                      >
+                        {t('unfold.sections.perspectives')}
+                      </button>
+                    </>
+                  )}
+                  {genaiChatProjectId && genaiChatProjectId !== 'local-unfold' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={unfoldSubView === 'pages'}
+                      aria-controls="unfold-pages-panel"
+                      onClick={() => setUnfoldSubView('pages')}
+                      className="px-2 py-1 text-12 rounded"
+                      style={{
+                                background:
+                                  unfoldSubView === 'pages'
+                                    ? 'var(--white-10)'
+                                    : 'transparent',
+                                color: 'var(--text-heading)',
+                      }}
+                    >
+                      {t('unfold.sections.dynamicContent', { defaultValue: 'Dynamic Content' })}
+                    </button>
+                  )}
+                  {genaiChatProjectId && genaiChatProjectId !== 'local-unfold' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
+                    <>
+                      {/* Divider */}
+                      <div
+                        className="h-4 w-px"
+                        style={{
+                          backgroundColor: theme === 'dark' 
+                            ? 'rgba(255, 255, 255, 0.2)' 
+                            : 'rgba(0, 0, 0, 0.15)',
+                          margin: '0 8px',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={unfoldSubView === 'scenarios'}
+                        aria-controls="unfold-scenarios-panel"
+                        onClick={() => setUnfoldSubView('scenarios')}
+                        className="px-2 py-1 text-12 rounded"
+                        style={{
+                                  background:
+                                    unfoldSubView === 'scenarios'
+                                      ? 'var(--white-10)'
+                                      : 'transparent',
+                                  color: 'var(--text-heading)',
+                        }}
+                      >
+                        {t('unfold.sections.scenarios', { defaultValue: 'Scenarios' })}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -3524,6 +3552,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
           onPreviewSource={setPreviewSource}
           onOpenDocument={setActiveDoc}
           onExpandWorkspace={openWorkspace}
+          currentMode={unfoldSubView}
           handleAnalyzeEntities={handleAnalyzeEntities}
           handleAnalyzeFacts={handleAnalyzeFacts}
           handleAnalyzeEvents={handleAnalyzeEvents}

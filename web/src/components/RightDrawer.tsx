@@ -29,6 +29,7 @@ interface RightDrawerProps {
   onPreviewSource: (source: any) => void;
   onOpenDocument: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string }) => void;
   onExpandWorkspace?: (projectId: string | null) => void;
+  currentMode?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios';
   // Analysis panel props
   handleAnalyzeEntities: () => Promise<void>;
   handleAnalyzeFacts: () => Promise<void>;
@@ -71,6 +72,7 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
   onPreviewSource,
   onOpenDocument,
   onExpandWorkspace,
+  currentMode,
   handleAnalyzeEntities,
   handleAnalyzeFacts,
   handleAnalyzeEvents,
@@ -355,6 +357,7 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                   <div style={getPanelVisibilityStyles(true)}>
                     <WorkspacePanel
                       currentProjectId={currentProjectId}
+                      currentMode={currentMode}
                       onShowAddTelegramModalChange={onShowAddTelegramModalChange}
                       onShowAddRSSModalChange={onShowAddRSSModalChange}
                       onPreviewSource={onPreviewSource}

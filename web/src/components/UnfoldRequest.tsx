@@ -982,7 +982,9 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
             if (f.includes('events')) return 'events';
             if (f.includes('metrics')) return 'metrics';
             if (f.includes('decisions')) return 'decisions';
-            return 'analysis';
+            if (f.includes('scenarios')) return 'scenarios';
+            // Don't show "Parsing analysis" for unknown types - use generic "Processing"
+            return '';
           };
 
           const kind = toKind((status as any)?.kind);
@@ -995,6 +997,16 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
 
           // Respect dismissal until a newer event arrives
           if (analysisDismissTs != null && tsVal != null && tsVal <= analysisDismissTs) return null;
+          
+          // Hide stale statuses (older than 5 minutes) to prevent "Processing…" from hanging forever
+          if (tsVal != null) {
+            const ageMs = Date.now() - tsVal;
+            const maxAgeMs = 5 * 60 * 1000; // 5 minutes
+            if (ageMs > maxAgeMs) {
+              // Status is too old - hide it (silently, no logging)
+              return null;
+            }
+          }
 
           const fmtTime = (ms?: number) => {
             if (typeof ms !== 'number' || ms < 0) return '';
@@ -1011,15 +1023,40 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
             if (kind === 'events') return plural ? 'events' : 'event';
             if (kind === 'metrics') return plural ? 'metrics' : 'metric';
             if (kind === 'decisions') return plural ? 'decisions' : 'decision';
+            if (kind === 'scenarios') return plural ? 'scenarios' : 'scenario';
             return plural ? kind + 's' : kind;
           };
           
           if (st === 'started') {
-            const unitOne = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
-            text = t('unfold.request.analysisStatus.analyzing', { kind: unitOne });
+            if (!kind) {
+              text = t('unfold.request.analysisStatus.processing', { defaultValue: 'Processing…' });
+            } else {
+              const unitOne = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
+              text = t('unfold.request.analysisStatus.analyzing', { kind: unitOne });
+            }
           } else if (docParsing && (!status || st !== 'done')) {
-            const unitOne = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
-            text = t('unfold.request.analysisStatus.parsing', { kind: unitOne });
+            // Only show parsing status if we have a recent timestamp (within 2 minutes)
+            // This prevents showing "Processing…" for stale document events
+            const docTs = typeof (lastDoc as any)?.ts === 'number' ? (lastDoc as any).ts : null;
+            if (docTs != null) {
+              const docAgeMs = Date.now() - docTs;
+              const maxDocAgeMs = 2 * 60 * 1000; // 2 minutes for document parsing
+              if (docAgeMs > maxDocAgeMs) {
+                // Document parsing event is too old - don't show status
+                console.log('[UnfoldRequest] Hiding stale document parsing status', {
+                  docAgeMs,
+                  docAgeMinutes: (docAgeMs / 60000).toFixed(1),
+                  filename: (lastDoc as any)?.filename
+                });
+                return null;
+              }
+            }
+            if (!kind) {
+              text = t('unfold.request.analysisStatus.processing', { defaultValue: 'Processing…' });
+            } else {
+              const unitOne = t(`unfold.request.analysisStatus.units.${getUnitKey(kind, false)}`, { defaultValue: kind });
+              text = t('unfold.request.analysisStatus.parsing', { kind: unitOne });
+            }
           } else if (st === 'done') {
             const n = typeof count === 'number' ? count : 0;
             const timeStr = fmtTime(elapsedMs);

@@ -1320,7 +1320,7 @@ FORMAT REQUIREMENTS:
                       <button
                         type="button"
                         onClick={() => setAutoUpdateScheduleType('daily')}
-                        className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                        className="text-xs px-3 py-1.5 rounded transition-colors"
                         style={{
                           backgroundColor: autoUpdateScheduleType === 'daily' 
                             ? 'var(--white-10)' 
@@ -1334,7 +1334,7 @@ FORMAT REQUIREMENTS:
                       <button
                         type="button"
                         onClick={() => setAutoUpdateScheduleType('weekly')}
-                        className="flex-1 text-xs px-3 py-1.5 rounded transition-colors"
+                        className="text-xs px-3 py-1.5 rounded transition-colors"
                         style={{
                           backgroundColor: autoUpdateScheduleType === 'weekly' 
                             ? 'var(--white-10)' 
@@ -1355,18 +1355,21 @@ FORMAT REQUIREMENTS:
                     >
                       Schedule Time (UTC)
                     </label>
-                    <input
-                      type="time"
-                      value={autoUpdateScheduleTime}
-                      onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
-                      className="w-full text-xs px-2 py-1.5 rounded"
-                      style={{
-                        backgroundColor: 'var(--white-06)',
-                        border: '1px solid var(--overlay-line-90)',
-                        color: 'var(--text-heading)',
-                        outline: 'none',
-                      }}
-                    />
+                    <div className="w-fit">
+                      <input
+                        type="time"
+                        value={autoUpdateScheduleTime}
+                        onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
+                        className="text-xs px-2 py-1.5 rounded"
+                        style={{
+                          backgroundColor: 'var(--white-06)',
+                          border: '1px solid var(--overlay-line-90)',
+                          color: 'var(--text-heading)',
+                          outline: 'none',
+                          width: 'auto',
+                        }}
+                      />
+                    </div>
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
                       {autoUpdateScheduleType === 'daily' 
                         ? 'Time when the update should run each day (24-hour format)' 
@@ -2041,18 +2044,21 @@ FORMAT REQUIREMENTS:
                         >
                           Schedule Time (UTC)
                         </label>
-                        <input
-                          type="time"
-                          value={autoUpdateScheduleTime}
-                          onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
-                          className="w-full text-xs px-2 py-1.5 rounded"
-                          style={{
-                            backgroundColor: 'var(--white-06)',
-                            border: '1px solid var(--overlay-line-90)',
-                            color: 'var(--text-heading)',
-                            outline: 'none',
-                          }}
-                        />
+                        <div className="w-fit">
+                          <input
+                            type="time"
+                            value={autoUpdateScheduleTime}
+                            onChange={(e) => setAutoUpdateScheduleTime(e.target.value)}
+                            className="text-xs px-2 py-1.5 rounded"
+                            style={{
+                              backgroundColor: 'var(--white-06)',
+                              border: '1px solid var(--overlay-line-90)',
+                              color: 'var(--text-heading)',
+                              outline: 'none',
+                              width: 'auto',
+                            }}
+                          />
+                        </div>
                         <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
                           {autoUpdateScheduleType === 'daily' 
                             ? 'Time when the update should run each day (24-hour format)' 

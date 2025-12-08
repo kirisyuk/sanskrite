@@ -13,6 +13,7 @@ interface WorkspacePanelProps {
   onPreviewSource: (source: any) => void;
   onOpenDocument: (doc: any) => void;
   onExpandWorkspace?: (projectId: string | null) => void;
+  currentMode?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios';
 }
 
 const getSourceIcon = (kind?: string) => {
@@ -279,6 +280,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   onPreviewSource,
   onOpenDocument,
   onExpandWorkspace,
+  currentMode,
 }) => {
   const { t } = useTranslation();
   const genaiChat = useGenaiChatStore();
@@ -315,6 +317,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       <WorkspaceLibrary
         ref={workspaceLibraryRef}
         projectId={genaiChat.projectId}
+        currentMode={currentMode}
         onDocumentDelete={(docId: string) => {
           console.log('[DiscoveryPage] Document deleted', { docId });
           // Optionally refresh interactions or handle cleanup

@@ -50,7 +50,9 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
         // Deduplicate user messages by content (handles race conditions in new chats)
         // This prevents showing duplicate user messages when the same message is added
         // to interactions multiple times with different IDs
-        if (it.kind === 'user' && it.content && typeof it.content === 'string') {
+        // Exclude indicator messages (action.bring_in) from content-based deduplication
+        // as they can legitimately repeat when the same agent is invoked multiple times
+        if (it.kind === 'user' && it.content && typeof it.content === 'string' && it.subkind !== 'action.bring_in') {
           const contentKey = it.content.trim();
           if (seenContent.has(contentKey)) {
             console.warn('[useMergedMessages] Duplicate user message detected by content', {
