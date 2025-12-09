@@ -547,9 +547,9 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsUser {
   assignedGoalIds?: string[];
   assignedInitiativeIds?: string[];
   recommendationSettings?: {
-    disableBiasEvaluation?: boolean;
-    disableFrameExpansion?: boolean;
-    disableComplianceEvaluation?: boolean;
+    disableBiasEvaluation: boolean;
+    disableFrameExpansion: boolean;
+    disableComplianceEvaluation: boolean;
   };
 }
 

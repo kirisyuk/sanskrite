@@ -1474,7 +1474,6 @@ FORMAT REQUIREMENTS:
                     </span>
                   </label>
                 </div>
-                )}
               </div>
 
               <div>

@@ -185,3 +185,4 @@ func (h *DocumentArtifactSignalsHandler) DeleteLink(w http.ResponseWriter, r *ht
 	WriteJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
+

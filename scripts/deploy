@@ -539,7 +539,8 @@ except:
   
   # 3.8 Setup BigQuery for documents analytics
   echo -e "${BLUE}[infra] Setting up BigQuery for documents analytics...${NC}"
-  local dataset="${PROJECT_ID}_documents"
+  # Replace hyphens with underscores for BigQuery dataset ID (hyphens not allowed)
+  local dataset=$(echo "${PROJECT_ID}_documents" | tr '-' '_')
   local dataset_ref="${PROJECT_ID}:${dataset}"
   
   # Check if dataset exists using REST API (works on Windows too)

@@ -20,6 +20,9 @@ import WorkspaceLibrary from '../components/WorkspaceLibrary';
 import { DynamicContentPanel } from '../components/DynamicContentPanel';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useGenAISettings } from '../stores/genaiSettingsStore';
+import { processScenarioQuery } from '../lib/scenarioDataHelpers';
+import { useScenarioDataStore } from '../stores/scenarioDataStore';
+import { ScenariosContent } from '../components/ScenariosContent';
 import { getAverageTiming } from '../lib/timingCache';
 import { mapAliasToModel } from '../lib/modelMapping';
 import { TelegramFetchUpdatesTool } from '../lib/genaiTools';
@@ -228,6 +231,7 @@ const DiscoveryPage: React.FC = () => {
   const [unfoldSubView, setUnfoldSubView] = useState<'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios'>(
     'chat',
   );
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   // Check if Model graph has nodes (for empty state)
   const modelGraphHasNodes = useModelGraphHasNodes();
   const processingCommands = useGenaiChatStore((s) => s.processingCommands);
@@ -252,6 +256,10 @@ const DiscoveryPage: React.FC = () => {
   const [isAnalysisClosed, setIsAnalysisClosed] = useState(false);
   const [unfoldMode, setUnfoldMode] = React.useState<'text' | 'graph' | 'analytics' | 'agent' | 'analyze' | 'scenarios' | 'sources'>('text');
   const unfoldRequestRef = React.useRef<HTMLDivElement | null>(null);
+  const unfoldSubViewRef = React.useRef(unfoldSubView);
+  React.useEffect(() => {
+    unfoldSubViewRef.current = unfoldSubView;
+  }, [unfoldSubView]);
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
   // Scroll functions for chat navigation
@@ -416,7 +424,71 @@ const DiscoveryPage: React.FC = () => {
         store.hydrateInteractions();
       }
     }
+    
+    // Reset selected scenario when switching away from scenarios mode
+    if (prevUnfoldSubView === 'scenarios' && unfoldSubView !== 'scenarios') {
+      setSelectedScenarioId(null);
+    }
   }, [unfoldSubView, genaiChatProjectId]);
+  
+  // Reset selected scenario when project changes
+  React.useEffect(() => {
+    setSelectedScenarioId(null);
+  }, [genaiChatProjectId]);
+
+  // Load scenario data when a scenario is selected
+  React.useEffect(() => {
+    if (!selectedScenarioId || unfoldSubView !== 'scenarios' || !genaiChatProjectId) {
+      return;
+    }
+
+    // Skip loading for 'scenarios-main' as it's used for new queries
+    if (selectedScenarioId === 'scenarios-main') {
+      return;
+    }
+
+    const loadScenarioData = async () => {
+      try {
+        console.log('[DiscoveryPage] Loading scenario data:', { projectId: genaiChatProjectId, scenarioId: selectedScenarioId });
+        const data = await api.getScenarioData(genaiChatProjectId, selectedScenarioId);
+        console.log('[DiscoveryPage] Loaded scenario data:', data);
+        
+        // Convert backend format to frontend format and add to store
+        // Store will handle duplicates by ID automatically
+        const scenarioDataStore = useScenarioDataStore.getState();
+        data.forEach((item: any) => {
+          // Convert backend format to frontend ScenarioData format
+          const frontendData: import('../types/scenarioData').ScenarioData = {
+            id: item.id,
+            scenarioId: item.scenarioId,
+            projectId: item.projectId,
+            userQuery: item.userQuery,
+            databaseSchema: item.databaseSchema,
+            executionStages: item.executionStages,
+            interpretation: {
+              queries: item.interpretation.queries || [],
+              executedAt: typeof item.interpretation.executedAt === 'string' 
+                ? item.interpretation.executedAt 
+                : (item.interpretation.executedAt ? new Date(item.interpretation.executedAt).toISOString() : new Date().toISOString()),
+            },
+            results: item.results || [],
+            isComposite: item.isComposite || false,
+            createdAt: typeof item.createdAt === 'string' 
+              ? item.createdAt 
+              : (item.createdAt ? new Date(item.createdAt).toISOString() : new Date().toISOString()),
+            updatedAt: typeof item.updatedAt === 'string' 
+              ? item.updatedAt 
+              : (item.updatedAt ? new Date(item.updatedAt).toISOString() : new Date().toISOString()),
+          };
+          scenarioDataStore.addScenarioData(frontendData);
+        });
+      } catch (error) {
+        console.error('[DiscoveryPage] Error loading scenario data:', error);
+      }
+    };
+
+    loadScenarioData();
+  }, [selectedScenarioId, unfoldSubView, genaiChatProjectId]);
 
   React.useEffect(() => {
     try {
@@ -1307,6 +1379,8 @@ const DiscoveryPage: React.FC = () => {
         onOpenDocument={setActiveDoc}
         onSelectJob={setSelectedJobTaskId}
         selectedJobTaskId={selectedJobTaskId}
+        selectedScenarioId={selectedScenarioId}
+        onSelectScenario={setSelectedScenarioId}
       />
 
       {/* Floating Account and Settings buttons (visible only when sidebar is hidden) */}
@@ -1832,6 +1906,92 @@ const DiscoveryPage: React.FC = () => {
                 }}
                       />
             )}
+            {/* Scenarios mode content - show ScenarioData results */}
+            {unfoldSubView === 'scenarios' && (
+              <div className="flex-1 flex flex-col min-h-0">
+                <div
+                  className="flex-1 overflow-y-auto overflow-x-hidden px-1 min-h-[160px]"
+                  style={{
+                    contentVisibility: 'auto',
+                    containIntrinsicSize: '0px 600px',
+                  }}
+                >
+                  <ScenariosContent scenarioId={selectedScenarioId || 'scenarios-main'} />
+                </div>
+                {/* Input for Scenarios mode */}
+                <div ref={unfoldRequestRef}>
+                  <UnfoldRequest
+                    dangerTint={isHighRisk}
+                    showHighRiskTag={isHighRisk}
+                    onHighRiskTagClick={() =>
+                      setRiskBanner((prev) => ({
+                        visible: true,
+                        level: 'High',
+                        rationale: prev?.rationale || '',
+                      }))
+                    }
+                    onModeChange={setUnfoldMode}
+                    scenariosMode={true}
+                    onSubmit={async (text) => {
+                      // CRITICAL: Check fresh state from store, not stale component state
+                      // genaiChat.streaming may be stale due to React batching/closure
+                      const currentStreaming = useGenaiChatStore.getState().streaming;
+                      if (currentStreaming || !text.trim()) {
+                        return;
+                      }
+                      
+                      console.log('[DiscoveryPage] Scenarios mode: processing BigQuery query:', text);
+                      const pid = await genaiChat.ensureProject();
+                      
+                      try {
+                        // Show loading state
+                        useGenaiChatStore.setState({ streaming: true, error: null });
+                        
+                        // Use selected scenario ID or fallback to default
+                        const targetScenarioId = selectedScenarioId || 'scenarios-main';
+                        console.log('[DiscoveryPage] Using scenario ID:', targetScenarioId);
+                        
+                        // Get model from settings
+                        const settings = useGenAISettings.getState();
+                        const model = settings.model;
+                        
+                        // Process query: interpret + execute
+                        // Progress callback is optional - stages are included in final ScenarioData
+                        const scenarioData = await processScenarioQuery(
+                          text.trim(),
+                          targetScenarioId,
+                          pid,
+                          model
+                        );
+                        
+                        // Save to store
+                        useScenarioDataStore.getState().addScenarioData(scenarioData);
+                        
+                        // Save to backend (only for real scenarios, not 'scenarios-main')
+                        if (targetScenarioId !== 'scenarios-main') {
+                          try {
+                            await api.createScenarioData(pid, targetScenarioId, scenarioData);
+                            console.log('[DiscoveryPage] Scenario data saved to backend');
+                          } catch (error) {
+                            console.error('[DiscoveryPage] Failed to save scenario data to backend:', error);
+                            // Don't fail the whole operation if backend save fails
+                          }
+                        }
+                        
+                        // Clear streaming state
+                        useGenaiChatStore.setState({ streaming: false });
+                      } catch (error) {
+                        console.error('[DiscoveryPage] Error processing scenario query:', error);
+                        useGenaiChatStore.setState({
+                          streaming: false,
+                          error: error instanceof Error ? error.message : 'Unknown error',
+                        });
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             {/* GenAI chat history */}
                     <div
                       ref={messagesRef}
@@ -2045,20 +2205,8 @@ const DiscoveryPage: React.FC = () => {
               genaiChatInteractionsLength={genaiChatInteractionsLength}
               genaiChatMessagesLength={genaiChatMessagesLength}
             />
-            {/* Scenarios content area - empty for now */}
-            {unfoldSubView === 'scenarios' && (
-              <div
-                className="flex-1 overflow-y-auto px-1 min-h-[160px]"
-                style={{
-                  contentVisibility: 'auto',
-                  containIntrinsicSize: '0px 600px',
-                }}
-              >
-                {/* Empty state - content will be added later */}
-              </div>
-            )}
             {/* Input */}
-            {unfoldSubView !== 'perspectives' && unfoldSubView !== 'pages' && (
+            {unfoldSubView !== 'perspectives' && unfoldSubView !== 'pages' && unfoldSubView !== 'scenarios' && (
             <div ref={unfoldRequestRef}>
             <UnfoldRequest
               dangerTint={isHighRisk}
@@ -2071,7 +2219,7 @@ const DiscoveryPage: React.FC = () => {
                             }))
                           }
               onModeChange={setUnfoldMode}
-              scenariosMode={unfoldSubView === 'scenarios'}
+              scenariosMode={false}
               onSubmit={async (text) => {
                 // CRITICAL: Check fresh state from store, not stale component state
                 // genaiChat.streaming may be stale due to React batching/closure

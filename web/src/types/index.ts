@@ -49,6 +49,18 @@ export {
   shouldRetainVersion,
 } from './artifact';
 
+// ScenarioData types for Scenarios mode
+export type {
+  ScenarioData,
+  BigQueryQueriesInterpretation,
+  QueryExecutionResult,
+  ColumnSchema,
+} from './scenarioData';
+
+export {
+  BIGQUERY_QUERIES_JSON_SCHEMA,
+} from './scenarioData';
+
 // Agent types
 export type {
   AgentContext,

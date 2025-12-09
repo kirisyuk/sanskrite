@@ -89,7 +89,6 @@
       "type": "array"
     },
     "recommendationSettings": {
-      "type": "object",
       "properties": {
         "disableBiasEvaluation": {
           "type": "boolean"
@@ -101,7 +100,13 @@
           "type": "boolean"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "disableBiasEvaluation",
+        "disableFrameExpansion",
+        "disableComplianceEvaluation"
+      ]
     }
   },
   "additionalProperties": false,

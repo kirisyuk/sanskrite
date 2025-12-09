@@ -1438,6 +1438,30 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     const res = await this.client.post(`/api/v1/paypal/subscription/cancel`);
     return res.data;
   }
+
+  async getScenarioData(projectId: string, scenarioId: string): Promise<Array<import('../types/scenarioData').ScenarioData>> {
+    console.log(`[API] getScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}`);
+    try {
+      const res = await this.client.get(`/api/v1/projects/${projectId}/scenarios/${scenarioId}/data`);
+      console.log(`[API] getScenarioData response:`, res.data);
+      return res.data || [];
+    } catch (error: any) {
+      console.error(`[API] getScenarioData error:`, error);
+      throw error;
+    }
+  }
+
+  async createScenarioData(projectId: string, scenarioId: string, data: import('../types/scenarioData').ScenarioData): Promise<import('../types/scenarioData').ScenarioData> {
+    console.log(`[API] createScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}`);
+    try {
+      const res = await this.client.post(`/api/v1/projects/${projectId}/scenarios/${scenarioId}/data`, data);
+      console.log(`[API] createScenarioData response:`, res.data);
+      return res.data;
+    } catch (error: any) {
+      console.error(`[API] createScenarioData error:`, error);
+      throw error;
+    }
+  }
 }
 
 export const api = new ApiClient();

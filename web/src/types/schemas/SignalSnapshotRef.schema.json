@@ -42,3 +42,4 @@
   "required": ["id", "signalId", "snapshotDocId", "capturedAt", "isActive", "createdAt", "updatedAt"]
 }
 
+

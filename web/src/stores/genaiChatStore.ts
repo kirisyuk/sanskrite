@@ -638,6 +638,157 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         
         merged = cleanedMerged;
         
+        // Remove duplicate user messages by content (fire & forget async deletion)
+        // This handles race conditions where the same user message is created multiple times
+        const duplicateUserMessageIds: string[] = [];
+        const contentToKeepId = new Map<string, string>(); // content -> id to keep
+        
+        // Find duplicate user messages by content
+        merged.forEach((it: any) => {
+          if (it.kind === 'user' && it.content && typeof it.content === 'string' && it.subkind !== 'action.bring_in') {
+            const contentKey = it.content.trim();
+            if (!contentKey) return;
+            
+            const existingKeepId = contentToKeepId.get(contentKey);
+            if (existingKeepId) {
+              // Found duplicate - determine which one to keep (keep the oldest by createdAt)
+              const existingIt = merged.find((item: any) => item.id === existingKeepId);
+              if (existingIt) {
+                const existingCreatedAt = existingIt.createdAt;
+                const currentCreatedAt = it.createdAt;
+                
+                // Parse timestamps for comparison
+                let existingTs = 0;
+                let currentTs = 0;
+                try {
+                  if (existingCreatedAt) {
+                    if (typeof existingCreatedAt === 'string') {
+                      existingTs = Date.parse(existingCreatedAt);
+                    } else if (existingCreatedAt.seconds) {
+                      existingTs = existingCreatedAt.seconds * 1000;
+                    }
+                  }
+                  if (currentCreatedAt) {
+                    if (typeof currentCreatedAt === 'string') {
+                      currentTs = Date.parse(currentCreatedAt);
+                    } else if (currentCreatedAt.seconds) {
+                      currentTs = currentCreatedAt.seconds * 1000;
+                    }
+                  }
+                } catch {}
+                
+                // Keep the oldest one (smallest timestamp), or if timestamps are equal, keep the one with smaller ID
+                if (currentTs > 0 && existingTs > 0) {
+                  if (currentTs < existingTs) {
+                    // Current is older, keep it and mark existing as duplicate
+                    duplicateUserMessageIds.push(existingKeepId);
+                    contentToKeepId.set(contentKey, it.id);
+                  } else if (currentTs === existingTs) {
+                    // Same timestamp, keep the one with smaller ID (lexicographically)
+                    if (it.id < existingKeepId) {
+                      duplicateUserMessageIds.push(existingKeepId);
+                      contentToKeepId.set(contentKey, it.id);
+                    } else {
+                      duplicateUserMessageIds.push(it.id);
+                    }
+                  } else {
+                    // Existing is older, keep it and mark current as duplicate
+                    duplicateUserMessageIds.push(it.id);
+                  }
+                } else {
+                  // If timestamps are invalid, keep the one with smaller ID
+                  if (it.id < existingKeepId) {
+                    duplicateUserMessageIds.push(existingKeepId);
+                    contentToKeepId.set(contentKey, it.id);
+                  } else {
+                    duplicateUserMessageIds.push(it.id);
+                  }
+                }
+              } else {
+                // Existing not found, keep current
+                contentToKeepId.set(contentKey, it.id);
+              }
+            } else {
+              // First occurrence, keep it
+              contentToKeepId.set(contentKey, it.id);
+            }
+          }
+        });
+        
+        // Remove duplicates from merged array before setting state (so they don't appear in UI)
+        const duplicateSet = new Set(duplicateUserMessageIds);
+        merged = merged.filter((it: any) => !duplicateSet.has(it.id));
+        
+        // Delete duplicate user messages and their dependents asynchronously (fire & forget)
+        if (duplicateUserMessageIds.length > 0) {
+          console.log('[hydrateInteractions] Found duplicate user messages, will delete', {
+            count: duplicateUserMessageIds.length,
+            ids: duplicateUserMessageIds,
+          });
+          (async () => {
+            const map = (s as any).persistedByLocalId || {};
+            
+            for (const duplicateId of duplicateUserMessageIds) {
+              try {
+                // Build cascade set: include duplicate id and any evaluations/system notes tied via replyTo or relations
+                const idSet = new Set<string>();
+                idSet.add(duplicateId);
+                
+                // Expand with local/server mapping variants
+                if (map[duplicateId]) idSet.add(map[duplicateId]);
+                const reverse: Record<string, string[]> = {};
+                Object.entries(map).forEach(([local, server]) => {
+                  const serverId = String(server);
+                  const localId = String(local);
+                  if (!reverse[serverId]) reverse[serverId] = [];
+                  reverse[serverId].push(localId);
+                });
+                const locals = reverse[duplicateId] || [];
+                for (const lid of locals) idSet.add(lid);
+                
+                // Find dependent interactions (evaluations or system/note referencing target)
+                for (const it of merged) {
+                  const repliesToTarget = it.replyTo && idSet.has(it.replyTo);
+                  const relatesToTarget = Array.isArray(it.relations) && it.relations.some((r: { type: string; targetId: string }) => r && idSet.has(r.targetId));
+                  const isEval = typeof it.subkind === 'string' && it.subkind.startsWith('eval.');
+                  const isSystemOrNote = it.kind === 'system' || it.kind === 'note';
+                  if ((repliesToTarget || relatesToTarget) && (isEval || isSystemOrNote)) {
+                    idSet.add(it.id);
+                  }
+                }
+                
+                const idsToDelete = Array.from(idSet);
+                
+                // Delete on server (best-effort for each; ignore 404s)
+                for (const id of idsToDelete) {
+                  try {
+                    await api.deleteProjectInteraction(projectId, id);
+                  } catch (err: any) {
+                    const status = err?.response?.status;
+                    if (status !== 404) {
+                      console.warn('[hydrateInteractions] Failed to delete duplicate message on server', {
+                        id,
+                        status,
+                        error: err,
+                      });
+                    }
+                  }
+                }
+                
+                console.log('[hydrateInteractions] Deleted duplicate user message and dependents', {
+                  duplicateId,
+                  deletedIds: idsToDelete,
+                });
+              } catch (e) {
+                console.warn('[hydrateInteractions] Failed to delete duplicate user message', {
+                  duplicateId,
+                  error: e,
+                });
+              }
+            }
+          })();
+        }
+        
         // Clear global queries/sources on hydration - chips are now per-interaction only
         // Global state is only temporary during streaming and should not persist
         

@@ -58,6 +58,8 @@ type ProjectsHandler struct {
 	genaiClient *gen_combined.Client
 	// Project scenarios repository
 	projectScenarios *repo.ProjectScenariosRepository
+	// Scenario data repository
+	scenarioDataRepo *repo.ScenarioDataRepository
 }
 
 // NewProjectsHandler creates a new ProjectsHandler
@@ -173,6 +175,12 @@ func (h *ProjectsHandler) WithGenAIClient(client *gen_combined.Client) *Projects
 // WithProjectScenarios wires ProjectScenarios repository
 func (h *ProjectsHandler) WithProjectScenarios(repo *repo.ProjectScenariosRepository) *ProjectsHandler {
 	h.projectScenarios = repo
+	return h
+}
+
+// WithScenarioData wires ScenarioData repository
+func (h *ProjectsHandler) WithScenarioData(repo *repo.ScenarioDataRepository) *ProjectsHandler {
+	h.scenarioDataRepo = repo
 	return h
 }
 
@@ -4231,4 +4239,110 @@ func (h *ProjectsHandler) DeleteProjectScenario(w http.ResponseWriter, r *http.R
 		"success": true,
 		"message": "Scenario deleted successfully",
 	})
+}
+
+// ListScenarioData handles GET /api/v1/projects/{id}/scenarios/{scenarioId}/data
+func (h *ProjectsHandler) ListScenarioData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	if h.scenarioDataRepo == nil {
+		WriteInternalError(w, "Scenario data repository is not configured")
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID and Scenario ID are required")
+		return
+	}
+	projectID := pathParts[3]
+	scenarioID := pathParts[5]
+
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Get scenario data
+	data, err := h.scenarioDataRepo.ListByProjectAndScenario(r.Context(), projectID, scenarioID)
+	if err != nil {
+		h.logger.Printf("Failed to list scenario data: %v", err)
+		WriteInternalError(w, "Failed to list scenario data")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, data)
+}
+
+// CreateScenarioData handles POST /api/v1/projects/{id}/scenarios/{scenarioId}/data
+func (h *ProjectsHandler) CreateScenarioData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
+		return
+	}
+	if h.scenarioDataRepo == nil {
+		WriteInternalError(w, "Scenario data repository is not configured")
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID and Scenario ID are required")
+		return
+	}
+	projectID := pathParts[3]
+	scenarioID := pathParts[5]
+
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Parse request body
+	var reqData repo.ScenarioData
+	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
+		WriteBadRequest(w, "INVALID_BODY", "Invalid request body")
+		return
+	}
+
+	// Set required fields
+	reqData.TenantID = authInfo.TenantID
+	reqData.ProjectID = projectID
+	reqData.ScenarioID = scenarioID
+
+	// Create scenario data
+	id, err := h.scenarioDataRepo.Create(r.Context(), &reqData)
+	if err != nil {
+		h.logger.Printf("Failed to create scenario data: %v", err)
+		WriteInternalError(w, "Failed to create scenario data")
+		return
+	}
+
+	// Fetch created document to return full data
+	created, err := h.scenarioDataRepo.Get(r.Context(), id)
+	if err != nil {
+		h.logger.Printf("Failed to fetch created scenario data: %v", err)
+		WriteInternalError(w, "Failed to fetch created scenario data")
+		return
+	}
+
+	WriteJSON(w, http.StatusCreated, created)
 }

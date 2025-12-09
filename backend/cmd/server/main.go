@@ -781,6 +781,9 @@ func main() {
 		// Wire project scenarios repository
 		projectScenariosRepo := repo.NewProjectScenariosRepository(fsClient.Client())
 		s.projectsHandler = s.projectsHandler.WithProjectScenarios(projectScenariosRepo)
+		// Wire scenario data repository
+		scenarioDataRepo := repo.NewScenarioDataRepository(fsClient.Client())
+		s.projectsHandler = s.projectsHandler.WithScenarioData(scenarioDataRepo)
 
 		// Initialize Agent Registry (legacy agents: DataAgent, EntitiesAgent)
 		agentRegistry := agents.NewRegistry(exec, genaiClient, pub, logger).
@@ -2022,6 +2025,17 @@ func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request, liste
 				s.projectsHandler.UpdateProjectScenario(w, r)
 			case http.MethodDelete:
 				s.projectsHandler.DeleteProjectScenario(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+			return
+		} else if len(pathParts) == 7 && pathParts[4] == "scenarios" && pathParts[6] == "data" {
+			// List or create scenario data: /api/v1/projects/{id}/scenarios/{scenarioId}/data
+			switch r.Method {
+			case http.MethodGet:
+				s.projectsHandler.ListScenarioData(w, r)
+			case http.MethodPost:
+				s.projectsHandler.CreateScenarioData(w, r)
 			default:
 				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
 			}

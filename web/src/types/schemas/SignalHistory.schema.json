@@ -63,3 +63,4 @@
   "required": ["id", "signalId", "detectedAt", "source", "matchType", "matchScore", "matchedText", "context", "tenantId", "createdAt"]
 }
 
+

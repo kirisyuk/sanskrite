@@ -32,6 +32,8 @@ interface SidebarPanelProps {
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
   onSelectJob?: (taskId: string | null) => void;
   selectedJobTaskId?: string | null;
+  selectedScenarioId?: string | null;
+  onSelectScenario?: (scenarioId: string | null) => void;
 }
 
 // Helper functions moved outside component to avoid recreation
@@ -331,6 +333,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   onOpenDocument,
   onSelectJob,
   selectedJobTaskId,
+  selectedScenarioId,
+  onSelectScenario,
 }) => {
   const { t } = useTranslation();
   // PERFORMANCE: Subscribe to projects array directly, but use shallow comparison
@@ -1566,22 +1570,27 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                       const ScenarioItem: React.FC<{ scenario: ProjectScenario & { children?: ProjectScenario[] }; level?: number }> = ({ scenario, level = 0 }) => {
                         const hasChildren = scenario.children && scenario.children.length > 0;
                         const isExpanded = expandedScenarios.has(scenario.id);
+                        const isSelected = selectedScenarioId === scenario.id;
                         
                         return (
                           <div key={scenario.id}>
                             <div
                               className="px-2 py-1 rounded text-xs flex items-center gap-2 group"
                               style={{
-                                backgroundColor: 'transparent',
+                                backgroundColor: isSelected ? 'var(--white-10)' : 'transparent',
                                 paddingLeft: `${8 + level * 16}px`,
                               }}
                               onMouseEnter={(e) => {
-                                (e.currentTarget as HTMLDivElement).style.backgroundColor =
-                                  'var(--white-10)';
+                                if (!isSelected) {
+                                  (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                                    'var(--white-10)';
+                                }
                               }}
                               onMouseLeave={(e) => {
-                                (e.currentTarget as HTMLDivElement).style.backgroundColor =
-                                  'transparent';
+                                if (!isSelected) {
+                                  (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                                    'transparent';
+                                }
                               }}
                             >
                               <div className="flex items-center gap-1 flex-1 min-w-0">
@@ -1630,8 +1639,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                   className="flex-1 truncate cursor-pointer"
                                   style={{ color: 'var(--text-heading)' }}
                                   onClick={() => {
-                                    // TODO: Handle scenario click
                                     console.log('[SidebarPanel] Scenario clicked', scenario.id);
+                                    onSelectScenario?.(scenario.id);
+                                    if (isMobile) {
+                                      onClose();
+                                    }
                                   }}
                                 >
                                   {scenario.title}

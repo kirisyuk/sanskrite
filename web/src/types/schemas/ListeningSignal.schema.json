@@ -58,3 +58,4 @@
   "required": ["id", "name", "signal", "searchQueries", "tenantId", "isActive", "createdAt", "updatedAt", "createdBy"]
 }
 
+
