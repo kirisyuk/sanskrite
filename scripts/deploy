@@ -97,6 +97,17 @@ enable_api redis.googleapis.com
 enable_api vpcaccess.googleapis.com
 enable_api compute.googleapis.com
 
+# Get Firebase Project ID from .firebaserc if available
+FIREBASE_PROJECT_ID=""
+if [[ -f "$WEB_DIR/.firebaserc" ]]; then
+  FIREBASE_PROJECT_ID=$(grep -o '"default": "[^"]*' "$WEB_DIR/.firebaserc" | cut -d'"' -f4 || echo "")
+fi
+if [[ -z "$FIREBASE_PROJECT_ID" ]]; then
+  # Fallback to GCP Project ID if not found (assume same project)
+  FIREBASE_PROJECT_ID="$PROJECT_ID"
+fi
+echo -e "${BLUE}Firebase Project ID:${NC} $FIREBASE_PROJECT_ID"
+
 deploy_web() {
   echo -e "${BLUE}[web] Starting frontend deployment...${NC}"
   require firebase
@@ -1031,7 +1042,7 @@ deploy_api() {
   # Note: VERTEX_SEARCH_LOCATION must be "global" for Discovery Engine Data Stores
   # Data Stores are created in "global" region, but search API uses the same location
   local vertex_search_ds_id="${VERTEX_SEARCH_DATA_STORE_ID_VALUE:-rag-documents-store}"
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
   
   # Add Redis env vars if available
   if [[ -n "$redis_host" ]]; then
@@ -1257,14 +1268,14 @@ deploy_ws() {
 deploy_hatlone_ws() {
   echo -e "${BLUE}[hatlone-ws] Building image...${NC}"
   local service="hatlone-ws"
-  local image="us-central1-docker.pkg.dev/$PROJECT_ID/sanskrite/hatlone-ws:latest"
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/hatlone-ws:latest"
 
   gcloud builds submit "$API_DIR" \
     --config="$API_DIR/cloudbuild.hatlone-ws.yaml" \
     --project "$PROJECT_ID" \
     --quiet
 
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID"
 
   echo -e "${BLUE}[hatlone-ws] Deploying to Cloud Run...${NC}"
   gcloud run deploy "$service" \

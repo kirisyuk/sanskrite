@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -60,6 +61,7 @@ func AuthMiddleware(authClient *auth.Client) func(http.Handler) http.Handler {
 			// Verify Firebase token
 			token, err := authClient.VerifyIDToken(r.Context(), idToken)
 			if err != nil {
+				log.Printf("Auth error: %v", err)
 				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 				return
 			}

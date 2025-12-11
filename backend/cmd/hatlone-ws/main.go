@@ -29,7 +29,11 @@ func main() {
 		opts = append(opts, option.WithCredentialsFile(creds))
 	}
 
-	fbApp, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectID}, opts...)
+	// Override Firebase Auth Project ID if specified
+	firebaseProjectID := getEnv("FIREBASE_AUTH_PROJECT_ID", projectID)
+	log.Printf("Initializing Firebase App with ProjectID: %s (GCP_PROJECT_ID: %s)", firebaseProjectID, projectID)
+
+	fbApp, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: firebaseProjectID}, opts...)
 	if err != nil {
 		log.Fatalf("firebase init: %v", err)
 	}
@@ -64,11 +68,13 @@ func main() {
 		}
 		client, err := fbApp.Auth(r.Context())
 		if err != nil {
+			logger.Printf("ws: auth init error: %v", err)
 			http.Error(w, "auth init error", http.StatusInternalServerError)
 			return
 		}
 		tok, err := client.VerifyIDToken(r.Context(), idToken)
 		if err != nil {
+			logger.Printf("ws: verify token error: %v", err)
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
 		}
@@ -76,8 +82,11 @@ func main() {
 		tenant := ""
 		if u, err := users.GetByUID(r.Context(), uid); err == nil && u != nil {
 			tenant = u.TenantID
+		} else if err != nil {
+			logger.Printf("ws: failed to get user by uid %s: %v", uid, err)
 		}
 		if tenant == "" {
+			logger.Printf("ws: tenant not resolved for uid %s", uid)
 			http.Error(w, "tenant not resolved", http.StatusForbidden)
 			return
 		}

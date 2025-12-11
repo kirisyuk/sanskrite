@@ -86,6 +86,16 @@ func (h *WaitlistHandler) Check(w http.ResponseWriter, r *http.Request) {
 		WriteBadRequest(w, "MISSING_EMAIL", "email required")
 		return
 	}
+
+	// Hardcoded admin check
+	if strings.EqualFold(email, "kirisyuk@gmail.com") {
+		WriteJSON(w, http.StatusOK, map[string]any{
+			"found": true, 
+			"status": "approved",
+		})
+		return
+	}
+
 	e, err := h.wl.Get(r.Context(), email)
 	if err != nil || e == nil {
 		WriteJSON(w, http.StatusOK, map[string]any{"found": false})
@@ -106,6 +116,9 @@ func (h *WaitlistHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.wl.List(r.Context(), st)
 	if err != nil {
+		if h.logger != nil {
+			h.logger.Printf("waitlist list error: %v", err)
+		}
 		WriteInternalError(w, "failed to list waitlist")
 		return
 	}

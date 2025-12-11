@@ -29,7 +29,10 @@ func main() {
 		opts = append(opts, option.WithCredentialsFile(creds))
 	}
 
-	fbApp, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectID}, opts...)
+	// Override Firebase Auth Project ID if specified
+	firebaseProjectID := getEnv("FIREBASE_AUTH_PROJECT_ID", projectID)
+
+	fbApp, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: firebaseProjectID}, opts...)
 	if err != nil {
 		log.Fatalf("firebase init: %v", err)
 	}

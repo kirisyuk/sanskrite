@@ -5,9 +5,9 @@ steps:
       - '-f'
       - 'cmd/hatlone-ws/Dockerfile'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/sanskrite/hatlone-ws:latest'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/hatlone-ws:latest'
       - '.'
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/sanskrite/hatlone-ws:latest'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/hatlone-ws:latest'
 
 

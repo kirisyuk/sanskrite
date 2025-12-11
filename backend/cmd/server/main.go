@@ -112,13 +112,18 @@ func main() {
 	}
 
 	projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
+	
+	// Override Firebase Auth Project ID if specified (for when Firebase project differs from GCP project)
+	firebaseProjectID := getEnv("FIREBASE_AUTH_PROJECT_ID", projectID)
+	log.Printf("Initializing Firebase App with ProjectID: %s (GCP_PROJECT_ID: %s)", firebaseProjectID, projectID)
+
 	// bucket name env or default (used for both projects handler and artifacts handler)
 	bucket := os.Getenv("CORE_DOCS_BUCKET")
 	if bucket == "" {
 		bucket = projectID + "-core-docs"
 	}
 	fbApp, err := firebase.NewApp(ctx, &firebase.Config{
-		ProjectID: projectID,
+		ProjectID: firebaseProjectID,
 	}, opts...)
 	if err != nil {
 		log.Fatalf("firebase app init: %v", err)

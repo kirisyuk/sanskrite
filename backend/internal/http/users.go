@@ -112,16 +112,20 @@ func (h *UsersHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce waitlist: user must be approved
 	// Best-effort: if waitlist repo accessible from context
-	if uraw := r.Context().Value(waitlistRepoKey{}); uraw != nil {
-		if wl, ok := uraw.(*repo.WaitlistRepository); ok && wl != nil {
-			if e, err := wl.Get(r.Context(), strings.ToLower(req.Email)); err == nil && e != nil {
-				if e.Status != "approved" {
-					WriteForbidden(w, "User not approved for beta")
+	isHardcodedAdmin := strings.EqualFold(req.Email, "kirisyuk@gmail.com")
+	
+	if !isHardcodedAdmin {
+		if uraw := r.Context().Value(waitlistRepoKey{}); uraw != nil {
+			if wl, ok := uraw.(*repo.WaitlistRepository); ok && wl != nil {
+				if e, err := wl.Get(r.Context(), strings.ToLower(req.Email)); err == nil && e != nil {
+					if e.Status != "approved" {
+						WriteForbidden(w, "User not approved for beta")
+						return
+					}
+				} else {
+					WriteForbidden(w, "User not found in waitlist")
 					return
 				}
-			} else {
-				WriteForbidden(w, "User not found in waitlist")
-				return
 			}
 		}
 	}
@@ -129,6 +133,9 @@ func (h *UsersHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// Create user
 	now := time.Now().UTC()
 	role := "user"
+	if isHardcodedAdmin {
+		role = "admin"
+	}
 	status := "active"
 	schemaVersion := "1.0"
 
