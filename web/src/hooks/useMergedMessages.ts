@@ -9,7 +9,7 @@ export type MergedItem = {
 
 /**
  * Хук для подготовки объединенного списка сообщений и взаимодействий
- * @param excludeModelChat - если true, исключает interactions из Model вкладки (subkind='model.chat' или kind='ontology')
+ * @param excludeModelChat - если true, исключает interactions из Graph вкладки (subkind='graph.chat' или kind='ontology')
  */
 export function useMergedMessages(excludeModelChat: boolean = false) {
   // Subscribe to lengths to trigger recalculation only when needed
@@ -101,13 +101,13 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
         if (it.kind === 'agent.execution') {
           return false;
         }
-        // Exclude Model chat interactions when in Discuss view (skip during streaming to save resources)
+        // Exclude Graph chat interactions when in Discussion view (skip during streaming to save resources)
         if (shouldExcludeModelChat) {
-          // Exclude all interactions with subkind='model.chat' (created from Model tab)
-          if (it.subkind === 'model.chat') {
+          // Exclude all interactions with subkind='graph.chat' (created from Graph tab)
+          if (it.subkind === 'graph.chat') {
             return false;
           }
-          // Exclude ontology interactions (they belong to Model view)
+          // Exclude ontology interactions (they belong to Graph view)
           if (it.kind === 'ontology') {
             return false;
           }

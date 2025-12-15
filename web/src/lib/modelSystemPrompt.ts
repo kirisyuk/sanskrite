@@ -1,10 +1,10 @@
-// Системный промпт для Model режима (онтологическая модель)
+// Системный промпт для Graph режима (онтологическая модель)
 // LLM должен возвращать только строгий JSON с командами, без текстовых ответов
 
-export function getModelSystemPrompt(langName: string = 'English'): string {
-  return `=== MODEL MODE: ONTOLOGICAL ENTITY MANAGEMENT ===
+export function getGraphSystemPrompt(langName: string = 'English'): string {
+  return `=== GRAPH MODE: ONTOLOGICAL ENTITY MANAGEMENT ===
 
-You are operating in MODEL mode. Your task is to manage ontological entities based on user requests.
+You are operating in GRAPH mode. Your task is to manage ontological entities based on user requests.
 
 CRITICAL RULES:
 1. You MUST respond with ONLY valid JSON - no text, no markdown, no explanations

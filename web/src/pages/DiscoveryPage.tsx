@@ -46,8 +46,8 @@ import { UserPositionAnalysis } from '../components/UserPositionAnalysis';
 import { LLMEvaluation } from '../components/LLMEvaluation';
 import { DiscussionFlow } from '../components/DiscussionFlow';
 import { TextTasksPanel, TextTask } from '../components/TextTasksPanel';
-import { ModelGraph, useModelGraphHasNodes } from '../components/ModelGraph';
-import { ModelProcessingIndicator } from '../components/ModelProcessingIndicator';
+import { Graph, useGraphHasNodes } from '../components/Graph';
+import { GraphProcessingIndicator } from '../components/GraphProcessingIndicator';
 // TitleSuggestions removed - title generation now handled automatically in genaiChatStore.onDone
 import {
   toggleInteractionPin,
@@ -68,7 +68,7 @@ import {
   getSxSystemInstructionShort,
   getSxSystemInstructionFull,
 } from '../lib/uiUtils';
-import { getModelSystemPrompt } from '../lib/modelSystemPrompt';
+import { getGraphSystemPrompt } from '../lib/graphSystemPrompt';
 import { CollapsibleText } from '../components/CollapsibleText';
 import { 
   generateKeyInsights, 
@@ -232,16 +232,16 @@ const DiscoveryPage: React.FC = () => {
     'chat',
   );
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
-  // Check if Model graph has nodes (for empty state)
-  const modelGraphHasNodes = useModelGraphHasNodes();
+  // Check if Graph has nodes (for empty state)
+  const graphHasNodes = useGraphHasNodes();
   const processingCommands = useGenaiChatStore((s) => s.processingCommands);
   const commandsProgress = useGenaiChatStore((s) => s.commandsProgress);
   
   // Get random empty state message (selected once per language)
-  // Use modelEmptyState for Model tab, chatEmptyState for Discuss tab
+  // Use graphEmptyState for Graph tab, chatEmptyState for Discussion tab
   const emptyStateMessage = React.useMemo(() => {
     const key = unfoldSubView === 'models' 
-      ? 'unfold.perspectives.modelEmptyState.descriptions'
+      ? 'unfold.perspectives.graphEmptyState.descriptions'
       : 'unfold.perspectives.chatEmptyState.descriptions';
     const emptyMessages = t(key, {
       returnObjects: true,
@@ -357,7 +357,7 @@ const DiscoveryPage: React.FC = () => {
   // PERFORMANCE FIX: Subscribe only to specific values for critical paths, keep genaiChat for compatibility
   const genaiChat = useGenaiChatStore();
   const genaiChatProjectId = useGenaiChatStore((state) => state.projectId);
-  // Исключаем сообщения из Model вкладки, когда мы в Discuss вкладке
+  // Исключаем сообщения из Graph вкладки, когда мы в Discussion вкладке
   const mergedMessages = useMergedMessages(unfoldSubView === 'chat');
   
   const genaiChatInteractionsLength = useGenaiChatStore(
@@ -1586,11 +1586,11 @@ const DiscoveryPage: React.FC = () => {
                     }}
                   >
                     <span>
-                      {unfoldSubView === 'chat' ? t('unfold.sections.discuss', { defaultValue: 'Discuss' }) :
-                       unfoldSubView === 'models' ? t('unfold.sections.model', { defaultValue: 'Model' }) :
+                      {unfoldSubView === 'chat' ? t('unfold.sections.discuss', { defaultValue: 'Discussion' }) :
+                       unfoldSubView === 'models' ? t('unfold.sections.model', { defaultValue: 'Graph' }) :
                        unfoldSubView === 'perspectives' ? t('unfold.sections.perspectives') :
                        unfoldSubView === 'pages' ? t('unfold.sections.dynamicContent', { defaultValue: 'Dynamic Content' }) :
-                       unfoldSubView === 'scenarios' ? t('unfold.sections.scenarios', { defaultValue: 'Scenarios' }) : t('unfold.sections.discuss', { defaultValue: 'Discuss' })}
+                       unfoldSubView === 'scenarios' ? t('unfold.sections.scenarios', { defaultValue: 'Scenarios' }) : t('unfold.sections.discuss', { defaultValue: 'Discussion' })}
                     </span>
                     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M6 9l6 6 6-6" />
@@ -1617,7 +1617,7 @@ const DiscoveryPage: React.FC = () => {
                           color: 'var(--text-heading)',
                         }}
                       >
-                        {t('unfold.sections.discuss', { defaultValue: 'Discuss' })}
+                        {t('unfold.sections.discuss', { defaultValue: 'Discussion' })}
                       </button>
                       <button
                         type="button"
@@ -1631,7 +1631,7 @@ const DiscoveryPage: React.FC = () => {
                           color: 'var(--text-heading)',
                         }}
                       >
-                        {t('unfold.sections.model', { defaultValue: 'Model' })}
+                        {t('unfold.sections.model', { defaultValue: 'Graph' })}
                       </button>
                       {genaiChatProjectId && genaiChatProjectId !== 'local-unfold' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
                         <>
@@ -1725,7 +1725,7 @@ const DiscoveryPage: React.FC = () => {
                               color: 'var(--text-heading)',
                     }}
                   >
-                    {t('unfold.sections.discuss', { defaultValue: 'Discuss' })}
+                    {t('unfold.sections.discuss', { defaultValue: 'Discussion' })}
                   </button>
                   <button
                     type="button"
@@ -1742,7 +1742,7 @@ const DiscoveryPage: React.FC = () => {
                               color: 'var(--text-heading)',
                     }}
                   >
-                    {t('unfold.sections.model', { defaultValue: 'Model' })}
+                    {t('unfold.sections.model', { defaultValue: 'Graph' })}
                   </button>
                   {genaiChatProjectId && genaiChatProjectId !== 'local-unfold' && (genaiChatInteractionsLength > 0 || genaiChatMessagesLength > 0) && (
                     <>
@@ -1837,7 +1837,7 @@ const DiscoveryPage: React.FC = () => {
                         onOpenDocument={setActiveDoc}
                       />
             )}
-            {/* Models content - React Graph */}
+            {/* Graph content - React Graph */}
             {unfoldSubView === 'models' && (
               <div 
                 className="flex flex-1" 
@@ -1848,7 +1848,7 @@ const DiscoveryPage: React.FC = () => {
                 }}
               >
                 {/* Graph - занимает всю ширину */}
-                {!modelGraphHasNodes ? (
+                {!graphHasNodes ? (
                   // Empty state для графа
                   <div
                     className="flex-1 flex items-center justify-center"
@@ -1859,7 +1859,7 @@ const DiscoveryPage: React.FC = () => {
                     }}
                   >
                     {processingCommands || commandsProgress ? (
-                      <ModelProcessingIndicator variant="empty-state" />
+                      <GraphProcessingIndicator variant="empty-state" />
                     ) : (
                       <div className="max-w-md text-center">
                         <div
@@ -1885,11 +1885,11 @@ const DiscoveryPage: React.FC = () => {
                       height: '100%',
                     }}
                   >
-                    <ModelGraph />
+                    <Graph />
                     {(processingCommands || commandsProgress) && (
                       <>
-                        <ModelProcessingIndicator variant="overlay" />
-                        <ModelProcessingIndicator variant="status-bar" />
+                        <GraphProcessingIndicator variant="overlay" />
+                        <GraphProcessingIndicator variant="status-bar" />
                       </>
                     )}
                   </div>
@@ -3216,13 +3216,13 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                             const sxSystemInstruction =
                               getSxSystemInstructionFull();
                             
-                            // Model mode system prompt (for ontological entity management)
-                            const modelSystemInstruction =
+                            // Graph mode system prompt (for ontological entity management)
+                            const graphSystemInstruction =
                               unfoldSubView === 'models'
-                                ? getModelSystemPrompt(langNameForPrompt)
+                                ? getGraphSystemPrompt(langNameForPrompt)
                                 : '';
                             
-                            const graphSystemInstruction =
+                            const graphModeSystemInstruction =
                               unfoldMode === 'graph'
                                 ? `=== GRAPH MODE ACTIVE ===\n` +
                     `You MUST respond with ONLY a complete valid JSON object. Start with { and end with }. No text, no markdown, no explanations.\n` +
@@ -3280,15 +3280,15 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                     `Example for R&D investments USA vs EU:\n` +
                     `{"chartTitle":"R&D Investment Trends (% of GDP)","chartType":"line","table":[["","2013","2018","2023"],["USA",2.8,2.82,3.4],["EU",2.08,2.18,2.26]],"sources":["https://ec.europa.eu/eurostat/statistics-explained/index.php?title=R%26D_expenditure","https://data.worldbank.org/indicator/GB.XPD.RSDV.GD.ZS"]}`
                   : '';
-                // In Model mode, use Model system instruction (no other instructions)
+                // In Graph mode, use Graph system instruction (no other instructions)
                 // In graph mode, prioritize graph instruction by putting it first
                 // Otherwise, use standard instructions
                             const combinedSystemInstruction =
                               unfoldSubView === 'models'
-                  ? modelSystemInstruction // Model mode: ONLY ontology instructions, no other prompts
+                  ? graphSystemInstruction // Graph mode: ONLY ontology instructions, no other prompts
                   : unfoldMode === 'graph'
                   ? [
-                      graphSystemInstruction,
+                      graphModeSystemInstruction,
                   genaiSettings.systemInstruction || '',
                   HATL_ONE_INSTRUCTIONS,
                   sxSystemInstruction,
@@ -3313,13 +3313,13 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                   groundingEnabled: genaiSettings.groundingEnabled,
                   researchEnabled: genaiSettings.researchEnabled,
                   temperature: genaiSettings.temperature,
-                  // Model mode needs more tokens for large ontology command sets
-                  // Increase to 32768 (32k) for Model mode, use default for other modes
+                  // Graph mode needs more tokens for large ontology command sets
+                  // Increase to 32768 (32k) for Graph mode, use default for other modes
                   maxOutputTokens: unfoldSubView === 'models' 
                     ? Math.max(genaiSettings.maxOutputTokens || 8192, 32768)
                     : genaiSettings.maxOutputTokens,
                   systemInstruction: combinedSystemInstruction,
-                  // Model mode: disable streaming, use non-streaming API
+                  // Graph mode: disable streaming, use non-streaming API
                   disableStreaming: unfoldSubView === 'models',
                 };
               // Capture previous assistant reply (if any) BEFORE starting stream
@@ -3360,7 +3360,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                               agentMeta: unfoldSubView === 'models' 
                                 ? { 
                                     displayName: 'Model',
-                                    subkind: 'model.chat',
+                                    subkind: 'graph.chat',
                                   }
                                 : undefined,
                             });

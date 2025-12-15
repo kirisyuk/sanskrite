@@ -278,8 +278,8 @@ const resources = {
         sections: {
           navigation: 'Navigation',
           chat: 'Chat',
-          discuss: 'Discuss',
-          model: 'Model',
+          discuss: 'Discussion',
+          model: 'Graph',
           perspectives: 'Perspectives',
           dynamicContent: 'Dynamic Content',
           newChat: 'New Chat',
@@ -491,7 +491,7 @@ const resources = {
               learn: 'Learn',
             },
           },
-          modelEmptyState: {
+          graphEmptyState: {
             descriptions: [
               'Hey! Ready to map some connections?',
               'What relationships should we visualize?',
@@ -1006,8 +1006,8 @@ const resources = {
         sections: {
           navigation: 'Навигация',
           chat: 'Чат',
-          discuss: 'Обсудить',
-          model: 'Смоделировать',
+          discuss: 'Обсуждение',
+          model: 'Граф',
           perspectives: 'Перспективы',
           dynamicContent: 'Динамический контент',
           newChat: 'Новый чат',
@@ -1218,7 +1218,7 @@ const resources = {
               learn: 'Выучить',
             },
           },
-          modelEmptyState: {
+          graphEmptyState: {
             descriptions: [
               'Готовы построить граф связей?',
               'Какие отношения визуализировать?',
@@ -1747,8 +1747,8 @@ const resources = {
         sections: {
           navigation: 'Navigation',
           chat: 'Chat',
-          discuss: 'Diskutieren',
-          model: 'Modellieren',
+          discuss: 'Diskussion',
+          model: 'Graph',
           perspectives: 'Perspektiven',
           dynamicContent: 'Dynamischer Inhalt',
           newChat: 'Neuer Chat',
@@ -1965,7 +1965,7 @@ const resources = {
               learn: 'Lernen',
             },
           },
-          modelEmptyState: {
+          graphEmptyState: {
             descriptions: [
               'Hey! Bereit, Verbindungen zu kartieren?',
               'Welche Beziehungen sollen wir visualisieren?',
@@ -2274,8 +2274,8 @@ const resources = {
         sections: {
           navigation: 'Navegación',
           chat: 'Chat',
-          discuss: 'Discutir',
-          model: 'Modelar',
+          discuss: 'Discusión',
+          model: 'Grafo',
           perspectives: 'Perspectivas',
           dynamicContent: 'Contenido Dinámico',
           newChat: 'Nuevo Chat',
@@ -2483,7 +2483,7 @@ const resources = {
               'Iniciemos la conversación.',
             ],
           },
-          modelEmptyState: {
+          graphEmptyState: {
             descriptions: [
               '¡Hola! ¿Listo para mapear algunas conexiones?',
               '¿Qué relaciones deberíamos visualizar?',
@@ -2793,7 +2793,7 @@ const resources = {
           navigation: 'Навигация',
           chat: 'Чат',
           discuss: 'Талқылау',
-          model: 'Модельдеу',
+          model: 'Граф',
           perspectives: 'Перспективалар',
           dynamicContent: 'Динамикалық мазмұн',
           newChat: 'Жаңа чат',
@@ -3020,7 +3020,7 @@ const resources = {
               'Сөйлесуді бастайық.',
             ],
           },
-          modelEmptyState: {
+          graphEmptyState: {
             descriptions: [
               'Сәлем! Байланыстарды картаға түсіруге дайынсыз ба?',
               'Қандай қатынастарды көрнекі түрде көрсету керек?',

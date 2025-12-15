@@ -189,7 +189,7 @@ interface GenaiChatState {
   hydrating: boolean;
   // Active stream tracking (for filtering events by streamId)
   currentStreamId?: string;
-  // Model mode: ontology commands processing state
+  // Graph mode: ontology commands processing state
   processingCommands: boolean;
   commandsProgress: {
     stage: 'parsing' | 'validating' | 'creating' | 'updating' | 'deleting' | 'linking' | 'complete';
@@ -797,12 +797,12 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         // Generate frameExpansions for assistant interactions that don't have them yet
         // Include both LLM responses and agent responses (bring-in agents)
         // Only generate for the last assistant interaction if it doesn't have an expansion interaction
-        // Exclude ontology interactions and model.chat responses (they are structured data, not conversational content)
+        // Exclude ontology interactions and graph.chat responses (they are structured data, not conversational content)
         const assistantInteractions = merged.filter((it: any) => 
           it.kind === 'assistant' && 
           it.content && 
           it.content.trim() &&
-          it.subkind !== 'model.chat'
+          it.subkind !== 'graph.chat'
         );
         if (assistantInteractions.length >= 1) {
           // Generate expansions for the last assistant interaction if it doesn't have them
@@ -837,9 +837,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 // Collect user messages before and including replyTo (up to 2 most recent)
                   for (let i = replyToIdx; i >= 0 && userMessages.length < 2; i--) {
                     const item = merged[i];
-                    // Exclude model.chat user messages (they are ontology commands, not conversational content)
+                    // Exclude graph.chat user messages (they are ontology commands, not conversational content)
                     if (item.kind === 'user' && 
-                        item.subkind !== 'model.chat' &&
+                        item.subkind !== 'graph.chat' &&
                         (item.content || (item as any).contentSanitized)) {
                     const content = (item.content || (item as any).contentSanitized || '') as string;
                     if (content.trim()) {
@@ -854,9 +854,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               if (assistantIdx > 0) {
                   for (let i = assistantIdx - 1; i >= 0 && userMessages.length < 2; i--) {
                     const item = merged[i];
-                    // Exclude model.chat user messages (they are ontology commands, not conversational content)
+                    // Exclude graph.chat user messages (they are ontology commands, not conversational content)
                     if (item.kind === 'user' && 
-                        item.subkind !== 'model.chat' &&
+                        item.subkind !== 'graph.chat' &&
                         (item.content || (item as any).contentSanitized)) {
                     const content = (item.content || (item as any).contentSanitized || '') as string;
                     if (content.trim()) {
@@ -2897,15 +2897,15 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       
       // Filter out evaluation messages, actions, section markers, and perspectives - they shouldn't be in chat context
       const chatInteractions = interactions.filter((it) => {
-        // Exclude Model chat interactions (they belong to Model tab, not Discuss chat)
-        if (it.subkind === 'model.chat') {
+        // Exclude Graph chat interactions (they belong to Graph tab, not Discussion chat)
+        if (it.subkind === 'graph.chat') {
           return false;
         }
         // Exclude layout interactions (they are UI state, not chat content)
         if (it.kind === 'ontology' && it.subkind === 'layout') {
           return false;
         }
-        // Exclude ontology interactions (they are shown in Model tab, not in chat)
+        // Exclude ontology interactions (they are shown in Graph tab, not in chat)
         if (it.kind === 'ontology') {
           return false;
         }
@@ -2942,7 +2942,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       
       // LLM context includes document attachments (for token counting and LLM), but excludes other non-displayable types
       // Exclude ontology interactions - they are structured data (entities, relations, etc.), not conversational content
-      // They should not be sent to LLM as chat context (they are shown in Model tab, not in chat)
+      // They should not be sent to LLM as chat context (they are shown in Graph tab, not in chat)
       const llmContextInteractions = interactions.filter((it) => {
         // Exclude ontology interactions (structured data, not chat content)
         // This includes layout interactions (UI state, not chat content)
@@ -3016,7 +3016,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const pinnedMessages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string; tokens: number }> = [];
       
       for (const it of sortedPinned) {
-        // For ontology interactions in Model mode, format as structured entity data
+        // For ontology interactions in Graph mode, format as structured entity data
         let text: string;
         if (it.kind === 'ontology' && it.content) {
           try {
@@ -3077,7 +3077,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       
       for (let i = regularInteractions.length - 1; i >= 0; i--) {
         const it = regularInteractions[i];
-        // For ontology interactions in Model mode, format as structured entity data
+        // For ontology interactions in Graph mode, format as structured entity data
         let text: string;
         if (it.kind === 'ontology' && it.content) {
           try {
@@ -3181,7 +3181,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       // CRITICAL: Используем проверенный projectId из локальной переменной
       // Не читаем из store, чтобы избежать гонок
       
-      // Check if streaming is disabled (Model mode) or model is gemini_preview - use non-streaming API
+      // Check if streaming is disabled (Graph mode) or model is gemini_preview - use non-streaming API
       // Get model from options.modelOverride or from currentSettings.model
       const modelOverride = options?.modelOverride || currentSettings.model || '';
       const isGeminiPreview = modelOverride === 'gemini_preview' || modelOverride === 'gemini-3-pro-preview';
@@ -3191,7 +3191,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         // Use non-streaming API for Gemini 3 Pro Preview
         console.log('[Chat] Using non-streaming API for gemini_preview', { projectId, streamId });
         
-        // Model mode: set processing state immediately to show UI indicator
+        // Graph mode: set processing state immediately to show UI indicator
         if (disableStreaming) {
           set((s) => ({
             processingCommands: true,
@@ -3229,7 +3229,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           tools: finalTools,
           projectId: projectId,
           streamId: streamId,
-          // Model mode: require strict JSON output
+          // Graph mode: require strict JSON output
           strictJSONEnabled: disableStreaming ? true : undefined,
         };
         
@@ -3244,10 +3244,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           const sources = response?.sources || [];
           const attributions = response?.attributions || [];
           
-          // Model mode: parse and process ontology commands
+          // Graph mode: parse and process ontology commands
           if (disableStreaming) {
             try {
-              console.log('[Chat] Model mode: parsing ontology commands', { 
+              console.log('[Chat] Graph mode: parsing ontology commands', { 
                 contentLength: content.length, 
                 contentPreview: content.substring(0, 200),
                 contentEnd: content.substring(Math.max(0, content.length - 200)),
@@ -3276,7 +3276,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               // Обрабатываем результат парсинга
               if (parseResult.parseError) {
                 // Ошибка парсинга - показываем пользователю
-                console.error('[Chat] Model mode: Failed to parse ontology commands', {
+                console.error('[Chat] Graph mode: Failed to parse ontology commands', {
                   error: parseResult.parseError,
                   wasTruncated: parseResult.wasTruncated,
                   contentPreview: content.substring(0, 500),
@@ -3302,7 +3302,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               
               if (parseResult.wasTruncated) {
                 // Ответ обрезан, но мы не пытались парсить
-                console.warn('[Chat] Model mode: Response was truncated, skipping parsing', {
+                console.warn('[Chat] Graph mode: Response was truncated, skipping parsing', {
                   contentLength: content.length,
                   maxOutputTokens: options?.maxOutputTokens,
                 });
@@ -3318,7 +3318,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 return;
               }
               
-              console.log('[Chat] Model mode: parsed commands', { 
+              console.log('[Chat] Graph mode: parsed commands', { 
                 commandsCount: parseResult.commands.length,
                 isValidJson: parseResult.isValidJson,
                 commands: parseResult.commands.map(c => ({ operation: c.operation, type: c.type, id: c.id }))
@@ -3350,7 +3350,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                   );
                   
                   // Логируем результат обработки
-                  console.log('[Chat] Model mode: Commands processed', {
+                  console.log('[Chat] Graph mode: Commands processed', {
                     totalCommands: parseResult.commands.length,
                     success: processResult.success,
                     createdIds: processResult.createdIds.length,
@@ -3393,7 +3393,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                   return; // Exit early - commands processed, no message needed
                 } catch (processErr) {
                   // Ошибка при обработке команд
-                  console.error('[Chat] Model mode: Failed to process ontology commands', processErr);
+                  console.error('[Chat] Graph mode: Failed to process ontology commands', processErr);
                   set((s) => {
                     const existingError = s.error;
                     const newError = `Failed to process ontology commands: ${processErr instanceof Error ? processErr.message : String(processErr)}. ${existingError ? existingError : ''}`;
@@ -3413,7 +3413,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 // Если JSON невалидный - это ошибка (но мы уже обработали это выше)
                 if (parseResult.isValidJson) {
                   // Валидный JSON, но команд нет - это нормально
-                  console.log('[Chat] Model mode: Valid JSON but no commands found - empty response');
+                  console.log('[Chat] Graph mode: Valid JSON but no commands found - empty response');
                   
                   set((s) => {
                     const msgs = [...s.messages];
@@ -3434,7 +3434,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                 } else {
                   // Невалидный JSON - ошибка (но мы уже обработали это выше через parseError)
                   // Этот код не должен выполняться, но на всякий случай
-                  console.error('[Chat] Model mode: Invalid JSON and no commands - unexpected state');
+                  console.error('[Chat] Graph mode: Invalid JSON and no commands - unexpected state');
                   set((s) => ({
                     error: 'Invalid JSON response from LLM. Expected ontology commands.',
                     streaming: false,
@@ -3445,7 +3445,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               }
             } catch (err) {
               // Неожиданная ошибка при обработке
-              console.error('[Chat] Model mode: Unexpected error processing ontology commands', err);
+              console.error('[Chat] Graph mode: Unexpected error processing ontology commands', err);
               set((s) => ({
                 error: `Unexpected error: ${err instanceof Error ? err.message : String(err)}`,
                 streaming: false,
@@ -4185,22 +4185,22 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             
             // Count all assistant interactions (including agents) to ensure we have at least 1 response
             // Count includes this one we're about to add, so we check if we'll have >= 1 after adding
-            // Exclude ontology interactions and model.chat responses (they are structured data, not conversational content)
+            // Exclude ontology interactions and graph.chat responses (they are structured data, not conversational content)
             const currentAssistants = state.interactions.filter((it) => 
               it.kind === 'assistant' &&
-              it.subkind !== 'model.chat'
+              it.subkind !== 'graph.chat'
             );
             // After adding this interaction, we'll have currentAssistants.length + 1
             if (currentAssistants.length + 1 < 1) {
               return;
             }
             // Generate expansions for the last assistant message
-            // Skip ontology interactions, model.chat responses, and agent responses (they are structured data or responses to previous messages, not direct user queries)
+            // Skip ontology interactions, graph.chat responses, and agent responses (they are structured data or responses to previous messages, not direct user queries)
             if (lastAssistant && 
                 lastAssistant.content && 
                 lastAssistant.content.trim() &&
                 (lastAssistant as any).kind !== 'ontology' &&
-                (lastAssistant as any).subkind !== 'model.chat' &&
+                (lastAssistant as any).subkind !== 'graph.chat' &&
                 !isAgentResponse) {
               
               // Check if expansion interaction already exists
@@ -4239,9 +4239,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                   for (let i = replyToIdx; i >= 0 && userMessages.length < 2; i--) {
                     const item = allItems[i];
                     const isUser = ('kind' in item && item.kind === 'user') || ('role' in item && item.role === 'user');
-                    // Exclude model.chat user messages (they are ontology commands, not conversational content)
+                    // Exclude graph.chat user messages (they are ontology commands, not conversational content)
                     if (isUser && 
-                        (item as any).subkind !== 'model.chat' &&
+                        (item as any).subkind !== 'graph.chat' &&
                         (item.content || (item as any).contentSanitized)) {
                       const content = (item.content || (item as any).contentSanitized || '') as string;
                       if (content.trim()) {
@@ -4261,9 +4261,9 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
                   for (let i = assistantIdx - 1; i >= 0 && userMessages.length < 2; i--) {
                     const item = allItems[i];
                     const isUser = ('kind' in item && item.kind === 'user') || ('role' in item && item.role === 'user');
-                    // Exclude model.chat user messages (they are ontology commands, not conversational content)
+                    // Exclude graph.chat user messages (they are ontology commands, not conversational content)
                     if (isUser && 
-                        (item as any).subkind !== 'model.chat' &&
+                        (item as any).subkind !== 'graph.chat' &&
                         (item.content || (item as any).contentSanitized)) {
                       const content = (item.content || (item as any).contentSanitized || '') as string;
                       if (content.trim()) {

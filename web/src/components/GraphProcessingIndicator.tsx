@@ -1,11 +1,11 @@
 import React from 'react';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 
-interface ModelProcessingIndicatorProps {
+interface GraphProcessingIndicatorProps {
   variant?: 'empty-state' | 'overlay' | 'status-bar';
 }
 
-export const ModelProcessingIndicator: React.FC<ModelProcessingIndicatorProps> = ({ 
+export const GraphProcessingIndicator: React.FC<GraphProcessingIndicatorProps> = ({ 
   variant = 'empty-state' 
 }) => {
   const processingCommands = useGenaiChatStore((s) => s.processingCommands);

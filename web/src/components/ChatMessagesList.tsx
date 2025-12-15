@@ -150,7 +150,7 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
               );
             }
             
-            // Skip ontology interactions (they are shown in Model tab, not in chat)
+            // Skip ontology interactions (they are shown in Graph tab, not in chat)
             if (it.kind === 'ontology') {
               return null;
             }

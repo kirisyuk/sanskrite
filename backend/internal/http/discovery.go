@@ -1099,7 +1099,7 @@ func (h *DiscoveryHandler) CreateProjectInteraction(w http.ResponseWriter, r *ht
 		}
 	}
 
-	// Log subkind for debugging Model mode filtering
+	// Log subkind for debugging Graph mode filtering
 	if body.Subkind != nil {
 		h.logger.Printf("CreateProjectInteraction: creating %s interaction with subkind=%s", k, *body.Subkind)
 	}

@@ -16,12 +16,12 @@ const getInteractionColor = (kind: string, theme: 'light' | 'dark'): string => {
   return colors[kind]?.[theme] || (theme === 'dark' ? '#9CA3AF' : '#6B7280');
 };
 
-export const ModelContextPanel: React.FC = () => {
+export const GraphContextPanel: React.FC = () => {
   const { theme } = React.useContext(ThemeContext);
   const interactions = useGenaiChatStore((s) => s.interactions);
 
   // Фильтруем interactions так же, как в genaiChatStore для LLM context
-  // Это те interactions, которые попадают в контекст для Model режима
+  // Это те interactions, которые попадают в контекст для Graph режима
   const contextInteractions = useMemo(() => {
     const filtered = interactions.filter((it) => {
       // Exclude perspective interactions (kind='note' with subkind starting with 'perspective.')

@@ -203,10 +203,10 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
           return false;
         }
         // Exclude Model chat interactions
-        if (it.subkind === 'model.chat') {
+        if (it.subkind === 'graph.chat') {
           return false;
         }
-        // Exclude ontology interactions (they belong to Model view)
+        // Exclude ontology interactions (they belong to Graph view)
         if (it.kind === 'ontology') {
           return false;
         }

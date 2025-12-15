@@ -14,7 +14,7 @@ interface RightPanelButtonsProps {
   availUserAnalysis: boolean;
   availDiscussionFlow: boolean;
   hasQueuedTasks?: boolean; // Show button if there are queued tasks
-  unfoldSubView?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios'; // Show model-context button only in models subview
+  unfoldSubView?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios'; // Show model-context button only in graph subview
   onScrollToTop?: () => void; // Scroll to top of chat
   onScrollToBottom?: () => void; // Scroll to bottom of chat
 }
@@ -236,12 +236,12 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
         </button>
       )}
 
-      {/* Model Context button - shows only in models subview */}
+      {/* Model Context button - shows only in graph subview */}
       {unfoldSubView === 'models' && (
         <button
           type="button"
-          aria-label="Model Context"
-          title="Model Context"
+          aria-label="Graph Context"
+          title="Graph Context"
           onClick={() => handleButtonClick('model-context')}
           className="rounded-lg flex items-center justify-center transition-all duration-300"
           style={getRightPanelButtonStyle(rightPanelType === 'model-context')}

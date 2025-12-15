@@ -17,7 +17,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { ThemeContext } from './ThemeProvider';
-import { nodeTypes } from './ModelGraphNodeTypes';
+import { nodeTypes } from './GraphNodeTypes';
 import { api } from '../lib/api';
 
 // Создаем стабильную ссылку на nodeTypes на уровне модуля
@@ -83,7 +83,7 @@ const getEntityColor = (type: OntologyEntityType, theme: 'light' | 'dark'): stri
 
 
 // Hook для проверки наличия нод (используется в родительском компоненте для empty state)
-export const useModelGraphHasNodes = (): boolean => {
+export const useGraphHasNodes = (): boolean => {
   const interactions = useGenaiChatStore((s) => s.interactions);
   
   return useMemo(() => {
@@ -111,7 +111,7 @@ export const useModelGraphHasNodes = (): boolean => {
   }, [interactions]);
 };
 
-export const ModelGraph: React.FC = () => {
+export const Graph: React.FC = () => {
   const { theme } = React.useContext(ThemeContext);
   const interactions = useGenaiChatStore((s) => s.interactions);
   const projectId = useGenaiChatStore((s) => s.projectId);
@@ -127,7 +127,7 @@ export const ModelGraph: React.FC = () => {
       return it.kind === 'ontology';
     });
     
-    console.log('[ModelGraph] Ontology interactions:', {
+    console.log('[Graph] Ontology interactions:', {
       total: interactions.length,
       ontology: filtered.length,
       interactions: filtered.map(it => ({
@@ -153,7 +153,7 @@ export const ModelGraph: React.FC = () => {
     
     // Если несколько layout interactions, берем самый новый
     if (layouts.length > 1) {
-      console.warn('[ModelGraph] Found multiple layout interactions, using the newest one', {
+      console.warn('[Graph] Found multiple layout interactions, using the newest one', {
         count: layouts.length,
         ids: layouts.map(l => l.id),
       });
@@ -187,7 +187,7 @@ export const ModelGraph: React.FC = () => {
       
       return positions;
     } catch (err) {
-      console.warn('[ModelGraph] Failed to parse layout interaction', err);
+      console.warn('[Graph] Failed to parse layout interaction', err);
       return new Map<string, { x: number; y: number }>();
     }
   }, [layoutInteraction]);
@@ -254,7 +254,7 @@ export const ModelGraph: React.FC = () => {
             entityData = JSON.parse(interaction.content);
           } catch {
             // Если не JSON, пропускаем этот interaction
-            console.warn('[ModelGraph] Failed to parse content as JSON', interaction.id);
+            console.warn('[Graph] Failed to parse content as JSON', interaction.id);
             return;
           }
         } else {
@@ -265,7 +265,7 @@ export const ModelGraph: React.FC = () => {
         // Используем ID сущности из данных (финальное состояние)
         const entityId = entityData.id || interaction.ontologyEntityId || interaction.id;
         if (!entityId) {
-          console.warn('[ModelGraph] No entity ID found', interaction.id);
+          console.warn('[Graph] No entity ID found', interaction.id);
           return;
         }
 
@@ -361,7 +361,7 @@ export const ModelGraph: React.FC = () => {
                 },
               });
             } else if (sourceId || targetId) {
-              console.warn('[ModelGraph] Invalid claim edge data', {
+              console.warn('[Graph] Invalid claim edge data', {
                 entityId,
                 sourceId,
                 targetId,
@@ -405,7 +405,7 @@ export const ModelGraph: React.FC = () => {
                 },
               });
             } else if (sourceId || targetId) {
-              console.warn('[ModelGraph] Invalid causalLink edge data', {
+              console.warn('[Graph] Invalid causalLink edge data', {
                 entityId,
                 sourceId,
                 targetId,
@@ -446,7 +446,7 @@ export const ModelGraph: React.FC = () => {
                   },
                 });
               } else if (participantId) {
-                console.warn('[ModelGraph] Invalid event participant edge data', {
+                console.warn('[Graph] Invalid event participant edge data', {
                   entityId,
                   participantId,
                   participantIdType: typeof participantId,
@@ -484,7 +484,7 @@ export const ModelGraph: React.FC = () => {
               },
             });
           } else if (subjectRefId) {
-            console.warn('[ModelGraph] Invalid metricState edge data', {
+            console.warn('[Graph] Invalid metricState edge data', {
               entityId,
               subjectRefId,
               subjectRefIdType: typeof subjectRefId,
@@ -521,7 +521,7 @@ export const ModelGraph: React.FC = () => {
                   },
                 });
               } else if (subjectId) {
-                console.warn('[ModelGraph] Invalid trend edge data', {
+                console.warn('[Graph] Invalid trend edge data', {
                   entityId,
                   subjectId,
                   subjectIdType: typeof subjectId,
@@ -561,7 +561,7 @@ export const ModelGraph: React.FC = () => {
                   },
                 });
               } else if (targetId) {
-                console.warn('[ModelGraph] Invalid scenario edge data', {
+                console.warn('[Graph] Invalid scenario edge data', {
                   entityId,
                   targetId,
                   targetIdType: typeof targetId,
@@ -599,7 +599,7 @@ export const ModelGraph: React.FC = () => {
               },
             });
           } else if (assignedTo) {
-            console.warn('[ModelGraph] Invalid actionableItem assignedTo edge data', {
+            console.warn('[Graph] Invalid actionableItem assignedTo edge data', {
               entityId,
               assignedTo,
               assignedToType: typeof assignedTo,
@@ -634,7 +634,7 @@ export const ModelGraph: React.FC = () => {
                   },
                 });
               } else if (relatedId) {
-                console.warn('[ModelGraph] Invalid actionableItem relatedEntityIds edge data', {
+                console.warn('[Graph] Invalid actionableItem relatedEntityIds edge data', {
                   entityId,
                   relatedId,
                   relatedIdType: typeof relatedId,
@@ -644,7 +644,7 @@ export const ModelGraph: React.FC = () => {
           }
         }
       } catch (err) {
-        console.warn('[ModelGraph] Failed to parse interaction', interaction.id, err);
+        console.warn('[Graph] Failed to parse interaction', interaction.id, err);
       }
     });
 
@@ -717,7 +717,7 @@ export const ModelGraph: React.FC = () => {
             
             edgesList.push(edge);
             
-            console.log('[ModelGraph] Created relation edge', {
+            console.log('[Graph] Created relation edge', {
               edgeId: edge.id,
               source: subjectId,
               target: objectId,
@@ -726,7 +726,7 @@ export const ModelGraph: React.FC = () => {
               targetExists: nodeIds.has(objectId),
             });
           } else {
-            console.warn('[ModelGraph] Cannot create relation edge - missing nodes or invalid data', {
+            console.warn('[Graph] Cannot create relation edge - missing nodes or invalid data', {
               entityId,
               subjectId,
               objectId,
@@ -736,7 +736,7 @@ export const ModelGraph: React.FC = () => {
           }
         }
       } catch (err) {
-        console.warn('[ModelGraph] Failed to process relation for edge creation', interaction.id, err);
+        console.warn('[Graph] Failed to process relation for edge creation', interaction.id, err);
       }
     });
 
@@ -747,7 +747,7 @@ export const ModelGraph: React.FC = () => {
       
       if (!sourceExists || !targetExists) {
         console.warn(
-          '[ModelGraph] Skipping edge with missing node(s)',
+          '[Graph] Skipping edge with missing node(s)',
           {
             edgeId: edge.id,
             source: edge.source,
@@ -762,7 +762,7 @@ export const ModelGraph: React.FC = () => {
       return true;
     });
 
-    console.log('[ModelGraph] Processed graph data:', {
+    console.log('[Graph] Processed graph data:', {
       nodesCount: finalNodes.length,
       edgesCount: validEdges.length,
       edgesListCount: edgesList.length,
@@ -856,7 +856,7 @@ export const ModelGraph: React.FC = () => {
               Promise.all(
                 oldLayouts.map(old => 
                   api.deleteProjectInteraction(projectId, old.id).catch(err => {
-                    console.warn('[ModelGraph] Failed to delete old layout interaction', old.id, err);
+                    console.warn('[Graph] Failed to delete old layout interaction', old.id, err);
                   })
                 )
               ).then(() => {
@@ -870,7 +870,7 @@ export const ModelGraph: React.FC = () => {
             }
             
             // Тихий лог (не показываем пользователю)
-            console.log('[ModelGraph] Layout saved', {
+            console.log('[Graph] Layout saved', {
               projectId,
               positionsCount: Object.keys(positions).length,
             });
@@ -892,7 +892,7 @@ export const ModelGraph: React.FC = () => {
               await api.updateProjectInteraction(projectId, latestLayout.id, {
                 content,
               });
-              console.log('[ModelGraph] Layout updated (found existing during create)', {
+              console.log('[Graph] Layout updated (found existing during create)', {
                 projectId,
                 positionsCount: Object.keys(positions).length,
               });
@@ -917,7 +917,7 @@ export const ModelGraph: React.FC = () => {
                   },
                 ],
               } as any);
-              console.log('[ModelGraph] Layout created', {
+              console.log('[Graph] Layout created', {
                 projectId,
                 positionsCount: Object.keys(positions).length,
               });
@@ -926,7 +926,7 @@ export const ModelGraph: React.FC = () => {
         } catch (err) {
           // Тихая обработка ошибок - не показываем пользователю
           // Позиции останутся в памяти и будут сохранены при следующем изменении
-          console.warn('[ModelGraph] Failed to save layout (will retry on next change)', err);
+          console.warn('[Graph] Failed to save layout (will retry on next change)', err);
         } finally {
           isSavingRef.current = false;
         }
@@ -956,7 +956,7 @@ export const ModelGraph: React.FC = () => {
     const edgesChanged = reactFlowEdges.length !== previousEdgesCountRef.current;
     
     if (nodesChanged || edgesChanged) {
-      console.log('[ModelGraph] ReactFlow state changed:', {
+      console.log('[Graph] ReactFlow state changed:', {
         reactFlowNodesCount: reactFlowNodes.length,
         reactFlowEdgesCount: reactFlowEdges.length,
         nodesChanged,
@@ -989,7 +989,7 @@ export const ModelGraph: React.FC = () => {
     const edgesChanged = edgesHash !== previousEdgesDataRef.current;
     
     if (nodesChanged || edgesChanged) {
-      console.log('[ModelGraph] Graph data changed, updating ReactFlow:', {
+      console.log('[Graph] Graph data changed, updating ReactFlow:', {
         nodesChanged,
         edgesChanged,
         nodesCount: nodes.length,
@@ -1018,7 +1018,7 @@ export const ModelGraph: React.FC = () => {
         previousEdgesDataRef.current = edgesHash;
       }
     } else {
-      console.log('[ModelGraph] Graph data unchanged, skipping ReactFlow update');
+      console.log('[Graph] Graph data unchanged, skipping ReactFlow update');
     }
   }, [nodes, edges, setNodes, setEdges, reactFlowNodes]);
 
@@ -1040,13 +1040,13 @@ export const ModelGraph: React.FC = () => {
 
   // Обработчик для кнопки Align - улучшенная иерархическая раскладка графа
   const handleAlign = useCallback(() => {
-    console.log('[ModelGraph] Arrange button clicked');
+    console.log('[Graph] Arrange button clicked');
     
     const currentNodes = reactFlowNodes;
     const currentEdges = reactFlowEdges;
     
     if (currentNodes.length === 0) {
-      console.warn('[ModelGraph] Arrange: No nodes to arrange');
+      console.warn('[Graph] Arrange: No nodes to arrange');
       return;
     }
     
@@ -1112,7 +1112,7 @@ export const ModelGraph: React.FC = () => {
       }
     });
     
-    console.log('[ModelGraph] Arrange: found components', {
+    console.log('[Graph] Arrange: found components', {
       totalNodes: currentNodes.length,
       componentsCount: components.length,
       componentSizes: components.map(c => c.length),
@@ -1305,11 +1305,11 @@ export const ModelGraph: React.FC = () => {
           reactFlowInstanceRef.current.fitView({ padding: 0.2, duration: 500 });
         }
       } catch (err) {
-        console.warn('[ModelGraph] Failed to fit view after arrange', err);
+        console.warn('[Graph] Failed to fit view after arrange', err);
       }
     }, 150);
     
-    console.log('[ModelGraph] Arrange: nodes repositioned', {
+    console.log('[Graph] Arrange: nodes repositioned', {
       totalNodes: updatedNodes.length,
       components: components.length,
       layers: components.map(c => {

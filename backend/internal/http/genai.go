@@ -224,7 +224,7 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Model mode: use task executor with universal JSON verifier for strict JSON validation
+	// Graph mode: use task executor with universal JSON verifier for strict JSON validation
 	// Universal verifier only checks JSON deserialization correctness, no schema-specific validation
 	if req.StrictJSONEnabled && h.taskExecutor != nil {
 		// Build system instruction with message history (same as regular flow)

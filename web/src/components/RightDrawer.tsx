@@ -7,7 +7,7 @@ import { AnalysisPanel } from './AnalysisPanel';
 import FindingsPanel from './FindingsPanel';
 import { ContextPanel } from './ContextPanel';
 import { PendingActionsPanel } from './PendingActionsPanel';
-import { ModelContextPanel } from './ModelContextPanel';
+import { GraphContextPanel } from './GraphContextPanel';
 
 interface RightDrawerProps {
   rightPanelType: 'workspace' | 'artifacts' | 'analysis' | 'context' | 'pending-actions' | 'model-context' | null;
@@ -416,10 +416,10 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
                   </div>
                 )}
 
-                {/* Model Context Panel */}
+                {/* Graph Context Panel */}
                 {rightPanelType === 'model-context' && (
                   <div style={getPanelVisibilityStyles(true)}>
-                    <ModelContextPanel />
+                    <GraphContextPanel />
                   </div>
                 )}
               </div>
