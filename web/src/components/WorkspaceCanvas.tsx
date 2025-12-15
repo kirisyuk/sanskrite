@@ -87,7 +87,7 @@ const DocumentItem = React.memo<{
         </div>
         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
           {/* Indexed status - I */}
-          {(indexedStatus.status === 'indexed' || indexedStatus.status === 'not_indexed' || indexedStatus.status === 'loading') && (
+          {(indexedStatus.status === 'indexed' || indexedStatus.status === 'not_indexed' || indexedStatus.status === 'loading' || indexedStatus.status === 'unknown') && (
             <span
               className="text-[10px] px-1.5 py-0.5 rounded font-medium"
               title={indexedStatus.text}

@@ -348,7 +348,16 @@ func (r *CoreDocsRepo) Create(ctx context.Context, d *models.CoreDoc) (string, e
 	}
 
 	// Индексация в Vertex AI Search асинхронно (best effort, не блокируем основной поток)
-	if r.indexingCallback != nil && d.ExtractedText != nil && *d.ExtractedText != "" {
+	shouldIndex := false
+	// Default rule: index only when we have extracted text (static docs after parsing)
+	if d.ExtractedText != nil && strings.TrimSpace(*d.ExtractedText) != "" {
+		shouldIndex = true
+	}
+	// Special-case: dynamic artifacts can be indexed from sections even if ExtractedText is empty
+	if !shouldIndex && d.DocType != nil && *d.DocType == "dynamic_artifact" && d.ArtifactConfig != nil && len(d.ArtifactConfig.Structure) > 0 {
+		shouldIndex = true
+	}
+	if r.indexingCallback != nil && shouldIndex {
 		docCopy := d // Capture doc for goroutine
 		tenantID := d.TenantID
 		go func(doc *models.CoreDoc) {
@@ -407,7 +416,16 @@ func (r *CoreDocsRepo) Upsert(ctx context.Context, d *models.CoreDoc) error {
 	}
 
 	// Индексация в Vertex AI Search асинхронно (best effort, не блокируем основной поток)
-	if r.indexingCallback != nil && d.ExtractedText != nil && *d.ExtractedText != "" {
+	shouldIndex := false
+	// Default rule: index only when we have extracted text (static docs after parsing)
+	if d.ExtractedText != nil && strings.TrimSpace(*d.ExtractedText) != "" {
+		shouldIndex = true
+	}
+	// Special-case: dynamic artifacts can be indexed from sections even if ExtractedText is empty
+	if !shouldIndex && d.DocType != nil && *d.DocType == "dynamic_artifact" && d.ArtifactConfig != nil && len(d.ArtifactConfig.Structure) > 0 {
+		shouldIndex = true
+	}
+	if r.indexingCallback != nil && shouldIndex {
 		docCopy := d // Capture doc for goroutine
 		tenantID := d.TenantID
 		go func(doc *models.CoreDoc) {

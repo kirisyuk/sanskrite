@@ -209,6 +209,18 @@ const ProjectRow = React.memo<{
               L
             </div>
           )}
+          {project.projectType === 'writing' && (
+            <div
+              className="flex-shrink-0 w-4 h-4 rounded-sm flex items-center justify-center text-[10px] font-bold"
+              style={{
+                backgroundColor: '#F39C12', // Orange/Yellow
+                color: '#000',
+              }}
+              title="Writing Project"
+            >
+              W
+            </div>
+          )}
           <span
             className="flex-1 truncate"
             style={{

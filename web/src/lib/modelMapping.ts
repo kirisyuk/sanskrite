@@ -14,7 +14,7 @@ export function mapAliasToModel(alias: string): { provider: string; model: strin
     // OpenAI models
     'gpt_fast': { provider: 'openai', model: 'gpt-5-nano' },
     'gpt_balanced': { provider: 'openai', model: 'gpt-5-mini' },
-    'gpt_quality': { provider: 'openai', model: 'gpt-5.1' },
+    'gpt_quality': { provider: 'openai', model: 'gpt-5.2' },
     
     // Grok models
     'grok_fast': { provider: 'grok', model: 'grok-4-1-fast-non-reasoning' },

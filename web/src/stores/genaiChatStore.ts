@@ -3576,6 +3576,74 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
             console.warn('[Chat] Failed to persist non-streaming response', e);
           }
           
+          // Generate discussion flow analysis (same as in onDone for streaming mode)
+          // This ensures frame shift recommendations are generated for gemini_preview
+          (async () => {
+            try {
+              if (!projectId || projectId === 'local-unfold') return;
+              const { generateDiscussionFlowAnalysis } = await import('../lib/discussionFlowAnalysis');
+              const interactions = get().interactions;
+              const messages = get().messages;
+              
+              // Get all chat messages (user, assistant, agent)
+              let chatMessages: Array<{ role: string; content: string }> = interactions
+                .filter((it) => 
+                  it.kind === 'user' || it.kind === 'assistant'
+                )
+                .map((it) => ({
+                  role: it.kind === 'user' ? 'user' : 'assistant',
+                  content: it.content || '',
+                  ...((it as any).agentProfile ? { agentProfile: (it as any).agentProfile } : {}),
+                }));
+              
+              // If no messages from interactions, fallback to messages array
+              if (chatMessages.length === 0 && messages.length > 0) {
+                chatMessages = messages.map((m) => ({
+                  role: m.role,
+                  content: m.content || '',
+                }));
+              }
+              
+              if (chatMessages.length === 0) return;
+              
+              // Check if analysis already exists
+              const existingAnalysisInteraction = interactions.find((it) => 
+                it.subkind === 'discussion.flow.analysis' && it.projectId === projectId
+              );
+              
+              let existingAnalysis: any = null;
+              if (existingAnalysisInteraction && existingAnalysisInteraction.content) {
+                try {
+                  existingAnalysis = JSON.parse(existingAnalysisInteraction.content || existingAnalysisInteraction.contentSanitized || '{}');
+                } catch {}
+              }
+              
+              // Get last pair for incremental update
+              let lastPair: Array<{ role: string; content: string }> | undefined = undefined;
+              if (existingAnalysis && content && content.trim()) {
+                // Find last user message before this assistant response
+                const lastUserInteraction = interactions
+                  .filter((it) => it.kind === 'user')
+                  .reverse()[0];
+                if (lastUserInteraction && lastUserInteraction.content) {
+                  lastPair = [
+                    { role: 'user', content: lastUserInteraction.content },
+                    { role: 'assistant', content: content }
+                  ];
+                }
+              }
+              
+              await generateDiscussionFlowAnalysis(
+                projectId,
+                chatMessages,
+                existingAnalysis,
+                lastPair
+              );
+            } catch (e) {
+              console.warn('[DiscussionFlowAnalysis] generation failed for non-streaming mode', e);
+            }
+          })();
+          
         } catch (e: any) {
           // Check if request was aborted
           if (e?.name === 'AbortError' || abortController.signal.aborted) {

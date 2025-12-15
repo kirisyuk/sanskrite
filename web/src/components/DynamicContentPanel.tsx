@@ -1214,7 +1214,12 @@ FORMAT REQUIREMENTS:
             >
               {category}
             </div>
-            <div className="space-y-3">
+            <div 
+              className="grid gap-2"
+              style={{
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              }}
+            >
               {categoryTemplates.map((template) => {
                 const isEditing = editingTemplateId === template.id;
                 const isDeleting = deletingTemplateId === template.id;
@@ -1225,7 +1230,6 @@ FORMAT REQUIREMENTS:
                       className="px-2 py-1.5 rounded text-xs flex items-start gap-2 group"
               style={{
                     backgroundColor: isEditing ? 'var(--white-10)' : 'transparent',
-                    maxWidth: 'fit-content',
                         opacity: isDeleting ? 0.5 : 1,
                   }}
                   onMouseEnter={(e) => {
@@ -1244,9 +1248,9 @@ FORMAT REQUIREMENTS:
                   <div className="flex-shrink-0 mt-0.5" style={{ color: 'var(--text-secondary)' }}>
                     {getTemplateIcon()}
                   </div>
-                      <div className="min-w-0 flex-1" style={{ maxWidth: '300px' }}>
+                      <div className="min-w-0 flex-1">
                     <div
-                          className="font-medium truncate cursor-pointer"
+                          className="font-medium cursor-pointer"
                       style={{ color: 'var(--text-heading)' }}
                       title={template.name}
                           onClick={() => !isEditing && !isDeleting && onTemplateSelect(template.id)}

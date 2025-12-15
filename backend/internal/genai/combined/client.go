@@ -139,7 +139,7 @@ func ConvertAliasToModel(alias string) string {
 		// OpenAI
 		"gpt_fast":     "gpt-5-nano",
 		"gpt_balanced": "gpt-5-mini",
-		"gpt_quality":  "gpt-5.1",
+		"gpt_quality":  "gpt-5.2",
 		// Grok
 		"grok_fast":     "grok-4-1-fast-non-reasoning",
 		"grok_balanced": "grok-4-1-fast-reasoning",
@@ -202,7 +202,7 @@ var ModelContextWindows = map[string]int{
 	// OpenAI models
 	"gpt_fast":     400_000, // gpt-5-nano
 	"gpt_balanced": 400_000, // gpt-5-mini
-	"gpt_quality":  400_000, // gpt-5.1
+	"gpt_quality":  400_000, // gpt-5.2
 
 	// Grok models
 	"grok_fast":     2_000_000, // grok-4-1-fast-non-reasoning

@@ -419,6 +419,51 @@ class ApiClient {
     return res.data as any;
   }
 
+  async shareListDocs(token: string): Promise<{
+    documents: Array<{
+      id: string;
+      filename: string;
+      contentType: string;
+      description?: string;
+      sizeBytes?: number;
+      docType?: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+  }> {
+    const res = await axios.get(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs`);
+    return res.data as any;
+  }
+
+  async shareGetDoc(token: string, docId: string): Promise<{
+    id: string;
+    filename: string;
+    contentType: string;
+    description?: string;
+    sizeBytes?: number;
+    docType?: string;
+    content: string;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    const res = await axios.get(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}`);
+    return res.data as any;
+  }
+
+  async shareDownloadDoc(token: string, docId: string): Promise<Blob> {
+    const res = await axios.get(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}/download`, {
+      responseType: 'blob',
+    });
+    return res.data;
+  }
+
+  async shareExportDocToWord(token: string, docId: string): Promise<Blob> {
+    const res = await axios.post(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}/export`, {}, {
+      responseType: 'blob',
+    });
+    return res.data;
+  }
+
   // --- Verified URL Analysis ---
   async verifiedCreate(url: string, model?: string): Promise<{ code: string; url: string; status: string }> {
     // Use proxy endpoint (Cloud Function) instead of direct backend call

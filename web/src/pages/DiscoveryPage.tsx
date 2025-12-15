@@ -1834,6 +1834,7 @@ const DiscoveryPage: React.FC = () => {
             {unfoldSubView === 'perspectives' && (
                       <PerspectivesPanel
                         onPresetChange={setCurrentPerspectivePreset}
+                        onOpenDocument={setActiveDoc}
                       />
             )}
             {/* Models content - React Graph */}

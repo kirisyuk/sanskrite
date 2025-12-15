@@ -112,7 +112,7 @@ func main() {
 	}
 
 	projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
-	
+
 	// Override Firebase Auth Project ID if specified (for when Firebase project differs from GCP project)
 	firebaseProjectID := getEnv("FIREBASE_AUTH_PROJECT_ID", projectID)
 	log.Printf("Initializing Firebase App with ProjectID: %s (GCP_PROJECT_ID: %s)", firebaseProjectID, projectID)
@@ -312,7 +312,7 @@ func main() {
 		artifactsHandlerForSaver := httphandlers.NewArtifactsHandler(coreDocsRepo).WithStorage(gcsClient, bucket)
 		artifactOrchestratorService = artifactOrchestratorService.WithStorageSaver(artifactsHandlerForSaver)
 		artifactGenerationHandler = httphandlers.NewArtifactGenerationHandler(artifactOrchestratorService)
-		
+
 		// Initialize signal repositories and handlers
 		listeningSignalsRepo := repo.NewListeningSignalsRepository(fsClient.Client())
 		documentArtifactSignalsRepo := repo.NewDocumentArtifactSignalsRepository(fsClient.Client())
@@ -321,7 +321,7 @@ func main() {
 		listeningSignalsHandler = httphandlers.NewListeningSignalsHandler(listeningSignalsRepo)
 		documentArtifactSignalsHandler = httphandlers.NewDocumentArtifactSignalsHandler(documentArtifactSignalsRepo)
 		signalHistoryHandler = httphandlers.NewSignalHistoryHandler(signalHistoryRepo, documentArtifactSignalsRepo)
-		
+
 		// Initialize signal monitoring service
 		signalMonitoringService = services.NewSignalMonitoringService(
 			listeningSignalsRepo,
@@ -330,7 +330,7 @@ func main() {
 			docsRepo,
 			exec,
 		).WithGenAIClient(genaiClient) // Wire GenAI client for structured output
-		
+
 		// Configure thresholds from env vars
 		if minRelevance := os.Getenv("SIGNAL_MIN_RELEVANCE_SCORE"); minRelevance != "" {
 			if score, err := strconv.ParseFloat(minRelevance, 64); err == nil && score >= 0 && score <= 1 {
@@ -342,7 +342,7 @@ func main() {
 				signalMonitoringService = signalMonitoringService.WithConfidenceThreshold(score)
 			}
 		}
-		
+
 		// Set check interval from env var (default: 6 hours)
 		if checkInterval := os.Getenv("SIGNAL_MONITORING_INTERVAL"); checkInterval != "" {
 			if parsed, err := time.ParseDuration(checkInterval); err == nil && parsed >= 5*time.Minute {
@@ -351,7 +351,7 @@ func main() {
 				log.Printf("invalid SIGNAL_MONITORING_INTERVAL: %s, using default 6h", checkInterval)
 			}
 		}
-		
+
 		// Initialize artifact scheduler service
 		artifactSchedulerService = services.NewArtifactSchedulerService(coreDocsRepo, artifactOrchestratorService)
 		// Set check interval from env var (default: 1 hour)
@@ -413,7 +413,7 @@ func main() {
 		if tavilyClient != nil {
 			genaiHandler = genaiHandler.WithTavilyClient(tavilyClient)
 			logger.Printf("Tavily client initialized (shared for Research mode and Web Search tools)")
-			
+
 			// Add Tavily client to signal monitoring service if it exists
 			if signalMonitoringService != nil {
 				tavilyAdapter := &tavilyAdapterForSignalMonitoring{client: tavilyClient}
@@ -1097,6 +1097,10 @@ func main() {
 	// Share routes handler (initialized before project sub-routes)
 	shareRepo := repo.NewShareTokensRepository(fsClient.Client())
 	shareHandler := httphandlers.NewShareHandler(shareRepo, s.projs, repo.NewInteractionsRepository(fsClient.Client()), logger)
+	// Wire CoreDocs and storage for document access in shared projects
+	if coreDocsRepo != nil && gcsClient != nil && bucket != "" {
+		shareHandler = shareHandler.WithCoreDocs(coreDocsRepo).WithStorage(gcsClient, bucket)
+	}
 
 	// Project routes and nested sub-routes
 	mux.Handle("/api/v1/projects", authMiddleware(http.HandlerFunc(s.routeProjects)))
@@ -1597,7 +1601,7 @@ func main() {
 		}
 		tenantID := r.URL.Query().Get("tenantId")
 		projectIDParam := r.URL.Query().Get("projectId")
-		
+
 		if tenantID != "" {
 			// Process signals for specific tenant (optionally filtered by project)
 			var projectID *string
@@ -1610,7 +1614,7 @@ func main() {
 				return
 			}
 			httphandlers.WriteJSON(w, http.StatusOK, map[string]string{
-				"message": "Signals processed successfully",
+				"message":  "Signals processed successfully",
 				"tenantId": tenantID,
 			})
 		} else {
@@ -1621,7 +1625,7 @@ func main() {
 				httphandlers.WriteInternalError(w, "Failed to list signals")
 				return
 			}
-			
+
 			successCount := 0
 			errorCount := 0
 			for _, signal := range signals {
@@ -1631,18 +1635,43 @@ func main() {
 				}
 				successCount++
 			}
-			
+
 			httphandlers.WriteJSON(w, http.StatusOK, map[string]interface{}{
-				"message": "Signal processing completed",
+				"message":   "Signal processing completed",
 				"processed": successCount,
-				"errors": errorCount,
-				"total": len(signals),
+				"errors":    errorCount,
+				"total":     len(signals),
 			})
 		}
 	}))
 
-	// Public share endpoint (unauthenticated)
-	mux.Handle("/api/v1/public/share/", http.HandlerFunc(shareHandler.GetPublicShare))
+	// Public share endpoints (unauthenticated)
+	mux.Handle("/api/v1/public/share/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.Trim(r.URL.Path, "/")
+		parts := strings.Split(path, "/")
+		// Route: /api/v1/public/share/{token}/docs/{docId}/download
+		if len(parts) >= 8 && parts[5] == "docs" && parts[7] == "download" && r.Method == http.MethodGet {
+			shareHandler.DownloadPublicShareDoc(w, r)
+			return
+		}
+		// Route: /api/v1/public/share/{token}/docs/{docId}/export
+		if len(parts) >= 8 && parts[5] == "docs" && parts[7] == "export" && r.Method == http.MethodPost {
+			shareHandler.ExportPublicShareDocToDocx(w, r)
+			return
+		}
+		// Route: /api/v1/public/share/{token}/docs/{docId}
+		if len(parts) >= 7 && parts[5] == "docs" && r.Method == http.MethodGet {
+			shareHandler.GetPublicShareDoc(w, r)
+			return
+		}
+		// Route: /api/v1/public/share/{token}/docs
+		if len(parts) >= 6 && parts[5] == "docs" && r.Method == http.MethodGet {
+			shareHandler.ListPublicShareDocs(w, r)
+			return
+		}
+		// Route: /api/v1/public/share/{token}
+		shareHandler.GetPublicShare(w, r)
+	}))
 
 	// Verified URL Analysis endpoints
 	if verifiedHandler != nil {

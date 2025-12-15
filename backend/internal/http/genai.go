@@ -1362,6 +1362,9 @@ func (h *GenAIHandler) calculateFallbackCost(provider, modelName string, inputTo
 		case strings.Contains(modelLower, "gpt-5-mini"):
 			inputPrice = 0.00000025  // $0.25 / 1M
 			outputPrice = 0.00000200 // $2.00 / 1M
+		case strings.Contains(modelLower, "gpt-5.2"):
+			inputPrice = 0.00000175  // $1.75 / 1M
+			outputPrice = 0.00001400 // $14.00 / 1M
 		case strings.Contains(modelLower, "gpt-5.1"):
 			inputPrice = 0.00000100  // $1.00 / 1M
 			outputPrice = 0.00000800 // $8.00 / 1M

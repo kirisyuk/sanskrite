@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "cross-env VITE_WS_BROKER_URL=https://hatlone-ws-sdfgtcqj7q-uc.a.run.app VITE_VERIFIED_PROXY_URL=https://verified-proxy-sqt63d2k2q-uc.a.run.app vite",
+    "dev": "cross-env VITE_WS_BROKER_URL=https://hatlone-ws-sqt63d2k2q-uc.a.run.app VITE_VERIFIED_PROXY_URL=https://verified-proxy-sqt63d2k2q-uc.a.run.app vite",
     "gen:schemas": "cd ../backend && go run ./internal/tools/schemagen",
     "gen:types": "node scripts/generate-types.mjs",
     "build": "npm run gen:schemas && npm run gen:types && tsc -b && vite build",
