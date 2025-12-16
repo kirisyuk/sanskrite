@@ -3560,6 +3560,8 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                                 : 'none',
                     maxWidth: '75%',
                   };
+                  const headerText = isUser ? 'you' : 'assistant';
+                  
                   return (
                               <div
                                 key={it.id}
@@ -3570,7 +3572,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                                   className="text-[10px] mb-1"
                                   style={{ color: 'var(--text-tertiary-weak)' }}
                                 >
-                                  {isUser ? 'you' : 'assistant'}
+                                  {headerText}
                                 </div>
                                 <div
                                   className="text-xs"

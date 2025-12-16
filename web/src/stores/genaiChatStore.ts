@@ -9,6 +9,7 @@ import { useGenAISettings, mapProviderStrengthToModel, getModelContextWindow } f
 import { useProjectsStore } from './projectsStore';
 import { parseOntologyCommands } from '../types/ontologyCommands';
 import { processOntologyCommands } from '../lib/ontologyCommandProcessor';
+import { mapAliasToModel } from '../lib/modelMapping';
 
 export type ChatRole = 'user' | 'assistant' | 'system';
 
@@ -3572,6 +3573,65 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               
               return { interactions: items, persistedByLocalId: map } as any;
             });
+
+            // Generate evaluations (frame expansions / compliance / bias) for non-streaming mode too.
+            // This is required for gemini_preview ("experimental") where streaming is disabled/unreliable.
+            (async () => {
+              try {
+                if (!projectId || projectId === 'local-unfold') return;
+
+                // Skip evaluations for agent/scenario replies (same behavior as streaming onDone)
+                const st = get();
+                const meta = st.pendingAssistantMeta as any;
+                const isAgentResponse =
+                  meta?.subkind?.startsWith('agent.') ||
+                  (typeof meta?.displayName === 'string' && meta.displayName.trim().length > 0);
+                const isScenarioMessage = meta?.subkind?.startsWith('scenarios.');
+                if (isAgentResponse || isScenarioMessage) return;
+
+                // Collect up to 2 most recent user prompts from the already-built messages array
+                // (it includes the current prompt we just sent).
+                const userMessages = (messages || [])
+                  .filter((m) => m && m.role === 'user' && typeof (m as any).text === 'string')
+                  .map((m: any) => String(m.text))
+                  .filter((t) => t.trim().length > 0)
+                  .slice(-2);
+
+                const { generateFrameExpansions } = await import('../lib/frameExpansions');
+                await generateFrameExpansions(res.id, content, userMessages.length > 0 ? userMessages : undefined);
+
+                try {
+                  const { generateFrameComplianceCheck } = await import('../lib/frameComplianceCheck');
+                  await generateFrameComplianceCheck(res.id, content, userMessages.length > 0 ? userMessages : undefined);
+                } catch (e) {
+                  console.warn('[FrameComplianceCheck] generation failed for non-streaming mode', e);
+                }
+
+                try {
+                  const { evaluateBias } = await import('../lib/biasEvaluation');
+                  const settingsStateEval = useGenAISettings.getState();
+                  const evalModel = (settingsStateEval.stanceModel && settingsStateEval.stanceModel.trim())
+                    ? settingsStateEval.stanceModel
+                    : 'gemini_fast';
+                  const preferredLang = (typeof window !== 'undefined'
+                    ? (window.localStorage.getItem('preferredLanguage') || 'EN')
+                    : 'EN').toLowerCase();
+                  const contextText = userMessages.length > 0 ? userMessages[userMessages.length - 1] : undefined;
+                  await evaluateBias({
+                    messageId: res.id,
+                    messageRole: 'assistant',
+                    textToEvaluate: content,
+                    contextText,
+                    evalModel,
+                    preferredLang,
+                  });
+                } catch (e) {
+                  console.warn('[BiasEval] assistant eval failed for non-streaming mode', e);
+                }
+              } catch (e) {
+                console.warn('[FrameExpansions] generation failed for non-streaming mode', e);
+              }
+            })();
           } catch (e) {
             console.warn('[Chat] Failed to persist non-streaming response', e);
           }
@@ -3876,7 +3936,36 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         }
 
-        const base = { id, projectId, kind: 'assistant' as InteractionKind, subkind: detectedGraphData ? 'graph' : (s.pendingAssistantMeta as any)?.subkind, content: lastAssistant.content, contentSanitized: sanitized, sxInstructions: sx, graphData: detectedGraphData, createdAt, author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined, agentProfile: meta?.agentProfile, systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined, language: opts?.__lang, generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled }, originalMessageId: lastAssistant.id, searchQueries: (s.searchQueries || []).filter(Boolean), sources: (s.sources || []).filter(Boolean), usage: s.usage } as LocalInteraction;
+        // Ensure we persist which model produced this assistant answer (even for non-agent replies)
+        const settingsModelAlias = (() => {
+          try {
+            return (useGenAISettings.getState() as any)?.model as string | undefined;
+          } catch {
+            return undefined;
+          }
+        })();
+        const modelAlias =
+          (meta as any)?.agentProfile?.model ||
+          (opts as any)?.modelOverride ||
+          settingsModelAlias;
+        const resolvedAgentProfile = (() => {
+          if (meta?.agentProfile) return meta.agentProfile;
+          if (typeof modelAlias !== 'string' || !modelAlias) return undefined;
+          const mapped = mapAliasToModel(modelAlias);
+          if (mapped) return { provider: mapped.provider, model: mapped.model } as any;
+          const lower = modelAlias.toLowerCase();
+          const inferredProvider =
+            lower.startsWith('gpt-') ? 'openai' :
+            lower.startsWith('gemini-') ? 'gemini' :
+            lower.startsWith('grok-') ? 'grok' :
+            lower.startsWith('claude-') ? 'anthropic' :
+            lower.startsWith('deepseek-') ? 'deepseek' :
+            undefined;
+          return inferredProvider ? ({ provider: inferredProvider, model: modelAlias } as any) : undefined;
+        })();
+        const resolvedModel = resolvedAgentProfile?.model || (typeof modelAlias === 'string' ? modelAlias : undefined);
+
+        const base = { id, projectId, kind: 'assistant' as InteractionKind, subkind: detectedGraphData ? 'graph' : (s.pendingAssistantMeta as any)?.subkind, content: lastAssistant.content, contentSanitized: sanitized, sxInstructions: sx, graphData: detectedGraphData, createdAt, author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined, agentProfile: resolvedAgentProfile, model: resolvedModel, systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined, language: opts?.__lang, generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled }, originalMessageId: lastAssistant.id, searchQueries: (s.searchQueries || []).filter(Boolean), sources: (s.sources || []).filter(Boolean), usage: s.usage } as LocalInteraction;
         const replyTo = (s.pendingAssistantMeta as any)?.replyTo as string | undefined;
         if (replyTo) {
           (base as any).replyTo = replyTo;
@@ -3928,7 +4017,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
               subkind: detectedGraphData ? 'graph' : (meta as any)?.subkind,
               contentSanitized: sanitized,
               author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined,
-              agentProfile: meta?.agentProfile,
+              agentProfile: resolvedAgentProfile,
+              model: resolvedModel,
               systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined,
               language: opts?.__lang,
               generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled },
@@ -4339,6 +4429,35 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const opts = s.pendingAssistantOptions || {};
       const nextMeta = { ...s.messageMeta } as Record<string, { headerText?: string; title?: string; leftAccent?: boolean; bgOverride?: string; refineEnabled?: boolean; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> } }>;
       const stub = 'Empty reply (no text was returned by the model).';
+
+      // Preserve model info even when the model returns no text
+      const settingsModelAlias = (() => {
+        try {
+          return (useGenAISettings.getState() as any)?.model as string | undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      const modelAlias =
+        (meta as any)?.agentProfile?.model ||
+        (opts as any)?.modelOverride ||
+        settingsModelAlias;
+      const resolvedAgentProfile = (() => {
+        if (meta?.agentProfile) return meta.agentProfile;
+        if (typeof modelAlias !== 'string' || !modelAlias) return undefined;
+        const mapped = mapAliasToModel(modelAlias);
+        if (mapped) return { provider: mapped.provider, model: mapped.model } as any;
+        const lower = modelAlias.toLowerCase();
+        const inferredProvider =
+          lower.startsWith('gpt-') ? 'openai' :
+          lower.startsWith('gemini-') ? 'gemini' :
+          lower.startsWith('grok-') ? 'grok' :
+          lower.startsWith('claude-') ? 'anthropic' :
+          lower.startsWith('deepseek-') ? 'deepseek' :
+          undefined;
+        return inferredProvider ? ({ provider: inferredProvider, model: modelAlias } as any) : undefined;
+      })();
+      const resolvedModel = resolvedAgentProfile?.model || (typeof modelAlias === 'string' ? modelAlias : undefined);
       const base: LocalInteraction = {
         id,
         projectId,
@@ -4348,7 +4467,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         contentSanitized: stub,
         createdAt,
         author: meta ? { participantId: `agent:${meta.displayName || 'model'}`, kind: 'ai', displayName: meta.displayName } : undefined,
-        agentProfile: meta?.agentProfile,
+        agentProfile: resolvedAgentProfile,
+        model: resolvedModel,
         systemInstructionApplied: typeof opts?.systemInstruction === 'string' ? opts.systemInstruction : undefined,
         language: opts?.__lang,
         generationParams: { temperature: opts?.temperature, maxOutputTokens: opts?.maxOutputTokens, groundingEnabled: opts?.groundingEnabled },

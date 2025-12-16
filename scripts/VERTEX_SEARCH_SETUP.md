@@ -143,3 +143,5 @@ gcloud auth application-default login --project=YOUR_PROJECT_ID
 - Проверьте, что документы существуют в GCS
 - Проверьте формат путей в `StoragePath` (должен быть `gs://bucket/path`)
 
+
+

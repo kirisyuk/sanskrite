@@ -96,3 +96,5 @@ gcloud discovery-engine operations list \
    ./scripts/sync-all-vertex-search.sh
    ```
 
+
+

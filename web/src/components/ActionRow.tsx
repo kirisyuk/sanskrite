@@ -113,7 +113,9 @@ export const ActionRow: React.FC<{
   const derivedHeaderText = React.useMemo(() => {
     try {
       const meta = messageMeta[messageId];
-      return meta?.headerText || interForMessage?.author?.displayName || (interForMessage?.agentProfile ? 'agent' : undefined);
+      // Don't label normal assistant messages as "agent" just because agentProfile exists.
+      // Agent replies should be explicitly named via headerText/author.displayName.
+      return meta?.headerText || interForMessage?.author?.displayName || undefined;
     } catch { return undefined; }
   }, [messageMeta, interForMessage, messageId]);
   const derivedAgentProfile = React.useMemo(() => {

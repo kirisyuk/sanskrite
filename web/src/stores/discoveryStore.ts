@@ -1082,14 +1082,16 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
             if (msg?.type === 'discovery.answer' && typeof msg.data?.answer === 'string') {
               set((state) => {
                 const items = [...state.interactions];
+                const model = typeof msg.data?.model === 'string' ? msg.data.model : undefined;
+                const usage = msg.data?.usage;
                 // Prefer replacing any existing Thinking... placeholder instead of appending (prevents duplicates for chat path)
                 const idx = [...items].reverse().findIndex((it) => it.kind === 'discovery.answer' && it.content === 'Thinking...');
                 if (idx >= 0) {
                   const realIdx = items.length - 1 - idx;
-                  items[realIdx] = { ...items[realIdx], content: msg.data.answer } as any;
+                  items[realIdx] = { ...items[realIdx], content: msg.data.answer, ...(model ? { model } : {}), ...(usage ? { usage } : {}) } as any;
                 } else {
                   const createdAt = new Date().toISOString();
-                  items.push({ id: createdAt, kind: 'discovery.answer', content: msg.data.answer, createdAt } as any);
+                  items.push({ id: createdAt, kind: 'discovery.answer', content: msg.data.answer, ...(model ? { model } : {}), ...(usage ? { usage } : {}), createdAt } as any);
                 }
                 return { answer: msg.data.answer, interactions: items } as any;
               });

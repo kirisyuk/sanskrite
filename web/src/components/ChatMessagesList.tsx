@@ -155,7 +155,10 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
               return null;
             }
             
-            const isUser = it.kind === 'user';
+            // Handle discovery.query/discovery.answer as user/assistant
+            const isUser = it.kind === 'user' || it.kind === 'discovery.query';
+            const isAssistant = it.kind === 'assistant' || it.kind === 'discovery.answer';
+            
             // Skip rendering if inside a collapsed section
             try {
               const sid = (it as any).sectionId as
@@ -179,13 +182,30 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
             }
             
             const meta = genaiChat.messageMeta[it.id];
-            const header = !isUser
-              ? meta?.headerText ||
-                it.author?.displayName ||
-                (it.agentProfile ? 'agent' : 'assistant')
+
+            // Agent responses are those with explicit agent name/displayName/subkind marker.
+            // Presence of agentProfile alone should NOT turn a normal assistant reply into "agent".
+            const isAgentResponse =
+              !!meta?.headerText ||
+              !!it.author?.displayName ||
+              (typeof it.subkind === 'string' && it.subkind.startsWith('agent.'));
+
+            // Model name display (prefer concrete model; provider is optional)
+            const modelDisplayName =
+              isAssistant
+                ? (it.agentProfile?.model || it.model || null)
+                : null;
+
+            const baseHeader = !isUser
+              ? (meta?.headerText || it.author?.displayName || 'assistant')
               : undefined;
+
+            // Append model name to header if available (assistant (model))
+            const header =
+              baseHeader && modelDisplayName ? `${baseHeader} (${modelDisplayName})` : baseHeader;
+
             const leftAccent = !isUser
-              ? (meta?.leftAccent ?? !!it.agentProfile)
+              ? (meta?.leftAccent ?? isAgentResponse)
               : false;
             
             // Check if this is an error interaction

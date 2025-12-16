@@ -48,3 +48,5 @@ echo ""
 echo "✓ Metadata update complete!"
 echo "Note: Run sync-all-vertex-search.sh to sync updated documents to Vertex AI Search"
 
+
+

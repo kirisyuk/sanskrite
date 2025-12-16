@@ -2000,7 +2000,15 @@ func (o *Orchestrator) synthesizeAnswer(ctx context.Context, in ExecuteInput) er
 	}
 	o.publishEvent(ctx, realtime.EventDiscoveryAnswer, in.TenantID, map[string]interface{}{
 		"correlationId": in.Correlation,
-		"projectId":     in.ProjectID, "answer": res.Content})
+		"projectId":     in.ProjectID,
+		"answer":        res.Content,
+		"model":         res.Model,
+		"usage": map[string]interface{}{
+			"promptTokens": res.InputTokens,
+			"outputTokens": res.OutputTokens,
+			"totalTokens":  res.InputTokens + res.OutputTokens,
+		},
+	})
 	return nil
 }
 
