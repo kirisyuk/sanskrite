@@ -65,21 +65,60 @@ func (r *ScoutingJobsRepository) Update(ctx context.Context, job *models.Scoutin
 }
 
 // ListByLens получает список ScoutingJob для Lens
+// Если lensID пустой, возвращает все ScoutingJob для tenant (фильтрованные по AgentID="scout")
 func (r *ScoutingJobsRepository) ListByLens(ctx context.Context, tenantID, lensID string, limit int) ([]*models.ScoutingJob, error) {
-	// Используем State для фильтрации по lensID
-	// В реальной реализации может потребоваться отдельная коллекция или индекс
-	agentJobs, err := r.agentJobsRepo.ListByProject(ctx, tenantID, "", limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list scouting jobs: %w", err)
+	// Получаем все AgentJob для tenant с AgentID="scout"
+	// Используем ListByStatus для получения всех jobs по разным статусам, затем фильтруем по AgentID
+	allStatuses := []models.AgentJobStatus{
+		models.AgentJobStatusPending,
+		models.AgentJobStatusRunning,
+		models.AgentJobStatusCompleted,
+		models.AgentJobStatusFailed,
+		models.AgentJobStatusPartial,
 	}
+	
+	var allAgentJobs []*models.AgentJob
+	for _, status := range allStatuses {
+		jobs, err := r.agentJobsRepo.ListByStatus(ctx, tenantID, status, limit*3) // Увеличиваем лимит для фильтрации
+		if err != nil {
+			continue // Пропускаем ошибки, продолжаем с другими статусами
+		}
+		allAgentJobs = append(allAgentJobs, jobs...)
+	}
+	
 	var scoutingJobs []*models.ScoutingJob
-	for _, agentJob := range agentJobs {
-		// Фильтруем по lensID из State
-		if lensIDVal, ok := agentJob.State["lensId"].(string); ok && lensIDVal == lensID {
-			scoutingJob := &models.ScoutingJob{
-				AgentJob: *agentJob,
+	for _, agentJob := range allAgentJobs {
+		// Фильтруем только ScoutingJob (AgentID="scout")
+		if agentJob.AgentID != "scout" {
+			continue
+		}
+		
+		// Преобразуем AgentJob в ScoutingJob
+		scoutingJob := &models.ScoutingJob{
+			AgentJob: *agentJob,
+		}
+		
+		// Извлекаем дополнительные поля из State
+		if targetPath, ok := agentJob.State["targetCanonicalPath"].(string); ok {
+			scoutingJob.TargetCanonicalPath = targetPath
+		}
+		if currentState, ok := agentJob.State["currentState"].(string); ok {
+			scoutingJob.CurrentState = models.ScoutingJobState(currentState)
+		}
+		if lensIDFromState, ok := agentJob.State["lensId"].(string); ok {
+			scoutingJob.LensID = lensIDFromState
+		}
+		
+		// Если lensID указан, фильтруем по нему
+		if lensID != "" {
+			if scoutingJob.LensID != lensID {
+				continue
 			}
-			scoutingJobs = append(scoutingJobs, scoutingJob)
+		}
+		
+		scoutingJobs = append(scoutingJobs, scoutingJob)
+		if len(scoutingJobs) >= limit {
+			break
 		}
 	}
 	return scoutingJobs, nil

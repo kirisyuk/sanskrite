@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
@@ -20,6 +21,7 @@ type Monitor struct {
 	fragmentsRepo   *horizonrepo.HorizonFragmentsRepository
 	scoutEngine     *scout.ScoutEngine
 	executor        *scout.SourceExecutor
+	changeAssessor  *ChangeAssessor
 }
 
 // NewMonitor создает новый мониторинг
@@ -29,6 +31,7 @@ func NewMonitor(
 	fragmentsRepo *horizonrepo.HorizonFragmentsRepository,
 	scoutEngine *scout.ScoutEngine,
 	executor *scout.SourceExecutor,
+	aiExecutor *ai.AITaskExecutor,
 ) *Monitor {
 	return &Monitor{
 		dataSourcesRepo: dataSourcesRepo,
@@ -36,6 +39,7 @@ func NewMonitor(
 		fragmentsRepo:   fragmentsRepo,
 		scoutEngine:     scoutEngine,
 		executor:        executor,
+		changeAssessor:  NewChangeAssessor(aiExecutor),
 	}
 }
 
@@ -95,8 +99,32 @@ func (m *Monitor) scanSource(ctx context.Context, source *models.DataSource, con
 		return nil // Изменений нет
 	}
 
-	// Вычисляем степень изменения на основе сравнения документов
-	changeAmount := m.calculateChangeAmount(ctx, source.ID, result.Content, previousHash)
+	// Вычисляем степень изменения через LLM
+	oldContent := ""
+	if previousHash != "" {
+		// Получаем старый документ для сравнения
+		oldDocs, err := m.documentsRepo.ListBySource(ctx, "", source.ID, 1)
+		if err == nil && len(oldDocs) > 0 {
+			oldContent = oldDocs[0].FullText
+		}
+	}
+
+	// Получаем targetCanonicalPath из fragment для контекста
+	targetCanonicalPath := ""
+	if fragment, err := m.fragmentsRepo.Get(ctx, config.TargetFragmentID); err == nil {
+		targetCanonicalPath = fragment.CanonicalPath
+	}
+
+	changeAmount, err := m.changeAssessor.AssessChangeAmount(ctx, oldContent, result.Content, targetCanonicalPath)
+	if err != nil {
+		// Fallback на простую проверку при ошибке LLM
+		if oldContent == "" {
+			changeAmount = 1.0
+		} else {
+			changeAmount = 0.5 // Среднее значение при ошибке
+		}
+	}
+
 	if changeAmount < config.TriggerThreshold {
 		// Изменение незначительно, обновляем хеш но не создаем запрос
 		m.saveHash(ctx, source.ID, contentHash, result.DocumentID)
@@ -140,60 +168,6 @@ func (m *Monitor) saveHash(ctx context.Context, sourceID string, hash string, do
 	// Дополнительных действий не требуется
 }
 
-// calculateChangeAmount вычисляет степень изменения на основе сравнения документов
-func (m *Monitor) calculateChangeAmount(ctx context.Context, sourceID string, newContent string, oldHash string) float64 {
-	if oldHash == "" {
-		return 1.0 // Первое сканирование - считаем максимальным изменением
-	}
-
-	// Получаем старый документ для сравнения (tenantID может быть пустым для публичных источников)
-	oldDocs, err := m.documentsRepo.ListBySource(ctx, "", sourceID, 1)
-	if err != nil || len(oldDocs) == 0 {
-		return 1.0 // Если не можем найти старый документ, считаем максимальным изменением
-	}
-
-	oldContent := oldDocs[0].FullText
-	// ExtractedText может быть недоступен в этой версии модели, используем FullText
-
-	// Вычисляем степень изменения через сравнение длины и содержимого
-	// Упрощенный алгоритм: используем отношение различий к общей длине
-	oldLen := len(oldContent)
-	newLen := len(newContent)
-	if oldLen == 0 && newLen == 0 {
-		return 0.0
-	}
-	if oldLen == 0 || newLen == 0 {
-		return 1.0
-	}
-
-	// Вычисляем процент различий через простое сравнение строк
-	// В реальной реализации можно использовать более сложные алгоритмы (diff, семантическое сравнение)
-	diff := 0
-	maxLen := oldLen
-	if newLen > maxLen {
-		maxLen = newLen
-	}
-	minLen := oldLen
-	if newLen < minLen {
-		minLen = newLen
-	}
-
-	// Простое сравнение по символам
-	for i := 0; i < minLen; i++ {
-		if oldContent[i] != newContent[i] {
-			diff++
-		}
-	}
-	diff += maxLen - minLen
-
-	// Нормализуем к [0..1]
-	changeAmount := float64(diff) / float64(maxLen)
-	if changeAmount > 1.0 {
-		changeAmount = 1.0
-	}
-
-	return changeAmount
-}
 
 // createScoutRequest создает запрос на разведку через Scout Engine
 func (m *Monitor) createScoutRequest(ctx context.Context, config *horizonmodels.WatchdogConfig, source *models.DataSource) error {

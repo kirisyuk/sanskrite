@@ -27,6 +27,7 @@ type ValidationResult struct {
 	Conflicts    []ValidationConflict   `json:"conflicts,omitempty"`
 	Confidence   float64                `json:"confidence"` // 0..1
 	IsValid      bool                   `json:"isValid"`
+	MissingInfo  []string               `json:"missingInfo,omitempty"` // Список вопросов для доизучения
 }
 
 // ValidationConflict конфликт между извлеченными данными и источниками
@@ -88,18 +89,22 @@ SOURCE CONTENT:
 
 TASK: Compare the extracted data with the source content and identify any conflicts, inconsistencies, or missing information.
 
-Return a JSON object with:
-- hasConflicts: boolean indicating if conflicts were found
-- conflicts: array of conflict objects (if any) with fields: field, extractedValue, sourceValue, reason, severity
-- confidence: float (0..1) indicating confidence in the validation
-- isValid: boolean indicating if data is valid overall
+	Return a JSON object with:
+	- hasConflicts: boolean indicating if conflicts were found
+	- conflicts: array of conflict objects (if any) with fields: field, extractedValue, sourceValue, reason, severity
+	- confidence: float (0..1) indicating confidence in the validation
+	- isValid: boolean indicating if data is valid overall
+	- missingInfo: array of strings (questions). Identify CRITICAL missing information based on the entity type (e.g., missing location for a factory, missing capacity metrics). Formulate each item as a specific search query to find this data.
 
-A conflict should be reported if:
-1. Extracted value contradicts information in source
-2. Extracted value is not supported by source
-3. Important information from source is missing in extracted data
-4. Metrics are outside valid ranges or inconsistent
+	A conflict should be reported if:
+	1. Extracted value contradicts information in source
+	2. Extracted value is not supported by source
+	3. Metrics are outside valid ranges or inconsistent
 
-Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), sourceContent)
+	Missing Info logic:
+	- If important fields (like location, key metrics for the sector) are empty or unknown, add a specific question to 'missingInfo'.
+	- Example: "What is the production capacity of TSMC Fab 21?"
+
+	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), sourceContent)
 }
 

@@ -3,31 +3,36 @@ package lens
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
 // LensService управляет Lens и подписками на HorizonFragment
 type LensService struct {
-	lensesRepo    *repo.LensesRepository
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	lifecycle     *LifecycleManager
-	calculator    *MetricsCalculator
+	lensesRepo       *repo.LensesRepository
+	fragmentsRepo    *repo.HorizonFragmentsRepository
+	scoutingJobsRepo *repo.ScoutingJobsRepository
+	lifecycle        *LifecycleManager
+	calculator       *MetricsCalculator
 }
 
 // NewLensService создает новый Lens Service
 func NewLensService(
 	lensesRepo *repo.LensesRepository,
 	fragmentsRepo *repo.HorizonFragmentsRepository,
+	scoutingJobsRepo *repo.ScoutingJobsRepository,
 	lifecycle *LifecycleManager,
 	calculator *MetricsCalculator,
 ) *LensService {
 	return &LensService{
-		lensesRepo:    lensesRepo,
-		fragmentsRepo: fragmentsRepo,
-		lifecycle:     lifecycle,
-		calculator:    calculator,
+		lensesRepo:       lensesRepo,
+		fragmentsRepo:    fragmentsRepo,
+		scoutingJobsRepo: scoutingJobsRepo,
+		lifecycle:        lifecycle,
+		calculator:       calculator,
 	}
 }
 
@@ -48,8 +53,36 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	for _, canonicalPath := range lens.Scope {
 		fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
 		if err != nil {
-			// Если фрагмент не существует, создаем его (будет заполнен Scout позже)
-			// Или пропускаем и создадим при первом запросе
+			// Если фрагмент не существует, создаем ScoutingJob (Pioneer модель)
+			// Согласно документации, первый проект оплачивает создание (Bounty модель)
+			if s.scoutingJobsRepo != nil {
+				now := time.Now().UTC()
+				scoutingJob := &models.ScoutingJob{
+					AgentJob: agentmodels.AgentJob{
+						TenantID:  lens.TenantID,
+						ProjectID: lens.ProjectID,
+						Status:    "pending",
+						AgentID:   "scout",
+						CreatedAt: now,
+						UpdatedAt: now,
+						State: map[string]interface{}{
+							"targetCanonicalPath": canonicalPath,
+							"lensId":              lensID,
+							"currentState":        string(models.ScoutingJobStatePending),
+						},
+					},
+					LensID:             lensID,
+					TargetCanonicalPath: canonicalPath,
+					ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
+					BillingContext: models.BillingContext{
+						ChargeModel: string(models.ChargeModelBounty),
+						ProjectID:   lens.ProjectID,
+					},
+					CurrentState: models.ScoutingJobStatePending,
+				}
+				// Создаем ScoutingJob (будет обработан Scout Engine позже)
+				_, _ = s.scoutingJobsRepo.Create(ctx, scoutingJob)
+			}
 			continue
 		}
 		if err := s.fragmentsRepo.IncrementActiveSubscribers(ctx, fragment.ID); err != nil {

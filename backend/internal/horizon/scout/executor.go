@@ -2,6 +2,7 @@ package scout
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
@@ -41,6 +42,9 @@ type ExecuteDataSourceResult struct {
 	DocumentID  string
 	SourceIDs   []string
 	DocumentIDs []string
+	SourceURL   string // URL источника для Evidence
+	SourceHash  string // SHA256 хеш контента для Evidence
+	SourceType  string // Тип источника (web, rss, telegram_channel, document)
 }
 
 // ExecuteDataSource выполняет запрос к DataSource и возвращает контент
@@ -84,11 +88,18 @@ func (e *SourceExecutor) executeWebSource(ctx context.Context, source *models.Da
 		return nil, fmt.Errorf("failed to create document: %w", err)
 	}
 
+	// Вычисляем хеш контента для Evidence
+	hash := sha256.Sum256([]byte(result.Text))
+	hashStr := fmt.Sprintf("sha256:%x", hash)
+
 	return &ExecuteDataSourceResult{
 		Content:     result.Text,
 		DocumentID:  documentID,
 		SourceIDs:   []string{source.ID},
 		DocumentIDs: []string{documentID},
+		SourceURL:   *source.Details.URI,
+		SourceHash:  hashStr,
+		SourceType:  "web",
 	}, nil
 }
 
@@ -126,11 +137,23 @@ func (e *SourceExecutor) executeRSSSource(ctx context.Context, source *models.Da
 		return nil, fmt.Errorf("RSS source returned empty content")
 	}
 
+	// Вычисляем хеш контента для Evidence
+	hash := sha256.Sum256([]byte(content))
+	hashStr := fmt.Sprintf("sha256:%x", hash)
+
+	sourceURL := ""
+	if source.Details.RSSURL != nil {
+		sourceURL = *source.Details.RSSURL
+	}
+
 	return &ExecuteDataSourceResult{
 		Content:     content,
 		DocumentID:  documentIDs[0], // Используем первый документ как основной
 		SourceIDs:   []string{source.ID},
 		DocumentIDs: documentIDs,
+		SourceURL:   sourceURL,
+		SourceHash:  hashStr,
+		SourceType:  "rss",
 	}, nil
 }
 
@@ -176,11 +199,21 @@ func (e *SourceExecutor) executeTelegramSource(ctx context.Context, source *mode
 		return nil, fmt.Errorf("failed to create document: %w", err)
 	}
 
+	// Вычисляем хеш контента для Evidence
+	hash := sha256.Sum256([]byte(content))
+	hashStr := fmt.Sprintf("sha256:%x", hash)
+
+	// Для Telegram источника URL формируется из канала
+	sourceURL := fmt.Sprintf("https://t.me/%s", *source.Details.ChannelUsername)
+
 	return &ExecuteDataSourceResult{
 		Content:     content,
 		DocumentID:  documentID,
 		SourceIDs:   []string{source.ID},
 		DocumentIDs: []string{documentID},
+		SourceURL:   sourceURL,
+		SourceHash:  hashStr,
+		SourceType:  "telegram_channel",
 	}, nil
 }
 
@@ -207,11 +240,25 @@ func (e *SourceExecutor) executeDocumentSource(ctx context.Context, source *mode
 		return nil, fmt.Errorf("document has no extractable text")
 	}
 
+	// Вычисляем хеш контента для Evidence
+	hash := sha256.Sum256([]byte(content))
+	hashStr := fmt.Sprintf("sha256:%x", hash)
+
+	sourceURL := ""
+	if document.URL != "" {
+		sourceURL = document.URL
+	} else if source.Details.URI != nil {
+		sourceURL = *source.Details.URI
+	}
+
 	return &ExecuteDataSourceResult{
 		Content:     content,
 		DocumentID:  document.ID,
 		SourceIDs:   []string{source.ID},
 		DocumentIDs: []string{document.ID},
+		SourceURL:   sourceURL,
+		SourceHash:  hashStr,
+		SourceType:  "document",
 	}, nil
 }
 

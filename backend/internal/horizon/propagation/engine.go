@@ -3,6 +3,7 @@ package propagation
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -19,6 +20,26 @@ type PropagationEngine struct {
 	threshold     *ThresholdManager
 	damping       *WaveDamping
 	lazyEval      *LazyEvaluator
+	
+	// Трекинг активных распространений
+	activePropagations map[string]*PropagationStatus
+	mu                 sync.RWMutex
+}
+
+// PropagationStatus статус распространения для фрагмента
+type PropagationStatus struct {
+	FragmentID          string
+	IsPropagating       bool
+	LastPropagation     *LastPropagationInfo
+	LastPropagationTime time.Time
+}
+
+// LastPropagationInfo информация о последнем распространении
+type LastPropagationInfo struct {
+	StartedAt          time.Time
+	CompletedAt        time.Time
+	NodesUpdated       int
+	LensesRecalculated int
 }
 
 // NewPropagationEngine создает новый Propagation Engine
@@ -29,13 +50,14 @@ func NewPropagationEngine(
 	realtime *realtime.Publisher,
 ) *PropagationEngine {
 	return &PropagationEngine{
-		fragmentsRepo: fragmentsRepo,
-		edgesRepo:     edgesRepo,
-		lensesRepo:    lensesRepo,
-		realtime:      realtime,
-		threshold:     NewThresholdManager(),
-		damping:       NewWaveDamping(),
-		lazyEval:      NewLazyEvaluator(),
+		fragmentsRepo:      fragmentsRepo,
+		edgesRepo:          edgesRepo,
+		lensesRepo:         lensesRepo,
+		realtime:           realtime,
+		threshold:          NewThresholdManager(),
+		damping:            NewWaveDamping(),
+		lazyEval:           NewLazyEvaluator(),
+		activePropagations: make(map[string]*PropagationStatus),
 	}
 }
 
@@ -80,9 +102,15 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 
 	// Cold Path: отложенное распространение для некритических путей
 	e.lazyEval.ScheduleColdPath(ctx, fragmentID, metricName, delta)
+	
+	// Запускаем обработку Cold Path асинхронно (если есть задачи старше 1 минуты)
+	go e.processColdPathIfReady(ctx)
 
 	// Публикуем события
 	e.publishPropagationEvents(ctx, fragmentID, affectedFragments, affectedLenses)
+
+	// Обновляем статус распространения
+	e.updatePropagationStatus(fragmentID, len(affectedFragments), len(affectedLenses), time.Since(startTime))
 
 	// Преобразуем в слайсы
 	affectedFragmentsList := make([]string, 0, len(affectedFragments))
@@ -104,6 +132,183 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 			"affectedLenses":   float64(len(affectedLenses)),
 		},
 	}, nil
+}
+
+// updatePropagationStatus обновляет статус распространения для фрагмента
+func (e *PropagationEngine) updatePropagationStatus(fragmentID string, nodesUpdated, lensesRecalculated int, duration time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := time.Now()
+	status, exists := e.activePropagations[fragmentID]
+	if !exists {
+		status = &PropagationStatus{
+			FragmentID: fragmentID,
+		}
+		e.activePropagations[fragmentID] = status
+	}
+
+	status.IsPropagating = false
+	status.LastPropagation = &LastPropagationInfo{
+		StartedAt:          now.Add(-duration),
+		CompletedAt:        now,
+		NodesUpdated:       nodesUpdated,
+		LensesRecalculated: lensesRecalculated,
+	}
+	status.LastPropagationTime = now
+}
+
+// GetPropagationStatus получает статус распространения для фрагмента
+func (e *PropagationEngine) GetPropagationStatus(fragmentID string) *PropagationStatus {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	status, exists := e.activePropagations[fragmentID]
+	if !exists {
+		return &PropagationStatus{
+			FragmentID:    fragmentID,
+			IsPropagating: false,
+		}
+	}
+	return status
+}
+
+// TriggerPropagation запускает принудительное распространение для фрагмента
+func (e *PropagationEngine) TriggerPropagation(ctx context.Context, fragmentID string) (*PropagationResult, error) {
+	// Получаем фрагмент
+	fragment, err := e.fragmentsRepo.Get(ctx, fragmentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get fragment: %w", err)
+	}
+
+	// Помечаем как активное распространение
+	e.mu.Lock()
+	status, exists := e.activePropagations[fragmentID]
+	if !exists {
+		status = &PropagationStatus{
+			FragmentID: fragmentID,
+		}
+		e.activePropagations[fragmentID] = status
+	}
+	status.IsPropagating = true
+	e.mu.Unlock()
+
+	// Запускаем распространение для всех метрик фрагмента
+	// Используем текущее состояние как "новое" и предыдущее как "старое" (упрощение)
+	var result *PropagationResult
+	for metricName, metricValue := range fragment.State {
+		// Создаем "старое" значение с нулевым delta для принудительного распространения
+		oldValue := metricValue
+		oldValue.Value = metricValue.Value - 0.01 // Небольшое изменение для триггера
+
+		res, err := e.PropagateChange(ctx, fragmentID, metricName, oldValue, metricValue)
+		if err != nil {
+			// Логируем ошибку, но продолжаем
+			_ = err
+			continue
+		}
+		if result == nil {
+			result = res
+		} else {
+			// Объединяем результаты
+			result.AffectedFragments = append(result.AffectedFragments, res.AffectedFragments...)
+			result.AffectedLenses = append(result.AffectedLenses, res.AffectedLenses...)
+		}
+	}
+
+	// Помечаем как завершенное
+	e.mu.Lock()
+	if status, exists := e.activePropagations[fragmentID]; exists {
+		status.IsPropagating = false
+	}
+	e.mu.Unlock()
+
+	if result == nil {
+		return &PropagationResult{
+			AffectedFragments: []string{},
+			AffectedLenses:    []string{},
+			PropagationTime:   0,
+			Metrics:           map[string]float64{},
+		}, nil
+	}
+
+	return result, nil
+}
+
+// processColdPathIfReady обрабатывает Cold Path задачи, если они готовы
+func (e *PropagationEngine) processColdPathIfReady(ctx context.Context) {
+	// Обрабатываем Cold Path задачи через LazyEvaluator
+	err := e.lazyEval.ProcessColdPath(ctx, func(ctx context.Context, task *ColdPathTask) error {
+		// Получаем фрагмент
+		fragment, err := e.fragmentsRepo.Get(ctx, task.FragmentID)
+		if err != nil {
+			return fmt.Errorf("failed to get fragment: %w", err)
+		}
+
+		// Получаем текущее значение метрики
+		currentMetric, exists := fragment.State[task.MetricName]
+		if !exists {
+			// Создаем новую метрику
+			currentMetric = models.MetricValue{
+				Value:      0.0,
+				Confidence: 0.5,
+				ObservedAt: time.Now(),
+				Provenance: models.Provenance{
+					Method: "propagated",
+				},
+			}
+		}
+
+		// Применяем изменение
+		oldValue := currentMetric
+		newValue := currentMetric
+		newValue.Value = currentMetric.Value + task.Delta
+		
+		// Определяем тип метрики и ограничиваем диапазон
+		metricType := getMetricType(task.MetricName)
+		newValue.Value = clampMetricValue(newValue.Value, metricType)
+		
+		// Обновляем метрику
+		fragment.State[task.MetricName] = newValue
+		
+		// Сохраняем изменения
+		if err := e.fragmentsRepo.Update(ctx, fragment); err != nil {
+			return fmt.Errorf("failed to update fragment: %w", err)
+		}
+
+		// Находим Lens, которые используют этот фрагмент
+		lenses, err := e.lensesRepo.FindByScope(ctx, "global", fragment.CanonicalPath, 100)
+		if err == nil {
+			for _, lens := range lenses {
+				// Публикуем событие обновления Lens
+				_ = e.realtime.PublishJSON(ctx, realtime.EventType("lens.updated"), "global", map[string]interface{}{
+					"lensId":    lens.ID,
+					"timestamp": time.Now().UTC(),
+				})
+			}
+		}
+
+		return nil
+	})
+	
+	// Логируем ошибку, но не блокируем
+	_ = err
+}
+
+// StartColdPathProcessor запускает фоновый процессор Cold Path задач
+func (e *PropagationEngine) StartColdPathProcessor(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				e.processColdPathIfReady(ctx)
+			}
+		}
+	}()
 }
 
 // propagateHotPath распространяет влияние по критическим путям (немедленно)
@@ -181,15 +386,10 @@ func (e *PropagationEngine) updateFragmentMetric(ctx context.Context, fragment *
 	// Применяем изменение
 	newValue := currentMetric.Value + delta
 
-	// Ограничиваем диапазон в зависимости от типа метрики
+	// Определяем тип метрики и ограничиваем диапазон соответственно
 	// Magnitude: [0.0..1.0], Directional: [-1.0..1.0]
-	// Упрощенная проверка: если метрика начинается с определенных префиксов
-	if newValue < 0.0 {
-		newValue = 0.0
-	}
-	if newValue > 1.0 {
-		newValue = 1.0
-	}
+	metricType := getMetricType(metricName)
+	newValue = clampMetricValue(newValue, metricType)
 
 	// Обновляем метрику
 	currentMetric.Value = newValue

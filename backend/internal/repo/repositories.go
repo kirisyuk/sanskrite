@@ -35,7 +35,10 @@ type MetaAnalysesRepository struct{ col *firestore.CollectionRef }
 type MetaAggregateProjectsRepository struct{ col *firestore.CollectionRef }
 type MetaAggregateUsersRepository struct{ col *firestore.CollectionRef }
 type SourceIngestHistoryRepository struct{ col *firestore.CollectionRef }
-type AgentJobsRepository struct{ col *firestore.CollectionRef }
+type AgentJobsRepository struct {
+	col *firestore.CollectionRef
+	db  *firestore.Client
+}
 type ProjectScenariosRepository struct{ col *firestore.CollectionRef }
 type ListeningSignalsRepository struct{ col *firestore.CollectionRef }
 type DocumentArtifactSignalsRepository struct{ col *firestore.CollectionRef }
@@ -83,7 +86,10 @@ func NewSourceIngestHistoryRepository(db *firestore.Client) *SourceIngestHistory
 }
 
 func NewAgentJobsRepository(db *firestore.Client) *AgentJobsRepository {
-	return &AgentJobsRepository{col: db.Collection("agent_jobs")}
+	return &AgentJobsRepository{
+		col: db.Collection("agent_jobs"),
+		db:  db,
+	}
 }
 
 func NewProjectScenariosRepository(db *firestore.Client) *ProjectScenariosRepository {

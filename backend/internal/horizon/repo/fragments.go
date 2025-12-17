@@ -3,11 +3,16 @@ package repo
 import (
 	"context"
 	"errors"
+	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"golang.org/x/time/rate"
 
+	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -15,16 +20,105 @@ var ErrFragmentNotFound = errors.New("horizon fragment not found")
 
 // HorizonFragmentsRepository репозиторий для работы с HorizonFragment
 type HorizonFragmentsRepository struct {
-	col *firestore.CollectionRef
-	db  *firestore.Client
+	col              *firestore.CollectionRef
+	db               *firestore.Client
+	versionsRepo     *HorizonFragmentVersionsRepository // Репозиторий для версий
+	storage          *gcp.GCSClient
+	bucket           string
+	useGCS           bool
+	uploadLimiter    *rate.Limiter                                                                // Rate limiter for GCS uploads
+	limiterMu        sync.Mutex
+	vertexSearchSync func(ctx context.Context, tenantID string) (operationName string, err error) // Sync trigger
 }
 
 // NewHorizonFragmentsRepository создает новый репозиторий
 func NewHorizonFragmentsRepository(db *firestore.Client) *HorizonFragmentsRepository {
 	return &HorizonFragmentsRepository{
-		col: db.Collection("horizon_fragments"),
-		db:  db,
+		col:          db.Collection("horizon_fragments"),
+		db:           db,
+		versionsRepo: NewHorizonFragmentVersionsRepository(db),
 	}
+}
+
+// WithStorage настраивает GCS хранилище для экспорта фрагментов
+func (r *HorizonFragmentsRepository) WithStorage(storage *gcp.GCSClient, bucket string) *HorizonFragmentsRepository {
+	r.storage = storage
+	r.bucket = bucket
+	r.useGCS = storage != nil && bucket != ""
+	if r.useGCS {
+		r.uploadLimiter = rate.NewLimiter(rate.Limit(10), 10)
+	}
+	return r
+}
+
+// WithVertexSearchSync настраивает синхронизацию с Vertex AI Search
+func (r *HorizonFragmentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, tenantID string) (operationName string, err error)) *HorizonFragmentsRepository {
+	r.vertexSearchSync = syncFn
+	return r
+}
+
+// uploadToGCS экспортирует фрагмент в GCS для индексации
+func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *models.HorizonFragment) error {
+	if !r.useGCS {
+		return nil
+	}
+	if r.uploadLimiter != nil {
+		if err := r.uploadLimiter.Wait(ctx); err != nil {
+			return fmt.Errorf("rate limiter wait failed: %w", err)
+		}
+	}
+
+	// Генерируем расширенный текстовый контент
+	content := fragment.GenerateVectorText()
+
+	// Формируем JSON документ для Vertex AI Search
+	// Используем схему, совместимую с "Unstructured with metadata" или "Structured"
+	// Vertex AI Search автоматически парсит JSON файлы
+	doc := map[string]interface{}{
+		"id":      fragment.ID,
+		"title":   fragment.CanonicalPath,
+		"content": content, // Основной текст для поиска
+		"structData": map[string]interface{}{
+			"type":          "horizon_fragment",
+			"tenantId":      fragment.TenantID,
+			"canonicalPath": fragment.CanonicalPath,
+			"entityPath":    fragment.EntityPath,
+			"sectorPath":    fragment.SectorPath,
+			"status":        fragment.Governance.Status,
+			"updatedAt":     fragment.UpdatedAt,
+		},
+	}
+
+	jsonData, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal fragment to json: %w", err)
+	}
+
+	// Сохраняем как JSON в папку horizon_fragments
+	// Путь: global/horizon_fragments/{id}.json
+	objectPath := fmt.Sprintf("%s/horizon_fragments/%s.json", fragment.TenantID, fragment.ID)
+	
+	metadata := map[string]string{
+		"type":     "horizon_fragment",
+		"tenantId": fragment.TenantID,
+	}
+
+	if err := r.storage.UploadBytes(ctx, r.bucket, objectPath, jsonData, "application/json", metadata); err != nil {
+		return fmt.Errorf("failed to upload fragment to GCS: %w", err)
+	}
+
+	// Триггерим синхронизацию
+	if r.vertexSearchSync != nil {
+		go func(tenantID string) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if op, err := r.vertexSearchSync(syncCtx, tenantID); err == nil {
+				log.Printf("[HorizonFragments] Vertex AI Sync triggered: %s", op)
+			}
+		}(fragment.TenantID)
+	}
+
+	return nil
 }
 
 // Create создает новый HorizonFragment
@@ -63,6 +157,13 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	if _, err := doc.Set(ctx, fragment); err != nil {
 		return "", err
 	}
+
+	// Экспорт в GCS для поиска
+	if err := r.uploadToGCS(ctx, fragment); err != nil {
+		// Логируем, но не фейлим создание
+		log.Printf("WARNING: failed to export fragment to GCS: %v", err)
+	}
+
 	return fragment.ID, nil
 }
 
@@ -105,7 +206,7 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	return &fragment, nil
 }
 
-// Update обновляет HorizonFragment
+// Update обновляет HorizonFragment и сохраняет версию
 func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *models.HorizonFragment) error {
 	if fragment == nil || fragment.ID == "" {
 		return ErrInvalidDocument
@@ -114,13 +215,42 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 		return fmt.Errorf("validation error: %w", err)
 	}
 
+	// Получаем текущую версию фрагмента для сохранения
+	currentFragment, err := r.Get(ctx, fragment.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get current fragment: %w", err)
+	}
+
 	now := time.Now().UTC()
 	fragment.UpdatedAt = now
 	fragment.Version++
 	fragment.Metadata.LastUpdatedAt = now
 
-	_, err := r.col.Doc(fragment.ID).Set(ctx, fragment)
-	return err
+	// Сохраняем версию перед обновлением
+	version := &HorizonFragmentVersion{
+		FragmentID:    currentFragment.ID,
+		TenantID:      currentFragment.TenantID,
+		State:         currentFragment.State,
+		SourceFrameID: currentFragment.Metadata.SourceFrameID,
+		Timestamp:     now,
+	}
+	if _, err := r.versionsRepo.Create(ctx, version); err != nil {
+		// Логируем ошибку, но продолжаем обновление фрагмента
+		// Версионирование не должно блокировать обновление
+		_ = err
+	}
+
+	_, err = r.col.Doc(fragment.ID).Set(ctx, fragment)
+	if err != nil {
+		return err
+	}
+
+	// Экспорт в GCS для поиска
+	if err := r.uploadToGCS(ctx, fragment); err != nil {
+		log.Printf("WARNING: failed to export updated fragment to GCS: %v", err)
+	}
+
+	return nil
 }
 
 // UpdateGovernance обновляет только Governance (для управления подписками)

@@ -37,6 +37,7 @@ import (
 
 	// Horizon system
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
@@ -959,11 +960,32 @@ func main() {
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
+		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
+
+		// Configure GCS storage and Vertex AI Search sync for Horizon Fragments
+		if gcsClient != nil && ragDocsBucket != "" {
+			horizonFragmentsRepo.WithStorage(gcsClient, ragDocsBucket)
+			if vertexSearchClient != nil {
+				horizonFragmentsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
+					// Импортируем только фрагменты (path pattern: tenantId/horizon_fragments/**)
+					gcsPath := fmt.Sprintf("gs://%s/%s/horizon_fragments/**", ragDocsBucket, tenantID)
+					importReq := &ai.ImportDocumentsRequest{
+						GCSPath:            gcsPath,
+						ReconciliationMode: "INCREMENTAL",
+						DataSchema:         "document", // JSON format
+					}
+					// Используем общий клиент Vertex AI Search (предполагаем один Data Store для всего)
+					return vertexSearchClient.ImportDocuments(ctx, importReq)
+				})
+				logger.Printf("Horizon Fragments: Vertex AI Search sync enabled")
+			}
+		}
 
 		// Horizon service dependencies
 		horizonDeps := horizon.HorizonServiceDependencies{
 			AIExecutor:       exec,
 			EmbeddingProvider: emb,
+			VertexSearchClient: vertexSearchClient,
 			AgentRegistry:     *agentRegistry,
 			AgentJobsRepo:     agentJobsRepo,
 			RealtimePublisher: pub,
@@ -984,6 +1006,7 @@ func main() {
 			horizonEdgesRepo,
 			horizonWatchdogRepo,
 			horizonScoutingJobsRepo,
+			horizonFragmentVersionsRepo,
 		)
 		if err != nil {
 			logger.Printf("WARNING: Horizon service initialization failed: %v", err)
@@ -991,7 +1014,7 @@ func main() {
 			// Initialize Lens subsystem
 			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
 			lensCalculator := horizonlens.NewMetricsCalculator(horizonFragmentsRepo)
-			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, lensLifecycle, lensCalculator)
+			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, horizonScoutingJobsRepo, lensLifecycle, lensCalculator)
 			horizonService.SetLensService(lensService)
 
 			// Initialize Propagation subsystem
@@ -1002,9 +1025,13 @@ func main() {
 				pub,
 			)
 			horizonService.SetPropagationEngine(propagationEngine)
+			
+			// Запускаем фоновый процессор Cold Path задач (каждые 30 секунд)
+			ctxBackground := context.Background()
+			propagationEngine.StartColdPathProcessor(ctxBackground, 30*time.Second)
 
 			// Initialize Watchdog subsystem
-			watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, nil, nil) // ScoutEngine and SourceExecutor will be set later
+			watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, nil, nil, exec) // ScoutEngine and SourceExecutor will be set later
 			watchdogScheduler := horizonwatchdog.NewScheduler()
 			watchdogService := horizonwatchdog.NewWatchdogService(
 				horizonWatchdogRepo,
@@ -1015,9 +1042,82 @@ func main() {
 			)
 			horizonService.SetWatchdogService(watchdogService)
 
-			// Initialize Scout subsystem (simplified - full initialization requires more components)
-			// For now, we'll skip Scout initialization as it requires many sub-components
-			// Scout can be initialized later when needed
+			// Initialize Scout subsystem
+			scoutPlanner := horizonscout.NewScoutPlanner(s.dsrcs, vertexSearchClient)
+			
+			// Source Executor (Telegram client skipped for now)
+			rssProvider := prov.NewRSSProvider()
+			sourceExecutor := horizonscout.NewSourceExecutor(wc, rssProvider, nil, docsRepo)
+
+			// Scout Agents
+			scoutAgent := horizonagents.NewScoutAgent(exec)
+			criticAgent := horizonagents.NewCriticAgent(exec)
+			resolverAgent := horizonagents.NewResolverAgent(exec)
+			researchAgent := horizonagents.NewResearchAgent(exec)
+			
+			frameBuilder := horizonscout.NewFrameBuilder()
+			scoutWorkflow := horizonscout.NewScoutWorkflow(agentJobsRepo)
+
+			scoutEngine := horizonscout.NewScoutEngine(
+				scoutPlanner,
+				sourceExecutor,
+				scoutAgent,
+				criticAgent,
+				resolverAgent,
+				researchAgent,
+				frameBuilder,
+				scoutWorkflow,
+				horizonFragmentsRepo,
+				horizonFramesRepo,
+				pub,
+				exec,
+			)
+			
+			// Подключаем триггер распространения изменений
+			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {
+				_, err := propagationEngine.TriggerPropagation(ctx, fragmentID)
+				return err
+			})
+			
+			horizonService.SetScoutEngine(scoutEngine)
+			logger.Printf("Scout Engine initialized")
+
+			// Запускаем Scout Worker для обработки фоновых задач
+			go func() {
+				// Задержка перед стартом
+				time.Sleep(5 * time.Second)
+				logger.Printf("Scout Worker started polling")
+				ticker := time.NewTicker(10 * time.Second)
+				defer ticker.Stop()
+
+				for {
+					select {
+					case <-ctxBackground.Done():
+						return
+					case <-ticker.C:
+						// Получаем ожидающие задачи
+						jobs, err := horizonScoutingJobsRepo.ListPending(context.Background(), 5)
+						if err != nil {
+							logger.Printf("Scout Worker poll error: %v", err)
+							continue
+						}
+
+						for _, job := range jobs {
+							// Выполняем задачу асинхронно
+							go func(j *models.ScoutingJob) {
+								execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+								defer cancel()
+								logger.Printf("Scout Worker executing job %s for %s", j.ID, j.TargetCanonicalPath)
+								if err := scoutEngine.ExecuteScoutingJob(execCtx, j); err != nil {
+									logger.Printf("Scout Job %s failed: %v", j.ID, err)
+								} else {
+									logger.Printf("Scout Job %s completed", j.ID)
+								}
+							}(job)
+						}
+					}
+				}
+			}()
 
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)

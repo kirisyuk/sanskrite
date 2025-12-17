@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -18,13 +19,15 @@ type SourcePlan struct {
 
 // ScoutPlanner планирует источники данных для ScoutingJob
 type ScoutPlanner struct {
-	dataSourcesRepo *repo.DataSourcesRepository
+	dataSourcesRepo    *repo.DataSourcesRepository
+	vertexSearchClient *ai.VertexAISearchClient
 }
 
 // NewScoutPlanner создает новый планировщик источников
-func NewScoutPlanner(dataSourcesRepo *repo.DataSourcesRepository) *ScoutPlanner {
+func NewScoutPlanner(dataSourcesRepo *repo.DataSourcesRepository, vertexSearchClient *ai.VertexAISearchClient) *ScoutPlanner {
 	return &ScoutPlanner{
-		dataSourcesRepo: dataSourcesRepo,
+		dataSourcesRepo:    dataSourcesRepo,
+		vertexSearchClient: vertexSearchClient,
 	}
 }
 
@@ -43,8 +46,8 @@ func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID stri
 	}
 
 	// 3. Фильтруем релевантные Sources для целевого узла
-	// В реальной реализации здесь будет семантический поиск или фильтрация по домену
-	relevantSources := p.filterRelevantSources(projectSources, targetCanonicalPath, strategy)
+	// Используем нативный Vertex AI Search для поиска релевантных источников
+	relevantSources := p.filterRelevantSources(ctx, projectSources, targetCanonicalPath, strategy)
 
 	return &SourcePlan{
 		DataSourceIDs: extractDataSourceIDs(relevantSources),
@@ -53,11 +56,56 @@ func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID stri
 	}, nil
 }
 
-// filterRelevantSources фильтрует релевантные источники
-// В MVP используем простую фильтрацию, в будущем добавим семантический поиск
-func (p *ScoutPlanner) filterRelevantSources(sources []*models.DataSource, targetCanonicalPath string, strategy horizonmodels.ScoutingStrategy) []*models.DataSource {
-	// Простая фильтрация: для Snapshot берем первые 3 источника, для DeepDive - все
-	// В реальной реализации здесь будет семантический поиск по vectorText источников
+// filterRelevantSources фильтрует релевантные источники с помощью Vertex AI Search
+func (p *ScoutPlanner) filterRelevantSources(ctx context.Context, sources []*models.DataSource, targetCanonicalPath string, strategy horizonmodels.ScoutingStrategy) []*models.DataSource {
+	// Fallback: если клиент не настроен или нет источников, используем эвристику
+	if p.vertexSearchClient == nil || !p.vertexSearchClient.IsConfigured() || len(sources) == 0 {
+		return p.fallbackFiltering(sources, strategy)
+	}
+
+	// Ищем релевантные документы в Vertex AI Search
+	// Это найдет источники, в которых упоминается тема (targetCanonicalPath)
+	req := &ai.SearchRequest{
+		Query:    targetCanonicalPath,
+		PageSize: 20, // Проверяем топ-20 документов
+		// Можно добавить фильтр по типу документов, если нужно
+	}
+
+	resp, err := p.vertexSearchClient.Search(ctx, req)
+	if err != nil || len(resp.Results) == 0 {
+		// При ошибке или отсутствии результатов используем fallback
+		return p.fallbackFiltering(sources, strategy)
+	}
+
+	// Собираем ID источников, которые выдали релевантные документы
+	relevantSourceIDs := make(map[string]bool)
+	for _, res := range resp.Results {
+		if res.Document.StructData != nil {
+			if sourceID, ok := res.Document.StructData["sourceId"].(string); ok && sourceID != "" {
+				relevantSourceIDs[sourceID] = true
+			}
+		}
+	}
+
+	// Фильтруем входной список источников
+	var filtered []*models.DataSource
+	for _, s := range sources {
+		if relevantSourceIDs[s.ID] {
+			filtered = append(filtered, s)
+		}
+	}
+
+	// Если семантический поиск отфильтровал всё (слишком строго), используем fallback
+	// Чтобы не возвращать пустой список, если источники есть
+	if len(filtered) == 0 {
+		return p.fallbackFiltering(sources, strategy)
+	}
+
+	return filtered
+}
+
+// fallbackFiltering простая эвристика фильтрации (взять первые N)
+func (p *ScoutPlanner) fallbackFiltering(sources []*models.DataSource, strategy horizonmodels.ScoutingStrategy) []*models.DataSource {
 	if strategy == horizonmodels.ScoutingStrategySnapshot {
 		if len(sources) > 3 {
 			return sources[:3]

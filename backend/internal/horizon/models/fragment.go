@@ -50,12 +50,6 @@ type HorizonFragment struct {
 	// Метаданные и управление
 	Metadata   FragmentMetadata   `json:"metadata" firestore:"metadata"`
 	Governance Governance         `json:"governance" firestore:"governance"`
-
-	// Семантический поиск
-	VectorText      string    `json:"vectorText,omitempty" firestore:"vectorText,omitempty"`
-	VectorEmbedding []float64 `json:"vectorEmbedding,omitempty" firestore:"vectorEmbedding,omitempty"`
-	VectorModel     string    `json:"vectorModel,omitempty" firestore:"vectorModel,omitempty"`   // text-embedding-3-small
-	VectorVersion   string    `json:"vectorVersion,omitempty" firestore:"vectorVersion,omitempty"` // v1
 }
 
 // FragmentMetadata метаданные жизненного цикла
@@ -97,6 +91,12 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	if name, ok := f.Labels["en"]; ok && name != "" {
 		parts = append(parts, name)
 	}
+	// Добавляем статус для контекста
+	parts = append(parts, fmt.Sprintf("Status: %s", f.Status))
+	if f.Metadata.EpistemicStatus != "" {
+		parts = append(parts, fmt.Sprintf("Epistemic Status: %s", f.Metadata.EpistemicStatus))
+	}
+
 	if f.Description != "" {
 		parts = append(parts, f.Description)
 	}
@@ -179,12 +179,5 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	}
 
 	return strings.Join(parts, "\n")
-}
-
-// UpdateVectorEmbedding обновляет векторное представление (вызывается после генерации vectorText)
-func (f *HorizonFragment) UpdateVectorEmbedding(embedding []float64, model, version string) {
-	f.VectorEmbedding = embedding
-	f.VectorModel = model
-	f.VectorVersion = version
 }
 

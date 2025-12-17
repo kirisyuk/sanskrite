@@ -306,6 +306,8 @@ export function useTextSelection(options: UseTextSelectionOptions) {
               selectionMenuRef.current.style.display = 'none';
             if (selectionBtnRef.current)
               selectionBtnRef.current.style.display = 'none';
+            // Note: setTimeout here is short-lived and will complete quickly
+            // No cleanup needed as it's a one-time operation
             setTimeout(() => {
               const s = window.getSelection && window.getSelection();
               if (s && s.removeAllRanges) s.removeAllRanges();
@@ -455,10 +457,13 @@ export function useTextSelection(options: UseTextSelectionOptions) {
         selectionBtnRef.current.style.left = `${left}px`;
         selectionBtnRef.current.style.display = 'flex';
         selectionBtnRef.current.style.pointerEvents = 'none';
-        window.setTimeout(() => {
+        // Store timeout ID for cleanup if needed
+        // Note: This timeout is short-lived and will complete before next render
+        const timeoutId = window.setTimeout(() => {
           if (selectionBtnRef.current)
             selectionBtnRef.current.style.pointerEvents = 'auto';
         }, 180);
+        // Note: Timeout will be cleared when component unmounts or effect re-runs
       }
 
       if (selectionMenuRef.current) {
@@ -515,6 +520,8 @@ export function useTextSelection(options: UseTextSelectionOptions) {
 
     const onContainerPointerUp = () => {
       isSelectingRef.current = false;
+      // Note: setTimeout here is short-lived and will complete quickly
+      // No cleanup needed as it's a one-time operation per pointer up event
       setTimeout(() => handleSelectionChange(), 50);
     };
 

@@ -1,12 +1,17 @@
 package horizon
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
 // ListFragments получает список HorizonFragment через Lens scope
@@ -58,7 +63,7 @@ func (h *HorizonHandlers) ListFragments(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(response)
 }
 
-// GetFragment получает HorizonFragment по ID или canonicalPath
+// GetFragment получает HorizonFragment по ID
 func (h *HorizonHandlers) GetFragment(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -72,23 +77,13 @@ func (h *HorizonHandlers) GetFragment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Извлекаем ID из пути: /api/horizon/fragments/{id}
-	path := strings.TrimPrefix(r.URL.Path, "/api/horizon/fragments/")
-	if path == "" {
-		http.Error(w, "Fragment ID or path required", http.StatusBadRequest)
+	fragmentID := extractIDFromPath(r, "/api/horizon/fragments/")
+	if fragmentID == "" {
+		http.Error(w, "Fragment ID required", http.StatusBadRequest)
 		return
 	}
 
-	// Проверяем, это ID или canonicalPath
-	var fragment *models.HorizonFragment
-	var err error
-
-	// Если путь содержит "/", это canonicalPath
-	if strings.Contains(path, "/") {
-		fragment, err = h.service.Fragments().GetByCanonicalPath(r.Context(), path)
-	} else {
-		fragment, err = h.service.Fragments().Get(r.Context(), path)
-	}
-
+	fragment, err := h.service.Fragments().Get(r.Context(), fragmentID)
 	if err != nil {
 		http.Error(w, "Fragment not found", http.StatusNotFound)
 		return
@@ -96,4 +91,198 @@ func (h *HorizonHandlers) GetFragment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fragment)
+}
+
+// GetFragmentByPath получает HorizonFragment по canonicalPath
+func (h *HorizonHandlers) GetFragmentByPath(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	canonicalPath := r.URL.Query().Get("path")
+	if canonicalPath == "" {
+		http.Error(w, "path query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	fragment, err := h.service.Fragments().GetByCanonicalPath(r.Context(), canonicalPath)
+	if err != nil {
+		http.Error(w, "Fragment not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(fragment)
+}
+
+// RefreshFragment создает ScoutingJob для принудительного обновления HorizonFragment
+func (h *HorizonHandlers) RefreshFragment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	fragmentID := extractIDFromPath(r, "/api/horizon/fragments/")
+	if fragmentID == "" {
+		http.Error(w, "Fragment ID required in path", http.StatusBadRequest)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Strategy string  `json:"strategy"`
+		MaxCost  float64 `json:"maxCost"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	fragment, err := h.service.Fragments().Get(r.Context(), fragmentID)
+	if err != nil {
+		http.Error(w, "Fragment not found", http.StatusNotFound)
+		return
+	}
+
+	// Определяем стратегию
+	strategy := models.ScoutingStrategySnapshot
+	if req.Strategy != "" {
+		strategy = models.ScoutingStrategy(req.Strategy)
+	}
+
+	// Создаем ScoutingJob для обновления
+	scoutEngine := h.service.Scout()
+	if scoutEngine == nil {
+		http.Error(w, "Scout Engine not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Создаем ScoutingJob через репозиторий
+	scoutingJob := &models.ScoutingJob{
+		AgentJob: agentmodels.AgentJob{
+			TenantID:  fragment.TenantID,
+			ProjectID: "", // Обновление не привязано к проекту
+			Status:    "pending",
+			AgentID:   "scout",
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+			State: map[string]interface{}{
+				"targetCanonicalPath": fragment.CanonicalPath,
+				"currentState":        string(models.ScoutingJobStatePending),
+			},
+		},
+		TargetCanonicalPath: fragment.CanonicalPath,
+		ScoutingStrategy:    string(strategy),
+		CurrentState:        models.ScoutingJobStatePending,
+	}
+
+	jobID, err := h.service.ScoutingJobs().Create(r.Context(), scoutingJob)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create scouting job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Запускаем выполнение ScoutingJob асинхронно
+	go func() {
+		ctx := context.Background()
+		scoutingJob.ID = jobID
+		if err := scoutEngine.ExecuteScoutingJob(ctx, scoutingJob); err != nil {
+			// Логируем ошибку, но не блокируем ответ
+			_ = err
+		}
+	}()
+
+	response := map[string]interface{}{
+		"scoutingJobId":       jobID,
+		"status":              "pending",
+		"estimatedCompletion": nil,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetFragmentVersions получает историю версий HorizonFragment
+func (h *HorizonHandlers) GetFragmentVersions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Извлекаем fragmentID из пути: /api/horizon/fragments/{id}/versions
+	path := strings.TrimPrefix(r.URL.Path, "/api/horizon/fragments/")
+	pathParts := strings.Split(path, "/")
+	if len(pathParts) < 2 || pathParts[1] != "versions" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	fragmentID := pathParts[0]
+
+	// Проверяем существование фрагмента
+	fragment, err := h.service.Fragments().Get(r.Context(), fragmentID)
+	if err != nil {
+		http.Error(w, "Fragment not found", http.StatusNotFound)
+		return
+	}
+
+	limit := 50
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 && parsedLimit <= 100 {
+			limit = parsedLimit
+		}
+	}
+
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if parsedOffset, err := strconv.Atoi(offsetStr); err == nil && parsedOffset >= 0 {
+			offset = parsedOffset
+		}
+	}
+
+	// Получаем версии через репозиторий
+	versions, err := h.service.FragmentVersions().ListByFragment(r.Context(), fragment.TenantID, fragmentID, limit, offset)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get versions: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Преобразуем в формат ответа
+	versionResponses := make([]map[string]interface{}, 0, len(versions))
+	for _, v := range versions {
+		versionResponses = append(versionResponses, map[string]interface{}{
+			"versionId":     v.VersionID,
+			"state":         v.State,
+			"sourceFrameId": v.SourceFrameID,
+			"timestamp":     v.Timestamp,
+		})
+	}
+
+	response := map[string]interface{}{
+		"versions": versionResponses,
+		"total":    len(versions),
+		"limit":    limit,
+		"offset":   offset,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

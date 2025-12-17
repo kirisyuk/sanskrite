@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"strings"
+
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
@@ -23,12 +26,13 @@ type HorizonService struct {
 	lensService       *lens.LensService
 
 	// Репозитории horizon
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	framesRepo    *repo.FramesRepository
-	lensesRepo    *repo.LensesRepository
-	edgesRepo     *repo.DependencyEdgesRepository
-	watchdogRepo  *repo.WatchdogConfigsRepository
+	fragmentsRepo     *repo.HorizonFragmentsRepository
+	framesRepo        *repo.FramesRepository
+	lensesRepo        *repo.LensesRepository
+	edgesRepo         *repo.DependencyEdgesRepository
+	watchdogRepo      *repo.WatchdogConfigsRepository
 	scoutingJobsRepo *repo.ScoutingJobsRepository
+	fragmentVersionsRepo *repo.HorizonFragmentVersionsRepository
 }
 
 // NewHorizonService создает новый экземпляр HorizonService с валидацией зависимостей
@@ -40,6 +44,7 @@ func NewHorizonService(
 	edgesRepo *repo.DependencyEdgesRepository,
 	watchdogRepo *repo.WatchdogConfigsRepository,
 	scoutingJobsRepo *repo.ScoutingJobsRepository,
+	fragmentVersionsRepo *repo.HorizonFragmentVersionsRepository,
 ) (*HorizonService, error) {
 	// Валидация обязательных зависимостей
 	if deps.AIExecutor == nil {
@@ -47,6 +52,9 @@ func NewHorizonService(
 	}
 	if deps.EmbeddingProvider == nil {
 		return nil, fmt.Errorf("EmbeddingProvider is required")
+	}
+	if deps.VertexSearchClient == nil {
+		return nil, fmt.Errorf("VertexSearchClient is required")
 	}
 	if deps.AgentJobsRepo == nil {
 		return nil, fmt.Errorf("AgentJobsRepo is required")
@@ -86,15 +94,19 @@ func NewHorizonService(
 	if scoutingJobsRepo == nil {
 		return nil, fmt.Errorf("ScoutingJobsRepository is required")
 	}
+	if fragmentVersionsRepo == nil {
+		return nil, fmt.Errorf("HorizonFragmentVersionsRepository is required")
+	}
 
 	return &HorizonService{
-		deps:          deps,
-		fragmentsRepo: fragmentsRepo,
-		framesRepo:    framesRepo,
-		lensesRepo:    lensesRepo,
-		edgesRepo:     edgesRepo,
-		watchdogRepo:  watchdogRepo,
-		scoutingJobsRepo: scoutingJobsRepo,
+		deps:                deps,
+		fragmentsRepo:       fragmentsRepo,
+		framesRepo:          framesRepo,
+		lensesRepo:          lensesRepo,
+		edgesRepo:           edgesRepo,
+		watchdogRepo:        watchdogRepo,
+		scoutingJobsRepo:    scoutingJobsRepo,
+		fragmentVersionsRepo: fragmentVersionsRepo,
 		// Подсистемы будут инициализированы на соответствующих этапах
 	}, nil
 }
@@ -164,9 +176,51 @@ func (s *HorizonService) Edges() *repo.DependencyEdgesRepository {
 	return s.edgesRepo
 }
 
+// FragmentVersions возвращает HorizonFragmentVersionsRepository
+func (s *HorizonService) FragmentVersions() *repo.HorizonFragmentVersionsRepository {
+	return s.fragmentVersionsRepo
+}
+
 // HealthCheck проверяет состояние сервиса
 func (s *HorizonService) HealthCheck(ctx context.Context) error {
 	// Базовая проверка доступности репозиториев
 	// Более детальные проверки будут добавлены на соответствующих этапах
 	return nil
+}
+
+// SearchFragments выполняет семантический поиск по фрагментам через Vertex AI Search
+func (s *HorizonService) SearchFragments(ctx context.Context, query string, limit int) ([]*models.HorizonFragment, error) {
+	if s.deps.VertexSearchClient == nil || !s.deps.VertexSearchClient.IsConfigured() {
+		return nil, fmt.Errorf("vertex search not configured")
+	}
+
+	// Ищем документы с типом horizon_fragment
+	req := &ai.SearchRequest{
+		Query:    query,
+		PageSize: limit,
+		Filter:   `structData.type: "horizon_fragment"`,
+	}
+
+	resp, err := s.deps.VertexSearchClient.Search(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("vertex search failed: %w", err)
+	}
+
+	var fragments []*models.HorizonFragment
+	for _, res := range resp.Results {
+		// Извлекаем ID фрагмента
+		id := res.Document.ID
+		// Если ID содержит расширение .json, убираем его
+		if strings.HasSuffix(id, ".json") {
+			id = strings.TrimSuffix(id, ".json")
+		}
+
+		// Пытаемся получить фрагмент из базы
+		fragment, err := s.fragmentsRepo.Get(ctx, id)
+		if err == nil {
+			fragments = append(fragments, fragment)
+		}
+	}
+
+	return fragments, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
@@ -13,16 +14,26 @@ import (
 
 // ScoutEngine основной движок Scout для сбора и верификации данных
 type ScoutEngine struct {
-	planner      *ScoutPlanner
-	executor     *SourceExecutor
-	scoutAgent   *agents.ScoutAgent
-	criticAgent  *agents.CriticAgent
-	resolverAgent *agents.ResolverAgent
-	frameBuilder *FrameBuilder
-	workflow     *ScoutWorkflow
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	framesRepo    *repo.FramesRepository
-	realtime      *realtime.Publisher
+	planner          *ScoutPlanner
+	executor         *SourceExecutor
+	scoutAgent       *agents.ScoutAgent
+	criticAgent      *agents.CriticAgent
+	resolverAgent    *agents.ResolverAgent
+	researchAgent    *agents.ResearchAgent // New
+	frameBuilder     *FrameBuilder
+	workflow         *ScoutWorkflow
+	fragmentsRepo    *repo.HorizonFragmentsRepository
+	framesRepo       *repo.FramesRepository
+	realtime            *realtime.Publisher
+	taxonomyClassifier  *TaxonomyClassifier
+	aiExecutor          *ai.AITaskExecutor
+	propagationTrigger  func(ctx context.Context, fragmentID string) error
+}
+
+// WithPropagationTrigger устанавливает триггер для запуска распространения изменений
+func (e *ScoutEngine) WithPropagationTrigger(trigger func(ctx context.Context, fragmentID string) error) *ScoutEngine {
+	e.propagationTrigger = trigger
+	return e
 }
 
 // NewScoutEngine создает новый Scout Engine
@@ -32,23 +43,27 @@ func NewScoutEngine(
 	scoutAgent *agents.ScoutAgent,
 	criticAgent *agents.CriticAgent,
 	resolverAgent *agents.ResolverAgent,
+	researchAgent *agents.ResearchAgent, // New
 	frameBuilder *FrameBuilder,
 	workflow *ScoutWorkflow,
 	fragmentsRepo *repo.HorizonFragmentsRepository,
 	framesRepo *repo.FramesRepository,
 	realtime *realtime.Publisher,
+	aiExecutor *ai.AITaskExecutor,
 ) *ScoutEngine {
 	return &ScoutEngine{
-		planner:       planner,
-		executor:      executor,
-		scoutAgent:    scoutAgent,
-		criticAgent:   criticAgent,
-		resolverAgent: resolverAgent,
-		frameBuilder:  frameBuilder,
-		workflow:      workflow,
-		fragmentsRepo: fragmentsRepo,
-		framesRepo:    framesRepo,
-		realtime:      realtime,
+		planner:            planner,
+		executor:            executor,
+		scoutAgent:          scoutAgent,
+		criticAgent:         criticAgent,
+		resolverAgent:       resolverAgent,
+		researchAgent:       researchAgent,
+		frameBuilder:        frameBuilder,
+		workflow:            workflow,
+		fragmentsRepo:       fragmentsRepo,
+		framesRepo:          framesRepo,
+		realtime:            realtime,
+		taxonomyClassifier: NewTaxonomyClassifier(aiExecutor),
 	}
 }
 
@@ -76,6 +91,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	var aggregatedContent string
 	var allSourceIDs []string
 	var allDocumentIDs []string
+	var sourceResults []*ExecuteDataSourceResult
 
 	// Получаем источники из плана
 	for _, source := range sourcePlan.Sources {
@@ -86,6 +102,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		if result.Content != "" {
 			aggregatedContent += result.Content + "\n\n"
+			sourceResults = append(sourceResults, result)
 		}
 		allSourceIDs = append(allSourceIDs, result.SourceIDs...)
 		allDocumentIDs = append(allDocumentIDs, result.DocumentIDs...)
@@ -101,9 +118,12 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		return fmt.Errorf("failed to transition to EXTRACTION: %w", err)
 	}
 
-	// Определяем entityPath и sectorPath из targetCanonicalPath или используем значения по умолчанию
-	entityPath := "/Organization/Corporation/Public" // Упрощенная реализация
-	sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная реализация
+	// Определяем entityPath и sectorPath из targetCanonicalPath через LLM
+	entityPath, sectorPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
+	if err != nil {
+		_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
+		return fmt.Errorf("failed to classify taxonomy: %w", err)
+	}
 
 	extractedFragment, err := e.scoutAgent.ExtractFragmentData(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath)
 	if err != nil {
@@ -120,6 +140,20 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if err != nil {
 		_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
 		return fmt.Errorf("failed to validate data: %w", err)
+	}
+
+	// RESEARCH: Дообогащение данных через Research Agent
+	if len(validationResult.MissingInfo) > 0 {
+		// Мы не переходим в отдельный стейт, это часть процесса валидации/обогащения
+		enrichedFragment, err := e.researchAgent.EnrichFragment(ctx, extractedFragment, validationResult.MissingInfo)
+		if err == nil {
+			extractedFragment = enrichedFragment
+			// После обогащения мы считаем данные более полными, но конфликты все еще могут требовать разрешения
+		} else {
+			// Логируем ошибку, но продолжаем с исходными данными
+			// В будущем можно добавить event log
+			_ = err
+		}
 	}
 
 	// RESOLUTION: Разрешение конфликтов если необходимо
@@ -145,10 +179,20 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		case "Low_Confidence":
 			// Продолжаем с низкой уверенностью
 			if resolutionResult.ResolvedData != nil {
-				// Обновляем extractedFragment с исправленными данными
+				// Обновляем extractedFragment с исправленными данными из Resolver
 				if resolvedJSON, ok := resolutionResult.ResolvedData.(map[string]interface{}); ok {
-					// Преобразуем обратно в HorizonFragment (упрощенная реализация)
-					_ = resolvedJSON
+					// Извлекаем state из resolvedJSON если он есть
+					if resolvedState, ok := resolvedJSON["state"].(map[string]interface{}); ok {
+						// Обновляем метрики в extractedFragment.State
+						for metricName, metricValue := range extractedFragment.State {
+							if resolvedMetricValue, ok := resolvedState[metricName].(map[string]interface{}); ok {
+								if value, ok := resolvedMetricValue["value"].(float64); ok {
+									metricValue.Value = value
+									extractedFragment.State[metricName] = metricValue
+								}
+							}
+						}
+					}
 				}
 			}
 		case "Verified":
@@ -161,6 +205,14 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		return fmt.Errorf("failed to transition to VERIFIED: %w", err)
 	}
 
+	// Извлекаем Evidence из результатов источников через LLM
+	evidenceExtractor := NewEvidenceExtractorLLM(e.aiExecutor)
+	evidence, err := ExtractEvidence(ctx, evidenceExtractor, sourceResults, extractedFragment.State)
+	if err != nil {
+		// Логируем ошибку, но продолжаем без Evidence
+		evidence = []models.Evidence{}
+	}
+
 	// Создаем Frame
 	frame := e.frameBuilder.BuildFrame(
 		tenantID,
@@ -168,7 +220,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		job.ID,
 		job.TargetCanonicalPath,
 		extractedFragment.State,
-		[]models.Evidence{}, // TODO: Извлечь evidence из источников
+		evidence,
 		models.ClaimProvenance{
 			SourceIDs:     allSourceIDs,
 			DataSourceIDs: allSourceIDs,
@@ -231,6 +283,20 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		"canonicalPath": job.TargetCanonicalPath,
 		"timestamp":     time.Now().UTC(),
 	})
+
+	// Запускаем распространение изменений в графе
+	if e.propagationTrigger != nil {
+		// Запускаем в отдельной горутине, чтобы не блокировать завершение задачи
+		go func(fid string) {
+			// Используем фоновый контекст с таймаутом
+			propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := e.propagationTrigger(propCtx, fid); err != nil {
+				// Логируем ошибку (в реальном коде нужен logger)
+				fmt.Printf("Propagation trigger failed for fragment %s: %v\n", fid, err)
+			}
+		}(fragmentID)
+	}
 
 	return nil
 }

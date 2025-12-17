@@ -289,6 +289,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     const currentState = get();
     if (currentState.projectId !== newProjectId) {
       clearAgentTimersForProject(currentState.projectId);
+      // Cancel any ongoing requests when switching projects
+      if (currentState.abortController) {
+        currentState.abortController.abort();
+      }
     }
     
     set({
@@ -310,6 +314,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       stanceAggregate: undefined,
       stanceLoading: false,
       pendingAttachedDocIds: [],
+      abortController: undefined, // Clear abort controller when switching projects
       hydrating: false,
       hydratingProjectId: undefined,
     } as any);

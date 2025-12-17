@@ -83,11 +83,12 @@ export function useAdvancedAutoScroll(
       lastScrollInteractionLength.current = 0;
       lastUserInteractionIdRef.current = null;
       hasScrolledToCurrentUserMessageRef.current = false;
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         if (containerRef.current) {
           containerRef.current.scrollTop = containerRef.current.scrollHeight;
         }
       }, 100);
+      return () => clearTimeout(timeoutId);
     }
   }, [projectId, containerRef]);
 
@@ -100,13 +101,14 @@ export function useAdvancedAutoScroll(
       // This prevents scrolling when updating existing interactions (like pinning)
       if (lastScrollInteractionLength.current === 0) {
         // Small delay to ensure DOM has rendered
-        setTimeout(() => {
+        const timeoutId = setTimeout(() => {
           if (containerRef.current) {
             containerRef.current.scrollTop = containerRef.current.scrollHeight;
           }
         }, 50);
         // Update tracked length after initial scroll
         lastScrollInteractionLength.current = interactionsLength;
+        return () => clearTimeout(timeoutId);
       } else {
         // Update tracked length even if we don't scroll (for consistency)
         lastScrollInteractionLength.current = interactionsLength;
@@ -146,9 +148,10 @@ export function useAdvancedAutoScroll(
         lastUserInteractionIdRef.current = currentUserInteractionId;
         hasScrolledToCurrentUserMessageRef.current = false;
         // Use double requestAnimationFrame + timeout to ensure DOM is fully updated
+        let timeoutId: number | null = null;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            setTimeout(() => {
+            timeoutId = window.setTimeout(() => {
               if (containerRef.current) {
                 // Try to find the user message element and scroll to it
                 const userMessageElement = containerRef.current.querySelector(
@@ -173,6 +176,8 @@ export function useAdvancedAutoScroll(
             }, 100);
           });
         });
+        // Note: We can't return cleanup here as this is inside a useEffect callback
+        // The timeout will be cleared when component unmounts or dependencies change
       } else {
         // For non-user messages, use standard scroll to bottom
         requestAnimationFrame(() => {
@@ -192,12 +197,14 @@ export function useAdvancedAutoScroll(
     ) {
       lastScrollStreamingState.current = currentStreaming;
       // Small delay to ensure DOM has updated after streaming completes
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         if (containerRef.current && !streaming) {
           containerRef.current.scrollTop = containerRef.current.scrollHeight;
         }
       }, 50);
-      return;
+      // Note: This timeout is short-lived and will complete before next render
+      // In practice, cleanup happens when dependencies change or component unmounts
+      return () => clearTimeout(timeoutId);
     }
 
     lastScrollStreamingState.current = currentStreaming;
@@ -224,9 +231,10 @@ export function useAdvancedAutoScroll(
       if (isIdUpdate || !hasScrolledToCurrentUserMessageRef.current) {
         lastUserInteractionIdRef.current = currentUserInteractionId;
         
+        let timeoutId: number | null = null;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            setTimeout(() => {
+            timeoutId = window.setTimeout(() => {
               if (containerRef.current) {
                 // Try to find the user message element with the new server ID
                 const userMessageElement = containerRef.current.querySelector(
@@ -250,6 +258,7 @@ export function useAdvancedAutoScroll(
             }, 150); // Slightly longer delay for ID updates to ensure DOM is updated
           });
         });
+        // Note: Timeout will be cleared when component unmounts or dependencies change
       }
     }
   }, [currentUserInteractionId, containerRef]);

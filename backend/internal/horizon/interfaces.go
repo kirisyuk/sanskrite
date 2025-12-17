@@ -15,6 +15,7 @@ type HorizonServiceDependencies struct {
 	// AI система
 	AIExecutor       *ai.AITaskExecutor
 	EmbeddingProvider ai.EmbeddingProvider
+	VertexSearchClient *ai.VertexAISearchClient
 
 	// Agent система
 	AgentRegistry  agents.Registry
