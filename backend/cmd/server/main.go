@@ -34,6 +34,14 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
 	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
+
+	// Horizon system
+	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
+	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 )
 
 // tavilyClientAdapterForAgents адаптирует httphandlers.TavilyClient к agents.TavilySearchClient интерфейсу
@@ -203,6 +211,8 @@ func main() {
 	var verifiedHandler *httphandlers.VerifiedHandler
 	var bigqueryHandler *httphandlers.BigQueryHandler
 	var bigqueryAIService *services.BigQueryAIService
+	var horizonService *horizon.HorizonService
+	var horizonHandlers *horizonhttp.HorizonHandlers
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
@@ -258,6 +268,9 @@ func main() {
 		tgClient := telegram.NewClient(tgBase)
 		projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
 		pub, err := realtime.NewPublisher(ctx, projectID)
+		if err != nil {
+			log.Printf("WARNING: PubSub publisher init failed: %v (realtime updates disabled)", err)
+		}
 		if err != nil {
 			log.Printf("WARNING: PubSub publisher init failed: %v (realtime updates disabled)", err)
 		}
@@ -938,6 +951,78 @@ func main() {
 		// Create AgentJobsHandler
 		agentJobsHandler = httphandlers.NewAgentJobsHandler(agentOrchestrator, agentJobsRepo, pub, logger)
 		logger.Printf("Agent Orchestrator initialized")
+
+		// Horizon repositories
+		horizonFragmentsRepo := horizonrepo.NewHorizonFragmentsRepository(fsClient.Client())
+		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
+		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
+		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
+		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
+		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
+
+		// Horizon service dependencies
+		horizonDeps := horizon.HorizonServiceDependencies{
+			AIExecutor:       exec,
+			EmbeddingProvider: emb,
+			AgentRegistry:     *agentRegistry,
+			AgentJobsRepo:     agentJobsRepo,
+			RealtimePublisher: pub,
+			EntitiesRepo:      entitiesRepo,
+			DocumentsRepo:     docsRepo,
+			ChunksRepo:        chunksRepo,
+			DataSourcesRepo:   s.dsrcs,
+			Crawler:           wc,
+			Logger:            logger,
+		}
+
+		// Create HorizonService
+		horizonService, err = horizon.NewHorizonService(
+			horizonDeps,
+			horizonFragmentsRepo,
+			horizonFramesRepo,
+			horizonLensesRepo,
+			horizonEdgesRepo,
+			horizonWatchdogRepo,
+			horizonScoutingJobsRepo,
+		)
+		if err != nil {
+			logger.Printf("WARNING: Horizon service initialization failed: %v", err)
+		} else {
+			// Initialize Lens subsystem
+			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
+			lensCalculator := horizonlens.NewMetricsCalculator(horizonFragmentsRepo)
+			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, lensLifecycle, lensCalculator)
+			horizonService.SetLensService(lensService)
+
+			// Initialize Propagation subsystem
+			propagationEngine := horizonpropagation.NewPropagationEngine(
+				horizonFragmentsRepo,
+				horizonEdgesRepo,
+				horizonLensesRepo,
+				pub,
+			)
+			horizonService.SetPropagationEngine(propagationEngine)
+
+			// Initialize Watchdog subsystem
+			watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, nil, nil) // ScoutEngine and SourceExecutor will be set later
+			watchdogScheduler := horizonwatchdog.NewScheduler()
+			watchdogService := horizonwatchdog.NewWatchdogService(
+				horizonWatchdogRepo,
+				horizonFragmentsRepo,
+				watchdogMonitor,
+				watchdogScheduler,
+				nil, // ScoutEngine will be set later
+			)
+			horizonService.SetWatchdogService(watchdogService)
+
+			// Initialize Scout subsystem (simplified - full initialization requires more components)
+			// For now, we'll skip Scout initialization as it requires many sub-components
+			// Scout can be initialized later when needed
+
+			// Create HTTP handlers
+			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)
+			logger.Printf("Horizon system initialized")
+		}
 	}
 
 	// Get auth client for middleware
@@ -1687,6 +1772,12 @@ func main() {
 
 	// Discovery routes
 	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
+
+	// Horizon routes
+	if horizonHandlers != nil {
+		horizonHandlers.RegisterRoutes(mux, authMiddleware)
+		logger.Printf("Horizon routes registered")
+	}
 
 	// Agents routes (legacy)
 	mux.Handle("/api/v1/agents", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

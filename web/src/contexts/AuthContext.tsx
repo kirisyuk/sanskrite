@@ -64,6 +64,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+  const subscriptionTimeoutRef = React.useRef<number | null>(null);
 
   // Fetch subscription when user is authenticated
   const fetchSubscription = async (firebaseUser: User | null) => {
@@ -91,20 +92,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      // Clear any pending subscription timeout
+      if (subscriptionTimeoutRef.current !== null) {
+        clearTimeout(subscriptionTimeoutRef.current);
+        subscriptionTimeoutRef.current = null;
+      }
+      
       setUser(firebaseUser);
       setLoading(false);
       
       // Fetch subscription after authentication
       if (firebaseUser) {
         // Small delay to ensure token is available
-        setTimeout(() => {
+        subscriptionTimeoutRef.current = window.setTimeout(() => {
           fetchSubscription(firebaseUser);
+          subscriptionTimeoutRef.current = null;
         }, 100);
       } else {
         setSubscription(null);
       }
     });
-    return unsubscribe;
+    
+    return () => {
+      unsubscribe();
+      // Cleanup timeout on unmount
+      if (subscriptionTimeoutRef.current !== null) {
+        clearTimeout(subscriptionTimeoutRef.current);
+        subscriptionTimeoutRef.current = null;
+      }
+    };
   }, []);
 
   // Refresh subscription manually (e.g., after applying voucher)

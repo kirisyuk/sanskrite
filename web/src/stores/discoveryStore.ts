@@ -984,8 +984,16 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
           }, delay) as unknown as number;
         };
 
-        wsRef.onclose = scheduleReconnect;
-        wsRef.onerror = scheduleReconnect;
+        wsRef.onclose = () => {
+          // Reject all pending subscription waiters when WebSocket closes
+          rejectAllSubscriptionWaiters('WebSocket closed');
+          scheduleReconnect();
+        };
+        wsRef.onerror = () => {
+          // Reject all pending subscription waiters when WebSocket errors
+          rejectAllSubscriptionWaiters('WebSocket error');
+          scheduleReconnect();
+        };
 
         wsRef.onmessage = (evt) => {
           try {

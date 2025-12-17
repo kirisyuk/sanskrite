@@ -8,6 +8,24 @@ import type { GenaiToolCall } from './genaiStore';
 import { useGenAISettings, mapProviderStrengthToModel, getModelContextWindow } from './genaiSettingsStore';
 import { useProjectsStore } from './projectsStore';
 import { parseOntologyCommands } from '../types/ontologyCommands';
+
+// Track active agent completion timers to prevent memory leaks
+const activeAgentTimers = new Map<string, number>();
+
+// Cleanup function to clear all active agent timers
+function clearAllAgentTimers() {
+  activeAgentTimers.forEach((timeoutId) => {
+    window.clearTimeout(timeoutId);
+  });
+  activeAgentTimers.clear();
+}
+
+// Cleanup timers for a specific project
+function clearAgentTimersForProject(projectId: string) {
+  // Note: We don't track projectId in timers, so we clear all
+  // This is safe because timers check projectId before executing
+  clearAllAgentTimers();
+}
 import { processOntologyCommands } from '../lib/ontologyCommandProcessor';
 import { mapAliasToModel } from '../lib/modelMapping';
 
@@ -240,6 +258,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     if (state.abortController) {
       state.abortController.abort();
     }
+    // Clear all active agent timers to prevent memory leaks
+    clearAllAgentTimers();
     set({ projectId: 'local-unfold', messages: [], streaming: false, error: null, toolCalls: [], toolResults: [], toolRetries: [], toolCorrections: [], attributions: [], searchQueries: [], sources: [], evaluations: {}, messageMeta: {}, usage: undefined, interactions: [], perspectives: {}, artifacts: { entities: [], metrics: [] }, metricOverlayOpenKey: null, metricOverlayLoading: false, metricOverlayCache: {}, persistedByLocalId: {}, stanceAggregate: undefined, stanceLoading: false, pendingAttachedDocIds: [], hydrating: false, currentStreamId: undefined, processingCommands: false, commandsProgress: null, abortController: undefined });
   },
 
@@ -264,6 +284,12 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
   setProjectId: (id) => {
     // Ensure projectId is always a string
     const newProjectId = id ? (typeof id === 'string' ? id : String(id)) : 'local-unfold';
+    
+    // Clear agent timers when switching projects to prevent memory leaks
+    const currentState = get();
+    if (currentState.projectId !== newProjectId) {
+      clearAgentTimersForProject(currentState.projectId);
+    }
     
     set({
       projectId: newProjectId,
@@ -2647,8 +2673,19 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       // Poll for completion (max 5 minutes)
       const maxAttempts = 300; // 5 minutes at 1 second intervals
       let attempts = 0;
+      let currentTimeoutId: number | null = null;
       
       const checkCompletion = async () => {
+        // Check if project changed or store was reset
+        const currentState = get();
+        if (currentState.projectId !== projectId) {
+          console.log('[Agent] Project changed, stopping completion check', { taskId, originalProjectId: projectId, currentProjectId: currentState.projectId });
+          if (currentTimeoutId !== null) {
+            activeAgentTimers.delete(taskId);
+          }
+          return;
+        }
+        
         attempts++;
         const taskState = agentsStore.getTaskState(taskId);
         
@@ -2656,15 +2693,18 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           // Task not found, might have been cleared or not started properly
           if (attempts < 10) {
             // Retry a few times in case task is still initializing
-            setTimeout(checkCompletion, 1000);
+            currentTimeoutId = window.setTimeout(checkCompletion, 1000);
+            activeAgentTimers.set(taskId, currentTimeoutId);
             return;
           }
           console.warn('[Agent] Task not found after multiple attempts');
+          activeAgentTimers.delete(taskId);
           return;
         }
         
         if (taskState.status === 'completed') {
           // Agent completed successfully - result already saved from HTTP response
+          activeAgentTimers.delete(taskId);
           try {
             await api.createProjectInteraction(projectId, {
               kind: 'assistant',
@@ -2676,6 +2716,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           } catch {}
         } else if (taskState.status === 'error') {
           // Agent failed
+          activeAgentTimers.delete(taskId);
           try {
             await api.createProjectInteraction(projectId, {
               kind: 'assistant',
@@ -2688,9 +2729,11 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         } else if (taskState.status === 'running') {
           // Still running, check again
           if (attempts < maxAttempts) {
-            setTimeout(checkCompletion, 1000);
+            currentTimeoutId = window.setTimeout(checkCompletion, 1000);
+            activeAgentTimers.set(taskId, currentTimeoutId);
           } else {
             // Timeout
+            activeAgentTimers.delete(taskId);
             console.warn('[Agent] Task timeout after 5 minutes');
             await api.createProjectInteraction(projectId, {
               kind: 'assistant',
@@ -2704,7 +2747,8 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       };
       
       // Start checking after a short delay
-      setTimeout(checkCompletion, 1000);
+      currentTimeoutId = window.setTimeout(checkCompletion, 1000);
+      activeAgentTimers.set(taskId, currentTimeoutId);
     }
     
     // Persist user interaction on server (only if not suppressed)
