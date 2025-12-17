@@ -358,8 +358,8 @@ export const ActionRow: React.FC<{
         try {
           const data = JSON.parse(complianceInteraction.content || complianceInteraction.contentSanitized || '{}');
           if (data.confidence !== undefined && data.explanation && typeof data.explanation === 'string') {
-            // Only return if confidence >= 0.6
-            if (data.confidence >= 0.6) {
+            // Only return if confidence >= 0.7
+            if (data.confidence >= 0.7) {
               return { 
                 confidence: data.confidence, 
                 explanation: data.explanation,
@@ -1355,7 +1355,7 @@ export const ActionRow: React.FC<{
           </div>
         </div>
       )}
-      {isAssistant && frameComplianceCheck && frameComplianceCheck.confidence >= 0.6 && (
+      {isAssistant && frameComplianceCheck && frameComplianceCheck.confidence >= 0.7 && (
         <div className="mt-2" style={{ width: '100%' }}>
           <div className="p-2" style={{ backgroundColor: 'var(--warning-10)', borderLeft: '2px solid var(--accent-warning)', borderRadius: '4px', position: 'relative' }}>
             <button

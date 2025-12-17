@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getPreferredLanguage, getLanguageName } from '../lib/uiUtils';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
+import { ThemeContext } from './ThemeProvider';
 
 interface ArtifactTemplate {
   id: string;
@@ -40,6 +41,7 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   onCreateFromTemplate,
 }) => {
   const { t } = useTranslation();
+  const { theme } = React.useContext(ThemeContext);
   const [artifacts, setArtifacts] = React.useState<Artifact[]>([]);
   const [templates, setTemplates] = React.useState<ArtifactTemplate[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -54,6 +56,9 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
   const [generatedSections, setGeneratedSections] = React.useState<Record<string, { content: string; error?: string }>>({});
   const [generating, setGenerating] = React.useState(false);
   const [generationProgress, setGenerationProgress] = React.useState<{ current: number; total: number }>({ current: 0, total: 0 });
+  const [sectionStatuses, setSectionStatuses] = React.useState<Record<string, 'pending' | 'generating' | 'completed' | 'error'>>({});
+  const [sectionGenerationTimes, setSectionGenerationTimes] = React.useState<number[]>([]);
+  const [currentGeneratingSectionId, setCurrentGeneratingSectionId] = React.useState<string | null>(null);
   const [refreshingSectionId, setRefreshingSectionId] = React.useState<string | null>(null);
 
   // Detect mobile device
@@ -266,6 +271,30 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
       setExpandedSections({});
       setGeneratedSections({});
       setGenerationProgress({ current: 0, total: 0 });
+      setSectionStatuses({});
+      setSectionGenerationTimes([]);
+      setCurrentGeneratingSectionId(null);
+    }
+  };
+
+  // Calculate estimated time remaining
+  const calculateTimeRemaining = (): string => {
+    if (sectionGenerationTimes.length === 0 || generationProgress.total === 0) {
+      return '';
+    }
+    
+    const avgTimePerSection = sectionGenerationTimes.reduce((sum, time) => sum + time, 0) / sectionGenerationTimes.length;
+    const remainingSections = generationProgress.total - generationProgress.current;
+    const estimatedMs = avgTimePerSection * remainingSections;
+    
+    const totalSeconds = Math.floor(estimatedMs / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    
+    if (totalSeconds > 60) {
+      return `approx ${minutes} min, ${seconds} sec left`;
+    } else {
+      return `approx ${totalSeconds} sec left`;
     }
   };
 
@@ -277,13 +306,22 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
 
     setGenerating(true);
     setGeneratedSections({});
+    setSectionGenerationTimes([]);
     
     const sortedSections = [...(selectedTemplate.defaultStructure || [])].sort(
       (a, b) => a.order - b.order
     );
     
+    // Initialize all sections as pending
+    const initialStatuses: Record<string, 'pending' | 'generating' | 'completed' | 'error'> = {};
+    sortedSections.forEach((section) => {
+      initialStatuses[section.id] = 'pending';
+    });
+    setSectionStatuses(initialStatuses);
+    
     setGenerationProgress({ current: 0, total: sortedSections.length });
     const sectionsContent: Record<string, { content: string; error?: string }> = {};
+    const generationTimes: number[] = [];
 
     // Get chat context and preferred language
     const chatStore = useGenaiChatStore.getState();
@@ -361,7 +399,11 @@ export const DynamicContentPanel: React.FC<DynamicContentPanelProps> = ({
         const section = sortedSections[i];
         const sectionModel = sectionModels[section.id] || defaultModel;
         
-        setGenerationProgress({ current: i + 1, total: sortedSections.length });
+        // Mark current section as generating
+        setCurrentGeneratingSectionId(section.id);
+        setSectionStatuses((prev) => ({ ...prev, [section.id]: 'generating' }));
+        
+        const sectionStartTime = Date.now();
         
         try {
           // Build prompt with context
@@ -402,23 +444,42 @@ FORMAT REQUIREMENTS:
             model: sectionModel.replace(/_/g, '-'),
             prompt: promptWithContext,
             systemInstruction: langDirective,
-            maxOutputTokens: 4096,
+            maxOutputTokens: 8192,
             webSearchEnabled: false,
           });
+          
+          const sectionEndTime = Date.now();
+          const sectionDuration = sectionEndTime - sectionStartTime;
+          generationTimes.push(sectionDuration);
+          setSectionGenerationTimes([...generationTimes]);
           
           sectionsContent[section.id] = {
             content: response.content || '',
           };
+          
+          // Mark section as completed
+          setSectionStatuses((prev) => ({ ...prev, [section.id]: 'completed' }));
+          setGenerationProgress({ current: i + 1, total: sortedSections.length });
         } catch (err: any) {
+          const sectionEndTime = Date.now();
+          const sectionDuration = sectionEndTime - sectionStartTime;
+          generationTimes.push(sectionDuration);
+          setSectionGenerationTimes([...generationTimes]);
+          
           console.error(`[DynamicContentPanel] Failed to generate section ${section.id}`, err);
           sectionsContent[section.id] = {
             content: '',
             error: err.message || 'Failed to generate content',
           };
+          
+          // Mark section as error
+          setSectionStatuses((prev) => ({ ...prev, [section.id]: 'error' }));
+          setGenerationProgress({ current: i + 1, total: sortedSections.length });
         }
         
         // Update UI progressively
         setGeneratedSections({ ...sectionsContent });
+        setCurrentGeneratingSectionId(null);
       }
       
       // Move to preview step
@@ -427,6 +488,7 @@ FORMAT REQUIREMENTS:
       console.error('[DynamicContentPanel] Failed to generate preview', err);
     } finally {
       setGenerating(false);
+      setCurrentGeneratingSectionId(null);
     }
   };
 
@@ -1021,6 +1083,7 @@ FORMAT REQUIREMENTS:
                 border: '1px solid var(--overlay-line-90)',
                 color: 'var(--text-heading)',
                 outline: 'none',
+                colorScheme: theme === 'dark' ? 'dark' : 'light',
               }}
             >
               <option value="gemini_fast">Gemini Fast</option>
@@ -1074,6 +1137,7 @@ FORMAT REQUIREMENTS:
                 border: '1px solid var(--overlay-line-90)',
                 color: 'var(--text-heading)',
                 outline: 'none',
+                colorScheme: theme === 'dark' ? 'dark' : 'light',
               }}
             >
               <option value="gemini_fast">Gemini Fast</option>
@@ -1124,22 +1188,44 @@ FORMAT REQUIREMENTS:
                     }}
                     className="w-full flex items-center justify-between text-left"
                   >
-                    <div
-                      className="text-xs font-medium"
-                      style={{ color: 'var(--text-heading)' }}
-                    >
-                      {section.title}
-                      {section.required && (
-                        <span
-                          className="ml-1 text-[10px]"
-                          style={{ color: 'var(--text-tertiary-weak)' }}
-                        >
-                          (required)
-                        </span>
+                    <div className="flex items-center gap-2 flex-1">
+                      <div
+                        className="text-xs font-medium"
+                        style={{ color: 'var(--text-heading)' }}
+                      >
+                        {section.title}
+                        {section.required && (
+                          <span
+                            className="ml-1 text-[10px]"
+                            style={{ color: 'var(--text-tertiary-weak)' }}
+                          >
+                            (required)
+                          </span>
+                        )}
+                      </div>
+                      {generating && sectionStatuses[section.id] && (
+                        <div className="flex items-center">
+                          {sectionStatuses[section.id] === 'pending' && (
+                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--text-tertiary-weak)' }} />
+                          )}
+                          {sectionStatuses[section.id] === 'generating' && (
+                            <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: 'var(--accent-primary)' }} />
+                          )}
+                          {sectionStatuses[section.id] === 'completed' && (
+                            <svg className="w-3 h-3" style={{ color: 'var(--accent-success)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                          {sectionStatuses[section.id] === 'error' && (
+                            <svg className="w-3 h-3" style={{ color: 'var(--accent-error)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </div>
                       )}
                     </div>
                     <svg
-                      className="w-3 h-3 transition-transform"
+                      className="w-3 h-3 transition-transform flex-shrink-0"
                       style={{
                         transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
                         color: 'var(--text-secondary)',
@@ -1205,6 +1291,7 @@ FORMAT REQUIREMENTS:
                               border: '1px solid var(--overlay-line-90)',
                               color: 'var(--text-heading)',
                               outline: 'none',
+                              colorScheme: theme === 'dark' ? 'dark' : 'light',
                             }}
                           >
                             <option value="gemini_fast">Gemini Fast</option>
@@ -1569,8 +1656,39 @@ FORMAT REQUIREMENTS:
           )}
         </div>
 
+        {/* Progress bar and status */}
+        {generating && generationProgress.total > 0 && (
+          <div className="pt-2 space-y-2">
+            <div className="w-full">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
+                  {currentGeneratingSectionId && sortedSections.find(s => s.id === currentGeneratingSectionId) 
+                    ? (() => {
+                        const currentIndex = sortedSections.findIndex(s => s.id === currentGeneratingSectionId);
+                        const sectionNumber = currentIndex >= 0 ? currentIndex + 1 : generationProgress.current;
+                        return `Generating section ${sectionNumber} of ${generationProgress.total}: ${sortedSections.find(s => s.id === currentGeneratingSectionId)?.title}`;
+                      })()
+                    : `Generating section ${generationProgress.current || 1} of ${generationProgress.total}`}
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                  {calculateTimeRemaining()}
+                </span>
+              </div>
+              <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--white-06)' }}>
+                <div 
+                  className="h-full transition-all duration-300"
+                  style={{ 
+                    backgroundColor: 'var(--accent-primary)',
+                    width: `${Math.max(0, Math.min(100, (Math.min(generationProgress.current, generationProgress.total - 1) / generationProgress.total) * 100))}%`
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Generate button */}
-        <div className="pt-2 flex justify-end">
+        <div className="pt-2 flex justify-start">
           <button
             onClick={handleGeneratePreview}
             disabled={!artifactName.trim() || generating}
@@ -1596,9 +1714,7 @@ FORMAT REQUIREMENTS:
               }
             }}
           >
-            {generating 
-              ? `Generating... (${generationProgress.current}/${generationProgress.total})`
-              : 'Next'}
+            Create
           </button>
         </div>
             </div>
@@ -1812,22 +1928,44 @@ FORMAT REQUIREMENTS:
                         }}
                         className="w-full flex items-center justify-between text-left"
                       >
-                        <div
-                          className="text-xs font-medium"
-                          style={{ color: 'var(--text-heading)' }}
-                        >
-                          {section.title}
-                          {section.required && (
-                            <span
-                              className="ml-1 text-[10px]"
-                              style={{ color: 'var(--text-tertiary-weak)' }}
-                            >
-                              (required)
-                            </span>
+                        <div className="flex items-center gap-2 flex-1">
+                          <div
+                            className="text-xs font-medium"
+                            style={{ color: 'var(--text-heading)' }}
+                          >
+                            {section.title}
+                            {section.required && (
+                              <span
+                                className="ml-1 text-[10px]"
+                                style={{ color: 'var(--text-tertiary-weak)' }}
+                              >
+                                (required)
+                              </span>
+                            )}
+                          </div>
+                          {generating && sectionStatuses[section.id] && (
+                            <div className="flex items-center">
+                              {sectionStatuses[section.id] === 'pending' && (
+                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--text-tertiary-weak)' }} />
+                              )}
+                              {sectionStatuses[section.id] === 'generating' && (
+                                <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: 'var(--accent-primary)' }} />
+                              )}
+                              {sectionStatuses[section.id] === 'completed' && (
+                                <svg className="w-3 h-3" style={{ color: 'var(--accent-success)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              )}
+                              {sectionStatuses[section.id] === 'error' && (
+                                <svg className="w-3 h-3" style={{ color: 'var(--accent-error)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              )}
+                            </div>
                           )}
                         </div>
                         <svg
-                          className="w-3 h-3 transition-transform"
+                          className="w-3 h-3 transition-transform flex-shrink-0"
                           style={{
                             transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
                             color: 'var(--text-secondary)',
@@ -2328,8 +2466,39 @@ FORMAT REQUIREMENTS:
               )}
             </div>
 
+            {/* Progress bar and status */}
+            {generating && generationProgress.total > 0 && (
+              <div className="pt-2 space-y-2">
+                <div className="w-full">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>
+                      {currentGeneratingSectionId && sortedSections.find(s => s.id === currentGeneratingSectionId) 
+                        ? (() => {
+                            const currentIndex = sortedSections.findIndex(s => s.id === currentGeneratingSectionId);
+                            const sectionNumber = currentIndex >= 0 ? currentIndex + 1 : generationProgress.current;
+                            return `Generating section ${sectionNumber} of ${generationProgress.total}: ${sortedSections.find(s => s.id === currentGeneratingSectionId)?.title}`;
+                          })()
+                        : `Generating section ${generationProgress.current || 1} of ${generationProgress.total}`}
+                    </span>
+                    <span className="text-[11px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                      {calculateTimeRemaining()}
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--white-06)' }}>
+                    <div 
+                      className="h-full transition-all duration-300"
+                      style={{ 
+                        backgroundColor: 'var(--accent-primary)',
+                        width: `${Math.max(0, Math.min(100, (Math.min(generationProgress.current, generationProgress.total - 1) / generationProgress.total) * 100))}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Generate button */}
-            <div className="pt-2 flex justify-end">
+            <div className="pt-2 flex justify-start">
               <button
                 onClick={handleGeneratePreview}
                 disabled={!artifactName.trim() || generating}
@@ -2355,9 +2524,7 @@ FORMAT REQUIREMENTS:
                   }
                 }}
               >
-                {generating 
-                  ? `Generating... (${generationProgress.current}/${generationProgress.total})`
-                  : 'Next'}
+                Create
               </button>
             </div>
           </div>

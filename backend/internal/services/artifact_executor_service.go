@@ -102,7 +102,7 @@ func (s *ArtifactExecutorService) GenerateSection(
 		Prompt:            prompt,
 		SystemInstruction: systemInstruction,
 		Temperature:       0.7,
-		MaxOutputTokens:   4096,
+		MaxOutputTokens:   8192,
 	}
 
 	// Execute generation
@@ -162,7 +162,7 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 		ModelOverride:     req.Model,
 		SystemInstruction: systemInstruction,
 		Temperature:       0.7,
-		MaxOutputTokens:   4096,
+		MaxOutputTokens:   8192,
 	}
 
 	// Accumulate content
@@ -399,8 +399,8 @@ func (s *ArtifactExecutorService) buildSectionPrompt(
 				builder.WriteString(fmt.Sprintf("### %s\n\n", doc.Title))
 				// Truncate if too long
 				text := doc.Text
-				if len(text) > 5000 {
-					text = text[:5000] + "...\n[Document truncated]"
+				if len(text) > 20000 {
+					text = text[:20000] + "...\n[Document truncated]"
 				}
 				builder.WriteString(text)
 				builder.WriteString("\n\n")

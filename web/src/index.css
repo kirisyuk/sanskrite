@@ -572,6 +572,17 @@ p {
   color: #0B0D12 !important;
 }
 
+/* Global styles for select option elements in dark theme */
+[data-theme="dark"] select option {
+  background-color: #1A1A1A !important;
+  color: #D0D0D8 !important;
+}
+
+[data-theme="light"] select option {
+  background-color: rgba(255,255,255,0.98) !important;
+  color: #0B0D12 !important;
+}
+
 /* Button components */
 .btn {
   display: inline-flex;

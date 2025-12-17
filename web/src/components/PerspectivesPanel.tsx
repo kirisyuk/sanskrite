@@ -344,7 +344,7 @@ FORMAT REQUIREMENTS:
             model: sectionModel.replace(/_/g, '-'),
             prompt: promptWithContext,
             systemInstruction: langDirective,
-            maxOutputTokens: 4096,
+            maxOutputTokens: 8192,
             webSearchEnabled: false,
           });
           
@@ -850,6 +850,7 @@ FORMAT REQUIREMENTS:
                   border: '1px solid var(--overlay-line-90)',
                   color: 'var(--text-heading)',
                   outline: 'none',
+                  colorScheme: theme === 'dark' ? 'dark' : 'light',
                 }}
               >
                 <option value="gemini_fast">Gemini Fast</option>
@@ -898,6 +899,7 @@ FORMAT REQUIREMENTS:
                   border: '1px solid var(--overlay-line-90)',
                   color: 'var(--text-heading)',
                   outline: 'none',
+                  colorScheme: theme === 'dark' ? 'dark' : 'light',
                 }}
               >
                 <option value="gemini_fast">Gemini Fast</option>

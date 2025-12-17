@@ -90,7 +90,7 @@ export default function ShareViewPage() {
         try {
           const content = it.contentSanitized || it.content || '{}';
           const parsed = JSON.parse(content);
-          if (parsed.confidence >= 0.6 && parsed.explanation) {
+          if (parsed.confidence >= 0.7 && parsed.explanation) {
             const warning = { confidence: parsed.confidence, explanation: parsed.explanation };
             // Collect all target IDs (replyTo and relations.targetId) to avoid duplicates
             const targetIds = new Set<string>();
