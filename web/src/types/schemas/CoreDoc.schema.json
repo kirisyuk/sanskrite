@@ -479,6 +479,12 @@
             }
           },
           "required": ["preferredLanguage", "systemPrompt"]
+        },
+        "userRequest": {
+          "type": "string"
+        },
+        "sourceInteractionId": {
+          "type": "string"
         }
       },
       "required": ["format", "focus", "orchestratorModel", "defaultModel", "reviewPrompt", "structure", "contextSources", "autoUpdateEnabled", "currentVersionID", "versionsRetained", "versions", "generationSettings"]

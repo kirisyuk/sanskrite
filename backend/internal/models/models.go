@@ -723,6 +723,7 @@ type ArtifactConfig struct {
 	StructureGeneration *StructureGenerationConfig `json:"structureGeneration,omitempty" firestore:"structureGeneration,omitempty"` // how structure was created
 	GenerationSettings  GenerationSettings         `json:"generationSettings" firestore:"generationSettings"`                       // generation settings
 	UserRequest         *string                    `json:"userRequest,omitempty" firestore:"userRequest,omitempty"`                 // original user request/requirements for the document
+	SourceInteractionID *string                   `json:"sourceInteractionId,omitempty" firestore:"sourceInteractionId,omitempty"` // ID of last user or assistant interaction that triggered document creation
 }
 
 // ArtifactSection defines a section of the artifact with its generation config

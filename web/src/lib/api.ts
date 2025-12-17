@@ -595,7 +595,9 @@ class ApiClient {
   }
 
   async docsUpdate(projectId: string, docId: string, data: { filename?: string; description?: string }) {
-    const res = await this.client.patch(`/api/v1/projects/${projectId}/docs/${docId}`, data);
+    // Encode docId to handle special characters like colons (e.g., Firestore version suffixes)
+    const encodedDocId = encodeURIComponent(docId);
+    const res = await this.client.patch(`/api/v1/projects/${projectId}/docs/${encodedDocId}`, data);
     return res.data as any;
   }
 

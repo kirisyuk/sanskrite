@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -684,18 +685,39 @@ func (h *ProjectsHandler) UpdateProjectDoc(w http.ResponseWriter, r *http.Reques
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) < 7 { // /api/v1/projects/{id}/docs/{docId}
+		if h.logger != nil {
+			h.logger.Printf("[UpdateProjectDoc] Invalid path: %s, parts: %v", r.URL.Path, parts)
+		}
 		WriteBadRequest(w, "INVALID_PATH", "Project and document ID are required")
 		return
 	}
-	projectID, docID := parts[3], parts[5]
+	projectID, docIDRaw := parts[3], parts[5]
+	// Decode docID to handle URL-encoded characters (e.g., %3A for colon)
+	docID, err := url.PathUnescape(docIDRaw)
+	if err != nil {
+		// If decoding fails, use raw value
+		docID = docIDRaw
+		if h.logger != nil {
+			h.logger.Printf("[UpdateProjectDoc] Failed to decode docID: %v, using raw: %s", err, docIDRaw)
+		}
+	}
+	if h.logger != nil {
+		h.logger.Printf("[UpdateProjectDoc] projectID=%s, docID=%s (raw=%s), path=%s", projectID, docID, docIDRaw, r.URL.Path)
+	}
 	// Access check via project
 	project, err := h.repo.Get(r.Context(), projectID)
 	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[UpdateProjectDoc] Access denied for projectID=%s: err=%v", projectID, err)
+		}
 		WriteForbidden(w, "Access denied")
 		return
 	}
 	cd, err := h.coreDocs.Get(r.Context(), docID)
 	if err != nil || cd == nil || cd.ProjectID != projectID || cd.TenantID != authInfo.TenantID {
+		if h.logger != nil {
+			h.logger.Printf("[UpdateProjectDoc] Document not found: docID=%s, err=%v, cd=%v", docID, err, cd != nil)
+		}
 		WriteNotFound(w, "Document not found")
 		return
 	}
@@ -704,6 +726,9 @@ func (h *ProjectsHandler) UpdateProjectDoc(w http.ResponseWriter, r *http.Reques
 		Description *string `json:"description,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		if h.logger != nil {
+			h.logger.Printf("[UpdateProjectDoc] Invalid JSON: %v", err)
+		}
 		WriteBadRequest(w, "INVALID_JSON", "Invalid request body")
 		return
 	}

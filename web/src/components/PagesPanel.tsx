@@ -609,6 +609,25 @@ FORMAT REQUIREMENTS:
         smartUpdate: smartUpdate,
       } : undefined;
 
+      // Get last interaction ID (user or assistant) from chat store
+      // This represents the state of the chat at the moment of document creation
+      // and will be used as a reference point for future updates
+      const genaiChat = useGenaiChatStore.getState();
+      const interactions = genaiChat.interactions || [];
+      let lastInteractionId: string | undefined;
+      // Find last user or assistant interaction by creation time
+      // Sort by createdAt to ensure we get the most recent one
+      const sortedInteractions = [...interactions]
+        .filter(it => it && (it.kind === 'user' || it.kind === 'assistant'))
+        .sort((a, b) => {
+          const timeA = new Date(a.createdAt).getTime();
+          const timeB = new Date(b.createdAt).getTime();
+          return timeB - timeA; // Most recent first
+        });
+      if (sortedInteractions.length > 0) {
+        lastInteractionId = sortedInteractions[0].id;
+      }
+
       const artifactDoc: Partial<CoreDoc> = {
         filename: artifactName.trim(),
         contentType: 'text/markdown',
@@ -626,11 +645,18 @@ FORMAT REQUIREMENTS:
           currentVersionID: versionId,
           versionsRetained: 10,
           versions: [],
+          structureGeneration: {
+            mode: 'template',
+            sourceTemplate: selectedTemplate.id,
+            generatedAt: new Date().toISOString(),
+            userModified: false,
+          },
           generationSettings: {
             preferredLanguage: 'en',
             systemPrompt: 'You are a helpful assistant.',
           },
           userRequest: userRequest.trim() || undefined,
+          sourceInteractionId: lastInteractionId,
         },
       };
 
