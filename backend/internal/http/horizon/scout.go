@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 // GetScoutingJob получает статус ScoutingJob

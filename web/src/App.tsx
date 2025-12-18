@@ -9,6 +9,7 @@ import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
 import { ServerUnavailableBanner } from './components/ServerUnavailableBanner';
 import DiscoveryPage from './pages/DiscoveryPage';
+import HorizonPage from './pages/HorizonPage';
 import ShareViewPage from './pages/ShareViewPage';
 import VerifiedPage from './pages/VerifiedPage';
 import VerifiedViewPage from './pages/VerifiedViewPage';
@@ -80,6 +81,7 @@ function AppContent() {
             <Route path="/shared/:token" element={<ShareViewPage />} />
             <Route path="/verified" element={<VerifiedPage />} />
             <Route path="/verified/:code" element={<VerifiedViewPage />} />
+            <Route path="/horizon" element={<AuthGuard><HorizonPage /></AuthGuard>} />
             <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
             <Route path="/terms" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
             <Route path="/privacy" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />

@@ -13,6 +13,7 @@ interface ScenarioDataState {
   // Actions
   addScenarioData: (data: ScenarioData) => void;
   updateScenarioData: (id: string, updater: (data: ScenarioData) => ScenarioData) => void;
+  removeScenarioData: (id: string) => void;
   getScenarioData: (projectId: string, scenarioId: string) => ScenarioData[];
   clearScenarioData: (projectId: string, scenarioId: string) => void;
   clearProjectData: (projectId: string) => void;
@@ -64,6 +65,35 @@ export const useScenarioDataStore = create<ScenarioDataState>((set, get) => ({
           const index = scenarioArray.findIndex(d => d.id === id);
           if (index >= 0) {
             scenarioArray[index] = updater(scenarioArray[index]);
+            return { data: newData };
+          }
+        }
+      }
+      
+      return { data: newData };
+    });
+  },
+  
+  removeScenarioData: (id: string) => {
+    set((state) => {
+      const newData = new Map(state.data);
+      
+      // Find and remove the scenario data
+      for (const [projectId, projectMap] of newData.entries()) {
+        for (const [scenarioId, scenarioArray] of projectMap.entries()) {
+          const index = scenarioArray.findIndex(d => d.id === id);
+          if (index >= 0) {
+            // Remove the item
+            const updatedArray = scenarioArray.filter(d => d.id !== id);
+            if (updatedArray.length === 0) {
+              // Remove scenario map if empty
+              projectMap.delete(scenarioId);
+              if (projectMap.size === 0) {
+                newData.delete(projectId);
+              }
+            } else {
+              projectMap.set(scenarioId, updatedArray);
+            }
             return { data: newData };
           }
         }

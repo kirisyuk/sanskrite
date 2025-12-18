@@ -47,11 +47,29 @@ func (s *OpenAIService) ExecuteTask(ctx context.Context, task *AITask, model str
 
 	log.Printf("[OpenAI] ExecuteTask: type=%s, model=%s", task.TaskType, model)
 
+	inputTokensEst := len(task.InputContent) / 4
+	var caps *AIModelCapabilities
+	if s.ModelManager != nil {
+		if c, err := s.ModelManager.GetModelCapabilities(model); err == nil {
+			cc := c
+			caps = &cc
+		}
+	}
+	maxOut := computeMaxOutputTokens(model, caps, task, inputTokensEst)
+
 	requestBody := map[string]interface{}{
 		"model": model,
 		"messages": []map[string]string{
 			{"role": "user", "content": task.InputContent},
 		},
+		// Ensure we don't get truncated completions (especially for large structured JSON outputs).
+		// NOTE: Newer OpenAI models (e.g., gpt-5-*) reject max_tokens and require max_completion_tokens.
+		"max_completion_tokens": maxOut,
+	}
+	// Back-compat: include max_tokens only for models that still accept it.
+	// Heuristic: gpt-5-* and o* reject max_tokens.
+	if !strings.HasPrefix(model, "gpt-5") && !strings.HasPrefix(model, "o") {
+		requestBody["max_tokens"] = maxOut
 	}
 
 	bodyJSON, err := json.Marshal(requestBody)
@@ -87,6 +105,7 @@ func (s *OpenAIService) ExecuteTask(ctx context.Context, task *AITask, model str
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 
@@ -96,6 +115,10 @@ func (s *OpenAIService) ExecuteTask(ctx context.Context, task *AITask, model str
 
 	if len(response.Choices) == 0 || response.Choices[0].Message.Content == "" {
 		return nil, fmt.Errorf("empty response from OpenAI Chat API")
+	}
+	// If the model hit the completion limit, treat as error so executor can fallback.
+	if strings.TrimSpace(response.Choices[0].FinishReason) == "length" {
+		return nil, fmt.Errorf("openai response truncated (finish_reason=length)")
 	}
 
 	content := response.Choices[0].Message.Content

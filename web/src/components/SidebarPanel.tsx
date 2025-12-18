@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { useLocation } from 'react-router-dom';
 import { useProjectsStore } from '../stores/projectsStore';
 import { api } from '../lib/api';
 import { isArtifact, type Artifact } from '../types/artifact';
@@ -221,6 +222,18 @@ const ProjectRow = React.memo<{
               W
             </div>
           )}
+          {project.projectType === 'horizon' && (
+            <div
+              className="flex-shrink-0 w-4 h-4 rounded-sm flex items-center justify-center text-[10px] font-bold"
+              style={{
+                backgroundColor: '#E74C3C', // Red
+                color: '#FFF',
+              }}
+              title="Horizon Project"
+            >
+              H
+            </div>
+          )}
           <span
             className="flex-1 truncate"
             style={{
@@ -349,6 +362,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   onSelectScenario,
 }) => {
   const { t } = useTranslation();
+  const location = useLocation();
+  
   // PERFORMANCE: Subscribe to projects array directly, but use shallow comparison
   // We need to track displayName changes for renamed projects
   const projects = useProjectsStore((s) => s.projects);
@@ -358,15 +373,28 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   const deletingProjectIdsArray = useProjectsStore((s) => s.deletingProjectIds);
   const deletingProjectIds = React.useMemo(() => new Set(deletingProjectIdsArray), [deletingProjectIdsArray]);
   
+  // Filter projects by type based on current route
+  // On /horizon page, show only horizon projects; otherwise show all except horizon
+  const filteredProjects = React.useMemo(() => {
+    const isHorizonPage = location.pathname === '/horizon';
+    return projects.filter((p) => {
+      if (isHorizonPage) {
+        return p.projectType === 'horizon';
+      }
+      // On other pages, exclude horizon projects (they belong to /horizon page)
+      return p.projectType !== 'horizon';
+    });
+  }, [projects, location.pathname]);
+  
   // Memoize projects array with a stable reference to prevent unnecessary re-renders
   // Create a signature string that includes displayName and projectType to detect changes
   const projectsSignature = React.useMemo(() => 
-    projects.map((p) => `${p.id}:${p.displayName}:${p.lastInteractionAt || p.createdAt}:${p.projectType || ''}`).join(','),
-    [projects]
+    filteredProjects.map((p) => `${p.id}:${p.displayName}:${p.lastInteractionAt || p.createdAt}:${p.projectType || ''}`).join(','),
+    [filteredProjects]
   );
   
   // Memoized projects array - will update when signature changes
-  const memoizedProjects = React.useMemo(() => projects, [projectsSignature]);
+  const memoizedProjects = React.useMemo(() => filteredProjects, [projectsSignature]);
   
   // Agent jobs state
   const [agentJobs, setAgentJobs] = React.useState<any[]>([]);

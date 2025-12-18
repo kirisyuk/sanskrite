@@ -148,7 +148,13 @@ func (e *SourceExecutor) executeRSSSource(ctx context.Context, source *models.Da
 
 	return &ExecuteDataSourceResult{
 		Content:     content,
-		DocumentID:  documentIDs[0], // Используем первый документ как основной
+		// Use first document if present; RSS normalization may not always create documents.
+		DocumentID: func() string {
+			if len(documentIDs) > 0 {
+				return documentIDs[0]
+			}
+			return ""
+		}(),
 		SourceIDs:   []string{source.ID},
 		DocumentIDs: documentIDs,
 		SourceURL:   sourceURL,

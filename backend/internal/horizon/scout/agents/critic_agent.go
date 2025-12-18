@@ -40,8 +40,8 @@ type ValidationConflict struct {
 }
 
 // Validate проверяет извлеченные данные на соответствие источникам
-func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, sourceContent string) (*ValidationResult, error) {
-	prompt := a.buildValidationPrompt(extractedData, sourceContent)
+func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, relations []DiscoveredRelation, sourceContent string) (*ValidationResult, error) {
+	prompt := a.buildValidationPrompt(extractedData, relations, sourceContent)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -51,8 +51,8 @@ func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.Horizo
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
 			MinCapabilityScore:       8,
-			MinContextWindow:         8000,
-			MaxOutputSize:            2048,
+			MinContextWindow:         16000, // Увеличиваем окно, так как добавляем relations
+			MaxOutputSize:            4096,
 		},
 		Verifier: verifier,
 	}
@@ -77,17 +77,22 @@ func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.Horizo
 }
 
 // buildValidationPrompt строит промпт для валидации данных
-func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, sourceContent string) string {
+func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, sourceContent string) string {
 	extractedJSON, _ := json.MarshalIndent(extractedData, "", "  ")
-	return fmt.Sprintf(`You are a validation agent (Critic) for a risk analysis system. Your task is to verify that extracted data matches the source content.
+	relationsJSON, _ := json.MarshalIndent(relations, "", "  ")
+
+	return fmt.Sprintf(`You are a validation agent (Critic) for a risk analysis system. Your task is to verify that extracted data matches the source content and assess the completeness of the knowledge graph.
 
 EXTRACTED DATA (JSON):
+%s
+
+EXTRACTED RELATIONS (JSON):
 %s
 
 SOURCE CONTENT:
 %s
 
-TASK: Compare the extracted data with the source content and identify any conflicts, inconsistencies, or missing information.
+TASK: Compare the extracted data with the source content and identify any conflicts, inconsistencies, or missing information. Pay close attention to missing relationships.
 
 	Return a JSON object with:
 	- hasConflicts: boolean indicating if conflicts were found
@@ -103,8 +108,8 @@ TASK: Compare the extracted data with the source content and identify any confli
 
 	Missing Info logic:
 	- If important fields (like location, key metrics for the sector) are empty or unknown, add a specific question to 'missingInfo'.
-	- Example: "What is the production capacity of TSMC Fab 21?"
+	- If the entity is an Organization or Facility, and NO supply chain relations (suppliers, customers, competitors) were found, you MUST add a question to find them. Example: "Who are the key suppliers for Tesla?" or "What are the major competitors of this entity?"
+	- If relations seem sparse or inconsistent with the entity's scale, flag it.
 
-	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), sourceContent)
+	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), sourceContent)
 }
-

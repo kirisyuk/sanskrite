@@ -1,8 +1,26 @@
 package propagation
 
+import "strings"
+
+func metricBaseName(metricNameOrPath string) string {
+	s := strings.TrimSpace(metricNameOrPath)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "/") {
+		parts := strings.Split(strings.Trim(s, "/"), "/")
+		if len(parts) == 0 {
+			return ""
+		}
+		return parts[len(parts)-1]
+	}
+	return s
+}
+
 // getMetricType определяет тип метрики (magnitude или directional) на основе её имени
 // Использует список стандартизированных метрик из таксономии
 func getMetricType(metricName string) string {
+	metricName = metricBaseName(metricName)
 	// Стандартизированные directional метрики (из taxonomy.md)
 	directionalMetrics := map[string]bool{
 		"geopolitical_alignment": true,

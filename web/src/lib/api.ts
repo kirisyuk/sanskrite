@@ -1509,6 +1509,18 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       throw error;
     }
   }
+
+  async deleteScenarioData(projectId: string, scenarioId: string, dataId: string): Promise<{ success: boolean; message: string }> {
+    console.log(`[API] deleteScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}, dataId=${dataId}`);
+    try {
+      const res = await this.client.delete(`/api/v1/projects/${projectId}/scenarios/${scenarioId}/data/${dataId}`);
+      console.log(`[API] deleteScenarioData response:`, res.data);
+      return res.data;
+    } catch (error: any) {
+      console.error(`[API] deleteScenarioData error:`, error);
+      throw error;
+    }
+  }
 }
 
 export const api = new ApiClient();

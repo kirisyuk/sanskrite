@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -57,13 +58,35 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 			},
 		},
 	}
+	// Ensure a sufficient completion budget, especially for structured JSON.
+	inputTokensEst := len(task.InputContent) / 4
+	var caps *AIModelCapabilities
+	if s.ModelManager != nil {
+		if c, err := s.ModelManager.GetModelCapabilities(model); err == nil {
+			cc := c
+			caps = &cc
+		}
+	}
+	maxOut := computeMaxOutputTokens(model, caps, task, inputTokensEst)
+	requestBody["generationConfig"] = map[string]interface{}{
+		"maxOutputTokens": maxOut,
+	}
+	// If task requests Search Grounding, enable googleSearch tool for Gemini.
+	// This is critical: previously we only *filtered* for grounding-capable models,
+	// but didn't actually enable grounding in the request.
+	if task.AIRequirements.SearchGroundingCapability {
+		log.Printf("[VertexAI] Grounding enabled via tools.googleSearch")
+		requestBody["tools"] = []map[string]interface{}{
+			{"googleSearch": map[string]interface{}{}},
+		}
+	}
 
 	bodyJSON, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1/models/%s:generateContent", model)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -87,6 +110,33 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		return nil, fmt.Errorf("vertex AI API error %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Grounding visibility: if grounding is requested, we should typically see groundingMetadata in candidates.
+	// We don't fail if it's missing (API may choose not to ground), but we log it for diagnosis.
+	if task.AIRequirements.SearchGroundingCapability {
+		var root map[string]interface{}
+		if err := json.Unmarshal(body, &root); err == nil {
+			hasGrounding := false
+			if candidates, ok := root["candidates"].([]interface{}); ok && len(candidates) > 0 {
+				if c0, ok := candidates[0].(map[string]interface{}); ok {
+					if _, ok := c0["groundingMetadata"]; ok {
+						hasGrounding = true
+					}
+				}
+			}
+			if hasGrounding {
+				log.Printf("[VertexAI] GroundingMetadata present in response")
+			} else {
+				// Some responses include promptFeedback with safety blocks; log keys for debugging.
+				keys := make([]string, 0, len(root))
+				for k := range root {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				log.Printf("[VertexAI] GroundingMetadata NOT present in response (keys=%v). Grounding may have been skipped or blocked.", keys)
+			}
+		}
+	}
+
 	var result struct {
 		Candidates []struct {
 			Content struct {
@@ -102,12 +152,20 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 	}
 
 	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("empty response from vertex AI")
+		preview := string(body)
+		if len(preview) > 1200 {
+			preview = preview[:1200] + "..."
+		}
+		return nil, fmt.Errorf("empty response from vertex AI (no candidates/parts). raw=%s", preview)
 	}
 
 	content := result.Candidates[0].Content.Parts[0].Text
 	if content == "" {
-		return nil, fmt.Errorf("empty response from vertex AI")
+		preview := string(body)
+		if len(preview) > 1200 {
+			preview = preview[:1200] + "..."
+		}
+		return nil, fmt.Errorf("empty response from vertex AI (empty text). raw=%s", preview)
 	}
 
 	return &AITaskResult{
@@ -330,7 +388,7 @@ func (s *VertexAIService) BeginChatWithTools(ctx context.Context, task *AITask, 
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1/models/%s:generateContent", model)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -425,7 +483,7 @@ func (s *VertexAIService) ContinueWithToolResults(ctx context.Context, sessionID
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1/models/%s:generateContent", model)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)

@@ -260,7 +260,6 @@ func (e *PropagationEngine) processColdPathIfReady(ctx context.Context) {
 		}
 
 		// Применяем изменение
-		oldValue := currentMetric
 		newValue := currentMetric
 		newValue.Value = currentMetric.Value + task.Delta
 		

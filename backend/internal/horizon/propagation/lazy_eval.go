@@ -4,8 +4,6 @@ import (
 	"context"
 	"sync"
 	"time"
-
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 // LazyEvaluator управляет отложенными вычислениями (Cold Path)

@@ -1,3 +1,10 @@
+package repo
+
+import (
+	"context"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+)
+
 // ListPending возвращает список ожидающих задач Scout
 func (r *ScoutingJobsRepository) ListPending(ctx context.Context, limit int) ([]*models.ScoutingJob, error) {
 	agentJobs, err := r.agentJobsRepo.ListPendingByAgent(ctx, "scout", limit)
@@ -20,10 +27,13 @@ func (r *ScoutingJobsRepository) ListPending(ctx context.Context, limit int) ([]
 		if lensID, ok := aj.State["lensId"].(string); ok {
 			scoutingJob.LensID = lensID
 		}
+		// ВАЖНО: ScoutingJobsRepository хранит только AgentJob, поэтому стратегия тоже должна жить в State
+		if strategy, ok := aj.State["scoutingStrategy"].(string); ok {
+			scoutingJob.ScoutingStrategy = strategy
+		}
 		
 		jobs = append(jobs, scoutingJob)
 	}
 	
 	return jobs, nil
 }
-

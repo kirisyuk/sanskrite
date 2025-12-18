@@ -38,10 +38,12 @@ import (
 	// Horizon system
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 )
 
@@ -1069,6 +1071,8 @@ func main() {
 				scoutWorkflow,
 				horizonFragmentsRepo,
 				horizonFramesRepo,
+				horizonEdgesRepo,
+				horizonScoutingJobsRepo,
 				pub,
 				exec,
 			)
@@ -1104,7 +1108,7 @@ func main() {
 
 						for _, job := range jobs {
 							// Выполняем задачу асинхронно
-							go func(j *models.ScoutingJob) {
+							go func(j *horizonmodels.ScoutingJob) {
 								execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 								defer cancel()
 								logger.Printf("Scout Worker executing job %s for %s", j.ID, j.TargetCanonicalPath)
@@ -2261,6 +2265,15 @@ func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request, liste
 				s.projectsHandler.ListScenarioData(w, r)
 			case http.MethodPost:
 				s.projectsHandler.CreateScenarioData(w, r)
+			default:
+				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+			}
+			return
+		} else if len(pathParts) == 8 && pathParts[4] == "scenarios" && pathParts[6] == "data" {
+			// Delete scenario data: /api/v1/projects/{id}/scenarios/{scenarioId}/data/{dataId}
+			switch r.Method {
+			case http.MethodDelete:
+				s.projectsHandler.DeleteScenarioData(w, r)
 			default:
 				httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
 			}

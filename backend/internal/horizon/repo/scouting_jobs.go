@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
@@ -69,15 +70,15 @@ func (r *ScoutingJobsRepository) Update(ctx context.Context, job *models.Scoutin
 func (r *ScoutingJobsRepository) ListByLens(ctx context.Context, tenantID, lensID string, limit int) ([]*models.ScoutingJob, error) {
 	// Получаем все AgentJob для tenant с AgentID="scout"
 	// Используем ListByStatus для получения всех jobs по разным статусам, затем фильтруем по AgentID
-	allStatuses := []models.AgentJobStatus{
-		models.AgentJobStatusPending,
-		models.AgentJobStatusRunning,
-		models.AgentJobStatusCompleted,
-		models.AgentJobStatusFailed,
-		models.AgentJobStatusPartial,
+	allStatuses := []coremodels.AgentJobStatus{
+		coremodels.AgentJobStatusPending,
+		coremodels.AgentJobStatusRunning,
+		coremodels.AgentJobStatusCompleted,
+		coremodels.AgentJobStatusFailed,
+		coremodels.AgentJobStatusPartial,
 	}
 	
-	var allAgentJobs []*models.AgentJob
+	var allAgentJobs []*coremodels.AgentJob
 	for _, status := range allStatuses {
 		jobs, err := r.agentJobsRepo.ListByStatus(ctx, tenantID, status, limit*3) // Увеличиваем лимит для фильтрации
 		if err != nil {

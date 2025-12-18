@@ -4371,3 +4371,63 @@ func (h *ProjectsHandler) CreateScenarioData(w http.ResponseWriter, r *http.Requ
 
 	WriteJSON(w, http.StatusCreated, created)
 }
+
+// DeleteScenarioData handles DELETE /api/v1/projects/{id}/scenarios/{scenarioId}/data/{dataId}
+func (h *ProjectsHandler) DeleteScenarioData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only DELETE is allowed", nil)
+		return
+	}
+	if h.scenarioDataRepo == nil {
+		WriteInternalError(w, "Scenario data repository is not configured")
+		return
+	}
+
+	authInfo := GetAuthInfo(r.Context())
+	if authInfo == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 8 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID, Scenario ID and Data ID are required")
+		return
+	}
+	projectID := pathParts[3]
+	scenarioID := pathParts[5]
+	dataID := pathParts[7]
+
+	// Validate project ownership
+	project, err := h.repo.Get(r.Context(), projectID)
+	if err != nil || project == nil || project.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Get scenario data to verify ownership
+	data, err := h.scenarioDataRepo.Get(r.Context(), dataID)
+	if err != nil {
+		h.logger.Printf("Failed to get scenario data: %v", err)
+		WriteNotFound(w, "Scenario data not found")
+		return
+	}
+
+	// Verify ownership
+	if data.ProjectID != projectID || data.ScenarioID != scenarioID || data.TenantID != authInfo.TenantID {
+		WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// Delete scenario data
+	if err := h.scenarioDataRepo.DeleteByID(r.Context(), dataID); err != nil {
+		h.logger.Printf("Failed to delete scenario data: %v", err)
+		WriteInternalError(w, "Failed to delete scenario data")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Scenario data deleted successfully",
+	})
+}

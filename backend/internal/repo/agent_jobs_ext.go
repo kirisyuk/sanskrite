@@ -1,3 +1,11 @@
+package repo
+
+import (
+	"context"
+	"cloud.google.com/go/firestore"
+	"github.com/igorkirisyuk/sanskrite/internal/models"
+)
+
 // ListPendingByAgent возвращает список ожидающих задач для конкретного агента по всем тенантам
 // Использует Collection Group query для поиска по всем коллекциям agent_jobs
 func (r *AgentJobsRepository) ListPendingByAgent(ctx context.Context, agentID string, limit int) ([]*models.AgentJob, error) {
@@ -5,13 +13,16 @@ func (r *AgentJobsRepository) ListPendingByAgent(ctx context.Context, agentID st
 		return nil, ErrInvalidAgentJob
 	}
 	
-	// Используем Collection Group query
-	// Требуется индекс для collection group "agent_jobs": status ASC, createdAt ASC (или просто по status/agentId)
-	q := r.db.CollectionGroup("agent_jobs").
+	// Используем обычный запрос к коллекции для Strong Consistency
+	// q := r.db.CollectionGroup("agent_jobs")... // CollectionGroup is eventually consistent
+	q := r.col.
 		Where("agentId", "==", agentID).
 		Where("status", "==", models.AgentJobStatusPending).
 		OrderBy("createdAt", firestore.Asc) // FIFO
-		
+
+	// DEBUG LOG
+	// fmt.Printf("DEBUG: ListPendingByAgent agentID=%s\n", agentID)
+
 	if limit > 0 {
 		q = q.Limit(limit)
 	}
@@ -33,4 +44,3 @@ func (r *AgentJobsRepository) ListPendingByAgent(ctx context.Context, agentID st
 	
 	return jobs, nil
 }
-

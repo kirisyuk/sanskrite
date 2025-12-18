@@ -3,6 +3,7 @@ package lens
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -52,8 +53,25 @@ func (c *MetricsCalculator) CalculateLensMetrics(ctx context.Context, lens *mode
 	metrics["activeFragments"] = c.countActiveFragments(fragments)
 
 	// Вычисляем общий риск-скор (если есть метрика operational_health)
+	// Support both legacy keys ("operational_health") and canonical metric paths ("/metric/risk/operational_health").
 	if avgHealth, ok := metrics["operational_health"].(float64); ok {
 		metrics["totalRiskScore"] = 1.0 - avgHealth // Инвертируем: низкий operational_health = высокий риск
+	} else {
+		// Look for canonical path key
+		if v, ok2 := metrics["/metric/risk/operational_health"].(float64); ok2 {
+			metrics["totalRiskScore"] = 1.0 - v
+		} else {
+			// As a fallback, find any metric whose base name matches operational_health.
+			for k, vv := range metrics {
+				parts := strings.Split(strings.Trim(k, "/"), "/")
+				if len(parts) > 0 && parts[len(parts)-1] == "operational_health" {
+					if f, ok4 := vv.(float64); ok4 {
+						metrics["totalRiskScore"] = 1.0 - f
+						break
+					}
+				}
+			}
+		}
 	}
 
 	return metrics, nil

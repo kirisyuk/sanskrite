@@ -3,12 +3,76 @@ package lens
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
+
+func parseStringSlice(v interface{}) []string {
+	switch t := v.(type) {
+	case []string:
+		out := make([]string, 0, len(t))
+		for _, s := range t {
+			if strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(t))
+		for _, it := range t {
+			if s, ok := it.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	case string:
+		parts := strings.Split(t, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func parseInt(v interface{}, def int) int {
+	switch t := v.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case float64:
+		return int(t)
+	case float32:
+		return int(t)
+	case string:
+		t = strings.TrimSpace(t)
+		if t == "" {
+			return def
+		}
+		if i, err := strconv.Atoi(t); err == nil {
+			return i
+		}
+		if f, err := strconv.ParseFloat(t, 64); err == nil {
+			return int(f)
+		}
+		return def
+	default:
+		return def
+	}
+}
 
 // LensService управляет Lens и подписками на HorizonFragment
 type LensService struct {
@@ -49,50 +113,75 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	}
 	lens.ID = lensID
 
+	// Optional behavior knobs for Horizon assembly (kept in ViewConfig to avoid breaking schema):
+	// - requestedMetrics: []string | []any(strings) | "a,b,c"
+	// - maxRecursionDepth: number | string
+	requestedMetrics := []string(nil)
+	maxRecursionDepth := 2
+	if lens.ViewConfig != nil {
+		if v, ok := lens.ViewConfig["requestedMetrics"]; ok {
+			requestedMetrics = parseStringSlice(v)
+		}
+		if v, ok := lens.ViewConfig["maxRecursionDepth"]; ok {
+			maxRecursionDepth = parseInt(v, 2)
+		}
+	}
+	if maxRecursionDepth < 0 {
+		maxRecursionDepth = 0
+	}
+
 	// Увеличиваем activeSubscribers для всех HorizonFragment в scope
 	for _, canonicalPath := range lens.Scope {
 		fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
-		if err != nil {
-			// Если фрагмент не существует, создаем ScoutingJob (Pioneer модель)
-			// Согласно документации, первый проект оплачивает создание (Bounty модель)
-			if s.scoutingJobsRepo != nil {
-				now := time.Now().UTC()
-				scoutingJob := &models.ScoutingJob{
-					AgentJob: agentmodels.AgentJob{
-						TenantID:  lens.TenantID,
-						ProjectID: lens.ProjectID,
-						Status:    "pending",
-						AgentID:   "scout",
-						CreatedAt: now,
-						UpdatedAt: now,
-						State: map[string]interface{}{
-							"targetCanonicalPath": canonicalPath,
-							"lensId":              lensID,
-							"currentState":        string(models.ScoutingJobStatePending),
-						},
-					},
-					LensID:             lensID,
-					TargetCanonicalPath: canonicalPath,
-					ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
-					BillingContext: models.BillingContext{
-						ChargeModel: string(models.ChargeModelBounty),
-						ProjectID:   lens.ProjectID,
-					},
-					CurrentState: models.ScoutingJobStatePending,
-				}
-				// Создаем ScoutingJob (будет обработан Scout Engine позже)
-				_, _ = s.scoutingJobsRepo.Create(ctx, scoutingJob)
+		if err == nil && fragment != nil {
+			if err := s.fragmentsRepo.IncrementActiveSubscribers(ctx, fragment.ID); err != nil {
+				// Логируем ошибку, но не прерываем создание Lens
+				_ = err
 			}
-			continue
+			// Управляем жизненным циклом
+			if err := s.lifecycle.EnsureActive(ctx, fragment.ID); err != nil {
+				_ = err
+			}
 		}
-		if err := s.fragmentsRepo.IncrementActiveSubscribers(ctx, fragment.ID); err != nil {
-			// Логируем ошибку, но не прерываем создание Lens
-			// TODO: добавить логирование
-			_ = err
-		}
-		// Управляем жизненным циклом
-		if err := s.lifecycle.EnsureActive(ctx, fragment.ID); err != nil {
-			_ = err
+
+		// Создаем ScoutingJob для сборки/освежения данных (ScoutEngine выполнит freshness-check и быстро завершит,
+		// если данные уже достаточно свежие). Это убирает расхождения между тестовым сценарием и ядром.
+		if s.scoutingJobsRepo != nil {
+			now := time.Now().UTC()
+			state := map[string]interface{}{
+				"targetCanonicalPath": canonicalPath,
+				"lensId":              lensID,
+				"currentState":        string(models.ScoutingJobStatePending),
+				"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+				// Recursion control (used by ScoutEngine.processDiscoveredRelations)
+				"recursionDepth":     0.0,
+				"maxRecursionDepth":  float64(maxRecursionDepth),
+			}
+			if len(requestedMetrics) > 0 {
+				state["requestedMetrics"] = requestedMetrics
+			}
+			scoutingJob := &models.ScoutingJob{
+				AgentJob: agentmodels.AgentJob{
+					TenantID:  lens.TenantID,
+					ProjectID: lens.ProjectID,
+					Status:    agentmodels.AgentJobStatusPending,
+					AgentID:   "scout",
+					CreatedAt: now,
+					UpdatedAt: now,
+					State:     state,
+				},
+				LensID:             lensID,
+				TargetCanonicalPath: canonicalPath,
+				ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
+				BillingContext: models.BillingContext{
+					ChargeModel: string(models.ChargeModelBounty),
+					ProjectID:   lens.ProjectID,
+				},
+				CurrentState: models.ScoutingJobStatePending,
+			}
+			if _, createErr := s.scoutingJobsRepo.Create(ctx, scoutingJob); createErr != nil {
+				return "", fmt.Errorf("failed to create scouting job for %s: %w", canonicalPath, createErr)
+			}
 		}
 	}
 

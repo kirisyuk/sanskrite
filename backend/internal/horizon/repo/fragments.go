@@ -103,6 +103,7 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 		"tenantId": fragment.TenantID,
 	}
 
+	log.Printf("[HorizonFragments] Exporting fragment %s (%s) to GCS for Vertex Indexing...", fragment.ID, fragment.CanonicalPath)
 	if err := r.storage.UploadBytes(ctx, r.bucket, objectPath, jsonData, "application/json", metadata); err != nil {
 		return fmt.Errorf("failed to upload fragment to GCS: %w", err)
 	}

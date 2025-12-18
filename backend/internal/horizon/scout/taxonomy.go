@@ -113,7 +113,7 @@ func inferInfrastructurePath(parts []string) string {
 			}
 		}
 		return "/Infrastructure/Energy/PowerPlant/Thermal"
-	case "manufacturing", "factory", "fab", "plant":
+	case "manufacturing", "factory", "fab":
 		return "/Infrastructure/Manufacturing/Factory"
 	case "mine", "mining":
 		return "/Infrastructure/Manufacturing/Mine"

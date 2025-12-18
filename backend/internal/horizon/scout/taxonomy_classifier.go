@@ -32,7 +32,7 @@ func (c *TaxonomyClassifier) ClassifyTaxonomy(ctx context.Context, canonicalPath
 	prompt := c.buildClassificationPrompt(canonicalPath)
 
 	// Создаем типизированный верификатор
-	verifier := ai.NewGenericVerifier[TaxonomyClassificationResult](func(result TaxonomyClassificationResult) error {
+	verifier := ai.NewGenericVerifier(func(result TaxonomyClassificationResult) error {
 		if result.EntityPath == "" {
 			return fmt.Errorf("entityPath is required")
 		}

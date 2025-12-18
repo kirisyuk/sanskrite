@@ -71,9 +71,7 @@ func (e *EvidenceExtractorLLM) extractRelevantQuote(ctx context.Context, content
 	prompt := e.buildQuoteExtractionPrompt(content, metricNames)
 
 	// Создаем типизированный верификатор
-	verifier := ai.NewGenericVerifier[struct {
-		Quote string `json:"quote"`
-	}](func(result struct {
+	verifier := ai.NewGenericVerifier(func(result struct {
 		Quote string `json:"quote"`
 	}) error {
 		if result.Quote == "" {
@@ -90,7 +88,7 @@ func (e *EvidenceExtractorLLM) extractRelevantQuote(ctx context.Context, content
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:       7, // Хорошее качество для извлечения цитат
+			MinCapabilityScore:       5, // Регулярная задача: gpt-5-nano обычно достаточно
 			MinContextWindow:         8000,
 			MaxOutputSize:            512,
 		},
@@ -162,10 +160,7 @@ func (e *EvidenceExtractorLLM) calculateReliabilityScore(ctx context.Context, so
 	prompt := e.buildReliabilityPrompt(sourceURL, sourceType, content)
 
 	// Создаем типизированный верификатор
-	verifier := ai.NewGenericVerifier[struct {
-		ReliabilityScore float64 `json:"reliabilityScore"`
-		Reasoning        string  `json:"reasoning,omitempty"`
-	}](func(result struct {
+	verifier := ai.NewGenericVerifier(func(result struct {
 		ReliabilityScore float64 `json:"reliabilityScore"`
 		Reasoning        string  `json:"reasoning,omitempty"`
 	}) error {
@@ -180,7 +175,7 @@ func (e *EvidenceExtractorLLM) calculateReliabilityScore(ctx context.Context, so
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:       7, // Хорошее качество для оценки надежности
+			MinCapabilityScore:       5, // Регулярная задача: gpt-5-nano обычно достаточно
 			MinContextWindow:         4000,
 			MaxOutputSize:            256,
 		},

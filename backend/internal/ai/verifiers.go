@@ -16,17 +16,22 @@ func (v *BaseVerifier) CleanAndFixJSON(rawJSON string) (string, error) {
 		return "", fmt.Errorf("JSON string is empty")
 	}
 	s = strings.TrimPrefix(s, "\uFEFF")
+
 	// Удаляем Markdown code fences ```json ... ``` / ``` ... ```
-	if strings.HasPrefix(s, "```") {
-		// отбросить первый блок ```...\n
-		if idx := strings.Index(s, "\n"); idx > 0 {
-			s = s[idx+1:]
+	// Ищем первое вхождение ```
+	if idx := strings.Index(s, "```"); idx >= 0 {
+		// Отрезаем всё до ``` и саму строку с ```
+		s = s[idx:]
+		if newline := strings.Index(s, "\n"); newline >= 0 {
+			s = s[newline+1:]
 		}
-		if j := strings.LastIndex(s, "```"); j > 0 {
-			s = s[:j]
+		// Ищем последнее вхождение ``` и отрезаем
+		if last := strings.LastIndex(s, "```"); last >= 0 {
+			s = s[:last]
 		}
 	}
-	// Вырезаем чистую JSON-структуру по скобкам (игнорируя содержимое строк)
+
+	// Находим начало JSON ({ или [)
 	start := -1
 	for i := 0; i < len(s); i++ {
 		if s[i] == '{' || s[i] == '[' {
@@ -34,52 +39,63 @@ func (v *BaseVerifier) CleanAndFixJSON(rawJSON string) (string, error) {
 			break
 		}
 	}
-	if start > 0 {
+	if start != -1 {
 		s = s[start:]
 	}
-	// Найти позицию закрывающей скобки, учитывая строки и экранирование
+
+	// Найти позицию закрывающей скобки по балансу, игнорируя строки
 	buf := make([]byte, 0, len(s))
 	inStr := false
 	esc := false
 	depthObj := 0
 	depthArr := 0
+	started := false
+
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
 		buf = append(buf, ch)
+
 		if inStr {
 			if esc {
 				esc = false
-				continue
-			}
-			if ch == '\\' {
+			} else if ch == '\\' {
 				esc = true
-				continue
-			}
-			if ch == '"' {
+			} else if ch == '"' {
 				inStr = false
 			}
 			continue
 		}
+
 		if ch == '"' {
 			inStr = true
 			continue
 		}
+
 		switch ch {
 		case '{':
 			depthObj++
+			started = true
 		case '}':
 			if depthObj > 0 {
 				depthObj--
 			}
 		case '[':
 			depthArr++
+			started = true
 		case ']':
 			if depthArr > 0 {
 				depthArr--
 			}
 		}
+
+		// Если мы уже начали парсинг и баланс вернулся к нулю, значит это конец JSON объекта
+		if started && depthObj == 0 && depthArr == 0 {
+			break
+		}
 	}
+
 	cleaned := string(buf)
+
 	// Проход для удаления однострочных/многострочных комментариев и хвостовых запятых вне строк
 	out := make([]byte, 0, len(cleaned))
 	inStr = false

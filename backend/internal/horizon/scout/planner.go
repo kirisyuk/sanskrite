@@ -72,9 +72,15 @@ func (p *ScoutPlanner) filterRelevantSources(ctx context.Context, sources []*mod
 	}
 
 	resp, err := p.vertexSearchClient.Search(ctx, req)
-	if err != nil || len(resp.Results) == 0 {
-		// При ошибке или отсутствии результатов используем fallback
+	if err != nil {
+		// При ошибке используем fallback
 		return p.fallbackFiltering(sources, strategy)
+	}
+
+	// Если поиск ничего не нашел, возвращаем пустой список.
+	// Это сигнал для ScoutEngine, что внутренних данных нет и нужно запускать Research.
+	if len(resp.Results) == 0 {
+		return []*models.DataSource{}
 	}
 
 	// Собираем ID источников, которые выдали релевантные документы
@@ -93,12 +99,6 @@ func (p *ScoutPlanner) filterRelevantSources(ctx context.Context, sources []*mod
 		if relevantSourceIDs[s.ID] {
 			filtered = append(filtered, s)
 		}
-	}
-
-	// Если семантический поиск отфильтровал всё (слишком строго), используем fallback
-	// Чтобы не возвращать пустой список, если источники есть
-	if len(filtered) == 0 {
-		return p.fallbackFiltering(sources, strategy)
 	}
 
 	return filtered

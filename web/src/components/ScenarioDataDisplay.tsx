@@ -5,7 +5,10 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Legend, Tooltip } from 'recharts';
-import type { ScenarioData } from '../types/scenarioData';
+import type { ScenarioData, ColumnSchema } from '../types/scenarioData';
+import { api } from '../lib/api';
+import { useScenarioDataStore } from '../stores/scenarioDataStore';
+import { useGenaiChatStore } from '../stores/genaiChatStore';
 
 interface ScenarioDataDisplayProps {
   scenarioData: ScenarioData;
@@ -13,15 +16,105 @@ interface ScenarioDataDisplayProps {
 
 export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenarioData }) => {
   const { t } = useTranslation();
+  const projectId = useGenaiChatStore((state) => state.projectId || '');
+  const removeScenarioData = useScenarioDataStore((state) => state.removeScenarioData);
+  const [isDeleting, setIsDeleting] = React.useState(false);
+  
   // Check if query is still in progress
   const isInProgress = scenarioData.executionStages?.some(s => s.status === 'running') || false;
   const hasCompleted = scenarioData.executionStages?.every(s => s.status === 'completed' || s.status === 'error') || false;
+  
+  const handleDelete = async () => {
+    if (isDeleting || !hasCompleted || projectId === 'local-unfold') {
+      return;
+    }
+    
+    if (!confirm(t('unfold.scenarios.display.confirmDelete', { defaultValue: 'Are you sure you want to delete this result?' }))) {
+      return;
+    }
+    
+    setIsDeleting(true);
+    try {
+      await api.deleteScenarioData(projectId, scenarioData.scenarioId, scenarioData.id);
+      removeScenarioData(scenarioData.id);
+    } catch (error) {
+      console.error('[ScenarioDataDisplay] Failed to delete scenario data:', error);
+      alert(t('unfold.scenarios.display.deleteError', { defaultValue: 'Failed to delete result' }));
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Convert table data to CSV
+  const convertToCSV = (schema: ColumnSchema[], rows: Array<Record<string, any>>): string => {
+    // CSV header
+    const headers = schema.map(col => col.name);
+    const csvRows = [headers.join(',')];
+    
+    // CSV rows
+    rows.forEach(row => {
+      const values = schema.map(col => {
+        const value = row[col.name];
+        if (value === null || value === undefined) {
+          return '';
+        }
+        // Escape commas and quotes in values
+        const stringValue = String(value);
+        if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
+          return `"${stringValue.replace(/"/g, '""')}"`;
+        }
+        return stringValue;
+      });
+      csvRows.push(values.join(','));
+    });
+    
+    return csvRows.join('\n');
+  };
+
+  const [savingResultIndex, setSavingResultIndex] = React.useState<number | null>(null);
+
+  const handleSaveAsCSV = async (resultIndex: number) => {
+    if (!projectId || projectId === 'local-unfold' || savingResultIndex !== null) {
+      return;
+    }
+
+    const result = scenarioData.results[resultIndex];
+    if (!result || !result.schema || !result.rows || result.rows.length === 0) {
+      return;
+    }
+
+    setSavingResultIndex(resultIndex);
+    try {
+      // Convert to CSV
+      const csvContent = convertToCSV(result.schema, result.rows);
+      
+      // Generate filename
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const queryPreview = scenarioData.userQuery.substring(0, 50).replace(/[^a-zA-Z0-9]/g, '_');
+      const filename = `scenario_${queryPreview}_${timestamp}.csv`;
+      
+      // Save as document
+      await api.docsCreateFromText(projectId, {
+        filename,
+        contentType: 'text/csv',
+        text: csvContent,
+        description: `Scenario query result: ${scenarioData.userQuery.substring(0, 200)}`,
+      });
+
+      // Show success message (optional)
+      console.log('[ScenarioDataDisplay] CSV saved successfully', { filename });
+    } catch (error) {
+      console.error('[ScenarioDataDisplay] Failed to save CSV:', error);
+      alert(t('unfold.scenarios.display.saveError', { defaultValue: 'Failed to save CSV file' }));
+    } finally {
+      setSavingResultIndex(null);
+    }
+  };
   
   // Collapsible sections state
   const [isSchemaExpanded, setIsSchemaExpanded] = React.useState(false); // collapsed by default
   const [isQueriesExpanded, setIsQueriesExpanded] = React.useState(false); // collapsed by default
   const [isResultsExpanded, setIsResultsExpanded] = React.useState(true); // expanded by default
-  const [isShowAsExpanded, setIsShowAsExpanded] = React.useState<Record<number, boolean>>({}); // collapsed by default per result
   const [displayType, setDisplayType] = React.useState<Record<number, 'table' | 'graph'>>({}); // default to table per result
 
   // Format number with thousands separator and 2 decimal places
@@ -45,6 +138,20 @@ export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenar
     return numericTypes.some(type => colType.toUpperCase().includes(type));
   };
 
+  // Check if column type is date
+  const isDateColumn = (colType: string, sampleValue: any): boolean => {
+    const dateTypes = ['DATE', 'TIMESTAMP', 'DATETIME'];
+    if (dateTypes.some(type => colType.toUpperCase().includes(type))) {
+      return true;
+    }
+    // Check if value looks like a date string (YYYY-MM-DD or YYYY-MM)
+    if (typeof sampleValue === 'string') {
+      const datePattern = /^\d{4}-\d{2}(-\d{2})?/;
+      return datePattern.test(sampleValue);
+    }
+    return false;
+  };
+
   // Check if value should be formatted as number (checks both column type and value)
   const shouldFormatAsNumber = (colType: string, value: any): boolean => {
     if (value === null || value === undefined) {
@@ -65,11 +172,50 @@ export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenar
   
   return (
     <div className="space-y-4" style={{ padding: '16px', maxWidth: '100%', overflow: 'hidden' }}>
+      {/* Top divider */}
+      <div style={{ borderTop: '1px solid var(--overlay-line-90)', marginTop: '0' }} />
+      
       {/* Header */}
       <div>
-        <h3 className="text-lg font-semibold" style={{ color: 'var(--text-heading)', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
-          {t('unfold.scenarios.display.query')}: {scenarioData.userQuery}
-        </h3>
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="flex-1">
+            <h3 className="text-lg font-semibold" style={{ color: 'var(--text-heading)' }}>
+              {t('unfold.scenarios.display.query')}:
+            </h3>
+            <div className="text-xs font-light mt-1" style={{ color: 'var(--text-heading)', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+              {scenarioData.userQuery}
+            </div>
+          </div>
+          {hasCompleted && projectId !== 'local-unfold' && (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className="flex-shrink-0 p-1 rounded transition-colors"
+              style={{
+                color: 'var(--red-400)',
+                backgroundColor: 'transparent',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--red-05)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+              }}
+              title={t('unfold.scenarios.display.delete', { defaultValue: 'Delete this result' })}
+            >
+              {isDeleting ? (
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeWidth={2} strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+            </button>
+          )}
+        </div>
         <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
           {hasCompleted ? (
             <>{t('unfold.scenarios.display.completed')}: {scenarioData.interpretation?.executedAt ? new Date(scenarioData.interpretation.executedAt).toLocaleString() : ''}</>
@@ -353,57 +499,56 @@ export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenar
 
                   {/* Show as section */}
                   {result.rows && result.rows.length > 0 && (
-                    <div className="space-y-2 mt-3">
-                      <button
-                        type="button"
-                        onClick={() => setIsShowAsExpanded(prev => ({ ...prev, [index]: !prev[index] }))}
-                        className="flex items-center gap-2 text-sm font-medium w-full text-left"
-                        style={{ color: 'var(--text-heading)' }}
-                      >
-                        <svg
-                          className="w-4 h-4 flex-shrink-0"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
+                    <div className="flex items-center gap-3 mt-3 mb-3">
+                      <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                        {t('unfold.scenarios.display.showAs')}:
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDisplayType(prev => ({ ...prev, [index]: 'table' }))}
+                          className="px-3 py-1 text-sm rounded transition-colors"
                           style={{
-                            transform: isShowAsExpanded[index] ? 'rotate(90deg)' : 'rotate(0deg)',
-                            transition: 'transform 0.15s ease',
+                            backgroundColor: (displayType[index] || 'table') === 'table' ? 'var(--white-10)' : 'transparent',
+                            color: (displayType[index] || 'table') === 'table' ? 'var(--text-heading)' : 'var(--text-secondary)',
+                            border: '1px solid var(--overlay-line-90)',
+                          }}
+                          onMouseEnter={(e) => {
+                            if ((displayType[index] || 'table') !== 'table') {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-05)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if ((displayType[index] || 'table') !== 'table') {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                            }
                           }}
                         >
-                          <path d="M9 6l6 6-6 6" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <span>{t('unfold.scenarios.display.showAs')}:</span>
-                      </button>
-                      {isShowAsExpanded[index] && (
-                        <div className="pl-6 space-y-2">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name={`displayType-${index}`}
-                              value="table"
-                              checked={(displayType[index] || 'table') === 'table'}
-                              onChange={(e) => setDisplayType(prev => ({ ...prev, [index]: e.target.value as 'table' | 'graph' }))}
-                              className="cursor-pointer"
-                            />
-                            <span className="text-sm" style={{ color: 'var(--text-heading)' }}>
-                              {t('unfold.scenarios.display.table')}
-                            </span>
-                          </label>
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name={`displayType-${index}`}
-                              value="graph"
-                              checked={(displayType[index] || 'table') === 'graph'}
-                              onChange={(e) => setDisplayType(prev => ({ ...prev, [index]: e.target.value as 'table' | 'graph' }))}
-                              className="cursor-pointer"
-                            />
-                            <span className="text-sm" style={{ color: 'var(--text-heading)' }}>
-                              {t('unfold.scenarios.display.graph')}
-                            </span>
-                          </label>
-                        </div>
-                      )}
+                          {t('unfold.scenarios.display.table')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDisplayType(prev => ({ ...prev, [index]: 'graph' }))}
+                          className="px-3 py-1 text-sm rounded transition-colors"
+                          style={{
+                            backgroundColor: (displayType[index] || 'table') === 'graph' ? 'var(--white-10)' : 'transparent',
+                            color: (displayType[index] || 'table') === 'graph' ? 'var(--text-heading)' : 'var(--text-secondary)',
+                            border: '1px solid var(--overlay-line-90)',
+                          }}
+                          onMouseEnter={(e) => {
+                            if ((displayType[index] || 'table') !== 'graph') {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-05)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if ((displayType[index] || 'table') !== 'graph') {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                            }
+                          }}
+                        >
+                          {t('unfold.scenarios.display.graph')}
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -497,26 +642,76 @@ export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenar
                               );
                             }
 
+                            // Determine X and Y axes based on column types
+                            // Priority: dates -> X axis, numeric -> Y axis
+                            let xAxisColumn: ColumnSchema | null = null;
+                            const yAxisColumns: ColumnSchema[] = [];
+                            
+                            // First pass: find date column for X axis
+                            for (const col of result.schema) {
+                              const sampleValue = result.rows.length > 0 ? result.rows[0][col.name] : null;
+                              if (isDateColumn(col.type, sampleValue)) {
+                                xAxisColumn = col;
+                                break;
+                              }
+                            }
+                            
+                            // Second pass: find numeric columns for Y axis
+                            for (const col of result.schema) {
+                              if (col === xAxisColumn) continue; // Skip X axis column
+                              if (isNumericColumn(col.type)) {
+                                yAxisColumns.push(col);
+                              }
+                            }
+                            
+                            // Fallback: if no date or numeric columns found, use first column as X, rest as Y
+                            if (!xAxisColumn && yAxisColumns.length === 0) {
+                              if (result.schema.length > 0) {
+                                xAxisColumn = result.schema[0];
+                                yAxisColumns.push(...result.schema.slice(1));
+                              }
+                            } else if (!xAxisColumn && yAxisColumns.length > 0) {
+                              // If we have numeric columns but no date, use first column as X
+                              if (result.schema.length > 0 && result.schema[0] !== yAxisColumns[0]) {
+                                xAxisColumn = result.schema[0];
+                              }
+                            } else if (xAxisColumn && yAxisColumns.length === 0) {
+                              // If we have date but no numeric, use remaining columns as Y
+                              for (const col of result.schema) {
+                                if (col !== xAxisColumn) {
+                                  yAxisColumns.push(col);
+                                }
+                              }
+                            }
+
                             // Convert table data to chart format
-                            // First column is X axis, rest are series
                             const chartData = result.rows.map((row) => {
                               const obj: any = {};
-                              result.schema.forEach((col, idx) => {
+                              
+                              // Set X axis value
+                              if (xAxisColumn) {
+                                const xValue = row[xAxisColumn.name];
+                                obj.x = xValue !== null && xValue !== undefined ? String(xValue) : '';
+                              }
+                              
+                              // Set Y axis values (series)
+                              yAxisColumns.forEach((col) => {
                                 const value = row[col.name];
-                                if (idx === 0) {
-                                  // First column is X axis
-                                  obj.x = value !== null && value !== undefined ? String(value) : '';
+                                if (isNumericColumn(col.type)) {
+                                  const numValue = Number(value);
+                                  obj[col.name] = isNaN(numValue) ? null : numValue;
                                 } else {
-                                  // Other columns are series
+                                  // For non-numeric Y columns, try to convert to number
                                   const numValue = Number(value);
                                   obj[col.name] = isNaN(numValue) ? null : numValue;
                                 }
                               });
+                              
                               return obj;
                             });
 
-                            // Get series columns (all except first)
-                            const seriesColumns = result.schema.slice(1);
+                            // Get series columns (Y axis columns)
+                            let seriesColumns = yAxisColumns;
 
                             // Detect theme for colors
                             const isDark = typeof window !== 'undefined' && document.body ?
@@ -524,6 +719,16 @@ export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenar
                             const COLORS = isDark
                               ? ['#60aaff', '#eab676', '#c7f464', '#ea5d93', '#b388ff', '#f06292', '#ffd740', '#80d6ff']
                               : ['#4078c0', '#e87c22', '#66bb6a', '#dc3987', '#a05abb', '#d34088', '#f5b800', '#0086b3'];
+
+                            // Ensure we have at least X axis column (fallback)
+                            if (!xAxisColumn && result.schema.length > 0) {
+                              xAxisColumn = result.schema[0];
+                            }
+                            
+                            // Ensure we have at least one series column (fallback)
+                            if (seriesColumns.length === 0 && result.schema.length > 1) {
+                              seriesColumns.push(...result.schema.filter(col => col !== xAxisColumn));
+                            }
 
                             return (
                               <ResponsiveContainer width="100%" height={280}>
@@ -556,6 +761,52 @@ export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenar
                           })()}
                         </div>
                       )}
+                      
+                      {/* Save button */}
+                      {result.rows && result.rows.length > 0 && result.schema && result.schema.length > 0 && (
+                        <div className="mt-3 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleSaveAsCSV(index)}
+                            disabled={savingResultIndex === index || projectId === 'local-unfold'}
+                            className="px-4 py-2 text-sm rounded transition-colors flex items-center gap-2"
+                            style={{
+                              backgroundColor: savingResultIndex === index ? 'var(--white-10)' : 'var(--white-10)',
+                              color: savingResultIndex === index ? 'var(--text-secondary)' : 'var(--text-heading)',
+                              border: '1px solid var(--overlay-line-90)',
+                              cursor: savingResultIndex === index || projectId === 'local-unfold' ? 'not-allowed' : 'pointer',
+                            }}
+                            onMouseEnter={(e) => {
+                              if (savingResultIndex !== index && projectId !== 'local-unfold') {
+                                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-20)';
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              if (savingResultIndex !== index) {
+                                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                              }
+                            }}
+                          >
+                            {savingResultIndex === index ? (
+                              <>
+                                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeWidth={2} strokeLinecap="round" />
+                                </svg>
+                                {t('unfold.scenarios.display.saving', { defaultValue: 'Saving...' })}
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" strokeLinecap="round" strokeLinejoin="round" />
+                                  <polyline points="17 21 17 13 7 13 7 21" strokeLinecap="round" strokeLinejoin="round" />
+                                  <polyline points="7 3 7 8 15 8" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                                {t('unfold.scenarios.display.save', { defaultValue: 'Save' })}
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
                     </>
                   )}
                 </>
@@ -566,6 +817,9 @@ export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenar
           </>
         )}
       </div>
+      
+      {/* Bottom divider */}
+      <div style={{ borderTop: '1px solid var(--overlay-line-90)', marginTop: '0' }} />
     </div>
   );
 };

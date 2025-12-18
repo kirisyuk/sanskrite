@@ -1,5 +1,22 @@
 package propagation
 
+import "strings"
+
+func thresholdMetricKey(metricNameOrPath string) string {
+	s := strings.TrimSpace(metricNameOrPath)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "/") {
+		parts := strings.Split(strings.Trim(s, "/"), "/")
+		if len(parts) == 0 {
+			return ""
+		}
+		return parts[len(parts)-1]
+	}
+	return s
+}
+
 // ThresholdManager управляет порогами значимости изменений
 type ThresholdManager struct {
 	// Пороги по умолчанию для разных метрик
@@ -34,7 +51,8 @@ func (m *ThresholdManager) ExceedsThreshold(metricName string, delta float64) bo
 	}
 
 	// Получаем порог для метрики
-	threshold, exists := m.defaultThresholds[metricName]
+	key := thresholdMetricKey(metricName)
+	threshold, exists := m.defaultThresholds[key]
 	if !exists {
 		threshold = m.defaultThresholds["default"]
 	}
@@ -44,12 +62,12 @@ func (m *ThresholdManager) ExceedsThreshold(metricName string, delta float64) bo
 
 // SetThreshold устанавливает порог для метрики
 func (m *ThresholdManager) SetThreshold(metricName string, threshold float64) {
-	m.defaultThresholds[metricName] = threshold
+	m.defaultThresholds[thresholdMetricKey(metricName)] = threshold
 }
 
 // GetThreshold получает порог для метрики
 func (m *ThresholdManager) GetThreshold(metricName string) float64 {
-	threshold, exists := m.defaultThresholds[metricName]
+	threshold, exists := m.defaultThresholds[thresholdMetricKey(metricName)]
 	if !exists {
 		return m.defaultThresholds["default"]
 	}

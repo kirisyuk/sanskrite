@@ -38,9 +38,22 @@ func (s *GrokService) ExecuteTask(ctx context.Context, task *AITask, model strin
 	}
 	log.Printf("[Grok] ExecuteTask: %s, model=%s", task.TaskType, model)
 
+	inputTokensEst := len(task.InputContent) / 4
+	var caps *AIModelCapabilities
+	if s.ModelManager != nil {
+		if c, err := s.ModelManager.GetModelCapabilities(model); err == nil {
+			cc := c
+			caps = &cc
+		}
+	}
+	maxOut := computeMaxOutputTokens(model, caps, task, inputTokensEst)
+
 	reqBody := map[string]interface{}{
 		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": task.InputContent}},
+		// Critical: without explicit max_tokens, the API may default to a small completion limit,
+		// which can truncate structured JSON (especially for reasoning models).
+		"max_tokens": maxOut,
 	}
 	bodyJSON, err := json.Marshal(reqBody)
 	if err != nil {
@@ -70,6 +83,7 @@ func (s *GrokService) ExecuteTask(ctx context.Context, task *AITask, model strin
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(b, &parsed); err != nil {
@@ -77,6 +91,10 @@ func (s *GrokService) ExecuteTask(ctx context.Context, task *AITask, model strin
 	}
 	if len(parsed.Choices) == 0 || parsed.Choices[0].Message.Content == "" {
 		return nil, fmt.Errorf("empty response from Grok")
+	}
+	// If the model hit the completion limit, treat as error so executor can fallback.
+	if strings.TrimSpace(parsed.Choices[0].FinishReason) == "length" {
+		return nil, fmt.Errorf("grok response truncated (finish_reason=length)")
 	}
 
 	return &AITaskResult{Content: parsed.Choices[0].Message.Content, Model: model, TaskType: task.TaskType, Status: AITaskStatusCompleted}, nil

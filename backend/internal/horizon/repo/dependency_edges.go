@@ -83,6 +83,28 @@ func (r *DependencyEdgesRepository) GetBySourceAndTarget(ctx context.Context, te
 	return &edge, nil
 }
 
+// GetBySourceTargetAndType получает DependencyEdge по source, target и типу
+func (r *DependencyEdgesRepository) GetBySourceTargetAndType(ctx context.Context, tenantID, sourceFragmentID, targetFragmentID string, edgeType models.DependencyType) (*models.DependencyEdge, error) {
+	q := r.col.Where("tenantId", "==", tenantID).
+		Where("sourceFragmentId", "==", sourceFragmentID).
+		Where("targetFragmentId", "==", targetFragmentID).
+		Where("type", "==", edgeType).
+		Limit(1)
+
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, ErrEdgeNotFound
+	}
+	var edge models.DependencyEdge
+	if err := docs[0].DataTo(&edge); err != nil {
+		return nil, err
+	}
+	return &edge, nil
+}
+
 // ListBySource получает список исходящих DependencyEdge
 func (r *DependencyEdgesRepository) ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *models.DependencyType, limit int) ([]*models.DependencyEdge, error) {
 	if limit <= 0 {
@@ -157,4 +179,3 @@ func (r *DependencyEdgesRepository) Delete(ctx context.Context, id string) error
 	_, err := r.col.Doc(id).Delete(ctx)
 	return err
 }
-
