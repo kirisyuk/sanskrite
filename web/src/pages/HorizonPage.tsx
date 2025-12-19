@@ -3,8 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../contexts/AuthContext';
 import { ThemeContext } from '../components/ThemeProvider';
 import { SidebarPanel } from '../components/SidebarPanel';
-import { TopBar } from '../components/TopBar';
-import { BottomBar } from '../components/BottomBar';
 import { useProjectsStore } from '../stores/projectsStore';
 import { useUIStore } from '../stores/uiStore';
 import { SettingsModal } from '../components/SettingsModal';
@@ -27,6 +25,17 @@ const HorizonPage: React.FC = () => {
   
   const isAdmin = currentUser?.email === 'igor@hatl.one' || currentUser?.email === 'admin@hatl.one';
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
+  
+  // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
+  const [isSmartphone, setIsSmartphone] = React.useState(false);
+  React.useEffect(() => {
+    const checkSmartphone = () => {
+      setIsSmartphone(window.innerWidth <= 600);
+    };
+    checkSmartphone();
+    window.addEventListener('resize', checkSmartphone);
+    return () => window.removeEventListener('resize', checkSmartphone);
+  }, []);
   
   // Editing state for projects
   const [editingProjectId, setEditingProjectId] = React.useState<string | null>(null);
@@ -88,46 +97,68 @@ const HorizonPage: React.FC = () => {
   }, []);
   
   return (
-    <div className="layout-main">
-      <div className="main-content">
-        <TopBar />
-        <div className="content-area">
-          <SidebarPanel
-            isOpen={sidebarOpen}
-            onOpen={() => setSidebarOpen(true)}
-            onClose={() => setSidebarOpen(false)}
-            isMobile={isMobile}
-            isAdmin={isAdmin}
-            onResetChat={handleResetChat}
-            onShowSettings={() => {
-              handleCloseAllModals();
-              setShowSettings(true);
-            }}
-            onShowAccount={() => {
-              handleCloseAllModals();
-              setShowAccount(true);
-            }}
-            onShowAdmin={() => {
-              handleCloseAllModals();
-              setShowAdmin(true);
-            }}
-            onCloseAllModals={handleCloseAllModals}
-            editingProjectId={editingProjectId}
-            editingProjectName={editingProjectName}
-            editingInputRef={editingInputRef}
-            onEditingProjectIdChange={setEditingProjectId}
-            onEditingProjectNameChange={setEditingProjectName}
-            onDeleteChat={handleDeleteChat}
-            onRenameChat={handleRenameChat}
-            onStartEditingProject={startEditingProject}
-            currentMode="chat"
-            projectId={currentProject?.id || null}
-          />
-          
-          {/* Main content area - placeholder for now */}
+    <div
+      className="flex h-full"
+      style={{ padding: isMobile ? '8px 0' : '16px 0' }}
+    >
+      {/* Side panel */}
+      <SidebarPanel
+        isOpen={sidebarOpen}
+        onOpen={() => setSidebarOpen(true)}
+        onClose={() => setSidebarOpen(false)}
+        isMobile={isMobile}
+        isAdmin={isAdmin}
+        onResetChat={handleResetChat}
+        onShowSettings={() => {
+          handleCloseAllModals();
+          setShowSettings(true);
+        }}
+        onShowAccount={() => {
+          handleCloseAllModals();
+          setShowAccount(true);
+        }}
+        onShowAdmin={() => {
+          handleCloseAllModals();
+          setShowAdmin(true);
+        }}
+        onCloseAllModals={handleCloseAllModals}
+        editingProjectId={editingProjectId}
+        editingProjectName={editingProjectName}
+        editingInputRef={editingInputRef}
+        onEditingProjectIdChange={setEditingProjectId}
+        onEditingProjectNameChange={setEditingProjectName}
+        onDeleteChat={handleDeleteChat}
+        onRenameChat={handleRenameChat}
+        onStartEditingProject={startEditingProject}
+        currentMode="chat"
+        projectId={currentProject?.id || null}
+      />
+
+      {/* Main content area */}
+      <div
+        className="flex-1 min-h-0"
+        style={{
+          position: 'relative',
+          display: 'flex',
+          gap: '16px',
+        }}
+      >
+        {/* 2% left margin for breathing room (hidden on smartphones) */}
+        {!isSmartphone && <div style={{ width: '2%', minWidth: '2%', flexShrink: 0 }} />}
+
+        {/* Content area - flexible width */}
+        <div
+          className="flex-1 min-h-0"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+          }}
+        >
+          {/* Main content - placeholder for now */}
           <div style={{ 
-            flex: 1, 
-            display: 'flex', 
+            flex: 1,
+            display: 'flex',
             alignItems: 'center', 
             justifyContent: 'center',
             padding: '2rem',
@@ -144,12 +175,11 @@ const HorizonPage: React.FC = () => {
             </div>
           </div>
         </div>
-        <BottomBar />
-        
-        {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-        {showAccount && <AccountModal onClose={() => setShowAccount(false)} />}
-        {showAdmin && isAdmin && <AdminModal onClose={() => setShowAdmin(false)} />}
       </div>
+      
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showAccount && <AccountModal onClose={() => setShowAccount(false)} />}
+      {showAdmin && isAdmin && <AdminModal onClose={() => setShowAdmin(false)} />}
     </div>
   );
 };
