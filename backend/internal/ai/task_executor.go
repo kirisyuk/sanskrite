@@ -21,6 +21,9 @@ type AITaskExecutor struct {
 	usageMetricsRepo interface {
 		CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 	} // Wrapper to avoid circular import
+	horizonSpendSink interface {
+		AddHorizonSpend(ctx context.Context, tenantID, lensID, cascadeID string, amountUSD float64, inputTokens, outputTokens int) error
+	}
 }
 
 // NewAITaskExecutor создает новый экземпляр AITaskExecutor
@@ -51,6 +54,14 @@ func (e *AITaskExecutor) WithUsageMetrics(repo interface {
 	CreateMetric(ctx context.Context, tenantID, userID, provider, model string, inputTokens, outputTokens int, cost float64, taskType, projectID *string, durationMs *int, useCase *string) (string, error)
 }) *AITaskExecutor {
 	e.usageMetricsRepo = repo
+	return e
+}
+
+// WithHorizonSpendSink installs a sink that receives per-call cost attribution for Horizon (lens/day + cascade).
+func (e *AITaskExecutor) WithHorizonSpendSink(sink interface {
+	AddHorizonSpend(ctx context.Context, tenantID, lensID, cascadeID string, amountUSD float64, inputTokens, outputTokens int) error
+}) *AITaskExecutor {
+	e.horizonSpendSink = sink
 	return e
 }
 
@@ -108,7 +119,7 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 
 		// Save usage metrics if repository is available
 		durationMs := int(result.ProcessingTime.Milliseconds())
-		e.saveUsageMetric(ctx, task, currentModel, result.InputTokens, result.OutputTokens, cost, &durationMs)
+		e.saveUsageMetric(ctx, task, currentModel, result.InputTokens, result.OutputTokens, len(result.Content), cost, &durationMs)
 
 		return result, nil
 	}
@@ -199,7 +210,7 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 			outputToks := len(result.Content) / 4
 			cost, _ := e.modelManager.CalculateProcessingCost(currentModel, inputToks, outputToks)
 			durationMs := int(time.Since(startedAt).Milliseconds())
-			e.saveUsageMetric(ctx, task, currentModel, inputToks, outputToks, cost, &durationMs)
+			e.saveUsageMetric(ctx, task, currentModel, inputToks, outputToks, len(result.Content), cost, &durationMs)
 		}
 
 		_ = startedAt // для телеметрии
@@ -649,13 +660,25 @@ func mapTaskTypeToUseCase(taskType TaskType) string {
 
 // saveUsageMetric saves usage metrics if repository is available and task has required metadata
 // Note: We use interface{} to avoid circular import with repo package
-func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelName string, inputTokens, outputTokens int, cost float64, durationMs *int) {
+func (e *AITaskExecutor) saveUsageMetric(ctx context.Context, task *AITask, modelName string, inputTokens, outputTokens int, outputChars int, cost float64, durationMs *int) {
 	if e.usageMetricsRepo == nil {
 		return
 	}
 
+	tenantID := strings.TrimSpace(task.TenantID)
+	userID := strings.TrimSpace(task.UserID)
+	projectID := strings.TrimSpace(task.Project)
+	if tenantID == "" {
+		tenantID = usageTenantFromContext(ctx)
+	}
+	if userID == "" {
+		userID = usageUserFromContext(ctx)
+	}
+	if projectID == "" {
+		projectID = usageProjectFromContext(ctx)
+	}
 	// Only save if we have tenantID and userID
-	if task.TenantID == "" || task.UserID == "" {
+	if tenantID == "" || userID == "" {
 		return
 	}
 
@@ -684,12 +707,17 @@ func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelN
 	}
 
 	var projectIDPtr *string
-	if task.Project != "" {
-		projectIDPtr = &task.Project
+	if projectID != "" {
+		projectIDPtr = &projectID
 	}
 
 	// Map TaskType to UseCase
 	useCaseStr := mapTaskTypeToUseCase(task.TaskType)
+	if strings.TrimSpace(task.UseCase) != "" {
+		useCaseStr = strings.TrimSpace(task.UseCase)
+	} else if uc := usageUseCaseFromContext(ctx); uc != "" {
+		useCaseStr = uc
+	}
 	var useCasePtr *string
 	if useCaseStr != "" {
 		useCasePtr = &useCaseStr
@@ -700,9 +728,26 @@ func (e *AITaskExecutor) saveUsageMetric(_ context.Context, task *AITask, modelN
 	go func() {
 		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := e.usageMetricsRepo.CreateMetric(metricCtx, task.TenantID, task.UserID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs, useCasePtr)
+		_, err := e.usageMetricsRepo.CreateMetric(metricCtx, tenantID, userID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs, useCasePtr)
 		if err != nil {
 			log.Printf("[AITaskExecutor] Failed to save usage metric: %v", err)
+		}
+		// Best-effort: update Horizon spend ledger (if context includes lens/cascade ids).
+		if e.horizonSpendSink != nil {
+			lensID := usageLensFromContext(ctx)
+			cascadeID := usageCascadeFromContext(ctx)
+			if lensID != "" || cascadeID != "" {
+				// Safety: if token counts are zero, fall back to char-based estimates (/4).
+				it := inputTokens
+				ot := outputTokens
+				if it <= 0 && task != nil {
+					it = len(task.InputContent) / 4
+				}
+				if ot <= 0 && outputChars > 0 {
+					ot = outputChars / 4
+				}
+				_ = e.horizonSpendSink.AddHorizonSpend(metricCtx, tenantID, lensID, cascadeID, cost, it, ot)
+			}
 		}
 	}()
 }

@@ -219,6 +219,10 @@ type AITask struct {
 	// TraceID идентификатор трассировки для телеметрии
 	TraceID string `json:"traceId,omitempty"`
 
+	// UseCase overrides the default TaskType->UseCase mapping when saving usage metrics.
+	// Example: "horizon.scout", "horizon.research", "artifact.generate".
+	UseCase string `json:"useCase,omitempty"`
+
 	// SpanID идентификатор спана для телеметрии
 	SpanID string `json:"spanId,omitempty"`
 }

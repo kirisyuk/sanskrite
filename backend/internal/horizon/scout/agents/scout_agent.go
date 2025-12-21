@@ -73,7 +73,7 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:       8,
+			MinCapabilityScore:       7,
 			MinContextWindow:         16000, // Увеличиваем окно для связей
 			// IMPORTANT: For large inputs + reasoning models, output budgets can be consumed by hidden "thinking",
 			// leading to truncated JSON. We intentionally allow larger outputs here.

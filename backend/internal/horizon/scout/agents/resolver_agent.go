@@ -22,17 +22,17 @@ func NewResolverAgent(executor *ai.AITaskExecutor) *ResolverAgent {
 
 // ResolutionRequest запрос на разрешение конфликта
 type ResolutionRequest struct {
-	ScoutData        interface{}         `json:"scoutData"`
-	CriticArguments  []ValidationConflict `json:"criticArguments"`
-	SourceContent    string              `json:"sourceContent"`
+	ScoutData       interface{}          `json:"scoutData"`
+	CriticArguments []ValidationConflict `json:"criticArguments"`
+	SourceContent   string               `json:"sourceContent"`
 }
 
 // ResolutionResult результат разрешения конфликта
 type ResolutionResult struct {
-	Verdict      string      `json:"verdict"`      // "Verified", "Low_Confidence", "Rejected"
+	Verdict      string      `json:"verdict"` // "Verified", "Low_Confidence", "Rejected"
 	Reasoning    string      `json:"reasoning"`
 	ResolvedData interface{} `json:"resolvedData,omitempty"`
-	Confidence   float64     `json:"confidence"`   // 0..1
+	Confidence   float64     `json:"confidence"` // 0..1
 }
 
 // ValidationConflict используется тип из critic_agent.go
@@ -48,7 +48,7 @@ func (a *ResolverAgent) Resolve(ctx context.Context, req ResolutionRequest) (*Re
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:       8,
+			MinCapabilityScore:       7,
 			MinContextWindow:         8000,
 			MaxOutputSize:            2048,
 		},
@@ -102,4 +102,3 @@ Return a JSON object with:
 
 Return ONLY valid JSON. Do not include markdown code fences.`, string(scoutJSON), string(conflictsJSON), req.SourceContent)
 }
-

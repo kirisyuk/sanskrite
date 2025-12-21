@@ -268,12 +268,25 @@ type ScoutEngine struct {
 	realtime           *realtime.Publisher
 	taxonomyClassifier *TaxonomyClassifier
 	aiExecutor         *ai.AITaskExecutor
+	spendLedger        *repo.HorizonSpendLedger
+	budgetPolicy       BudgetPolicy
 	propagationTrigger func(ctx context.Context, fragmentID string) error
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
 func (e *ScoutEngine) WithPropagationTrigger(trigger func(ctx context.Context, fragmentID string) error) *ScoutEngine {
 	e.propagationTrigger = trigger
+	return e
+}
+
+// WithSpendLedger wires spend attribution ledger used for budget enforcement (optional).
+func (e *ScoutEngine) WithSpendLedger(ledger *repo.HorizonSpendLedger) *ScoutEngine {
+	e.spendLedger = ledger
+	return e
+}
+
+func (e *ScoutEngine) WithBudgetPolicy(policy BudgetPolicy) *ScoutEngine {
+	e.budgetPolicy = policy
 	return e
 }
 
@@ -310,6 +323,8 @@ func NewScoutEngine(
 		realtime:           realtime,
 		taxonomyClassifier: NewTaxonomyClassifier(aiExecutor),
 		aiExecutor:         aiExecutor,
+		spendLedger:        nil,
+		budgetPolicy:       BudgetPolicyFromEnv(),
 	}
 }
 
@@ -317,6 +332,32 @@ func NewScoutEngine(
 func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.ScoutingJob) error {
 	tenantID := job.TenantID
 	projectID := job.ProjectID
+
+	// Attach telemetry context so LLM usage metrics get attributed even if individual agents
+	// don't fill task.TenantID/UserID fields.
+	lensID := strings.TrimSpace(job.LensID)
+	if lensID == "" && job.State != nil {
+		if v, ok := job.State["lensId"].(string); ok {
+			lensID = strings.TrimSpace(v)
+		}
+	}
+	cascadeID := ""
+	if job.State != nil {
+		if v, ok := job.State["cascadeRootJobId"].(string); ok {
+			cascadeID = strings.TrimSpace(v)
+		}
+	}
+	if cascadeID == "" {
+		cascadeID = strings.TrimSpace(job.ID)
+	}
+	// Best-effort: persist cascadeRootJobId back into job state once.
+	if job.State != nil {
+		if v, ok := job.State["cascadeRootJobId"].(string); !ok || strings.TrimSpace(v) == "" {
+			job.State["cascadeRootJobId"] = cascadeID
+			_ = e.scoutingJobsRepo.Update(ctx, job)
+		}
+	}
+	ctx = ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.scout", lensID, cascadeID)
 
 	// FRESHNESS CHECK: Проверяем, есть ли свежие данные
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
@@ -360,8 +401,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 		}
 
-		// If fragment is fresh AND there are no new facts since watermark, skip expensive scouting.
-		if isFresh && (facts == nil || len(facts) == 0) {
+				// If fragment is fresh AND there are no new facts since watermark, skip expensive scouting.
+				if isFresh && len(facts) == 0 {
 			fmt.Printf("[ScoutEngine] Data for %s is fresh (verified %v ago) and no new facts. Skipping active scouting.\n",
 				job.TargetCanonicalPath, time.Since(existingFragment.Metadata.LastVerifiedAt))
 			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateVerified)
@@ -508,8 +549,33 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 
 	// RESEARCH: Дообогащение данных через Research Agent
 	if len(validationResult.MissingInfo) > 0 {
+		// Daily guardrails (USD + token caps) to keep costs bounded during MVP.
+		if e.budgetPolicy.Enabled && e.spendLedger != nil && lensID != "" && cascadeID != "" {
+			day := time.Now().UTC().Format("2006-01-02")
+			if cSpend, _, cOut, err := e.spendLedger.GetCascadeSpendUSD(ctx, tenantID, cascadeID, day); err == nil {
+				if e.budgetPolicy.CascadeDailyMaxUSD > 0 && cSpend >= e.budgetPolicy.CascadeDailyMaxUSD {
+					fmt.Printf("[ScoutEngine] Skipping research: cascade daily USD budget exceeded: cascade=%s spend=%.4f\n", cascadeID, cSpend)
+					goto SKIP_RESEARCH
+				}
+				if e.budgetPolicy.CascadeDailyMaxOutputTokens > 0 && cOut >= e.budgetPolicy.CascadeDailyMaxOutputTokens {
+					fmt.Printf("[ScoutEngine] Skipping research: cascade daily token cap exceeded: cascade=%s outTokens=%d\n", cascadeID, cOut)
+					goto SKIP_RESEARCH
+				}
+			}
+			if dSpend, _, dOut, err := e.spendLedger.GetLensDaySpendUSD(ctx, tenantID, lensID, day); err == nil {
+				if e.budgetPolicy.LensDailyMaxUSD > 0 && dSpend >= e.budgetPolicy.LensDailyMaxUSD {
+					fmt.Printf("[ScoutEngine] Skipping research: lens daily USD budget exceeded: lens=%s day=%s spend=%.4f\n", lensID, day, dSpend)
+					goto SKIP_RESEARCH
+				}
+				if e.budgetPolicy.LensDailyMaxOutputTokens > 0 && dOut >= e.budgetPolicy.LensDailyMaxOutputTokens {
+					fmt.Printf("[ScoutEngine] Skipping research: lens daily token cap exceeded: lens=%s day=%s outTokens=%d\n", lensID, day, dOut)
+					goto SKIP_RESEARCH
+				}
+			}
+		}
 		fmt.Printf("[ScoutEngine] Starting research for job %s, missing info: %v\n", job.ID, validationResult.MissingInfo)
-		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(ctx, extractedFragment, validationResult.MissingInfo)
+		researchCtx := ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.research", lensID, cascadeID)
+		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo)
 		if err == nil {
 			extractedFragment = enrichedFragment
 			if len(newRelations) > 0 {
@@ -522,6 +588,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			fmt.Printf("[ScoutEngine] Research failed: %v\n", err)
 		}
 	}
+SKIP_RESEARCH:
 
 	// RESOLUTION: Разрешение конфликтов если необходимо
 	if validationResult.HasConflicts {

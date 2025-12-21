@@ -293,7 +293,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:       8,
+			MinCapabilityScore:       7,
 			MinContextWindow:         4000,
 			MaxOutputSize:            1024,
 		},

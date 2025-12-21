@@ -19,9 +19,9 @@ type ScoutCloudTasksDispatcher struct {
 	location  string
 	queue     string
 
-	targetURL         string
+	targetURL          string
 	oidcServiceAccount string
-	oidcAudience      string
+	oidcAudience       string
 }
 
 type ScoutTaskPayload struct {
@@ -133,5 +133,3 @@ func targetAudienceFromURL(u string) string {
 	}
 	return u
 }
-
-

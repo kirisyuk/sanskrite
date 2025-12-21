@@ -54,7 +54,7 @@ func (c *TaxonomyClassifier) ClassifyTaxonomy(ctx context.Context, canonicalPath
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:       8, // Высокое качество для классификации
+			MinCapabilityScore:       7, // Lowered to reduce cost while keeping quality
 			MinContextWindow:         4000,
 			MaxOutputSize:            512,
 		},
@@ -188,4 +188,3 @@ RULES:
 
 Return the classification as JSON:`, canonicalPath)
 }
-

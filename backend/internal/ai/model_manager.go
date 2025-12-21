@@ -382,16 +382,18 @@ func (mm *AIModelManager) initializeModels() {
 	}
 
 	mm.models["gemini-2.5-flash-lite"] = AIModelCapabilities{
-		Name:                          "gemini-2.5-flash-lite",
-		ContextWindow:                 1000000,
-		OutputTokens:                  1000000,
-		PricePerInputToken:            0.00000010, // $0.10 / 1M (max in range)
-		PricePerOutputToken:           0.00000041, // $0.41 / 1M (slightly increased to favor gpt-5-nano)
-		Provider:                      AIProviderGemini,
-		MaxTokensPerMinute:            6000000,
-		MaxTokensPerDay:               12000000,
-		NearlyRealTime:                true,
-		CapabilityScore:               5,
+		Name:                "gemini-2.5-flash-lite",
+		ContextWindow:       1000000,
+		OutputTokens:        1000000,
+		PricePerInputToken:  0.00000010, // $0.10 / 1M (max in range)
+		PricePerOutputToken: 0.00000041, // $0.41 / 1M (slightly increased to favor gpt-5-nano)
+		Provider:            AIProviderGemini,
+		MaxTokensPerMinute:  6000000,
+		MaxTokensPerDay:     12000000,
+		NearlyRealTime:      true,
+		// Raise to 7 so Horizon heavy tasks (MinCapabilityScore=7) can still select this cheap model
+		// when grounding isn't required.
+		CapabilityScore:               7,
 		ImageGenerationCapability:     false,
 		EmbeddingGenerationCapability: false,
 		TextGenerationCapability:      true,
@@ -426,9 +428,10 @@ func (mm *AIModelManager) initializeModels() {
 	}
 
 	mm.models["gemini-3-pro-preview"] = AIModelCapabilities{
-		Name:                          "gemini-3-pro-preview",
-		ContextWindow:                 2000000, // Supports up to 2M tokens
-		OutputTokens:                  2000000,
+		Name: "gemini-3-pro-preview",
+		// Official Gemini API pricing page lists 1M / 64k for Gemini 3 Pro Preview.
+		ContextWindow:                 1048576,
+		OutputTokens:                  65536,
 		PricePerInputToken:            0.00000200, // $2.00 / 1M (up to 200K), $4.00 / 1M (above 200K)
 		PricePerOutputToken:           0.00001200, // $12.00 / 1M (up to 200K), $18.00 / 1M (above 200K)
 		Provider:                      AIProviderGemini,
@@ -436,6 +439,30 @@ func (mm *AIModelManager) initializeModels() {
 		MaxTokensPerDay:               10000000,
 		NearlyRealTime:                false,
 		CapabilityScore:               9, // Higher than 2.5-pro as it's newer
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       true,
+		BuiltInSearchCapability:       false,
+		SearchGroundingCapability:     true,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolGemini,
+	}
+
+	// Gemini 3 Flash Preview (official Gemini API pricing: $0.50 input (text/image/video), $3.00 output per 1M tokens).
+	// Source: https://ai.google.dev/gemini-api/docs/pricing
+	mm.models["gemini-3-flash-preview"] = AIModelCapabilities{
+		Name:                          "gemini-3-flash-preview",
+		ContextWindow:                 1048576,
+		OutputTokens:                  65536,
+		PricePerInputToken:            0.00000050, // $0.50 / 1M (text/image/video). Audio differs ($1.00 / 1M).
+		PricePerOutputToken:           0.00000300, // $3.00 / 1M output (including thinking tokens).
+		Provider:                      AIProviderGemini,
+		MaxTokensPerMinute:            6000000,
+		MaxTokensPerDay:               12000000,
+		NearlyRealTime:                true,
+		CapabilityScore:               8,
 		ImageGenerationCapability:     false,
 		EmbeddingGenerationCapability: false,
 		TextGenerationCapability:      true,

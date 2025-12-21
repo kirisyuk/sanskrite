@@ -44,7 +44,7 @@ func (a *ResearchAgent) EnrichFragment(ctx context.Context, fragment *models.Hor
 			SearchGroundingCapability: true, // Включаем Search Grounding
 			// Важно: позволяем fallback на gemini-2.5-pro (capabilityScore=8),
 			// иначе при сбое gemini-3-pro-preview у нас не остаётся подходящих моделей.
-			MinCapabilityScore: 8,
+			MinCapabilityScore: 7,
 			MinContextWindow:   16000,
 			MaxOutputSize:      4096,
 		},

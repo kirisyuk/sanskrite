@@ -388,6 +388,54 @@ freshness = timestamp_event - timestamp_published
 - Использование Resolver Agent для принятия решения
 - Создание Frame с меткой Low_Confidence при неуверенности
 
+## Суточный лимитер стоимости (MVP guardrails)
+
+На этапе MVP мы намеренно **ограничиваем каскадные эффекты по стоимости**, чтобы отладка и развитие системы не приводили к неуправляемым расходам.
+
+### Принцип
+
+- **Все лимиты — суточные (UTC day)**.
+- Ограничение делается **глубиной, а не шириной**:
+  - если лимит превышен — система **не углубляет рекурсию** (не создаёт новые child-jobs глубже),
+  - и может **пропустить дорогой этап Research** (grounding / web-enrichment).
+
+### Что именно ограничивается
+
+- **Research stage**: если превышены лимиты — `ResearchAgent` не вызывается, job продолжает обработку без enrichment.
+- **Recursive scouting**: при превышении лимитов система **режет `maxRecursionDepth` до текущей глубины**, т.е. каскад прекращается по глубине.
+
+### Основа расчёта (USD + token caps)
+
+Лимитер использует две независимые «сетки безопасности»:
+
+- **USD budget**: фактическая стоимость вызовов LLM агрегируется в Firestore ledger:
+  - per-lens per-day (UTC)
+  - per-cascade per-day (UTC), где cascade идентифицируется `cascadeRootJobId`
+- **Token caps (fallback)**: если по каким-то причинам USD-атрибуция/стоимость недоступна или некорректна, применяется ограничение по токенам.
+
+**Важно**: если модель вернула `0` использованных токенов, токены считаются приближённо как `len(text)/4`.
+
+### Дефолтные лимиты
+
+- **Cascade/day**: `$0.50` (UTC)
+- **Lens/day**: `$4.00` (UTC)
+- **Token caps (output tokens)**: по умолчанию выводятся из USD-лимитов по консервативной цене \( \$3 / 1M output tokens \) (в духе `gemini-3-flash-preview`), но могут быть переопределены.
+
+### Конфигурация через env
+
+- `HORIZON_BUDGETS_ENABLED` (default: `1`)
+- `HORIZON_CASCADE_DAILY_MAX_USD` (default: `0.50`)
+- `HORIZON_LENS_DAILY_MAX_USD` (default: `4.00`)
+- `HORIZON_CASCADE_DAILY_MAX_OUTPUT_TOKENS` (default: derived)
+- `HORIZON_LENS_DAILY_MAX_OUTPUT_TOKENS` (default: derived)
+
+### Как это связано с телеметрией
+
+Вызовы LLM пишут usage/telemetry метрики, а лимитер использует ledger-агрегации, которые атрибутируют расходы к:
+
+- `lensId` (per-lens/day)
+- `cascadeRootJobId` (per-cascade/day)
+
 ## Использование таксономии
 
 Scout Agent должен использовать базовую таксономию (Core Taxonomy v1.0) при извлечении данных:

@@ -985,6 +985,13 @@ func main() {
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
 
+		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
+		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
+		// Feed spend increments from AITaskExecutor based on real per-call cost.
+		if exec != nil {
+			exec.WithHorizonSpendSink(horizonSpendLedger)
+		}
+
 		// Cloud Tasks dispatcher for Scout jobs (managed queue + autoscaling + retries).
 		var scoutTasksDispatcher *horizontasks.ScoutCloudTasksDispatcher
 		{
@@ -1138,6 +1145,8 @@ func main() {
 				pub,
 				exec,
 			)
+			// Budget enforcement wiring.
+			scoutEngine.WithSpendLedger(horizonSpendLedger)
 
 			// Подключаем триггер распространения изменений
 			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {

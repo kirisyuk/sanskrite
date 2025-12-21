@@ -130,6 +130,45 @@ func (e *ScoutEngine) processDiscoveredRelations(
 				maxDepth = 0
 			}
 
+			// Daily budget guardrails (depth limiting, not breadth):
+			// If we've exceeded cascade or lens daily limits, stop expanding deeper.
+			if e.budgetPolicy.Enabled && e.spendLedger != nil && job != nil {
+				lensID := ""
+				if job.State != nil {
+					if v, ok := job.State["lensId"].(string); ok {
+						lensID = strings.TrimSpace(v)
+					}
+				}
+				cascadeID := ""
+				if job.State != nil {
+					if v, ok := job.State["cascadeRootJobId"].(string); ok {
+						cascadeID = strings.TrimSpace(v)
+					}
+				}
+				if cascadeID == "" {
+					cascadeID = job.ID
+				}
+				if lensID != "" && cascadeID != "" {
+					day := time.Now().UTC().Format("2006-01-02")
+					if cSpend, _, cOut, err := e.spendLedger.GetCascadeSpendUSD(ctx, job.TenantID, cascadeID, day); err == nil {
+						if e.budgetPolicy.CascadeDailyMaxUSD > 0 && cSpend >= e.budgetPolicy.CascadeDailyMaxUSD {
+							maxDepth = currentDepth
+						}
+						if e.budgetPolicy.CascadeDailyMaxOutputTokens > 0 && cOut >= e.budgetPolicy.CascadeDailyMaxOutputTokens {
+							maxDepth = currentDepth
+						}
+					}
+					if dSpend, _, dOut, err := e.spendLedger.GetLensDaySpendUSD(ctx, job.TenantID, lensID, day); err == nil {
+						if e.budgetPolicy.LensDailyMaxUSD > 0 && dSpend >= e.budgetPolicy.LensDailyMaxUSD {
+							maxDepth = currentDepth
+						}
+						if e.budgetPolicy.LensDailyMaxOutputTokens > 0 && dOut >= e.budgetPolicy.LensDailyMaxOutputTokens {
+							maxDepth = currentDepth
+						}
+					}
+				}
+			}
+
 			// Ограничиваем глубину
 			if currentDepth < maxDepth {
 				agentID := job.AgentID
@@ -144,6 +183,16 @@ func (e *ScoutEngine) processDiscoveredRelations(
 					"recursionDepth":      currentDepth + 1,
 					"maxRecursionDepth":   float64(maxDepth),
 					"parentJobId":         job.ID,
+				}
+				// Propagate cascade root id for budget attribution.
+				if job != nil && job.State != nil {
+					if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
+						childState["cascadeRootJobId"] = strings.TrimSpace(v)
+					} else {
+						childState["cascadeRootJobId"] = job.ID
+					}
+				} else {
+					childState["cascadeRootJobId"] = job.ID
 				}
 				// Propagate requestedMetrics, if present (ensures identical dynamic metrics behavior across prod/test).
 				if job != nil && job.State != nil {
@@ -195,6 +244,44 @@ func (e *ScoutEngine) processDiscoveredRelations(
 				maxDepth = 0
 			}
 
+			// Daily budget guardrails (depth limiting, not breadth)
+			if e.budgetPolicy.Enabled && e.spendLedger != nil && job != nil {
+				lensID := ""
+				if job.State != nil {
+					if v, ok := job.State["lensId"].(string); ok {
+						lensID = strings.TrimSpace(v)
+					}
+				}
+				cascadeID := ""
+				if job.State != nil {
+					if v, ok := job.State["cascadeRootJobId"].(string); ok {
+						cascadeID = strings.TrimSpace(v)
+					}
+				}
+				if cascadeID == "" {
+					cascadeID = job.ID
+				}
+				if lensID != "" && cascadeID != "" {
+					day := time.Now().UTC().Format("2006-01-02")
+					if cSpend, _, cOut, err := e.spendLedger.GetCascadeSpendUSD(ctx, job.TenantID, cascadeID, day); err == nil {
+						if e.budgetPolicy.CascadeDailyMaxUSD > 0 && cSpend >= e.budgetPolicy.CascadeDailyMaxUSD {
+							maxDepth = currentDepth
+						}
+						if e.budgetPolicy.CascadeDailyMaxOutputTokens > 0 && cOut >= e.budgetPolicy.CascadeDailyMaxOutputTokens {
+							maxDepth = currentDepth
+						}
+					}
+					if dSpend, _, dOut, err := e.spendLedger.GetLensDaySpendUSD(ctx, job.TenantID, lensID, day); err == nil {
+						if e.budgetPolicy.LensDailyMaxUSD > 0 && dSpend >= e.budgetPolicy.LensDailyMaxUSD {
+							maxDepth = currentDepth
+						}
+						if e.budgetPolicy.LensDailyMaxOutputTokens > 0 && dOut >= e.budgetPolicy.LensDailyMaxOutputTokens {
+							maxDepth = currentDepth
+						}
+					}
+				}
+			}
+
 			if shouldScout && currentDepth < maxDepth {
 				agentID := job.AgentID
 				if agentID == "" {
@@ -208,6 +295,16 @@ func (e *ScoutEngine) processDiscoveredRelations(
 					"recursionDepth":      currentDepth + 1,
 					"maxRecursionDepth":   float64(maxDepth),
 					"parentJobId":         job.ID,
+				}
+				// Propagate cascade root id for budget attribution.
+				if job != nil && job.State != nil {
+					if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
+						childState["cascadeRootJobId"] = strings.TrimSpace(v)
+					} else {
+						childState["cascadeRootJobId"] = job.ID
+					}
+				} else {
+					childState["cascadeRootJobId"] = job.ID
 				}
 				if job != nil && job.State != nil {
 					if rm, ok := job.State["requestedMetrics"]; ok {

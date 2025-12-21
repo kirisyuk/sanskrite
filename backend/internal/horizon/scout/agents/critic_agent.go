@@ -23,20 +23,20 @@ func NewCriticAgent(executor *ai.AITaskExecutor) *CriticAgent {
 
 // ValidationResult результат валидации Critic Agent
 type ValidationResult struct {
-	HasConflicts bool                   `json:"hasConflicts"`
-	Conflicts    []ValidationConflict   `json:"conflicts,omitempty"`
-	Confidence   float64                `json:"confidence"` // 0..1
-	IsValid      bool                   `json:"isValid"`
-	MissingInfo  []string               `json:"missingInfo,omitempty"` // Список вопросов для доизучения
+	HasConflicts bool                 `json:"hasConflicts"`
+	Conflicts    []ValidationConflict `json:"conflicts,omitempty"`
+	Confidence   float64              `json:"confidence"` // 0..1
+	IsValid      bool                 `json:"isValid"`
+	MissingInfo  []string             `json:"missingInfo,omitempty"` // Список вопросов для доизучения
 }
 
 // ValidationConflict конфликт между извлеченными данными и источниками
 type ValidationConflict struct {
-	Field       string `json:"field"`
+	Field          string      `json:"field"`
 	ExtractedValue interface{} `json:"extractedValue"`
-	SourceValue interface{} `json:"sourceValue"`
-	Reason      string `json:"reason"`
-	Severity    string `json:"severity"` // "low", "medium", "high"
+	SourceValue    interface{} `json:"sourceValue"`
+	Reason         string      `json:"reason"`
+	Severity       string      `json:"severity"` // "low", "medium", "high"
 }
 
 // Validate проверяет извлеченные данные на соответствие источникам
@@ -50,7 +50,7 @@ func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.Horizo
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:       8,
+			MinCapabilityScore:       7,
 			MinContextWindow:         16000, // Увеличиваем окно, так как добавляем relations
 			MaxOutputSize:            4096,
 		},
