@@ -387,10 +387,13 @@ func chooseCanonicalPath(ctx context.Context, vertex *ai.VertexAISearchClient, e
 	}
 	var candidates []candidate
 	if vertex != nil && vertex.IsConfigured() {
+		// Use dedicated Horizon Fragments datastore if configured (store isolation; no filters).
+		if ds := strings.TrimSpace(getenvDefault("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
+			vertex = vertex.WithDataStore(ds)
+		}
 		req := &ai.SearchRequest{
 			Query:    name,
 			PageSize: 10,
-			Filter:   `structData.type: "horizon_fragment"`,
 		}
 		resp, vErr := vertex.Search(ctx, req)
 		if vErr == nil && resp != nil {

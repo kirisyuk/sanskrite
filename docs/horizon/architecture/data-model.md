@@ -209,11 +209,26 @@
   "name": "Риски поставок полупроводников из Тайваня",
   "scope": [
     "/fac/tsmc/fab-21",
-    "/loc/tw/na/na"
+    "/loc/tw/na/na",
+    "/query/sector:/Technology/Semiconductors/**"
   ],
+  "scopeFragments": {
+    "/fac/tsmc/fab-21": "fragment-uuid-1",
+    "/loc/tw/na/na": "fragment-uuid-2"
+  },
+  "resolvedQueries": {
+    "/query/sector:/Technology/Semiconductors/**": [
+      "/org/tsmc",
+      "/org/samsung/semiconductor",
+      "/org/intel"
+    ]
+  },
+  "lastResolved": "2025-12-21T10:00:00Z",
   "viewConfig": {
     "depth": 3,
-    "viewType": "graph | table | timeline"
+    "viewType": "graph | table | timeline",
+    "requestedMetrics": ["revenue", "operational_health"],
+    "maxRecursionDepth": 2
   },
   "alertConfig": {
     "thresholds": {
@@ -233,6 +248,14 @@
 - `(tenantId, scope)` — для поиска Lens по узлам (array-contains)
 
 **Связь с Project**: Lens всегда связан с Project через `projectId`
+
+**QueryAddress Support**:
+- `scope` — поддерживает как статические canonical paths, так и QueryAddress (формат `/query/{criteria}`)
+- `scopeFragments` — кэш canonicalPath → fragmentID для оптимизации операций Update/Delete
+- `resolvedQueries` — кэш QueryAddress → []canonicalPath для избежания повторных Firestore запросов
+- `lastResolved` — timestamp последнего разрешения QueryAddress (обновляется фоновым job)
+
+Подробнее см. [QueryAddress](query-address.md)
 
 ### dependency_edges
 

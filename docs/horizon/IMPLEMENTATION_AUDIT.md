@@ -390,6 +390,59 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 4. Реализовать автоматическую обработку Cold Path задач (приоритет 2)
 5. Реализовать WebSocket endpoint (приоритет 3)
 
+## Будущие исследования и улучшения
+
+### Таксономия и иерархия
+
+- **Связка org/person/пр - индустрия и иерархия**: 
+  - Подумать над связкой между организациями, персонами и программами с индустриями
+  - Исследовать иерархическую структуру связей между сущностями и отраслями
+  - Рассмотреть возможность создания явных связей между canonical paths и sector paths
+  - Определить, как лучше моделировать принадлежность организаций к индустриям
+
+### Географическая и контекстная релевантность
+
+- **"Расстояние" от запроса до horizon fragments**:
+  - Исследовать концепцию "расстояния" или релевантности между запросом и horizon fragments
+  - При наличии географического интереса выборка не должна касаться всего пула индустриальных игроков
+  - Разработать механизм фильтрации по географической близости или релевантности
+  - Учесть, что не все индустриальные игроки релевантны для конкретного географического контекста
+  - Рассмотреть возможность добавления весов или метрик релевантности для фильтрации результатов
+
+### Сложные технологические зависимости
+
+- **Сложные связки адресов-технологий**:
+  - Исследовать моделирование сложных технологических зависимостей
+  - Пример: батарейные производители могут быть зависимы от лития, а могут и нет
+  - Watchdogs и волны распространения изменений не должны слепо менять всё
+  - Разработать механизм условных зависимостей (conditional dependencies)
+  - Добавить возможность указания контекста и условий для зависимостей
+  - Рассмотреть использование метаданных или атрибутов для описания характера зависимостей
+
+### Распространение сигналов через граф зависимостей
+
+- **Watchdog и соседние пути в графе**:
+  - Необходимо, чтобы Watchdog реагировал не только на прямой canonical path, но и на соседние пути в графе зависимостей
+  - Путь может не измениться напрямую, но технология или сущность, упомянутая в факте, может влиять на другие сущности через одно плечо зависимости
+  - Пример: факт упоминает технологию лития → литий влияет на производителя батарей (DependencyEdge) → производитель батарей влияет на производителя электромобилей → Watchdog должен сработать для производителя электромобилей
+  - Разработать механизм обхода графа зависимостей при поиске релевантных фактов
+  - Определить глубину обхода (например, 1-2 плеча) для баланса между полнотой и производительностью
+  - Интегрировать с Propagation Engine для согласованного поведения
+  - Рассмотреть кэширование графа зависимостей для оптимизации запросов
+
+### Оптимизация производительности через батчинг
+
+- **Аккумуляция вызовов Scout и изменений**:
+  - Необходимо аккумулировать будущие вызовы Scout и внесения изменений до фактического исполнения
+  - Множество изменений может значительно пересекаться (например, один факт может влиять на несколько сущностей через граф зависимостей)
+  - Пример: факт про литий может вызвать обновление для 10 производителей батарей, каждый из которых связан с 5 производителями электромобилей → вместо 50 отдельных вызовов Scout можно сделать 1 батч-запрос
+  - Разработать механизм очереди и батчинга для ScoutingJob
+  - Группировать запросы по источникам данных, типам сущностей или временным окнам
+  - Дедуплицировать запросы для одной и той же сущности из разных источников
+  - Оптимизировать Propagation Engine для батч-обработки изменений метрик
+  - Рассмотреть использование транзакций или batch операций в Firestore для атомарности
+  - Определить оптимальный размер батча и стратегию флаширования (по времени, по размеру, по приоритету)
+
 ## Следующие шаги
 
 1. Создать задачи для реализации отсутствующих endpoints
@@ -397,4 +450,162 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 3. Реализовать версионирование
 4. Обновить документацию с учетом реализованных дополнительных endpoints
 5. Проверить и создать все необходимые индексы Firestore
+
+---
+
+## Snapshot: текущий статус разработки/деплоя (2025‑12‑21)
+
+Эта секция — “точка сохранения” (state capture), чтобы продолжить работу с другого компьютера без контекста.
+
+### TL;DR (что сломано/почему подсказки не работают)
+
+- **Сломано**: `/api/horizon/entities/search` отдавал **500** в проде.
+- **Корень проблемы**: мы пытались использовать `filter` в Discovery Engine (Vertex AI Search) вида `structData.type: "horizon_fragment"`, но **в текущем Data Store со схемой `dataSchema=document` фильтрация по `structData.*` не поддерживается**. Любой filter возвращает **400 INVALID_ARGUMENT**, а мы это превращали в 500.
+- **Принятое решение**: **store isolation** — отдельный Vertex AI Search Data Store только под Horizon fragments + отдельный GCS bucket под их экспорт. Тогда filter не нужен.
+- **Текущий блокер**: импорт/индексация Horizon fragments в новый Data Store пока **не завершены/не работают**, потому что:
+  - Discovery Engine import ограничивает `gcsSource.inputUris` **максимум 100** значений (не 1000).
+  - Наш JSON‑формат экспортируемых fragment‑файлов **не соответствует ожидаемому `google.cloud.discoveryengine.Document` при `dataSchema=document`** (ошибка вида: `invalid JSON ... Document.Content ... unexpected character: '\"'; expected '{'`).
+
+### Что уже сделано в коде (Backend)
+
+#### 1) Выделена конфигурация для Horizon Fragments в Vertex AI Search
+
+- **Новые env vars** (Cloud Run):
+  - `HORIZON_FRAGMENTS_BUCKET` — отдельный bucket для JSON‑экспорта фрагментов.
+    - В деплое по умолчанию: `${PROJECT_ID}-horizon-fragments` (в проде: `sanskrite-horizon-fragments`).
+  - `VERTEX_SEARCH_HORIZON_DATA_STORE_ID` — отдельный Data Store для фрагментов.
+    - В деплое по умолчанию: `horizon-fragments-store`.
+
+#### 2) Vertex AI Search client: переключение Data Store
+
+- В `backend/internal/ai/vertex_search_client.go` добавлен метод:
+  - `WithDataStore(dataStoreID string) *VertexAISearchClient` — клонирует клиента, меняя только datastore.
+
+#### 3) Поиск фрагментов: больше не используем `filter`
+
+- В `backend/internal/horizon/service.go`:
+  - `SearchFragments()` больше **не ставит `Filter`**.
+  - Использует `VERTEX_SEARCH_HORIZON_DATA_STORE_ID` через `WithDataStore(...)` (если задано).
+  - Это критично, потому что фильтры по `structData.*` не поддерживаются в текущем формате Data Store.
+
+#### 4) Scout / инструменты: убраны `structData.type: "horizon_fragment"`
+
+Чтобы “скауты и пр” корректно пользовались новым store‑isolation подходом:
+
+- В `backend/internal/horizon/scout/` добавлен helper `horizonVertexClient(...)` (выбирает dedicated Data Store).
+- Из `FactApplier`, `Canonicalizer` и инструментов миграции (`cmd/tools/horizon_merge_*`) убраны фильтры `structData.type: "horizon_fragment"`.
+  - Сейчас они либо используют dedicated datastore (если env задан), либо fallback на общий.
+
+#### 5) Репозиторий фрагментов: синхронизация в Vertex при каждом Create/Update
+
+- `backend/internal/horizon/repo/fragments.go`:
+  - При `Create()` и `Update()` выполняется `uploadToGCS(...)`.
+  - После upload запускается `vertexSearchSync(...)` (best‑effort, асинхронно).
+  - В этот же файл добавлено логирование ошибок версионирования (не блокирует update).
+
+> ВАЖНО: сейчас `uploadToGCS(...)` экспортирует JSON, который **пока не проходит импорт** в Discovery Engine при `dataSchema=document`. Это следующий шаг.
+
+### Инфраструктура (GCS + Vertex AI Search)
+
+#### 1) Созданы отдельные ресурсы
+
+- **GCS bucket** для фрагментов:
+  - `gs://sanskrite-horizon-fragments`
+- **Discovery Engine Data Store** для фрагментов:
+  - `horizon-fragments-store` (location: `global`)
+
+#### 2) Деплой API (актуально на 2025‑12‑21)
+
+- Деплой выполнялся командой:
+
+  - `bash scripts/deploy --api`
+
+- Результат:
+  - Cloud Run service: `sanskrite-api`
+  - URL: `https://sanskrite-api-sqt63d2k2q-uc.a.run.app`
+  - Revision: `sanskrite-api-00708-xfn`
+
+#### 3) Что было сделано вручную/скриптами
+
+- Создание bucket:
+  - `gcloud storage buckets create gs://sanskrite-horizon-fragments --location=US --uniform-bucket-level-access`
+- Создание Data Store:
+  - REST call `.../dataStores?dataStoreId=horizon-fragments-store` (добавлено и в `scripts/deploy`).
+
+### Backfill (перенос существующих 6999 fragments)
+
+#### 1) Перенос объектов между bucket’ами
+
+Перенос существующих файлов:
+
+- `gcloud storage rsync -r gs://sanskrite-rag-documents/global/horizon_fragments gs://sanskrite-horizon-fragments/global/horizon_fragments`
+
+Пояснение:
+- `6999` — количество JSON‑файлов (по одному на фрагмент) в папке `global/horizon_fragments/`.
+
+#### 2) Скрипт backfill импорта в Vertex AI Search
+
+Добавлен файл:
+- `scripts/backfill-horizon-fragments-vertex.sh`
+
+Назначение:
+- импортировать файлы **батчами**, чтобы не упираться в лимиты Discovery Engine.
+
+Текущие ограничения (важно для продолжения):
+- `gcsSource.inputUris` принимает **максимум 100 URIs** за один import request.
+- Поэтому скрипт нужно запускать с `BATCH_SIZE<=100` (сейчас дефолт был 500 → ошибка).
+
+Пример корректного запуска:
+- `PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
+
+### Главный незакрытый блокер: формат экспортируемых JSON для Discovery Engine
+
+Сейчас import в `horizon-fragments-store` падает с ошибкой парсинга `Document.Content`.
+
+Причина:
+- экспорт в `backend/internal/horizon/repo/fragments.go` формирует документ вида:
+  - `{ "id": "...", "title": "...", "content": "...", "structData": {...} }`
+- Discovery Engine при `dataSchema=document` ожидает структуру, совместимую с `google.cloud.discoveryengine.Document`, и поле `content` там **не plain string** (отсюда “expected '{'”).
+
+Следующий шаг (FIX PLAN):
+- Привести экспорт к формату, который уже используется у нас для docs‑импорта (см. `scripts/import-documents-to-vertex-search.sh`):
+  - `{"id":"...","structData":{"title":"...","content":"...","uri":"...","tenantId":"...","canonicalPath":"...","type":"horizon_fragment", ...}}`
+- После этого:
+  - новые фрагменты будут индексироваться автоматически через single‑file import
+  - backfill можно делать либо:
+    - пересозданием файлов в новом bucket (re-export из Firestore), либо
+    - конвертацией существующих файлов в корректный JSONL/JSON формат и импортом.
+
+### Frontend (подсказки в AssembleLensRequest)
+
+- В `web/src/features/horizon/components/hook/AssembleLensRequest.tsx`:
+  - debounce = **500ms**
+  - отмена предыдущих запросов через `AbortController`
+  - fetch идёт на `/api/horizon/entities/search` (через `api.searchHorizonEntities`)
+- В `web/src/lib/api.ts`:
+  - добавлен метод `searchHorizonEntities(query, limit, signal)`
+
+### “Как продолжить с другого компа” (чек‑лист)
+
+1) **GCloud auth + project**
+- `gcloud auth login`
+- `gcloud config set project sanskrite`
+
+2) **Проверить наличие ресурсов**
+- `gcloud storage buckets describe gs://sanskrite-horizon-fragments`
+- `ACCESS_TOKEN=$(gcloud auth print-access-token) && curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "X-Goog-User-Project: sanskrite" "https://discoveryengine.googleapis.com/v1beta/projects/sanskrite/locations/global/dataStores" | grep horizon-fragments-store`
+
+3) **Деплой API**
+- `bash scripts/deploy --api`
+
+4) **Проверка, что env применились**
+- `gcloud run services describe sanskrite-api --region us-central1 --format='value(spec.template.spec.containers[0].env)' | grep -E 'HORIZON_FRAGMENTS_BUCKET|VERTEX_SEARCH_HORIZON_DATA_STORE_ID'`
+
+5) **Backfill (после фикса формата экспорта)**
+- Если нужно импортировать существующие файлы:
+  - `PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
+
+6) **Проверка эндпоинта**
+- `curl -X POST "$API_URL/api/horizon/entities/search" -H "Content-Type: application/json" -H "Authorization: Bearer <FIREBASE_ID_TOKEN>" -d '{"query":"Tesla","limit":10}'`
+
 

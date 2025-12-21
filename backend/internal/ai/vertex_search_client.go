@@ -38,6 +38,17 @@ type VertexAISearchClient struct {
 	tokenSource oauth2.TokenSource // Для OAuth2 аутентификации
 }
 
+// WithDataStore returns a shallow-cloned client targeting a different Data Store ID.
+// It reuses the same auth (API key / ADC token source) and HTTP client.
+func (c *VertexAISearchClient) WithDataStore(dataStoreID string) *VertexAISearchClient {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.dataStoreID = dataStoreID
+	return &clone
+}
+
 // NewVertexAISearchClient создает новый клиент для Vertex AI Search
 // Если apiKey пустой, будет использоваться Application Default Credentials (OAuth2)
 func NewVertexAISearchClient(projectID, location, dataStoreID, apiKey string) *VertexAISearchClient {
@@ -268,6 +279,90 @@ type ImportDocumentsRequest struct {
 	GCSPath            string // gs://bucket/path pattern (например, gs://bucket/tenantId/**)
 	ReconciliationMode string // "INCREMENTAL" или "FULL"
 	DataSchema         string // "content" (plain text) или "document" (JSONL с structData)
+}
+
+// ImportDocumentsFromURIs imports a specific list of GCS URIs (NOT a wildcard/pattern).
+// This is the recommended mode when you may exceed Discovery Engine's file expansion limits.
+// Note: Discovery Engine imposes a hard limit on number of files per import request (e.g. 1000).
+func (c *VertexAISearchClient) ImportDocumentsFromURIs(ctx context.Context, inputURIs []string, reconciliationMode, dataSchema string) (string, error) {
+	if c.projectID == "" || c.location == "" || c.dataStoreID == "" {
+		return "", fmt.Errorf("vertex AI search not configured: project, location, or dataStoreID missing")
+	}
+	if len(inputURIs) == 0 {
+		return "", fmt.Errorf("inputURIs is required")
+	}
+	if reconciliationMode == "" {
+		reconciliationMode = "INCREMENTAL"
+	}
+	if dataSchema == "" {
+		dataSchema = "content"
+	}
+
+	url := fmt.Sprintf(
+		"https://discoveryengine.googleapis.com/v1beta/projects/%s/locations/%s/collections/default_collection/dataStores/%s/branches/default_branch/documents:import",
+		c.projectID,
+		c.location,
+		c.dataStoreID,
+	)
+
+	requestBody := map[string]interface{}{
+		"gcsSource": map[string]interface{}{
+			"inputUris":  inputURIs,
+			"dataSchema": dataSchema,
+		},
+		"reconciliationMode": reconciliationMode,
+	}
+
+	log.Printf("[VertexAISearch] Importing URIs: count=%d dataSchema=%s reconciliationMode=%s", len(inputURIs), dataSchema, reconciliationMode)
+
+	bodyJSON, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Auth
+	if c.apiKey != "" {
+		httpReq.Header.Set("x-goog-api-key", c.apiKey)
+	} else if c.tokenSource != nil {
+		token, err := c.tokenSource.Token()
+		if err != nil {
+			return "", fmt.Errorf("failed to get OAuth2 token: %w", err)
+		}
+		httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
+	} else {
+		return "", fmt.Errorf("authentication required: either API key or Application Default Credentials")
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Goog-User-Project", c.projectID)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("vertex AI search import API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var importResp map[string]interface{}
+	if err := json.Unmarshal(body, &importResp); err != nil {
+		return "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	if name, ok := importResp["name"].(string); ok && name != "" {
+		return name, nil
+	}
+	return "", fmt.Errorf("unexpected import response: %s", string(body))
 }
 
 // ImportDocuments импортирует документы из GCS в Vertex AI Search

@@ -61,6 +61,10 @@ type ProjectsHandler struct {
 	projectScenarios *repo.ProjectScenariosRepository
 	// Scenario data repository
 	scenarioDataRepo *repo.ScenarioDataRepository
+	// Horizon Lens service for cascade delete
+	lensService interface {
+		DeleteLensesByProject(ctx context.Context, tenantID, projectID string) error
+	}
 }
 
 // NewProjectsHandler creates a new ProjectsHandler
@@ -182,6 +186,14 @@ func (h *ProjectsHandler) WithProjectScenarios(repo *repo.ProjectScenariosReposi
 // WithScenarioData wires ScenarioData repository
 func (h *ProjectsHandler) WithScenarioData(repo *repo.ScenarioDataRepository) *ProjectsHandler {
 	h.scenarioDataRepo = repo
+	return h
+}
+
+// WithLensService wires Horizon Lens service for cascade delete
+func (h *ProjectsHandler) WithLensService(lensService interface {
+	DeleteLensesByProject(ctx context.Context, tenantID, projectID string) error
+}) *ProjectsHandler {
+	h.lensService = lensService
 	return h
 }
 
@@ -454,6 +466,13 @@ func (h *ProjectsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) 
 	if h.projectScenarios != nil {
 		if err := h.projectScenarios.DeleteByProject(r.Context(), authInfo.TenantID, projectID); err != nil {
 			h.logger.Printf("Warning: cascade delete scenarios for project %s: %v", projectID, err)
+		}
+	}
+
+	// Cascade: delete Horizon lenses for this project
+	if h.lensService != nil {
+		if err := h.lensService.DeleteLensesByProject(r.Context(), authInfo.TenantID, projectID); err != nil {
+			h.logger.Printf("Warning: cascade delete lenses for project %s: %v", projectID, err)
 		}
 	}
 

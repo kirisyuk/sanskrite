@@ -28,7 +28,7 @@ interface SidebarPanelProps {
   onDeleteChat: (projectId: string, projectName: string) => void;
   onRenameChat: (projectId: string, newName: string) => void;
   onStartEditingProject: (projectId: string, currentName: string) => void;
-  currentMode?: 'chat' | 'perspectives' | 'models' | 'pages' | 'scenarios';
+  currentMode?: 'chat' | 'horizon' | 'perspectives' | 'models' | 'pages' | 'scenarios';
   projectId?: string | null;
   onOpenDocument?: (doc: { id: string; filename: string; contentType?: string; sizeBytes?: number; parseStatus?: string; docType?: string; artifactConfig?: any }) => void;
   onSelectJob?: (taskId: string | null) => void;
@@ -75,6 +75,7 @@ const ProjectRow = React.memo<{
   onCancelEditing: () => void;
   onEditingNameChange: (name: string) => void;
   t: any; // Pass t function as prop
+  currentMode?: 'chat' | 'horizon' | 'perspectives' | 'models' | 'pages' | 'scenarios';
 }>(({ 
   project, 
   isDeleting, 
@@ -89,12 +90,13 @@ const ProjectRow = React.memo<{
   onCancelEditing,
   onEditingNameChange,
   t,
+  currentMode,
 }) => {
   const daysAgo = getDaysSinceLastInteraction(project);
   const timeAgoLabel = daysAgo > 0 ? formatTimeAgo(daysAgo) : null;
   return (
     <div
-      className="px-2 py-1 rounded text-xs flex items-center gap-2 group cursor-pointer"
+      className="px-2 py-1 rounded text-xs flex items-center gap-2 group cursor-pointer relative"
       title={project.displayName}
       onClick={() => {
         if (!isEditing && !isDeleting) {
@@ -143,7 +145,7 @@ const ProjectRow = React.memo<{
               color: 'var(--text-heading)',
               border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
             }}
-            placeholder={t('unfold.sections.renameChatPlaceholder')}
+            placeholder={currentMode === 'horizon' ? 'Project name...' : t('unfold.sections.renameChatPlaceholder')}
             onClick={(e) => e.stopPropagation()}
           />
         </>
@@ -235,7 +237,7 @@ const ProjectRow = React.memo<{
             </div>
           )}
           <span
-            className="flex-1 truncate"
+            className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap transition-all duration-200 group-hover:pr-14"
             style={{
               color: isDeleting ? 'var(--text-tertiary-weak)' : 'var(--text-heading)',
               textDecoration: isDeleting ? 'line-through' : 'none',
@@ -244,10 +246,10 @@ const ProjectRow = React.memo<{
             {project.displayName}
           </span>
           {!isDeleting && (
-            <div className="relative flex items-center justify-end flex-shrink-0" style={{ width: '56px' }}>
+            <>
               {timeAgoLabel && (
                 <span
-                  className="text-[10px] px-1.5 py-0.5 rounded absolute right-0 group-hover:opacity-0 group-hover:pointer-events-none transition-opacity"
+                  className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 group-hover:opacity-0 group-hover:pointer-events-none transition-opacity"
                   style={{
                     color: 'var(--text-tertiary-weak)',
                     backgroundColor: 'var(--white-5)',
@@ -256,10 +258,10 @@ const ProjectRow = React.memo<{
                   {timeAgoLabel}
                 </span>
               )}
-              <div className="absolute right-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto z-10">
                 <button
                   className="p-1 rounded"
-                  title={t('unfold.sections.renameChat')}
+                  title={currentMode === 'horizon' ? 'Rename Project' : t('unfold.sections.renameChat')}
                   style={{ backgroundColor: 'transparent' }}
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
@@ -283,7 +285,7 @@ const ProjectRow = React.memo<{
                 </button>
                 <button
                   className="p-1 rounded"
-                  title={t('unfold.sections.deleteChat')}
+                  title={currentMode === 'horizon' ? 'Delete Project' : t('unfold.sections.deleteChat')}
                   style={{ backgroundColor: 'transparent' }}
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
@@ -306,7 +308,7 @@ const ProjectRow = React.memo<{
                   </svg>
                 </button>
               </div>
-            </div>
+            </>
           )}
         </>
       )}
@@ -470,6 +472,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         editingInputRef={editingInputRef}
         onEditingNameChange={onEditingProjectNameChange}
         t={t}
+        currentMode={currentMode}
         onSelect={() => {
           console.log('[SidebarPanel] Clicked on project', {
             projectId: project.id,
@@ -1235,7 +1238,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               <>
               <button
                 type="button"
-                aria-label={t('unfold.sections.newChat')}
+                aria-label={currentMode === 'horizon' ? 'New Project' : t('unfold.sections.newChat')}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
                 style={{
                   backgroundColor: 'transparent',
@@ -1250,7 +1253,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                     'transparent';
                 }}
                 onClick={() => {
-                  // Close all modals (workspace, admin, settings, account) when creating new chat
+                  // Close all modals (workspace, admin, settings, account) when creating new chat/project
                   onCloseAllModals?.();
                   onResetChat();
                   if (isMobile) {
@@ -1282,7 +1285,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   className="text-13 font-medium"
                   style={{ color: 'var(--text-heading)' }}
                 >
-                  {t('unfold.sections.newChat')}
+                  {currentMode === 'horizon' ? 'New Project' : t('unfold.sections.newChat')}
                   </span>
                 </button>
                 {onShowWorkspace && (
@@ -1712,16 +1715,16 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   className="text-[11px] uppercase tracking-wide mb-2"
                   style={{ color: 'var(--text-heading)' }}
                 >
-                  {t('unfold.sections.chats')}
+                  {currentMode === 'horizon' ? 'Projects' : t('unfold.sections.chats')}
                 </div>
 
                 {projectsLoading && memoizedProjects.length === 0 ? (
                   <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
-                    {t('unfold.sections.loadingChats')}
+                    {currentMode === 'horizon' ? 'Loading projects...' : t('unfold.sections.loadingChats')}
                   </div>
                 ) : memoizedProjects.length === 0 ? (
                   <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
-                    {t('unfold.sections.noChatsYet')}
+                    {currentMode === 'horizon' ? 'No projects yet' : t('unfold.sections.noChatsYet')}
                   </div>
                 ) : (
                   <div className="space-y-3">

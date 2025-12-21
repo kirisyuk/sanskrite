@@ -189,6 +189,14 @@
       ]
     },
     {
+      "collectionGroup": "ontology_entities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "canonicalPaths", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
       "collectionGroup": "ontology_events",
       "queryScope": "COLLECTION",
       "fields": [

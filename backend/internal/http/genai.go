@@ -860,7 +860,11 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 				mo := strings.ToLower(strings.TrimSpace(req.Options.ModelOverride))
 				if strings.HasPrefix(mo, "gemini_") {
 					go func(prompt string, model string) {
-						defer func() { recover() }()
+						defer func() {
+							if r := recover(); r != nil {
+								log.Printf("[GenAI] PANIC in grounding fallback goroutine (model=%s): %v", model, r)
+							}
+						}()
 						gopts := gen_gemini.Options{ModelOverride: model, GroundingEnabled: true, MaxOutputTokens: 64}
 						if gr, gerr := h.client.Generate(ctx, prompt, nil, gopts); gerr == nil {
 							if len(gr.Sources) > 0 {

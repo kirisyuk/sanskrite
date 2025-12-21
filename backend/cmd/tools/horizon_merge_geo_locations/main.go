@@ -380,10 +380,13 @@ func chooseLocPath(ctx context.Context, vertex *ai.VertexAISearchClient, execAI 
 	}
 	var candidates []candidate
 	if vertex != nil && vertex.IsConfigured() {
+		// Use dedicated Horizon Fragments datastore if configured (store isolation; no filters).
+		if ds := strings.TrimSpace(getenvDefault("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
+			vertex = vertex.WithDataStore(ds)
+		}
 		resp, err := vertex.Search(ctx, &ai.SearchRequest{
 			Query:    query,
 			PageSize: 10,
-			Filter:   `structData.type: "horizon_fragment"`,
 		})
 		if err == nil && resp != nil {
 			for _, r := range resp.Results {

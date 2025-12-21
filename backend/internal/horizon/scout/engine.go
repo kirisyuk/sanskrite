@@ -10,14 +10,14 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
-	ontologyModels "github.com/igorkirisyuk/sanskrite/internal/models"
+	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
 
 func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 	ctx context.Context,
 	target *models.HorizonFragment,
-	facts []*ontologyModels.OntologyFact,
+	facts []*coreModels.OntologyFact,
 	appliedFactIDs []string,
 ) error {
 	if e == nil || target == nil || target.ID == "" || e.fragmentsRepo == nil || e.edgesRepo == nil {
@@ -76,7 +76,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		return frag, nil
 	}
 
-	applyMetricUpdates := func(fragment *models.HorizonFragment, fact *ontologyModels.OntologyFact) bool {
+	applyMetricUpdates := func(fragment *models.HorizonFragment, fact *coreModels.OntologyFact) bool {
 		if fragment == nil || fact == nil || len(fact.MetricUpdates) == 0 {
 			return false
 		}
@@ -99,7 +99,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			}
 			return out
 		}
-		dedupHorizonRefsLocal := func(in []ontologyModels.SourceRef) []models.SourceRef {
+		dedupHorizonRefsLocal := func(in []coreModels.SourceRef) []models.SourceRef {
 			seen := map[string]struct{}{}
 			out := make([]models.SourceRef, 0, len(in))
 			for _, r := range in {
@@ -210,6 +210,9 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 				}
 				sfrag, err := ensureFragment(sp, models.FragmentTypeSphere, sp, "/Influence/Sphere", "/Influence")
 				if err != nil || sfrag == nil {
+					if err != nil {
+						fmt.Printf("[ScoutEngine] Failed to ensure sphere fragment %s: %v\n", sp, err)
+					}
 					continue
 				}
 				ensureInfluenceEdge(sfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "sphere", "path": sp, "factId": f.ID})
@@ -373,7 +376,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 
 		// FAST PATH: if we have fresh facts and they strongly match the fragment, apply deterministically without LLM.
-		var facts []*ontologyModels.OntologyFact
+		var facts []*coreModels.OntologyFact
 		if e.planner != nil && e.planner.factsRepo != nil && sinceFacts != nil {
 			facts, err = e.planner.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, tenantID, job.TargetCanonicalPath, sinceFacts.UTC(), 200)
 			if err == nil && len(facts) > 0 {
@@ -415,10 +418,35 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		return fmt.Errorf("failed to transition to PLANNING: %w", err)
 	}
 
-	sourcePlan, err := e.planner.PlanSources(ctx, tenantID, projectID, job.TargetCanonicalPath, models.ScoutingStrategy(job.ScoutingStrategy), sinceFacts)
-	if err != nil {
-		_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
-		return fmt.Errorf("failed to plan sources: %w", err)
+	var sourcePlan *SourcePlan
+
+	// ОПТИМИЗАЦИЯ: Если job имеет конкретные sourceIDs (от Watchdog), используем их напрямую.
+	// Это избегает дорогого PLANNING (Vertex AI Search + Firestore queries) для Watchdog-driven jobs.
+	// Watchdog уже обнаружил изменения в конкретных источниках, нет смысла переопределять их.
+	if len(job.SourceIDs) > 0 {
+		fmt.Printf("[ScoutEngine] Using explicit sourceIDs from job (Watchdog-driven): %d sources\n", len(job.SourceIDs))
+		sources := make([]*coreModels.DataSource, 0, len(job.SourceIDs))
+		for _, sourceID := range job.SourceIDs {
+			if e.planner != nil && e.planner.dataSourcesRepo != nil {
+				if source, err := e.planner.dataSourcesRepo.Get(ctx, sourceID); err == nil && source != nil {
+					sources = append(sources, source)
+				}
+			}
+		}
+		sourcePlan = &SourcePlan{
+			DataSourceIDs: job.SourceIDs,
+			Strategy:      job.ScoutingStrategy,
+			Sources:       sources,
+		}
+	} else {
+		// Полное планирование только если sourceIDs не указаны (Lens-driven jobs)
+		fmt.Printf("[ScoutEngine] Running full planning for %s (Lens-driven)\n", job.TargetCanonicalPath)
+		var err error
+		sourcePlan, err = e.planner.PlanSources(ctx, tenantID, projectID, job.TargetCanonicalPath, models.ScoutingStrategy(job.ScoutingStrategy), sinceFacts)
+		if err != nil {
+			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
+			return fmt.Errorf("failed to plan sources: %w", err)
+		}
 	}
 
 	// EXECUTION: Выполнение запросов к источникам
@@ -436,6 +464,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		result, err := e.executor.ExecuteDataSource(ctx, source)
 		if err != nil {
 			// Логируем ошибку, но продолжаем с другими источниками
+			fmt.Printf("[ScoutEngine] Failed to execute data source (id=%s, kind=%s): %v\n", source.ID, source.Kind, err)
 			continue
 		}
 		if result.Content != "" {
@@ -696,6 +725,7 @@ SKIP_RESEARCH:
 	evidence, err := ExtractEvidence(ctx, evidenceExtractor, sourceResults, extractedFragment.State)
 	if err != nil {
 		// Логируем ошибку, но продолжаем без Evidence
+		fmt.Printf("[ScoutEngine] Failed to extract evidence (jobID=%s, fragmentPath=%s): %v\n", job.ID, job.TargetCanonicalPath, err)
 		evidence = []models.Evidence{}
 	}
 

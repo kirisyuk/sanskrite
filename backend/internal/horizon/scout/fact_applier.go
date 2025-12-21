@@ -167,6 +167,10 @@ func (a *FactApplier) relevanceToFragment(ctx context.Context, fragmentCanonical
 	if a == nil || a.vertex == nil || !a.vertex.IsConfigured() || f == nil {
 		return 0
 	}
+	vertex := horizonVertexClient(a.vertex)
+	if vertex == nil || !vertex.IsConfigured() {
+		return 0
+	}
 	q := strings.TrimSpace(f.VectorText)
 	if q == "" {
 		q = strings.TrimSpace(f.Title + "\n" + f.Summary)
@@ -175,23 +179,31 @@ func (a *FactApplier) relevanceToFragment(ctx context.Context, fragmentCanonical
 		return 0
 	}
 
-	filterParts := []string{
-		`structData.type: "horizon_fragment"`,
-	}
-	if strings.TrimSpace(fragmentCanonicalPath) != "" {
-		filterParts = append(filterParts, fmt.Sprintf(`structData.canonicalPath: "%s"`, strings.TrimSpace(fragmentCanonicalPath)))
-	}
-
 	req := &ai.SearchRequest{
 		Query:    q,
-		PageSize: 1,
-		Filter:   strings.Join(filterParts, " AND "),
+		PageSize: 50,
 	}
-	resp, err := a.vertex.Search(ctx, req)
+	resp, err := vertex.Search(ctx, req)
 	if err != nil || resp == nil || len(resp.Results) == 0 {
 		return 0
 	}
-	return resp.Results[0].RelevanceScore
+
+	// Without server-side filters, we approximate relevance to a specific fragment by
+	// scanning returned results for that fragment canonicalPath.
+	want := strings.TrimSpace(fragmentCanonicalPath)
+	if want == "" {
+		return resp.Results[0].RelevanceScore
+	}
+	for _, r := range resp.Results {
+		sd := r.Document.StructData
+		if sd == nil {
+			continue
+		}
+		if cp, ok := sd["canonicalPath"].(string); ok && strings.TrimSpace(cp) == want {
+			return r.RelevanceScore
+		}
+	}
+	return 0
 }
 
 func mergeStringSet(dst *[]string, src []string) {

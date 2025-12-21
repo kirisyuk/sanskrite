@@ -11,12 +11,33 @@ type Lens struct {
 	TenantID    string                 `json:"tenantId" firestore:"tenantId"`
 	ProjectID   string                 `json:"projectId" firestore:"projectId"`
 	Name        string                 `json:"name" firestore:"name"`
-	Scope       []string               `json:"scope" firestore:"scope"` // Массив canonicalPath
+
+	// Scope: Mixed array of canonical paths AND query addresses
+	// Examples:
+	//   - Static: "/org/tsmc", "/fac/tsmc/fab-21"
+	//   - Dynamic (QueryAddress): "/query/sector:/Technology/Semiconductors/**"
+	Scope       []string               `json:"scope" firestore:"scope"`
+
 	ViewConfig  map[string]interface{} `json:"viewConfig" firestore:"viewConfig"`
 	AlertConfig map[string]interface{} `json:"alertConfig" firestore:"alertConfig"`
 	Status      string                 `json:"status" firestore:"status"` // ACTIVE, ARCHIVED
 	CreatedAt   time.Time              `json:"createdAt" firestore:"createdAt"`
 	UpdatedAt   time.Time              `json:"updatedAt" firestore:"updatedAt"`
+
+	// ОПТИМИЗАЦИЯ: Кэш для ускорения операций с Lens (Update/Delete).
+	// Хранит mapping canonicalPath → fragmentID, чтобы избежать дорогих
+	// composite index queries (GetByCanonicalPath) в пользу прямых key lookups (Get).
+	// Обновляется автоматически при Create/Update Lens.
+	ScopeFragments map[string]string `json:"scopeFragments,omitempty" firestore:"scopeFragments,omitempty"`
+
+	// QUERY ADDRESS SUPPORT: Кэш разрешенных QueryAddress в canonicalPaths.
+	// Key = QueryAddress (e.g., "/query/sector:/Technology/Semiconductors/**")
+	// Value = []canonicalPath (resolved list)
+	// Обновляется фоновым job (раз в день) или при Create/Update Lens.
+	ResolvedQueries map[string][]string `json:"resolvedQueries,omitempty" firestore:"resolvedQueries,omitempty"`
+
+	// Timestamp последнего разрешения QueryAddress
+	LastResolved *time.Time `json:"lastResolved,omitempty" firestore:"lastResolved,omitempty"`
 }
 
 // LensStatus статус Lens

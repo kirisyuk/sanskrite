@@ -3,6 +3,9 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -10,6 +13,35 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 )
+
+// validateCanonicalPath validates canonical path format without importing taxonomy package
+// to avoid circular dependencies. This is a simplified version that checks basic format.
+func validateCanonicalPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("canonical path cannot be empty")
+	}
+	if path == "/" {
+		return fmt.Errorf("canonical path cannot be root path '/'")
+	}
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("canonical path must start with '/': %s", path)
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return fmt.Errorf("canonical path has no segments: %s", path)
+	}
+	// Check that all segments are valid slugs (lowercase alphanumeric and hyphens)
+	slugRegex := regexp.MustCompile(`^[a-z0-9-]+$`)
+	for i, part := range parts {
+		if part == "" {
+			return fmt.Errorf("canonical path segment %d is empty: %s", i, path)
+		}
+		if !slugRegex.MatchString(part) {
+			return fmt.Errorf("canonical path segment %d contains invalid characters: %s", i, path)
+		}
+	}
+	return nil
+}
 
 var ErrInvalidOntologyDocument = errors.New("invalid ontology document")
 
@@ -46,6 +78,16 @@ func (r *EntityRepository) Create(ctx context.Context, e *models.Entity) (string
 	if e.Status == "" {
 		e.Status = "active"
 	}
+
+	// Validate canonical paths if present
+	if len(e.CanonicalPaths) > 0 {
+		for _, cp := range e.CanonicalPaths {
+			if err := validateCanonicalPath(cp); err != nil {
+				return "", fmt.Errorf("invalid canonical path '%s': %w", cp, err)
+			}
+		}
+	}
+
 	doc := r.col.NewDoc()
 	e.ID = doc.ID
 	if _, err := doc.Set(ctx, e); err != nil {
@@ -80,6 +122,16 @@ func (r *EntityRepository) Upsert(ctx context.Context, e *models.Entity) error {
 	if e.Status == "" {
 		e.Status = "active"
 	}
+
+	// Validate canonical paths if present
+	if len(e.CanonicalPaths) > 0 {
+		for _, cp := range e.CanonicalPaths {
+			if err := validateCanonicalPath(cp); err != nil {
+				return fmt.Errorf("invalid canonical path '%s': %w", cp, err)
+			}
+		}
+	}
+
 	_, err := r.col.Doc(e.ID).Set(ctx, e)
 	if err != nil {
 		return err
@@ -160,6 +212,100 @@ func (r *EntityRepository) FindByCanonicalName(ctx context.Context, tenantID, ca
 		return nil, err
 	}
 	return &e, nil
+}
+
+// FindByCanonicalPath finds an entity by its canonical path.
+// Returns the first entity found with the given canonical path, or nil if not found.
+func (r *EntityRepository) FindByCanonicalPath(ctx context.Context, tenantID, canonicalPath string) (*models.Entity, error) {
+	if canonicalPath == "" || canonicalPath == "/" {
+		return nil, nil
+	}
+	q := r.col.Where("tenantId", "==", tenantID).Where("canonicalPaths", "array-contains", canonicalPath).Limit(1)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil || len(docs) == 0 {
+		return nil, err
+	}
+	var e models.Entity
+	if err := docs[0].DataTo(&e); err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// FindDuplicatesByCanonicalPath finds all entities with the same canonical path.
+// Useful for detecting and merging duplicates.
+func (r *EntityRepository) FindDuplicatesByCanonicalPath(ctx context.Context, tenantID, canonicalPath string) ([]*models.Entity, error) {
+	if canonicalPath == "" || canonicalPath == "/" {
+		return nil, nil
+	}
+	q := r.col.Where("tenantId", "==", tenantID).Where("canonicalPaths", "array-contains", canonicalPath)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.Entity
+	for _, d := range docs {
+		var e models.Entity
+		if err := d.DataTo(&e); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
+// MergeDuplicatesByCanonicalPath merges duplicate entities that share the same canonical path.
+// The oldest entity (by CreatedAt) is kept as the primary, and others are marked as deprecated.
+// Aliases from duplicate entities are merged into the primary entity.
+func (r *EntityRepository) MergeDuplicatesByCanonicalPath(ctx context.Context, tenantID, canonicalPath string) error {
+	duplicates, err := r.FindDuplicatesByCanonicalPath(ctx, tenantID, canonicalPath)
+	if err != nil {
+		return err
+	}
+	if len(duplicates) <= 1 {
+		return nil // No duplicates to merge
+	}
+
+	// Find the oldest entity (primary)
+	var primary *models.Entity
+	for _, e := range duplicates {
+		if primary == nil || e.CreatedAt.Before(primary.CreatedAt) {
+			primary = e
+		}
+	}
+
+	// Merge aliases and mark others as deprecated
+	aliasMap := make(map[string]bool)
+	for _, alias := range primary.Aliases {
+		aliasMap[alias] = true
+	}
+
+	for _, dup := range duplicates {
+		if dup.ID == primary.ID {
+			continue
+		}
+
+		// Add canonical name and aliases to primary
+		if !aliasMap[dup.CanonicalName] {
+			primary.Aliases = append(primary.Aliases, dup.CanonicalName)
+			aliasMap[dup.CanonicalName] = true
+		}
+		for _, alias := range dup.Aliases {
+			if !aliasMap[alias] {
+				primary.Aliases = append(primary.Aliases, alias)
+				aliasMap[alias] = true
+			}
+		}
+
+		// Mark duplicate as deprecated
+		dup.Status = "deprecated"
+		if err := r.Upsert(ctx, dup); err != nil {
+			return err
+		}
+	}
+
+	// Update primary entity with merged aliases
+	return r.Upsert(ctx, primary)
 }
 
 // ListBySource находит все entities, созданные из указанного источника

@@ -224,6 +224,10 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 
 	// 2) Try Vertex AI Search over already indexed fragments
 	if e.planner != nil && e.planner.vertexSearchClient != nil && e.planner.vertexSearchClient.IsConfigured() {
+		vertex := horizonVertexClient(e.planner.vertexSearchClient)
+		if vertex == nil || !vertex.IsConfigured() {
+			goto LLM
+		}
 		query := strings.TrimSpace(rel.TargetShortName)
 		if query == "" {
 			query = strings.TrimSpace(rel.TargetLegalName)
@@ -234,9 +238,8 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		req := &ai.SearchRequest{
 			Query:    query,
 			PageSize: 10,
-			Filter:   `structData.type: "horizon_fragment"`,
 		}
-		resp, err := e.planner.vertexSearchClient.Search(ctx, req)
+		resp, err := vertex.Search(ctx, req)
 		if err == nil && resp != nil {
 			// Prefer search hit that matches our shortName-derived canonicalPath
 			for _, pref := range preferredCanonicalPaths(rel) {
@@ -282,6 +285,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 	}
 
 	// 3) LLM canonicalization
+LLM:
 	if e.aiExecutor == nil {
 		return "", fmt.Errorf("ai executor not configured for canonicalization")
 	}

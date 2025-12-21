@@ -142,7 +142,11 @@ func WithSubscriptionService(service *services.SubscriptionService) func(http.Ha
 			authInfo := GetAuthInfo(r.Context())
 			if authInfo != nil && !authInfo.IsSystem {
 				go func() {
-					defer func() { recover() }() // Don't let panics crash the server
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("[Auth] PANIC in admin subscription check goroutine (uid=%s, tenant=%s): %v", authInfo.UID, authInfo.TenantID, r)
+						}
+					}() // Don't let panics crash the server
 					
 					// Use background context with timeout for async operation
 					bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

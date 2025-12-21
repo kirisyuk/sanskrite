@@ -8,6 +8,7 @@ import { useUIStore } from '../stores/uiStore';
 import { SettingsModal } from '../components/SettingsModal';
 import { AccountModal } from '../components/AccountModal';
 import { AdminModal } from '../components/AdminModal';
+import AssembleLensRequestComponent, { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 
 const HorizonPage: React.FC = () => {
   const { t } = useTranslation();
@@ -17,6 +18,8 @@ const HorizonPage: React.FC = () => {
   const fetchProjects = useProjectsStore((s) => s.fetchProjects);
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const currentProject = useProjectsStore((s) => s.currentProject);
+  const deleteProject = useProjectsStore((s) => s.deleteProject);
+  const updateProject = useProjectsStore((s) => s.updateProject);
   
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
   const [showSettings, setShowSettings] = React.useState(false);
@@ -60,11 +63,19 @@ const HorizonPage: React.FC = () => {
   const handleDeleteChat = React.useCallback(async (projectId: string, projectName: string) => {
     if (!confirm(`Delete "${projectName}"?`)) return;
     try {
-      await useProjectsStore.getState().deleteProject(projectId);
+      // Check if the deleted project is currently open
+      const isCurrentProject = currentProject?.id === projectId;
+      
+      await deleteProject(projectId);
+      
+      // If we deleted the current project, reset it
+      if (isCurrentProject) {
+        setCurrentProject(null);
+      }
     } catch (err) {
       console.error('Failed to delete project:', err);
     }
-  }, []);
+  }, [currentProject, deleteProject, setCurrentProject]);
   
   const handleRenameChat = React.useCallback(async (projectId: string, newName: string) => {
     if (!newName.trim()) {
@@ -73,13 +84,13 @@ const HorizonPage: React.FC = () => {
       return;
     }
     try {
-      await useProjectsStore.getState().updateProject(projectId, { displayName: newName.trim() });
+      await updateProject(projectId, { displayName: newName.trim() });
       setEditingProjectId(null);
       setEditingProjectName('');
     } catch (err) {
       console.error('Failed to rename project:', err);
     }
-  }, []);
+  }, [updateProject]);
   
   const startEditingProject = React.useCallback((projectId: string, currentName: string) => {
     setEditingProjectId(projectId);
@@ -94,6 +105,19 @@ const HorizonPage: React.FC = () => {
     setShowSettings(false);
     setShowAccount(false);
     setShowAdmin(false);
+  }, []);
+
+  const handleAssembleLens = React.useCallback(async (request: AssembleLensRequest) => {
+    try {
+      // TODO: Implement API call to /api/horizon/lenses/assemble
+      console.log('Assembling lens:', request);
+      // For now, just log the request
+      // In the future, this will:
+      // 1. Call POST /api/horizon/lenses/assemble
+      // 2. Navigate to /horizon/assemble/:lensId
+    } catch (error) {
+      console.error('Failed to assemble lens:', error);
+    }
   }, []);
   
   return (
@@ -130,7 +154,7 @@ const HorizonPage: React.FC = () => {
         onDeleteChat={handleDeleteChat}
         onRenameChat={handleRenameChat}
         onStartEditingProject={startEditingProject}
-        currentMode="chat"
+        currentMode="horizon"
         projectId={currentProject?.id || null}
       />
 
@@ -155,24 +179,40 @@ const HorizonPage: React.FC = () => {
             minWidth: 0,
           }}
         >
-          {/* Main content - placeholder for now */}
+          {/* Main content - Assemble Lens Request */}
           <div style={{ 
             flex: 1,
             display: 'flex',
-            alignItems: 'center', 
-            justifyContent: 'center',
-            padding: '2rem',
-            color: 'var(--text-secondary)'
+            flexDirection: 'column',
+            minHeight: 0,
+            height: '100%',
           }}>
-            <div style={{ textAlign: 'center' }}>
-              <h1 style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
-                Horizon
-              </h1>
-              <p>Risk monitoring and dependency analysis</p>
-              <p style={{ marginTop: '1rem', fontSize: '0.875rem' }}>
-                Select a Horizon project from the sidebar to begin.
-              </p>
-            </div>
+            {currentProject ? (
+              <AssembleLensRequestComponent
+                projectId={currentProject.id}
+                onAssemble={handleAssembleLens}
+                disabled={false}
+              />
+            ) : (
+              <div style={{ 
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center', 
+                justifyContent: 'center',
+                padding: '2rem',
+                color: 'var(--text-secondary)'
+              }}>
+                <div style={{ textAlign: 'center' }}>
+                  <h1 style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
+                    Horizon
+                  </h1>
+                  <p>Risk monitoring and dependency analysis</p>
+                  <p style={{ marginTop: '1rem', fontSize: '0.875rem' }}>
+                    Select a project from the sidebar to begin.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

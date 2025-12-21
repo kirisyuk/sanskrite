@@ -1027,20 +1027,22 @@ func main() {
 			}
 		}
 
-		// Configure GCS storage and Vertex AI Search sync for Horizon Fragments
-		if gcsClient != nil && ragDocsBucket != "" {
-			horizonFragmentsRepo.WithStorage(gcsClient, ragDocsBucket)
+		// Configure dedicated GCS storage and Vertex AI Search sync for Horizon Fragments
+		// We use a separate bucket to keep Horizon fragment indexing isolated and controllable.
+		horizonFragmentsBucket := strings.TrimSpace(getEnv("HORIZON_FRAGMENTS_BUCKET", ""))
+		if horizonFragmentsBucket == "" {
+			horizonFragmentsBucket = ragDocsBucket // fallback for legacy setups
+		}
+		if gcsClient != nil && horizonFragmentsBucket != "" {
+			horizonFragmentsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
 			if vertexSearchClient != nil {
-				horizonFragmentsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
-					// Импортируем только фрагменты (path pattern: tenantId/horizon_fragments/**)
-					gcsPath := fmt.Sprintf("gs://%s/%s/horizon_fragments/**", ragDocsBucket, tenantID)
-					importReq := &ai.ImportDocumentsRequest{
-						GCSPath:            gcsPath,
-						ReconciliationMode: "INCREMENTAL",
-						DataSchema:         "document", // JSON format
+				horizonFragmentsRepo.WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
+					// Prefer a dedicated datastore for horizon fragments (store isolation instead of filters).
+					if ds := strings.TrimSpace(getEnv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
+						return vertexSearchClient.WithDataStore(ds).ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "document")
 					}
-					// Используем общий клиент Vertex AI Search (предполагаем один Data Store для всего)
-					return vertexSearchClient.ImportDocuments(ctx, importReq)
+					// Fallback: legacy behavior (shared datastore) — still uses single-file import to avoid >1000 expansion.
+					return vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "document")
 				})
 				logger.Printf("Horizon Fragments: Vertex AI Search sync enabled")
 			}
@@ -1237,11 +1239,17 @@ func main() {
 			}()
 			}
 
-			// Create HTTP handlers
-			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)
-			logger.Printf("Horizon system initialized")
+		// Create HTTP handlers
+		horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)
+		logger.Printf("Horizon system initialized")
+		
+		// Wire Horizon Lens service to projects handler for cascade delete
+		if horizonService != nil && horizonService.Lens() != nil {
+			s.projectsHandler = s.projectsHandler.WithLensService(horizonService.Lens())
+			logger.Printf("Horizon Lens service wired to projects handler for cascade delete")
 		}
 	}
+}
 
 	// Get auth client for middleware
 	authClient, err := fbApp.Auth(ctx)
@@ -2040,6 +2048,7 @@ func main() {
 			errorCount := 0
 			for _, signal := range signals {
 				if err := signalMonitoringService.ProcessSignal(r.Context(), signal); err != nil {
+					logger.Printf("Failed to process signal (signalID=%s): %v", signal.ID, err)
 					errorCount++
 					continue
 				}

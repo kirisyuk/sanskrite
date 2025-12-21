@@ -1521,6 +1521,39 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       throw error;
     }
   }
+
+  // Horizon - Entity Search
+  async searchHorizonEntities(query: string, limit: number = 10, signal?: AbortSignal): Promise<{
+    entities: Array<{
+      id: string;
+      canonicalPath: string;
+      name: string;
+      type: string;
+      entityPath?: string;
+      sectorPath?: string;
+      description?: string;
+      location?: string;
+      sector?: string;
+    }>;
+    total: number;
+    query: string;
+  }> {
+    try {
+      const response = await this.client.post('/api/horizon/entities/search', {
+        query,
+        limit,
+      }, {
+        signal,
+      });
+      return response.data;
+    } catch (error: any) {
+      if (error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
+        throw error; // Re-throw abort errors as-is
+      }
+      console.error(`[API] searchHorizonEntities error:`, error);
+      throw error;
+    }
+  }
 }
 
 export const api = new ApiClient();

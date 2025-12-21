@@ -1,12 +1,77 @@
 package taxonomy
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
 
 var reNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
+
+// ValidCanonicalPathNamespace defines allowed namespace prefixes for canonical paths
+var ValidCanonicalPathNamespace = map[string]bool{
+	"org":     true,
+	"person":  true,
+	"product": true,
+	"program": true,
+	"market":  true,
+	"fac":     true,
+	"loc":     true,
+	"sphere":  true,
+	"event":   true,
+}
+
+// ValidateCanonicalPath validates that a canonical path matches the expected format.
+// Returns an error if the path is invalid, nil otherwise.
+func ValidateCanonicalPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("canonical path cannot be empty")
+	}
+	if path == "/" {
+		return fmt.Errorf("canonical path cannot be root path '/'")
+	}
+
+	// Must start with /
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("canonical path must start with '/': %s", path)
+	}
+
+	// Split into parts
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return fmt.Errorf("canonical path has no segments: %s", path)
+	}
+
+	// First segment must be a valid namespace
+	namespace := parts[0]
+	if !ValidCanonicalPathNamespace[namespace] {
+		return fmt.Errorf("canonical path has invalid namespace '%s' (allowed: %v): %s",
+			namespace, getValidNamespaces(), path)
+	}
+
+	// All segments must be non-empty after slugification
+	for i, part := range parts {
+		if part == "" {
+			return fmt.Errorf("canonical path segment %d is empty: %s", i, path)
+		}
+		// Check that segment matches slug format (lowercase alphanumeric and hyphens)
+		if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(part) {
+			return fmt.Errorf("canonical path segment %d contains invalid characters: %s", i, path)
+		}
+	}
+
+	return nil
+}
+
+// getValidNamespaces returns a sorted list of valid namespace names for error messages
+func getValidNamespaces() []string {
+	namespaces := make([]string, 0, len(ValidCanonicalPathNamespace))
+	for ns := range ValidCanonicalPathNamespace {
+		namespaces = append(namespaces, ns)
+	}
+	return namespaces
+}
 
 // Slugify converts an arbitrary label into a stable, URL/path-friendly slug.
 // This is used as a shared primitive between Horizon and Ontology to keep canonical paths consistent.

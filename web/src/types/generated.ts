@@ -166,6 +166,8 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsCoreDoc {
       detailLevel?: 'brief' | 'moderate' | 'detailed';
       [k: string]: any;
     };
+    userRequest?: string;
+    sourceInteractionId?: string;
     [k: string]: any;
   };
 }

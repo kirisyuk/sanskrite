@@ -3,7 +3,8 @@ package horizon
 import (
 	"context"
 	"fmt"
-
+	"log"
+	"os"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
@@ -194,20 +195,28 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 		return nil, fmt.Errorf("vertex search not configured")
 	}
 
-	// Ищем документы с типом horizon_fragment
+	// Horizon fragments are searched in a dedicated Vertex AI Search Data Store.
+	// IMPORTANT: Filtering by structData.* is not supported in our current "document" schema datastore,
+	// so we avoid filters and instead rely on store isolation.
+	vertexClient := s.deps.VertexSearchClient
+	if ds := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID")); ds != "" {
+		vertexClient = vertexClient.WithDataStore(ds)
+	}
+
 	req := &ai.SearchRequest{
 		Query:    query,
 		PageSize: limit,
-		Filter:   `structData.type: "horizon_fragment"`,
 	}
 
-	resp, err := s.deps.VertexSearchClient.Search(ctx, req)
+	resp, err := vertexClient.Search(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("vertex search failed: %w", err)
 	}
 
+	log.Printf("[SearchFragments] Vertex search returned %d results", len(resp.Results))
+
 	var fragments []*models.HorizonFragment
-	for _, res := range resp.Results {
+	for i, res := range resp.Results {
 		// Извлекаем ID фрагмента
 		id := res.Document.ID
 		// Если ID содержит расширение .json, убираем его
@@ -215,12 +224,17 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 			id = strings.TrimSuffix(id, ".json")
 		}
 
+		log.Printf("[SearchFragments] Result %d: ID=%s, URI=%s", i, id, res.Document.URI)
+
 		// Пытаемся получить фрагмент из базы
 		fragment, err := s.fragmentsRepo.Get(ctx, id)
-		if err == nil {
-			fragments = append(fragments, fragment)
+		if err != nil {
+			log.Printf("[SearchFragments] Failed to get fragment %s: %v", id, err)
+			continue
 		}
+		fragments = append(fragments, fragment)
 	}
 
+	log.Printf("[SearchFragments] Successfully loaded %d fragments from %d search results", len(fragments), len(resp.Results))
 	return fragments, nil
 }

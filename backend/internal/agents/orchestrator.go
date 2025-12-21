@@ -1199,7 +1199,14 @@ func (o *AgentOrchestrator) executeWithReplanning(
 			// Критичная ошибка - проверить возможность репланирования перед остановкой
 			if job.PlanMode == models.PlanModeAuto && replanCount < maxReplans {
 				// Перезагрузить job для получения актуального состояния
-				job, _ = o.jobsRepo.Get(ctx, job.ID)
+				reloadedJob, err := o.jobsRepo.Get(ctx, job.ID)
+				if err != nil {
+					if o.logger != nil {
+						o.logger.Printf("[AgentOrchestrator] Failed to reload job %s for replanning: %v", job.ID, err)
+					}
+				} else {
+					job = reloadedJob
+				}
 				if o.shouldReplan(job) || len(job.Steps) > 0 {
 					// Попробовать репланирование
 					if replanErr := o.replan(ctx, job); replanErr == nil {
@@ -1208,7 +1215,14 @@ func (o *AgentOrchestrator) executeWithReplanning(
 						now := time.Now().UTC()
 						job.LastReplanAt = &now
 						job.ReplanTriggered = true
-						job, _ = o.jobsRepo.Get(ctx, job.ID)
+						reloadedJob, err := o.jobsRepo.Get(ctx, job.ID)
+						if err != nil {
+							if o.logger != nil {
+								o.logger.Printf("[AgentOrchestrator] Failed to reload job %s after replanning: %v", job.ID, err)
+							}
+						} else {
+							job = reloadedJob
+						}
 						continue // Попробовать выполнить новый план
 					}
 				}

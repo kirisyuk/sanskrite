@@ -28,7 +28,9 @@ type HorizonFragmentsRepository struct {
 	useGCS           bool
 	uploadLimiter    *rate.Limiter                                                                // Rate limiter for GCS uploads
 	limiterMu        sync.Mutex
-	vertexSearchSync func(ctx context.Context, tenantID string) (operationName string, err error) // Sync trigger
+	// vertexSearchSync triggers Vertex AI Search import for specific GCS URIs.
+	// We pass the exact object URI to avoid Discovery Engine file expansion limits (max 1000 files per import).
+	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error) // Sync trigger
 }
 
 // NewHorizonFragmentsRepository создает новый репозиторий
@@ -52,7 +54,7 @@ func (r *HorizonFragmentsRepository) WithStorage(storage *gcp.GCSClient, bucket 
 }
 
 // WithVertexSearchSync настраивает синхронизацию с Vertex AI Search
-func (r *HorizonFragmentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, tenantID string) (operationName string, err error)) *HorizonFragmentsRepository {
+func (r *HorizonFragmentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, gcsURI string) (operationName string, err error)) *HorizonFragmentsRepository {
 	r.vertexSearchSync = syncFn
 	return r
 }
@@ -110,13 +112,16 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 
 	// Триггерим синхронизацию
 	if r.vertexSearchSync != nil {
-		go func(tenantID string) {
+		gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
+		go func() {
 			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if op, err := r.vertexSearchSync(syncCtx, tenantID); err == nil {
+			if op, err := r.vertexSearchSync(syncCtx, gcsURI); err == nil {
 				log.Printf("[HorizonFragments] Vertex AI Sync triggered: %s", op)
+			} else {
+				log.Printf("[HorizonFragments] Vertex AI Sync failed for %s: %v", gcsURI, err)
 			}
-		}(fragment.TenantID)
+		}()
 	}
 
 	return nil
@@ -238,7 +243,7 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 	if _, err := r.versionsRepo.Create(ctx, version); err != nil {
 		// Логируем ошибку, но продолжаем обновление фрагмента
 		// Версионирование не должно блокировать обновление
-		_ = err
+		log.Printf("[HorizonFragments] Failed to create version for fragment %s: %v", currentFragment.ID, err)
 	}
 
 	_, err = r.col.Doc(fragment.ID).Set(ctx, fragment)
@@ -344,6 +349,12 @@ func (r *HorizonFragmentsRepository) ListByStatus(ctx context.Context, status st
 		fragments = append(fragments, &fragment)
 	}
 	return fragments, nil
+}
+
+// Query возвращает базовый Firestore query для HorizonFragment коллекции
+// CollectionRef сам является Query, поэтому возвращаем его напрямую
+func (r *HorizonFragmentsRepository) Query() firestore.Query {
+	return r.col.Where("tenantId", "==", "global")
 }
 
 // ListByCanonicalPaths получает список HorizonFragment по массиву canonicalPath

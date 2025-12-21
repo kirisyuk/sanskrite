@@ -2,7 +2,9 @@ package horizon
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"strings"
 
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
@@ -42,46 +44,68 @@ func (h *HorizonHandlers) SearchEntities(w http.ResponseWriter, r *http.Request)
 		req.Limit = 50
 	}
 
-	// Генерируем embedding для запроса через EmbeddingProvider
-	embeddingProvider := h.service.EmbeddingProvider()
-	if embeddingProvider == nil {
-		http.Error(w, "Embedding provider not available", http.StatusInternalServerError)
-		return
-	}
-
-	embeddings, err := embeddingProvider.EmbedTexts(r.Context(), []string{req.Query})
+	// Выполняем семантический поиск через Vertex AI Search
+	fragments, err := h.service.SearchFragments(r.Context(), req.Query, req.Limit)
 	if err != nil {
-		http.Error(w, "Failed to generate embedding", http.StatusInternalServerError)
-		return
-	}
-
-	if len(embeddings) == 0 {
-		http.Error(w, "Failed to generate embedding", http.StatusInternalServerError)
-		return
-	}
-
-	// Выполняем семантический поиск
-	fragments, err := h.service.Fragments().SearchByVectorText(r.Context(), embeddings[0], req.Limit)
-	if err != nil {
-		// Если векторный поиск не реализован, возвращаем ошибку
-		http.Error(w, "Vector search not available: "+err.Error(), http.StatusNotImplemented)
+		log.Printf("[SearchEntities] Search failed: %v", err)
+		http.Error(w, "Search failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Преобразуем в формат ответа для Live Entity Recognition
 	entities := make([]map[string]interface{}, 0, len(fragments))
 	for _, fragment := range fragments {
+		// Извлекаем имя: предпочитаем Labels["en"], fallback на Identifiers или canonicalPath
+		name := ""
+		if fragment.Labels != nil {
+			name = fragment.Labels["en"]
+		}
+		if name == "" && fragment.Identifiers != nil {
+			if shortName := fragment.Identifiers["shortName"]; shortName != "" {
+				name = shortName
+			} else if legalName := fragment.Identifiers["legalName"]; legalName != "" {
+				name = legalName
+			}
+		}
+		if name == "" {
+			// Fallback: извлекаем имя из canonicalPath
+			parts := strings.Split(fragment.CanonicalPath, "/")
+			if len(parts) > 0 {
+				lastPart := parts[len(parts)-1]
+				name = strings.Title(strings.ReplaceAll(lastPart, "-", " "))
+			}
+		}
+
+		// Извлекаем location и sector из fragment
+		location := ""
+		if fragment.HomeLocation != nil {
+			if fragment.HomeLocation.ISO3166_1 != nil {
+				location = *fragment.HomeLocation.ISO3166_1
+			}
+		}
+
+		sector := ""
+		if fragment.SectorPath != "" {
+			parts := strings.Split(strings.Trim(fragment.SectorPath, "/"), "/")
+			if len(parts) > 0 {
+				sector = parts[len(parts)-1]
+			}
+		}
+
 		entity := map[string]interface{}{
 			"id":            fragment.ID,
 			"canonicalPath": fragment.CanonicalPath,
-			"name":          fragment.Labels["en"],
-			"type":          fragment.Type,
+			"name":          name,
+			"type":          string(fragment.Type),
 			"entityPath":    fragment.EntityPath,
 			"sectorPath":    fragment.SectorPath,
 			"description":   fragment.Description,
 		}
-		if fragment.HomeLocation != nil {
-			entity["location"] = fragment.HomeLocation
+		if location != "" {
+			entity["location"] = location
+		}
+		if sector != "" {
+			entity["sector"] = sector
 		}
 		entities = append(entities, entity)
 	}

@@ -1085,6 +1085,44 @@ deploy_api() {
   }
   echo -e "${GREEN}[api] Go build successful locally${NC}"
 
+  # Ensure Horizon fragments dedicated bucket exists (even on --api deploys that skip infra).
+  local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-horizon-fragments}"
+  if gcloud storage buckets describe "gs://${horizon_fragments_bucket}" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[api] Horizon fragments bucket exists:${NC} gs://${horizon_fragments_bucket}"
+  else
+    echo -e "${BLUE}[api] Creating Horizon fragments bucket:${NC} gs://${horizon_fragments_bucket}"
+    gcloud storage buckets create "gs://${horizon_fragments_bucket}" --location=US --uniform-bucket-level-access --project="$PROJECT_ID" || true
+  fi
+
+  # Ensure dedicated Vertex AI Search Data Store for Horizon fragments exists (store isolation; no filters).
+  local horizon_fragments_datastore="${VERTEX_SEARCH_HORIZON_DATA_STORE_ID:-horizon-fragments-store}"
+  local access_token
+  access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || true)
+  if [[ -n "$access_token" ]]; then
+    local ds_list
+    ds_list=$(curl -s -H "Authorization: Bearer ${access_token}" \
+      -H "X-Goog-User-Project: ${PROJECT_ID}" \
+      "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores" 2>/dev/null || echo "")
+    if echo "$ds_list" | grep -q "dataStores/${horizon_fragments_datastore}\""; then
+      echo -e "${GREEN}[api] Horizon fragments Data Store exists:${NC} ${horizon_fragments_datastore}"
+    else
+      echo -e "${BLUE}[api] Creating Horizon fragments Data Store:${NC} ${horizon_fragments_datastore}"
+      curl -s -X POST \
+        -H "Authorization: Bearer ${access_token}" \
+        -H "X-Goog-User-Project: ${PROJECT_ID}" \
+        -H "Content-Type: application/json" \
+        "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores?dataStoreId=${horizon_fragments_datastore}" \
+        -d "{
+          \"displayName\": \"Horizon Fragments Store\",
+          \"industryVertical\": \"GENERIC\",
+          \"solutionTypes\": [\"SOLUTION_TYPE_SEARCH\"],
+          \"contentConfig\": \"CONTENT_REQUIRED\"
+        }" >/dev/null 2>&1 || true
+    fi
+  else
+    echo -e "${YELLOW}[api] Warning: cannot ensure Horizon Data Store (no access token).${NC}"
+  fi
+
   # Ensure Cloud Tasks queue exists even for --api-only deploys (managed Scout execution).
   local scout_queue="sanskrite-scout"
   if ! gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1169,6 +1207,11 @@ deploy_api() {
   fi
 
   local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=sanskrite-scout,CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
+  # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
+  # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
+  local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-horizon-fragments}"
+  local horizon_fragments_datastore="${VERTEX_SEARCH_HORIZON_DATA_STORE_ID:-horizon-fragments-store}"
+  env_vars="$env_vars,HORIZON_FRAGMENTS_BUCKET=${horizon_fragments_bucket},VERTEX_SEARCH_HORIZON_DATA_STORE_ID=${horizon_fragments_datastore}"
 
   # NOTE: ADMIN_JOB_TOKEN is provided via Secret Manager (see --set-secrets) to avoid rotation/desync.
 

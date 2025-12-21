@@ -294,6 +294,45 @@ func (e *OntologyExtractor) extractEntities(
 			entityIDs[canonicalName] = entityRef{ID: existing.ID, CanonicalPath: cp}
 		} else {
 			cPath := taxonomy.EntityCanonicalPath(string(entityType), canonicalName)
+			if cPath == "" || cPath == "/" {
+				if e.logger != nil {
+					e.logger.Printf("[OntologyExtractor] Skipping entity %s (type %s): invalid canonical path", canonicalName, entityType)
+				}
+				continue
+			}
+
+			// Validate canonical path format
+			if err := taxonomy.ValidateCanonicalPath(cPath); err != nil {
+				if e.logger != nil {
+					e.logger.Printf("[OntologyExtractor] Invalid canonical path '%s' for entity %s: %v", cPath, canonicalName, err)
+				}
+				continue
+			}
+
+			// Check for duplicate canonical path
+			duplicate, err := e.entitiesRepo.FindByCanonicalPath(ctx, tenantID, cPath)
+			if err == nil && duplicate != nil {
+				// Found duplicate - use existing entity instead of creating new one
+				if e.logger != nil {
+					e.logger.Printf("[OntologyExtractor] Canonical path collision: '%s' already exists for entity %s (ID: %s), reusing existing entity for '%s'",
+						cPath, duplicate.CanonicalName, duplicate.ID, canonicalName)
+				}
+				// Add canonical name as alias to existing entity if not present
+				hasAlias := false
+				for _, alias := range duplicate.Aliases {
+					if strings.EqualFold(alias, canonicalName) {
+						hasAlias = true
+						break
+					}
+				}
+				if !hasAlias {
+					duplicate.Aliases = append(duplicate.Aliases, canonicalName)
+					_ = e.entitiesRepo.Upsert(ctx, duplicate)
+				}
+				entityIDs[canonicalName] = entityRef{ID: duplicate.ID, CanonicalPath: cPath}
+				continue
+			}
+
 			entity := &models.Entity{
 				BaseOntologyFields: models.BaseOntologyFields{
 					TenantID:  tenantID,
@@ -304,12 +343,7 @@ func (e *OntologyExtractor) extractEntities(
 					UpdatedBy: "system",
 					Labels:    map[string]string{"en": canonicalName},
 					Status:    "active",
-					CanonicalPaths: func() []string {
-						if cPath == "" || cPath == "/" {
-							return nil
-						}
-						return []string{cPath}
-					}(),
+					CanonicalPaths: []string{cPath},
 				},
 				CanonicalName: canonicalName,
 				Type:          entityType,
@@ -419,6 +453,46 @@ func (e *OntologyExtractor) extractEntities(
 		} else {
 			cPath = taxonomy.EntityCanonicalPath(string(entityType), canonicalName)
 		}
+
+		if cPath == "" || cPath == "/" {
+			if e.logger != nil {
+				e.logger.Printf("[OntologyExtractor] Skipping entity %s (type %s): invalid canonical path", canonicalName, entityType)
+			}
+			continue
+		}
+
+		// Validate canonical path format
+		if err := taxonomy.ValidateCanonicalPath(cPath); err != nil {
+			if e.logger != nil {
+				e.logger.Printf("[OntologyExtractor] Invalid canonical path '%s' for entity %s: %v", cPath, canonicalName, err)
+			}
+			continue
+		}
+
+		// Check for duplicate canonical path
+		duplicate, err := e.entitiesRepo.FindByCanonicalPath(ctx, tenantID, cPath)
+		if err == nil && duplicate != nil {
+			// Found duplicate - use existing entity instead of creating new one
+			if e.logger != nil {
+				e.logger.Printf("[OntologyExtractor] Canonical path collision: '%s' already exists for entity %s (ID: %s), reusing existing entity for '%s'",
+					cPath, duplicate.CanonicalName, duplicate.ID, canonicalName)
+			}
+			// Add canonical name as alias to existing entity if not present
+			hasAlias := false
+			for _, alias := range duplicate.Aliases {
+				if strings.EqualFold(alias, canonicalName) {
+					hasAlias = true
+					break
+				}
+			}
+			if !hasAlias {
+				duplicate.Aliases = append(duplicate.Aliases, canonicalName)
+				_ = e.entitiesRepo.Upsert(ctx, duplicate)
+			}
+			entityIDs[canonicalName] = entityRef{ID: duplicate.ID, CanonicalPath: cPath}
+			continue
+		}
+
 		entity := &models.Entity{
 			BaseOntologyFields: models.BaseOntologyFields{
 				TenantID:  tenantID,
@@ -429,12 +503,7 @@ func (e *OntologyExtractor) extractEntities(
 				UpdatedBy: "system",
 				Labels:    map[string]string{"en": canonicalName},
 				Status:    "active",
-				CanonicalPaths: func() []string {
-					if cPath == "" || cPath == "/" {
-						return nil
-					}
-					return []string{cPath}
-				}(),
+				CanonicalPaths: []string{cPath},
 			},
 			CanonicalName: canonicalName,
 			Type:          entityType,
