@@ -19,6 +19,20 @@ type BaseOntologyFields struct {
 	Description string            `json:"description,omitempty" firestore:"description,omitempty"`
 	Tags        []string          `json:"tags,omitempty" firestore:"tags,omitempty"`
 	Status      string            `json:"status" firestore:"status"` // active, deprecated, draft, archived
+
+	// ---- Horizon taxonomy alignment + Vertex indexing fields ----
+	// CanonicalPaths are Horizon-first paths that link this ontology object to the unified taxonomy.
+	// This enables deterministic filtering and incremental watchdog processing without scanning sources.
+	CanonicalPaths []string `json:"canonicalPaths,omitempty" firestore:"canonicalPaths,omitempty"`
+	// LocationPath is a taxonomy path for a normalized location (if applicable).
+	LocationPath *string `json:"locationPath,omitempty" firestore:"locationPath,omitempty"`
+	// ActorPaths are taxonomy paths for normalized actors/participants (if applicable).
+	ActorPaths []string `json:"actorPaths,omitempty" firestore:"actorPaths,omitempty"`
+	// SpherePaths are taxonomy paths for spheres of influence/impact domains (e.g. geopolitical, social, cyber).
+	// They are used for filtering, faceting, and future wave propagation policies.
+	SpherePaths []string `json:"spherePaths,omitempty" firestore:"spherePaths,omitempty"`
+	// VectorText is the unified searchable text representation (for Vertex AI Search indexing).
+	VectorText string `json:"vectorText,omitempty" firestore:"vectorText,omitempty"`
 }
 
 // ============================================================================
@@ -31,6 +45,8 @@ const (
 	EntityTypePerson            EntityType = "Person"
 	EntityTypeOrganization      EntityType = "Organization"
 	EntityTypeProduct           EntityType = "Product"
+	EntityTypeProgram           EntityType = "Program"
+	EntityTypeMarket            EntityType = "Market"
 	EntityTypeLocation          EntityType = "Location"
 	EntityTypeEventEntity       EntityType = "EventEntity"
 	EntityTypeDocument          EntityType = "Document"
@@ -59,8 +75,11 @@ type KBReference struct {
 
 // Location представляет местоположение
 type Location struct {
-	Name    string  `json:"name,omitempty" firestore:"name,omitempty"`
-	ISO6709 *string `json:"iso6709,omitempty" firestore:"iso6709,omitempty"` // координаты ISO 6709
+	Name          string  `json:"name,omitempty" firestore:"name,omitempty"`
+	ISO6709       *string `json:"iso6709,omitempty" firestore:"iso6709,omitempty"`             // координаты ISO 6709
+	CountryAlpha2 *string `json:"countryAlpha2,omitempty" firestore:"countryAlpha2,omitempty"` // ISO3166-1 alpha2 lowercase (e.g., us, cn)
+	Admin1        *string `json:"admin1,omitempty" firestore:"admin1,omitempty"`               // state/province code or slug lowercase (e.g., ca, tx, sh)
+	City          *string `json:"city,omitempty" firestore:"city,omitempty"`                   // city slug lowercase (e.g., austin)
 }
 
 // Governance информация об управлении данными
@@ -138,16 +157,16 @@ const (
 
 // SourceRef ссылка на источник артефакта (документ, чат, веб-страница и т.д.)
 type SourceRef struct {
-	SourceID   string `json:"sourceId" firestore:"sourceId"`   // ID источника (document ID, chat ID, etc.)
+	SourceID   string `json:"sourceId" firestore:"sourceId"`     // ID источника (document ID, chat ID, etc.)
 	SourceType string `json:"sourceType" firestore:"sourceType"` // тип источника: document, telegram_channel, rss, web, chat, etc.
 }
 
 // Provenance информация о происхождении данных
 type Provenance struct {
-	SourceIDs   []string    `json:"sourceIds" firestore:"sourceIds"`   // ID источников данных (DataSource IDs) - для обратной совместимости
-	SourceRefs  []SourceRef `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"` // детальные ссылки на источники артефактов
-	ObservedAt  *time.Time  `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
-	Method      string      `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
+	SourceIDs  []string    `json:"sourceIds" firestore:"sourceIds"`                       // ID источников данных (DataSource IDs) - для обратной совместимости
+	SourceRefs []SourceRef `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"` // детальные ссылки на источники артефактов
+	ObservedAt *time.Time  `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
+	Method     string      `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
 }
 
 // Relation представляет статические/квазистатические связи между Entity/Concept
@@ -215,7 +234,7 @@ type TemporalInfo struct {
 
 // ClaimProvenance детальная информация о происхождении утверждения
 type ClaimProvenance struct {
-	SourceIDs       []string         `json:"sourceIds" firestore:"sourceIds"`   // ID источников данных (DataSource IDs) - для обратной совместимости
+	SourceIDs       []string         `json:"sourceIds" firestore:"sourceIds"`                       // ID источников данных (DataSource IDs) - для обратной совместимости
 	SourceRefs      []SourceRef      `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"` // детальные ссылки на источники артефактов
 	Method          ExtractionMethod `json:"method" firestore:"method"`
 	ExtractedAt     time.Time        `json:"extractedAt" firestore:"extractedAt"`

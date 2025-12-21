@@ -781,6 +781,7 @@ func setupExtractor(t *testing.T, fsClient *firestore.Client, genaiClient *gen_c
 		claimsRepo,
 		relationsRepo,
 		sourcesRepo,
+		nil, // factsRepo optional for integration tests
 		entityResolver,
 		entityEnricher,
 		trustIntegrator,

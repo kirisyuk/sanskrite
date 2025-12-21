@@ -177,8 +177,8 @@ DiscoveredRelation Schema:
   "targetName": "string",
   "targetLegalName": "string",
   "targetShortName": "string",
-  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "EVENT" | "PERSON",
-  "relationType": "SUPPLIES_TO" | "LOCATED_IN" | "OWNS" | "COMPETES_WITH" | "SUBSIDIARY_OF",
+  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON",
+  "relationType": "SUPPLIES_TO" | "LOCATED_IN" | "OWNS" | "PRODUCES" | "OPERATES_IN" | "REGULATES" | "COMPETES_WITH" | "INFLUENCES" | "DEPENDS_ON" | "SUBSIDIARY_OF",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED"
@@ -189,8 +189,18 @@ CANONICAL PATH RULES:
 - Prefer stable namespaces:
   - Organizations: /org/{lowercase-slug}
   - People: /person/{lowercase-slug}
-  - Products: /product/{lowercase-slug}
-  - Facilities: /fac/{lowercase-slug}
+  - Products:
+    - Prefer /product/{orgSlug}/{productSlug} when org is known
+    - Otherwise /product/{productSlug}
+  - Programs:
+    - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
+    - Otherwise /program/{programSlug}
+  - Markets:
+    - Prefer /market/{domainSlug}/{marketSlug} when domain is known
+    - Otherwise /market/{marketSlug}
+  - Facilities:
+    - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred
+    - Otherwise /fac/{facilitySlug}
   - Geo regions / locations: prefer /region/... or /loc/... when you can be specific; otherwise /region/{lowercase-slug}
 - canonicalPath slug SHOULD be derived from targetShortName (without ownership suffix) to avoid duplicates when legal form changes.
 - ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.

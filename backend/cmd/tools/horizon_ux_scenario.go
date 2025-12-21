@@ -63,7 +63,7 @@ func main() {
 	projectID := "sanskrite"
 
 	// Scenario flags (so we can test different branches without editing code)
-	targetFlag := flag.String("target", "/org/tesla/inc", "Target canonical path for the scenario (e.g., /product/tesla-batteries)")
+	targetFlag := flag.String("target", "/org/tesla", "Target canonical path for the scenario (e.g., /product/tesla-batteries)")
 	promptFlag := flag.String("prompt", "Analyze risks for Tesla Inc. with focus on supply chain", "User prompt for the scenario")
 	focusFlag := flag.String("focus", "supply_chain", "Lens focus (informational)")
 	depthFlag := flag.Int("depth", 2, "Lens depth (informational)")
@@ -225,7 +225,8 @@ func main() {
 		plannerVertex = nil
 		log.Printf("INFO: ScoutPlanner Vertex AI Search disabled for this run (fallback filtering will be used).")
 	}
-	planner := horizonscout.NewScoutPlanner(dataSourcesRepo, plannerVertex)
+	// factsRepo is not used in this UX tool scenario; keep nil.
+	planner := horizonscout.NewScoutPlanner(dataSourcesRepo, nil, plannerVertex)
 
 	wc := crawler.NewWebCrawler()
 	rssProvider := prov.NewRSSProvider()
@@ -267,7 +268,7 @@ func main() {
 	// Clean up previous run data to ensure fresh start
 	rawTarget := strings.TrimSpace(*targetFlag)
 	if rawTarget == "" {
-		rawTarget = "/org/tesla/inc"
+		rawTarget = "/org/tesla"
 	}
 	targetPath := normalizeCanonicalPath(rawTarget)
 

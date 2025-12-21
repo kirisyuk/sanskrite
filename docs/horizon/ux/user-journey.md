@@ -72,7 +72,7 @@ POST /api/horizon/lenses/assemble
   "name": "Tesla Supply Chain Risks",
   "targetEntities": [
     {
-      "canonicalPath": "/org/tesla/inc",
+      "canonicalPath": "/org/tesla",
       "type": "Organization"
     }
   ],

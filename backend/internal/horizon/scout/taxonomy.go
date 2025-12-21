@@ -21,11 +21,11 @@ func InferTaxonomyFromCanonicalPath(canonicalPath string) (entityPath, sectorPat
 		// Организация
 		entityPath = inferOrganizationPath(parts)
 		sectorPath = inferSectorFromPath(parts)
-	case "infra", "infrastructure", "facility", "fab", "plant", "factory":
+	case "fac", "facility", "infra", "infrastructure", "fab", "plant", "factory":
 		// Инфраструктура
 		entityPath = inferInfrastructurePath(parts)
 		sectorPath = inferSectorFromPath(parts)
-	case "geo", "geography", "region", "country", "location":
+	case "loc", "geo", "geography", "region", "country", "location":
 		// Географический регион
 		entityPath = "/Geo/Region"
 		sectorPath = "/Geography"
@@ -40,6 +40,10 @@ func InferTaxonomyFromCanonicalPath(canonicalPath string) (entityPath, sectorPat
 	case "event":
 		// Событие
 		entityPath = "/Event"
+		sectorPath = inferSectorFromPath(parts)
+	case "product":
+		// Продукт/ресурс (приближение)
+		entityPath = "/Resource/Component/Electronic"
 		sectorPath = inferSectorFromPath(parts)
 	default:
 		// Пытаемся определить по содержимому пути
@@ -66,7 +70,7 @@ func inferOrganizationPath(parts []string) string {
 
 	// Проверяем второй сегмент
 	secondSegment := strings.ToLower(parts[1])
-	
+
 	switch secondSegment {
 	case "gov", "government", "state":
 		return "/Organization/Government/Agency"
@@ -92,7 +96,7 @@ func inferInfrastructurePath(parts []string) string {
 	}
 
 	secondSegment := strings.ToLower(parts[1])
-	
+
 	switch secondSegment {
 	case "logistics", "port", "airport", "rail":
 		return "/Infrastructure/Logistics/Seaport"
@@ -133,7 +137,7 @@ func inferResourcePath(parts []string) string {
 	}
 
 	secondSegment := strings.ToLower(parts[1])
-	
+
 	switch secondSegment {
 	case "mineral", "mining", "ore":
 		return "/Resource/RawMaterial/Mineral"
@@ -152,29 +156,29 @@ func inferResourcePath(parts []string) string {
 func inferSectorFromPath(parts []string) string {
 	// Ищем ключевые слова в пути
 	pathStr := strings.ToLower(strings.Join(parts, "/"))
-	
+
 	// Технологии
-	if strings.Contains(pathStr, "tech") || strings.Contains(pathStr, "semiconductor") || 
-	   strings.Contains(pathStr, "chip") || strings.Contains(pathStr, "fab") {
+	if strings.Contains(pathStr, "tech") || strings.Contains(pathStr, "semiconductor") ||
+		strings.Contains(pathStr, "chip") || strings.Contains(pathStr, "fab") {
 		return "/Technology/Semiconductors/Manufacturing"
 	}
-	
+
 	// Энергетика
-	if strings.Contains(pathStr, "energy") || strings.Contains(pathStr, "power") || 
-	   strings.Contains(pathStr, "oil") || strings.Contains(pathStr, "gas") {
+	if strings.Contains(pathStr, "energy") || strings.Contains(pathStr, "power") ||
+		strings.Contains(pathStr, "oil") || strings.Contains(pathStr, "gas") {
 		return "/Energy/Fossil"
 	}
-	
+
 	// Материалы
 	if strings.Contains(pathStr, "material") || strings.Contains(pathStr, "mining") {
 		return "/Materials/Metals"
 	}
-	
+
 	// Финансы
 	if strings.Contains(pathStr, "finance") || strings.Contains(pathStr, "bank") {
 		return "/Finance/Banking"
 	}
-	
+
 	// По умолчанию
 	return getDefaultSectorPath()
 }
@@ -182,18 +186,18 @@ func inferSectorFromPath(parts []string) string {
 // inferEntityPathFromContent пытается определить entityPath по содержимому
 func inferEntityPathFromContent(parts []string) string {
 	pathStr := strings.ToLower(strings.Join(parts, "/"))
-	
+
 	if strings.Contains(pathStr, "org") || strings.Contains(pathStr, "company") {
 		return "/Organization/Corporation/Public"
 	}
-	if strings.Contains(pathStr, "facility") || strings.Contains(pathStr, "factory") || 
-	   strings.Contains(pathStr, "plant") || strings.Contains(pathStr, "fab") {
+	if strings.Contains(pathStr, "facility") || strings.Contains(pathStr, "factory") ||
+		strings.Contains(pathStr, "plant") || strings.Contains(pathStr, "fab") {
 		return "/Infrastructure/Manufacturing/Factory"
 	}
 	if strings.Contains(pathStr, "geo") || strings.Contains(pathStr, "region") {
 		return "/Geo/Region"
 	}
-	
+
 	return ""
 }
 
@@ -211,4 +215,3 @@ func getDefaultEntityPath() string {
 func getDefaultSectorPath() string {
 	return "/Technology/Semiconductors/Manufacturing"
 }
-

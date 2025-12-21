@@ -15,7 +15,7 @@
 {
   "id": "uuid",
   "tenantId": "string",
-  "canonicalPath": "/org/tsmc/fab/21",
+  "canonicalPath": "/fac/tsmc/fab-21",
   "type": "ORGANIZATION | FACILITY | GEO_REGION | EVENT",
   "entityPath": "/Infrastructure/Manufacturing/Factory",
   "sectorPath": "/Technology/Semiconductors/Manufacturing",
@@ -108,7 +108,7 @@
   "id": "uuid",
   "tenantId": "string",
   "scoutRequestId": "uuid",
-  "targetCanonicalPath": "/org/tsmc/fab/21",
+  "targetCanonicalPath": "/fac/tsmc/fab-21",
   "sourceDocumentId": "uuid",
   "extractedState": {
     "operational_health": {
@@ -180,8 +180,8 @@
   "projectId": "string",
   "name": "Риски поставок полупроводников из Тайваня",
   "scope": [
-    "/org/tsmc/fab/21",
-    "/geo/tw"
+    "/fac/tsmc/fab-21",
+    "/loc/tw/na/na"
   ],
   "viewConfig": {
     "depth": 3,

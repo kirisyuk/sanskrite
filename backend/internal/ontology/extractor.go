@@ -10,6 +10,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // OntologyExtractor преобразует извлеченные данные в онтологические объекты
@@ -20,6 +21,7 @@ type OntologyExtractor struct {
 	claimsRepo       *repo.ClaimRepository
 	relationsRepo    *repo.RelationRepository
 	sourcesRepo      *repo.SourceRepository
+	factsRepo        *repo.OntologyFactsRepository
 	entityResolver   *EntityResolver
 	entityEnricher   *EntityEnricher
 	trustIntegrator  *TrustIntegrator
@@ -36,6 +38,7 @@ func NewOntologyExtractor(
 	claimsRepo *repo.ClaimRepository,
 	relationsRepo *repo.RelationRepository,
 	sourcesRepo *repo.SourceRepository,
+	factsRepo *repo.OntologyFactsRepository,
 	entityResolver *EntityResolver,
 	entityEnricher *EntityEnricher,
 	trustIntegrator *TrustIntegrator,
@@ -50,6 +53,7 @@ func NewOntologyExtractor(
 		claimsRepo:       claimsRepo,
 		relationsRepo:    relationsRepo,
 		sourcesRepo:      sourcesRepo,
+		factsRepo:        factsRepo,
 		entityResolver:   entityResolver,
 		entityEnricher:   entityEnricher,
 		trustIntegrator:  trustIntegrator,
@@ -104,12 +108,27 @@ func (e *OntologyExtractor) ExtractFromDocument(
 		}
 	}
 
+	// Emit metric facts (fast-path friendly) if present
+	if len(extractedData.Metrics) > 0 {
+		if err := e.emitMetricFacts(ctx, tenantID, document, extractedData.Metrics, sourceID, entityIDs, now); err != nil {
+			if e.logger != nil {
+				e.logger.Printf("[OntologyExtractor] Failed to emit metric facts: %v", err)
+			}
+		}
+	}
+
 	if e.logger != nil {
-		e.logger.Printf("[OntologyExtractor] Extracted from document %s: %d entities, %d events, %d claims",
-			document.ID, len(entityIDs), len(eventIDs), len(extractedData.Claims))
+		e.logger.Printf("[OntologyExtractor] Extracted from document %s: %d entities, %d events, %d claims, %d metrics",
+			document.ID, len(entityIDs), len(eventIDs), len(extractedData.Claims), len(extractedData.Metrics))
 	}
 
 	return nil
+}
+
+// entityRef holds a resolved entity ID and its normalized taxonomy path.
+type entityRef struct {
+	ID            string
+	CanonicalPath string
 }
 
 // ExtractFromChat извлекает онтологические объекты из чат-сообщения
@@ -166,16 +185,18 @@ func (e *OntologyExtractor) ExtractFromChat(
 
 // DocumentExtraction структура извлеченных данных из документа
 type DocumentExtraction struct {
-	Entities []ExtractedEntity `json:"entities"`
-	Events   []ExtractedEvent  `json:"events"`
-	Claims   []ExtractedClaim  `json:"claims"`
+	Entities []ExtractedEntity       `json:"entities"`
+	Events   []ExtractedEvent        `json:"events"`
+	Claims   []ExtractedClaim        `json:"claims"`
+	Metrics  []ExtractedMetricUpdate `json:"metrics,omitempty"`
 }
 
 // ChatExtraction структура извлеченных данных из чата
 type ChatExtraction struct {
-	Entities []ExtractedEntity `json:"entities"`
-	Events   []ExtractedEvent  `json:"events"`
-	Claims   []ExtractedClaim  `json:"claims"`
+	Entities []ExtractedEntity       `json:"entities"`
+	Events   []ExtractedEvent        `json:"events"`
+	Claims   []ExtractedClaim        `json:"claims"`
+	Metrics  []ExtractedMetricUpdate `json:"metrics,omitempty"`
 }
 
 // ExtractedEntity извлеченная сущность
@@ -191,20 +212,46 @@ type ExtractedEventParticipant struct {
 	Role       string `json:"role"`       // agent, target, mediator, mentioned, etc.
 }
 
+// ExtractedLocation is a minimal location payload extracted by LLM.
+type ExtractedLocation struct {
+	Name          *string `json:"name,omitempty"`
+	ISO6709       *string `json:"iso6709,omitempty"`
+	CountryAlpha2 *string `json:"countryAlpha2,omitempty"` // ISO3166-1 alpha2 lowercase
+	Admin1        *string `json:"admin1,omitempty"`        // state/province code or slug lowercase; "na" if unknown
+	City          *string `json:"city,omitempty"`          // city slug lowercase; "na" if unknown
+}
+
 // ExtractedEvent извлеченное событие
 type ExtractedEvent struct {
-	Title       string                      `json:"title"`
-	DateISO     string                      `json:"dateISO"`
-	Context     *string                     `json:"context,omitempty"`
+	Title        string                      `json:"title"`
+	DateISO      string                      `json:"dateISO"`
+	Context      *string                     `json:"context,omitempty"`
+	Summary      *string                     `json:"summary,omitempty"`
+	Location     *ExtractedLocation          `json:"location,omitempty"`
 	Participants []ExtractedEventParticipant `json:"participants,omitempty"` // участники с ролями
+	SpherePaths  []string                    `json:"spherePaths,omitempty"`
+	EventType    string                      `json:"eventType,omitempty"`
 }
 
 // ExtractedClaim извлеченное утверждение
 type ExtractedClaim struct {
-	Text          string   `json:"text"`
-	Summary       *string  `json:"summary,omitempty"`
-	Confidence    float64  `json:"confidence"`
-	EvidenceURLs  []string `json:"evidenceUrls,omitempty"`
+	Text              string   `json:"text"`
+	Summary           *string  `json:"summary,omitempty"`
+	Confidence        float64  `json:"confidence"`
+	EvidenceURLs      []string `json:"evidenceUrls,omitempty"`
+	SubjectEntityName *string  `json:"subjectEntityName,omitempty"`
+	SpherePaths       []string `json:"spherePaths,omitempty"`
+}
+
+// ExtractedMetricUpdate is a typed numeric metric extracted by LLM (open-world with preferred vocabulary).
+// observedAt is kept as string for the extraction stage; parsing is handled in the extractor.
+type ExtractedMetricUpdate struct {
+	MetricName        string  `json:"metricName"`
+	Value             float64 `json:"value"`
+	Unit              *string `json:"unit,omitempty"`
+	Confidence        float64 `json:"confidence"`
+	ObservedAt        *string `json:"observedAt,omitempty"`
+	SubjectEntityName *string `json:"subjectEntityName,omitempty"`
 }
 
 // extractEntities создает Entity объекты из извлеченных данных
@@ -215,8 +262,87 @@ func (e *OntologyExtractor) extractEntities(
 	extractedEntities []ExtractedEntity,
 	sourceID string,
 	now time.Time,
-) (map[string]string, error) {
-	entityIDs := make(map[string]string) // canonicalName -> entityID
+) (map[string]entityRef, error) {
+	entityIDs := make(map[string]entityRef) // canonicalName -> entityRef
+
+	// First pass: resolve/create organizations early, so facilities can bind to a stable orgSlug.
+	orgNameToSlug := make(map[string]string) // lower-canonicalName -> orgSlug (from /org/{slug})
+	for _, ext := range extractedEntities {
+		if strings.TrimSpace(ext.Value) == "" {
+			continue
+		}
+		canonicalName := strings.TrimSpace(ext.Value)
+		entityType := e.mapExtractedTypeToEntityType(ext.Type)
+		if entityType != models.EntityTypeOrganization {
+			continue
+		}
+
+		existing, err := e.entityResolver.ResolveEntity(ctx, tenantID, canonicalName, entityType)
+		if err == nil && existing != nil {
+			cp := ""
+			if len(existing.CanonicalPaths) > 0 {
+				cp = existing.CanonicalPaths[0]
+			}
+			if cp == "" {
+				cp = taxonomy.EntityCanonicalPath(string(existing.Type), existing.CanonicalName)
+				if strings.TrimSpace(cp) != "" && strings.TrimSpace(cp) != "/" {
+					existing.CanonicalPaths = []string{cp}
+					existing.VectorText = existing.Description
+					_ = e.entitiesRepo.Upsert(ctx, existing)
+				}
+			}
+			entityIDs[canonicalName] = entityRef{ID: existing.ID, CanonicalPath: cp}
+		} else {
+			cPath := taxonomy.EntityCanonicalPath(string(entityType), canonicalName)
+			entity := &models.Entity{
+				BaseOntologyFields: models.BaseOntologyFields{
+					TenantID:  tenantID,
+					Version:   1,
+					CreatedAt: now,
+					UpdatedAt: now,
+					CreatedBy: "system",
+					UpdatedBy: "system",
+					Labels:    map[string]string{"en": canonicalName},
+					Status:    "active",
+					CanonicalPaths: func() []string {
+						if cPath == "" || cPath == "/" {
+							return nil
+						}
+						return []string{cPath}
+					}(),
+				},
+				CanonicalName: canonicalName,
+				Type:          entityType,
+				Aliases:       []string{canonicalName},
+				Attributes: map[string]interface{}{
+					"extractedFrom": "document",
+					"sourceId":      document.ID,
+					"sourceType":    "document",
+					"dataSourceId":  sourceID,
+				},
+			}
+			entityID, err := e.entitiesRepo.Create(ctx, entity)
+			if err != nil {
+				if e.logger != nil {
+					e.logger.Printf("[OntologyExtractor] Failed to create entity %s: %v", canonicalName, err)
+				}
+				continue
+			}
+			entityIDs[canonicalName] = entityRef{ID: entityID, CanonicalPath: cPath}
+			entity.ID = entityID
+		}
+
+		// Derive orgSlug for facility binding when canonicalPath is of form /org/{slug}
+		if ref, ok := entityIDs[canonicalName]; ok {
+			cp := strings.TrimSpace(ref.CanonicalPath)
+			if strings.HasPrefix(cp, "/org/") {
+				parts := strings.Split(strings.Trim(cp, "/"), "/")
+				if len(parts) >= 2 && parts[0] == "org" && strings.TrimSpace(parts[1]) != "" {
+					orgNameToSlug[strings.ToLower(canonicalName)] = parts[1]
+				}
+			}
+		}
+	}
 
 	for _, ext := range extractedEntities {
 		if ext.Value == "" {
@@ -232,14 +358,67 @@ func (e *OntologyExtractor) extractEntities(
 		// Определяем тип Entity
 		entityType := e.mapExtractedTypeToEntityType(ext.Type)
 
+		// Organizations were handled in the first pass.
+		if entityType == models.EntityTypeOrganization {
+			continue
+		}
+
 		// Используем EntityResolver для поиска существующего Entity
 		existing, err := e.entityResolver.ResolveEntity(ctx, tenantID, canonicalName, entityType)
 		if err == nil && existing != nil {
-			entityIDs[canonicalName] = existing.ID
+			// Ensure canonical path alignment
+			cp := ""
+			if len(existing.CanonicalPaths) > 0 {
+				cp = existing.CanonicalPaths[0]
+			}
+			if cp == "" {
+				cp = taxonomy.EntityCanonicalPath(string(existing.Type), existing.CanonicalName)
+				if strings.TrimSpace(cp) != "" && strings.TrimSpace(cp) != "/" {
+					existing.CanonicalPaths = []string{cp}
+					existing.VectorText = existing.Description // keep old text if any; will be refined later
+					_ = e.entitiesRepo.Upsert(ctx, existing)   // best-effort
+				}
+			}
+			entityIDs[canonicalName] = entityRef{ID: existing.ID, CanonicalPath: cp}
 			continue
 		}
 
 		// Создаем новый Entity
+		cPath := ""
+		if entityType == models.EntityTypeFacility {
+			// Prefer /fac/{orgSlug}/{facilitySlug} when facility name starts with a resolved org name.
+			lv := strings.ToLower(canonicalName)
+			bestOrgName := ""
+			bestOrgSlug := ""
+			for orgNameLower, orgSlug := range orgNameToSlug {
+				if orgSlug == "" {
+					continue
+				}
+				if strings.HasPrefix(lv, orgNameLower) {
+					// Ensure boundary (space/punct) so "meta" doesn't match "metallurgy".
+					if len(lv) == len(orgNameLower) {
+						continue
+					}
+					next := lv[len(orgNameLower)]
+					if (next >= 'a' && next <= 'z') || (next >= '0' && next <= '9') {
+						continue
+					}
+					if len(orgNameLower) > len(bestOrgName) {
+						bestOrgName = orgNameLower
+						bestOrgSlug = orgSlug
+					}
+				}
+			}
+			if bestOrgSlug != "" {
+				rest := strings.TrimSpace(canonicalName[len(bestOrgName):])
+				cPath = taxonomy.FacilityCanonicalPath(bestOrgSlug, rest)
+			}
+			if cPath == "" {
+				cPath = taxonomy.FacilityCanonicalPath("", canonicalName)
+			}
+		} else {
+			cPath = taxonomy.EntityCanonicalPath(string(entityType), canonicalName)
+		}
 		entity := &models.Entity{
 			BaseOntologyFields: models.BaseOntologyFields{
 				TenantID:  tenantID,
@@ -250,15 +429,21 @@ func (e *OntologyExtractor) extractEntities(
 				UpdatedBy: "system",
 				Labels:    map[string]string{"en": canonicalName},
 				Status:    "active",
+				CanonicalPaths: func() []string {
+					if cPath == "" || cPath == "/" {
+						return nil
+					}
+					return []string{cPath}
+				}(),
 			},
 			CanonicalName: canonicalName,
 			Type:          entityType,
 			Aliases:       []string{canonicalName}, // Начальный алиас
 			Attributes: map[string]interface{}{
 				"extractedFrom": "document",
-				"sourceId":     document.ID,    // ID документа как источника
-				"sourceType":   "document",     // тип источника
-				"dataSourceId": sourceID,       // ID DataSource (если есть)
+				"sourceId":      document.ID, // ID документа как источника
+				"sourceType":    "document",  // тип источника
+				"dataSourceId":  sourceID,    // ID DataSource (если есть)
 			},
 		}
 
@@ -270,7 +455,7 @@ func (e *OntologyExtractor) extractEntities(
 			continue
 		}
 
-		entityIDs[canonicalName] = entityID
+		entityIDs[canonicalName] = entityRef{ID: entityID, CanonicalPath: cPath}
 
 		// Обновляем entity.ID для использования в обогащении и классификации
 		entity.ID = entityID
@@ -304,12 +489,18 @@ func (e *OntologyExtractor) extractEvents(
 	document *models.Document,
 	extractedEvents []ExtractedEvent,
 	sourceID string,
-	entityIDs map[string]string,
+	entityIDs map[string]entityRef,
 	now time.Time,
 ) ([]string, error) {
 	var eventIDs []string
 
 	for _, ext := range extractedEvents {
+		// Prefer core DataSource ID for provenance (this is what Scout/Watchdog can consume).
+		dataSourceID := strings.TrimSpace(document.SourceID)
+		if dataSourceID == "" {
+			dataSourceID = strings.TrimSpace(sourceID)
+		}
+
 		if ext.Title == "" || ext.DateISO == "" {
 			continue
 		}
@@ -343,7 +534,8 @@ func (e *OntologyExtractor) extractEvents(
 			sourceType = "document"
 		}
 
-		// Создаем Event
+		// Create Event
+		eventType := taxonomy.NormalizeEventType(ext.EventType)
 		event := &models.Event{
 			BaseOntologyFields: models.BaseOntologyFields{
 				TenantID:  tenantID,
@@ -355,12 +547,21 @@ func (e *OntologyExtractor) extractEvents(
 				Labels:    map[string]string{"en": ext.Title},
 				Status:    "active",
 			},
-			Type:       "extracted", // Тип события из документа
+			Type:       eventType, // normalized event type from taxonomy (allowlist + other)
 			Title:      ext.Title,
 			OccurredAt: &occurredAt,
+			OutcomeSummary: func() string {
+				if ext.Summary != nil && strings.TrimSpace(*ext.Summary) != "" {
+					return strings.TrimSpace(*ext.Summary)
+				}
+				if ext.Context != nil && strings.TrimSpace(*ext.Context) != "" {
+					return strings.TrimSpace(*ext.Context)
+				}
+				return ""
+			}(),
 			Confidence: baseConfidence,
 			Provenance: models.Provenance{
-				SourceIDs: []string{sourceID},
+				SourceIDs: []string{dataSourceID},
 				SourceRefs: []models.SourceRef{
 					{
 						SourceID:   document.ID,
@@ -372,31 +573,48 @@ func (e *OntologyExtractor) extractEvents(
 			},
 		}
 
+		// Location (best effort)
+		if ext.Location != nil {
+			locName := ""
+			if ext.Location.Name != nil {
+				locName = strings.TrimSpace(*ext.Location.Name)
+			}
+			if locName != "" || ext.Location.ISO6709 != nil || ext.Location.CountryAlpha2 != nil || ext.Location.Admin1 != nil || ext.Location.City != nil {
+				event.Location = &models.Location{
+					Name:          locName,
+					ISO6709:       ext.Location.ISO6709,
+					CountryAlpha2: ext.Location.CountryAlpha2,
+					Admin1:        ext.Location.Admin1,
+					City:          ext.Location.City,
+				}
+			}
+		}
+
 		// Добавляем участников из извлеченных данных или упомянутых entities
 		if len(ext.Participants) > 0 {
 			// Используем участников из извлеченных данных с ролями
 			participants := make([]models.Participant, 0, len(ext.Participants))
 			for _, p := range ext.Participants {
 				// Ищем Entity по имени
-				entityID, found := entityIDs[p.EntityName]
+				ref, found := entityIDs[p.EntityName]
 				if !found {
 					// Пробуем найти по алиасам или нормализованному имени
 					canonicalName := strings.TrimSpace(p.EntityName)
-					entityID, found = entityIDs[canonicalName]
+					ref, found = entityIDs[canonicalName]
 					if !found {
 						// Пропускаем, если entity не найдена
 						continue
 					}
 				}
-				
+
 				// Определяем роль (по умолчанию "mentioned", если не указана)
 				role := strings.TrimSpace(p.Role)
 				if role == "" {
 					role = "mentioned"
 				}
-				
+
 				participants = append(participants, models.Participant{
-					EntityID: entityID,
+					EntityID: ref.ID,
 					Role:     role,
 				})
 			}
@@ -404,9 +622,9 @@ func (e *OntologyExtractor) extractEvents(
 		} else if len(entityIDs) > 0 {
 			// Fallback: если участники не извлечены, используем все упомянутые entities с ролью "mentioned"
 			participants := make([]models.Participant, 0, len(entityIDs))
-			for _, entityID := range entityIDs {
+			for _, ref := range entityIDs {
 				participants = append(participants, models.Participant{
-					EntityID: entityID,
+					EntityID: ref.ID,
 					Role:     "mentioned",
 				})
 			}
@@ -425,6 +643,80 @@ func (e *OntologyExtractor) extractEvents(
 
 		// Обновляем event.ID для использования в детекторах
 		event.ID = eventID
+
+		// Emit unified fact frame (ontology_facts) for watchdog/search
+		if e.factsRepo != nil {
+			f := &models.OntologyFact{
+				BaseOntologyFields: models.BaseOntologyFields{
+					TenantID:  tenantID,
+					Version:   1,
+					CreatedAt: now,
+					UpdatedAt: now,
+					CreatedBy: "system",
+					UpdatedBy: "system",
+					Labels:    map[string]string{"en": ext.Title},
+					Status:    "active",
+				},
+				Kind:       "event",
+				Type:       event.Type,
+				Title:      event.Title,
+				Summary:    event.OutcomeSummary,
+				OccurredAt: event.OccurredAt,
+				ObservedAt: &now,
+				EventID:    &eventID,
+				SourceIDs:  []string{dataSourceID},
+				SourceRefs: []models.SourceRef{{SourceID: document.ID, SourceType: "document"}},
+				Confidence: event.Confidence,
+			}
+
+			// spherePaths (impact domains) from extraction
+			if len(ext.SpherePaths) > 0 {
+				f.SpherePaths = taxonomy.NormalizeSpherePaths(ext.SpherePaths)
+			}
+
+			// actorPaths from participants
+			for _, p := range event.Participants {
+				for _, ref := range entityIDs {
+					if ref.ID == p.EntityID && ref.CanonicalPath != "" && ref.CanonicalPath != "/" {
+						f.ActorPaths = append(f.ActorPaths, ref.CanonicalPath)
+						break
+					}
+				}
+			}
+
+			// locationPath from event.Location if present
+			if event.Location != nil {
+				country := ""
+				admin1 := ""
+				city := ""
+				if event.Location.CountryAlpha2 != nil {
+					country = strings.TrimSpace(*event.Location.CountryAlpha2)
+				}
+				if event.Location.Admin1 != nil {
+					admin1 = strings.TrimSpace(*event.Location.Admin1)
+				}
+				if event.Location.City != nil {
+					city = strings.TrimSpace(*event.Location.City)
+				}
+				// Canonical Horizon geo taxonomy: /loc/{country}/{admin1}/{city}
+				// Country-only locations are /loc/{country}/na/na.
+				if strings.TrimSpace(country) != "" {
+					locPath := taxonomy.GeoCanonicalPath(country, admin1, city)
+					if locPath != "" && locPath != "/" {
+						f.LocationPath = &locPath
+					}
+				}
+			}
+
+			// canonicalPaths unify the frame: include actors + location
+			f.CanonicalPaths = append([]string{}, f.ActorPaths...)
+			if f.LocationPath != nil {
+				f.CanonicalPaths = append(f.CanonicalPaths, *f.LocationPath)
+			}
+			f.VectorText = f.GenerateVectorText()
+
+			_, _ = e.factsRepo.Create(ctx, f) // best effort
+		}
 
 		// Обнаружение причинно-следственных связей
 		if e.causalDetector != nil {
@@ -455,10 +747,15 @@ func (e *OntologyExtractor) extractClaims(
 	document *models.Document,
 	extractedClaims []ExtractedClaim,
 	sourceID string,
-	entityIDs map[string]string,
+	entityIDs map[string]entityRef,
 	now time.Time,
 ) error {
 	for _, ext := range extractedClaims {
+		dataSourceID := strings.TrimSpace(document.SourceID)
+		if dataSourceID == "" {
+			dataSourceID = strings.TrimSpace(sourceID)
+		}
+
 		if ext.Text == "" {
 			continue
 		}
@@ -466,13 +763,15 @@ func (e *OntologyExtractor) extractClaims(
 		// Для Claim нужен SubjectRef - пытаемся найти подходящий Entity
 		// Если не находим, создаем Claim без SubjectRef (будет обработан позже)
 		var subjectRef models.SubjectRef
-		if len(entityIDs) > 0 {
-			// Берем первый упомянутый entity как субъект
-			for _, entityID := range entityIDs {
-				subjectRef = models.SubjectRef{
-					ID:   entityID,
-					Kind: models.ReferenceKindEntity,
-				}
+		if ext.SubjectEntityName != nil && strings.TrimSpace(*ext.SubjectEntityName) != "" {
+			if ref, ok := entityIDs[strings.TrimSpace(*ext.SubjectEntityName)]; ok && ref.ID != "" {
+				subjectRef = models.SubjectRef{ID: ref.ID, Kind: models.ReferenceKindEntity}
+			}
+		}
+		if subjectRef.ID == "" && len(entityIDs) > 0 {
+			// Fallback: берем первый упомянутый entity как субъект
+			for _, ref := range entityIDs {
+				subjectRef = models.SubjectRef{ID: ref.ID, Kind: models.ReferenceKindEntity}
 				break
 			}
 		} else {
@@ -515,9 +814,9 @@ func (e *OntologyExtractor) extractClaims(
 				Value: ext.Text,
 			},
 			Confidence: adjustedConfidence,
-			Stance:    models.StanceNeutral,
+			Stance:     models.StanceNeutral,
 			Provenance: models.ClaimProvenance{
-				SourceIDs: []string{sourceID},
+				SourceIDs: []string{dataSourceID},
 				SourceRefs: []models.SourceRef{
 					{
 						SourceID:   document.ID,
@@ -540,6 +839,62 @@ func (e *OntologyExtractor) extractClaims(
 
 		// Обновляем claim.ID для использования в детекторе конфликтов
 		claim.ID = claimID
+
+		// Emit unified fact frame for watchdog/search
+		if e.factsRepo != nil {
+			f := &models.OntologyFact{
+				BaseOntologyFields: models.BaseOntologyFields{
+					TenantID:  tenantID,
+					Version:   1,
+					CreatedAt: now,
+					UpdatedAt: now,
+					CreatedBy: "system",
+					UpdatedBy: "system",
+					Labels:    map[string]string{"en": ext.Text},
+					Status:    "active",
+				},
+				Kind:  "claim",
+				Type:  claim.Predicate,
+				Title: ext.Text,
+				Summary: func() string {
+					if ext.Summary != nil {
+						return strings.TrimSpace(*ext.Summary)
+					}
+					return ""
+				}(),
+				ObservedAt: &now,
+				ClaimID:    &claimID,
+				SourceIDs:  []string{dataSourceID},
+				SourceRefs: []models.SourceRef{{SourceID: document.ID, SourceType: "document"}},
+				Confidence: claim.Confidence,
+			}
+
+			// spherePaths (impact domains) from extraction
+			if len(ext.SpherePaths) > 0 {
+				f.SpherePaths = taxonomy.NormalizeSpherePaths(ext.SpherePaths)
+			}
+
+			// Best-effort canonical link: prefer extracted subject, else first entity.
+			if ext.SubjectEntityName != nil {
+				if ref, ok := entityIDs[strings.TrimSpace(*ext.SubjectEntityName)]; ok {
+					if ref.CanonicalPath != "" && ref.CanonicalPath != "/" {
+						f.ActorPaths = []string{ref.CanonicalPath}
+						f.CanonicalPaths = []string{ref.CanonicalPath}
+					}
+				}
+			}
+			if len(f.CanonicalPaths) == 0 {
+				for _, ref := range entityIDs {
+					if ref.CanonicalPath != "" && ref.CanonicalPath != "/" {
+						f.ActorPaths = []string{ref.CanonicalPath}
+						f.CanonicalPaths = []string{ref.CanonicalPath}
+						break
+					}
+				}
+			}
+			f.VectorText = f.GenerateVectorText()
+			_, _ = e.factsRepo.Create(ctx, f)
+		}
 
 		// Обнаружение конфликтов
 		if e.conflictDetector != nil {
@@ -565,6 +920,121 @@ func (e *OntologyExtractor) extractClaims(
 	return nil
 }
 
+func (e *OntologyExtractor) emitMetricFacts(
+	ctx context.Context,
+	tenantID string,
+	document *models.Document,
+	metrics []ExtractedMetricUpdate,
+	sourceID string,
+	entityIDs map[string]entityRef,
+	now time.Time,
+) error {
+	if e.factsRepo == nil || len(metrics) == 0 {
+		return nil
+	}
+
+	// Prefer core DataSource ID for provenance (same as events/claims)
+	dataSourceID := strings.TrimSpace(document.SourceID)
+	if dataSourceID == "" {
+		dataSourceID = strings.TrimSpace(sourceID)
+	}
+
+	parseObservedAt := func(s *string) *time.Time {
+		if s == nil {
+			return nil
+		}
+		raw := strings.TrimSpace(*s)
+		if raw == "" {
+			return nil
+		}
+		// Try RFC3339 first, then YYYY-MM-DD.
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			tt := t.UTC()
+			return &tt
+		}
+		if t, err := time.Parse("2006-01-02", raw); err == nil {
+			tt := t.UTC()
+			return &tt
+		}
+		return nil
+	}
+
+	for _, mu := range metrics {
+		name := strings.TrimSpace(mu.MetricName)
+		if name == "" {
+			continue
+		}
+
+		// Resolve subject entity to canonicalPath (best effort)
+		var subj entityRef
+		if mu.SubjectEntityName != nil {
+			if ref, ok := entityIDs[strings.TrimSpace(*mu.SubjectEntityName)]; ok {
+				subj = ref
+			}
+		}
+		if subj.ID == "" {
+			// fallback: first entity in doc
+			for _, ref := range entityIDs {
+				subj = ref
+				break
+			}
+		}
+		if subj.CanonicalPath == "" || subj.CanonicalPath == "/" {
+			// Cannot bind metric to taxonomy; skip (avoid polluting global metric space)
+			continue
+		}
+
+		obs := parseObservedAt(mu.ObservedAt)
+		if obs == nil {
+			obs = &now
+		}
+
+		conf := mu.Confidence
+		if conf <= 0 {
+			conf = 0.8
+		}
+
+		fact := &models.OntologyFact{
+			BaseOntologyFields: models.BaseOntologyFields{
+				TenantID:  tenantID,
+				Version:   1,
+				CreatedAt: now,
+				UpdatedAt: now,
+				CreatedBy: "system",
+				UpdatedBy: "system",
+				Labels:    map[string]string{"en": fmt.Sprintf("%s: %.6f", name, mu.Value)},
+				Status:    "active",
+				CanonicalPaths: []string{
+					subj.CanonicalPath,
+				},
+				ActorPaths: []string{
+					subj.CanonicalPath,
+				},
+			},
+			Kind:       "metric",
+			Type:       name,
+			Title:      fmt.Sprintf("%s = %.6f", name, mu.Value),
+			Summary:    "",
+			Confidence: conf,
+			ObservedAt: obs,
+			SourceIDs:  []string{dataSourceID},
+			SourceRefs: []models.SourceRef{{SourceID: document.ID, SourceType: "document"}},
+			MetricUpdates: []models.FactMetricUpdate{
+				{
+					MetricName: name,
+					Value:      mu.Value,
+					Unit:       mu.Unit,
+					Confidence: conf,
+					ObservedAt: obs,
+				},
+			},
+		}
+		fact.VectorText = fact.GenerateVectorText()
+		_, _ = e.factsRepo.Create(ctx, fact)
+	}
+	return nil
+}
+
 // extractEntitiesFromChat создает Entity из чата
 func (e *OntologyExtractor) extractEntitiesFromChat(
 	ctx context.Context,
@@ -573,7 +1043,7 @@ func (e *OntologyExtractor) extractEntitiesFromChat(
 	extractedEntities []ExtractedEntity,
 	sourceID string,
 	now time.Time,
-) (map[string]string, error) {
+) (map[string]entityRef, error) {
 	// Аналогично extractEntities, но с контекстом чата
 	return e.extractEntities(ctx, tenantID, &models.Document{
 		ID:       interaction.ID,
@@ -589,7 +1059,7 @@ func (e *OntologyExtractor) extractEventsFromChat(
 	interaction *repo.Interaction,
 	extractedEvents []ExtractedEvent,
 	sourceID string,
-	entityIDs map[string]string,
+	entityIDs map[string]entityRef,
 	now time.Time,
 ) ([]string, error) {
 	return e.extractEvents(ctx, tenantID, &models.Document{
@@ -606,7 +1076,7 @@ func (e *OntologyExtractor) extractClaimsFromChat(
 	interaction *repo.Interaction,
 	extractedClaims []ExtractedClaim,
 	sourceID string,
-	entityIDs map[string]string,
+	entityIDs map[string]entityRef,
 	now time.Time,
 ) error {
 	return e.extractClaims(ctx, tenantID, &models.Document{
@@ -717,18 +1187,20 @@ func (e *OntologyExtractor) ensureChatSource(
 // mapExtractedTypeToEntityType маппит извлеченный тип в EntityType
 func (e *OntologyExtractor) mapExtractedTypeToEntityType(extractedType string) models.EntityType {
 	extractedType = strings.ToLower(strings.TrimSpace(extractedType))
-	
+
 	typeMap := map[string]models.EntityType{
-		"person":         models.EntityTypePerson,
-		"organization":  models.EntityTypeOrganization,
-		"location":       models.EntityTypeLocation,
-		"product":        models.EntityTypeProduct,
-		"event":          models.EntityTypeEventEntity,
-		"document":       models.EntityTypeDocument,
-		"facility":       models.EntityTypeFacility,
-		"supplychain":    models.EntityTypeSupplyChainNode,
-		"government":     models.EntityTypeGovernmentProject,
-		"index":          models.EntityTypeIndexMetric,
+		"person":       models.EntityTypePerson,
+		"organization": models.EntityTypeOrganization,
+		"location":     models.EntityTypeLocation,
+		"product":      models.EntityTypeProduct,
+		"program":      models.EntityTypeProgram,
+		"market":       models.EntityTypeMarket,
+		"event":        models.EntityTypeEventEntity,
+		"document":     models.EntityTypeDocument,
+		"facility":     models.EntityTypeFacility,
+		"supplychain":  models.EntityTypeSupplyChainNode,
+		"government":   models.EntityTypeGovernmentProject,
+		"index":        models.EntityTypeIndexMetric,
 	}
 
 	if entityType, ok := typeMap[extractedType]; ok {
@@ -737,4 +1209,3 @@ func (e *OntologyExtractor) mapExtractedTypeToEntityType(extractedType string) m
 
 	return models.EntityTypeOther
 }
-

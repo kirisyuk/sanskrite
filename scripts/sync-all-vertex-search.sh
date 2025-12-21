@@ -47,3 +47,5 @@ echo "Note: Documents will be available in Vertex AI Search within 1-2 minutes"
 
 
 
+
+

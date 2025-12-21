@@ -14,6 +14,7 @@ import (
 // PropagationEngine распространяет изменения в графе зависимостей
 type PropagationEngine struct {
 	fragmentsRepo *repo.HorizonFragmentsRepository
+	versionsRepo  *repo.HorizonFragmentVersionsRepository
 	edgesRepo     *repo.DependencyEdgesRepository
 	lensesRepo    *repo.LensesRepository
 	realtime      *realtime.Publisher
@@ -45,12 +46,14 @@ type LastPropagationInfo struct {
 // NewPropagationEngine создает новый Propagation Engine
 func NewPropagationEngine(
 	fragmentsRepo *repo.HorizonFragmentsRepository,
+	versionsRepo *repo.HorizonFragmentVersionsRepository,
 	edgesRepo *repo.DependencyEdgesRepository,
 	lensesRepo *repo.LensesRepository,
 	realtime *realtime.Publisher,
 ) *PropagationEngine {
 	return &PropagationEngine{
 		fragmentsRepo:      fragmentsRepo,
+		versionsRepo:       versionsRepo,
 		edgesRepo:          edgesRepo,
 		lensesRepo:         lensesRepo,
 		realtime:           realtime,
@@ -75,7 +78,7 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 
 	// Проверяем порог значимости
 	delta := newValue.Value - oldValue.Value
-	if !e.threshold.ExceedsThreshold(metricName, delta) {
+	if !e.threshold.ExceedsThreshold(metricName, delta, newValue.Unit) {
 		// Изменение незначительно, пропускаем распространение
 		return &PropagationResult{
 			AffectedFragments: []string{},
@@ -193,13 +196,23 @@ func (e *PropagationEngine) TriggerPropagation(ctx context.Context, fragmentID s
 	status.IsPropagating = true
 	e.mu.Unlock()
 
+	// Load previous state from versions to compute real deltas.
+	var prevState map[string]models.MetricValue
+	if e.versionsRepo != nil {
+		if vers, err := e.versionsRepo.ListByFragment(ctx, fragment.TenantID, fragment.ID, 1, 0); err == nil && len(vers) > 0 && vers[0] != nil {
+			prevState = vers[0].State
+		}
+	}
+
 	// Запускаем распространение для всех метрик фрагмента
-	// Используем текущее состояние как "новое" и предыдущее как "старое" (упрощение)
 	var result *PropagationResult
 	for metricName, metricValue := range fragment.State {
-		// Создаем "старое" значение с нулевым delta для принудительного распространения
-		oldValue := metricValue
-		oldValue.Value = metricValue.Value - 0.01 // Небольшое изменение для триггера
+		oldValue := models.MetricValue{}
+		if prevState != nil {
+			if pv, ok := prevState[metricName]; ok {
+				oldValue = pv
+			}
+		}
 
 		res, err := e.PropagateChange(ctx, fragmentID, metricName, oldValue, metricValue)
 		if err != nil {
@@ -327,11 +340,16 @@ func (e *PropagationEngine) propagateHotPath(
 
 	// Обрабатываем каждую связь
 	for _, edge := range edges {
+		// Best-effort unit: use the current unit on the source fragment metric, if present.
+		var unit *string
+		if mv, ok := sourceFragment.State[metricName]; ok {
+			unit = mv.Unit
+		}
 		// Применяем затухание волны
 		dampedDelta := e.damping.ApplyDamping(delta, edge.Properties.Amplification, edge.Properties.Criticality)
 
 		// Проверяем порог после затухания
-		if !e.threshold.ExceedsThreshold(metricName, dampedDelta) {
+		if !e.threshold.ExceedsThreshold(metricName, dampedDelta, unit) {
 			continue
 		}
 
@@ -432,7 +450,7 @@ func (e *PropagationEngine) SimulatePropagation(ctx context.Context, fragmentID 
 
 	// Проверяем порог значимости
 	delta := newValue.Value - oldValue.Value
-	if !e.threshold.ExceedsThreshold(metricName, delta) {
+	if !e.threshold.ExceedsThreshold(metricName, delta, nil) {
 		return &PropagationResult{
 			AffectedFragments: []string{},
 			AffectedLenses:    []string{},
@@ -499,7 +517,7 @@ func (e *PropagationEngine) simulateHotPath(
 		dampedDelta := e.damping.ApplyDamping(delta, edge.Properties.Amplification, edge.Properties.Criticality)
 
 		// Проверяем порог после затухания
-		if !e.threshold.ExceedsThreshold(metricName, dampedDelta) {
+		if !e.threshold.ExceedsThreshold(metricName, dampedDelta, nil) {
 			continue
 		}
 

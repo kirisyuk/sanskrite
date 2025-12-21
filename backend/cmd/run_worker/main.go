@@ -18,6 +18,7 @@ import (
 	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
 )
 
@@ -42,6 +43,19 @@ func main() {
 		log.Fatalf("Failed to create Firestore client: %v", err)
 	}
 	defer fsClient.Close()
+
+	// Load Horizon taxonomy from Firestore and keep it cached (source of truth for normalization).
+	taxonomy.InitRuntimeTaxonomyCacheFromFirestore(fsClient.Client(), "v1", 10*time.Minute)
+	if err := taxonomy.RefreshRuntimeTaxonomy(ctx); err != nil {
+		logger := log.New(os.Stdout, "[worker] ", log.LstdFlags|log.Lshortfile)
+		logger.Printf("WARNING: failed to load horizon taxonomy: %v", err)
+	}
+	taxonomy.StartRuntimeTaxonomyAutoRefresh(ctx, 5*time.Minute, func(err error) {
+		if err != nil {
+			logger := log.New(os.Stdout, "[worker] ", log.LstdFlags|log.Lshortfile)
+			logger.Printf("WARNING: horizon taxonomy refresh failed: %v", err)
+		}
+	})
 
 	logger := log.New(os.Stdout, "[worker] ", log.LstdFlags|log.Lshortfile)
 

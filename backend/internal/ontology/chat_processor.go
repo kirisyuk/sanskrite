@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"cloud.google.com/go/pubsub"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
@@ -49,8 +50,8 @@ func (p *ChatOntologyProcessor) Start(ctx context.Context, sub *pubsub.Subscript
 
 	return sub.Receive(ctx, func(ctx context.Context, m *pubsub.Message) {
 		var payload struct {
-			TenantID     string `json:"tenantId"`
-			ProjectID    string `json:"projectId"`
+			TenantID      string `json:"tenantId"`
+			ProjectID     string `json:"projectId"`
 			InteractionID string `json:"interactionId"`
 		}
 
@@ -142,7 +143,45 @@ func (p *ChatOntologyProcessor) extractFromChatMessage(
 MESSAGE:
 %s
 
-Return JSON with entities, events, and claims. Be conservative - only extract clear, factual information.
+Return JSON with entities, events, claims, and (optionally) metricUpdates. Be conservative - only extract clear, factual information.
+
+IMPORTANT (Horizon canonical taxonomy):
+- When you can normalize a location, provide countryAlpha2/admin1/city for /loc/{country}/{admin1}/{city}.
+- countryAlpha2 MUST be ISO3166-1 alpha2 lowercase (e.g., us, cn, de).
+- admin1/city SHOULD be lowercase slugs/codes; use "na" if unknown/not applicable.
+- Country-only locations MUST be represented as: countryAlpha2=<code>, admin1="na", city="na".
+
+IMPORTANT (intangible events):
+- Include intangible events such as partnerships, alliances/coalitions, union actions, incorporations (new legal entities), policy/regulatory changes, sanctions/licensing, investigations, and dissolutions as events when clearly stated.
+
+IMPORTANT (eventType):
+- If you output eventType, it MUST be one of: attack, cyberattack, sanction, blockade, policy_change, protest, strike, election, warning, announcement, incident, other.
+- If you cannot map confidently, use "other".
+
+IMPORTANT (spherePaths):
+- For each extracted event/claim, set spherePaths to 1..N canonical taxonomy paths under /sphere/...
+- Examples:
+  - /sphere/geopolitics
+  - /sphere/social
+  - /sphere/social/information
+  - /sphere/cyber
+  - /sphere/digital
+  - /sphere/logistics
+  - /sphere/logistics/maritime
+  - /sphere/energy
+  - /sphere/finance
+- If unsure, omit spherePaths.
+
+Metric rules:
+- Prefer metricName from this vocabulary when possible (but not required):
+  org_headcount, org_revenue, org_operating_margin, org_net_margin, org_cash, org_debt, org_market_cap, org_esg_risk_score,
+  capacity_units_per_day, capacity_utilization, downtime_hours, output_volume, lead_time_days, inventory_days,
+  price, market_share, demand_index, defect_rate, on_time_delivery_rate,
+  shipment_delay_days, freight_cost, port_congestion_index,
+  incident_severity, incident_duration_hours, impact_confidence, status_code, sanctions_risk, supply_risk
+- If not mappable, create snake_case with prefix org_/fac_/product_/logistics_/risk_/incident_
+- Units allowed: usd, eur, rub, units, units_per_day, days, hours, ratio, index_point, code
+- IMPORTANT: use ratio (0..1) for shares/rates; do NOT output percent.
 
 Schema:
 {
@@ -156,15 +195,39 @@ Schema:
   "events": [
     {
       "title": "string",
-      "dateISO": "string",
-      "context": "string (optional)"
+      "eventType": "string (optional; e.g., attack|cyberattack|sanction|blockade|policy_change|protest|strike|election|warning|announcement|incident|other)",
+      "dateISO": "YYYY-MM-DD or RFC3339",
+      "context": "string (optional)",
+      "summary": "string (optional)",
+      "location": {
+        "name": "string (optional)",
+        "iso6709": "string (optional)",
+        "countryAlpha2": "string (ISO3166-1 alpha2 lowercase, optional)",
+        "admin1": "string (lowercase code/slug or 'na', optional)",
+        "city": "string (lowercase slug or 'na', optional)"
+      },
+      "spherePaths": ["string (optional, canonical /sphere/... taxonomy paths)"],
+      "participants": [{"entityName": "string", "role": "agent|target|mediator|mentioned|beneficiary|affected|other"}]
     }
   ],
   "claims": [
     {
       "text": "string",
       "summary": "string (optional)",
-      "confidence": 0.0-1.0
+      "confidence": 0.0-1.0,
+      "evidenceUrls": ["string"],
+      "subjectEntityName": "string (optional)",
+      "spherePaths": ["string (optional, canonical /sphere/... taxonomy paths)"]
+    }
+  ],
+  "metricUpdates": [
+    {
+      "metricName": "string",
+      "value": 0.0,
+      "unit": "string",
+      "confidence": 0.0-1.0,
+      "observedAt": "YYYY-MM-DD or RFC3339 (optional)",
+      "subjectEntityName": "string (optional)"
     }
   ]
 }`,
@@ -200,9 +263,10 @@ Schema:
 	}
 
 	var result struct {
-		Entities []ExtractedEntity `json:"entities"`
-		Events   []ExtractedEvent  `json:"events"`
-		Claims   []ExtractedClaim   `json:"claims"`
+		Entities      []ExtractedEntity       `json:"entities"`
+		Events        []ExtractedEvent        `json:"events"`
+		Claims        []ExtractedClaim        `json:"claims"`
+		MetricUpdates []ExtractedMetricUpdate `json:"metricUpdates"`
 	}
 
 	// Преобразуем map в структуру
@@ -235,6 +299,87 @@ Schema:
 				if ctx, ok := evMap["context"].(string); ok {
 					result.Events[i].Context = &ctx
 				}
+				if summary, ok := evMap["summary"].(string); ok {
+					result.Events[i].Summary = &summary
+				}
+				if locAny, ok := evMap["location"].(map[string]interface{}); ok {
+					var loc ExtractedLocation
+					if nm, ok := locAny["name"].(string); ok {
+						nm = strings.TrimSpace(nm)
+						if nm != "" {
+							loc.Name = &nm
+						}
+					}
+					if iso, ok := locAny["iso6709"].(string); ok {
+						iso = strings.TrimSpace(iso)
+						if iso != "" {
+							loc.ISO6709 = &iso
+						}
+					}
+					if cc, ok := locAny["countryAlpha2"].(string); ok {
+						cc = strings.ToLower(strings.TrimSpace(cc))
+						if cc != "" {
+							loc.CountryAlpha2 = &cc
+						}
+					}
+					if a1, ok := locAny["admin1"].(string); ok {
+						a1 = strings.ToLower(strings.TrimSpace(a1))
+						if a1 != "" {
+							loc.Admin1 = &a1
+						}
+					}
+					if ct, ok := locAny["city"].(string); ok {
+						ct = strings.ToLower(strings.TrimSpace(ct))
+						if ct != "" {
+							loc.City = &ct
+						}
+					}
+					if loc.Name != nil || loc.ISO6709 != nil || loc.CountryAlpha2 != nil || loc.Admin1 != nil || loc.City != nil {
+						result.Events[i].Location = &loc
+					}
+				}
+				if partsAny, ok := evMap["participants"].([]interface{}); ok {
+					parts := make([]ExtractedEventParticipant, 0, len(partsAny))
+					for _, pAny := range partsAny {
+						pMap, ok := pAny.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						var p ExtractedEventParticipant
+						if en, ok := pMap["entityName"].(string); ok {
+							p.EntityName = strings.TrimSpace(en)
+						}
+						if rl, ok := pMap["role"].(string); ok {
+							p.Role = strings.TrimSpace(rl)
+						}
+						if p.EntityName != "" {
+							parts = append(parts, p)
+						}
+					}
+					if len(parts) > 0 {
+						result.Events[i].Participants = parts
+					}
+				}
+				if spAny, ok := evMap["spherePaths"].([]interface{}); ok {
+					sps := make([]string, 0, len(spAny))
+					for _, it := range spAny {
+						if s, ok := it.(string); ok {
+							s = strings.TrimSpace(s)
+							if s != "" {
+								sps = append(sps, s)
+							}
+						}
+					}
+					if len(sps) > 0 {
+						result.Events[i].SpherePaths = sps
+					}
+				}
+				if et, ok := evMap["eventType"].(string); ok {
+					et = strings.TrimSpace(et)
+					if et != "" {
+						result.Events[i].EventType = et
+					}
+				}
 			}
 		}
 	}
@@ -251,6 +396,82 @@ Schema:
 				if conf, ok := cMap["confidence"].(float64); ok {
 					result.Claims[i].Confidence = conf
 				}
+				if su, ok := cMap["subjectEntityName"].(string); ok {
+					su = strings.TrimSpace(su)
+					if su != "" {
+						result.Claims[i].SubjectEntityName = &su
+					}
+				}
+				if evUrls, ok := cMap["evidenceUrls"].([]interface{}); ok {
+					urls := make([]string, 0, len(evUrls))
+					for _, u := range evUrls {
+						if s, ok := u.(string); ok {
+							s = strings.TrimSpace(s)
+							if s != "" {
+								urls = append(urls, s)
+							}
+						}
+					}
+					if len(urls) > 0 {
+						result.Claims[i].EvidenceURLs = urls
+					}
+				}
+				if spAny, ok := cMap["spherePaths"].([]interface{}); ok {
+					sps := make([]string, 0, len(spAny))
+					for _, it := range spAny {
+						if s, ok := it.(string); ok {
+							s = strings.TrimSpace(s)
+							if s != "" {
+								sps = append(sps, s)
+							}
+						}
+					}
+					if len(sps) > 0 {
+						result.Claims[i].SpherePaths = sps
+					}
+				}
+			}
+		}
+	}
+
+	if mus, ok := resultMap["metricUpdates"].([]interface{}); ok {
+		result.MetricUpdates = make([]ExtractedMetricUpdate, 0, len(mus))
+		for _, it := range mus {
+			m, ok := it.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			var mu ExtractedMetricUpdate
+			if mn, ok := m["metricName"].(string); ok {
+				mn = strings.TrimSpace(mn)
+				mu.MetricName = mn
+			}
+			if v, ok := m["value"].(float64); ok {
+				mu.Value = v
+			}
+			if u, ok := m["unit"].(string); ok {
+				u = strings.TrimSpace(u)
+				if u != "" {
+					mu.Unit = &u
+				}
+			}
+			if c, ok := m["confidence"].(float64); ok {
+				mu.Confidence = c
+			}
+			if obs, ok := m["observedAt"].(string); ok {
+				obs = strings.TrimSpace(obs)
+				if obs != "" {
+					mu.ObservedAt = &obs
+				}
+			}
+			if sub, ok := m["subjectEntityName"].(string); ok {
+				sub = strings.TrimSpace(sub)
+				if sub != "" {
+					mu.SubjectEntityName = &sub
+				}
+			}
+			if mu.MetricName != "" {
+				result.MetricUpdates = append(result.MetricUpdates, mu)
 			}
 		}
 	}
@@ -259,6 +480,6 @@ Schema:
 		Entities: result.Entities,
 		Events:   result.Events,
 		Claims:   result.Claims,
+		Metrics:  result.MetricUpdates,
 	}, nil
 }
-

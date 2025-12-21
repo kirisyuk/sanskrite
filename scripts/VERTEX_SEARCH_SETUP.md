@@ -84,11 +84,15 @@ export RAG_DOCUMENTS_BUCKET="your-project-rag-documents"  # опциональн
 ### Проверить статус операций импорта:
 
 ```bash
-gcloud discovery-engine operations list \
-  --location=global \
-  --project=YOUR_PROJECT_ID \
-  --filter="metadata.operationType=IMPORT" \
-  --limit=10
+# В некоторых окружениях команда `gcloud discovery-engine ...` может быть недоступна.
+# Тогда проверяйте через REST API (рекомендуется добавить quota project header).
+
+# REST API: последние IMPORT операции
+ACCESS_TOKEN="$(gcloud auth print-access-token)"
+curl -s \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "x-goog-user-project: YOUR_PROJECT_ID" \
+  "https://discoveryengine.googleapis.com/v1beta/projects/YOUR_PROJECT_ID/locations/global/operations?filter=metadata.operationType%3DIMPORT&pageSize=10"
 ```
 
 ### Проверить документы в Vertex AI Search:

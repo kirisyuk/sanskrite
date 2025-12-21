@@ -46,7 +46,7 @@
 
 1. **Канонический путь и имя**:
    ```
-   /org/tsmc/fab/21
+   /fac/tsmc/fab-21
    TSMC Fab 21
    Taiwan Semiconductor Manufacturing Company Fab 21
    ```
@@ -106,7 +106,7 @@
 ### Пример полного vectorText
 
 ```
-/org/tsmc/fab/21
+/fac/tsmc/fab-21
 TSMC Fab 21
 Taiwan Semiconductor Manufacturing Company Fab 21
 TSMC Factory 21

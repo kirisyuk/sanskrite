@@ -10,6 +10,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func parseStateInt(v interface{}, def int) int {
@@ -237,14 +238,19 @@ func (e *ScoutEngine) processDiscoveredRelations(
 		}
 
 		// 3. Create Dependency Edge
-		// Валидация типа ребра
-		edgeType := models.DependencyType(rel.RelationType)
-		if edgeType == "" {
-			edgeType = models.DependencyTypeSuppliesTo
+		// Normalize and validate relation types against runtime taxonomy (Firestore-backed).
+		edgeType := models.DependencyType(taxonomy.NormalizeRelationType(rel.RelationType))
+		edgeSourceID := sourceFragment.ID
+		edgeTargetID := targetID
+		switch edgeType {
+		case "SUBSIDIARY_OF":
+			// Canonical representation: OWNS from parent -> subsidiary.
+			edgeType = models.DependencyTypeOwns
+			edgeSourceID, edgeTargetID = targetID, sourceFragment.ID
 		}
 
 		// Проверка на дубликат ребра
-		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceFragment.ID, targetID, edgeType); err == nil {
+		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", edgeSourceID, edgeTargetID, edgeType); err == nil {
 			// Ребро уже существует, пропускаем создание
 			fmt.Printf("Skipping duplicate edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
 			continue
@@ -252,8 +258,8 @@ func (e *ScoutEngine) processDiscoveredRelations(
 
 		edge := &models.DependencyEdge{
 			TenantID:         "global",
-			SourceFragmentID: sourceFragment.ID,
-			TargetFragmentID: targetID,
+			SourceFragmentID: edgeSourceID,
+			TargetFragmentID: edgeTargetID,
 			Type:             edgeType,
 			Properties: models.EdgeProperties{
 				Criticality:   rel.Confidence,

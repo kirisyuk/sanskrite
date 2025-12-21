@@ -29,6 +29,9 @@ func NewChangeAssessor(executor *ai.AITaskExecutor) *ChangeAssessor {
 
 // AssessChangeAmount оценивает значимость изменений между старым и новым контентом через LLM
 func (c *ChangeAssessor) AssessChangeAmount(ctx context.Context, oldContent string, newContent string, targetFragmentCanonicalPath string) (float64, error) {
+	if c == nil || c.executor == nil {
+		return 0.5, fmt.Errorf("change assessor not configured")
+	}
 	if oldContent == "" {
 		return 1.0, nil // Первое сканирование - считаем максимальным изменением
 	}

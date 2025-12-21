@@ -1470,7 +1470,7 @@ var SystemTemplates = map[string]*models.ArtifactTemplate{
 				Title:          "Named Entities",
 				Order:          1,
 				Description:    "Extract named entities and relations",
-				PromptTemplate: "Extract named entities and relations.\nReturn strictly JSON:\n{\"entities\": [{\"name\": \"string\", \"type\": \"Person|Organization|Location|Product|Document|Facility|Other\", \"relations\"?: [{\"type\": \"string\", \"target\": \"string\"}]}]}",
+				PromptTemplate: "Extract named entities and relations.\nReturn strictly JSON:\n{\"entities\": [{\"name\": \"string\", \"type\": \"Person|Organization|Location|Product|Program|Market|Document|Facility|Other\", \"relations\"?: [{\"type\": \"string\", \"target\": \"string\"}]}]}",
 				Required:       true,
 				Editable:       false,
 			},

@@ -175,7 +175,7 @@
     },
     "type": {
       "type": "string",
-      "enum": ["ORGANIZATION", "FACILITY", "GEO_REGION", "EVENT"]
+      "enum": ["ORGANIZATION", "FACILITY", "GEO_REGION", "SPHERE", "EVENT", "PRODUCT", "PROGRAM", "MARKET", "PERSON"]
     },
     "entityPath": {
       "type": "string",
@@ -399,7 +399,7 @@
     },
     "type": {
       "type": "string",
-      "enum": ["SUPPLIES_TO", "LOCATED_IN", "OWNS", "COMPETES_WITH"],
+      "enum": ["SUPPLIES_TO", "LOCATED_IN", "OWNS", "PRODUCES", "OPERATES_IN", "REGULATES", "COMPETES_WITH", "DEPENDS_ON", "INFLUENCES"],
       "description": "Тип зависимости"
     },
     "properties": {
@@ -456,7 +456,7 @@
     },
     "type": {
       "type": "string",
-      "enum": ["SUPPLIES_TO", "LOCATED_IN", "OWNS", "COMPETES_WITH"]
+      "enum": ["SUPPLIES_TO", "LOCATED_IN", "OWNS", "PRODUCES", "OPERATES_IN", "REGULATES", "COMPETES_WITH", "DEPENDS_ON", "INFLUENCES"]
     },
     "properties": {
       "type": "object",

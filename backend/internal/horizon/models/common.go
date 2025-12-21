@@ -67,8 +67,11 @@ const (
 	FragmentTypeOrganization FragmentType = "ORGANIZATION"
 	FragmentTypeFacility     FragmentType = "FACILITY"
 	FragmentTypeGeoRegion    FragmentType = "GEO_REGION"
+	FragmentTypeSphere       FragmentType = "SPHERE"
 	FragmentTypeEvent        FragmentType = "EVENT"
 	FragmentTypeProduct      FragmentType = "PRODUCT"
+	FragmentTypeProgram      FragmentType = "PROGRAM"
+	FragmentTypeMarket       FragmentType = "MARKET"
 	FragmentTypePerson       FragmentType = "PERSON"
 )
 

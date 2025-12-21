@@ -80,29 +80,66 @@
       "collectionGroup": "vouchers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "code", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "vouchers",
-      "queryScope": "COLLECTION",
-      "fields": [
         { "fieldPath": "tier", "order": "ASCENDING" },
         { "fieldPath": "isActive", "order": "ASCENDING" },
         {       "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "horizon_watchdog_configs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "nextScanAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_watchdog_configs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "targetFragmentId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_watchdog_configs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "lastScanAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "agent_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ontology_facts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "canonicalPaths", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "updatedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ontology_facts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "canonicalPaths", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
     }
   ],
-  "fieldOverrides": [
-    {
-      "collectionGroup": "rag_chunks",
-      "fieldPath": "embedding",
-      "vectorConfig": {
-        "dimension": 1536,
-        "distanceMeasure": "COSINE"
-      }
-    }
-  ]
+  "fieldOverrides": []
 }
 
 

@@ -57,6 +57,11 @@ type FragmentMetadata struct {
 	CreatedAt      time.Time      `json:"createdAt" firestore:"createdAt"`
 	LastUpdatedAt  time.Time      `json:"lastUpdatedAt" firestore:"lastUpdatedAt"`
 	LastVerifiedAt time.Time      `json:"lastVerifiedAt" firestore:"lastVerifiedAt"`
+	// LastFactsSeenAt is a watermark for incremental "facts slice" processing (watchdog/scout).
+	// It is independent from LastVerifiedAt to allow cheap fact-driven refresh without full LLM runs.
+	LastFactsSeenAt time.Time `json:"lastFactsSeenAt" firestore:"lastFactsSeenAt"`
+	// LastFactsAppliedAt is updated when fast-path applies facts to the fragment without LLM.
+	LastFactsAppliedAt time.Time `json:"lastFactsAppliedAt" firestore:"lastFactsAppliedAt"`
 	SourceFrameID  string         `json:"sourceFrameId" firestore:"sourceFrameId"`
 	EpistemicStatus EpistemicStatus `json:"epistemicStatus" firestore:"epistemicStatus"`
 }

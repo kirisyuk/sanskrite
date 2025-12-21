@@ -20,11 +20,11 @@ import (
 
 // DocumentProcessor consumes document.process events and updates document status
 type DocumentProcessor struct {
-	sub      *pubsub.Subscription
-	docsRepo *repo.DocumentsRepository
-	logger   *log.Logger
-	exec     *ai.AITaskExecutor
-	rules    *repo.RulesRepository
+	sub       *pubsub.Subscription
+	docsRepo  *repo.DocumentsRepository
+	logger    *log.Logger
+	exec      *ai.AITaskExecutor
+	rules     *repo.RulesRepository
 	extractor *ontology.OntologyExtractor
 }
 
@@ -135,28 +135,55 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 				URL  string `json:"url"`
 				Kind string `json:"kind"`
 			}
+			type extEventParticipant struct {
+				EntityName string `json:"entityName"`
+				Role       string `json:"role"`
+			}
+			type extLocation struct {
+				Name          *string `json:"name,omitempty"`
+				ISO6709       *string `json:"iso6709,omitempty"`
+				CountryAlpha2 *string `json:"countryAlpha2,omitempty"`
+				Admin1        *string `json:"admin1,omitempty"`
+				City          *string `json:"city,omitempty"`
+			}
 			type extEvent struct {
-				Title   string  `json:"title"`
-				DateISO string  `json:"dateISO"`
-				Context *string `json:"context,omitempty"`
+				Title        string                `json:"title"`
+				EventType    string                `json:"eventType,omitempty"`
+				DateISO      string                `json:"dateISO"`
+				Context      *string               `json:"context,omitempty"`
+				Summary      *string               `json:"summary,omitempty"`
+				Location     *extLocation          `json:"location,omitempty"`
+				Participants []extEventParticipant `json:"participants,omitempty"`
+				SpherePaths  []string              `json:"spherePaths,omitempty"`
 			}
 			type extClaim struct {
-				Text         string   `json:"text"`
-				Summary      *string  `json:"summary,omitempty"`
-				Confidence   float64  `json:"confidence"`
-				EvidenceURLs []string `json:"evidenceUrls,omitempty"`
+				Text              string   `json:"text"`
+				Summary           *string  `json:"summary,omitempty"`
+				Confidence        float64  `json:"confidence"`
+				EvidenceURLs      []string `json:"evidenceUrls,omitempty"`
+				SubjectEntityName *string  `json:"subjectEntityName,omitempty"`
+				SpherePaths       []string `json:"spherePaths,omitempty"`
+			}
+			type extMetricUpdate struct {
+				MetricName        string  `json:"metricName"`
+				Value             float64 `json:"value"`
+				Unit              *string `json:"unit,omitempty"`
+				Confidence        float64 `json:"confidence"`
+				ObservedAt        *string `json:"observedAt,omitempty"`
+				SubjectEntityName *string `json:"subjectEntityName,omitempty"`
 			}
 			type docExtraction struct {
-				Language     string        `json:"language"`
-				Sentiment    float64       `json:"sentiment"`
-				Categories   []extCategory `json:"categories"`
-				Topics       []extTopic    `json:"topics"`
-				Entities     []extEntity   `json:"entities"`
-				KeyPoints    []string      `json:"keyPoints"`
-				DocumentType string        `json:"documentType"`
-				Outlinks     []extOutlink  `json:"outlinks"`
-				Events       []extEvent    `json:"events"`
-				Claims       []extClaim    `json:"claims"`
+				Language      string            `json:"language"`
+				Sentiment     float64           `json:"sentiment"`
+				Categories    []extCategory     `json:"categories"`
+				Topics        []extTopic        `json:"topics"`
+				Entities      []extEntity       `json:"entities"`
+				KeyPoints     []string          `json:"keyPoints"`
+				DocumentType  string            `json:"documentType"`
+				Outlinks      []extOutlink      `json:"outlinks"`
+				Events        []extEvent        `json:"events"`
+				Claims        []extClaim        `json:"claims"`
+				MetricUpdates []extMetricUpdate `json:"metricUpdates"`
 			}
 
 			validate := func(x docExtraction) error {
@@ -209,11 +236,31 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 					if ev.Title == "" || ev.DateISO == "" {
 						return fmt.Errorf("invalid event entry")
 					}
+					if ev.Location != nil && ev.Location.CountryAlpha2 != nil {
+						cc := strings.TrimSpace(strings.ToLower(*ev.Location.CountryAlpha2))
+						if len(cc) != 2 {
+							return fmt.Errorf("event.location.countryAlpha2 must be ISO3166-1 alpha2 lowercase")
+						}
+					}
+					for _, p := range ev.Participants {
+						if strings.TrimSpace(p.EntityName) == "" {
+							return fmt.Errorf("invalid event participant")
+						}
+					}
 				}
 				// claims
 				for _, cl := range x.Claims {
 					if cl.Text == "" || cl.Confidence < 0 || cl.Confidence > 1 {
 						return fmt.Errorf("invalid claim entry")
+					}
+				}
+				// metricUpdates
+				for _, mu := range x.MetricUpdates {
+					if strings.TrimSpace(mu.MetricName) == "" {
+						continue
+					}
+					if mu.Confidence < 0 || mu.Confidence > 1 {
+						return fmt.Errorf("metric confidence out of range")
 					}
 				}
 				return nil
@@ -239,7 +286,7 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 					TaskType:     ai.TaskTypeContentGeneration,
 					InputContent: prompt,
 					TenantID:     payload.TenantID, // Передаем TenantID для записи метрик
-					UserID:       "system",        // Системные задачи ingest используют "system" как UserID
+					UserID:       "system",         // Системные задачи ingest используют "system" как UserID
 					AIRequirements: ai.AIRequirements{
 						TextGenerationCapability: true,
 						MinCapabilityScore:       6,
@@ -282,6 +329,7 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 								Entities: make([]ontology.ExtractedEntity, 0, len(ex.Entities)),
 								Events:   make([]ontology.ExtractedEvent, 0, len(ex.Events)),
 								Claims:   make([]ontology.ExtractedClaim, 0, len(ex.Claims)),
+								Metrics:  make([]ontology.ExtractedMetricUpdate, 0, len(ex.MetricUpdates)),
 							}
 
 							// Преобразуем entities
@@ -294,21 +342,63 @@ func (w *DocumentProcessor) Start(ctx context.Context) error {
 							}
 
 							// Преобразуем events
-						for _, ev := range ex.Events {
+							for _, ev := range ex.Events {
 								extraction.Events = append(extraction.Events, ontology.ExtractedEvent{
-									Title:   ev.Title,
-									DateISO: ev.DateISO,
-									Context: ev.Context,
+									Title:       ev.Title,
+									EventType:   strings.TrimSpace(ev.EventType),
+									DateISO:     ev.DateISO,
+									Context:     ev.Context,
+									Summary:     ev.Summary,
+									SpherePaths: ev.SpherePaths,
+									Location: func() *ontology.ExtractedLocation {
+										if ev.Location == nil {
+											return nil
+										}
+										return &ontology.ExtractedLocation{
+											Name:          ev.Location.Name,
+											ISO6709:       ev.Location.ISO6709,
+											CountryAlpha2: ev.Location.CountryAlpha2,
+											Admin1:        ev.Location.Admin1,
+											City:          ev.Location.City,
+										}
+									}(),
+									Participants: func() []ontology.ExtractedEventParticipant {
+										if len(ev.Participants) == 0 {
+											return nil
+										}
+										out := make([]ontology.ExtractedEventParticipant, 0, len(ev.Participants))
+										for _, p := range ev.Participants {
+											out = append(out, ontology.ExtractedEventParticipant{EntityName: p.EntityName, Role: p.Role})
+										}
+										return out
+									}(),
 								})
-						}
+							}
 
 							// Преобразуем claims
-						for _, c := range ex.Claims {
+							for _, c := range ex.Claims {
 								extraction.Claims = append(extraction.Claims, ontology.ExtractedClaim{
-									Text:         c.Text,
-									Summary:      c.Summary,
-									Confidence:   clamp01(c.Confidence),
-									EvidenceURLs: c.EvidenceURLs,
+									Text:              c.Text,
+									Summary:           c.Summary,
+									Confidence:        clamp01(c.Confidence),
+									EvidenceURLs:      c.EvidenceURLs,
+									SubjectEntityName: c.SubjectEntityName,
+									SpherePaths:       c.SpherePaths,
+								})
+							}
+
+							// Преобразуем metricUpdates
+							for _, mu := range ex.MetricUpdates {
+								if strings.TrimSpace(mu.MetricName) == "" {
+									continue
+								}
+								extraction.Metrics = append(extraction.Metrics, ontology.ExtractedMetricUpdate{
+									MetricName:        strings.TrimSpace(mu.MetricName),
+									Value:             mu.Value,
+									Unit:              mu.Unit,
+									Confidence:        clamp01(mu.Confidence),
+									ObservedAt:        mu.ObservedAt,
+									SubjectEntityName: mu.SubjectEntityName,
 								})
 							}
 

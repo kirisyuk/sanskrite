@@ -40,6 +40,32 @@ service cloud.firestore {
     match /rag_search_events/{id} {
       allow read, write: if isSignedIn();
     }
+
+    // Horizon collections (server-side access; rules permissive for backend)
+    match /horizon_fragments/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); // Backend creates/updates via service account
+    }
+    match /horizon_frames/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); // Backend creates via Scout Engine
+    }
+    match /horizon_lenses/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); // Users create/update via API
+    }
+    match /horizon_dependency_edges/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); // Backend creates/updates via Propagation Engine
+    }
+    match /horizon_watchdog_configs/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); // Backend manages via Watchdog Service
+    }
+    match /horizon_fragment_versions/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); // Backend creates versions automatically
+    }
   }
 }
 

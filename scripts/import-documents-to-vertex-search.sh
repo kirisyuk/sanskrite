@@ -180,10 +180,11 @@ if echo "$IMPORT_RESPONSE" | grep -q "\"name\""; then
   echo "     Operation: $OPERATION_NAME"
   echo ""
   echo "  ⏳ Import is running in background. Check status:"
-  echo "     gcloud discovery-engine operations describe $OPERATION_NAME --location=$LOCATION --project=$PROJECT"
+  echo "     (если `gcloud discovery-engine ...` доступен) gcloud discovery-engine operations describe $OPERATION_NAME --location=$LOCATION --project=$PROJECT"
   echo ""
   echo "  Or check via API:"
-  echo "     curl -H \"Authorization: Bearer \$(gcloud auth print-access-token)\" \\"
+  echo "     ACCESS_TOKEN=\"\\$(gcloud auth print-access-token)\""
+  echo "     curl -H \"Authorization: Bearer \\$ACCESS_TOKEN\" -H \"x-goog-user-project: $PROJECT\" \\"
   echo "       \"https://discoveryengine.googleapis.com/v1beta/$OPERATION_NAME\""
 else
   ERROR_MSG=$(echo "$IMPORT_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', {}).get('message', 'Unknown error'))" 2>/dev/null || echo "Unknown error")

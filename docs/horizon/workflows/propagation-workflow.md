@@ -360,7 +360,7 @@ func (pe *PropagationEngine) publishEvent(ctx context.Context, eventType string,
 {
   "type": "propagation.node_updated",
   "fragmentId": "uuid",
-  "canonicalPath": "/org/tsmc/fab/21",
+  "canonicalPath": "/fac/tsmc/fab-21",
   "influence": 0.75,
   "depth": 2,
   "updatedAt": "2025-12-17T14:30:00Z"

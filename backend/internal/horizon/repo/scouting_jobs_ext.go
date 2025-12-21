@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"time"
 )
 
 // ListPending возвращает список ожидающих задач Scout
@@ -35,5 +36,32 @@ func (r *ScoutingJobsRepository) ListPending(ctx context.Context, limit int) ([]
 		jobs = append(jobs, scoutingJob)
 	}
 	
+	return jobs, nil
+}
+
+// ListPendingSince returns pending Scout jobs created at/after 'since' time.
+// Useful to prioritize new jobs under backlog.
+func (r *ScoutingJobsRepository) ListPendingSince(ctx context.Context, since time.Time, limit int) ([]*models.ScoutingJob, error) {
+	agentJobs, err := r.agentJobsRepo.ListPendingByAgentSince(ctx, "scout", since, limit)
+	if err != nil {
+		return nil, err
+	}
+	var jobs []*models.ScoutingJob
+	for _, aj := range agentJobs {
+		scoutingJob := &models.ScoutingJob{AgentJob: *aj}
+		if targetPath, ok := aj.State["targetCanonicalPath"].(string); ok {
+			scoutingJob.TargetCanonicalPath = targetPath
+		}
+		if currentState, ok := aj.State["currentState"].(string); ok {
+			scoutingJob.CurrentState = models.ScoutingJobState(currentState)
+		}
+		if lensID, ok := aj.State["lensId"].(string); ok {
+			scoutingJob.LensID = lensID
+		}
+		if strategy, ok := aj.State["scoutingStrategy"].(string); ok {
+			scoutingJob.ScoutingStrategy = strategy
+		}
+		jobs = append(jobs, scoutingJob)
+	}
 	return jobs, nil
 }

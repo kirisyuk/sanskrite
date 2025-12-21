@@ -18,6 +18,8 @@ TARGET_WS=0
 TARGET_HATLONE_WS=0
 TARGET_VERIFIED_PROXY=0
 TARGET_CHECK_INFRA=0
+TARGET_HORIZON_WATCHDOG=0
+TARGET_HORIZON_WATCHDOG_ONLY=0
 
 REGION=${REGION:-us-central1}
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null || true)
@@ -29,8 +31,11 @@ fi
 # Service account for backend
 SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
 
+# Secret for Cloud Scheduler secured endpoints (X-Job-Token header)
+SECRET_ADMIN_JOB_TOKEN="admin_job_token"
+
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws] [--hatlone-ws] [--verified-proxy] [--check-infra]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws] [--hatlone-ws] [--verified-proxy] [--check-infra] [--horizon-watchdog] [--horizon-watchdog-only]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
@@ -41,6 +46,8 @@ usage() {
   echo "  --hatlone-ws    Deploy new hatlone WS broker only (skips infra checks)"
   echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
   echo "  --check-infra   Run infrastructure checks only (no deployments)"
+  echo "  --horizon-watchdog Ensure Cloud Scheduler job for Horizon Watchdog (calls API cron endpoint)"
+  echo "  --horizon-watchdog-only Only ensure Horizon Watchdog infra/job/env (no API build/deploy)"
 }
 
 TARGET_PY=0
@@ -53,6 +60,8 @@ while [[ $# -gt 0 ]]; do
     --hatlone-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=1; TARGET_CHECK_INFRA=0 ;;
     --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
     --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
+    --horizon-watchdog) TARGET_HORIZON_WATCHDOG=1 ;;
+    --horizon-watchdog-only) TARGET_HORIZON_WATCHDOG=1; TARGET_HORIZON_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
   esac
@@ -260,6 +269,16 @@ setup_infrastructure() {
       echo -e "${GREEN}  ✓${NC} $secret exists"
     fi
   done
+
+  # 3.1 Ensure ADMIN_JOB_TOKEN secret exists (stable token for Cloud Scheduler secured endpoints).
+  if ! gcloud secrets describe "$SECRET_ADMIN_JOB_TOKEN" >/dev/null 2>&1; then
+    local admin_token_seed
+    admin_token_seed=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
+    echo -n "$admin_token_seed" | gcloud secrets create "$SECRET_ADMIN_JOB_TOKEN" --data-file=-
+    echo -e "${GREEN}  ✓${NC} Created $SECRET_ADMIN_JOB_TOKEN secret"
+  else
+    echo -e "${GREEN}  ✓${NC} $SECRET_ADMIN_JOB_TOKEN exists"
+  fi
 
   # 3.5 Ensure GCS bucket for core docs exists
   local docs_bucket="gs://${PROJECT_ID}-core-docs"
@@ -852,21 +871,23 @@ except:
     fi
   done
 
-  # 5. Ensure Cloud Scheduler jobs only when deploying API
-  if [[ "$TARGET_API" -eq 1 ]]; then
+  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --horizon-watchdog-only)
+  if [[ "$TARGET_API" -eq 1 || "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
     echo -e "${BLUE}[infra] Ensuring Cloud Scheduler jobs (optional)...${NC}"
     if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
       SVC_URL=$(gcloud run services describe sanskrite-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
       
       if [[ -n "$SVC_URL" ]]; then
+        # Resolve the stable admin job token from Secret Manager (single source of truth).
+        ADMIN_TOKEN=$(gcloud secrets versions access latest --secret="$SECRET_ADMIN_JOB_TOKEN" 2>/dev/null || true)
+        if [[ -z "$ADMIN_TOKEN" ]]; then
+          # Best effort: create a new version if access failed for some reason.
+          ADMIN_TOKEN=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
+          echo -n "$ADMIN_TOKEN" | gcloud secrets versions add "$SECRET_ADMIN_JOB_TOKEN" --data-file=- >/dev/null 2>&1 || true
+        fi
+
         # 5a. Source poller job
         JOB_NAME="sanskrite-source-poller"
-        # Ensure admin token env on API (if not set, generate ephemeral weak token for dev; recommend overriding in CI/prod)
-        ADMIN_TOKEN=${ADMIN_JOB_TOKEN:-}
-        if [[ -z "$ADMIN_TOKEN" ]]; then
-          ADMIN_TOKEN=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
-          gcloud run services update sanskrite-api --region "$REGION" --update-env-vars "ADMIN_JOB_TOKEN=$ADMIN_TOKEN" --quiet || true
-        fi
         # Create or update a job that calls admin publish-due with header X-Job-Token
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
@@ -874,6 +895,8 @@ except:
             --schedule="*/5 * * * *" \
             --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
             --http-method=POST \
+            --oidc-service-account-email="$SA_BACKEND" \
+            --oidc-token-audience="$SVC_URL" \
             --update-headers="X-Job-Token=$ADMIN_TOKEN" \
             --attempt-deadline=60s \
             --quiet || true
@@ -883,6 +906,8 @@ except:
             --schedule="*/5 * * * *" \
             --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
             --http-method=POST \
+            --oidc-service-account-email="$SA_BACKEND" \
+            --oidc-token-audience="$SVC_URL" \
             --headers="X-Job-Token=$ADMIN_TOKEN" \
             --attempt-deadline=60s \
             --quiet || true
@@ -913,6 +938,47 @@ except:
             --quiet || true
         fi
         echo -e "${GREEN}[infra] ✓${NC} Artifact scheduler job ensured (runs hourly)"
+
+        # 5c. Horizon Watchdog job (optional; enabled via --horizon-watchdog)
+        if [[ "${TARGET_HORIZON_WATCHDOG}" -eq 1 ]]; then
+          echo -e "${BLUE}[infra] Ensuring Horizon Watchdog scheduler job...${NC}"
+
+          # Ensure API env vars aligned with Cloud Scheduler mode
+          # (disable any internal ticker if introduced later; keep knobs explicit)
+          gcloud run services update sanskrite-api --region "$REGION" \
+            --update-env-vars "DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=200,HORIZON_WATCHDOG_CRON_LOCK_TTL=9m" \
+            --quiet || true
+
+          JOB_NAME="sanskrite-horizon-watchdog"
+          WATCHDOG_LIMIT="${HORIZON_WATCHDOG_CRON_LIMIT:-200}"
+          WATCHDOG_SCHEDULE="${HORIZON_WATCHDOG_CRON_SCHEDULE:-*/5 * * * *}"
+          WATCHDOG_URI="$SVC_URL/api/v1/admin/horizon/watchdog/run?limit=$WATCHDOG_LIMIT"
+
+          if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "$JOB_NAME" \
+              --location="$REGION" \
+              --schedule="$WATCHDOG_SCHEDULE" \
+              --uri="$WATCHDOG_URI" \
+              --http-method=POST \
+              --oidc-service-account-email="$SA_BACKEND" \
+              --oidc-token-audience="$SVC_URL" \
+              --update-headers="X-Job-Token=$ADMIN_TOKEN" \
+              --attempt-deadline=540s \
+              --quiet || true
+          else
+            gcloud scheduler jobs create http "$JOB_NAME" \
+              --location="$REGION" \
+              --schedule="$WATCHDOG_SCHEDULE" \
+              --uri="$WATCHDOG_URI" \
+              --http-method=POST \
+              --oidc-service-account-email="$SA_BACKEND" \
+              --oidc-token-audience="$SVC_URL" \
+              --headers="X-Job-Token=$ADMIN_TOKEN" \
+              --attempt-deadline=540s \
+              --quiet || true
+          fi
+          echo -e "${GREEN}[infra] ✓${NC} Horizon Watchdog scheduler job ensured ($WATCHDOG_SCHEDULE)"
+        fi
       else
         echo -e "${YELLOW}[infra] Skipping scheduler jobs (api url not resolved).${NC}"
       fi
@@ -1005,7 +1071,7 @@ deploy_api() {
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
-  local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest"
+  local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest,ADMIN_JOB_TOKEN=${SECRET_ADMIN_JOB_TOKEN}:latest"
   if gcloud secrets describe paypal_client_id >/dev/null 2>&1 && gcloud secrets describe paypal_secret >/dev/null 2>&1; then
     paypal_secrets="$paypal_secrets,PAYPAL_CLIENT_ID=paypal_client_id:latest,PAYPAL_SECRET=paypal_secret:latest"
     if gcloud secrets describe paypal_webhook_id >/dev/null 2>&1; then
@@ -1043,6 +1109,13 @@ deploy_api() {
   # Data Stores are created in "global" region, but search API uses the same location
   local vertex_search_ds_id="${VERTEX_SEARCH_DATA_STORE_ID_VALUE:-rag-documents-store}"
   local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
+
+  # NOTE: ADMIN_JOB_TOKEN is provided via Secret Manager (see --set-secrets) to avoid rotation/desync.
+
+  # If deploying Horizon Watchdog scheduler mode, keep related env vars in sync (also replaced by deploy).
+  if [[ "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
+    env_vars="$env_vars,DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=${HORIZON_WATCHDOG_CRON_LIMIT:-200},HORIZON_WATCHDOG_CRON_LOCK_TTL=${HORIZON_WATCHDOG_CRON_LOCK_TTL:-9m}"
+  fi
   
   # Add Redis env vars if available
   if [[ -n "$redis_host" ]]; then
@@ -1091,6 +1164,27 @@ deploy_api() {
   API_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[api] Deployed successfully${NC}"
   echo -e "${BLUE}[api] URL:${NC} $API_URL"
+
+  # Best-effort: keep Cloud Scheduler job headers in sync with Secret Manager admin job token.
+  local admin_token
+  admin_token=$(gcloud secrets versions access latest --secret="$SECRET_ADMIN_JOB_TOKEN" 2>/dev/null || true)
+  if [[ -z "$admin_token" ]]; then
+    admin_token=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
+  fi
+  if gcloud scheduler jobs describe "sanskrite-horizon-watchdog" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "sanskrite-horizon-watchdog" \
+      --location="$REGION" \
+      --update-headers="X-Job-Token=$admin_token" \
+      --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for sanskrite-horizon-watchdog"
+  fi
+  if gcloud scheduler jobs describe "sanskrite-source-poller" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "sanskrite-source-poller" \
+      --location="$REGION" \
+      --update-headers="X-Job-Token=$admin_token" \
+      --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for sanskrite-source-poller"
+  fi
 }
 
 deploy_verified_proxy() {
@@ -1309,7 +1403,7 @@ deploy_py() {
     --source "$SRC_DIR" \
     --region "$REGION" \
     --allow-unauthenticated \
-    --min-instances=0 \
+    --min-instances=1 \
     --max-instances=3 \
     --cpu=1 \
     --memory=256Mi \
@@ -1527,13 +1621,17 @@ create_indexes() {
   fi
 }
 
-# Setup infrastructure only on full deploy or explicit check
-# Individual service deploys (--api, --ws, --verified-proxy, --py) skip infra checks for speed
+# Setup infrastructure only on full deploy or explicit check.
+# Individual service deploys (--api, --ws, --verified-proxy, --py) usually skip infra checks for speed,
+# BUT some flags (e.g. --horizon-watchdog) require infra steps (Cloud Scheduler jobs, env vars).
 if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
   setup_infrastructure
   create_indexes
   echo -e "${GREEN}[infra] Infrastructure checks completed${NC}"
   exit 0
+elif [[ "$TARGET_HORIZON_WATCHDOG" -eq 1 ]]; then
+  # Minimal infra needed for watchdog Cloud Scheduler job creation/update.
+  setup_infrastructure
 elif [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_WS" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
   # Full deploy: run infrastructure checks
   setup_infrastructure

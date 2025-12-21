@@ -23,7 +23,13 @@ func slugify(s string) string {
 	return s
 }
 
-func preferredCanonicalPath(rel agents.DiscoveredRelation) string {
+// preferredCanonicalPaths returns ordered canonical path candidates derived from names only.
+// For facilities we emit both:
+//  1. /fac/{orgSlug}/{facilitySlug} (if name appears prefixed by an org token)
+//  2. /fac/{facilitySlug} (flat fallback)
+//
+// Repo/Vertex checks decide which one is stable.
+func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 	t := normalizeFragmentType(rel.TargetType)
 	short := strings.TrimSpace(rel.TargetShortName)
 	if short == "" {
@@ -35,34 +41,65 @@ func preferredCanonicalPath(rel agents.DiscoveredRelation) string {
 	}
 	short = strings.TrimSpace(short)
 	if short == "" {
-		return ""
+		return nil
 	}
 
 	slug := slugify(short)
 	if slug == "" {
-		return ""
+		return nil
 	}
 
 	switch t {
 	case models.FragmentTypeOrganization:
-		return "/org/" + slug
+		return []string{"/org/" + slug}
 	case models.FragmentTypeFacility:
-		return "/fac/" + slug
+		out := make([]string, 0, 2)
+		// Candidate nested: take first word as org token, remainder as facility label.
+		if parts := strings.Fields(short); len(parts) >= 2 {
+			orgTok := strings.TrimSpace(parts[0])
+			rest := strings.TrimSpace(strings.TrimPrefix(short, parts[0]))
+			orgSlug := slugify(orgTok)
+			facSlug := slugify(rest)
+			if orgSlug != "" && facSlug != "" {
+				out = append(out, "/fac/"+orgSlug+"/"+facSlug)
+			}
+		}
+		out = append(out, "/fac/"+slug)
+		return out
 	case models.FragmentTypeProduct:
-		return "/product/" + slug
+		// Candidate nested: take first word as org token, remainder as product label.
+		out := make([]string, 0, 2)
+		if parts := strings.Fields(short); len(parts) >= 2 {
+			orgTok := strings.TrimSpace(parts[0])
+			rest := strings.TrimSpace(strings.TrimPrefix(short, parts[0]))
+			orgSlug := slugify(orgTok)
+			prodSlug := slugify(rest)
+			if orgSlug != "" && prodSlug != "" {
+				out = append(out, "/product/"+orgSlug+"/"+prodSlug)
+			}
+		}
+		out = append(out, "/product/"+slug)
+		return out
+	case models.FragmentTypeProgram:
+		// Preferred: /program/{jurisdiction}/{slug} when jurisdiction can be inferred; fallback: /program/{slug}
+		// We avoid guessing jurisdiction aggressively; LLM/inputs may provide it explicitly.
+		return []string{"/program/" + slug}
+	case models.FragmentTypeMarket:
+		// Preferred: /market/{domain}/{slug} when domain can be inferred; fallback: /market/{slug}
+		return []string{"/market/" + slug}
 	case models.FragmentTypeEvent:
-		return "/event/" + slug
+		return []string{"/event/" + slug}
 	case models.FragmentTypeGeoRegion:
 		// For GEO, do NOT guess /loc without explicit country/admin1.
 		// We'll use:
 		// - normalized input paths (e.g., /region/na/us/tx/austin -> /loc/us/tx/austin)
 		// - Vertex Search / existing fragments
 		// - LLM canonicalization with strict /loc schema
-		return ""
+		return nil
 	case models.FragmentTypePerson:
-		return "/person/" + slug
+		return []string{"/person/" + slug}
 	default:
-		return "/org/" + slug
+		return []string{"/org/" + slug}
 	}
 }
 
@@ -103,6 +140,10 @@ func normalizeFragmentType(s string) models.FragmentType {
 		return models.FragmentTypeGeoRegion
 	case string(models.FragmentTypeProduct):
 		return models.FragmentTypeProduct
+	case string(models.FragmentTypeProgram):
+		return models.FragmentTypeProgram
+	case string(models.FragmentTypeMarket):
+		return models.FragmentTypeMarket
 	case string(models.FragmentTypeEvent):
 		return models.FragmentTypeEvent
 	case string(models.FragmentTypePerson), "HUMAN", "INDIVIDUAL":
@@ -136,7 +177,21 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 	if strings.TrimSpace(rel.TargetCanonicalPath) != "" && !strings.HasPrefix(strings.TrimSpace(rel.TargetCanonicalPath), "/discovered/") {
 		// Hard preference: if preferred shortName path exists, use it to avoid duplicates like /org/tesla-inc vs /org/tesla.
 		if e.fragmentsRepo != nil {
-			if pref := preferredCanonicalPath(rel); pref != "" {
+			for _, pref := range preferredCanonicalPaths(rel) {
+				if strings.TrimSpace(pref) == "" {
+					continue
+				}
+				// For nested facilities, ensure the org fragment exists before preferring the nested path.
+				if strings.HasPrefix(pref, "/fac/") {
+					parts := strings.Split(strings.Trim(pref, "/"), "/")
+					// fac/{org}/{fac}
+					if len(parts) == 3 {
+						orgCP := "/org/" + parts[1]
+						if fOrg, err := e.fragmentsRepo.GetByCanonicalPath(ctx, orgCP); err != nil || fOrg == nil || fOrg.ID == "" {
+							continue
+						}
+					}
+				}
 				if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
 					return pref, nil
 				}
@@ -147,7 +202,20 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 
 	// 1.5) Hard preference: if a preferred canonical fragment already exists, use it immediately.
 	if e.fragmentsRepo != nil {
-		if pref := preferredCanonicalPath(rel); pref != "" {
+		for _, pref := range preferredCanonicalPaths(rel) {
+			if strings.TrimSpace(pref) == "" {
+				continue
+			}
+			// For nested facilities, ensure the org fragment exists before preferring the nested path.
+			if strings.HasPrefix(pref, "/fac/") {
+				parts := strings.Split(strings.Trim(pref, "/"), "/")
+				if len(parts) == 3 {
+					orgCP := "/org/" + parts[1]
+					if fOrg, err := e.fragmentsRepo.GetByCanonicalPath(ctx, orgCP); err != nil || fOrg == nil || fOrg.ID == "" {
+						continue
+					}
+				}
+			}
 			if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
 				return pref, nil
 			}
@@ -171,8 +239,10 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		resp, err := e.planner.vertexSearchClient.Search(ctx, req)
 		if err == nil && resp != nil {
 			// Prefer search hit that matches our shortName-derived canonicalPath
-			pref := preferredCanonicalPath(rel)
-			if pref != "" {
+			for _, pref := range preferredCanonicalPaths(rel) {
+				if strings.TrimSpace(pref) == "" {
+					continue
+				}
 				for _, r := range resp.Results {
 					if r.Document.StructData == nil {
 						continue
@@ -251,6 +321,33 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		return "", fmt.Errorf("canonicalization returned forbidden /discovered canonicalPath: %s", out.CanonicalPath)
 	}
 
+	// Enforce namespace consistency when targetType is known.
+	if relType != "" {
+		expectedPrefix := ""
+		switch relType {
+		case models.FragmentTypeOrganization:
+			expectedPrefix = "/org/"
+		case models.FragmentTypeFacility:
+			expectedPrefix = "/fac/"
+		case models.FragmentTypeProduct:
+			expectedPrefix = "/product/"
+		case models.FragmentTypeProgram:
+			expectedPrefix = "/program/"
+		case models.FragmentTypeMarket:
+			expectedPrefix = "/market/"
+		case models.FragmentTypeGeoRegion:
+			expectedPrefix = "/loc/"
+		case models.FragmentTypeEvent:
+			expectedPrefix = "/event/"
+		case models.FragmentTypePerson:
+			expectedPrefix = "/person/"
+		}
+		if expectedPrefix != "" && !strings.HasPrefix(out.CanonicalPath, expectedPrefix) {
+			return "", fmt.Errorf("canonicalization returned canonicalPath %q that does not match targetType %q (expected prefix %q)",
+				out.CanonicalPath, string(relType), expectedPrefix)
+		}
+	}
+
 	// GEO strictness: require /loc/{country}/{admin1}/{city}
 	if relType == models.FragmentTypeGeoRegion {
 		cp := out.CanonicalPath
@@ -265,7 +362,20 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 
 	// Final hard preference: if preferred canonicalPath exists, use it (even if LLM suggested a suffix variant).
 	if e.fragmentsRepo != nil {
-		if pref := preferredCanonicalPath(rel); pref != "" {
+		for _, pref := range preferredCanonicalPaths(rel) {
+			if strings.TrimSpace(pref) == "" {
+				continue
+			}
+			// For nested facilities, ensure the org fragment exists before preferring the nested path.
+			if strings.HasPrefix(pref, "/fac/") {
+				parts := strings.Split(strings.Trim(pref, "/"), "/")
+				if len(parts) == 3 {
+					orgCP := "/org/" + parts[1]
+					if fOrg, err := e.fragmentsRepo.GetByCanonicalPath(ctx, orgCP); err != nil || fOrg == nil || fOrg.ID == "" {
+						continue
+					}
+				}
+			}
 			if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
 				return pref, nil
 			}
@@ -300,15 +410,27 @@ RULES:
 - shortName MUST be the base name without ownership suffix.
 - canonicalPath slug MUST be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
 - ONLY include ownership suffix in canonicalPath if (and only if) it is REQUIRED to disambiguate entities with same shortName.
+- Intangible-but-real actors (alliances, coalitions, unions, regulators, ministries, associations) are ORGANIZATION and MUST use /org/{slug}.
 - Use these namespaces:
   - ORGANIZATION: /org/{lowercase-slug}
   - PERSON: /person/{lowercase-slug}
-  - PRODUCT: /product/{lowercase-slug}
-  - FACILITY: /fac/{lowercase-slug}
+  - PRODUCT:
+    - Prefer /product/{orgSlug}/{productSlug} when org can be inferred from name (e.g., "Google Gemini" -> /product/google/gemini)
+    - Otherwise use /product/{productSlug}
+  - PROGRAM:
+    - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known (e.g., "Kazakhstan Alem.ai" -> /program/kazakhstan/alem-ai)
+    - Otherwise use /program/{programSlug}
+  - MARKET:
+    - Prefer /market/{domainSlug}/{marketSlug} when domain is known (e.g., "Energy secondary liquidity" -> /market/energy/secondary-liquidity)
+    - Otherwise use /market/{marketSlug}
+  - FACILITY:
+    - Prefer /fac/{orgSlug}/{facilitySlug} when the org can be inferred from the facility name (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
+    - Otherwise use /fac/{facilitySlug}
   - GEO_REGION: MUST be /loc/{country}/{admin1}/{city}
     - country: ISO3166-1 alpha2 lowercase (examples: us, de, ru, fr, br, cn)
     - admin1: state/province/region code or slug lowercase; use "na" if not applicable
     - city: lowercase slug
+    - For country-only locations, use: /loc/{country}/na/na
     Examples (3-position model):
     - USA / Texas / Austin: /loc/us/tx/austin
     - Germany / Bavaria / Munich: /loc/de/by/munich
@@ -319,5 +441,3 @@ RULES:
 - Output only JSON, no markdown, no extra text.
 `, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType)
 }
-
-

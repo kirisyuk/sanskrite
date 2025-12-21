@@ -33,8 +33,8 @@ X-Tenant-ID: <tenant_id>
   "projectId": "uuid",
   "name": "Риски поставок полупроводников из Тайваня",
   "scope": [
-    "/org/tsmc/fab/21",
-    "/geo/tw"
+    "/fac/tsmc/fab-21",
+    "/loc/tw/na/na"
   ],
   "viewConfig": {
     "depth": 3,
@@ -56,7 +56,7 @@ X-Tenant-ID: <tenant_id>
   "tenantId": "uuid",
   "projectId": "uuid",
   "name": "Риски поставок полупроводников из Тайваня",
-  "scope": ["/org/tsmc/fab/21", "/geo/tw"],
+  "scope": ["/fac/tsmc/fab-21", "/loc/tw/na/na"],
   "viewConfig": {...},
   "alertConfig": {...},
   "status": "ACTIVE",
@@ -76,7 +76,7 @@ X-Tenant-ID: <tenant_id>
   "tenantId": "uuid",
   "projectId": "uuid",
   "name": "Риски поставок полупроводников из Тайваня",
-  "scope": ["/org/tsmc/fab/21", "/geo/tw"],
+  "scope": ["/fac/tsmc/fab-21", "/loc/tw/na/na"],
   "viewConfig": {...},
   "alertConfig": {...},
   "status": "ACTIVE",
@@ -98,7 +98,7 @@ X-Tenant-ID: <tenant_id>
 ```json
 {
   "name": "Обновленное название",
-  "scope": ["/org/tsmc/fab/21", "/geo/tw", "/org/smic"],
+  "scope": ["/fac/tsmc/fab-21", "/loc/tw/na/na", "/org/smic"],
   "viewConfig": {
     "depth": 4,
     "viewType": "table"
@@ -130,7 +130,7 @@ X-Tenant-ID: <tenant_id>
       "id": "uuid",
       "name": "Риски поставок полупроводников из Тайваня",
       "status": "ACTIVE",
-      "scope": ["/org/tsmc/fab/21", "/geo/tw"],
+      "scope": ["/fac/tsmc/fab-21", "/loc/tw/na/na"],
       "updatedAt": "2025-12-17T14:30:00Z"
     }
   ],
@@ -162,7 +162,7 @@ X-Tenant-ID: <tenant_id>
 {
   "id": "uuid",
   "tenantId": "uuid",
-  "canonicalPath": "/org/tsmc/fab/21",
+  "canonicalPath": "/fac/tsmc/fab-21",
   "type": "FACILITY",
   "entityPath": "/Infrastructure/Manufacturing/Factory",
   "sectorPath": "/Technology/Semiconductors/Manufacturing",
@@ -361,7 +361,7 @@ X-Tenant-ID: <tenant_id>
 {
   "id": "uuid",
   "status": "EXTRACTION",
-  "targetCanonicalPath": "/org/tsmc/fab/21",
+  "targetCanonicalPath": "/fac/tsmc/fab-21",
   "progress": 0.6,
   "currentStep": "extraction",
   "steps": [
@@ -402,7 +402,7 @@ X-Tenant-ID: <tenant_id>
     {
       "id": "uuid",
       "status": "VERIFIED",
-      "targetCanonicalPath": "/org/tsmc/fab/21",
+      "targetCanonicalPath": "/fac/tsmc/fab-21",
       "createdAt": "2025-12-17T14:24:00Z",
       "completedAt": "2025-12-17T14:30:00Z"
     }
@@ -566,7 +566,7 @@ X-Tenant-ID: <tenant_id>
   "type": "horizon_fragment.updated",
   "fragmentId": "uuid",
   "data": {
-    "canonicalPath": "/org/tsmc/fab/21",
+    "canonicalPath": "/fac/tsmc/fab-21",
     "version": 15,
     "state": {
       "operational_health": {

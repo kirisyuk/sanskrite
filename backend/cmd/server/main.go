@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"google.golang.org/api/option"
 
 	// orchestrator deps
+	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
 	"github.com/igorkirisyuk/sanskrite/internal/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
@@ -32,18 +34,19 @@ import (
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
 	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
 
 	// Horizon system
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
-	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
-	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
-	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
-	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
-	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 )
 
@@ -146,6 +149,17 @@ func main() {
 		log.Fatalf("firestore init: %v", err)
 	}
 
+	// Load Horizon taxonomy from Firestore and keep it cached (single source of truth).
+	taxonomy.InitRuntimeTaxonomyCacheFromFirestore(fsClient.Client(), "v1", 10*time.Minute)
+	if err := taxonomy.RefreshRuntimeTaxonomy(ctx); err != nil {
+		log.Printf("WARNING: failed to load horizon taxonomy: %v", err)
+	}
+	taxonomy.StartRuntimeTaxonomyAutoRefresh(ctx, 5*time.Minute, func(err error) {
+		if err != nil {
+			log.Printf("WARNING: horizon taxonomy refresh failed: %v", err)
+		}
+	})
+
 	// Initialize GCS client for uploads
 	gcsClient, err := gcp.NewGCSClient(ctx, projectID)
 	if err != nil {
@@ -174,6 +188,7 @@ func main() {
 	sourcesRepo := repo.NewSourceRepository(fsClient.Client())
 	trustRepo := repo.NewTrustRepository(fsClient.Client())
 	uncertaintyRepo := repo.NewUncertaintyModelRepository(fsClient.Client())
+	ontologyFactsRepo := repo.NewOntologyFactsRepository(fsClient.Client())
 	// RAG repos
 	ragDocsBucket := getEnv("RAG_DOCUMENTS_BUCKET", "")
 	var bqClient *gcp.BigQueryClient // Will be initialized later if BigQuery is enabled
@@ -492,13 +507,15 @@ func main() {
 			entityEnricher = ontology.NewEntityEnricher(entitiesRepo, wikidataAdapter, logger)
 		}
 
-		// OntologyExtractor - главный компонент для извлечения онтологических объектов
+		// OntologyExtractor - главный компонент для извлечения онтологических объектов.
+		// ВАЖНО: он должен быть инициализирован ДО старта document/chat воркеров, иначе факты не будут создаваться.
 		ontologyExtractor := ontology.NewOntologyExtractor(
 			entitiesRepo,
 			eventsRepo,
 			claimsRepo,
 			relationsRepo,
 			sourcesRepo,
+			ontologyFactsRepo,
 			entityResolver,
 			entityEnricher,
 			trustIntegrator,
@@ -983,20 +1000,37 @@ func main() {
 			}
 		}
 
+		// Configure GCS export + Vertex sync for ontology_facts (unified fact frames)
+		if gcsClient != nil && ragDocsBucket != "" {
+			ontologyFactsRepo = ontologyFactsRepo.WithStorage(gcsClient, ragDocsBucket)
+			if vertexSearchClient != nil {
+				ontologyFactsRepo = ontologyFactsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
+					gcsPath := fmt.Sprintf("gs://%s/%s/ontology_facts/**", ragDocsBucket, tenantID)
+					importReq := &ai.ImportDocumentsRequest{
+						GCSPath:            gcsPath,
+						ReconciliationMode: "INCREMENTAL",
+						DataSchema:         "document",
+					}
+					return vertexSearchClient.ImportDocuments(ctx, importReq)
+				})
+				logger.Printf("Ontology facts: Vertex AI Search sync enabled")
+			}
+		}
+
 		// Horizon service dependencies
 		horizonDeps := horizon.HorizonServiceDependencies{
-			AIExecutor:       exec,
-			EmbeddingProvider: emb,
+			AIExecutor:         exec,
+			EmbeddingProvider:  emb,
 			VertexSearchClient: vertexSearchClient,
-			AgentRegistry:     *agentRegistry,
-			AgentJobsRepo:     agentJobsRepo,
-			RealtimePublisher: pub,
-			EntitiesRepo:      entitiesRepo,
-			DocumentsRepo:     docsRepo,
-			ChunksRepo:        chunksRepo,
-			DataSourcesRepo:   s.dsrcs,
-			Crawler:           wc,
-			Logger:            logger,
+			AgentRegistry:      agentRegistry,
+			AgentJobsRepo:      agentJobsRepo,
+			RealtimePublisher:  pub,
+			EntitiesRepo:       entitiesRepo,
+			DocumentsRepo:      docsRepo,
+			ChunksRepo:         chunksRepo,
+			DataSourcesRepo:    s.dsrcs,
+			Crawler:            wc,
+			Logger:             logger,
 		}
 
 		// Create HorizonService
@@ -1022,31 +1056,20 @@ func main() {
 			// Initialize Propagation subsystem
 			propagationEngine := horizonpropagation.NewPropagationEngine(
 				horizonFragmentsRepo,
+				horizonFragmentVersionsRepo,
 				horizonEdgesRepo,
 				horizonLensesRepo,
 				pub,
 			)
 			horizonService.SetPropagationEngine(propagationEngine)
-			
+
 			// Запускаем фоновый процессор Cold Path задач (каждые 30 секунд)
 			ctxBackground := context.Background()
 			propagationEngine.StartColdPathProcessor(ctxBackground, 30*time.Second)
 
-			// Initialize Watchdog subsystem
-			watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, nil, nil, exec) // ScoutEngine and SourceExecutor will be set later
-			watchdogScheduler := horizonwatchdog.NewScheduler()
-			watchdogService := horizonwatchdog.NewWatchdogService(
-				horizonWatchdogRepo,
-				horizonFragmentsRepo,
-				watchdogMonitor,
-				watchdogScheduler,
-				nil, // ScoutEngine will be set later
-			)
-			horizonService.SetWatchdogService(watchdogService)
-
 			// Initialize Scout subsystem
-			scoutPlanner := horizonscout.NewScoutPlanner(s.dsrcs, vertexSearchClient)
-			
+			scoutPlanner := horizonscout.NewScoutPlanner(s.dsrcs, ontologyFactsRepo, vertexSearchClient)
+
 			// Source Executor (Telegram client skipped for now)
 			rssProvider := prov.NewRSSProvider()
 			sourceExecutor := horizonscout.NewSourceExecutor(wc, rssProvider, nil, docsRepo)
@@ -1056,7 +1079,7 @@ func main() {
 			criticAgent := horizonagents.NewCriticAgent(exec)
 			resolverAgent := horizonagents.NewResolverAgent(exec)
 			researchAgent := horizonagents.NewResearchAgent(exec)
-			
+
 			frameBuilder := horizonscout.NewFrameBuilder()
 			scoutWorkflow := horizonscout.NewScoutWorkflow(agentJobsRepo)
 
@@ -1076,21 +1099,41 @@ func main() {
 				pub,
 				exec,
 			)
-			
+
 			// Подключаем триггер распространения изменений
 			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {
 				_, err := propagationEngine.TriggerPropagation(ctx, fragmentID)
 				return err
 			})
-			
+
 			horizonService.SetScoutEngine(scoutEngine)
 			logger.Printf("Scout Engine initialized")
+
+			// Initialize Watchdog subsystem (requires ScoutEngine + SourceExecutor)
+			watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec)
+			watchdogScheduler := horizonwatchdog.NewScheduler()
+			watchdogService := horizonwatchdog.NewWatchdogService(
+				horizonWatchdogRepo,
+				horizonFragmentsRepo,
+				watchdogMonitor,
+				watchdogScheduler,
+				scoutEngine,
+			)
+			horizonService.SetWatchdogService(watchdogService)
+
+			// Wire Lens lifecycle -> Watchdog lifecycle (create/pause configs on ACTIVE/DORMANT)
+			lensService.SetWatchdogLifecycleHook(func(ctx context.Context, fragmentID string) {
+				_ = watchdogService.UpdateConfigLifecycle(ctx, fragmentID)
+			})
 
 			// Запускаем Scout Worker для обработки фоновых задач
 			go func() {
 				// Задержка перед стартом
 				time.Sleep(5 * time.Second)
 				logger.Printf("Scout Worker started polling")
+				// Limit concurrency to avoid spawning unbounded goroutines and to reduce starvation under backlog.
+				const scoutWorkerMaxConcurrent = 3
+				sem := make(chan struct{}, scoutWorkerMaxConcurrent)
 				ticker := time.NewTicker(10 * time.Second)
 				defer ticker.Stop()
 
@@ -1099,16 +1142,36 @@ func main() {
 					case <-ctxBackground.Done():
 						return
 					case <-ticker.C:
-						// Получаем ожидающие задачи
-						jobs, err := horizonScoutingJobsRepo.ListPending(context.Background(), 5)
+						// Получаем ожидающие задачи.
+						// First, prioritize "fresh" jobs to avoid high latency under backlog.
+						seen := map[string]struct{}{}
+						cutoff := time.Now().UTC().Add(-15 * time.Minute)
+						jobs, err := horizonScoutingJobsRepo.ListPendingSince(context.Background(), cutoff, 25)
 						if err != nil {
 							logger.Printf("Scout Worker poll error: %v", err)
 							continue
 						}
 
+						// Then, also drain the backlog (FIFO).
+						backlog, err := horizonScoutingJobsRepo.ListPending(context.Background(), 25)
+						if err != nil {
+							logger.Printf("Scout Worker poll error (backlog): %v", err)
+							continue
+						}
+						jobs = append(jobs, backlog...)
+
 						for _, job := range jobs {
+							if job == nil || job.ID == "" {
+								continue
+							}
+							if _, ok := seen[job.ID]; ok {
+								continue
+							}
+							seen[job.ID] = struct{}{}
+							sem <- struct{}{}
 							// Выполняем задачу асинхронно
 							go func(j *horizonmodels.ScoutingJob) {
+								defer func() { <-sem }()
 								execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 								defer cancel()
 								logger.Printf("Scout Worker executing job %s for %s", j.ID, j.TargetCanonicalPath)
@@ -1137,6 +1200,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	// LB-friendly health check (some setups route only /api/* to the service)
+	mux.HandleFunc("/api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
@@ -2128,10 +2196,12 @@ func main() {
 				allowedOrigins = append(allowedOrigins, o)
 			}
 		}
+		log.Printf("CORS: parsed %d allowed origins from FRONTEND_ORIGINS: %v", len(allowedOrigins), allowedOrigins)
 	} else {
 		legacy := getEnv("FRONTEND_ORIGIN", "")
 		if legacy != "" {
 			allowedOrigins = []string{legacy}
+			log.Printf("CORS: using FRONTEND_ORIGIN: %s", legacy)
 		} else {
 			allowedOrigins = []string{
 				"http://localhost:5173",
@@ -2140,6 +2210,7 @@ func main() {
 				"https://www.hatl.one",
 				"https://*.hatl.one",
 			}
+			log.Printf("CORS: using default allowed origins: %v", allowedOrigins)
 		}
 	}
 
@@ -2170,6 +2241,130 @@ func main() {
 
 	// Attach admin route without Firebase auth, but with jobAuth
 	mux.Handle("/api/v1/admin/sources/publish-due", jobAuth(http.HandlerFunc(s.discoveryHandler.PublishDue)))
+
+	// Horizon Watchdog cron endpoint (Cloud Scheduler)
+	// POST /api/v1/admin/horizon/watchdog/run?limit=200
+	// Secured via the same jobAuth (X-Job-Token header) to avoid exposing cron publicly.
+	mux.Handle("/api/v1/admin/horizon/watchdog/run", jobAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if horizonService == nil || horizonService.Watchdog() == nil {
+			http.Error(w, "horizon watchdog not initialized", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Parse limit
+		limit := 200
+		if v := r.URL.Query().Get("limit"); strings.TrimSpace(v) != "" {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				limit = n
+			}
+		}
+
+		// Distributed lock in Firestore to avoid overlapping runs (scheduler retries / multi-instance).
+		// Collection is intentionally separate from domain data.
+		lockTTL := 9 * time.Minute
+		if v := os.Getenv("HORIZON_WATCHDOG_CRON_LOCK_TTL"); strings.TrimSpace(v) != "" {
+			if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil && d >= 30*time.Second {
+				lockTTL = d
+			}
+		}
+		lockOwner := fmt.Sprintf("watchdog-cron-%d", time.Now().UnixNano())
+		lockRef := fsClient.Client().Collection("horizon_runtime_locks").Doc("watchdog_cron")
+		now := time.Now().UTC()
+
+		type lockDoc struct {
+			Owner     string    `firestore:"owner"`
+			ExpiresAt time.Time `firestore:"expiresAt"`
+			UpdatedAt time.Time `firestore:"updatedAt"`
+		}
+
+		acquired := false
+		_ = fsClient.Client().RunTransaction(r.Context(), func(ctx context.Context, tx *firestore.Transaction) error {
+			snap, err := tx.Get(lockRef)
+			if err == nil && snap.Exists() {
+				var ld lockDoc
+				if err := snap.DataTo(&ld); err == nil {
+					if !ld.ExpiresAt.IsZero() && ld.ExpiresAt.After(now) {
+						// Already locked
+						return nil
+					}
+				}
+			}
+			ld := lockDoc{
+				Owner:     lockOwner,
+				ExpiresAt: now.Add(lockTTL),
+				UpdatedAt: now,
+			}
+			if err := tx.Set(lockRef, ld); err != nil {
+				return err
+			}
+			acquired = true
+			return nil
+		})
+
+		if !acquired {
+			// Return 200 to prevent Cloud Scheduler retries piling up.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":      true,
+				"skipped": true,
+				"reason":  "lock_not_acquired",
+			})
+			return
+		}
+
+		// Best-effort release: shorten the lease at the end if we still own it.
+		defer func() {
+			_ = fsClient.Client().RunTransaction(context.Background(), func(ctx context.Context, tx *firestore.Transaction) error {
+				snap, err := tx.Get(lockRef)
+				if err != nil || !snap.Exists() {
+					return nil
+				}
+				var ld lockDoc
+				if err := snap.DataTo(&ld); err != nil {
+					return nil
+				}
+				if ld.Owner != lockOwner {
+					return nil
+				}
+				ld.ExpiresAt = time.Now().UTC()
+				ld.UpdatedAt = time.Now().UTC()
+				return tx.Set(lockRef, ld)
+			})
+		}()
+
+		// Run watchdog scans with timeout
+		timeout := 8 * time.Minute
+		ctxRun, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		stats, err := horizonService.Watchdog().ProcessScheduledScansWithStats(ctxRun, limit)
+		if err != nil {
+			// Firestore composite index may be creating/building right after deploy.
+			// In that case, don't fail Cloud Scheduler with 5xx (it will just retry and spam logs).
+			msg := err.Error()
+			if strings.Contains(msg, "The query requires an index") {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ok":      true,
+					"skipped": true,
+					"reason":  "firestore_index_building",
+					"error":   msg,
+				})
+				return
+			}
+			http.Error(w, msg, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":    true,
+			"stats": stats,
+		})
+	})))
 
 	handler := withCORS(allowedOrigins)(mux)
 
@@ -2210,7 +2405,7 @@ func (s *server) routeProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 // routeProjectsByID routes /api/v1/projects/{id} to appropriate handler based on method
-func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request, listeningSignalsHandler *httphandlers.ListeningSignalsHandler, signalHistoryHandler *httphandlers.SignalHistoryHandler) {
+func (s *server) routeProjectsByID(w http.ResponseWriter, r *http.Request, _ *httphandlers.ListeningSignalsHandler, _ *httphandlers.SignalHistoryHandler) {
 	// Check if path is /projects/{id}/datasources
 	if strings.HasSuffix(r.URL.Path, "/datasources") {
 		s.discoveryHandler.ListProjectSources(w, r)
@@ -2324,24 +2519,46 @@ func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 						host := u.Hostname()
 						scheme := u.Scheme
 						for _, ao := range allowedOrigins {
+							// Handle wildcard patterns with scheme like "https://*.hatl.one"
 							if strings.HasPrefix(ao, "http://") || strings.HasPrefix(ao, "https://") {
-								if au, err2 := url.Parse(ao); err2 == nil {
-									ahost := au.Hostname()
-									if strings.HasPrefix(ahost, "*.") {
-										if strings.HasSuffix(host, strings.TrimPrefix(ahost, "*")) && au.Scheme == scheme {
+								// Extract hostname from pattern, handling wildcards
+								aoScheme := ""
+								aoHost := ""
+								if strings.HasPrefix(ao, "https://") {
+									aoScheme = "https"
+									aoHost = strings.TrimPrefix(ao, "https://")
+								} else if strings.HasPrefix(ao, "http://") {
+									aoScheme = "http"
+									aoHost = strings.TrimPrefix(ao, "http://")
+								}
+
+								if aoHost != "" && aoScheme == scheme {
+									if strings.HasPrefix(aoHost, "*.") {
+										// Wildcard pattern: "*.hatl.one" matches "hatl.one", "www.hatl.one", etc.
+										suffix := strings.TrimPrefix(aoHost, "*")
+										// Match exact domain (hatl.one) or subdomain (www.hatl.one)
+										if host == strings.TrimPrefix(suffix, ".") || strings.HasSuffix(host, suffix) {
 											allowOrigin = origin
 											break
 										}
 									}
 								}
 							} else if strings.HasPrefix(ao, "*.") {
-								if strings.HasSuffix(host, strings.TrimPrefix(ao, "*")) {
+								// Wildcard pattern without scheme: "*.hatl.one"
+								suffix := strings.TrimPrefix(ao, "*")
+								// Match exact domain (hatl.one) or subdomain (www.hatl.one)
+								if host == strings.TrimPrefix(suffix, ".") || strings.HasSuffix(host, suffix) {
 									allowOrigin = origin
 									break
 								}
 							}
 						}
 					}
+				}
+				// Log only after all matching attempts (exact + wildcard + subdomain patterns),
+				// otherwise we can log false negatives.
+				if allowOrigin == "" && r.Method == http.MethodOptions {
+					log.Printf("CORS: origin '%s' not matched against allowed origins: %v", origin, allowedOrigins)
 				}
 			}
 

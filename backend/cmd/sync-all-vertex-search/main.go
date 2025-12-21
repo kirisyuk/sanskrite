@@ -238,3 +238,5 @@ func syncTenant(ctx context.Context, client *ai.VertexAISearchClient, gcsPath, t
 
 
 
+
+

@@ -26,7 +26,7 @@
 ```json
 {
   "id": "fragment-123",
-  "canonicalPath": "/org/tsmc/fab/21",
+  "canonicalPath": "/fac/tsmc/fab-21",
   "governance": {
     "activeSubscribers": 3,
     "status": "ACTIVE"
@@ -64,7 +64,7 @@
 ```json
 {
   "id": "fragment-123",
-  "canonicalPath": "/org/tsmc/fab/21",
+  "canonicalPath": "/fac/tsmc/fab-21",
   "governance": {
     "activeSubscribers": 0,
     "status": "DORMANT"
@@ -101,7 +101,7 @@
 ```json
 {
   "id": "fragment-123",
-  "canonicalPath": "/org/tsmc/fab/21",
+  "canonicalPath": "/fac/tsmc/fab-21",
   "governance": {
     "activeSubscribers": 0,
     "status": "ARCHIVED"

@@ -463,13 +463,81 @@ type MetricValue struct {
 }
 ```
 
+## 5. Influence Spheres Taxonomy (spherePaths)
+
+Иногда событие/утверждение влияет не “на объект” напрямую, а на **сферу**: геополитику, социум, киберпространство, логистику и т.п.
+Для этого в `ontology_facts` используется поле `spherePaths: []string` — **множественные** канонизированные пути, которые:
+- используются для фильтрации/фасетинга в Vertex AI Search,
+- дают основу для будущего распространения волн “по сфере” и “по месту” (политика распространения может эволюционировать отдельно).
+
+**Канонический формат**:
+
+```
+/sphere/{domain}/{subdomain...}
+```
+
+**Примеры (минимальный словарь v1):**
+- `/sphere/ai`
+- `/sphere/ai/models`
+- `/sphere/ai/policy`
+- `/sphere/ai/research`
+- `/sphere/ai/applications`
+- `/sphere/geopolitics`
+- `/sphere/policy`
+- `/sphere/policy/regulation`
+- `/sphere/policy/trade`
+- `/sphere/policy/sanctions`
+- `/sphere/social`
+- `/sphere/social/information`
+- `/sphere/cyber`
+- `/sphere/digital`
+- `/sphere/logistics`
+- `/sphere/logistics/maritime`
+- `/sphere/energy`
+- `/sphere/energy/markets`
+- `/sphere/finance`
+- `/sphere/finance/crypto`
+- `/sphere/finance/markets`
+
+**Правила:**
+- `spherePaths` можно указывать 1..N (например, атака на порт: `/sphere/geopolitics` + `/sphere/logistics/maritime`).
+- Если сфера неочевидна — лучше опустить поле, чем выдумывать.
+
+## 6. Intangible signals → metricUpdates (как мы формируем “волны”)
+
+Propagation в Horizon в текущей реализации реагирует на **дельты метрик** (`HorizonFragment.state`).
+Поэтому для intangible факторов мы различаем:
+- **факт как событие/утверждение** (`ontology_fact.kind=event|claim`, `type=eventType|predicate`, `spherePaths`, `locationPath`, `actorPaths`)
+- **сигнал как метрика** (`ontology_fact.kind=metric` или `metricUpdates`), которая даёт детерминируемую дельту и запускает волну.
+
+### Базовое правило
+`metricUpdates` добавляются **только если их можно обосновать текстом** (явный эффект/ущерб/ограничения/длительность/интенсивность).
+Если обоснования нет — метрики не добавляем (факт остаётся для поиска/контекста).
+
+### Рекомендуемая “карта” (v1)
+- **attack / incident** (геополитика/логистика/социум):
+  - `incident_severity` (ratio, 0..1) — оценка тяжести из контекста
+  - `impact_confidence` (ratio, 0..1) — уверенность в оценке влияния
+  - `shipment_delay_days` / `freight_cost` — только если есть явные числа/задержки
+- **cyberattack / outage** (кибер/цифровая сфера):
+  - `incident_severity` (ratio)
+  - `incident_duration_hours` (hours) — если длительность указана
+  - `impact_confidence` (ratio)
+- **sanction / blockade / policy_change** (геополитика/финансы):
+  - `sanctions_risk` (ratio) — если действие реально вводит/усиливает ограничения
+  - `impact_confidence` (ratio)
+- **union / strike / protest** (социум/операции):
+  - `incident_severity` (ratio)
+  - `downtime_hours` (hours) — если указано/однозначно следует
+  - `impact_confidence` (ratio)
+
 ## Использование в системе
 
 ### В HorizonFragment
 
 ```json
 {
-  "canonicalPath": "/org/tsmc/fab/21",
+  "canonicalPath": "/fac/tsmc/fab-21",
   "type": "FACILITY",
   "entityPath": "/Infrastructure/Manufacturing/Factory",
   "sectorPath": "/Technology/Semiconductors/Manufacturing",

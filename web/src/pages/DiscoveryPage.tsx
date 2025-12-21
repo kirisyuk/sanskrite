@@ -1071,12 +1071,14 @@ const DiscoveryPage: React.FC = () => {
           });
           // Update projectId, clear interactions and messages (they're from old project), and set hydrating to show skeleton
           // CRITICAL: Clear currentStreamId when switching projects to avoid filtering events from wrong project
+          // For local-unfold, don't set hydrating=true since hydrateInteractions won't be called
+          const isLocalUnfold = pid === 'local-unfold';
           useGenaiChatStore.setState({ 
             projectId: pid, 
             interactions: [], // Clear interactions from old project
             messages: [], // Clear messages from old project
-            hydrating: true, 
-            hydratingProjectId: pid,
+            hydrating: isLocalUnfold ? false : true, 
+            hydratingProjectId: isLocalUnfold ? undefined : pid,
             currentStreamId: undefined, // Clear stream tracking when switching projects
             streaming: false, // Stop streaming when switching projects
           } as any);

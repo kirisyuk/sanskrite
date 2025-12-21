@@ -81,6 +81,7 @@ type LensService struct {
 	scoutingJobsRepo *repo.ScoutingJobsRepository
 	lifecycle        *LifecycleManager
 	calculator       *MetricsCalculator
+	watchdogHook     func(ctx context.Context, fragmentID string)
 }
 
 // NewLensService создает новый Lens Service
@@ -98,6 +99,12 @@ func NewLensService(
 		lifecycle:        lifecycle,
 		calculator:       calculator,
 	}
+}
+
+// SetWatchdogLifecycleHook устанавливает hook, который синхронизирует WatchdogConfig
+// после изменений жизненного цикла фрагментов (ACTIVE/DORMANT/ARCHIVED).
+func (s *LensService) SetWatchdogLifecycleHook(hook func(ctx context.Context, fragmentID string)) {
+	s.watchdogHook = hook
 }
 
 // CreateLens создает новый Lens и управляет подписками
@@ -141,6 +148,10 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			// Управляем жизненным циклом
 			if err := s.lifecycle.EnsureActive(ctx, fragment.ID); err != nil {
 				_ = err
+			}
+			// Синхронизируем WatchdogConfig (создать/запустить при ACTIVE)
+			if s.watchdogHook != nil {
+				s.watchdogHook(ctx, fragment.ID)
 			}
 		}
 
@@ -223,6 +234,10 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			if err == nil {
 				_ = s.fragmentsRepo.DecrementActiveSubscribers(ctx, fragment.ID)
 				_ = s.lifecycle.CheckAndTransition(ctx, fragment.ID)
+				// Синхронизируем WatchdogConfig (паузить при DORMANT)
+				if s.watchdogHook != nil {
+					s.watchdogHook(ctx, fragment.ID)
+				}
 			}
 		}
 	}
@@ -234,6 +249,10 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			if err == nil {
 				_ = s.fragmentsRepo.IncrementActiveSubscribers(ctx, fragment.ID)
 				_ = s.lifecycle.EnsureActive(ctx, fragment.ID)
+				// Синхронизируем WatchdogConfig (создать/запустить при ACTIVE)
+				if s.watchdogHook != nil {
+					s.watchdogHook(ctx, fragment.ID)
+				}
 			}
 		}
 	}
@@ -260,6 +279,10 @@ func (s *LensService) DeleteLens(ctx context.Context, lensID string) error {
 		if err == nil {
 			_ = s.fragmentsRepo.DecrementActiveSubscribers(ctx, fragment.ID)
 			_ = s.lifecycle.CheckAndTransition(ctx, fragment.ID)
+			// Синхронизируем WatchdogConfig (паузить при DORMANT)
+			if s.watchdogHook != nil {
+				s.watchdogHook(ctx, fragment.ID)
+			}
 		}
 	}
 

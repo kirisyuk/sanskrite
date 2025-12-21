@@ -180,6 +180,10 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 			scoutResult.Fragment.Type = models.FragmentTypeOrganization
 		case strings.Contains(targetCanonicalPath, "/product/"):
 			scoutResult.Fragment.Type = models.FragmentTypeProduct
+		case strings.Contains(targetCanonicalPath, "/program/"):
+			scoutResult.Fragment.Type = models.FragmentTypeProgram
+		case strings.Contains(targetCanonicalPath, "/market/"):
+			scoutResult.Fragment.Type = models.FragmentTypeMarket
 		case strings.Contains(targetCanonicalPath, "/fac/"):
 			scoutResult.Fragment.Type = models.FragmentTypeFacility
 		case strings.Contains(targetCanonicalPath, "/loc/") || strings.Contains(targetCanonicalPath, "/region/"):
@@ -246,8 +250,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - targetName: Full legal/official name where relevant (e.g., "Tesla, Inc.")
    - targetLegalName: Same as targetName (explicit field)
    - targetShortName: Base name without ownership suffix (e.g., "Tesla")
-   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "EVENT" | "PERSON"
-   - relationType: One of: SUPPLIES_TO, LOCATED_IN, OWNS, COMPETES_WITH, DEPENDS_ON
+   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON"
+   - relationType: One of: SUPPLIES_TO, LOCATED_IN, OWNS, PRODUCES, OPERATES_IN, REGULATES, COMPETES_WITH, INFLUENCES, DEPENDS_ON, SUBSIDIARY_OF
    - reason: Brief evidence/reason for this relation
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.
@@ -257,8 +261,18 @@ CANONICAL PATH RULES:
 - Prefer existing stable namespaces:
   - Organizations: /org/{lowercase-slug}
   - People: /person/{lowercase-slug}
-  - Products: /product/{lowercase-slug}
-  - Facilities: /fac/{lowercase-slug}
+  - Products:
+    - Prefer /product/{orgSlug}/{productSlug} when org is known (e.g., "Google Gemini" -> /product/google/gemini)
+    - Otherwise /product/{productSlug}
+  - Programs:
+    - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
+    - Otherwise /program/{programSlug}
+  - Markets:
+    - Prefer /market/{domainSlug}/{marketSlug} when domain is known
+    - Otherwise /market/{marketSlug}
+  - Facilities:
+    - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
+    - Otherwise /fac/{facilitySlug}
   - Geo regions / locations: prefer /region/... or /loc/... when you can be specific; otherwise /region/{lowercase-slug}
 - canonicalPath slug SHOULD be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
 - ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.

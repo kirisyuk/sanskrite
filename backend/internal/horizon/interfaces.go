@@ -18,7 +18,7 @@ type HorizonServiceDependencies struct {
 	VertexSearchClient *ai.VertexAISearchClient
 
 	// Agent система
-	AgentRegistry  agents.Registry
+	AgentRegistry  *agents.Registry
 	AgentJobsRepo *repo.AgentJobsRepository
 
 	// Realtime система

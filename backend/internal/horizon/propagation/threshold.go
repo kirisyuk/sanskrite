@@ -19,14 +19,18 @@ func thresholdMetricKey(metricNameOrPath string) string {
 
 // ThresholdManager управляет порогами значимости изменений
 type ThresholdManager struct {
-	// Пороги по умолчанию для разных метрик
-	defaultThresholds map[string]float64
+	// metricThresholds override defaults for specific metric names (highest priority)
+	metricThresholds map[string]float64
+	// unitThresholds are defaults by unit (e.g., ratio, usd, units)
+	unitThresholds map[string]float64
+	// defaultThreshold is fallback when neither metric nor unit thresholds are known
+	defaultThreshold float64
 }
 
 // NewThresholdManager создает новый менеджер порогов
 func NewThresholdManager() *ThresholdManager {
 	return &ThresholdManager{
-		defaultThresholds: map[string]float64{
+		metricThresholds: map[string]float64{
 			"operational_health":     0.05, // 5% изменение
 			"capacity_utilization":   0.05,
 			"supply_chain_criticality": 0.1,
@@ -36,41 +40,74 @@ func NewThresholdManager() *ThresholdManager {
 			"geopolitical_alignment": 0.1,
 			"market_sentiment":       0.1,
 			"public_perception":      0.1,
-			// По умолчанию для неизвестных метрик
-			"default": 0.05,
+			// Overrides for metrics where unit-level threshold is too blunt.
+			"price":                   1,
+			"freight_cost":            1_000,
 		},
+		unitThresholds: map[string]float64{
+			// Units: thresholds are ABSOLUTE deltas on MetricValue.Value.
+			"ratio":         0.01,
+			"usd":           1_000_000,
+			"eur":           1_000_000,
+			"rub":           50_000_000,
+			"units":         100,
+			"units_per_day": 100,
+			"days":          1,
+			"hours":         1,
+			"index_point":   5,
+			"code":          1,
+		},
+		defaultThreshold: 0.05,
 	}
 }
 
 // ExceedsThreshold проверяет, превышает ли изменение порог значимости
-func (m *ThresholdManager) ExceedsThreshold(metricName string, delta float64) bool {
+func (m *ThresholdManager) ExceedsThreshold(metricName string, delta float64, unit *string) bool {
 	// Используем абсолютное значение delta
 	absDelta := delta
 	if absDelta < 0 {
 		absDelta = -absDelta
 	}
 
-	// Получаем порог для метрики
+	// 1) Metric override (highest priority)
 	key := thresholdMetricKey(metricName)
-	threshold, exists := m.defaultThresholds[key]
-	if !exists {
-		threshold = m.defaultThresholds["default"]
+	if key != "" {
+		if thr, ok := m.metricThresholds[key]; ok {
+			return absDelta >= thr
+		}
 	}
 
-	return absDelta >= threshold
+	// 2) Unit-level threshold
+	if unit != nil {
+		u := strings.ToLower(strings.TrimSpace(*unit))
+		if u != "" {
+			if thr, ok := m.unitThresholds[u]; ok {
+				return absDelta >= thr
+			}
+		}
+	}
+
+	// 3) Default
+	return absDelta >= m.defaultThreshold
 }
 
-// SetThreshold устанавливает порог для метрики
+// SetThreshold устанавливает порог для метрики (override).
 func (m *ThresholdManager) SetThreshold(metricName string, threshold float64) {
-	m.defaultThresholds[thresholdMetricKey(metricName)] = threshold
+	if m.metricThresholds == nil {
+		m.metricThresholds = map[string]float64{}
+	}
+	m.metricThresholds[thresholdMetricKey(metricName)] = threshold
 }
 
-// GetThreshold получает порог для метрики
-func (m *ThresholdManager) GetThreshold(metricName string) float64 {
-	threshold, exists := m.defaultThresholds[thresholdMetricKey(metricName)]
-	if !exists {
-		return m.defaultThresholds["default"]
+// SetUnitThreshold sets default threshold for a unit (e.g., ratio/usd/units).
+func (m *ThresholdManager) SetUnitThreshold(unit string, threshold float64) {
+	if m.unitThresholds == nil {
+		m.unitThresholds = map[string]float64{}
 	}
-	return threshold
+	u := strings.ToLower(strings.TrimSpace(unit))
+	if u == "" {
+		return
+	}
+	m.unitThresholds[u] = threshold
 }
 

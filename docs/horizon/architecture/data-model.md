@@ -15,8 +15,8 @@
 {
   "id": "uuid",
   "tenantId": "global",
-  "canonicalPath": "/org/tsmc/fab/21",
-  "type": "ORGANIZATION | FACILITY | GEO_REGION | EVENT",
+  "canonicalPath": "/fac/tsmc/fab-21",
+  "type": "ORGANIZATION | FACILITY | GEO_REGION | SPHERE | EVENT | PRODUCT | PROGRAM | MARKET | PERSON",
   "entityPath": "/Infrastructure/Manufacturing/Factory",
   "sectorPath": "/Technology/Semiconductors/Manufacturing",
   "entityId": "uuid",
@@ -130,7 +130,7 @@
   "scoutRequestId": "uuid",
   "projectId": "uuid",
   "tenantId": "string",
-  "targetCanonicalPath": "/org/tsmc/fab/21",
+  "targetCanonicalPath": "/fac/tsmc/fab-21",
   "sourceDocumentId": "uuid",
   "sourceIds": ["source-uuid-1", "source-uuid-2"],
   "documentIds": ["doc-uuid-1"],
@@ -208,8 +208,8 @@
   "projectId": "string",
   "name": "Риски поставок полупроводников из Тайваня",
   "scope": [
-    "/org/tsmc/fab/21",
-    "/geo/tw"
+    "/fac/tsmc/fab-21",
+    "/loc/tw/na/na"
   ],
   "viewConfig": {
     "depth": 3,
@@ -245,7 +245,7 @@
   "tenantId": "string",
   "sourceFragmentId": "uuid",
   "targetFragmentId": "uuid",
-  "type": "SUPPLIES_TO | LOCATED_IN | OWNS | COMPETES_WITH",
+  "type": "SUPPLIES_TO | LOCATED_IN | OWNS | PRODUCES | OPERATES_IN | REGULATES | COMPETES_WITH | DEPENDS_ON | INFLUENCES",
   "properties": {
     "criticality": 0.9,
     "amplification": 1.1,
@@ -571,6 +571,12 @@ const (
     FragmentTypeOrganization FragmentType = "ORGANIZATION"
     FragmentTypeFacility     FragmentType = "FACILITY"
     FragmentTypeGeoRegion    FragmentType = "GEO_REGION"
+    FragmentTypeSphere       FragmentType = "SPHERE"
+    FragmentTypeEvent        FragmentType = "EVENT"
+    FragmentTypeProduct      FragmentType = "PRODUCT"
+    FragmentTypeProgram      FragmentType = "PROGRAM"
+    FragmentTypeMarket       FragmentType = "MARKET"
+    FragmentTypePerson       FragmentType = "PERSON"
     FragmentTypeEvent        FragmentType = "EVENT"
 )
 
@@ -691,6 +697,13 @@ type DependencyType string
 const (
     DependencyTypeSuppliesTo   DependencyType = "SUPPLIES_TO"
     DependencyTypeLocatedIn    DependencyType = "LOCATED_IN"
+    DependencyTypeOwns         DependencyType = "OWNS"
+    DependencyTypeProduces     DependencyType = "PRODUCES"
+    DependencyTypeOperatesIn   DependencyType = "OPERATES_IN"
+    DependencyTypeRegulates    DependencyType = "REGULATES"
+    DependencyTypeCompetesWith DependencyType = "COMPETES_WITH"
+    DependencyTypeDependsOn    DependencyType = "DEPENDS_ON"
+    DependencyTypeInfluences   DependencyType = "INFLUENCES"
     DependencyTypeOwns         DependencyType = "OWNS"
     DependencyTypeCompetesWith DependencyType = "COMPETES_WITH"
 )

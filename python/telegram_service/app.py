@@ -63,6 +63,10 @@ def telegram_updates():
 def healthz():
     return jsonify({"ok": True}), 200
 
+@app.get("/")
+def root():
+    return jsonify({"service": "telegram", "status": "ok"}), 200
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)

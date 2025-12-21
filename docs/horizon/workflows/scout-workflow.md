@@ -17,8 +17,8 @@
     "projectId": "string"
   },
   "targetNode": {
-    "canonicalPath": "/geo/CN/Shanghai/Port",
-    "nodeType": "Infrastructure.Port"
+    "canonicalPath": "/fac/shanghai-port",
+    "nodeType": "Infrastructure.Logistics.Seaport"
   },
   "requirements": {
     "maxStaleness": "12h",

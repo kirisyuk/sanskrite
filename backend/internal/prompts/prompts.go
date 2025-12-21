@@ -148,7 +148,61 @@ TASK:
 - Categories must have labels of 1-2 words only, with confidence in [0,1].
 - Document type must be one of: article, post, report, announcement, interview, transcript, other.
 - Dates must be ISO (YYYY-MM-DD) or RFC3339.
+- eventType (if provided) MUST be one of:
+  attack, cyberattack, sanction, blockade, policy_change, license_change, partnership, acquisition, release, deprecation, pricing_change, availability_change, capability_change, protest, strike, election, warning, announcement, incident, other.
+- If you cannot map confidently, use "other".
 - If unsure, prefer conservative outputs; omit or use nulls instead of inventing facts.
+- Include intangible events when they are clearly stated (partnerships, alliances/coalitions, union actions, new legal entities/incorporations, factory openings/closures, product/model releases & deprecations, pricing/availability changes, policy/regulatory changes, sanctions/licensing, investigations, dissolutions).
+- For event locations, prefer structured geo normalization fields (countryAlpha2/admin1/city) to support Horizon canonical geo taxonomy (/loc/{country}/{admin1}/{city}).
+- For geopolitics, social, cyber, and other intangible factors, provide spherePaths on events/claims when clearly inferable.
+  spherePaths must be 1..N canonical taxonomy paths under /sphere/...
+  Examples:
+  - /sphere/geopolitics
+  - /sphere/social
+  - /sphere/social/information
+  - /sphere/cyber
+  - /sphere/digital
+  - /sphere/logistics
+  - /sphere/logistics/maritime
+  - /sphere/energy
+  - /sphere/finance
+-
+- METRIC UPDATES:
+  You may extract structured numeric metric updates when the content provides clear values.
+  Use the preferred metric vocabulary below when possible, BUT you are not limited to it.
+  If not mappable, create a new metricName using snake_case and a prefix: org_, fac_, product_, program_, market_, logistics_, risk_, incident_.
+  Use units from this allowed set only: usd, eur, rub, units, units_per_day, days, hours, ratio, index_point, code.
+  IMPORTANT: use ratio (0..1) for shares/rates; do NOT output percent.
+
+PREFERRED METRIC VOCABULARY (non-exhaustive):
+- org_headcount (units)
+- org_revenue (usd)
+- org_operating_margin (ratio)
+- org_net_margin (ratio)
+- org_cash (usd)
+- org_debt (usd)
+- org_market_cap (usd)
+- org_esg_risk_score (ratio)
+- capacity_units_per_day (units_per_day)
+- capacity_utilization (ratio)
+- downtime_hours (hours)
+- output_volume (units)
+- lead_time_days (days)
+- inventory_days (days)
+- price (usd)
+- market_share (ratio)
+- demand_index (index_point)
+- defect_rate (ratio)
+- on_time_delivery_rate (ratio)
+- shipment_delay_days (days)
+- freight_cost (usd)
+- port_congestion_index (index_point)
+- incident_severity (ratio)
+- incident_duration_hours (hours)
+- impact_confidence (ratio)
+- status_code (code)
+- sanctions_risk (ratio)
+- supply_risk (ratio)
 
 REQUIRED JSON SCHEMA:
 {
@@ -156,12 +210,42 @@ REQUIRED JSON SCHEMA:
   "sentiment": -1.0,
   "categories": [{"label": "1-2 words", "confidence": 0.0}],
   "topics": [{"name": "string", "share": 0.0}],
-  "entities": [{"type": "Person|Organization|Location|Product|Document|Facility|Other", "value": "string", "confidence": 0.0}],
+  "entities": [{"type": "Person|Organization|Location|Product|Program|Market|Document|Facility|Other", "value": "string", "confidence": 0.0}],
   "keyPoints": ["string"],
   "documentType": "article|post|report|announcement|interview|transcript|other",
   "outlinks": [{"url": "string", "kind": "reference|citation|internal|external"}],
-  "events": [{"title": "string", "dateISO": "YYYY-MM-DD or RFC3339", "context": "string?", "participants": [{"entityName": "string", "role": "agent|target|mediator|mentioned|beneficiary|affected|other"}]}],
-  "claims": [{"text": "string", "summary": "string?", "confidence": 0.0, "evidenceUrls": ["string"]}]
+  "events": [{
+    "title": "string",
+    "eventType": "string (optional; e.g., attack|cyberattack|sanction|blockade|policy_change|protest|strike|election|warning|announcement|incident|other)",
+    "dateISO": "YYYY-MM-DD or RFC3339",
+    "context": "string?",
+    "summary": "string?",
+    "location": {
+      "name": "string?",
+      "iso6709": "string?",
+      "countryAlpha2": "ISO3166-1 alpha2 lowercase (e.g., us, cn, de)?",
+      "admin1": "state/province code or slug lowercase; use 'na' if unknown/not applicable?",
+      "city": "city slug lowercase; use 'na' if unknown/not applicable?"
+    },
+    "spherePaths": ["string (optional, canonical /sphere/... taxonomy paths)"],
+    "participants": [{"entityName": "string", "role": "agent|target|mediator|mentioned|beneficiary|affected|other"}]
+  }],
+  "claims": [{
+    "text": "string",
+    "summary": "string?",
+    "confidence": 0.0,
+    "evidenceUrls": ["string"],
+    "subjectEntityName": "string?",
+    "spherePaths": ["string (optional, canonical /sphere/... taxonomy paths)"]
+  }],
+  "metricUpdates": [{
+    "metricName": "snake_case (prefer vocabulary)",
+    "value": 0.0,
+    "unit": "usd|eur|rub|units|units_per_day|days|hours|ratio|index_point|code",
+    "confidence": 0.0,
+    "observedAt": "YYYY-MM-DD or RFC3339?",
+    "subjectEntityName": "string?"
+  }]
 }
 
 STRICT RULES:

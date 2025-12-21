@@ -7,6 +7,7 @@ Horizon использует нативный семантический пои�
 Мы используем единый подход для всех типов данных:
 1. **Источники (Sources):** Статьи, новости, отчеты.
 2. **Фрагменты (Fragments):** Узлы графа знаний.
+3. **Ontology Facts:** Нормализованные факты/события (`ontology_facts`) как единый поток изменений.
 
 ## Архитектура
 
@@ -34,11 +35,11 @@ Horizon использует нативный семантический пои�
 ```json
 {
   "id": "fragment_uuid",
-  "title": "/org/tsmc/fab/21",
+  "title": "/fac/tsmc/fab-21",
   "content": "Полное текстовое описание фрагмента, включающее имена, алиасы, метрики, статусы...",
   "structData": {
     "type": "horizon_fragment",
-    "canonicalPath": "/org/tsmc/fab/21",
+    "canonicalPath": "/fac/tsmc/fab-21",
     "entityPath": "/Infrastructure/Manufacturing/Factory",
     "sectorPath": "/Technology/Semiconductors/Manufacturing",
     "status": "active",
@@ -59,6 +60,32 @@ Horizon использует нативный семантический пои�
 - Локацию (имена и ISO коды).
 
 Это обеспечивает высокую точность семантического поиска, так как модель видит полный контекст сущности.
+
+#### 3. Ontology Facts
+*Реализовано в `OntologyFactsRepository` + `OntologyExtractor`*
+- При извлечении онтологии из документов/чатов создаются `ontology_facts`.
+- Каждый факт экспортируется в GCS как JSON: `gs://bucket/{tenantId}/ontology_facts/{factId}.json`.
+- Автоматически триггерится импорт в Vertex AI Search (`dataSchema=document`).
+
+Формат JSON для факта:
+```json
+{
+  "id": "fact_uuid",
+  "title": "Human-readable title",
+  "content": "vectorText (единый поисковый текст)",
+  "structData": {
+    "type": "ontology_fact",
+    "tenantId": "global",
+    "kind": "event",
+    "factType": "extracted",
+    "canonicalPaths": ["/org/tsmc", "/loc/tw/na/na"],
+    "actorPaths": ["/org/tsmc"],
+    "locationPath": "/loc/tw/na/na",
+    "confidence": 0.82,
+    "updatedAt": "2025-12-20T09:18:36Z"
+  }
+}
+```
 
 ## Использование
 

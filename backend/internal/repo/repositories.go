@@ -819,6 +819,34 @@ func (r *DataSourcesRepository) ListByProject(ctx context.Context, tenantID, pro
 	return sources, nil
 }
 
+// ResolveProjectIDForSource resolves a projectId for a given core DataSource ID using rag_source_projects links.
+// This is used by systems that only have sourceIds (e.g. watchdog facts) but need a project context for billing/execution.
+func (r *DataSourcesRepository) ResolveProjectIDForSource(ctx context.Context, tenantID, sourceID string) (string, error) {
+	if sourceID == "" {
+		return "", fmt.Errorf("sourceID is required")
+	}
+	spRepo := NewSourceProjectsRepository(r.db)
+	status := "active"
+	links, err := spRepo.ListBySource(ctx, tenantID, sourceID, &status)
+	if err != nil {
+		return "", err
+	}
+	if len(links) == 0 && tenantID != "" {
+		// fallback across all tenants (public sources)
+		links, err = spRepo.ListBySource(ctx, "", sourceID, &status)
+		if err != nil {
+			return "", err
+		}
+	}
+	if len(links) == 0 {
+		return "", fmt.Errorf("no project link found for sourceId=%s", sourceID)
+	}
+	if links[0].ProjectID == "" {
+		return "", fmt.Errorf("invalid source project link for sourceId=%s", sourceID)
+	}
+	return links[0].ProjectID, nil
+}
+
 // ListActiveByKinds returns active datasources filtered by kinds (using Firestore IN on kind)
 func (r *DataSourcesRepository) ListActiveByKinds(ctx context.Context, kinds []string) ([]*models.DataSource, error) {
 	if len(kinds) == 0 {

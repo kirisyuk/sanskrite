@@ -10,8 +10,246 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	ontologyModels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
+
+func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
+	ctx context.Context,
+	target *models.HorizonFragment,
+	facts []*ontologyModels.OntologyFact,
+	appliedFactIDs []string,
+) error {
+	if e == nil || target == nil || target.ID == "" || e.fragmentsRepo == nil || e.edgesRepo == nil {
+		return nil
+	}
+	if len(facts) == 0 || len(appliedFactIDs) == 0 {
+		return nil
+	}
+
+	applied := map[string]struct{}{}
+	for _, id := range appliedFactIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			applied[id] = struct{}{}
+		}
+	}
+	if len(applied) == 0 {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	dimensionFragmentIDsToPropagate := map[string]struct{}{}
+
+	ensureFragment := func(canonicalPath string, ftype models.FragmentType, label string, entityPath string, sectorPath string) (*models.HorizonFragment, error) {
+		canonicalPath = strings.TrimSpace(canonicalPath)
+		if canonicalPath == "" || canonicalPath == "/" {
+			return nil, fmt.Errorf("empty canonicalPath")
+		}
+		ex, err := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
+		if err == nil && ex != nil && ex.ID != "" {
+			return ex, nil
+		}
+		frag := &models.HorizonFragment{
+			TenantID:      "global",
+			Version:       1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+			CreatedBy:     "system",
+			UpdatedBy:     "system",
+			Labels:        map[string]string{"en": strings.TrimSpace(label)},
+			Status:        "active",
+			CanonicalPath: canonicalPath,
+			Type:          ftype,
+			EntityPath:    entityPath,
+			SectorPath:    sectorPath,
+			State:         map[string]models.MetricValue{},
+			Provenance:    models.Provenance{Method: "taxonomy_dimension_seed", SourceIDs: []string{}, SourceRefs: []models.SourceRef{}},
+			Metadata:      models.FragmentMetadata{CreatedAt: now, LastUpdatedAt: now, LastVerifiedAt: now, LastFactsSeenAt: now, LastFactsAppliedAt: now, EpistemicStatus: models.EpistemicStatusVerified},
+			Governance:    models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
+		}
+		id, err := e.fragmentsRepo.Create(ctx, frag)
+		if err != nil {
+			return nil, err
+		}
+		frag.ID = id
+		return frag, nil
+	}
+
+	applyMetricUpdates := func(fragment *models.HorizonFragment, fact *ontologyModels.OntologyFact) bool {
+		if fragment == nil || fact == nil || len(fact.MetricUpdates) == 0 {
+			return false
+		}
+		if fragment.State == nil {
+			fragment.State = map[string]models.MetricValue{}
+		}
+		dedupStringsLocal := func(in []string) []string {
+			seen := map[string]struct{}{}
+			out := make([]string, 0, len(in))
+			for _, s := range in {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					continue
+				}
+				if _, ok := seen[s]; ok {
+					continue
+				}
+				seen[s] = struct{}{}
+				out = append(out, s)
+			}
+			return out
+		}
+		dedupHorizonRefsLocal := func(in []ontologyModels.SourceRef) []models.SourceRef {
+			seen := map[string]struct{}{}
+			out := make([]models.SourceRef, 0, len(in))
+			for _, r := range in {
+				sid := strings.TrimSpace(r.SourceID)
+				st := strings.TrimSpace(r.SourceType)
+				if sid == "" && st == "" {
+					continue
+				}
+				key := st + "|" + sid
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, models.SourceRef{SourceID: sid, SourceType: st})
+			}
+			return out
+		}
+		changed := false
+		for _, mu := range fact.MetricUpdates {
+			name := strings.TrimSpace(mu.MetricName)
+			if name == "" {
+				continue
+			}
+			obs := now
+			if mu.ObservedAt != nil {
+				obs = mu.ObservedAt.UTC()
+			}
+			conf := mu.Confidence
+			if conf <= 0 {
+				conf = fact.Confidence
+			}
+			prev, ok := fragment.State[name]
+			next := models.MetricValue{
+				Value:      mu.Value,
+				Unit:       mu.Unit,
+				Confidence: conf,
+				ObservedAt: obs,
+				Provenance: models.Provenance{
+					SourceIDs:  dedupStringsLocal(fact.SourceIDs),
+					SourceRefs: dedupHorizonRefsLocal(fact.SourceRefs),
+					ObservedAt: &obs,
+					Method:     "dimension_fact_fastpath",
+				},
+			}
+			if !ok || prev.Value != next.Value || (prev.Unit == nil) != (next.Unit == nil) {
+				fragment.State[name] = next
+				changed = true
+			}
+		}
+		return changed
+	}
+
+	ensureInfluenceEdge := func(sourceID, targetID string, confidence float64, qualifier map[string]interface{}) {
+		if sourceID == "" || targetID == "" || sourceID == targetID {
+			return
+		}
+		edgeType := models.DependencyTypeInfluences
+		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceID, targetID, edgeType); err == nil {
+			return
+		}
+		edge := &models.DependencyEdge{
+			TenantID:         "global",
+			SourceFragmentID: sourceID,
+			TargetFragmentID: targetID,
+			Type:             edgeType,
+			Properties: models.EdgeProperties{
+				Criticality: func(x float64) float64 {
+					if x < 0 {
+						return 0
+					}
+					if x > 1 {
+						return 1
+					}
+					return x
+				}(confidence),
+				Amplification: 1.0,
+				LatencyHours:  1,
+			},
+			Qualifiers: qualifier,
+			Provenance: models.Provenance{
+				Method: "dimension_edge_from_fact",
+			},
+			Metadata: models.EdgeMetadata{
+				CreatedAt:     now,
+				LastUpdatedAt: now,
+			},
+		}
+		_, _ = e.edgesRepo.Create(ctx, edge) // best effort
+	}
+
+	for _, f := range facts {
+		if f == nil || strings.TrimSpace(f.ID) == "" {
+			continue
+		}
+		if _, ok := applied[strings.TrimSpace(f.ID)]; !ok {
+			continue
+		}
+		if len(f.MetricUpdates) == 0 {
+			continue // wave dimensions are currently metric-driven
+		}
+
+		// 1) sphere dimensions
+		if len(f.SpherePaths) > 0 {
+			for _, sp := range f.SpherePaths {
+				sp = strings.TrimSpace(sp)
+				if sp == "" {
+					continue
+				}
+				sfrag, err := ensureFragment(sp, models.FragmentTypeSphere, sp, "/Influence/Sphere", "/Influence")
+				if err != nil || sfrag == nil {
+					continue
+				}
+				ensureInfluenceEdge(sfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "sphere", "path": sp, "factId": f.ID})
+				if applyMetricUpdates(sfrag, f) {
+					_ = e.fragmentsRepo.Update(ctx, sfrag)
+					dimensionFragmentIDsToPropagate[sfrag.ID] = struct{}{}
+				}
+			}
+		}
+
+		// 2) geo dimension (locationPath)
+		if f.LocationPath != nil {
+			lp := strings.TrimSpace(*f.LocationPath)
+			if lp != "" {
+				gfrag, err := ensureFragment(lp, models.FragmentTypeGeoRegion, lp, "/Geo/Region", "/Geography")
+				if err == nil && gfrag != nil {
+					ensureInfluenceEdge(gfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "geo", "path": lp, "factId": f.ID})
+					if applyMetricUpdates(gfrag, f) {
+						_ = e.fragmentsRepo.Update(ctx, gfrag)
+						dimensionFragmentIDsToPropagate[gfrag.ID] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+
+	// Trigger propagation for dimension fragments (non-blocking).
+	if e.propagationTrigger != nil {
+		for fid := range dimensionFragmentIDsToPropagate {
+			fid := fid
+			go func() {
+				propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				_ = e.propagationTrigger(propCtx, fid)
+			}()
+		}
+	}
+
+	return nil
+}
 
 // ScoutEngine основной движок Scout для сбора и верификации данных
 type ScoutEngine struct {
@@ -82,13 +320,50 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 
 	// FRESHNESS CHECK: Проверяем, есть ли свежие данные
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
+	var sinceFacts *time.Time
 	if existingFragment, err := e.fragmentsRepo.GetByCanonicalPath(ctx, job.TargetCanonicalPath); err == nil && existingFragment != nil {
 		freshnessThreshold := 1 * time.Hour // Для теста. В проде может быть конфигурируемо.
-		if time.Since(existingFragment.Metadata.LastVerifiedAt) < freshnessThreshold {
-			fmt.Printf("[ScoutEngine] Data for %s is fresh (verified %v ago). Skipping active scouting.\n",
-				job.TargetCanonicalPath, time.Since(existingFragment.Metadata.LastVerifiedAt))
+		isFresh := !existingFragment.Metadata.LastVerifiedAt.IsZero() && time.Since(existingFragment.Metadata.LastVerifiedAt) < freshnessThreshold
+		// Watermark for facts: prefer dedicated LastFactsSeenAt, fall back to LastVerifiedAt.
+		if !existingFragment.Metadata.LastFactsSeenAt.IsZero() {
+			sinceFacts = &existingFragment.Metadata.LastFactsSeenAt
+		} else if !existingFragment.Metadata.LastVerifiedAt.IsZero() {
+			sinceFacts = &existingFragment.Metadata.LastVerifiedAt
+		}
 
-			// Сразу завершаем задачу
+		// FAST PATH: if we have fresh facts and they strongly match the fragment, apply deterministically without LLM.
+		var facts []*ontologyModels.OntologyFact
+		if e.planner != nil && e.planner.factsRepo != nil && sinceFacts != nil {
+			facts, err = e.planner.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, tenantID, job.TargetCanonicalPath, sinceFacts.UTC(), 200)
+			if err == nil && len(facts) > 0 {
+				applier := &FactApplier{vertex: e.planner.vertexSearchClient}
+				// Thresholds are conservative; can be tuned later or moved into policy doc.
+				applyRes, err := applier.TryApplyFactsFastPath(ctx, e.fragmentsRepo, existingFragment, facts, 0.70 /*relevance*/, 0.80 /*fact confidence*/)
+				if err == nil && applyRes != nil && applyRes.Applied {
+					fmt.Printf("[ScoutEngine] Fast-path applied facts for %s: appliedFacts=%d maxRelevance=%.3f\n",
+						job.TargetCanonicalPath, applyRes.AppliedFacts, applyRes.MaxRelevance)
+					// Dimension propagation: for applied facts, map sphere/location to dimension fragments and trigger waves.
+					_ = e.applyDimensionWavesFromAppliedFacts(ctx, existingFragment, facts, applyRes.AppliedFactIDs)
+					// Trigger propagation for deterministic updates as well (non-blocking).
+					if e.propagationTrigger != nil {
+						go func(fid string) {
+							propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+							defer cancel()
+							if err := e.propagationTrigger(propCtx, fid); err != nil {
+								fmt.Printf("Propagation trigger failed for fragment %s: %v\n", fid, err)
+							}
+						}(existingFragment.ID)
+					}
+					_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateVerified)
+					return nil
+				}
+			}
+		}
+
+		// If fragment is fresh AND there are no new facts since watermark, skip expensive scouting.
+		if isFresh && (facts == nil || len(facts) == 0) {
+			fmt.Printf("[ScoutEngine] Data for %s is fresh (verified %v ago) and no new facts. Skipping active scouting.\n",
+				job.TargetCanonicalPath, time.Since(existingFragment.Metadata.LastVerifiedAt))
 			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateVerified)
 			return nil
 		}
@@ -99,7 +374,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		return fmt.Errorf("failed to transition to PLANNING: %w", err)
 	}
 
-	sourcePlan, err := e.planner.PlanSources(ctx, tenantID, projectID, job.TargetCanonicalPath, models.ScoutingStrategy(job.ScoutingStrategy))
+	sourcePlan, err := e.planner.PlanSources(ctx, tenantID, projectID, job.TargetCanonicalPath, models.ScoutingStrategy(job.ScoutingStrategy), sinceFacts)
 	if err != nil {
 		_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
 		return fmt.Errorf("failed to plan sources: %w", err)
@@ -142,6 +417,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		switch {
 		case strings.HasPrefix(job.TargetCanonicalPath, "/product/"):
 			defaultType = models.FragmentTypeProduct
+		case strings.HasPrefix(job.TargetCanonicalPath, "/program/"):
+			defaultType = models.FragmentTypeProgram
+		case strings.HasPrefix(job.TargetCanonicalPath, "/market/"):
+			defaultType = models.FragmentTypeMarket
 		case strings.HasPrefix(job.TargetCanonicalPath, "/fac/"):
 			defaultType = models.FragmentTypeFacility
 		case strings.HasPrefix(job.TargetCanonicalPath, "/loc/") || strings.HasPrefix(job.TargetCanonicalPath, "/region/"):
