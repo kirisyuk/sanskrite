@@ -101,6 +101,7 @@ enable_api bigquery.googleapis.com  # BigQuery API
 enable_api bigqueryconnection.googleapis.com  # BigQuery Connections API (for Object Tables and ML)
 enable_api apikeys.googleapis.com
 enable_api cloudscheduler.googleapis.com
+enable_api cloudtasks.googleapis.com
 enable_api cloudresourcemanager.googleapis.com
 enable_api redis.googleapis.com
 enable_api vpcaccess.googleapis.com
@@ -247,6 +248,7 @@ setup_infrastructure() {
     roles/pubsub.admin \
     roles/pubsub.publisher \
     roles/pubsub.subscriber \
+    roles/cloudtasks.enqueuer \
     roles/logging.logWriter \
     roles/storage.objectViewer \
     roles/storage.objectCreator \
@@ -279,6 +281,27 @@ setup_infrastructure() {
   else
     echo -e "${GREEN}  ✓${NC} $SECRET_ADMIN_JOB_TOKEN exists"
   fi
+
+  # 3.2 Ensure Cloud Tasks queue for Scout exists and is configured (managed retries).
+  local scout_queue="sanskrite-scout"
+  if gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scout_queue"
+  else
+    gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet || true
+    echo -e "${GREEN}[infra] Created Cloud Tasks queue:${NC} $scout_queue"
+  fi
+  # Configure poison semantics via max-attempts (5), and reasonable backoff.
+  gcloud tasks queues update "$scout_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=10s \
+    --max-backoff=600s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second=10 \
+    --max-concurrent-dispatches=50 \
+    --quiet >/dev/null 2>&1 || true
+  echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $scout_queue (maxAttempts=5)"
 
   # 3.5 Ensure GCS bucket for core docs exists
   local docs_bucket="gs://${PROJECT_ID}-core-docs"
@@ -1062,6 +1085,30 @@ deploy_api() {
   }
   echo -e "${GREEN}[api] Go build successful locally${NC}"
 
+  # Ensure Cloud Tasks queue exists even for --api-only deploys (managed Scout execution).
+  local scout_queue="sanskrite-scout"
+  if ! gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $scout_queue"
+    gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+  fi
+  gcloud tasks queues update "$scout_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=10s \
+    --max-backoff=600s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second=10 \
+    --max-concurrent-dispatches=50 \
+    --quiet >/dev/null 2>&1 || true
+
+  # Ensure backend service account can enqueue tasks (idempotent; safe to call on --api-only).
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA_BACKEND" \
+    --role="roles/cloudtasks.enqueuer" \
+    --condition=None \
+    --quiet >/dev/null 2>&1 || true
+
   # Clean up any local binaries before Cloud Build (they're not needed, built in Docker)
   echo -e "${BLUE}[api] Cleaning up local build artifacts...${NC}"
   (cd "$API_DIR" && rm -f server ws-broker verified-proxy hatlone-ws main test-agent-orchestrator cmd/*/server cmd/*/ws-broker cmd/*/verified-proxy cmd/*/hatlone-ws cmd/*/main 2>/dev/null || true)
@@ -1108,7 +1155,13 @@ deploy_api() {
   # Note: VERTEX_SEARCH_LOCATION must be "global" for Discovery Engine Data Stores
   # Data Stores are created in "global" region, but search API uses the same location
   local vertex_search_ds_id="${VERTEX_SEARCH_DATA_STORE_ID_VALUE:-rag-documents-store}"
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
+  # Best-effort: resolve service URL (stable per service) to construct Cloud Tasks target URL.
+  local existing_api_url=""
+  if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    existing_api_url=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
+  fi
+
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=sanskrite-scout,CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
 
   # NOTE: ADMIN_JOB_TOKEN is provided via Secret Manager (see --set-secrets) to avoid rotation/desync.
 

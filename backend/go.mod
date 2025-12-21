@@ -5,6 +5,7 @@ go 1.25.1
 require (
 	baliance.com/gooxml v1.0.1
 	cloud.google.com/go/bigquery v1.72.0
+	cloud.google.com/go/cloudtasks v1.13.7
 	cloud.google.com/go/firestore v1.20.0
 	cloud.google.com/go/pubsub v1.50.1
 	cloud.google.com/go/secretmanager v1.16.0
@@ -23,6 +24,7 @@ require (
 	golang.org/x/time v0.14.0
 	google.golang.org/api v0.255.0
 	google.golang.org/grpc v1.76.0
+	google.golang.org/protobuf v1.36.10
 )
 
 require (
@@ -96,6 +98,5 @@ require (
 	google.golang.org/genproto v0.0.0-20251103181224-f26f9409b101 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251103181224-f26f9409b101 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251103181224-f26f9409b101 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

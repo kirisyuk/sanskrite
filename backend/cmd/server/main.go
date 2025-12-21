@@ -37,6 +37,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 	"github.com/igorkirisyuk/sanskrite/internal/telegram"
 	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
+	"google.golang.org/api/idtoken"
 
 	// Horizon system
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
@@ -46,6 +47,7 @@ import (
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	horizontasks "github.com/igorkirisyuk/sanskrite/internal/horizon/tasks"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 )
@@ -226,11 +228,13 @@ func main() {
 	var metaHandler *httphandlers.MetaHandler
 	var agentsHandler *httphandlers.AgentsHandler
 	var agentJobsHandler *httphandlers.AgentJobsHandler
+	var agentJobsRepo *repo.AgentJobsRepository
 	var verifiedHandler *httphandlers.VerifiedHandler
 	var bigqueryHandler *httphandlers.BigQueryHandler
 	var bigqueryAIService *services.BigQueryAIService
 	var horizonService *horizon.HorizonService
 	var horizonHandlers *horizonhttp.HorizonHandlers
+	var scoutEngine *horizonscout.ScoutEngine
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
@@ -829,7 +833,7 @@ func main() {
 		agentsHandler = httphandlers.NewAgentsHandler(agentRegistry, pub, logger)
 
 		// Initialize Agent Orchestrator (new capabilities-based system)
-		agentJobsRepo := repo.NewAgentJobsRepository(fsClient.Client())
+		agentJobsRepo = repo.NewAgentJobsRepository(fsClient.Client())
 		capabilityRegistry := agents.NewCapabilityRegistry()
 
 		// Register basic capability executors (используем coreDocsRepo для DocumentRead/Write)
@@ -981,6 +985,41 @@ func main() {
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
 
+		// Cloud Tasks dispatcher for Scout jobs (managed queue + autoscaling + retries).
+		var scoutTasksDispatcher *horizontasks.ScoutCloudTasksDispatcher
+		{
+			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_SCOUT", "1"))
+			if enabled == "1" || strings.EqualFold(enabled, "true") {
+				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_QUEUE", "sanskrite-scout"))
+				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
+				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+				if baseURL != "" && saEmail != "" {
+					targetURL := strings.TrimRight(baseURL, "/") + "/api/v1/internal/tasks/scout/run"
+					if aud == "" {
+						aud = strings.TrimRight(baseURL, "/")
+					}
+					if d, err := horizontasks.NewScoutCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
+						scoutTasksDispatcher = d
+						logger.Printf("Cloud Tasks (Scout) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
+						horizonScoutingJobsRepo.WithOnCreate(func(c context.Context, job *horizonmodels.ScoutingJob) error {
+							// Enqueue by job ID; execution will load full state from Firestore.
+							if err := scoutTasksDispatcher.EnqueueScoutJob(c, job.ID); err != nil {
+								return err
+							}
+							logger.Printf("Cloud Tasks (Scout) enqueued: jobId=%s target=%s", job.ID, job.TargetCanonicalPath)
+							return nil
+						})
+					} else {
+						logger.Printf("WARNING: Cloud Tasks (Scout) disabled due to init error: %v", err)
+					}
+				} else {
+					logger.Printf("WARNING: Cloud Tasks (Scout) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
+				}
+			}
+		}
+
 		// Configure GCS storage and Vertex AI Search sync for Horizon Fragments
 		if gcsClient != nil && ragDocsBucket != "" {
 			horizonFragmentsRepo.WithStorage(gcsClient, ragDocsBucket)
@@ -1083,7 +1122,7 @@ func main() {
 			frameBuilder := horizonscout.NewFrameBuilder()
 			scoutWorkflow := horizonscout.NewScoutWorkflow(agentJobsRepo)
 
-			scoutEngine := horizonscout.NewScoutEngine(
+			scoutEngine = horizonscout.NewScoutEngine(
 				scoutPlanner,
 				sourceExecutor,
 				scoutAgent,
@@ -1126,8 +1165,10 @@ func main() {
 				_ = watchdogService.UpdateConfigLifecycle(ctx, fragmentID)
 			})
 
-			// Запускаем Scout Worker для обработки фоновых задач
-			go func() {
+			// Legacy Firestore poller (disabled by default in prod).
+			// Cloud Tasks is the preferred mechanism for executing Scout jobs.
+			if strings.TrimSpace(getEnv("ENABLE_SCOUT_FIRESTORE_POLLER", "0")) == "1" {
+				go func() {
 				// Задержка перед стартом
 				time.Sleep(5 * time.Second)
 				logger.Printf("Scout Worker started polling")
@@ -1185,6 +1226,7 @@ func main() {
 					}
 				}
 			}()
+			}
 
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)
@@ -1207,6 +1249,108 @@ func main() {
 	mux.HandleFunc("/api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
+	})
+
+	// Cloud Tasks -> Scout job execution (managed queue + retries + autoscaling).
+	// Secured via OIDC token issued for the configured service account.
+	mux.HandleFunc("/api/v1/internal/tasks/scout/run", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if scoutEngine == nil || horizonService == nil {
+			http.Error(w, "horizon scout not initialized", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Verify Cloud Tasks OIDC token.
+		authz := strings.TrimSpace(r.Header.Get("Authorization"))
+		const bearer = "Bearer "
+		if !strings.HasPrefix(authz, bearer) || len(authz) <= len(bearer) {
+			http.Error(w, "missing Authorization bearer token", http.StatusUnauthorized)
+			return
+		}
+		rawTok := strings.TrimSpace(authz[len(bearer):])
+		aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+		if aud == "" {
+			// Default to service URL (scheme+host).
+			aud = "https://" + r.Host
+		}
+		payload, err := idtoken.Validate(r.Context(), rawTok, aud)
+		if err != nil {
+			http.Error(w, "invalid cloud tasks token", http.StatusUnauthorized)
+			return
+		}
+		expectedSA := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+		if expectedSA != "" {
+			if email, ok := payload.Claims["email"].(string); !ok || !strings.EqualFold(strings.TrimSpace(email), expectedSA) {
+				http.Error(w, "unexpected token identity", http.StatusForbidden)
+				return
+			}
+		}
+
+		var body struct {
+			JobID string `json:"jobId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		jobID := strings.TrimSpace(body.JobID)
+		if jobID == "" {
+			http.Error(w, "jobId is required", http.StatusBadRequest)
+			return
+		}
+
+		// Load job and reconstruct scouting-specific fields from state.
+		job, err := horizonService.ScoutingJobs().Get(r.Context(), jobID)
+		if err != nil || job == nil {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+		if job.State != nil {
+			if v, ok := job.State["targetCanonicalPath"].(string); ok && strings.TrimSpace(v) != "" {
+				job.TargetCanonicalPath = strings.TrimSpace(v)
+			}
+			if v, ok := job.State["currentState"].(string); ok && strings.TrimSpace(v) != "" {
+				job.CurrentState = horizonmodels.ScoutingJobState(strings.TrimSpace(v))
+			}
+			if v, ok := job.State["lensId"].(string); ok && strings.TrimSpace(v) != "" {
+				job.LensID = strings.TrimSpace(v)
+			}
+			if v, ok := job.State["scoutingStrategy"].(string); ok && strings.TrimSpace(v) != "" {
+				job.ScoutingStrategy = strings.TrimSpace(v)
+			}
+		}
+
+		// Execute with generous timeout (Cloud Run request timeout is 3600s).
+		execCtx, cancel := context.WithTimeout(r.Context(), 45*time.Minute)
+		defer cancel()
+
+		if err := scoutEngine.ExecuteScoutingJob(execCtx, job); err != nil {
+			// Retry behavior:
+			// - transient failures: return 500 to let Cloud Tasks retry
+			// - last attempt: mark failed and ACK (200) so it becomes "poison" (no more retries)
+			retryCount := 0
+			if v := strings.TrimSpace(r.Header.Get("X-CloudTasks-TaskRetryCount")); v != "" {
+				if n, perr := strconv.Atoi(v); perr == nil && n >= 0 {
+					retryCount = n
+				}
+			}
+			// MaxAttempts is configured on the queue (we set to 5). On the last attempt, retryCount will be 4.
+			if retryCount >= 4 {
+				// Best-effort: ensure job is terminal, then ACK to stop retries.
+				_ = horizonscout.NewScoutWorkflow(agentJobsRepo).TransitionState(context.Background(), jobID, horizonmodels.ScoutingJobStateFailed)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("failed (poisoned)"))
+				return
+			}
+			http.Error(w, "scout execution failed (will retry)", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	// WS hub and Pub/Sub subscriber (disabled when WS is brokered externally)

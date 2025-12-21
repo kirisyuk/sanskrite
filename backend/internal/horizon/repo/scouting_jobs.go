@@ -13,6 +13,7 @@ import (
 // Использует существующий AgentJobsRepository для хранения
 type ScoutingJobsRepository struct {
 	agentJobsRepo *repo.AgentJobsRepository
+	onCreate      func(ctx context.Context, job *models.ScoutingJob) error
 }
 
 // NewScoutingJobsRepository создает новый репозиторий
@@ -20,6 +21,13 @@ func NewScoutingJobsRepository(agentJobsRepo *repo.AgentJobsRepository) *Scoutin
 	return &ScoutingJobsRepository{
 		agentJobsRepo: agentJobsRepo,
 	}
+}
+
+// WithOnCreate installs an optional hook invoked after a job is created.
+// Used by the server to enqueue Cloud Tasks, while keeping tools/tests able to write jobs directly.
+func (r *ScoutingJobsRepository) WithOnCreate(hook func(ctx context.Context, job *models.ScoutingJob) error) *ScoutingJobsRepository {
+	r.onCreate = hook
+	return r
 }
 
 // Create создает новый ScoutingJob через AgentJobsRepository
@@ -34,6 +42,11 @@ func (r *ScoutingJobsRepository) Create(ctx context.Context, job *models.Scoutin
 		return "", fmt.Errorf("failed to create scouting job: %w", err)
 	}
 	job.ID = id
+	if r.onCreate != nil {
+		if err := r.onCreate(ctx, job); err != nil {
+			return "", fmt.Errorf("scouting job created but enqueue hook failed: %w", err)
+		}
+	}
 	return id, nil
 }
 
