@@ -70,26 +70,20 @@
      - ✅ `DELETE /api/horizon/edges/{edgeId}` - удаление DependencyEdge (реализован в `DeleteEdge`)
      - ✅ `GET /api/horizon/scout/jobs/{jobId}` - статус ScoutingJob (реализован в `GetScoutingJob`, но с TODO)
      - ✅ Дополнительные endpoints: `/cockpit`, `/assembly-status`, `/simulate`, `/entities/search`, `/co-pilot/chat`
-   - ⚠️ **Реализованы с заглушками/TODO**:
-     - ⚠️ `GET /api/horizon/fragments/{id}/versions` - история версий (заглушка, возвращает пустой массив)
-     - ⚠️ `POST /api/horizon/fragments/{id}/refresh` - принудительное обновление (заглушка, TODO в коде)
-     - ⚠️ `GET /api/horizon/scout/jobs` - список ScoutingJob (заглушка, возвращает пустой массив)
-     - ⚠️ `GET /api/horizon/propagation/status` - статус распространения (заглушка, TODO в коде)
-     - ⚠️ `POST /api/horizon/propagation/trigger` - принудительное распространение (заглушка, TODO в коде)
+   - ✅ **Реализованы (ранее были заглушками)**:
+     - ✅ `GET /api/horizon/fragments/{id}/versions` - история версий (использует репозиторий версий)
+     - ✅ `POST /api/horizon/fragments/{id}/refresh` - принудительное обновление (создает ScoutingJob)
+     - ✅ `GET /api/horizon/scout/jobs` - список ScoutingJob (использует репозиторий)
+     - ✅ `GET /api/horizon/propagation/status` - статус распространения (использует Propagation Engine)
+     - ✅ `POST /api/horizon/propagation/trigger` - принудительное распространение (использует Propagation Engine)
 
 ### ❌ Не реализовано
 
-1. **Версионирование HorizonFragment**
-   - ✅ Репозиторий `HorizonFragmentVersionsRepository` создан (`backend/internal/horizon/repo/fragment_versions.go`)
-   - ✅ Методы `Create`, `ListByFragment`, `GetByVersionID` реализованы
-   - ❌ **Логика сохранения версий при обновлении НЕ интегрирована**: метод `Update` в `HorizonFragmentsRepository` не вызывает сохранение версии
-   - ⚠️ API endpoint `GET /api/horizon/fragments/{id}/versions` реализован, но возвращает заглушку (не использует репозиторий версий)
-
-2. **Версионирование DependencyEdge**
+1. **Версионирование DependencyEdge**
    - ❌ Репозиторий для версий DependencyEdge не создан
    - ❌ Логика отслеживания изменений ребер не реализована
 
-3. **WebSocket события**
+2. **WebSocket события**
    - ❌ WebSocket endpoint для подписки на события не реализован
    - ✅ События публикуются через Realtime (`realtime.Publisher`), но WebSocket endpoint отсутствует
 
@@ -210,8 +204,8 @@
 
 2. **Fragment endpoints**:
    - ✅ `GET /api/horizon/fragments/by-path?path={canonicalPath}` - получение по canonicalPath (`GetFragmentByPath`)
-   - ⚠️ `GET /api/horizon/fragments/{id}/versions` - история версий (заглушка, не использует репозиторий)
-   - ⚠️ `POST /api/horizon/fragments/{id}/refresh` - принудительное обновление (заглушка, TODO)
+   - ✅ `GET /api/horizon/fragments/{id}/versions` - история версий (использует репозиторий версий)
+   - ✅ `POST /api/horizon/fragments/{id}/refresh` - принудительное обновление (создает ScoutingJob)
    - ✅ `GET /api/horizon/fragments/{id}/dependencies` - зависимости узла (`GetFragmentDependencies`)
 
 3. **DependencyEdge endpoints**:
@@ -221,11 +215,11 @@
 
 4. **Scout endpoints**:
    - ⚠️ `GET /api/horizon/scout/jobs/{jobId}` - статус ScoutingJob (реализован, но с TODO для progress/steps)
-   - ⚠️ `GET /api/horizon/scout/jobs` - список ScoutingJob (заглушка, возвращает пустой массив)
+   - ✅ `GET /api/horizon/scout/jobs` - список ScoutingJob (использует репозиторий)
 
 5. **Propagation endpoints**:
-   - ⚠️ `GET /api/horizon/propagation/status` - статус распространения (заглушка, TODO)
-   - ⚠️ `POST /api/horizon/propagation/trigger` - принудительное распространение (заглушка, TODO)
+   - ✅ `GET /api/horizon/propagation/status` - статус распространения (использует Propagation Engine)
+   - ✅ `POST /api/horizon/propagation/trigger` - принудительное распространение (использует Propagation Engine)
 
 #### ✅ Реализованные endpoints (не из документации)
 
@@ -237,14 +231,14 @@
 
 ### 8. Версионирование
 
-#### ⚠️ Частично реализовано
+#### ✅ Реализовано
 
 1. **HorizonFragment версионирование**:
    - ✅ Репозиторий `HorizonFragmentVersionsRepository` создан (`backend/internal/horizon/repo/fragment_versions.go`)
    - ✅ Коллекция `horizon_fragment_versions` используется в репозитории
    - ✅ Методы `Create`, `ListByFragment`, `GetByVersionID` реализованы
-   - ❌ **КРИТИЧНО**: Логика сохранения версий при обновлении НЕ интегрирована в `HorizonFragmentsRepository.Update()`
-   - ⚠️ API endpoint реализован, но возвращает заглушку (не использует репозиторий версий)
+   - ✅ **ИНТЕГРИРОВАНО**: Логика сохранения версий интегрирована в `HorizonFragmentsRepository.Update()`
+   - ✅ API endpoint реализован и использует репозиторий версий
 
 2. **DependencyEdge версионирование**:
    - ❌ Репозиторий для версий DependencyEdge не создан
@@ -260,44 +254,51 @@
 
 ### 10. Индексы Firestore
 
-#### ⚠️ Требуется проверка
+#### ✅ Определены в firestore.indexes.json
 
-- Документация содержит список обязательных индексов
-- Необходимо проверить, созданы ли все индексы в Firestore
-- Векторные индексы должны создаваться через `gcloud firestore indexes composite create`
+Все обязательные индексы определены в `backend/firestore.indexes.json`:
+
+- ✅ `horizon_fragments`: tenantId + canonicalPath
+- ✅ `horizon_fragments`: tenantId + governance.status + updatedAt
+- ✅ `horizon_fragments`: tenantId + governance.activeSubscribers + governance.status
+- ✅ `horizon_lenses`: tenantId + projectId + status + updatedAt
+- ✅ `horizon_dependency_edges`: tenantId + sourceFragmentId + type
+- ✅ `horizon_dependency_edges`: tenantId + targetFragmentId + type
+- ✅ `horizon_watchdog_configs`: tenantId + status + nextScanAt
+
+**Векторные индексы**:
+- ✅ `horizon_fragments`: vectorEmbedding (dimension: 1536, COSINE)
+
+**Проверка индексов**:
+```bash
+# Проверить существующие индексы
+gcloud firestore indexes composite list --project=sanskrite
+
+# Применить индексы из firestore.indexes.json
+firebase deploy --only firestore:indexes
+```
 
 ## Критические находки
 
-### 1. Версионирование не интегрировано
+### ✅ Исправлено: Версионирование интегрировано
 
-**Проблема**: Репозиторий `HorizonFragmentVersionsRepository` создан и имеет все необходимые методы, но не используется при обновлении фрагментов.
+**Статус**: Исправлено (2025-12-21)
 
-**Местоположение**: `backend/internal/horizon/repo/fragments.go:109-124`
+**Что было сделано**:
+- Логика сохранения версий интегрирована в `HorizonFragmentsRepository.Update()`
+- Версия сохраняется перед обновлением фрагмента
+- API endpoint `GetFragmentVersions` использует репозиторий версий
 
-**Текущая реализация**:
-```go
-func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *models.HorizonFragment) error {
-    // ... валидация ...
-    fragment.Version++
-    // НЕТ сохранения версии в horizon_fragment_versions
-    _, err := r.col.Doc(fragment.ID).Set(ctx, fragment)
-    return err
-}
-```
+### ✅ Исправлено: API endpoints с заглушками
 
-**Требуется**: Добавить сохранение версии перед обновлением фрагмента.
+**Статус**: Исправлено (2025-12-21)
 
-### 2. API endpoints с заглушками
-
-**Проблема**: Несколько endpoints реализованы, но возвращают заглушки вместо реальных данных:
-
-- `GetFragmentVersions` (`fragments.go:175-222`) - возвращает пустой массив
-- `RefreshFragment` (`fragments.go:122-173`) - возвращает заглушку с TODO
-- `ListScoutingJobs` (`scout.go:59-104`) - возвращает пустой массив
-- `GetPropagationStatus` (`propagation.go:11-50`) - возвращает заглушку
-- `TriggerPropagation` (`propagation.go:52-88`) - возвращает заглушку
-
-**Требуется**: Реализовать полноценную логику для этих endpoints.
+**Что было сделано**:
+- `RefreshFragment` - реализован, создает ScoutingJob через Scout Engine
+- `ListScoutingJobs` - реализован, использует репозиторий
+- `GetPropagationStatus` - реализован, использует Propagation Engine
+- `TriggerPropagation` - реализован, использует Propagation Engine
+- `GetFragmentVersions` - реализован, использует репозиторий версий
 
 ### 3. Scout Engine: упрощенное определение таксономии
 
@@ -317,33 +318,19 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 ### Приоритет 1 (Критично)
 
-1. **Интегрировать версионирование**:
-   - Добавить сохранение версии в `HorizonFragmentsRepository.Update()`
-   - Использовать `HorizonFragmentVersionsRepository` при обновлении
-   - Реализовать полноценный `GetFragmentVersions` endpoint
-
-2. **Реализовать endpoints с заглушками**:
-   - `RefreshFragment` - создать ScoutingJob через Scout Engine
-   - `ListScoutingJobs` - использовать репозиторий для получения списка
-   - `GetPropagationStatus` - получить статус из Propagation Engine
-   - `TriggerPropagation` - вызвать Propagation Engine
-
+1. ✅ **Интегрировать версионирование**: ВЫПОЛНЕНО
+2. ✅ **Реализовать endpoints с заглушками**: ВЫПОЛНЕНО
 3. **Улучшить Scout Engine**:
    - Определение entityPath и sectorPath из canonicalPath или через LLM
 
 ### Приоритет 2 (Важно)
 
-1. **Реализовать версионирование**:
-   - Создать коллекции для версий
-   - Реализовать логику сохранения версий
-   - Реализовать API для получения истории
-
-2. **Улучшить Scout Engine**:
+1. **Улучшить Scout Engine**:
    - Определение entityPath и sectorPath из canonicalPath
    - Обработка ResolvedData при Low_Confidence
    - Создание ScoutingJob для отсутствующих фрагментов
 
-3. **Реализовать Cold Path обработку**:
+2. **Реализовать Cold Path обработку**:
    - Обработка отложенных задач распространения
    - Планирование и выполнение Cold Path задач
 
@@ -359,12 +346,11 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 3. **Проверить и создать индексы Firestore**:
    - Проверить наличие всех индексов
-   - Создать недостающие индексы
-   - Создать векторные индексы
+   - Создать недостающие индексы через `firebase deploy --only firestore:indexes`
 
 ## Выводы
 
-### Общая оценка соответствия: ~85%
+### Общая оценка соответствия: ~90%
 
 **Сильные стороны**:
 - ✅ Модели данных полностью соответствуют документации
@@ -375,20 +361,19 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 - ✅ Обработка метрик в Propagation Engine исправлена (magnitude/directional)
 - ✅ Создание ScoutingJob для отсутствующих фрагментов реализовано
 - ✅ Evidence извлекается из источников
+- ✅ Версионирование интегрировано
+- ✅ Все endpoints с заглушками реализованы
 
 **Области для улучшения**:
-- ⚠️ Версионирование: репозиторий создан, но не интегрирован в процесс обновления
-- ⚠️ Некоторые API endpoints имеют заглушки (versions, refresh, scout jobs list, propagation status/trigger)
 - ⚠️ Scout Engine: упрощенное определение entityPath/sectorPath (хардкод)
 - ⚠️ Cold Path обработка планируется, но не запускается автоматически
 - ⚠️ WebSocket endpoint не реализован
+- ⚠️ Версионирование DependencyEdge не реализовано
 
 **Рекомендации**:
-1. **КРИТИЧНО**: Интегрировать сохранение версий в `HorizonFragmentsRepository.Update()` (приоритет 1)
-2. Реализовать полноценные реализации для endpoints с заглушками (приоритет 1)
-3. Улучшить Scout Engine: определение entityPath/sectorPath из canonicalPath (приоритет 2)
-4. Реализовать автоматическую обработку Cold Path задач (приоритет 2)
-5. Реализовать WebSocket endpoint (приоритет 3)
+1. Улучшить Scout Engine: определение entityPath/sectorPath из canonicalPath (приоритет 1)
+2. Реализовать автоматическую обработку Cold Path задач (приоритет 2)
+3. Реализовать WebSocket endpoint (приоритет 3)
 
 ## Будущие исследования и улучшения
 
@@ -445,26 +430,28 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 ## Следующие шаги
 
-1. Создать задачи для реализации отсутствующих endpoints
-2. Исправить критические расхождения в логике
-3. Реализовать версионирование
+1. ✅ Создать задачи для реализации отсутствующих endpoints - ВЫПОЛНЕНО
+2. ✅ Исправить критические расхождения в логике - ВЫПОЛНЕНО
+3. ✅ Реализовать версионирование - ВЫПОЛНЕНО
 4. Обновить документацию с учетом реализованных дополнительных endpoints
 5. Проверить и создать все необходимые индексы Firestore
 
 ---
 
-## Snapshot: текущий статус разработки/деплоя (2025‑12‑21)
+## Snapshot: текущий статус разработки/деплоя (2025‑12‑22)
 
-Эта секция — “точка сохранения” (state capture), чтобы продолжить работу с другого компьютера без контекста.
+Эта секция — "точка сохранения" (state capture), чтобы продолжить работу с другого компьютера без контекста.
 
 ### TL;DR (что сломано/почему подсказки не работают)
 
 - **Сломано**: `/api/horizon/entities/search` отдавал **500** в проде.
 - **Корень проблемы**: мы пытались использовать `filter` в Discovery Engine (Vertex AI Search) вида `structData.type: "horizon_fragment"`, но **в текущем Data Store со схемой `dataSchema=document` фильтрация по `structData.*` не поддерживается**. Любой filter возвращает **400 INVALID_ARGUMENT**, а мы это превращали в 500.
 - **Принятое решение**: **store isolation** — отдельный Vertex AI Search Data Store только под Horizon fragments + отдельный GCS bucket под их экспорт. Тогда filter не нужен.
-- **Текущий блокер**: импорт/индексация Horizon fragments в новый Data Store пока **не завершены/не работают**, потому что:
-  - Discovery Engine import ограничивает `gcsSource.inputUris` **максимум 100** значений (не 1000).
-  - Наш JSON‑формат экспортируемых fragment‑файлов **не соответствует ожидаемому `google.cloud.discoveryengine.Document` при `dataSchema=document`** (ошибка вида: `invalid JSON ... Document.Content ... unexpected character: '\"'; expected '{'`).
+- **Статус (2025-12-22)**: 
+  - ✅ Формат экспорта исправлен и задеплоен
+  - ✅ Инструмент для re-export создан с поддержкой `--skip-existing`
+  - ✅ Скрипт backfill исправлен (BATCH_SIZE=100)
+  - ⏳ Re-export запущен и работает (в процессе)
 
 ### Что уже сделано в коде (Backend)
 
@@ -490,7 +477,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 #### 4) Scout / инструменты: убраны `structData.type: "horizon_fragment"`
 
-Чтобы “скауты и пр” корректно пользовались новым store‑isolation подходом:
+Чтобы "скауты и пр" корректно пользовались новым store‑isolation подходом:
 
 - В `backend/internal/horizon/scout/` добавлен helper `horizonVertexClient(...)` (выбирает dedicated Data Store).
 - Из `FactApplier`, `Canonicalizer` и инструментов миграции (`cmd/tools/horizon_merge_*`) убраны фильтры `structData.type: "horizon_fragment"`.
@@ -503,7 +490,38 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
   - После upload запускается `vertexSearchSync(...)` (best‑effort, асинхронно).
   - В этот же файл добавлено логирование ошибок версионирования (не блокирует update).
 
-> ВАЖНО: сейчас `uploadToGCS(...)` экспортирует JSON, который **пока не проходит импорт** в Discovery Engine при `dataSchema=document`. Это следующий шаг.
+#### 6) ✅ ИСПРАВЛЕНО: формат экспорта для Discovery Engine
+
+**Статус**: Исправлено и задеплоено (2025-12-22)
+
+**Что было исправлено**:
+- Формат экспорта в `backend/internal/horizon/repo/fragments.go` приведен к формату, совместимому с Discovery Engine `dataSchema=document`
+- Все поля (`title`, `content`, `uri`) теперь находятся внутри `structData`
+- Формат соответствует ожидаемому `google.cloud.discoveryengine.Document`
+- Добавлен метод `ObjectExists` в `GCSClient` для проверки существования файлов
+
+**Новый формат экспорта**:
+```json
+{
+  "id": "...",
+  "structData": {
+    "title": "...",
+    "content": "...",
+    "uri": "gs://...",
+    "tenantId": "...",
+    "canonicalPath": "...",
+    "type": "horizon_fragment",
+    ...
+  }
+}
+```
+
+**Инструмент для re-export**:
+- Создан `backend/cmd/tools/horizon_reexport_fragments/main.go` для массового re-export всех фрагментов из Firestore
+- Поддержка флага `--skip-existing` для продолжения с места остановки (пропускает уже экспортированные файлы)
+- Использование: 
+  - `go run ./cmd/tools/horizon_reexport_fragments -project sanskrite -bucket sanskrite-horizon-fragments -skip-existing`
+  - Или использовать скомпилированный бинарник: `./bin/horizon_reexport_fragments -project sanskrite -bucket sanskrite-horizon-fragments -skip-existing`
 
 ### Инфраструктура (GCS + Vertex AI Search)
 
@@ -514,7 +532,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 - **Discovery Engine Data Store** для фрагментов:
   - `horizon-fragments-store` (location: `global`)
 
-#### 2) Деплой API (актуально на 2025‑12‑21)
+#### 2) Деплой API (актуально на 2025‑12‑22)
 
 - Деплой выполнялся командой:
 
@@ -523,7 +541,8 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 - Результат:
   - Cloud Run service: `sanskrite-api`
   - URL: `https://sanskrite-api-sqt63d2k2q-uc.a.run.app`
-  - Revision: `sanskrite-api-00708-xfn`
+  - Revision: `sanskrite-api-00709-dn4` (последний деплой с исправленным форматом экспорта)
+  - Предыдущая ревизия: `sanskrite-api-00708-xfn` (2025-12-21)
 
 #### 3) Что было сделано вручную/скриптами
 
@@ -534,7 +553,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 ### Backfill (перенос существующих 6999 fragments)
 
-#### 1) Перенос объектов между bucket’ами
+#### 1) Перенос объектов между bucket'ами
 
 Перенос существующих файлов:
 
@@ -545,36 +564,24 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 #### 2) Скрипт backfill импорта в Vertex AI Search
 
-Добавлен файл:
-- `scripts/backfill-horizon-fragments-vertex.sh`
+Добавлены файлы:
+- `scripts/backfill-horizon-fragments-vertex.sh` - основной скрипт для импорта батчами
+- `scripts/backfill-horizon-fragments.sh` - wrapper скрипт с проверками
 
 Назначение:
 - импортировать файлы **батчами**, чтобы не упираться в лимиты Discovery Engine.
 
-Текущие ограничения (важно для продолжения):
+**Исправлено (2025-12-22)**:
+- `BATCH_SIZE` по умолчанию изменен с 500 на 100 (лимит Discovery Engine)
+- Добавлена проверка лимита <= 100
+- Создан wrapper скрипт `scripts/backfill-horizon-fragments.sh` с проверками
+
+Текущие ограничения:
 - `gcsSource.inputUris` принимает **максимум 100 URIs** за один import request.
-- Поэтому скрипт нужно запускать с `BATCH_SIZE<=100` (сейчас дефолт был 500 → ошибка).
 
-Пример корректного запуска:
-- `PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
-
-### Главный незакрытый блокер: формат экспортируемых JSON для Discovery Engine
-
-Сейчас import в `horizon-fragments-store` падает с ошибкой парсинга `Document.Content`.
-
-Причина:
-- экспорт в `backend/internal/horizon/repo/fragments.go` формирует документ вида:
-  - `{ "id": "...", "title": "...", "content": "...", "structData": {...} }`
-- Discovery Engine при `dataSchema=document` ожидает структуру, совместимую с `google.cloud.discoveryengine.Document`, и поле `content` там **не plain string** (отсюда “expected '{'”).
-
-Следующий шаг (FIX PLAN):
-- Привести экспорт к формату, который уже используется у нас для docs‑импорта (см. `scripts/import-documents-to-vertex-search.sh`):
-  - `{"id":"...","structData":{"title":"...","content":"...","uri":"...","tenantId":"...","canonicalPath":"...","type":"horizon_fragment", ...}}`
-- После этого:
-  - новые фрагменты будут индексироваться автоматически через single‑file import
-  - backfill можно делать либо:
-    - пересозданием файлов в новом bucket (re-export из Firestore), либо
-    - конвертацией существующих файлов в корректный JSONL/JSON формат и импортом.
+Примеры запуска:
+- Простой: `bash scripts/backfill-horizon-fragments.sh`
+- С параметрами: `PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
 
 ### Frontend (подсказки в AssembleLensRequest)
 
@@ -585,7 +592,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 - В `web/src/lib/api.ts`:
   - добавлен метод `searchHorizonEntities(query, limit, signal)`
 
-### “Как продолжить с другого компа” (чек‑лист)
+### "Как продолжить с другого компа" (чек‑лист)
 
 1) **GCloud auth + project**
 - `gcloud auth login`
@@ -601,11 +608,69 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 4) **Проверка, что env применились**
 - `gcloud run services describe sanskrite-api --region us-central1 --format='value(spec.template.spec.containers[0].env)' | grep -E 'HORIZON_FRAGMENTS_BUCKET|VERTEX_SEARCH_HORIZON_DATA_STORE_ID'`
 
-5) **Backfill (после фикса формата экспорта)**
-- Если нужно импортировать существующие файлы:
-  - `PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
+5) **Re-export фрагментов (если нужно пересоздать файлы в новом формате)**
+- С пропуском уже экспортированных: `./bin/horizon_reexport_fragments -project sanskrite -bucket sanskrite-horizon-fragments -skip-existing`
+- Или через go run: `go run ./backend/cmd/tools/horizon_reexport_fragments -project sanskrite -bucket sanskrite-horizon-fragments -skip-existing`
+- Флаг `--skip-existing` позволяет продолжить с места остановки, пропуская уже экспортированные файлы
 
-6) **Проверка эндпоинта**
+6) **Backfill (после завершения re-export)**
+- Простой запуск: `bash scripts/backfill-horizon-fragments.sh`
+- Или с параметрами: `PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
+- **Важно**: Дождаться завершения re-export перед запуском backfill
+
+7) **Проверка эндпоинта**
 - `curl -X POST "$API_URL/api/horizon/entities/search" -H "Content-Type: application/json" -H "Authorization: Bearer <FIREBASE_ID_TOKEN>" -d '{"query":"Tesla","limit":10}'`
 
+### Индексы Firestore
 
+**Статус**: Определены в `backend/firestore.indexes.json`
+
+Все обязательные индексы определены в конфигурации. Для применения:
+
+```bash
+# Применить индексы
+firebase deploy --only firestore:indexes --project sanskrite
+
+# Или через gcloud (для векторных индексов)
+gcloud firestore indexes composite create \
+  --collection-group=horizon_fragments \
+  --query-scope=COLLECTION \
+  --field-config='field-path=tenantId,order=ASCENDING' \
+  --field-config='field-path=vectorEmbedding,vector-config={"dimension":"1536", "flat": "{}"}' \
+  --database="(default)" \
+  --project=sanskrite
+```
+
+**Проверка индексов**:
+```bash
+gcloud firestore indexes composite list --project=sanskrite
+```
+
+### Текущий статус re-export (2025-12-22)
+
+**Процесс запущен**: 10:20:42
+**Этап**: Загрузка списка фрагментов из Firestore
+**Флаг**: `--skip-existing` (пропускает уже экспортированные файлы)
+
+**История запусков**:
+- Первый запуск (2025-12-21, 21:42:25): ~4100 фрагментов экспортировано, упал из-за ошибок Firestore (22:11:29)
+- Второй запуск (2025-12-21, 22:35:52): ~14 фрагментов, завершился без статистики
+- Третий запуск (2025-12-22, 10:20:42): в процессе, с флагом `--skip-existing`
+
+**Проверка статуса**:
+```bash
+# Проверить процесс
+ps aux | grep horizon_reexport_fragments
+
+# Проверить прогресс
+tail -f /tmp/reexport_final.log
+
+# Проверить количество файлов в бакете
+gcloud storage ls gs://sanskrite-horizon-fragments/global/horizon_fragments/*.json | wc -l
+```
+
+**После завершения re-export**:
+- Запустить backfill: `bash scripts/backfill-horizon-fragments.sh`
+- Проверить endpoint: `curl -X POST "$API_URL/api/horizon/entities/search" -H "Content-Type: application/json" -H "Authorization: Bearer <FIREBASE_ID_TOKEN>" -d '{"query":"Tesla","limit":10}'`
+
+**Примечание**: Процесс может долго загружать список фрагментов из Firestore (~6999 документов). Это нормально и может занять несколько минут.

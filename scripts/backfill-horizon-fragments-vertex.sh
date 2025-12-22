@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backfill Horizon Fragments into a dedicated Vertex AI Search Data Store, in batches (<= 1000 files per import).
+# Backfill Horizon Fragments into a dedicated Vertex AI Search Data Store, in batches (<= 100 files per import).
 # This avoids Discovery Engine's file expansion limit when importing gs://.../** patterns.
+# Discovery Engine import ограничивает gcsSource.inputUris максимум 100 значений.
 #
 # Defaults:
 # - PROJECT: current gcloud project
 # - BUCKET: ${PROJECT}-horizon-fragments
 # - TENANT: global
 # - DATA_STORE_ID: horizon-fragments-store
-# - BATCH_SIZE: 500
+# - BATCH_SIZE: 100 (максимум для Discovery Engine)
 #
 # Usage:
 #   scripts/backfill-horizon-fragments-vertex.sh
-#   PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store BATCH_SIZE=500 scripts/backfill-horizon-fragments-vertex.sh
+#   PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 scripts/backfill-horizon-fragments-vertex.sh
 #
 
 require() {
@@ -36,10 +37,11 @@ fi
 TENANT="${TENANT:-global}"
 BUCKET="${BUCKET:-${PROJECT}-horizon-fragments}"
 DATA_STORE_ID="${DATA_STORE_ID:-horizon-fragments-store}"
-BATCH_SIZE="${BATCH_SIZE:-500}"
+BATCH_SIZE="${BATCH_SIZE:-100}"
 
-if [[ "${BATCH_SIZE}" -gt 1000 ]]; then
-  echo "BATCH_SIZE must be <= 1000 (Discovery Engine import limit). Got: ${BATCH_SIZE}" >&2
+# Discovery Engine import ограничивает gcsSource.inputUris максимум 100 значений
+if [[ "${BATCH_SIZE}" -gt 100 ]]; then
+  echo "BATCH_SIZE must be <= 100 (Discovery Engine import limit for inputUris). Got: ${BATCH_SIZE}" >&2
   exit 1
 fi
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/googleapi"
 )
 
 type FirestoreClient struct {
@@ -66,6 +68,30 @@ func (g *GCSClient) ReadObject(ctx context.Context, bucket, object string) ([]by
 	}
 	defer r.Close()
 	return io.ReadAll(r)
+}
+
+// ObjectExists checks if an object exists in GCS bucket
+func (g *GCSClient) ObjectExists(ctx context.Context, bucket, object string) (bool, error) {
+	_, err := g.client.Bucket(bucket).Object(object).Attrs(ctx)
+	if err != nil {
+		// Check if error is "object doesn't exist" (can be ErrObjectNotExist or 404 error)
+		if err == storage.ErrObjectNotExist {
+			return false, nil
+		}
+		// Check for 404 error (googleapi.Error with Code 404)
+		if apiErr, ok := err.(*googleapi.Error); ok && apiErr.Code == 404 {
+			return false, nil
+		}
+		// Check for 404 error in error message (fallback)
+		if errStr := err.Error(); errStr != "" {
+			if strings.Contains(errStr, "404") || strings.Contains(errStr, "No such object") {
+				return false, nil
+			}
+		}
+		// Other errors (permissions, network, etc.) - return error
+		return false, err
+	}
+	return true, nil
 }
 
 // UpdateMetadata updates metadata for an existing GCS object without re-uploading content
