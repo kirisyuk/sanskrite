@@ -45,6 +45,8 @@ const (
 	EventChatOntologyProcess EventType = "chat.ontology.process"
 	// Verified URL analysis streaming: all events go to a single topic for ordering
 	EventVerifiedStream EventType = "verified.stream"
+	// Horizon events namespace (graph/lens/scout/propagation assembly)
+	// NOTE: Horizon uses "horizon.*" event types for routing to a dedicated topic.
 )
 
 // Aggregated Pub/Sub topic names for the hatlone broker
@@ -55,6 +57,7 @@ const (
 	TopicInteractionEvents = "hatlone.interaction.events"
 	TopicAnalysisEvents    = "hatlone.analysis.events"
 	TopicVerifiedStreams   = "hatlone.verified.streams"
+	TopicHorizonEvents     = "hatlone.horizon.events"
 	TopicOperationsEvents  = "hatlone.operations.events"
 	TopicSourcePoll        = "source.poll"
 )
@@ -67,6 +70,7 @@ var AggregatedTopics = []string{
 	TopicInteractionEvents,
 	TopicAnalysisEvents,
 	TopicVerifiedStreams,
+	TopicHorizonEvents,
 	TopicOperationsEvents,
 	TopicSourcePoll,
 }
@@ -240,6 +244,8 @@ func (p *Publisher) Client() *pubsub.Client { return p.client }
 
 func routeTopicName(et EventType) string {
 	switch {
+	case strings.HasPrefix(string(et), "horizon."):
+		return TopicHorizonEvents
 	case genaiStreamEventTypes[et] || strings.HasPrefix(string(et), "genai.stream."):
 		return TopicGenAIStreams
 	case strings.HasPrefix(string(et), "discovery."):

@@ -84,8 +84,11 @@
    - ❌ Логика отслеживания изменений ребер не реализована
 
 2. **WebSocket события**
-   - ❌ WebSocket endpoint для подписки на события не реализован
-   - ✅ События публикуются через Realtime (`realtime.Publisher`), но WebSocket endpoint отсутствует
+   - ✅ WebSocket endpoint реализован через общий realtime broker (`/ws?token=...`)
+   - ✅ Подписка по проекту реализована control message `{"type":"subscribe","projectId":"..."}`
+   - ✅ Horizon события публикуются через `realtime.Publisher` и маршрутизируются по `horizon.*` в отдельный Pub/Sub топик `hatlone.horizon.events`
+   - ✅ Реализованы события: `horizon.assembly.failed`, `horizon.graph.edge.upserted`, `horizon.propagation.node_updated`, `horizon.propagation.completed`
+   - ⚠️ Lens-based subscription (server-side фильтрация по lensId) пока не реализована (фильтрация по lensId делается на клиенте)
 
 ## Детальные расхождения
 
@@ -249,8 +252,9 @@
 #### ⚠️ Частично реализовано
 
 - События публикуются через `realtime.Publisher`
-- WebSocket endpoint для подписки не реализован
-- В документации указан WebSocket URL: `wss://api.sanskrite.com/ws/risk`
+- Реализация WS: общий `/ws` (через `cmd/hatlone-ws`) + project subscription `subscribe`
+- Horizon события: namespace `horizon.*` + отдельный Pub/Sub топик `hatlone.horizon.events`
+- В старой документации встречается `wss://.../ws/risk` — заменить на `/ws` (см. `docs/horizon/realtime.md`)
 
 ### 10. Индексы Firestore
 
@@ -430,11 +434,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 ## Следующие шаги
 
-1. ✅ Создать задачи для реализации отсутствующих endpoints - ВЫПОЛНЕНО
-2. ✅ Исправить критические расхождения в логике - ВЫПОЛНЕНО
-3. ✅ Реализовать версионирование - ВЫПОЛНЕНО
-4. Обновить документацию с учетом реализованных дополнительных endpoints
-5. Проверить и создать все необходимые индексы Firestore
+Актуальный backlog и порядок работ ведём в **roadmap**: `docs/horizon/implementation/roadmap.md`.
 
 ---
 
@@ -609,16 +609,31 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 - `gcloud run services describe sanskrite-api --region us-central1 --format='value(spec.template.spec.containers[0].env)' | grep -E 'HORIZON_FRAGMENTS_BUCKET|VERTEX_SEARCH_HORIZON_DATA_STORE_ID'`
 
 5) **Re-export фрагментов (если нужно пересоздать файлы в новом формате)**
-- С пропуском уже экспортированных: `./bin/horizon_reexport_fragments -project sanskrite -bucket sanskrite-horizon-fragments -skip-existing`
-- Или через go run: `go run ./backend/cmd/tools/horizon_reexport_fragments -project sanskrite -bucket sanskrite-horizon-fragments -skip-existing`
-- Флаг `--skip-existing` позволяет продолжить с места остановки, пропуская уже экспортированные файлы
+- Рекомендуемый запуск (ресюмируемый, с чекпоинтом):
+  - **Важно**: если в бакете уже есть файлы старого формата, `--skip-existing` нельзя — он НЕ перезапишет их.
+  - Первый прогон для гарантированного приведения формата: **без** `--skip-existing`:
+    - `./bin/horizon_reexport_fragments -project sanskrite -bucket sanskrite-horizon-fragments -tenant global -resume -checkpoint-file /tmp/horizon_reexport_checkpoint.txt -checkpoint-every 100 -heartbeat 30s -stall-timeout 30m`
+  - Если процесс прервался — повторить ту же команду (чекпоинт продолжит после последнего docID).
+- После того как ты уверен, что формат в бакете уже правильный, можно использовать `--skip-existing` для ускорения повторных прогонов.
+- Можно стартовать вручную после конкретного docID:
+  - `./bin/horizon_reexport_fragments ... -start-after <FIRESTORE_DOC_ID>`
+- `--skip-existing` пропускает уже загруженные JSON в GCS.
+- `--resume` читает `checkpoint-file` и продолжает **после последнего Firestore docID** (итерация упорядочена по `__name__`), чтобы не сканировать коллекцию "с нуля".
 
 6) **Backfill (после завершения re-export)**
 - Простой запуск: `bash scripts/backfill-horizon-fragments.sh`
 - Или с параметрами: `PROJECT=sanskrite BUCKET=sanskrite-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
 - **Важно**: Дождаться завершения re-export перед запуском backfill
+- **Важно (Discovery Engine)**: импорт `dataSchema=document` требует `Document.content` как **объект** (`{"mimeType":"text/plain","rawBytes":"<base64>"}`).
+  Если `content` был строкой/лежал только в `structData`, импорты будут падать с ошибкой:
+  `To create document without content, content config of data store must be NO_CONTENT.`
 
-7) **Проверка эндпоинта**
+7) **Cloud Tasks (после стабилизации/бэкфилла)**
+- Очередь Scout Cloud Tasks: `sanskrite-scout` (region: `us-central1`) — **сейчас PAUSED**.
+- Включать обратно **после** завершения бэкфилла/стабилизации:
+  - `gcloud tasks queues resume sanskrite-scout --project=sanskrite --location=us-central1`
+
+8) **Проверка эндпоинта**
 - `curl -X POST "$API_URL/api/horizon/entities/search" -H "Content-Type: application/json" -H "Authorization: Bearer <FIREBASE_ID_TOKEN>" -d '{"query":"Tesla","limit":10}'`
 
 ### Индексы Firestore
@@ -648,14 +663,17 @@ gcloud firestore indexes composite list --project=sanskrite
 
 ### Текущий статус re-export (2025-12-22)
 
-**Процесс запущен**: 10:20:42
-**Этап**: Загрузка списка фрагментов из Firestore
-**Флаг**: `--skip-existing` (пропускает уже экспортированные файлы)
+**Последний запуск**: 12:32:56
+**Режим**: `--skip-existing` + `--resume` (чекпоинт по Firestore docID, чтобы не начинать "вхолостую")
+**Файлы**:
+- Лог: `/tmp/reexport_final.log`
+- Чекпоинт: `/tmp/horizon_reexport_checkpoint.txt`
 
 **История запусков**:
 - Первый запуск (2025-12-21, 21:42:25): ~4100 фрагментов экспортировано, упал из-за ошибок Firestore (22:11:29)
 - Второй запуск (2025-12-21, 22:35:52): ~14 фрагментов, завершился без статистики
-- Третий запуск (2025-12-22, 10:20:42): в процессе, с флагом `--skip-existing`
+- Третий запуск (2025-12-22): серия запусков с `--skip-existing`; добавлены heartbeat/backoff на `Unavailable`, чтобы не спамить логом и не падать.
+- Четвертый запуск (2025-12-22, 12:32:56): добавлен чекпоинт/`--resume` (продолжение после последнего docID).
 
 **Проверка статуса**:
 ```bash
@@ -664,6 +682,9 @@ ps aux | grep horizon_reexport_fragments
 
 # Проверить прогресс
 tail -f /tmp/reexport_final.log
+
+# Посмотреть чекпоинт (последний docID)
+cat /tmp/horizon_reexport_checkpoint.txt
 
 # Проверить количество файлов в бакете
 gcloud storage ls gs://sanskrite-horizon-fragments/global/horizon_fragments/*.json | wc -l
@@ -674,3 +695,12 @@ gcloud storage ls gs://sanskrite-horizon-fragments/global/horizon_fragments/*.js
 - Проверить endpoint: `curl -X POST "$API_URL/api/horizon/entities/search" -H "Content-Type: application/json" -H "Authorization: Bearer <FIREBASE_ID_TOKEN>" -d '{"query":"Tesla","limit":10}'`
 
 **Примечание**: Процесс может долго загружать список фрагментов из Firestore (~6999 документов). Это нормально и может занять несколько минут.
+
+### Lessons learned (2025-12-22)
+
+- **Discovery Engine `dataSchema=document` требует `Document.content` как объект**: `{"mimeType":"text/plain","rawBytes":"<base64>"}`. Если положить текст только в `structData` или строкой — импорты падают с `To create document without content...`, и поиск будет пустой.
+- **`--skip-existing` нельзя использовать при смене схемы**: он не перезапишет старые JSON в GCS, и backfill продолжит импортировать “старый формат”. Для миграции формата нужен overwrite re-export (без `--skip-existing`) + чекпоинт.
+- **Backfill может падать посередине из-за OAuth**: токен истекает/требует reauth (`401 UNAUTHENTICATED`). Решение — обновлять access token на каждом батче и уметь продолжать с `START_BATCH`.
+- **Firestore “Unavailable” чаще всего вызван длинным стримом + минутными P99**: полный скан `ORDER_BY __name__ ASC` на `Documents().Next()` может сыпаться. Надёжнее читать страницами (`Limit(pageSize)` + `StartAfter(lastDocID)` + `GetAll()`), плюс чекпоинт/`--resume`.
+- **Не давать логам съедать диск**: `tee` в `/tmp/*.log` легко раздувается при tight-loop ошибках. Нужны backoff/троттлинг логов и ротация/очистка больших логов.
+- **Cloud Tasks queue `sanskrite-scout`**: `PAUSED` — это ручное действие (не “пустая очередь”), после стабилизации/бэкфилла нужно явно вернуть в `RESUME`.

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"encoding/json"
+	"encoding/base64"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,17 +84,20 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 	content := fragment.GenerateVectorText()
 
 	// Формируем JSON документ для Vertex AI Search
-	// Формат совместим с Discovery Engine dataSchema=document
-	// Все поля, включая content и title, должны быть в structData
+	// Формат совместим с Discovery Engine dataSchema=document.
+	// ВАЖНО: Discovery Engine ожидает Document.content как объект (mimeType/rawBytes), а не строку.
 	objectPath := fmt.Sprintf("%s/horizon_fragments/%s.json", fragment.TenantID, fragment.ID)
 	gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
 	
 	doc := map[string]interface{}{
 		"id": fragment.ID,
+		// IMPORTANT: ImportDocuments(dataSchema=document) is strict about top-level fields.
+		// Keep only documented top-level fields (id/content/structData) to avoid parse errors.
+		"content": map[string]interface{}{
+			"mimeType": "text/plain",
+			"rawBytes": base64.StdEncoding.EncodeToString([]byte(content)),
+		},
 		"structData": map[string]interface{}{
-			"title":         fragment.CanonicalPath,
-			"content":       content, // Текстовый контент для поиска (внутри structData)
-			"uri":           gcsURI,
 			"tenantId":      fragment.TenantID,
 			"type":          "horizon_fragment",
 			"canonicalPath": fragment.CanonicalPath,
@@ -101,6 +106,7 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 			"status":        fragment.Governance.Status,
 			"updatedAt":     fragment.UpdatedAt.Format(time.RFC3339),
 			"createdAt":     fragment.CreatedAt.Format(time.RFC3339),
+			"uri":           gcsURI,
 		},
 	}
 
@@ -363,6 +369,75 @@ func (r *HorizonFragmentsRepository) ListByStatus(ctx context.Context, status st
 // CollectionRef сам является Query, поэтому возвращаем его напрямую
 func (r *HorizonFragmentsRepository) Query() firestore.Query {
 	return r.col.Where("tenantId", "==", "global")
+}
+
+// SearchPrefix performs a fast prefix search in Firestore to support UI typeahead/autocomplete.
+//
+// Behavior:
+// - If query starts with "/", search by canonicalPath prefix.
+// - Else search by labels.en prefix.
+// - Always scoped to tenantId=="global" and governance.status=="ACTIVE".
+//
+// Note: This is intentionally simple and predictable. It complements semantic search (Vertex).
+func (r *HorizonFragmentsRepository) SearchPrefix(ctx context.Context, query string, limit int) ([]*models.HorizonFragment, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	base := r.col.
+		Where("tenantId", "==", "global").
+		Where("governance.status", "==", "ACTIVE")
+
+	// Canonical path prefix (power-user)
+	if strings.HasPrefix(q, "/") {
+		prefix := q
+		fsQ := base.
+			Where("canonicalPath", ">=", prefix).
+			Where("canonicalPath", "<", prefix+"\ufffd").
+			OrderBy("canonicalPath", firestore.Asc).
+			Limit(limit)
+		docs, err := fsQ.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		out := make([]*models.HorizonFragment, 0, len(docs))
+		for _, d := range docs {
+			var f models.HorizonFragment
+			if err := d.DataTo(&f); err != nil {
+				continue
+			}
+			out = append(out, &f)
+		}
+		return out, nil
+	}
+
+	// Label prefix (user-friendly)
+	prefix := q
+	fsQ := base.
+		Where("labels.en", ">=", prefix).
+		Where("labels.en", "<", prefix+"\ufffd").
+		OrderBy("labels.en", firestore.Asc).
+		Limit(limit)
+	docs, err := fsQ.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.HorizonFragment, 0, len(docs))
+	for _, d := range docs {
+		var f models.HorizonFragment
+		if err := d.DataTo(&f); err != nil {
+			continue
+		}
+		out = append(out, &f)
+	}
+	return out, nil
 }
 
 // ListByCanonicalPaths получает список HorizonFragment по массиву canonicalPath

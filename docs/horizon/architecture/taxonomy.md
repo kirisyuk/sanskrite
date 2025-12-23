@@ -1,10 +1,72 @@
-# Базовая таксономия ядра (Core Taxonomy v1.0)
+# Таксономия Horizon (backend-first)
 
 ## Обзор
 
-Базовая таксономия ядра определяет стандарты классификации и оценки сущностей в системе динамического анализа рисков. Таксономия строго на английском языке, использует иерархические пути для расширяемости и нормализованные числовые метрики.
+В Sanskrite/Horizon есть два “слоя” таксономии:
 
-**Важно**: На этапе MVP мы строго придерживаемся данной таксономии. Любые отклонения должны быть согласованы и документированы.
+- **Runtime taxonomy (источник правды для бэкенда)**: хранится в Firestore в коллекции `horizon_taxonomy`, doc id = версия (по умолчанию `v1`). Бэкенд загружает её при старте и периодически обновляет в памяти. Это то, что реально используется для нормализации/валидации некоторых словарей (например `spherePaths`, `eventType`, `relationType`).
+- **Core taxonomy (гайд для классификации/LLM)**: описывает рекомендуемые `entityPath`, `sectorPath` и метрики. Важно: **этот слой сейчас не является строгой allow-list в рантайме** (сервер не блокирует неизвестные значения `entityPath/sectorPath`), но он используется как контракт и база для промптов/классификатора.
+
+Таксономия в документации ниже приведена в backend-first виде: сначала то, что “enforced” бэкендом, потом — рекомендации (Core taxonomy guide).
+
+## 0. Runtime taxonomy (Firestore, backend source of truth)
+
+### Где хранится и как загружается
+
+- **Firestore**: `horizon_taxonomy/{version}` (например `horizon_taxonomy/v1`)
+- **Загрузка в рантайм**: сервер читает `v1` при старте и авто-рефрешит.
+- **Инспекция**: есть утилита `backend/cmd/tools/horizon_get_taxonomy` (печатает текущий документ как JSON).
+- **Сидинг/обновление**: есть утилита `backend/cmd/tools/horizon_seed_taxonomy` (записывает дефолтный словарь v1).
+
+### Что внутри (v1, по модели бэкенда)
+
+Runtime taxonomy в коде представлена моделью `HorizonTaxonomy` и включает:
+
+- **canonicalPrefixes**: разрешённые пространства имен для canonicalPath (Horizon-first)
+- **allowedSpherePaths + sphereSynonyms**: allow-list сфер и алиасы (label → `/sphere/...`)
+- **allowedEventTypes + eventTypeSynonyms**: словарь `eventType` и алиасы (label → нормализованный тип)
+- **allowedRelationTypes**: allow-list типов связей dependency edges (upper snake-case)
+- **allowedMetricUnits**: allow-list единиц измерения (используется как словарь для промптов/валидаций по необходимости)
+
+Ниже приведены **дефолтные значения v1**, которые сидятся через `backend/cmd/tools/horizon_seed_taxonomy`.
+Фактические значения в окружении всегда можно получить через `backend/cmd/tools/horizon_get_taxonomy`.
+
+### canonicalPrefixes (default v1)
+
+`/org/`, `/fac/`, `/loc/`, `/person/`, `/product/`, `/program/`, `/market/`, `/event/`, `/sphere/`
+
+### eventType vocabulary (default v1)
+
+`attack`, `cyberattack`, `sanction`, `blockade`, `policy_change`, `license_change`, `partnership`, `acquisition`, `release`, `deprecation`, `pricing_change`, `availability_change`, `capability_change`, `protest`, `strike`, `election`, `warning`, `announcement`, `incident`, `other`
+
+**Нормализация**: если значение не поддерживается — приводится к `other` (в т.ч. через `eventTypeSynonyms`).
+
+### relationType vocabulary (default v1)
+
+`SUPPLIES_TO`, `LOCATED_IN`, `OWNS`, `PRODUCES`, `OPERATES_IN`, `REGULATES`, `COMPETES_WITH`, `INFLUENCES`, `DEPENDS_ON`, `SUBSIDIARY_OF`
+
+**Нормализация**: unknown → `INFLUENCES` (safe default), `DEPENDS` → `DEPENDS_ON`, `OWNED_BY` → `SUBSIDIARY_OF`.
+
+### allowedMetricUnits (default v1)
+
+`usd`, `eur`, `rub`, `units`, `units_per_day`, `days`, `hours`, `ratio`, `index_point`, `code`
+
+## 0.1 Canonical paths (то, что реально валидируется кодом)
+
+CanonicalPath — это **Horizon-first** идентификатор фрагмента/сущности, в формате:
+
+- **формат**: `/{namespace}/{slug}/{slug}/...`
+- **slug**: нижний регистр, `[a-z0-9-]`
+- **namespace (enforced)**: `org`, `person`, `product`, `program`, `market`, `fac`, `loc`, `sphere`, `event`
+
+### Location canonicalPath (важное отличие от entityPath)
+
+- **canonicalPath для локаций (namespace `loc`)** в коде канонизируется как:
+  - `/loc/{country}/{admin1}/{city}`
+  - `country`: ISO3166-1 alpha2 (lowercase)
+  - `admin1/city`: slug или `na`
+
+Это **не то же самое**, что `entityPath` (см. ниже): `entityPath` может быть `/Geo/...`, а canonicalPath для location-fragment при этом будет `/loc/...`.
 
 ## 1. Numeric Standards (Принципы оценки)
 
@@ -41,7 +103,7 @@
 - `market_sentiment` — настроение рынка
 - `public_perception` — общественное восприятие
 
-## 2. Entity Types Taxonomy (entity_path)
+## 2. Entity Types Taxonomy (entity_path) — guide (не strict allow-list в рантайме)
 
 Определяет физическую природу узла. Это иерархия, позволяющая уточнять тип по мере поступления данных.
 
@@ -131,7 +193,7 @@
 - `/Geo/Region/Subdivision` с ISO3166-2: "US-CA" (Калифорния), "KZ-75" (Алматы), "RU-MOW" (Москва)
 - `/Geo/Region/City` с ISO6709: "+3740+12225/" (Сан-Франциско)
 
-## 3. Industry & Sector Taxonomy (sector_path)
+## 3. Industry & Sector Taxonomy (sector_path) — guide (не strict allow-list в рантайме)
 
 Базируется на логике GICS/NAICS, но упрощена для риск-анализа. Расширяема добавлением уровней.
 
@@ -463,7 +525,7 @@ type MetricValue struct {
 }
 ```
 
-## 5. Influence Spheres Taxonomy (spherePaths)
+## 5. Influence Spheres Taxonomy (spherePaths) — enforced через runtime taxonomy
 
 Иногда событие/утверждение влияет не “на объект” напрямую, а на **сферу**: геополитику, социум, киберпространство, логистику и т.п.
 Для этого в `ontology_facts` используется поле `spherePaths: []string` — **множественные** канонизированные пути, которые:
@@ -476,7 +538,7 @@ type MetricValue struct {
 /sphere/{domain}/{subdomain...}
 ```
 
-**Примеры (минимальный словарь v1):**
+**Примеры (дефолтный словарь v1, сидится через `horizon_seed_taxonomy`):**
 - `/sphere/ai`
 - `/sphere/ai/models`
 - `/sphere/ai/policy`
@@ -594,37 +656,35 @@ Classify the entity using:
 
 ### Валидация данных
 
-Все данные, извлеченные Scout Agent, должны проходить валидацию:
+Ниже — **рекомендуемые** проверки качества данных. Важно: в текущей реализации бэкенда **не всё из этого строго enforced** (см. разделы выше про runtime taxonomy).
 
 1. **Проверка диапазонов**:
    - Magnitude Metrics: должны быть в диапазоне [0.0, 1.0]
    - Directional Metrics: должны быть в диапазоне [-1.0, 1.0]
 
 2. **Проверка таксономии**:
-   - `entityPath` должен соответствовать допустимым путям
-   - `sectorPath` должен соответствовать допустимым путям
+   - `canonicalPath` должен соответствовать правилам canonical namespace/slug (enforced)
+   - `spherePaths`, `eventType`, `relationType` должны нормализоваться через runtime taxonomy (enforced/normalized)
+   - `entityPath` / `sectorPath` — сейчас это **гайд для классификации**, а не strict allow-list в рантайме
 
 3. **Проверка обязательных метрик**:
-   - Для каждого типа сущности определен набор обязательных метрик
+   - Наборы “обязательных метрик” могут быть определены на уровне продукта/агента; бэкенд не должен ломать ingest из-за отсутствия не-критичных полей
 
 ## Расширение таксономии
 
-Таксономия может быть расширена добавлением новых путей и метрик. При расширении необходимо:
+При расширении таксономии ориентируемся на backend-first подход:
 
-1. Обновить данный документ
-2. Обновить схемы валидации
-3. Обновить промпты Scout Agent
-4. Версионировать таксономию (v1.1, v1.2, и т.д.)
+1. Обновить runtime taxonomy в Firestore (`horizon_taxonomy/v1`) или создать новый документ версии (`v2`) для несовместимых изменений
+2. Обновить данный документ (чтобы отражал фактическое runtime поведение)
+3. Обновить промпты/классификатор Scout Agent (если меняются словари/правила)
 
 ## Версионирование
 
-Текущая версия: **v1.0**
+Текущая runtime-версия в бэкенде: **`v1`** (doc id в Firestore: `horizon_taxonomy/v1`).
 
-При изменении таксономии:
-- Минорные изменения (добавление путей/метрик): v1.1, v1.2, ...
-- Мажорные изменения (изменение принципов): v2.0
-
-Версия таксономии хранится в метаданных HorizonFragment и Frame.
+При изменении runtime taxonomy:
+- Минорные изменения (добавление алиасов/значений): можно менять документ `v1` (понимая, что это “live” изменение).
+- Мажорные изменения: заводим новый документ `v2` и обновляем бэкенд на загрузку `v2` (и/или делаем выбор версии конфигом).
 
 ## См. также
 

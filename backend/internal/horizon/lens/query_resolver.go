@@ -10,17 +10,20 @@ import (
 	"cloud.google.com/go/firestore"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 // QueryResolver resolves QueryAddress to a list of canonical paths
 type QueryResolver struct {
 	fragmentsRepo *horizonrepo.HorizonFragmentsRepository
+	ontologyFactsRepo *corerepo.OntologyFactsRepository
 }
 
 // NewQueryResolver creates a new QueryResolver
-func NewQueryResolver(fragmentsRepo *horizonrepo.HorizonFragmentsRepository) *QueryResolver {
+func NewQueryResolver(fragmentsRepo *horizonrepo.HorizonFragmentsRepository, ontologyFactsRepo *corerepo.OntologyFactsRepository) *QueryResolver {
 	return &QueryResolver{
-		fragmentsRepo: fragmentsRepo,
+		fragmentsRepo:      fragmentsRepo,
+		ontologyFactsRepo:  ontologyFactsRepo,
 	}
 }
 
@@ -41,44 +44,33 @@ func (r *QueryResolver) Resolve(ctx context.Context, tenantID string, queryAddre
 		tenantID = "global" // HorizonFragments are always global
 	}
 
-	// Build Firestore query based on criteria
-	query, err := r.buildQuery(tenantID, queryAddress)
+	// Build evaluation context (expensive predicates precomputed once).
+	evalCtx, err := r.buildEvalContext(ctx, tenantID, queryAddress.Expr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build query: %w", err)
+		return nil, err
 	}
 
-	// Execute query
-	docs, err := query.Documents(ctx).GetAll()
+	// Convert expression to DNF (OR of AND clauses) to be able to fetch candidates correctly for OR.
+	clauses, err := exprToDNF(queryAddress.Expr, 32 /* maxClauses */)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
+		return nil, err
 	}
 
-	// Extract canonical paths and apply pattern matching
-	canonicalPaths := []string{}
-	seen := map[string]bool{}
+	// Fetch candidate fragments (union across OR branches), then filter by full expression in-memory.
+	candidates, fetchedCount, err := r.fetchCandidates(ctx, tenantID, clauses)
+	if err != nil {
+		return nil, err
+	}
+
+	canonicalPaths := make([]string, 0, len(candidates))
 	matchedCount := 0
-	skippedCount := 0
-
-	for _, doc := range docs {
-		var fragment models.HorizonFragment
-		if err := doc.DataTo(&fragment); err != nil {
-			skippedCount++
-			continue // Skip invalid documents
-		}
-
-		// Apply pattern matching filters (for wildcards)
-		if !r.matchesQueryAddress(&fragment, queryAddress) {
-			skippedCount++
-			continue
-		}
-
-		// Deduplicate
-		if !seen[fragment.CanonicalPath] {
-			seen[fragment.CanonicalPath] = true
-			canonicalPaths = append(canonicalPaths, fragment.CanonicalPath)
+	for _, v := range candidates {
+		if queryAddress.Expr.Eval(v, evalCtx) {
+			canonicalPaths = append(canonicalPaths, v.CanonicalPath)
 			matchedCount++
 		}
 	}
+	skippedCount := fetchedCount - matchedCount
 
 	duration := time.Since(startTime)
 	log.Printf("[QueryResolver] Resolved query %q: %d paths found (matched %d, skipped %d) in %v", 
@@ -87,218 +79,374 @@ func (r *QueryResolver) Resolve(ctx context.Context, tenantID string, queryAddre
 	return canonicalPaths, nil
 }
 
-// buildQuery builds a Firestore query from QueryAddress criteria
-func (r *QueryResolver) buildQuery(tenantID string, qa *QueryAddress) (firestore.Query, error) {
-	// NOTE: SpherePaths filtering is not supported for HorizonFragment queries
-	// SpherePaths exist only in Frame/OntologyFact, not in HorizonFragment
-	// For now, sphere filtering will be done in-memory after fetching fragments
-	
-	// NOTE: SpherePaths filtering is not supported for HorizonFragment queries
-	// SpherePaths exist only in Frame/OntologyFact, not in HorizonFragment
-	// For now, sphere filtering will be done in-memory after fetching fragments
-	
-	baseQuery := r.fragmentsRepo.Query().
-		Where("tenantId", "==", tenantID).
-		Where("governance.status", "==", "ACTIVE") // Only active fragments
+// --- "adult" query execution helpers ---
 
-	// IMPORTANT: Firestore has limitations on queries:
-	// - Only ONE array-contains per query
-	// - No OR operator support (must use multiple queries)
-	// - Inequality filters can only be on one field
-
-	// Strategy: Use most restrictive filter in Firestore, apply pattern matching in-memory
-
-	// NOTE: SpherePaths are not stored in HorizonFragment, so sphere filtering
-	// will be done entirely in-memory after fetching fragments
-
-	// Priority 2: SectorPath (if no wildcard, use range query)
-	if len(qa.SectorPatterns) > 0 {
-		pattern := qa.SectorPatterns[0]
-		if strings.HasSuffix(pattern, "/**") {
-			// Range query for prefix match
-			prefix := strings.TrimSuffix(pattern, "/**")
-			baseQuery = baseQuery.
-				Where("sectorPath", ">=", prefix).
-				Where("sectorPath", "<", prefix+"\ufffd")
-			return baseQuery, nil
-		} else if !containsWildcard(pattern) {
-			// Exact match
-			baseQuery = baseQuery.Where("sectorPath", "==", pattern)
-			return baseQuery, nil
-		}
-	}
-
-	// Priority 3: LocationPath (if no wildcard, use range query)
-	if len(qa.LocationPatterns) > 0 {
-		pattern := qa.LocationPatterns[0]
-		if strings.HasSuffix(pattern, "/**") {
-			prefix := strings.TrimSuffix(pattern, "/**")
-			countryCode := extractCountryCode(prefix)
-			if countryCode != "" {
-				baseQuery = baseQuery.
-					Where("homeLocation.iso3166_1", "==", countryCode)
-				return baseQuery, nil
-			}
-		} else if !containsWildcard(pattern) {
-			// Exact match
-			countryCode := extractCountryCode(pattern)
-			if countryCode != "" {
-				baseQuery = baseQuery.Where("homeLocation.iso3166_1", "==", countryCode)
-				return baseQuery, nil
-			}
-		}
-	}
-
-	// Priority 4: EntityPath (if no wildcard, use range query)
-	if len(qa.EntityTypePatterns) > 0 {
-		pattern := qa.EntityTypePatterns[0]
-		if strings.HasSuffix(pattern, "/**") {
-			prefix := strings.TrimSuffix(pattern, "/**")
-			baseQuery = baseQuery.
-				Where("entityPath", ">=", prefix).
-				Where("entityPath", "<", prefix+"\ufffd")
-			return baseQuery, nil
-		} else if !containsWildcard(pattern) {
-			baseQuery = baseQuery.Where("entityPath", "==", pattern)
-			return baseQuery, nil
-		}
-	}
-
-	// Priority 5: CanonicalPath (if no wildcard, use range query)
-	if len(qa.CanonicalPathPatterns) > 0 {
-		pattern := qa.CanonicalPathPatterns[0]
-		if strings.HasSuffix(pattern, "/**") {
-			prefix := strings.TrimSuffix(pattern, "/**")
-			baseQuery = baseQuery.
-				Where("canonicalPath", ">=", prefix).
-				Where("canonicalPath", "<", prefix+"\ufffd")
-			return baseQuery, nil
-		} else if !containsWildcard(pattern) {
-			baseQuery = baseQuery.Where("canonicalPath", "==", pattern)
-			return baseQuery, nil
-		}
-	}
-
-	// Fallback: no Firestore filtering, return all active fragments
-	// Pattern matching will be done in-memory
-	return baseQuery, nil
+type lit struct {
+	term Term
+	neg  bool
 }
 
-// buildLocationPath строит locationPath из HomeLocation
+type conj []lit
+
+func (r *QueryResolver) baseFragmentsQuery(tenantID string) firestore.Query {
+	return r.fragmentsRepo.Query().
+		Where("tenantId", "==", tenantID).
+		Where("governance.status", "==", "ACTIVE")
+}
+
+func (r *QueryResolver) buildEvalContext(ctx context.Context, tenantID string, expr Expr) (*EvalContext, error) {
+	// Collect all sphere terms used in expression.
+	terms := []Term{}
+	expr.collectTerms(&terms)
+
+	sphereExact := make([]string, 0, 4)
+	seen := map[string]struct{}{}
+	for _, t := range terms {
+		if t.Field != FieldSphere {
+			continue
+		}
+		p := strings.TrimSpace(t.Pattern)
+		if p == "" {
+			continue
+		}
+		// "adult" policy: we only support exact sphere paths (no wildcards) because facts store spheres as arrays.
+		if strings.Contains(p, "*") {
+			return nil, fmt.Errorf("sphere criteria does not support wildcards yet: %q", p)
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		sphereExact = append(sphereExact, p)
+	}
+
+	if len(sphereExact) == 0 {
+		return &EvalContext{}, nil
+	}
+	if r.ontologyFactsRepo == nil {
+		return nil, fmt.Errorf("sphere criteria requires ontologyFactsRepo (not configured)")
+	}
+
+	out := &EvalContext{SphereCanonicalPathsByExact: map[string]map[string]struct{}{}}
+	for _, sp := range sphereExact {
+		paths, err := r.ontologyFactsRepo.ListCanonicalPathsBySpherePath(ctx, tenantID, sp, 2000)
+		if err != nil {
+			return nil, fmt.Errorf("sphere lookup failed for %q: %w", sp, err)
+		}
+		set := map[string]struct{}{}
+		for _, cp := range paths {
+			set[cp] = struct{}{}
+		}
+		out.SphereCanonicalPathsByExact[sp] = set
+	}
+	return out, nil
+}
+
+func exprToDNF(expr Expr, maxClauses int) ([]conj, error) {
+	// First, push NOT down to terms (NNF).
+	nnf, err := toNNF(expr, 64)
+	if err != nil {
+		return nil, err
+	}
+	clauses, err := toDNF(nnf, maxClauses)
+	if err != nil {
+		return nil, err
+	}
+	if len(clauses) == 0 {
+		return nil, fmt.Errorf("empty expression (no clauses)")
+	}
+	return clauses, nil
+}
+
+func toNNF(expr Expr, maxNodes int) (Expr, error) {
+	// Convert to negation normal form: NOT only applies to terms.
+	var rec func(e Expr, budget *int) (Expr, error)
+	rec = func(e Expr, budget *int) (Expr, error) {
+		*budget--
+		if *budget <= 0 {
+			return nil, fmt.Errorf("query expression too complex")
+		}
+		switch x := e.(type) {
+		case termExpr:
+			return x, nil
+		case andExpr:
+			a, err := rec(x.a, budget)
+			if err != nil {
+				return nil, err
+			}
+			b, err := rec(x.b, budget)
+			if err != nil {
+				return nil, err
+			}
+			return andExpr{a: a, b: b}, nil
+		case orExpr:
+			a, err := rec(x.a, budget)
+			if err != nil {
+				return nil, err
+			}
+			b, err := rec(x.b, budget)
+			if err != nil {
+				return nil, err
+			}
+			return orExpr{a: a, b: b}, nil
+		case notExpr:
+			// Push negation down.
+			switch y := x.x.(type) {
+			case termExpr:
+				return notExpr{x: y}, nil
+			case notExpr:
+				return rec(y.x, budget)
+			case andExpr:
+				// NOT (A AND B) -> (NOT A) OR (NOT B)
+				na, err := rec(notExpr{x: y.a}, budget)
+				if err != nil {
+					return nil, err
+				}
+				nb, err := rec(notExpr{x: y.b}, budget)
+				if err != nil {
+					return nil, err
+				}
+				return orExpr{a: na, b: nb}, nil
+			case orExpr:
+				// NOT (A OR B) -> (NOT A) AND (NOT B)
+				na, err := rec(notExpr{x: y.a}, budget)
+				if err != nil {
+					return nil, err
+				}
+				nb, err := rec(notExpr{x: y.b}, budget)
+				if err != nil {
+					return nil, err
+				}
+				return andExpr{a: na, b: nb}, nil
+			default:
+				return nil, fmt.Errorf("unsupported expression node")
+			}
+		default:
+			return nil, fmt.Errorf("unsupported expression node")
+		}
+	}
+	b := maxNodes
+	return rec(expr, &b)
+}
+
+func toDNF(expr Expr, maxClauses int) ([]conj, error) {
+	switch x := expr.(type) {
+	case termExpr:
+		return []conj{{{term: x.t, neg: false}}}, nil
+	case notExpr:
+		if t, ok := x.x.(termExpr); ok {
+			return []conj{{{term: t.t, neg: true}}}, nil
+		}
+		return nil, fmt.Errorf("NOT must apply to a term after NNF")
+	case orExpr:
+		a, err := toDNF(x.a, maxClauses)
+		if err != nil {
+			return nil, err
+		}
+		b, err := toDNF(x.b, maxClauses)
+		if err != nil {
+			return nil, err
+		}
+		out := append(a, b...)
+		if len(out) > maxClauses {
+			return nil, fmt.Errorf("query expands to too many OR clauses (%d > %d)", len(out), maxClauses)
+		}
+		return out, nil
+	case andExpr:
+		a, err := toDNF(x.a, maxClauses)
+		if err != nil {
+			return nil, err
+		}
+		b, err := toDNF(x.b, maxClauses)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]conj, 0, len(a)*len(b))
+		for _, ca := range a {
+			for _, cb := range b {
+				merged, ok := mergeConj(ca, cb)
+				if !ok {
+					continue // contradiction
+				}
+				out = append(out, merged)
+				if len(out) > maxClauses {
+					return nil, fmt.Errorf("query expands to too many OR clauses (%d > %d)", len(out), maxClauses)
+				}
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported expression node in DNF")
+	}
+}
+
+func mergeConj(a, b conj) (conj, bool) {
+	out := make(conj, 0, len(a)+len(b))
+	seen := map[string]bool{} // key -> neg?
+	for _, l := range a {
+		key := string(l.term.Field) + ":" + l.term.Pattern
+		seen[key] = l.neg
+		out = append(out, l)
+	}
+	for _, l := range b {
+		key := string(l.term.Field) + ":" + l.term.Pattern
+		if neg, ok := seen[key]; ok {
+			if neg != l.neg {
+				return nil, false // contradiction
+			}
+			continue
+		}
+		seen[key] = l.neg
+		out = append(out, l)
+	}
+	return out, true
+}
+
+func (r *QueryResolver) fetchCandidates(ctx context.Context, tenantID string, clauses []conj) ([]*HorizonFragmentView, int, error) {
+	// De-duplicate by canonicalPath across clauses.
+	seen := map[string]struct{}{}
+	out := make([]*HorizonFragmentView, 0, 128)
+	totalFetched := 0
+
+	for _, c := range clauses {
+		q := r.pickSeedQuery(tenantID, c)
+		docs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, totalFetched, err
+		}
+		totalFetched += len(docs)
+		for _, d := range docs {
+			var f models.HorizonFragment
+			if err := d.DataTo(&f); err != nil {
+				continue
+			}
+			view := fragmentToView(&f)
+			if view == nil || strings.TrimSpace(view.CanonicalPath) == "" {
+				continue
+			}
+			if _, ok := seen[view.CanonicalPath]; ok {
+				continue
+			}
+			seen[view.CanonicalPath] = struct{}{}
+			out = append(out, view)
+		}
+	}
+	return out, totalFetched, nil
+}
+
+func (r *QueryResolver) pickSeedQuery(tenantID string, c conj) firestore.Query {
+	base := r.baseFragmentsQuery(tenantID)
+
+	// Choose a single positive literal for Firestore seeding (must be correct subset, then full expr filters).
+	// Priority: canonicalPath > sector > entityType > location
+	bestRank := 999
+	var best *lit
+	for i := range c {
+		if c[i].neg {
+			continue
+		}
+		rank := literalSeedRank(c[i])
+		if rank < bestRank && rank < 999 {
+			bestRank = rank
+			best = &c[i]
+		}
+	}
+	if best == nil {
+		return base
+	}
+	return applySeed(base, best.term)
+}
+
+func literalSeedRank(l lit) int {
+	switch l.term.Field {
+	case FieldCanonicalPath:
+		return 1
+	case FieldSector:
+		return 2
+	case FieldEntityType:
+		return 3
+	case FieldLocation:
+		return 4
+	default:
+		return 999
+	}
+}
+
+func applySeed(q firestore.Query, t Term) firestore.Query {
+	p := strings.TrimSpace(t.Pattern)
+	switch t.Field {
+	case FieldCanonicalPath:
+		return applyPathSeed(q, "canonicalPath", p)
+	case FieldSector:
+		return applyPathSeed(q, "sectorPath", p)
+	case FieldEntityType:
+		return applyPathSeed(q, "entityPath", p)
+	case FieldLocation:
+		// /loc/{cc}[/admin1][/**]
+		cc, admin1 := parseLocPattern(p)
+		if cc != "" && admin1 != "" {
+			return q.Where("homeLocation.iso3166_2", "==", strings.ToUpper(cc)+"-"+strings.ToUpper(admin1))
+		}
+		if cc != "" {
+			return q.Where("homeLocation.iso3166_1", "==", strings.ToLower(cc))
+		}
+		return q
+	default:
+		return q
+	}
+}
+
+func applyPathSeed(q firestore.Query, field string, pattern string) firestore.Query {
+	if strings.HasSuffix(pattern, "/**") {
+		prefix := strings.TrimSuffix(pattern, "/**")
+		return q.Where(field, ">=", prefix).Where(field, "<", prefix+"\ufffd")
+	}
+	// exact only (no wildcard)
+	if !strings.Contains(pattern, "*") {
+		return q.Where(field, "==", pattern)
+	}
+	return q
+}
+
+func parseLocPattern(pattern string) (country string, admin1 string) {
+	// Accepts: /loc/{country}, /loc/{country}/** , /loc/{country}/{admin1}, /loc/{country}/{admin1}/**
+	parts := strings.Split(strings.Trim(pattern, "/"), "/")
+	if len(parts) < 2 || parts[0] != "loc" {
+		return "", ""
+	}
+	country = strings.ToLower(strings.TrimSpace(parts[1]))
+	if len(parts) >= 3 && parts[2] != "**" && parts[2] != "" {
+		admin1 = strings.ToLower(strings.TrimSpace(parts[2]))
+	}
+	return country, admin1
+}
+
+func fragmentToView(f *models.HorizonFragment) *HorizonFragmentView {
+	if f == nil {
+		return nil
+	}
+	return &HorizonFragmentView{
+		CanonicalPath: f.CanonicalPath,
+		EntityPath:    f.EntityPath,
+		SectorPath:    f.SectorPath,
+		LocationPath:  buildLocationPath(f.HomeLocation),
+	}
+}
+
+// buildLocationPath builds a best-effort canonicalized location path for QueryAddress matching.
+// Canonical format: /loc/{country}/{admin1}/{city}
+// HorizonFragment stores only ISO3166-1 + ISO3166-2; we map to /loc/{country}/{admin1}/na.
 func buildLocationPath(homeLocation *models.Location) string {
-	if homeLocation == nil || homeLocation.ISO3166_1 == nil {
+	if homeLocation == nil || homeLocation.ISO3166_1 == nil || strings.TrimSpace(*homeLocation.ISO3166_1) == "" {
 		return ""
 	}
-	
-	locationPath := "/loc/" + strings.ToLower(*homeLocation.ISO3166_1)
-	if homeLocation.ISO3166_2 != nil && *homeLocation.ISO3166_2 != "" {
-		parts := strings.Split(*homeLocation.ISO3166_2, "-")
-		if len(parts) > 1 {
-			locationPath += "/" + strings.ToLower(parts[1])
+	country := strings.ToLower(strings.TrimSpace(*homeLocation.ISO3166_1))
+	admin1 := "na"
+	if homeLocation.ISO3166_2 != nil && strings.TrimSpace(*homeLocation.ISO3166_2) != "" {
+		parts := strings.Split(strings.TrimSpace(*homeLocation.ISO3166_2), "-")
+		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
+			admin1 = strings.ToLower(strings.TrimSpace(parts[1]))
 		}
 	}
-	return locationPath
-}
-
-// criterionMatcher функция для проверки соответствия критерию
-type criterionMatcher func(fragment *models.HorizonFragment, patterns []string) bool
-
-// matchesQueryAddress checks if a fragment matches the QueryAddress criteria
-func (r *QueryResolver) matchesQueryAddress(fragment *models.HorizonFragment, qa *QueryAddress) bool {
-	if fragment == nil || qa == nil {
-		return false
-	}
-
-	// Определяем matchers для каждого типа критерия
-	matchers := map[string]criterionMatcher{
-		"sphere": func(f *models.HorizonFragment, patterns []string) bool {
-			if len(patterns) == 0 {
-				return true // No criteria = match
-			}
-			// NOTE: SpherePaths are not stored in HorizonFragment
-			// They exist only in Frame/OntologyFact
-			// For now, sphere filtering always returns false (no match)
-			// TODO: Implement sphere filtering by querying related Frames or OntologyFacts
-			return false
-		},
-		"sector": func(f *models.HorizonFragment, patterns []string) bool {
-			if len(patterns) == 0 {
-				return true
-			}
-			for _, pattern := range patterns {
-				if MatchesPattern(f.SectorPath, pattern) {
-					return true
-				}
-			}
-			return false
-		},
-		"location": func(f *models.HorizonFragment, patterns []string) bool {
-			if len(patterns) == 0 {
-				return true
-			}
-			locationPath := buildLocationPath(f.HomeLocation)
-			if locationPath == "" {
-				return false // No location data
-			}
-			for _, pattern := range patterns {
-				if MatchesPattern(locationPath, pattern) {
-					return true
-				}
-			}
-			return false
-		},
-		"entityType": func(f *models.HorizonFragment, patterns []string) bool {
-			if len(patterns) == 0 {
-				return true
-			}
-			for _, pattern := range patterns {
-				if MatchesPattern(f.EntityPath, pattern) {
-					return true
-				}
-			}
-			return false
-		},
-		"canonicalPath": func(f *models.HorizonFragment, patterns []string) bool {
-			if len(patterns) == 0 {
-				return true
-			}
-			for _, pattern := range patterns {
-				if MatchesPattern(f.CanonicalPath, pattern) {
-					return true
-				}
-			}
-			return false
-		},
-	}
-
-	// Выполняем проверки для каждого критерия
-	results := map[string]bool{
-		"sphere":        matchers["sphere"](fragment, qa.SpherePaths),
-		"sector":        matchers["sector"](fragment, qa.SectorPatterns),
-		"location":      matchers["location"](fragment, qa.LocationPatterns),
-		"entityType":    matchers["entityType"](fragment, qa.EntityTypePatterns),
-		"canonicalPath": matchers["canonicalPath"](fragment, qa.CanonicalPathPatterns),
-	}
-
-	// Применяем оператор (AND/OR)
-	if qa.Operator == "OR" {
-		return results["sphere"] || results["sector"] || results["location"] || results["entityType"] || results["canonicalPath"]
-	}
-	// Default: AND - все критерии должны совпадать (или отсутствовать)
-	return results["sphere"] && results["sector"] && results["location"] && results["entityType"] && results["canonicalPath"]
-}
-
-// Helper functions
-
-func containsWildcard(s string) bool {
-	return strings.Contains(s, "*")
-}
-
-func extractCountryCode(locationPath string) string {
-	// /loc/id/... → "id"
-	parts := strings.Split(strings.Trim(locationPath, "/"), "/")
-	if len(parts) >= 2 && parts[0] == "loc" {
-		return strings.ToLower(parts[1])
-	}
-	return ""
+	return "/loc/" + country + "/" + admin1 + "/na"
 }

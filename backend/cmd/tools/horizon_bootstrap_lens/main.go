@@ -175,13 +175,13 @@ func main() {
 				}(),
 			},
 			Metadata: horizonmodels.FragmentMetadata{
-				CreatedAt:         now,
-				LastUpdatedAt:     now,
-				LastVerifiedAt:    now,
-				LastFactsSeenAt:   time.Time{},
+				CreatedAt:          now,
+				LastUpdatedAt:      now,
+				LastVerifiedAt:     now,
+				LastFactsSeenAt:    time.Time{},
 				LastFactsAppliedAt: time.Time{},
-				SourceFrameID:     "",
-				EpistemicStatus:   horizonmodels.EpistemicStatusVerified,
+				SourceFrameID:      "",
+				EpistemicStatus:    horizonmodels.EpistemicStatusVerified,
 			},
 			Governance: horizonmodels.Governance{
 				Owner:              "SYSTEM",
@@ -204,7 +204,7 @@ func main() {
 	// --- 5) Create Lens via LensService (so it flips fragment ACTIVE and syncs watchdog lifecycle hook)
 	lifecycle := horizonlens.NewLifecycleManager(hFragmentsRepo)
 	calculator := horizonlens.NewMetricsCalculator(hFragmentsRepo)
-	lensService := horizonlens.NewLensService(hLensesRepo, hFragmentsRepo, hScoutingJobsRepo, lifecycle, calculator)
+	lensService := horizonlens.NewLensService(hLensesRepo, hFragmentsRepo, hScoutingJobsRepo, ontologyFactsRepo, lifecycle, calculator, nil)
 
 	// Wire hook exactly like server does, but with a minimal watchdog service (we only use UpdateConfigLifecycle).
 	scheduler := horizonwatchdog.NewScheduler()
@@ -553,10 +553,10 @@ func snapshotBaseline(ctx context.Context, db *firestore.Client, fragment *horiz
 }
 
 type validationReport struct {
-	FragmentUpdated      bool
-	FramesDelta          int
-	OutEdgesDelta        int
-	InEdgesDelta         int
+	FragmentUpdated       bool
+	FramesDelta           int
+	OutEdgesDelta         int
+	InEdgesDelta          int
 	ProjectFragmentsDelta int
 }
 
@@ -682,5 +682,3 @@ func countProjectFragments(ctx context.Context, db *firestore.Client, projectID 
 	}
 	return len(docs)
 }
-
-

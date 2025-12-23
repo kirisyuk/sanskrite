@@ -623,10 +623,13 @@ const DiscoveryPage: React.FC = () => {
   }, []);
 
   // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
+  // Also use fold mode (medium) for portrait orientation (height > width)
   const [isSmartphone, setIsSmartphone] = React.useState(false);
   React.useEffect(() => {
     const checkSmartphone = () => {
-      setIsSmartphone(window.innerWidth <= 600);
+      const isPortrait = window.innerHeight > window.innerWidth;
+      // Use fold mode (medium) if portrait orientation, otherwise check width
+      setIsSmartphone(window.innerWidth <= 600 && !isPortrait);
     };
     checkSmartphone();
     window.addEventListener('resize', checkSmartphone);

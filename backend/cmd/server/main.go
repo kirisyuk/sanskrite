@@ -1011,6 +1011,37 @@ func main() {
 						scoutTasksDispatcher = d
 						logger.Printf("Cloud Tasks (Scout) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
 						horizonScoutingJobsRepo.WithOnCreate(func(c context.Context, job *horizonmodels.ScoutingJob) error {
+							// Best-effort realtime: job created (for Hook->Assemble "Sled" UI).
+							// IMPORTANT: publish with tenantId from the job (security namespace), even though fragments are global.
+							if pub != nil && job != nil {
+								correlationID := ""
+								sessionID := ""
+								if job.State != nil {
+									if v, ok := job.State["correlationId"].(string); ok {
+										correlationID = strings.TrimSpace(v)
+									}
+									if v, ok := job.State["sessionId"].(string); ok {
+										sessionID = strings.TrimSpace(v)
+									}
+								}
+								payload := map[string]interface{}{
+									"tenantId":            strings.TrimSpace(job.TenantID),
+									"projectId":           strings.TrimSpace(job.ProjectID),
+									"lensId":              strings.TrimSpace(job.LensID),
+									"jobId":               strings.TrimSpace(job.ID),
+									"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+									"strategy":            strings.TrimSpace(job.ScoutingStrategy),
+								}
+								if correlationID != "" {
+									payload["correlationId"] = correlationID
+								}
+								if sessionID != "" {
+									payload["sessionId"] = sessionID
+								}
+								// Do not fail job creation if realtime publish fails.
+								_ = pub.PublishJSON(c, realtime.EventType("horizon.scout.job.created"), strings.TrimSpace(job.TenantID), payload)
+							}
+
 							// Enqueue by job ID; execution will load full state from Firestore.
 							if err := scoutTasksDispatcher.EnqueueScoutJob(c, job.ID); err != nil {
 								return err
@@ -1098,7 +1129,7 @@ func main() {
 			// Initialize Lens subsystem
 			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
 			lensCalculator := horizonlens.NewMetricsCalculator(horizonFragmentsRepo)
-			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, horizonScoutingJobsRepo, lensLifecycle, lensCalculator)
+			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, horizonScoutingJobsRepo, ontologyFactsRepo, lensLifecycle, lensCalculator, pub)
 			horizonService.SetLensService(lensService)
 
 			// Initialize Propagation subsystem
@@ -1180,76 +1211,76 @@ func main() {
 			// Cloud Tasks is the preferred mechanism for executing Scout jobs.
 			if strings.TrimSpace(getEnv("ENABLE_SCOUT_FIRESTORE_POLLER", "0")) == "1" {
 				go func() {
-				// Задержка перед стартом
-				time.Sleep(5 * time.Second)
-				logger.Printf("Scout Worker started polling")
-				// Limit concurrency to avoid spawning unbounded goroutines and to reduce starvation under backlog.
-				const scoutWorkerMaxConcurrent = 3
-				sem := make(chan struct{}, scoutWorkerMaxConcurrent)
-				ticker := time.NewTicker(10 * time.Second)
-				defer ticker.Stop()
+					// Задержка перед стартом
+					time.Sleep(5 * time.Second)
+					logger.Printf("Scout Worker started polling")
+					// Limit concurrency to avoid spawning unbounded goroutines and to reduce starvation under backlog.
+					const scoutWorkerMaxConcurrent = 3
+					sem := make(chan struct{}, scoutWorkerMaxConcurrent)
+					ticker := time.NewTicker(10 * time.Second)
+					defer ticker.Stop()
 
-				for {
-					select {
-					case <-ctxBackground.Done():
-						return
-					case <-ticker.C:
-						// Получаем ожидающие задачи.
-						// First, prioritize "fresh" jobs to avoid high latency under backlog.
-						seen := map[string]struct{}{}
-						cutoff := time.Now().UTC().Add(-15 * time.Minute)
-						jobs, err := horizonScoutingJobsRepo.ListPendingSince(context.Background(), cutoff, 25)
-						if err != nil {
-							logger.Printf("Scout Worker poll error: %v", err)
-							continue
-						}
-
-						// Then, also drain the backlog (FIFO).
-						backlog, err := horizonScoutingJobsRepo.ListPending(context.Background(), 25)
-						if err != nil {
-							logger.Printf("Scout Worker poll error (backlog): %v", err)
-							continue
-						}
-						jobs = append(jobs, backlog...)
-
-						for _, job := range jobs {
-							if job == nil || job.ID == "" {
+					for {
+						select {
+						case <-ctxBackground.Done():
+							return
+						case <-ticker.C:
+							// Получаем ожидающие задачи.
+							// First, prioritize "fresh" jobs to avoid high latency under backlog.
+							seen := map[string]struct{}{}
+							cutoff := time.Now().UTC().Add(-15 * time.Minute)
+							jobs, err := horizonScoutingJobsRepo.ListPendingSince(context.Background(), cutoff, 25)
+							if err != nil {
+								logger.Printf("Scout Worker poll error: %v", err)
 								continue
 							}
-							if _, ok := seen[job.ID]; ok {
+
+							// Then, also drain the backlog (FIFO).
+							backlog, err := horizonScoutingJobsRepo.ListPending(context.Background(), 25)
+							if err != nil {
+								logger.Printf("Scout Worker poll error (backlog): %v", err)
 								continue
 							}
-							seen[job.ID] = struct{}{}
-							sem <- struct{}{}
-							// Выполняем задачу асинхронно
-							go func(j *horizonmodels.ScoutingJob) {
-								defer func() { <-sem }()
-								execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-								defer cancel()
-								logger.Printf("Scout Worker executing job %s for %s", j.ID, j.TargetCanonicalPath)
-								if err := scoutEngine.ExecuteScoutingJob(execCtx, j); err != nil {
-									logger.Printf("Scout Job %s failed: %v", j.ID, err)
-								} else {
-									logger.Printf("Scout Job %s completed", j.ID)
+							jobs = append(jobs, backlog...)
+
+							for _, job := range jobs {
+								if job == nil || job.ID == "" {
+									continue
 								}
-							}(job)
+								if _, ok := seen[job.ID]; ok {
+									continue
+								}
+								seen[job.ID] = struct{}{}
+								sem <- struct{}{}
+								// Выполняем задачу асинхронно
+								go func(j *horizonmodels.ScoutingJob) {
+									defer func() { <-sem }()
+									execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+									defer cancel()
+									logger.Printf("Scout Worker executing job %s for %s", j.ID, j.TargetCanonicalPath)
+									if err := scoutEngine.ExecuteScoutingJob(execCtx, j); err != nil {
+										logger.Printf("Scout Job %s failed: %v", j.ID, err)
+									} else {
+										logger.Printf("Scout Job %s completed", j.ID)
+									}
+								}(job)
+							}
 						}
 					}
-				}
-			}()
+				}()
 			}
 
-		// Create HTTP handlers
-		horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)
-		logger.Printf("Horizon system initialized")
-		
-		// Wire Horizon Lens service to projects handler for cascade delete
-		if horizonService != nil && horizonService.Lens() != nil {
-			s.projectsHandler = s.projectsHandler.WithLensService(horizonService.Lens())
-			logger.Printf("Horizon Lens service wired to projects handler for cascade delete")
+			// Create HTTP handlers
+			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)
+			logger.Printf("Horizon system initialized")
+
+			// Wire Horizon Lens service to projects handler for cascade delete
+			if horizonService != nil && horizonService.Lens() != nil {
+				s.projectsHandler = s.projectsHandler.WithLensService(horizonService.Lens())
+				logger.Printf("Horizon Lens service wired to projects handler for cascade delete")
+			}
 		}
 	}
-}
 
 	// Get auth client for middleware
 	authClient, err := fbApp.Auth(ctx)

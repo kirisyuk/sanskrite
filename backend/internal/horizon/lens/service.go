@@ -10,7 +10,10 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 func parseStringSlice(v interface{}) []string {
@@ -77,13 +80,15 @@ func parseInt(v interface{}, def int) int {
 
 // LensService управляет Lens и подписками на HorizonFragment
 type LensService struct {
-	lensesRepo       *repo.LensesRepository
-	fragmentsRepo    *repo.HorizonFragmentsRepository
-	scoutingJobsRepo *repo.ScoutingJobsRepository
-	lifecycle        *LifecycleManager
-	calculator       *MetricsCalculator
-	watchdogHook     func(ctx context.Context, fragmentID string)
-	queryResolver    *QueryResolver
+	lensesRepo        *repo.LensesRepository
+	fragmentsRepo     *repo.HorizonFragmentsRepository
+	scoutingJobsRepo  *repo.ScoutingJobsRepository
+	ontologyFactsRepo *corerepo.OntologyFactsRepository
+	lifecycle         *LifecycleManager
+	calculator        *MetricsCalculator
+	watchdogHook      func(ctx context.Context, fragmentID string)
+	queryResolver     *QueryResolver
+	realtime          *realtime.Publisher
 }
 
 // NewLensService создает новый Lens Service
@@ -91,18 +96,59 @@ func NewLensService(
 	lensesRepo *repo.LensesRepository,
 	fragmentsRepo *repo.HorizonFragmentsRepository,
 	scoutingJobsRepo *repo.ScoutingJobsRepository,
+	ontologyFactsRepo *corerepo.OntologyFactsRepository,
 	lifecycle *LifecycleManager,
 	calculator *MetricsCalculator,
+	rt *realtime.Publisher,
 ) *LensService {
-	queryResolver := NewQueryResolver(fragmentsRepo)
+	queryResolver := NewQueryResolver(fragmentsRepo, ontologyFactsRepo)
 	return &LensService{
-		lensesRepo:       lensesRepo,
-		fragmentsRepo:    fragmentsRepo,
-		scoutingJobsRepo: scoutingJobsRepo,
-		lifecycle:        lifecycle,
-		calculator:       calculator,
-		queryResolver:    queryResolver,
+		lensesRepo:        lensesRepo,
+		fragmentsRepo:     fragmentsRepo,
+		scoutingJobsRepo:  scoutingJobsRepo,
+		ontologyFactsRepo: ontologyFactsRepo,
+		lifecycle:         lifecycle,
+		calculator:        calculator,
+		queryResolver:     queryResolver,
+		realtime:          rt,
 	}
+}
+
+func (s *LensService) publish(ctx context.Context, et realtime.EventType, data map[string]interface{}) {
+	if s == nil || s.realtime == nil {
+		return
+	}
+	rc, ok := rtctx.Get(ctx)
+	tenantID := ""
+	if ok {
+		tenantID = strings.TrimSpace(rc.TenantID)
+		// Ensure mandatory routing keys are present in payload for WS delivery.
+		if v := strings.TrimSpace(rc.ProjectID); v != "" {
+			data["projectId"] = v
+		}
+		if v := strings.TrimSpace(rc.LensID); v != "" {
+			data["lensId"] = v
+		}
+		if v := strings.TrimSpace(rc.CorrelationID); v != "" {
+			data["correlationId"] = v
+		}
+		if v := strings.TrimSpace(rc.SessionID); v != "" {
+			data["sessionId"] = v
+		}
+	}
+	if tenantID == "" {
+		// Fall back to tenant from auth/lens when context is missing.
+		if v, ok2 := data["tenantId"].(string); ok2 {
+			tenantID = strings.TrimSpace(v)
+		}
+	}
+	if tenantID == "" {
+		// As a last resort, do not publish (we must not leak across tenants).
+		return
+	}
+	data["tenantId"] = tenantID
+	data["ts"] = time.Now().UTC().Format(time.RFC3339Nano)
+	_ = s.realtime.PublishJSON(ctx, et, tenantID, data)
 }
 
 // SetWatchdogLifecycleHook устанавливает hook, который синхронизирует WatchdogConfig
@@ -114,15 +160,66 @@ func (s *LensService) SetWatchdogLifecycleHook(hook func(ctx context.Context, fr
 // CreateLens создает новый Lens и управляет подписками
 func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string, error) {
 	if err := lens.Validate(); err != nil {
+		// Best-effort: surface assembly failure to the initiating UI (if realtime ctx exists).
+		s.publish(ctx, realtime.EventType("horizon.assembly.failed"), map[string]interface{}{
+			"tenantId":  lens.TenantID,
+			"projectId": lens.ProjectID,
+			"phase":     "decomposition",
+			"error":     err.Error(),
+		})
 		return "", fmt.Errorf("validation error: %w", err)
+	}
+
+	// Emit assembly start (Hook -> Assemble).
+	// Note: lensId is not known yet; we'll re-attach it after creation.
+	if rc, ok := rtctx.Get(ctx); ok && s.realtime != nil {
+		tmp := map[string]interface{}{
+			"tenantId":  lens.TenantID,
+			"projectId": lens.ProjectID,
+			"phase":     "decomposition",
+			"progress":  0.0,
+		}
+		if strings.TrimSpace(rc.CorrelationID) != "" {
+			tmp["correlationId"] = rc.CorrelationID
+		}
+		if strings.TrimSpace(rc.SessionID) != "" {
+			tmp["sessionId"] = rc.SessionID
+		}
+		s.publish(ctx, realtime.EventType("horizon.assembly.started"), tmp)
+		s.publish(ctx, realtime.EventType("horizon.assembly.phase"), map[string]interface{}{
+			"tenantId":  lens.TenantID,
+			"projectId": lens.ProjectID,
+			"phase":     "decomposition",
+			"progress":  0.0,
+		})
 	}
 
 	// Создаем Lens
 	lensID, err := s.lensesRepo.Create(ctx, lens)
 	if err != nil {
+		s.publish(ctx, realtime.EventType("horizon.assembly.failed"), map[string]interface{}{
+			"tenantId":  lens.TenantID,
+			"projectId": lens.ProjectID,
+			"phase":     "decomposition",
+			"error":     err.Error(),
+		})
 		return "", fmt.Errorf("failed to create lens: %w", err)
 	}
 	lens.ID = lensID
+
+	// Update realtime ctx with lensId (if present).
+	if rc, ok := rtctx.Get(ctx); ok {
+		rc.LensID = lensID
+		ctx = rtctx.With(ctx, rc)
+	}
+
+	s.publish(ctx, realtime.EventType("horizon.assembly.phase"), map[string]interface{}{
+		"tenantId":  lens.TenantID,
+		"projectId": lens.ProjectID,
+		"lensId":    lensID,
+		"phase":     "cache_hit",
+		"progress":  0.05,
+	})
 
 	// Optional behavior knobs for Horizon assembly (kept in ViewConfig to avoid breaking schema):
 	// - requestedMetrics: []string | []any(strings) | "a,b,c"
@@ -155,7 +252,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Резолвим QueryAddress в canonical paths
 	now := time.Now().UTC()
 	resolvedQueries, resolveErrors := resolveQueryAddresses(ctx, s.queryResolver, lens.TenantID, queryAddresses)
-	
+
 	// Сохраняем resolved queries в кэш
 	for queryAddr, resolvedPaths := range resolvedQueries {
 		lens.ResolvedQueries[queryAddr] = resolvedPaths
@@ -163,16 +260,19 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		// Добавляем resolved paths к static paths для последующей обработки
 		staticPaths = append(staticPaths, resolvedPaths...)
 	}
-	
+
 	// Логируем ошибки резолва (если есть)
 	if len(resolveErrors) > 0 {
 		log.Printf("[LensService] CreateLens: %d query address resolution errors (continuing with partial results)", len(resolveErrors))
 	}
 
 	// Увеличиваем activeSubscribers для всех HorizonFragment в scope
+	cacheHits := 0
+	scoutingPlanned := 0
 	for _, canonicalPath := range staticPaths {
 		fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
 		if err == nil && fragment != nil {
+			cacheHits++
 			// Сохраняем в кэш для будущих операций
 			lens.ScopeFragments[canonicalPath] = fragment.ID
 
@@ -188,11 +288,23 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			if s.watchdogHook != nil {
 				s.watchdogHook(ctx, fragment.ID)
 			}
+			// Graph materialization: cached node is ready to render.
+			s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+				"tenantId":        lens.TenantID,
+				"projectId":       lens.ProjectID,
+				"lensId":          lensID,
+				"canonicalPath":   canonicalPath,
+				"fragmentId":      fragment.ID,
+				"status":          "cached",
+				"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
+				"version":         fragment.Version,
+			})
 		}
 
 		// Создаем ScoutingJob для сборки/освежения данных (ScoutEngine выполнит freshness-check и быстро завершит,
 		// если данные уже достаточно свежие). Это убирает расхождения между тестовым сценарием и ядром.
 		if s.scoutingJobsRepo != nil {
+			scoutingPlanned++
 			now := time.Now().UTC()
 			state := map[string]interface{}{
 				"targetCanonicalPath": canonicalPath,
@@ -200,8 +312,17 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"currentState":        string(models.ScoutingJobStatePending),
 				"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
 				// Recursion control (used by ScoutEngine.processDiscoveredRelations)
-				"recursionDepth":     0.0,
-				"maxRecursionDepth":  float64(maxRecursionDepth),
+				"recursionDepth":    0.0,
+				"maxRecursionDepth": float64(maxRecursionDepth),
+			}
+			// Propagate correlation/session IDs into job state for downstream realtime.
+			if rc, ok := rtctx.Get(ctx); ok {
+				if strings.TrimSpace(rc.CorrelationID) != "" {
+					state["correlationId"] = rc.CorrelationID
+				}
+				if strings.TrimSpace(rc.SessionID) != "" {
+					state["sessionId"] = rc.SessionID
+				}
 			}
 			if len(requestedMetrics) > 0 {
 				state["requestedMetrics"] = requestedMetrics
@@ -216,7 +337,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 					UpdatedAt: now,
 					State:     state,
 				},
-				LensID:             lensID,
+				LensID:              lensID,
 				TargetCanonicalPath: canonicalPath,
 				ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
 				BillingContext: models.BillingContext{
@@ -226,14 +347,80 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				CurrentState: models.ScoutingJobStatePending,
 			}
 			if _, createErr := s.scoutingJobsRepo.Create(ctx, scoutingJob); createErr != nil {
+				s.publish(ctx, realtime.EventType("horizon.assembly.failed"), map[string]interface{}{
+					"tenantId":      lens.TenantID,
+					"projectId":     lens.ProjectID,
+					"lensId":        lensID,
+					"phase":         "scouting",
+					"canonicalPath": canonicalPath,
+					"error":         createErr.Error(),
+				})
 				return "", fmt.Errorf("failed to create scouting job for %s: %w", canonicalPath, createErr)
 			}
+			// Graph materialization hint: node requires scouting (even if fragment didn't exist at cache-hit time).
+			s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+				"tenantId":      lens.TenantID,
+				"projectId":     lens.ProjectID,
+				"lensId":        lensID,
+				"canonicalPath": canonicalPath,
+				"status":        "scouting",
+				"jobId":         scoutingJob.ID,
+			})
 		}
 	}
 
 	// Сохраняем обновленный кэш fragment IDs обратно в Firestore
 	if len(lens.ScopeFragments) > 0 {
 		_ = s.lensesRepo.Update(ctx, lens)
+	}
+
+	// Transition to scouting phase and publish initial progress snapshot.
+	progress := 0.1
+	if scoutingPlanned > 0 {
+		progress = 0.1
+	} else {
+		progress = 1.0
+	}
+	s.publish(ctx, realtime.EventType("horizon.assembly.phase"), map[string]interface{}{
+		"tenantId":  lens.TenantID,
+		"projectId": lens.ProjectID,
+		"lensId":    lensID,
+		"phase": func() string {
+			if scoutingPlanned > 0 {
+				return "scouting"
+			}
+			return "ready"
+		}(),
+		"progress": progress,
+	})
+	s.publish(ctx, realtime.EventType("horizon.assembly.progress"), map[string]interface{}{
+		"tenantId":  lens.TenantID,
+		"projectId": lens.ProjectID,
+		"lensId":    lensID,
+		"phase": func() string {
+			if scoutingPlanned > 0 {
+				return "scouting"
+			}
+			return "ready"
+		}(),
+		"progress": progress,
+		"counters": map[string]interface{}{
+			"nodesKnown":  len(staticPaths),
+			"nodesCached": cacheHits,
+			"jobsTotal":   scoutingPlanned,
+			"jobsRunning": 0,
+			"jobsDone":    0,
+			"jobsFailed":  0,
+		},
+	})
+	if scoutingPlanned == 0 {
+		s.publish(ctx, realtime.EventType("horizon.assembly.ready"), map[string]interface{}{
+			"tenantId":  lens.TenantID,
+			"projectId": lens.ProjectID,
+			"lensId":    lensID,
+			"phase":     "ready",
+			"progress":  1.0,
+		})
 	}
 
 	return lensID, nil
@@ -298,14 +485,14 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	copy(allNewStaticPaths, newStaticPaths)
 
 	resolvedQueries, resolveErrors := resolveQueryAddresses(ctx, s.queryResolver, lens.TenantID, newQueryAddresses)
-	
+
 	// Обновляем кэш и добавляем resolved paths
 	for queryAddr, resolvedPaths := range resolvedQueries {
 		lens.ResolvedQueries[queryAddr] = resolvedPaths
 		lens.LastResolved = &now
 		allNewStaticPaths = append(allNewStaticPaths, resolvedPaths...)
 	}
-	
+
 	// Логируем ошибки резолва (если есть)
 	if len(resolveErrors) > 0 {
 		log.Printf("[LensService] UpdateLens: %d query address resolution errors (continuing with partial results)", len(resolveErrors))
@@ -545,4 +732,3 @@ func (s *LensService) CalculateMetrics(ctx context.Context, lensID string) (map[
 
 	return s.calculator.CalculateLensMetrics(ctx, lens)
 }
-

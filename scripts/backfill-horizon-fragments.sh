@@ -9,6 +9,8 @@ BUCKET="${BUCKET:-sanskrite-horizon-fragments}"
 DATA_STORE_ID="${DATA_STORE_ID:-horizon-fragments-store}"
 TENANT="${TENANT:-global}"
 BATCH_SIZE="${BATCH_SIZE:-100}"
+START_BATCH="${START_BATCH:-}"
+END_BATCH="${END_BATCH:-}"
 
 echo "=== Backfill Horizon Fragments to Vertex AI Search ==="
 echo "Project: $PROJECT"
@@ -16,6 +18,12 @@ echo "Bucket: $BUCKET"
 echo "Data Store: $DATA_STORE_ID"
 echo "Tenant: $TENANT"
 echo "Batch Size: $BATCH_SIZE"
+if [[ -n "${START_BATCH}" ]]; then
+  echo "Start Batch: $START_BATCH"
+fi
+if [[ -n "${END_BATCH}" ]]; then
+  echo "End Batch: $END_BATCH"
+fi
 echo ""
 
 # Проверяем наличие файлов
@@ -31,6 +39,7 @@ echo ""
 
 # Запускаем backfill
 PROJECT="$PROJECT" BUCKET="$BUCKET" DATA_STORE_ID="$DATA_STORE_ID" TENANT="$TENANT" BATCH_SIZE="$BATCH_SIZE" \
+  START_BATCH="$START_BATCH" END_BATCH="$END_BATCH" \
   bash scripts/backfill-horizon-fragments-vertex.sh
 
 echo ""

@@ -1,13 +1,51 @@
 package horizon
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
-	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
+
+func (h *HorizonHandlers) publishEdgeUpserted(ctx context.Context, authTenant string, projectID string, lensID string, correlationID string, sessionID string, edge *models.DependencyEdge) {
+	if h == nil || h.service == nil || edge == nil {
+		return
+	}
+	pub := h.service.RealtimePublisher()
+	if pub == nil {
+		return
+	}
+	if strings.TrimSpace(projectID) == "" {
+		// Without projectId we cannot route to subscribed clients (skip).
+		return
+	}
+	payload := map[string]interface{}{
+		"tenantId":         strings.TrimSpace(authTenant),
+		"projectId":        strings.TrimSpace(projectID),
+		"lensId":           strings.TrimSpace(lensID),
+		"edgeId":           strings.TrimSpace(edge.ID),
+		"sourceFragmentId": strings.TrimSpace(edge.SourceFragmentID),
+		"targetFragmentId": strings.TrimSpace(edge.TargetFragmentID),
+		"type":             string(edge.Type),
+		"properties":       edge.Properties,
+		"qualifiers":       edge.Qualifiers,
+		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if correlationID != "" {
+		payload["correlationId"] = correlationID
+	}
+	if sessionID != "" {
+		payload["sessionId"] = sessionID
+	}
+	_ = pub.PublishJSON(ctx, realtime.EventType("horizon.graph.edge.upserted"), strings.TrimSpace(authTenant), payload)
+}
 
 // CreateEdge создает новый DependencyEdge
 func (h *HorizonHandlers) CreateEdge(w http.ResponseWriter, r *http.Request) {
@@ -30,13 +68,42 @@ func (h *HorizonHandlers) CreateEdge(w http.ResponseWriter, r *http.Request) {
 
 	edge.TenantID = authInfo.TenantID
 
-	edgeID, err := h.service.Edges().Create(r.Context(), &edge)
+	// Optional routing context from headers (best-effort for realtime).
+	projectID := strings.TrimSpace(r.Header.Get("X-Project-Id"))
+	if projectID == "" {
+		projectID = strings.TrimSpace(r.Header.Get("X-Project-ID"))
+	}
+	lensID := strings.TrimSpace(r.Header.Get("X-Lens-Id"))
+	if lensID == "" {
+		lensID = strings.TrimSpace(r.Header.Get("X-Lens-ID"))
+	}
+	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+	if correlationID == "" {
+		correlationID = strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
+	}
+	if correlationID == "" {
+		correlationID = uuid.NewString()
+	}
+	sessionID := strings.TrimSpace(r.Header.Get("X-Session-Id"))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(r.Header.Get("X-Session-ID"))
+	}
+	ctx := rtctx.With(r.Context(), rtctx.Context{
+		TenantID:      authInfo.TenantID,
+		ProjectID:     projectID,
+		LensID:        lensID,
+		CorrelationID: correlationID,
+		SessionID:     sessionID,
+	})
+
+	edgeID, err := h.service.Edges().Create(ctx, &edge)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	edge.ID = edgeID
+	h.publishEdgeUpserted(ctx, authInfo.TenantID, projectID, lensID, correlationID, sessionID, &edge)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(edge)
@@ -102,6 +169,32 @@ func (h *HorizonHandlers) UpdateEdge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Best-effort realtime edge upsert (needs projectId in headers for routing).
+	projectID := strings.TrimSpace(r.Header.Get("X-Project-Id"))
+	if projectID == "" {
+		projectID = strings.TrimSpace(r.Header.Get("X-Project-ID"))
+	}
+	lensID := strings.TrimSpace(r.Header.Get("X-Lens-Id"))
+	if lensID == "" {
+		lensID = strings.TrimSpace(r.Header.Get("X-Lens-ID"))
+	}
+	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+	if correlationID == "" {
+		correlationID = strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
+	}
+	sessionID := strings.TrimSpace(r.Header.Get("X-Session-Id"))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(r.Header.Get("X-Session-ID"))
+	}
+	ctx := rtctx.With(r.Context(), rtctx.Context{
+		TenantID:      authInfo.TenantID,
+		ProjectID:     projectID,
+		LensID:        lensID,
+		CorrelationID: correlationID,
+		SessionID:     sessionID,
+	})
+	h.publishEdgeUpserted(ctx, authInfo.TenantID, projectID, lensID, correlationID, sessionID, edge)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(edge)
@@ -217,4 +310,3 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
-

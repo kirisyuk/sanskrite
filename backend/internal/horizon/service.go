@@ -14,6 +14,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
 
 // HorizonService - главный сервис модуля horizon
@@ -21,18 +22,18 @@ type HorizonService struct {
 	deps HorizonServiceDependencies
 
 	// Подсистемы (будут инициализированы на соответствующих этапах)
-	scoutEngine      *scout.ScoutEngine
+	scoutEngine       *scout.ScoutEngine
 	propagationEngine *propagation.PropagationEngine
 	watchdogService   *watchdog.WatchdogService
 	lensService       *lens.LensService
 
 	// Репозитории horizon
-	fragmentsRepo     *repo.HorizonFragmentsRepository
-	framesRepo        *repo.FramesRepository
-	lensesRepo        *repo.LensesRepository
-	edgesRepo         *repo.DependencyEdgesRepository
-	watchdogRepo      *repo.WatchdogConfigsRepository
-	scoutingJobsRepo *repo.ScoutingJobsRepository
+	fragmentsRepo        *repo.HorizonFragmentsRepository
+	framesRepo           *repo.FramesRepository
+	lensesRepo           *repo.LensesRepository
+	edgesRepo            *repo.DependencyEdgesRepository
+	watchdogRepo         *repo.WatchdogConfigsRepository
+	scoutingJobsRepo     *repo.ScoutingJobsRepository
 	fragmentVersionsRepo *repo.HorizonFragmentVersionsRepository
 }
 
@@ -100,13 +101,13 @@ func NewHorizonService(
 	}
 
 	return &HorizonService{
-		deps:                deps,
-		fragmentsRepo:       fragmentsRepo,
-		framesRepo:          framesRepo,
-		lensesRepo:          lensesRepo,
-		edgesRepo:           edgesRepo,
-		watchdogRepo:        watchdogRepo,
-		scoutingJobsRepo:    scoutingJobsRepo,
+		deps:                 deps,
+		fragmentsRepo:        fragmentsRepo,
+		framesRepo:           framesRepo,
+		lensesRepo:           lensesRepo,
+		edgesRepo:            edgesRepo,
+		watchdogRepo:         watchdogRepo,
+		scoutingJobsRepo:     scoutingJobsRepo,
 		fragmentVersionsRepo: fragmentVersionsRepo,
 		// Подсистемы будут инициализированы на соответствующих этапах
 	}, nil
@@ -182,6 +183,15 @@ func (s *HorizonService) FragmentVersions() *repo.HorizonFragmentVersionsReposit
 	return s.fragmentVersionsRepo
 }
 
+// RealtimePublisher exposes the underlying realtime publisher for HTTP handlers that need to emit
+// events directly (best-effort). Prefer emitting from domain services when possible.
+func (s *HorizonService) RealtimePublisher() *realtime.Publisher {
+	if s == nil {
+		return nil
+	}
+	return s.deps.RealtimePublisher
+}
+
 // HealthCheck проверяет состояние сервиса
 func (s *HorizonService) HealthCheck(ctx context.Context) error {
 	// Базовая проверка доступности репозиториев
@@ -191,50 +201,116 @@ func (s *HorizonService) HealthCheck(ctx context.Context) error {
 
 // SearchFragments выполняет семантический поиск по фрагментам через Vertex AI Search
 func (s *HorizonService) SearchFragments(ctx context.Context, query string, limit int) ([]*models.HorizonFragment, error) {
-	if s.deps.VertexSearchClient == nil || !s.deps.VertexSearchClient.IsConfigured() {
-		return nil, fmt.Errorf("vertex search not configured")
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, fmt.Errorf("query is required")
 	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	// 1) Vertex AI Search (semantic). Best-effort: if it fails, we fall back to Firestore prefix search.
+	var vertexFragments []*models.HorizonFragment
+	var vertexErr error
 
 	// Horizon fragments are searched in a dedicated Vertex AI Search Data Store.
 	// IMPORTANT: Filtering by structData.* is not supported in our current "document" schema datastore,
 	// so we avoid filters and instead rely on store isolation.
-	vertexClient := s.deps.VertexSearchClient
-	if ds := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID")); ds != "" {
-		vertexClient = vertexClient.WithDataStore(ds)
-	}
-
-	req := &ai.SearchRequest{
-		Query:    query,
-		PageSize: limit,
-	}
-
-	resp, err := vertexClient.Search(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("vertex search failed: %w", err)
-	}
-
-	log.Printf("[SearchFragments] Vertex search returned %d results", len(resp.Results))
-
-	var fragments []*models.HorizonFragment
-	for i, res := range resp.Results {
-		// Извлекаем ID фрагмента
-		id := res.Document.ID
-		// Если ID содержит расширение .json, убираем его
-		if strings.HasSuffix(id, ".json") {
-			id = strings.TrimSuffix(id, ".json")
+	if s.deps.VertexSearchClient != nil && s.deps.VertexSearchClient.IsConfigured() {
+		vertexClient := s.deps.VertexSearchClient
+		if ds := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID")); ds != "" {
+			vertexClient = vertexClient.WithDataStore(ds)
 		}
 
-		log.Printf("[SearchFragments] Result %d: ID=%s, URI=%s", i, id, res.Document.URI)
+		req := &ai.SearchRequest{
+			Query:    q,
+			PageSize: limit,
+		}
 
-		// Пытаемся получить фрагмент из базы
-		fragment, err := s.fragmentsRepo.Get(ctx, id)
+		resp, err := vertexClient.Search(ctx, req)
 		if err != nil {
-			log.Printf("[SearchFragments] Failed to get fragment %s: %v", id, err)
-			continue
+			vertexErr = fmt.Errorf("vertex search failed: %w", err)
+		} else {
+			log.Printf("[SearchFragments] Vertex search returned %d results", len(resp.Results))
+
+			for i, res := range resp.Results {
+				// Extract fragment ID
+				id := res.Document.ID
+				if strings.HasSuffix(id, ".json") {
+					id = strings.TrimSuffix(id, ".json")
+				}
+				log.Printf("[SearchFragments] Result %d: ID=%s, URI=%s", i, id, res.Document.URI)
+
+				fragment, err := s.fragmentsRepo.Get(ctx, id)
+				if err != nil {
+					log.Printf("[SearchFragments] Failed to get fragment %s: %v", id, err)
+					continue
+				}
+				vertexFragments = append(vertexFragments, fragment)
+			}
+
+			log.Printf("[SearchFragments] Successfully loaded %d fragments from %d search results", len(vertexFragments), len(resp.Results))
 		}
-		fragments = append(fragments, fragment)
 	}
 
-	log.Printf("[SearchFragments] Successfully loaded %d fragments from %d search results", len(fragments), len(resp.Results))
-	return fragments, nil
+	// 2) Firestore prefix search (typeahead). Best-effort: used as supplement + fallback.
+	var fsFragments []*models.HorizonFragment
+	var fsErr error
+	if s.fragmentsRepo != nil {
+		// Prefix search is only useful for short UI queries; keep it cheap.
+		if len([]rune(q)) >= 2 {
+			fsFragments, fsErr = s.fragmentsRepo.SearchPrefix(ctx, q, limit)
+		}
+	}
+
+	// If both sources failed / unavailable, return a useful error.
+	if len(vertexFragments) == 0 && len(fsFragments) == 0 {
+		if vertexErr != nil && fsErr != nil {
+			return nil, fmt.Errorf("search failed (vertex: %v; firestore: %v)", vertexErr, fsErr)
+		}
+		if vertexErr != nil {
+			return nil, vertexErr
+		}
+		if fsErr != nil {
+			return nil, fsErr
+		}
+		return nil, nil
+	}
+
+	// Merge + dedupe (prefer Vertex ordering, then append Firestore).
+	seen := map[string]struct{}{}
+	out := make([]*models.HorizonFragment, 0, limit*2)
+	add := func(f *models.HorizonFragment) {
+		if f == nil {
+			return
+		}
+		key := strings.TrimSpace(f.CanonicalPath)
+		if key == "" {
+			key = strings.TrimSpace(f.ID)
+		}
+		if key == "" {
+			return
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, f)
+	}
+	for _, f := range vertexFragments {
+		add(f)
+		if len(out) >= limit {
+			return out, nil
+		}
+	}
+	for _, f := range fsFragments {
+		add(f)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }

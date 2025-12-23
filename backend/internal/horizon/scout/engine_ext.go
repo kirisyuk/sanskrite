@@ -10,6 +10,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -375,11 +376,24 @@ func (e *ScoutEngine) processDiscoveredRelations(
 
 		// Используем Create, предполагая что репо обработает дубликаты или мы просто создаем новые
 		// В реальной системе нужен UpsertEdge
-		if _, err := e.edgesRepo.Create(ctx, edge); err != nil {
+		if id, err := e.edgesRepo.Create(ctx, edge); err != nil {
 			// Игнорируем ошибки дубликатов
 			// fmt.Printf("Edge creation note: %v\n", err)
 		} else {
+			edge.ID = id
 			fmt.Printf("Created edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+			// Realtime: edge materialized/updated for UI graph.
+			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
+				"tenantId":         job.TenantID,
+				"projectId":        job.ProjectID,
+				"lensId":           strings.TrimSpace(job.LensID),
+				"edgeId":           edge.ID,
+				"sourceFragmentId": edge.SourceFragmentID,
+				"targetFragmentId": edge.TargetFragmentID,
+				"type":             string(edge.Type),
+				"properties":       edge.Properties,
+				"qualifiers":       edge.Qualifiers,
+			})
 		}
 	}
 	return nil

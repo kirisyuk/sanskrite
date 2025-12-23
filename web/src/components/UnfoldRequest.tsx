@@ -274,10 +274,19 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   }, []);
 
   // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
-  const isSmartphone = React.useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    // Smartphones are typically < 600px width (Galaxy Fold is ~512px folded, but we want to target smaller phones)
-    return window.matchMedia('(max-width: 600px)').matches;
+  // Also use fold mode (medium) for portrait orientation (height > width)
+  const [isSmartphone, setIsSmartphone] = React.useState(false);
+  React.useEffect(() => {
+    const checkSmartphone = () => {
+      if (typeof window === 'undefined') return;
+      const isPortrait = window.innerHeight > window.innerWidth;
+      // Smartphones are typically < 600px width (Galaxy Fold is ~512px folded, but we want to target smaller phones)
+      // Use fold mode (medium) if portrait orientation, otherwise check width
+      setIsSmartphone(window.innerWidth <= 600 && !isPortrait);
+    };
+    checkSmartphone();
+    window.addEventListener('resize', checkSmartphone);
+    return () => window.removeEventListener('resize', checkSmartphone);
   }, []);
 
   // State for tools dropdown on smartphones

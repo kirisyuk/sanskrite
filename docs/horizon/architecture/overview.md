@@ -163,8 +163,8 @@ graph TB
 
 **Использование**:
 - Pub/Sub события для обновлений HorizonFragment
-- WebSocket уведомления для обновлений Lens
-- События: `horizon_fragment.updated`, `lens.recalculated`, `propagation.completed`
+- WebSocket уведомления для обновлений Lens/Graph через общий realtime broker (`/ws`) + project subscription
+- События: `horizon.assembly.*`, `horizon.scout.job.*`, `horizon.graph.node.upserted`, `horizon.propagation.started`, `horizon.lens.updated`
 
 ### Мультитенантность
 

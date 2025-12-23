@@ -8,7 +8,11 @@ import { useUIStore } from '../stores/uiStore';
 import { SettingsModal } from '../components/SettingsModal';
 import { AccountModal } from '../components/AccountModal';
 import { AdminModal } from '../components/AdminModal';
+import { LensCanvas } from '../components/LensCanvas';
 import AssembleLensRequestComponent, { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
+import { api } from '../lib/api';
+import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
+import { useWebSocketConnection } from '../hooks/useWebSocketConnection';
 
 const HorizonPage: React.FC = () => {
   const { t } = useTranslation();
@@ -25,15 +29,20 @@ const HorizonPage: React.FC = () => {
   const [showSettings, setShowSettings] = React.useState(false);
   const [showAccount, setShowAccount] = React.useState(false);
   const [showAdmin, setShowAdmin] = React.useState(false);
+  const [selectedLensId, setSelectedLensId] = React.useState<string | null>(null);
+  const assembly = useHorizonRealtimeStore((s) => s.assembly);
   
   const isAdmin = currentUser?.email === 'igor@hatl.one' || currentUser?.email === 'admin@hatl.one';
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
   
   // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
+  // Also use fold mode (medium) for portrait orientation (height > width)
   const [isSmartphone, setIsSmartphone] = React.useState(false);
   React.useEffect(() => {
     const checkSmartphone = () => {
-      setIsSmartphone(window.innerWidth <= 600);
+      const isPortrait = window.innerHeight > window.innerWidth;
+      // Use fold mode (medium) if portrait orientation, otherwise check width
+      setIsSmartphone(window.innerWidth <= 600 && !isPortrait);
     };
     checkSmartphone();
     window.addEventListener('resize', checkSmartphone);
@@ -51,6 +60,9 @@ const HorizonPage: React.FC = () => {
       fetchProjects();
     }
   }, [currentUser, fetchProjects]);
+
+  // Initialize WebSocket connection (same flow as Discovery).
+  useWebSocketConnection();
   
   // Focus input when editing starts
   React.useEffect(() => {
@@ -105,16 +117,32 @@ const HorizonPage: React.FC = () => {
     setShowSettings(false);
     setShowAccount(false);
     setShowAdmin(false);
+    setSelectedLensId(null);
   }, []);
 
   const handleAssembleLens = React.useCallback(async (request: AssembleLensRequest) => {
     try {
-      // TODO: Implement API call to /api/horizon/lenses/assemble
-      console.log('Assembling lens:', request);
-      // For now, just log the request
-      // In the future, this will:
-      // 1. Call POST /api/horizon/lenses/assemble
-      // 2. Navigate to /horizon/assemble/:lensId
+      // We currently "assemble" by creating a Lens with a scope derived from selected entities.
+      // Realtime assembly/scout progress is delivered via horizon.* websocket events.
+      const correlationId = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
+        ? (globalThis.crypto as any).randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const sessionId = (window as any).__horizonSessionId || correlationId;
+      (window as any).__horizonSessionId = sessionId;
+
+      const lens = await api.createHorizonLens({
+        projectId: request.projectId,
+        name: request.name || 'New Lens',
+        scope: request.targetEntities.map((e) => e.canonicalPath),
+        viewConfig: {
+          depth: request.filters?.depth,
+          horizon: request.filters?.horizon,
+          focus: request.filters?.focus,
+        },
+      }, { correlationId, sessionId });
+
+      // Open the lens canvas; realtime updates will arrive via WS for this project.
+      setSelectedLensId(lens.id);
     } catch (error) {
       console.error('Failed to assemble lens:', error);
     }
@@ -156,6 +184,8 @@ const HorizonPage: React.FC = () => {
         onStartEditingProject={startEditingProject}
         currentMode="horizon"
         projectId={currentProject?.id || null}
+        onSelectLens={setSelectedLensId}
+        selectedLensId={selectedLensId}
       />
 
       {/* Main content area */}
@@ -177,49 +207,78 @@ const HorizonPage: React.FC = () => {
             display: 'flex',
             flexDirection: 'column',
             minWidth: 0,
+            position: 'relative',
           }}
         >
-          {/* Main content - Assemble Lens Request */}
-          <div style={{ 
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            minHeight: 0,
-            height: '100%',
-          }}>
-            {currentProject ? (
-              <AssembleLensRequestComponent
-                projectId={currentProject.id}
-                onAssemble={handleAssembleLens}
-                disabled={false}
-              />
-            ) : (
-              <div style={{ 
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center', 
-                justifyContent: 'center',
-                padding: '2rem',
-                color: 'var(--text-secondary)'
-              }}>
-                <div style={{ textAlign: 'center' }}>
-                  <h1 style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
-                    Horizon
-                  </h1>
-                  <p>Risk monitoring and dependency analysis</p>
-                  <p style={{ marginTop: '1rem', fontSize: '0.875rem' }}>
-                    Select a project from the sidebar to begin.
-                  </p>
+          {/* Lens Canvas overlay */}
+          {selectedLensId ? (
+            <LensCanvas
+              isOpen={true}
+              lensId={selectedLensId}
+              onClose={() => setSelectedLensId(null)}
+            />
+          ) : (
+            /* Main content - Assemble Lens Request */
+            <div style={{ 
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+              height: '100%',
+            }}>
+              {/* Minimal realtime debug for assembly (can be replaced by dedicated Sled UI) */}
+              {assembly?.phase && (
+                <div style={{
+                  position: 'absolute',
+                  top: 12,
+                  right: 24,
+                  padding: '8px 12px',
+                  borderRadius: 10,
+                  border: '1px solid var(--overlay-line-90)',
+                  background: 'var(--bg-elevated)',
+                  color: 'var(--text-secondary)',
+                  fontSize: 12,
+                  zIndex: 10,
+                }}>
+                  <div><strong>Assembly</strong></div>
+                  <div>phase: {assembly.phase}</div>
+                  {typeof assembly.progress === 'number' && <div>progress: {(assembly.progress * 100).toFixed(0)}%</div>}
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+              {currentProject ? (
+                <AssembleLensRequestComponent
+                  projectId={currentProject.id}
+                  onAssemble={handleAssembleLens}
+                  disabled={false}
+                />
+              ) : (
+                <div style={{ 
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  padding: '2rem',
+                  color: 'var(--text-secondary)'
+                }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <h1 style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
+                      Horizon
+                    </h1>
+                    <p>Risk monitoring and dependency analysis</p>
+                    <p style={{ marginTop: '1rem', fontSize: '0.875rem' }}>
+                      Select a project from the sidebar to begin.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
       
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      {showAccount && <AccountModal onClose={() => setShowAccount(false)} />}
-      {showAdmin && isAdmin && <AdminModal onClose={() => setShowAdmin(false)} />}
+      {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />}
+      {showAccount && <AccountModal isOpen={showAccount} onClose={() => setShowAccount(false)} />}
+      {showAdmin && isAdmin && <AdminModal isOpen={showAdmin} onClose={() => setShowAdmin(false)} />}
     </div>
   );
 };

@@ -59,27 +59,24 @@
 - Поиск сущностей по тексту (Live Entity Recognition)
 - Возвращает список релевантных сущностей с их типами и путями
 
-**POST** `/api/horizon/lenses/assemble`
-- Создание нового Lens на основе выбранных сущностей
-- Запускает процесс сборки графа
+**POST** `/api/horizon/lenses`
+- Фактический assemble: создание нового Lens (scope задаётся canonical paths выбранных сущностей)
+- Запускает процесс сборки/освежения: создаются Scout jobs для scope
 
 ### Пример запроса
 
 ```json
-POST /api/horizon/lenses/assemble
+POST /api/horizon/lenses
 {
   "projectId": "uuid",
   "name": "Tesla Supply Chain Risks",
-  "targetEntities": [
-    {
-      "canonicalPath": "/org/tesla",
-      "type": "Organization"
-    }
+  "scope": [
+    "/org/tesla"
   ],
-  "filters": {
+  "viewConfig": {
+    "depth": 3,
     "horizon": "Tier-2",
-    "focus": "Supply Chain",
-    "depth": 3
+    "focus": "Supply Chain"
   }
 }
 ```
@@ -132,7 +129,7 @@ POST /api/horizon/lenses/assemble
 
 **GET** `/api/horizon/lenses/:lensId/assembly-status`
 - Возвращает текущий статус сборки графа
-- WebSocket: `/ws/horizon/lenses/:lensId/assembly` для real-time обновлений
+- WebSocket: общий `/ws` + подписка на `projectId` для real-time обновлений (`horizon.assembly.*`, `horizon.scout.job.*`, `horizon.graph.*`)
 
 **GET** `/api/horizon/lenses/:lensId/graph`
 - Возвращает текущее состояние графа (для визуализации)
@@ -275,8 +272,10 @@ GET /api/horizon/lenses/:lensId/assembly-status
 **GET** `/api/horizon/lenses/:lensId/events`
 - Лента событий для Live Feed
 
-**WebSocket**: `/ws/horizon/lenses/:lensId/cockpit`
-- Real-time обновления графа, метрик, событий
+**WebSocket**: общий `/ws` + подписка на `projectId`
+- Real-time обновления графа, метрик, событий (`horizon.*`)
+
+Подробности реализации: [Realtime (implementation)](../realtime.md).
 
 ## Этап 4: Co-Pilot (Чат как вспомогательный инструмент)
 

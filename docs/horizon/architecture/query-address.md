@@ -14,12 +14,19 @@ QueryAddress — это специальный тип адреса, которы
 
 ## Решение: QueryAddress
 
-QueryAddress — это адрес формата `/query/{criteria}`, который автоматически разрешается в список canonical paths на основе критериев фильтрации.
+QueryAddress — это адрес формата `/query/{expression}`, который автоматически разрешается в список canonical paths на основе критериев фильтрации.
 
 ### Синтаксис
 
 ```
-/query/{field}:{pattern} [AND|OR {field}:{pattern}]*
+/query/{expression}
+
+expression :=
+  term
+  | NOT expression
+  | expression AND expression
+  | expression OR expression
+  | '(' expression ')'
 ```
 
 **Поддерживаемые поля**:
@@ -30,11 +37,18 @@ QueryAddress — это адрес формата `/query/{criteria}`, кото�
 - `canonicalPath` или `path` — прямое совпадение с canonical path
 
 **Операторы**:
-- `AND` (по умолчанию) — все критерии должны совпадать
-- `OR` — хотя бы один критерий должен совпадать
+- `NOT` — отрицание
+- `AND` — конъюнкция
+- `OR` — дизъюнкция
+
+**Приоритеты (как в “нормальном” языке запросов)**:
+- `NOT` > `AND` > `OR`
+- Скобки `(...)` задают явный приоритет
 
 **Wildcard**:
 - `**` — рекурсивное совпадение (например, `/Technology/Semiconductors/**` включает все подкатегории)
+
+Примечание: для `sphere:` в текущей реализации поддерживается только **точное совпадение** (без `*`/`**`), потому что сферы хранятся как массив `spherePaths` у `ontology_facts`.
 
 ### Примеры
 
@@ -118,12 +132,10 @@ func (r *QueryResolver) Resolve(ctx context.Context, tenantID string, qa *QueryA
 2. Применяет pattern matching (wildcard `**`) в памяти
 3. Учитывает ограничения Firestore (только один `array-contains`, нет `OR`)
 
-**Приоритет Firestore фильтров**:
-1. Sphere (array-contains, если точное совпадение)
-2. SectorPath (range query для prefix match `/**`)
-3. LocationPath (range query через `homeLocation.iso3166_1`)
-4. EntityPath (range query для prefix match)
-5. CanonicalPath (range query для prefix match)
+**Как это выполняется “по-взрослому”**:
+- Парсится в AST (скобки/NOT/приоритеты).
+- Для `OR` веток делается union кандидатов (несколько Firestore-запросов) и затем **полная фильтрация выражением в памяти**.
+- `sphere:` резолвится через `ontology_facts` (по `spherePaths` → `canonicalPaths`) и применяется к фрагментам как “есть ли факт в этой сфере для canonicalPath”.
 
 #### 3. Lens Model Extension
 
@@ -227,7 +239,7 @@ For each Lens:
   ↓
   Set Lens.LastResolved = now
   ↓
-  (TODO: Manage subscriptions - increment/decrement activeSubscribers for new/removed paths)
+  (See roadmap: background refresh should manage subscriptions for added/removed paths)
 ```
 
 **Note**: Полное управление подписками (создание/удаление WatchdogConfig и ScoutingJob) реализуется при явном UpdateLens. Background job только обновляет кэш.

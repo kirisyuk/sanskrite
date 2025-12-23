@@ -1554,6 +1554,143 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       throw error;
     }
   }
+
+  // Horizon - Lenses
+  async createHorizonLens(input: {
+    projectId: string;
+    name: string;
+    scope: string[];
+    viewConfig?: Record<string, any>;
+    alertConfig?: Record<string, any>;
+    status?: string;
+  }, options?: { correlationId?: string; sessionId?: string }): Promise<{
+    id: string;
+    tenantId: string;
+    projectId: string;
+    name: string;
+    scope: string[];
+    viewConfig?: Record<string, any>;
+    alertConfig?: Record<string, any>;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post('/api/horizon/lenses', input, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] createHorizonLens error:`, error);
+      throw error;
+    }
+  }
+
+  async listHorizonLenses(projectId: string, options?: { status?: string; limit?: number }): Promise<{
+    lenses: Array<{
+      id: string;
+      tenantId: string;
+      projectId: string;
+      name: string;
+      scope: string[];
+      viewConfig?: Record<string, any>;
+      alertConfig?: Record<string, any>;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+    total: number;
+  }> {
+    try {
+      const params: Record<string, string> = { projectId };
+      if (options?.status) {
+        params.status = options.status;
+      }
+      if (options?.limit) {
+        params.limit = options.limit.toString();
+      }
+      const response = await this.client.get('/api/horizon/lenses', { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] listHorizonLenses error:`, error);
+      throw error;
+    }
+  }
+
+  async getHorizonLens(lensId: string): Promise<{
+    id: string;
+    tenantId: string;
+    projectId: string;
+    name: string;
+    scope: string[];
+    viewConfig?: Record<string, any>;
+    alertConfig?: Record<string, any>;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    scopeFragments?: Record<string, string>;
+    resolvedQueries?: Record<string, string[]>;
+    lastResolved?: string;
+  }> {
+    try {
+      const response = await this.client.get(`/api/horizon/lenses/${lensId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonLens error:`, error);
+      throw error;
+    }
+  }
+
+  async getHorizonLensAssemblyStatus(lensId: string): Promise<{
+    status: string;
+    phase: string;
+    progress: number;
+    phases: {
+      decomposition: { status: string; nodes: number };
+      cacheHit: { status: string; nodes: number };
+      scouting: { status: string; completed: number; total: number; logs: string[] };
+      ready: { status: string };
+    };
+    graph: {
+      nodes: any[];
+      edges: any[];
+    };
+  }> {
+    try {
+      const response = await this.client.get(`/api/horizon/lenses/${lensId}/assembly-status`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonLensAssemblyStatus error:`, error);
+      throw error;
+    }
+  }
+
+  async listHorizonScoutingJobs(lensId: string, options?: { status?: string; limit?: number }): Promise<{
+    jobs: Array<{
+      id: string;
+      status: string;
+      targetCanonicalPath: string;
+      createdAt: string;
+      completedAt?: string | null;
+    }>;
+    total: number;
+  }> {
+    try {
+      const params: Record<string, string> = { lensId };
+      if (options?.status) {
+        params.status = options.status;
+      }
+      if (options?.limit) {
+        params.limit = options.limit.toString();
+      }
+      const response = await this.client.get('/api/horizon/scout/jobs', { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] listHorizonScoutingJobs error:`, error);
+      throw error;
+    }
+  }
 }
 
 export const api = new ApiClient();

@@ -9,6 +9,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -331,6 +332,113 @@ func NewScoutEngine(
 	}
 }
 
+func (e *ScoutEngine) publish(ctx context.Context, et realtime.EventType, data map[string]interface{}) {
+	if e == nil || e.realtime == nil {
+		return
+	}
+	rc, ok := rtctx.Get(ctx)
+	tenantID := ""
+	if ok {
+		tenantID = strings.TrimSpace(rc.TenantID)
+		if v := strings.TrimSpace(rc.ProjectID); v != "" {
+			data["projectId"] = v
+		}
+		if v := strings.TrimSpace(rc.LensID); v != "" {
+			data["lensId"] = v
+		}
+		if v := strings.TrimSpace(rc.CorrelationID); v != "" {
+			data["correlationId"] = v
+		}
+		if v := strings.TrimSpace(rc.SessionID); v != "" {
+			data["sessionId"] = v
+		}
+	}
+	if tenantID == "" {
+		if v, ok2 := data["tenantId"].(string); ok2 {
+			tenantID = strings.TrimSpace(v)
+		}
+	}
+	if tenantID == "" {
+		return
+	}
+	data["tenantId"] = tenantID
+	data["ts"] = time.Now().UTC().Format(time.RFC3339Nano)
+	_ = e.realtime.PublishJSON(ctx, et, tenantID, data)
+}
+
+func (e *ScoutEngine) attachRealtimeContext(ctx context.Context, job *models.ScoutingJob, tenantID, projectID, lensID string) context.Context {
+	correlationID := ""
+	sessionID := ""
+	if job != nil && job.State != nil {
+		if v, ok := job.State["correlationId"].(string); ok {
+			correlationID = strings.TrimSpace(v)
+		}
+		if v, ok := job.State["sessionId"].(string); ok {
+			sessionID = strings.TrimSpace(v)
+		}
+	}
+	return rtctx.With(ctx, rtctx.Context{
+		TenantID:      strings.TrimSpace(tenantID),
+		ProjectID:     strings.TrimSpace(projectID),
+		LensID:        strings.TrimSpace(lensID),
+		CorrelationID: correlationID,
+		SessionID:     sessionID,
+	})
+}
+
+func (e *ScoutEngine) transition(ctx context.Context, job *models.ScoutingJob, newState models.ScoutingJobState, progress float64, hint string) error {
+	if e == nil || e.workflow == nil || job == nil {
+		return nil
+	}
+	if err := e.workflow.TransitionState(ctx, job.ID, newState); err != nil {
+		return err
+	}
+	// Update local job snapshot (best-effort)
+	job.CurrentState = newState
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	job.State["currentState"] = string(newState)
+	evt := map[string]interface{}{
+		"tenantId":  job.TenantID,
+		"projectId": job.ProjectID,
+		"lensId":    strings.TrimSpace(job.LensID),
+		"jobId":     job.ID,
+		"state":     string(newState),
+		"progress":  progress,
+	}
+	if hint != "" {
+		evt["hint"] = hint
+	}
+	if strings.TrimSpace(job.TargetCanonicalPath) != "" {
+		evt["targetCanonicalPath"] = strings.TrimSpace(job.TargetCanonicalPath)
+	}
+	e.publish(ctx, realtime.EventType("horizon.scout.job.state"), evt)
+	return nil
+}
+
+func (e *ScoutEngine) logLine(ctx context.Context, job *models.ScoutingJob, level string, line string) {
+	if e == nil || job == nil {
+		return
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if level == "" {
+		level = "info"
+	}
+	e.publish(ctx, realtime.EventType("horizon.scout.job.log"), map[string]interface{}{
+		"tenantId":            job.TenantID,
+		"projectId":           job.ProjectID,
+		"lensId":              strings.TrimSpace(job.LensID),
+		"jobId":               job.ID,
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"level":               level,
+		"line":                line,
+	})
+}
+
 // ExecuteScoutingJob выполняет полный цикл ScoutingJob
 func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.ScoutingJob) error {
 	tenantID := job.TenantID
@@ -361,6 +469,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 	ctx = ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.scout", lensID, cascadeID)
+	ctx = e.attachRealtimeContext(ctx, job, tenantID, projectID, lensID)
 
 	// FRESHNESS CHECK: Проверяем, есть ли свежие данные
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
@@ -398,25 +507,57 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 							}
 						}(existingFragment.ID)
 					}
-					_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateVerified)
+					_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "fast_path_applied_facts")
+					// Emit completion + node upsert for UI.
+					e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+						"tenantId":        job.TenantID,
+						"projectId":       projectID,
+						"lensId":          lensID,
+						"jobId":           job.ID,
+						"fragmentId":      existingFragment.ID,
+						"canonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
+						"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
+						"confidence":      1.0,
+					})
+					e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+						"tenantId":        job.TenantID,
+						"projectId":       projectID,
+						"lensId":          lensID,
+						"fragmentId":      existingFragment.ID,
+						"canonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
+						"status":          "verified",
+						"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
+						"version":         existingFragment.Version,
+					})
 					return nil
 				}
 			}
 		}
 
-				// If fragment is fresh AND there are no new facts since watermark, skip expensive scouting.
-				if isFresh && len(facts) == 0 {
+		// If fragment is fresh AND there are no new facts since watermark, skip expensive scouting.
+		if isFresh && len(facts) == 0 {
 			fmt.Printf("[ScoutEngine] Data for %s is fresh (verified %v ago) and no new facts. Skipping active scouting.\n",
 				job.TargetCanonicalPath, time.Since(existingFragment.Metadata.LastVerifiedAt))
-			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateVerified)
+			_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "fresh_no_new_facts")
+			e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+				"tenantId":        job.TenantID,
+				"projectId":       projectID,
+				"lensId":          lensID,
+				"jobId":           job.ID,
+				"fragmentId":      existingFragment.ID,
+				"canonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
+				"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
+				"confidence":      1.0,
+			})
 			return nil
 		}
 	}
 
 	// PLANNING: Планирование источников
-	if err := e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStatePlanning); err != nil {
+	if err := e.transition(ctx, job, models.ScoutingJobStatePlanning, 0.1, "planning"); err != nil {
 		return fmt.Errorf("failed to transition to PLANNING: %w", err)
 	}
+	e.logLine(ctx, job, "info", fmt.Sprintf("> planning sources for %s", strings.TrimSpace(job.TargetCanonicalPath)))
 
 	var sourcePlan *SourcePlan
 
@@ -425,6 +566,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// Watchdog уже обнаружил изменения в конкретных источниках, нет смысла переопределять их.
 	if len(job.SourceIDs) > 0 {
 		fmt.Printf("[ScoutEngine] Using explicit sourceIDs from job (Watchdog-driven): %d sources\n", len(job.SourceIDs))
+		e.logLine(ctx, job, "info", fmt.Sprintf("> using explicit sourceIDs (%d) (watchdog-driven)", len(job.SourceIDs)))
 		sources := make([]*coreModels.DataSource, 0, len(job.SourceIDs))
 		for _, sourceID := range job.SourceIDs {
 			if e.planner != nil && e.planner.dataSourcesRepo != nil {
@@ -441,18 +583,20 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	} else {
 		// Полное планирование только если sourceIDs не указаны (Lens-driven jobs)
 		fmt.Printf("[ScoutEngine] Running full planning for %s (Lens-driven)\n", job.TargetCanonicalPath)
+		e.logLine(ctx, job, "info", "> running full planning (lens-driven)")
 		var err error
 		sourcePlan, err = e.planner.PlanSources(ctx, tenantID, projectID, job.TargetCanonicalPath, models.ScoutingStrategy(job.ScoutingStrategy), sinceFacts)
 		if err != nil {
-			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
+			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "planning_failed")
 			return fmt.Errorf("failed to plan sources: %w", err)
 		}
 	}
 
 	// EXECUTION: Выполнение запросов к источникам
-	if err := e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateExecution); err != nil {
+	if err := e.transition(ctx, job, models.ScoutingJobStateExecution, 0.25, "execution"); err != nil {
 		return fmt.Errorf("failed to transition to EXECUTION: %w", err)
 	}
+	e.logLine(ctx, job, "info", "> executing sources")
 
 	var aggregatedContent string
 	var allSourceIDs []string
@@ -461,10 +605,14 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 
 	// Получаем источники из плана
 	for _, source := range sourcePlan.Sources {
+		if source != nil {
+			e.logLine(ctx, job, "info", fmt.Sprintf("> fetching source %s (%s)", strings.TrimSpace(source.ID), strings.TrimSpace(source.Kind)))
+		}
 		result, err := e.executor.ExecuteDataSource(ctx, source)
 		if err != nil {
 			// Логируем ошибку, но продолжаем с другими источниками
 			fmt.Printf("[ScoutEngine] Failed to execute data source (id=%s, kind=%s): %v\n", source.ID, source.Kind, err)
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> source failed %s (%s): %v", strings.TrimSpace(source.ID), strings.TrimSpace(source.Kind), err))
 			continue
 		}
 		if result.Content != "" {
@@ -481,6 +629,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 
 	if aggregatedContent == "" {
 		fmt.Printf("[ScoutEngine] No internal content for %s. Initiating full research.\n", job.TargetCanonicalPath)
+		e.logLine(ctx, job, "info", "> no internal content; initiating full research")
 
 		// Choose a sensible default type from canonicalPath prefix (no LLM needed for this deterministic mapping).
 		defaultType := models.FragmentTypeOrganization
@@ -542,28 +691,31 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	} else {
 		// EXTRACTION: Извлечение данных через Scout Agent
-		if err := e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateExtraction); err != nil {
+		if err := e.transition(ctx, job, models.ScoutingJobStateExtraction, 0.5, "extraction"); err != nil {
 			return fmt.Errorf("failed to transition to EXTRACTION: %w", err)
 		}
+		e.logLine(ctx, job, "info", "> extracting structured data")
 
 		// Определяем entityPath и sectorPath из targetCanonicalPath через LLM
 		entityPath, sectorPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
 		if err != nil {
-			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
+			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "taxonomy_failed")
 			return fmt.Errorf("failed to classify taxonomy: %w", err)
 		}
+		e.logLine(ctx, job, "info", fmt.Sprintf("> taxonomy classified: entityPath=%s sectorPath=%s", entityPath, sectorPath))
 
 		scoutResult, err = e.scoutAgent.ExtractFragmentData(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath)
 		if err != nil {
-			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
+			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "extraction_failed")
 			return fmt.Errorf("failed to extract fragment data: %w", err)
 		}
 		extractedFragment = &scoutResult.Fragment
 
 		// VALIDATION: Валидация через Critic Agent
-		if err := e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateValidation); err != nil {
+		if err := e.transition(ctx, job, models.ScoutingJobStateValidation, 0.7, "validation"); err != nil {
 			return fmt.Errorf("failed to transition to VALIDATION: %w", err)
 		}
+		e.logLine(ctx, job, "info", "> critic validating extracted data")
 
 		validationResult, err = e.criticAgent.Validate(ctx, extractedFragment, scoutResult.Relations, aggregatedContent)
 		if err != nil {
@@ -603,6 +755,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 		}
 		fmt.Printf("[ScoutEngine] Starting research for job %s, missing info: %v\n", job.ID, validationResult.MissingInfo)
+		e.logLine(ctx, job, "info", fmt.Sprintf("> research started (missing=%d)", len(validationResult.MissingInfo)))
 		researchCtx := ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.research", lensID, cascadeID)
 		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo)
 		if err == nil {
@@ -610,18 +763,20 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			if len(newRelations) > 0 {
 				scoutResult.Relations = append(scoutResult.Relations, newRelations...)
 				fmt.Printf("[ScoutEngine] Research found %d new relations.\n", len(newRelations))
+				e.logLine(ctx, job, "info", fmt.Sprintf("> research found %d new relations", len(newRelations)))
 			}
 			// Обновляем LastVerifiedAt
 			extractedFragment.Metadata.LastVerifiedAt = time.Now()
 		} else {
 			fmt.Printf("[ScoutEngine] Research failed: %v\n", err)
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> research failed: %v", err))
 		}
 	}
 SKIP_RESEARCH:
 
 	// RESOLUTION: Разрешение конфликтов если необходимо
 	if validationResult.HasConflicts {
-		if err := e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateResolution); err != nil {
+		if err := e.transition(ctx, job, models.ScoutingJobStateResolution, 0.85, "resolution"); err != nil {
 			return fmt.Errorf("failed to transition to RESOLUTION: %w", err)
 		}
 
@@ -631,13 +786,13 @@ SKIP_RESEARCH:
 			SourceContent:   aggregatedContent,
 		})
 		if err != nil {
-			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateFailed)
+			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "resolution_failed")
 			return fmt.Errorf("failed to resolve conflicts: %w", err)
 		}
 
 		switch resolutionResult.Verdict {
 		case "Rejected":
-			_ = e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateRejected)
+			_ = e.transition(ctx, job, models.ScoutingJobStateRejected, 1.0, "rejected")
 			return fmt.Errorf("data rejected by resolver: %s", resolutionResult.Reasoning)
 		case "Low_Confidence":
 			// Продолжаем с низкой уверенностью
@@ -716,7 +871,7 @@ SKIP_RESEARCH:
 	}
 
 	// VERIFIED: Создание Frame и обновление HorizonFragment
-	if err := e.workflow.TransitionState(ctx, job.ID, models.ScoutingJobStateVerified); err != nil {
+	if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "verified"); err != nil {
 		return fmt.Errorf("failed to transition to VERIFIED: %w", err)
 	}
 
@@ -792,15 +947,32 @@ SKIP_RESEARCH:
 		fragmentID = existingFragment.ID
 	}
 
-	// Публикуем событие завершения
-	if e.realtime != nil {
-		_ = e.realtime.PublishJSON(ctx, realtime.EventType("scout.completed"), tenantID, map[string]interface{}{
-			"jobId":         job.ID,
-			"fragmentId":    fragmentID,
-			"canonicalPath": job.TargetCanonicalPath,
-			"timestamp":     time.Now().UTC(),
-		})
-	}
+	// Realtime: job completed + node materialized/updated.
+	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+		"tenantId":        tenantID,
+		"projectId":       projectID,
+		"lensId":          lensID,
+		"jobId":           job.ID,
+		"fragmentId":      fragmentID,
+		"canonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
+		"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
+		"confidence":      validationResult.Confidence,
+	})
+	e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+		"tenantId":      tenantID,
+		"projectId":     projectID,
+		"lensId":        lensID,
+		"fragmentId":    fragmentID,
+		"canonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"status": func() string {
+			if existingFragment.Metadata.EpistemicStatus == models.EpistemicStatusLowConfidence {
+				return "low_confidence"
+			}
+			return "verified"
+		}(),
+		"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
+		"version":         existingFragment.Version,
+	})
 
 	// DECOMPOSITION: Обработка найденных связей (рекурсивный скаутинг)
 	if len(scoutResult.Relations) > 0 {
@@ -812,10 +984,15 @@ SKIP_RESEARCH:
 
 	// Запускаем распространение изменений в графе
 	if e.propagationTrigger != nil {
+		rc, _ := rtctx.Get(ctx)
 		// Запускаем в отдельной горутине, чтобы не блокировать завершение задачи
 		go func(fid string) {
 			// Используем фоновый контекст с таймаутом
-			propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			propBase := context.Background()
+			if strings.TrimSpace(rc.TenantID) != "" || strings.TrimSpace(rc.ProjectID) != "" || strings.TrimSpace(rc.LensID) != "" || strings.TrimSpace(rc.CorrelationID) != "" || strings.TrimSpace(rc.SessionID) != "" {
+				propBase = rtctx.With(propBase, rc)
+			}
+			propCtx, cancel := context.WithTimeout(propBase, 5*time.Minute)
 			defer cancel()
 			if err := e.propagationTrigger(propCtx, fid); err != nil {
 				// Логируем ошибку (в реальном коде нужен logger)

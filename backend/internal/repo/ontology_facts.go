@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -150,6 +151,51 @@ func (r *OntologyFactsRepository) ListUpdatedSinceByCanonicalPath(ctx context.Co
 	return out, nil
 }
 
+// ListCanonicalPathsBySpherePath returns a deduplicated list of canonicalPaths for facts
+// that contain the given exact spherePath in their spherePaths.
+//
+// Notes:
+// - This intentionally avoids adding extra Firestore filters (tenant/status) to not require composite indexes.
+//   Filtering is done in-memory.
+func (r *OntologyFactsRepository) ListCanonicalPathsBySpherePath(ctx context.Context, tenantID string, spherePath string, limit int) ([]string, error) {
+	if strings.TrimSpace(spherePath) == "" {
+		return nil, fmt.Errorf("spherePath is required")
+	}
+	if limit <= 0 {
+		limit = 2000
+	}
+	q := r.col.Where("spherePaths", "array-contains", strings.TrimSpace(spherePath)).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	for _, d := range docs {
+		var f models.OntologyFact
+		if err := d.DataTo(&f); err != nil {
+			continue
+		}
+		if tenantID != "" && tenantID != f.TenantID {
+			continue
+		}
+		if strings.TrimSpace(f.Status) != "" && strings.ToLower(strings.TrimSpace(f.Status)) != "active" {
+			continue
+		}
+		for _, cp := range f.CanonicalPaths {
+			cp = strings.TrimSpace(cp)
+			if cp == "" {
+				continue
+			}
+			seen[cp] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for cp := range seen {
+		out = append(out, cp)
+	}
+	return out, nil
+}
+
 func (r *OntologyFactsRepository) getObjectPath(f *models.OntologyFact) string {
 	// Format: {tenantId}/ontology_facts/{factId}.json
 	return fmt.Sprintf("%s/ontology_facts/%s.json", f.TenantID, f.ID)
@@ -162,8 +208,7 @@ func (r *OntologyFactsRepository) getStoragePath(f *models.OntologyFact) string 
 // vertexDocumentJSON is the JSON format expected by Discovery Engine dataSchema=document.
 type vertexDocumentJSON struct {
 	ID         string                 `json:"id"`
-	Title      string                 `json:"title"`
-	Content    string                 `json:"content"`
+	Content    map[string]interface{} `json:"content"`
 	StructData map[string]interface{} `json:"structData"`
 }
 
@@ -177,13 +222,16 @@ func (r *OntologyFactsRepository) exportToGCSAndSync(ctx context.Context, f *mod
 
 	doc := vertexDocumentJSON{
 		ID:      f.ID,
-		Title:   f.Title,
-		Content: f.VectorText,
+		Content: map[string]interface{}{
+			"mimeType": "text/plain",
+			"rawBytes": base64.StdEncoding.EncodeToString([]byte(f.VectorText)),
+		},
 		StructData: map[string]interface{}{
 			"type":            "ontology_fact",
 			"tenantId":        f.TenantID,
 			"kind":            f.Kind,
 			"factType":        f.Type,
+			"title":           f.Title,
 			"confidence":      f.Confidence,
 			"updatedAt":       f.UpdatedAt.UTC().Format(time.RFC3339),
 			"updatedAtUnixMs": f.UpdatedAt.UTC().UnixMilli(),

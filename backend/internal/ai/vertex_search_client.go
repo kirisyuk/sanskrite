@@ -144,9 +144,9 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 	}
 
 	// Формируем URL для REST API
-	// Формат: https://discoveryengine.googleapis.com/v1beta/projects/{project}/locations/{location}/dataStores/{dataStore}/servingConfigs/default_search:search
+	// Формат: https://discoveryengine.googleapis.com/v1beta/projects/{project}/locations/{location}/collections/default_collection/dataStores/{dataStore}/servingConfigs/default_search:search
 	url := fmt.Sprintf(
-		"https://discoveryengine.googleapis.com/v1beta/projects/%s/locations/%s/dataStores/%s/servingConfigs/default_search:search",
+		"https://discoveryengine.googleapis.com/v1beta/projects/%s/locations/%s/collections/default_collection/dataStores/%s/servingConfigs/default_search:search",
 		c.projectID,
 		c.location,
 		c.dataStoreID,

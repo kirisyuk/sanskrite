@@ -80,33 +80,6 @@ require() {
 require gcloud
 ## gsutil not required; use gcloud storage to avoid Python dependency
 
-# Ensure APIs
-enable_api() {
-  local api=$1
-  gcloud services enable "$api" >/dev/null && echo -e "${GREEN}API enabled:${NC} $api" || true
-}
-
-echo -e "${BLUE}Ensuring required APIs...${NC}"
-enable_api firestore.googleapis.com
-enable_api run.googleapis.com
-enable_api cloudbuild.googleapis.com
-enable_api iam.googleapis.com
-enable_api secretmanager.googleapis.com
-enable_api pubsub.googleapis.com
-# Optional but recommended for future features
-enable_api aiplatform.googleapis.com
-enable_api generativelanguage.googleapis.com
-enable_api discoveryengine.googleapis.com  # Vertex AI Search API
-enable_api bigquery.googleapis.com  # BigQuery API
-enable_api bigqueryconnection.googleapis.com  # BigQuery Connections API (for Object Tables and ML)
-enable_api apikeys.googleapis.com
-enable_api cloudscheduler.googleapis.com
-enable_api cloudtasks.googleapis.com
-enable_api cloudresourcemanager.googleapis.com
-enable_api redis.googleapis.com
-enable_api vpcaccess.googleapis.com
-enable_api compute.googleapis.com
-
 # Get Firebase Project ID from .firebaserc if available
 FIREBASE_PROJECT_ID=""
 if [[ -f "$WEB_DIR/.firebaserc" ]]; then
@@ -232,6 +205,34 @@ deploy_web() {
 }
 
 setup_infrastructure() {
+  echo -e "${BLUE}[infra] Ensuring required APIs...${NC}"
+  
+  # Ensure APIs
+  enable_api() {
+    local api=$1
+    gcloud services enable "$api" >/dev/null && echo -e "${GREEN}API enabled:${NC} $api" || true
+  }
+  
+  enable_api firestore.googleapis.com
+  enable_api run.googleapis.com
+  enable_api cloudbuild.googleapis.com
+  enable_api iam.googleapis.com
+  enable_api secretmanager.googleapis.com
+  enable_api pubsub.googleapis.com
+  # Optional but recommended for future features
+  enable_api aiplatform.googleapis.com
+  enable_api generativelanguage.googleapis.com
+  enable_api discoveryengine.googleapis.com  # Vertex AI Search API
+  enable_api bigquery.googleapis.com  # BigQuery API
+  enable_api bigqueryconnection.googleapis.com  # BigQuery Connections API (for Object Tables and ML)
+  enable_api apikeys.googleapis.com
+  enable_api cloudscheduler.googleapis.com
+  enable_api cloudtasks.googleapis.com
+  enable_api cloudresourcemanager.googleapis.com
+  enable_api redis.googleapis.com
+  enable_api vpcaccess.googleapis.com
+  enable_api compute.googleapis.com
+  
   echo -e "${BLUE}[infra] Setting up service accounts and permissions...${NC}"
   
   # 1. Ensure SA exists
@@ -891,6 +892,56 @@ except:
       echo -e "${GREEN}  ✓${NC} Created topic: $topic"
     else
       echo -e "${GREEN}  ✓${NC} $topic exists"
+    fi
+  done
+
+  # 4.1 Ensure aggregated topics used by hatlone-ws exist (Horizon realtime depends on hatlone.horizon.events)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for hatlone-ws...${NC}"
+  local agg_topics=(
+    "hatlone.genai.streams"
+    "hatlone.discovery.events"
+    "hatlone.artifact.events"
+    "hatlone.interaction.events"
+    "hatlone.analysis.events"
+    "hatlone.verified.streams"
+    "hatlone.horizon.events"
+    "hatlone.operations.events"
+    "source.poll"
+  )
+  for topic in "${agg_topics[@]}"; do
+    if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --message-ordering --quiet || true
+      echo -e "${GREEN}  ✓${NC} Created topic: $topic"
+    else
+      echo -e "${GREEN}  ✓${NC} $topic exists"
+    fi
+  done
+
+  # 4.2 Ensure ws-broker subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for ws-broker...${NC}"
+  for topic in "${agg_topics[@]}"; do
+    local sub_id="${topic}-ws-broker"
+    if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      # Ensure message ordering is enabled (recreate if needed)
+      local ordering
+      ordering=$(gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" --format="value(enableMessageOrdering)" 2>/dev/null || echo "False")
+      if [[ "$ordering" != "True" ]]; then
+        echo -e "${YELLOW}[infra] Recreating subscription with ordering enabled:${NC} $sub_id"
+        gcloud pubsub subscriptions delete "$sub_id" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+        gcloud pubsub subscriptions create "$sub_id" \
+          --project="$PROJECT_ID" \
+          --topic="$topic" \
+          --enable-message-ordering \
+          --quiet >/dev/null 2>&1 || true
+      fi
+      echo -e "${GREEN}  ✓${NC} $sub_id exists"
+    else
+      gcloud pubsub subscriptions create "$sub_id" \
+        --project="$PROJECT_ID" \
+        --topic="$topic" \
+        --enable-message-ordering \
+        --quiet >/dev/null 2>&1 || true
+      echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
     fi
   done
 
@@ -1808,7 +1859,7 @@ if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]]; then
     echo -e "  ☐ Update VITE_VERIFIED_PROXY_URL in frontend: $VERIFIED_PROXY_URL"
   fi
 fi
-echo -e "  ☐ Test API health: curl \$API_URL/health"
+echo -e "  ☐ Test API health: curl \$API_URL/api/v1/healthz"
 echo -e "  ☐ Check Cloud Run logs for errors"
 echo -e "  ☐ Verify traffic is on latest revision"
 echo ""

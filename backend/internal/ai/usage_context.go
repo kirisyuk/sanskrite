@@ -13,7 +13,7 @@ const (
 	usageProjectKey usageCtxKey = "ai.projectId"
 	usageUseCaseKey usageCtxKey = "ai.useCase"
 
-	usageHorizonLensKey   usageCtxKey = "ai.horizon.lensId"
+	usageHorizonLensKey    usageCtxKey = "ai.horizon.lensId"
 	usageHorizonCascadeKey usageCtxKey = "ai.horizon.cascadeId"
 )
 
@@ -103,5 +103,3 @@ func usageCascadeFromContext(ctx context.Context) string {
 	}
 	return ""
 }
-
-

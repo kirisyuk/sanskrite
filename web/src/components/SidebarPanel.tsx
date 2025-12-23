@@ -35,6 +35,8 @@ interface SidebarPanelProps {
   selectedJobTaskId?: string | null;
   selectedScenarioId?: string | null;
   onSelectScenario?: (scenarioId: string | null) => void;
+  onSelectLens?: (lensId: string | null) => void;
+  selectedLensId?: string | null;
 }
 
 // Helper functions moved outside component to avoid recreation
@@ -362,6 +364,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   selectedJobTaskId,
   selectedScenarioId,
   onSelectScenario,
+  onSelectLens,
+  selectedLensId,
 }) => {
   const { t } = useTranslation();
   const location = useLocation();
@@ -404,6 +408,18 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   const [deletingJobIds, setDeletingJobIds] = React.useState<Set<string>>(new Set());
   // Track which project the agentJobs belong to, to prevent showing wrong agents during project switch
   const [agentJobsProjectId, setAgentJobsProjectId] = React.useState<string | null>(null);
+
+  // Horizon lenses state
+  const [lenses, setLenses] = React.useState<Array<{
+    id: string;
+    name: string;
+    status: string;
+    scope: string[];
+    updatedAt: string;
+  }>>([]);
+  const [lensesLoading, setLensesLoading] = React.useState(false);
+  // Track which project the lenses belong to
+  const [lensesProjectId, setLensesProjectId] = React.useState<string | null>(null);
 
   // Group projects by date (Today, Yesterday, Later)
   const groupedProjects = React.useMemo(() => {
@@ -542,6 +558,123 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 
     loadJobs();
   }, [currentProject?.id]);
+
+  // Load lenses for the current project in horizon mode
+  React.useEffect(() => {
+    // Only load lenses in horizon mode
+    if (currentMode !== 'horizon') {
+      setLenses([]);
+      setLensesProjectId(null);
+      return;
+    }
+
+    // Immediately clear lenses when project changes (synchronously)
+    if (!currentProject?.id || currentProject.id === 'local-unfold') {
+      setLenses([]);
+      setLensesProjectId(null);
+      return;
+    }
+
+    // Clear lenses immediately if switching to a different project
+    if (lensesProjectId !== currentProject.id) {
+      setLenses([]);
+      setLensesProjectId(null);
+    }
+
+    const loadLenses = async () => {
+      // Capture the project ID at the start of the async operation
+      const projectIdForLoading = currentProject.id;
+      setLensesLoading(true);
+      try {
+        const result = await api.listHorizonLenses(projectIdForLoading, { limit: 50 });
+        // Only set lenses if we're still on the same project (prevent race conditions)
+        if (currentProject?.id === projectIdForLoading) {
+          setLenses(result.lenses || []);
+          setLensesProjectId(projectIdForLoading);
+        }
+      } catch (err) {
+        console.error('[SidebarPanel] Failed to load lenses', err);
+        // Only clear if we're still on the same project
+        if (currentProject?.id === projectIdForLoading) {
+          setLenses([]);
+          setLensesProjectId(null);
+        }
+      } finally {
+        setLensesLoading(false);
+      }
+    };
+
+    loadLenses();
+  }, [currentProject?.id, currentMode]);
+
+  // Render lens row
+  const renderLensRow = React.useCallback((lens: {
+    id: string;
+    name: string;
+    status: string;
+    scope: string[];
+    updatedAt: string;
+  }) => {
+    const isSelected = selectedLensId === lens.id;
+    
+    const getStatusIcon = () => {
+      if (lens.status === 'ACTIVE') {
+        return (
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: '#2ECC71' }}>
+            <circle cx="12" cy="12" r="10" strokeWidth="2" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+        );
+      } else if (lens.status === 'ARCHIVED') {
+        return (
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: 'var(--text-tertiary-weak)' }}>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+          </svg>
+        );
+      }
+      return null;
+    };
+
+    return (
+      <div
+        key={lens.id}
+        className="px-2 py-1 rounded text-xs flex items-center gap-2 ml-4 cursor-pointer group"
+        style={{
+          backgroundColor: isSelected ? 'var(--white-10)' : 'transparent',
+          color: 'var(--text-secondary-strong)',
+        }}
+        title={lens.name}
+        onClick={() => {
+          if (onSelectLens) {
+            onSelectLens(isSelected ? null : lens.id);
+          }
+          if (isMobile) {
+            onClose();
+          }
+        }}
+        onMouseEnter={(e) => {
+          if (!isSelected) {
+            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--white-10)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isSelected) {
+            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+          }
+        }}
+      >
+        {getStatusIcon()}
+        <span 
+          className="flex-1 truncate" 
+          style={{ 
+            color: 'var(--text-secondary-strong)',
+          }}
+        >
+          {lens.name}
+        </span>
+      </div>
+    );
+  }, [selectedLensId, onSelectLens, isMobile, onClose]);
 
   // Render agent job row
   const renderAgentJobRow = (job: any) => {
@@ -730,10 +863,17 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             const isSelected = currentProject?.id === project.id;
             // Only show agent jobs if they belong to the currently selected project
             const projectJobs = (isSelected && agentJobsProjectId === project.id) ? agentJobs : [];
+            // Only show lenses if they belong to the currently selected project in horizon mode
+            const projectLenses = (isSelected && currentMode === 'horizon' && lensesProjectId === project.id) ? lenses : [];
             return (
               <div key={project.id}>
                 {renderProjectRow(project)}
-                {isSelected && projectJobs.length > 0 && (
+                {isSelected && currentMode === 'horizon' && projectLenses.length > 0 && (
+                  <div className="mt-1 space-y-0.5">
+                    {projectLenses.map(renderLensRow)}
+                  </div>
+                )}
+                {isSelected && currentMode !== 'horizon' && projectJobs.length > 0 && (
                   <div className="mt-1 space-y-0.5">
                     {projectJobs.map(renderAgentJobRow)}
                   </div>
@@ -744,7 +884,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         </div>
       </>
     );
-  }, [currentProject, agentJobsProjectId, agentJobs, renderProjectRow, renderAgentJobRow]);
+  }, [currentProject, agentJobsProjectId, agentJobs, lensesProjectId, lenses, currentMode, renderProjectRow, renderAgentJobRow, renderLensRow, selectedLensId, onSelectLens]);
   const [pages, setPages] = React.useState<Artifact[]>([]);
   const [pagesLoading, setPagesLoading] = React.useState(false);
   const [editingPageId, setEditingPageId] = React.useState<string | null>(null);

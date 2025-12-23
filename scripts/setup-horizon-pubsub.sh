@@ -13,7 +13,10 @@ echo "=== Настройка Pub/Sub топиков для Horizon ==="
 echo "Проект: $PROJECT_ID"
 echo ""
 
-# Агрегированные топики (используются системой realtime)
+# Service account that publishes/subscribes (API + hatlone-ws usually share it)
+SA="${PUBSUB_SERVICE_ACCOUNT:-backend@${PROJECT_ID}.iam.gserviceaccount.com}"
+
+# Агрегированные топики (используются системой realtime / hatlone-ws broker)
 TOPICS=(
   "hatlone.genai.streams"
   "hatlone.discovery.events"
@@ -21,25 +24,57 @@ TOPICS=(
   "hatlone.interaction.events"
   "hatlone.analysis.events"
   "hatlone.verified.streams"
+  "hatlone.horizon.events"
   "hatlone.operations.events"
   "source.poll"
 )
 
 for topic in "${TOPICS[@]}"; do
   echo "Проверка топика: $topic"
-  if gcloud pubsub topics describe "$topic" --format="value(name)" 2>/dev/null | grep -q "$topic"; then
+  if gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" --format="value(name)" 2>/dev/null | grep -q "$topic"; then
     echo "  ✓ Топик уже существует"
   else
     echo "  → Создание топика..."
-    gcloud pubsub topics create "$topic" --message-ordering || echo "  ⚠ Ошибка создания (возможно уже существует)"
+    gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --message-ordering || echo "  ⚠ Ошибка создания (возможно уже существует)"
     echo "  ✓ Топик создан"
   fi
+
+  # Ensure publisher permissions for the service account (best-effort; may already be granted at project-level)
+  gcloud pubsub topics add-iam-policy-binding "$topic" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${SA}" \
+    --role="roles/pubsub.publisher" \
+    --quiet >/dev/null 2>&1 || true
 done
 
 echo ""
-echo "=== Настройка подписок (опционально) ==="
-echo "Подписки создаются автоматически при использовании Subscriber"
+echo "=== Настройка подписок для ws-broker ==="
+echo "Subscriber создает подписки автоматически, но для надежности фиксируем их здесь (idempotent)."
 echo ""
+
+for topic in "${TOPICS[@]}"; do
+  sub_id="${topic}-ws-broker"
+  echo "Проверка подписки: $sub_id"
+
+  if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" --format="value(name)" 2>/dev/null | grep -q "$sub_id"; then
+    echo "  ✓ Подписка уже существует"
+  else
+    echo "  → Создание подписки..."
+    gcloud pubsub subscriptions create "$sub_id" \
+      --project="$PROJECT_ID" \
+      --topic="$topic" \
+      --enable-message-ordering \
+      --quiet || echo "  ⚠ Ошибка создания (возможно уже существует)"
+    echo "  ✓ Подписка создана"
+  fi
+
+  # Ensure subscriber permissions for the service account (best-effort; may already be granted at project-level)
+  gcloud pubsub subscriptions add-iam-policy-binding "$sub_id" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${SA}" \
+    --role="roles/pubsub.subscriber" \
+    --quiet >/dev/null 2>&1 || true
+done
 
 echo "Готово!"
 

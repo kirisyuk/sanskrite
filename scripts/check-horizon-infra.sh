@@ -90,12 +90,24 @@ fi
 echo ""
 echo "4. Проверка Pub/Sub топиков..."
 # Проверка основных топиков (агрегированные создаются автоматически)
-REQUIRED_TOPICS=("source.poll" "hatlone.operations.events" "hatlone.interaction.events")
+REQUIRED_TOPICS=("source.poll" "hatlone.operations.events" "hatlone.interaction.events" "hatlone.horizon.events")
 for topic in "${REQUIRED_TOPICS[@]}"; do
   if gcloud pubsub topics describe "$topic" --format="value(name)" 2>/dev/null | grep -q "$topic"; then
     check "Топик существует: $topic"
   else
     warn "Топик не найден: $topic (будет создан автоматически при первом использовании)"
+  fi
+done
+
+echo ""
+echo "4.1 Проверка Pub/Sub подписок для ws-broker..."
+# Для нового ws-broker (hatlone-ws) подписка имеет фиксированный нейминг: <topic>-ws-broker
+REQUIRED_SUBS=("hatlone.horizon.events-ws-broker")
+for sub in "${REQUIRED_SUBS[@]}"; do
+  if gcloud pubsub subscriptions describe "$sub" --format="value(name)" 2>/dev/null | grep -q "$sub"; then
+    check "Подписка существует: $sub"
+  else
+    warn "Подписка не найдена: $sub (создайте: scripts/setup-horizon-pubsub.sh)"
   fi
 done
 

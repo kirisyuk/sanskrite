@@ -1002,6 +1002,15 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
             import('./wsStore').then(({ useWsStore }) => {
               try { useWsStore.getState().noteMessage(msg?.type, msg?.data); } catch {}
             }).catch(() => {});
+
+            // Horizon realtime events (Hook -> Assemble -> Sled).
+            if (typeof msg?.type === 'string' && msg.type.startsWith('horizon.')) {
+              import('./horizonRealtimeStore')
+                .then(({ useHorizonRealtimeStore }) => {
+                  try { useHorizonRealtimeStore.getState().handleWsEvent(msg.type, msg.data); } catch {}
+                })
+                .catch(() => {});
+            }
             
             // Notify verified.stream listeners
             if (msg?.type?.startsWith('verified.stream.')) {

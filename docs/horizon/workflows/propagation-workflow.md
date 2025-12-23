@@ -430,13 +430,7 @@ func (gc *GraphCache) GetNode(ctx context.Context, fragmentID string) (*GraphNod
 
 ### TODO: защита от циклов (важно)
 
-Текущая реализация `PropagationEngine` выполняет рекурсивный обход исходящих рёбер и **не имеет явной защиты от циклов**
-(например, `visited` по `(fragmentId, metricName)`, TTL, `maxDepth`, `maxNodes`, time budget).
-На практике распространение обычно останавливается за счёт `threshold` и `damping`, но это **не является формальной гарантией**.
-
-**План**:
-- Добавить `visited`/дедуп в рамках одной волны по ключу `(fragmentId, metricName)` и не рекурсировать повторно.
-- Добавить лимиты: `maxDepth`, `maxNodesUpdated`, `timeBudget` (fail-safe).
+План по защите от циклов и лимитам propagation ведём в **roadmap**: `docs/horizon/implementation/roadmap.md` (секция “Масштабирование и графовая корректность”).
 
 ### Логирование
 

@@ -261,7 +261,7 @@ func main() {
 	// 6. Init Lens Service
 	lifecycle := horizonlens.NewLifecycleManager(fragmentsRepo)
 	calculator := horizonlens.NewMetricsCalculator(fragmentsRepo)
-	lensService := horizonlens.NewLensService(lensesRepo, fragmentsRepo, scoutingJobsRepo, lifecycle, calculator)
+	lensService := horizonlens.NewLensService(lensesRepo, fragmentsRepo, scoutingJobsRepo, nil, lifecycle, calculator, nil)
 
 	// --- SCENARIO EXECUTION ---
 

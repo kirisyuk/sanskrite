@@ -3,11 +3,13 @@ package propagation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
 
@@ -21,7 +23,7 @@ type PropagationEngine struct {
 	threshold     *ThresholdManager
 	damping       *WaveDamping
 	lazyEval      *LazyEvaluator
-	
+
 	// Трекинг активных распространений
 	activePropagations map[string]*PropagationStatus
 	mu                 sync.RWMutex
@@ -66,9 +68,9 @@ func NewPropagationEngine(
 
 // PropagationResult результат распространения влияния
 type PropagationResult struct {
-	AffectedFragments []string          `json:"affectedFragments"`
-	AffectedLenses    []string          `json:"affectedLenses"`
-	PropagationTime   time.Duration     `json:"propagationTime"`
+	AffectedFragments []string           `json:"affectedFragments"`
+	AffectedLenses    []string           `json:"affectedLenses"`
+	PropagationTime   time.Duration      `json:"propagationTime"`
 	Metrics           map[string]float64 `json:"metrics"`
 }
 
@@ -105,7 +107,7 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 
 	// Cold Path: отложенное распространение для некритических путей
 	e.lazyEval.ScheduleColdPath(ctx, fragmentID, metricName, delta)
-	
+
 	// Запускаем обработку Cold Path асинхронно (если есть задачи старше 1 минуты)
 	go e.processColdPathIfReady(ctx)
 
@@ -275,34 +277,52 @@ func (e *PropagationEngine) processColdPathIfReady(ctx context.Context) {
 		// Применяем изменение
 		newValue := currentMetric
 		newValue.Value = currentMetric.Value + task.Delta
-		
+
 		// Определяем тип метрики и ограничиваем диапазон
 		metricType := getMetricType(task.MetricName)
 		newValue.Value = clampMetricValue(newValue.Value, metricType)
-		
+
 		// Обновляем метрику
 		fragment.State[task.MetricName] = newValue
-		
+
 		// Сохраняем изменения
 		if err := e.fragmentsRepo.Update(ctx, fragment); err != nil {
 			return fmt.Errorf("failed to update fragment: %w", err)
 		}
 
-		// Находим Lens, которые используют этот фрагмент
-		lenses, err := e.lensesRepo.FindByScope(ctx, "global", fragment.CanonicalPath, 100)
-		if err == nil {
-			for _, lens := range lenses {
-				// Публикуем событие обновления Lens
-				_ = e.realtime.PublishJSON(ctx, realtime.EventType("lens.updated"), "global", map[string]interface{}{
-					"lensId":    lens.ID,
-					"timestamp": time.Now().UTC(),
-				})
+		// Best-effort: notify lens updates, but only when we have tenant routing context.
+		// Cold-path processor may run without rtctx; in that case, we skip realtime publishes to avoid leaking.
+		rc, ok := rtctx.Get(ctx)
+		tenantID := strings.TrimSpace(rc.TenantID)
+		projectID := strings.TrimSpace(rc.ProjectID)
+		originLensID := strings.TrimSpace(rc.LensID)
+		if ok && tenantID != "" && e.lensesRepo != nil && e.realtime != nil {
+			lenses, err := e.lensesRepo.FindByScope(ctx, tenantID, fragment.CanonicalPath, 100)
+			if err == nil {
+				for _, l := range lenses {
+					payload := map[string]interface{}{
+						"tenantId":  tenantID,
+						"projectId": projectID,
+						"lensId":    l.ID,
+						"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+					}
+					if originLensID != "" && originLensID != l.ID {
+						payload["originLensId"] = originLensID
+					}
+					if v := strings.TrimSpace(rc.CorrelationID); v != "" {
+						payload["correlationId"] = v
+					}
+					if v := strings.TrimSpace(rc.SessionID); v != "" {
+						payload["sessionId"] = v
+					}
+					_ = e.realtime.PublishJSON(ctx, realtime.EventType("horizon.lens.updated"), tenantID, payload)
+				}
 			}
 		}
 
 		return nil
 	})
-	
+
 	// Логируем ошибку, но не блокируем
 	_ = err
 }
@@ -419,29 +439,101 @@ func (e *PropagationEngine) updateFragmentMetric(ctx context.Context, fragment *
 
 // publishPropagationEvents публикует события распространения
 func (e *PropagationEngine) publishPropagationEvents(ctx context.Context, sourceFragmentID string, affectedFragments map[string]bool, affectedLenses map[string]bool) {
-	tenantID := "global" // HorizonFragment всегда глобальные
+	// IMPORTANT: Even though fragments are mostly global, realtime delivery must be scoped to the
+	// requesting tenant/project/lens (security + UX). We take routing context from rtctx when available.
+	rc, _ := rtctx.Get(ctx)
+	tenantID := strings.TrimSpace(rc.TenantID)
+	projectID := strings.TrimSpace(rc.ProjectID)
+	originLensID := strings.TrimSpace(rc.LensID)
+	correlationID := strings.TrimSpace(rc.CorrelationID)
+	sessionID := strings.TrimSpace(rc.SessionID)
+
+	// If we don't have a tenant namespace, we cannot safely publish.
+	if tenantID == "" {
+		tenantID = "global"
+	}
 
 	// Публикуем событие начала распространения
-	_ = e.realtime.PublishJSON(ctx, realtime.EventType("propagation.started"), tenantID, map[string]interface{}{
+	startPayload := map[string]interface{}{
+		"tenantId":         tenantID,
+		"projectId":        projectID,
+		"lensId":           originLensID,
 		"sourceFragmentId": sourceFragmentID,
-		"timestamp":        time.Now().UTC(),
-	})
+		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if correlationID != "" {
+		startPayload["correlationId"] = correlationID
+	}
+	if sessionID != "" {
+		startPayload["sessionId"] = sessionID
+	}
+	_ = e.realtime.PublishJSON(ctx, realtime.EventType("horizon.propagation.started"), tenantID, startPayload)
 
 	// Публикуем события обновления фрагментов
 	for fragmentID := range affectedFragments {
-		_ = e.realtime.PublishJSON(ctx, realtime.EventType("fragment.updated"), tenantID, map[string]interface{}{
+		// Granular propagation update
+		nodePayload := map[string]interface{}{
+			"tenantId":         tenantID,
+			"projectId":        projectID,
+			"lensId":           originLensID,
+			"sourceFragmentId": sourceFragmentID,
+			"fragmentId":       fragmentID,
+			"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		if correlationID != "" {
+			nodePayload["correlationId"] = correlationID
+		}
+		if sessionID != "" {
+			nodePayload["sessionId"] = sessionID
+		}
+		_ = e.realtime.PublishJSON(ctx, realtime.EventType("horizon.propagation.node_updated"), tenantID, nodePayload)
+		_ = e.realtime.PublishJSON(ctx, realtime.EventType("horizon.graph.node.upserted"), tenantID, map[string]interface{}{
+			"tenantId":   tenantID,
+			"projectId":  projectID,
+			"lensId":     originLensID,
 			"fragmentId": fragmentID,
-			"timestamp":  time.Now().UTC(),
+			"status":     "propagated",
+			"ts":         time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	}
 
 	// Публикуем события обновления Lens
 	for lensID := range affectedLenses {
-		_ = e.realtime.PublishJSON(ctx, realtime.EventType("lens.updated"), tenantID, map[string]interface{}{
+		payload := map[string]interface{}{
+			"tenantId":  tenantID,
+			"projectId": projectID,
 			"lensId":    lensID,
-			"timestamp": time.Now().UTC(),
-		})
+			"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		if originLensID != "" && originLensID != lensID {
+			payload["originLensId"] = originLensID
+		}
+		if correlationID != "" {
+			payload["correlationId"] = correlationID
+		}
+		if sessionID != "" {
+			payload["sessionId"] = sessionID
+		}
+		_ = e.realtime.PublishJSON(ctx, realtime.EventType("horizon.lens.updated"), tenantID, payload)
 	}
+
+	// Propagation completed summary
+	completePayload := map[string]interface{}{
+		"tenantId":         tenantID,
+		"projectId":        projectID,
+		"lensId":           originLensID,
+		"sourceFragmentId": sourceFragmentID,
+		"nodesUpdated":     len(affectedFragments),
+		"lensesAffected":   len(affectedLenses),
+		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if correlationID != "" {
+		completePayload["correlationId"] = correlationID
+	}
+	if sessionID != "" {
+		completePayload["sessionId"] = sessionID
+	}
+	_ = e.realtime.PublishJSON(ctx, realtime.EventType("horizon.propagation.completed"), tenantID, completePayload)
 }
 
 // SimulatePropagation выполняет симуляцию распространения без сохранения изменений
@@ -547,4 +639,3 @@ func (e *PropagationEngine) simulateHotPath(
 
 	return nil
 }
-

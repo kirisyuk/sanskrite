@@ -8,12 +8,14 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 // QueryRefreshJob периодически переразрешает QueryAddress в активных Lens
 type QueryRefreshJob struct {
 	lensesRepo    *repo.LensesRepository
 	fragmentsRepo *repo.HorizonFragmentsRepository
+	ontologyFactsRepo *corerepo.OntologyFactsRepository
 	queryResolver *QueryResolver
 	lifecycle     *LifecycleManager
 	watchdogHook  func(ctx context.Context, fragmentID string)
@@ -24,6 +26,7 @@ type QueryRefreshJob struct {
 func NewQueryRefreshJob(
 	lensesRepo *repo.LensesRepository,
 	fragmentsRepo *repo.HorizonFragmentsRepository,
+	ontologyFactsRepo *corerepo.OntologyFactsRepository,
 	lifecycle *LifecycleManager,
 	interval time.Duration,
 ) *QueryRefreshJob {
@@ -34,7 +37,8 @@ func NewQueryRefreshJob(
 	return &QueryRefreshJob{
 		lensesRepo:    lensesRepo,
 		fragmentsRepo: fragmentsRepo,
-		queryResolver: NewQueryResolver(fragmentsRepo),
+		ontologyFactsRepo: ontologyFactsRepo,
+		queryResolver: NewQueryResolver(fragmentsRepo, ontologyFactsRepo),
 		lifecycle:     lifecycle,
 		interval:      interval,
 	}

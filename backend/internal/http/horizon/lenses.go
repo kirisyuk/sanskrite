@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
-	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
 
 // CreateLens создает новый Lens
@@ -29,15 +33,52 @@ func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lens.TenantID = authInfo.TenantID
+	if strings.TrimSpace(lens.ProjectID) == "" {
+		http.Error(w, "projectId is required", http.StatusBadRequest)
+		return
+	}
 
-	lensID, err := h.service.Lens().CreateLens(r.Context(), &lens)
+	// Correlation/session IDs (optional, but recommended for realtime UX).
+	// Frontend can pass these via headers; backend will generate correlationId if missing.
+	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+	if correlationID == "" {
+		correlationID = strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
+	}
+	if correlationID == "" {
+		correlationID = uuid.NewString()
+	}
+	sessionID := strings.TrimSpace(r.Header.Get("X-Session-Id"))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(r.Header.Get("X-Session-ID"))
+	}
+
+	ctx := rtctx.With(r.Context(), rtctx.Context{
+		TenantID:      authInfo.TenantID,
+		ProjectID:     lens.ProjectID,
+		CorrelationID: correlationID,
+		SessionID:     sessionID,
+	})
+
+	lensID, err := h.service.Lens().CreateLens(ctx, &lens)
 	if err != nil {
+		// Best-effort: publish assembly failed for UI visibility.
+		if pub := h.service.RealtimePublisher(); pub != nil && strings.TrimSpace(lens.ProjectID) != "" {
+			_ = pub.PublishJSON(ctx, realtime.EventType("horizon.assembly.failed"), authInfo.TenantID, map[string]interface{}{
+				"tenantId":      authInfo.TenantID,
+				"projectId":     lens.ProjectID,
+				"phase":         "decomposition",
+				"error":         err.Error(),
+				"correlationId": correlationID,
+				"sessionId":     sessionID,
+			})
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	lens.ID = lensID
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Correlation-Id", correlationID)
 	json.NewEncoder(w).Encode(lens)
 }
 
@@ -224,14 +265,13 @@ func (h *HorizonHandlers) RecalculateLens(w http.ResponseWriter, r *http.Request
 
 	// Возвращаем ответ с jobId (в данном случае синхронный пересчет)
 	response := map[string]interface{}{
-		"jobId":                lensID,
-		"status":               "completed",
-		"estimatedCompletion":  nil,
-		"metrics":              metrics,
+		"jobId":               lensID,
+		"status":              "completed",
+		"estimatedCompletion": nil,
+		"metrics":             metrics,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(response)
 }
-

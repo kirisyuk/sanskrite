@@ -535,75 +535,149 @@ X-Tenant-ID: <tenant_id>
 
 ### Подписка на события
 
-**WebSocket URL**: `wss://api.sanskrite.com/ws/risk`
+**WebSocket URL**: `wss://<ws-host>/ws`
 
 **Аутентификация**: Токен передается в query параметре `token`
 
+**Project subscription (обязательно)**: после подключения клиент отправляет:
+
+```json
+{"type":"subscribe","projectId":"<projectId>"}
+```
+
 **События**:
 
-#### `lens.updated`
-Обновление Lens после пересчета
+#### `horizon.assembly.*`
+События сборки (Hook → Sled): фазы и прогресс.
 
 ```json
 {
-  "type": "lens.updated",
-  "lensId": "uuid",
+  "type": "horizon.assembly.phase",
   "data": {
-    "metrics": {
-      "overallRisk": 0.65,
-      "criticalNodes": 2
-    },
-    "updatedAt": "2025-12-17T14:30:00Z"
+    "tenantId": "uuid",
+    "projectId": "uuid",
+    "lensId": "uuid",
+    "phase": "scouting",
+    "progress": 0.43,
+    "correlationId": "uuid",
+    "ts": "2025-12-22T12:34:56.123456Z"
   }
 }
 ```
 
-#### `horizon_fragment.updated`
-Обновление HorizonFragment
+#### `horizon.graph.node.upserted`
+Материализация/обновление узла в графе (cache-hit / scouting / verified / propagation).
 
 ```json
 {
-  "type": "horizon_fragment.updated",
-  "fragmentId": "uuid",
+  "type": "horizon.graph.node.upserted",
   "data": {
+    "tenantId": "uuid",
+    "projectId": "uuid",
+    "lensId": "uuid",
+    "fragmentId": "uuid",
     "canonicalPath": "/fac/tsmc/fab-21",
+    "status": "cached",
+    "epistemicStatus": "VERIFIED",
     "version": 15,
-    "state": {
-      "operational_health": {
-        "value": 0.85,
-        "confidence": 0.95,
-        "observedAt": "2025-12-17T14:30:00Z"
-      }
-    },
-    "updatedAt": "2025-12-17T14:30:00Z"
+    "correlationId": "uuid",
+    "ts": "2025-12-22T12:34:56.123456Z"
   }
 }
 ```
 
-#### `scout.job.progress`
-Прогресс выполнения ScoutingJob
+#### `horizon.scout.job.state`
+Переходы состояний ScoutingJob (PENDING/PLANNING/EXECUTION/EXTRACTION/VALIDATION/RESOLUTION/VERIFIED/FAILED).
 
 ```json
 {
-  "type": "scout.job.progress",
-  "jobId": "uuid",
+  "type": "horizon.scout.job.state",
   "data": {
-    "status": "EXTRACTION",
-    "progress": 0.6,
-    "currentStep": "extraction"
+    "tenantId": "uuid",
+    "projectId": "uuid",
+    "lensId": "uuid",
+    "jobId": "uuid",
+    "targetCanonicalPath": "/fac/tsmc/fab-21",
+    "state": "EXTRACTION",
+    "progress": 0.5,
+    "hint": "extraction",
+    "correlationId": "uuid",
+    "ts": "2025-12-22T12:34:56.123456Z"
   }
 }
 ```
 
-#### `propagation.started`
+#### `horizon.propagation.started`
 Начало распространения изменений
 
 ```json
 {
-  "type": "propagation.started",
-  "fragmentId": "uuid",
+  "type": "horizon.propagation.started",
   "data": {
-    "startedAt": "2025-12-17T14:30:00Z"
+    "tenantId": "uuid",
+    "projectId": "uuid",
+    "lensId": "uuid",
+    "sourceFragmentId": "uuid",
+    "correlationId": "uuid",
+    "ts": "2025-12-22T12:34:56.123456Z"
+  }
+}
+```
+
+#### `horizon.propagation.node_updated`
+Обновление узла в ходе propagation (granular update)
+
+```json
+{
+  "type": "horizon.propagation.node_updated",
+  "data": {
+    "tenantId": "uuid",
+    "projectId": "uuid",
+    "lensId": "uuid",
+    "sourceFragmentId": "uuid",
+    "fragmentId": "uuid",
+    "correlationId": "uuid",
+    "ts": "2025-12-22T12:34:56.123456Z"
+  }
+}
+```
+
+#### `horizon.propagation.completed`
+Завершение propagation (summary)
+
+```json
+{
+  "type": "horizon.propagation.completed",
+  "data": {
+    "tenantId": "uuid",
+    "projectId": "uuid",
+    "lensId": "uuid",
+    "sourceFragmentId": "uuid",
+    "nodesUpdated": 12,
+    "lensesAffected": 3,
+    "correlationId": "uuid",
+    "ts": "2025-12-22T12:34:56.123456Z"
+  }
+}
+```
+
+#### `horizon.graph.edge.upserted`
+Создание/обновление ребра в графе.
+
+```json
+{
+  "type": "horizon.graph.edge.upserted",
+  "data": {
+    "tenantId": "uuid",
+    "projectId": "uuid",
+    "lensId": "uuid",
+    "edgeId": "uuid",
+    "sourceFragmentId": "uuid",
+    "targetFragmentId": "uuid",
+    "type": "SUPPLIES_TO",
+    "properties": { "criticality": 0.9, "amplification": 1.1, "latencyHours": 72 },
+    "correlationId": "uuid",
+    "ts": "2025-12-22T12:34:56.123456Z"
   }
 }
 ```
@@ -612,4 +686,5 @@ X-Tenant-ID: <tenant_id>
 
 - [JSON Schemas](schemas.md)
 - [Архитектурный обзор](../architecture/overview.md)
+- [Realtime (implementation)](../realtime.md)
 

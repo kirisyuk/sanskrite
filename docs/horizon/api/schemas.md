@@ -653,16 +653,26 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["type"],
+  "required": ["type", "data"],
   "properties": {
     "type": {
       "type": "string",
       "enum": [
-        "lens.updated",
-        "horizon_fragment.updated",
-        "scout.job.progress",
-        "propagation.started",
-        "propagation.completed"
+        "horizon.assembly.started",
+        "horizon.assembly.phase",
+        "horizon.assembly.progress",
+        "horizon.assembly.ready",
+        "horizon.assembly.failed",
+        "horizon.scout.job.created",
+        "horizon.scout.job.state",
+        "horizon.scout.job.log",
+        "horizon.scout.job.completed",
+        "horizon.graph.node.upserted",
+        "horizon.graph.edge.upserted",
+        "horizon.propagation.started",
+        "horizon.propagation.node_updated",
+        "horizon.propagation.completed",
+        "horizon.lens.updated"
       ]
     },
     "data": {
@@ -674,44 +684,40 @@
 }
 ```
 
+### Realtime envelope (рекомендованные поля)
+
+Это не строгая схема (payload отличается по eventType), но мы **рекомендуем** наличие следующих полей в `data`
+для роутинга и UI:
+
+- `tenantId`: string
+- `projectId`: string
+- `lensId`: string
+- `correlationId`: string (optional)
+- `sessionId`: string (optional)
+- `ts`: string (date-time)
+
 ### LensUpdatedEvent
 
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["type", "lensId", "data"],
+  "required": ["type", "data"],
   "properties": {
-    "type": {
-      "type": "string",
-      "const": "lens.updated"
-    },
-    "lensId": {
-      "type": "string",
-      "format": "uuid"
-    },
+    "type": { "type": "string", "const": "horizon.lens.updated" },
     "data": {
       "type": "object",
+      "required": ["lensId", "projectId", "tenantId", "ts"],
       "properties": {
-        "metrics": {
-          "type": "object",
-          "properties": {
-            "overallRisk": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "criticalNodes": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
-      }
+        "tenantId": { "type": "string" },
+        "projectId": { "type": "string" },
+        "lensId": { "type": "string" },
+        "originLensId": { "type": "string" },
+        "correlationId": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "ts": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
     }
   }
 }

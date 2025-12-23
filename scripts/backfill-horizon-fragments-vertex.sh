@@ -38,6 +38,8 @@ TENANT="${TENANT:-global}"
 BUCKET="${BUCKET:-${PROJECT}-horizon-fragments}"
 DATA_STORE_ID="${DATA_STORE_ID:-horizon-fragments-store}"
 BATCH_SIZE="${BATCH_SIZE:-100}"
+START_BATCH="${START_BATCH:-1}" # 1-based, inclusive
+END_BATCH="${END_BATCH:-0}"     # 0 = no limit
 
 # Discovery Engine import ограничивает gcsSource.inputUris максимум 100 значений
 if [[ "${BATCH_SIZE}" -gt 100 ]]; then
@@ -45,9 +47,12 @@ if [[ "${BATCH_SIZE}" -gt 100 ]]; then
   exit 1
 fi
 
-ACCESS_TOKEN="$(gcloud auth print-access-token --project="$PROJECT" 2>/dev/null || true)"
-if [[ -z "$ACCESS_TOKEN" ]]; then
-  echo "Failed to get access token. Run: gcloud auth login" >&2
+if ! [[ "${START_BATCH}" =~ ^[0-9]+$ ]] || [[ "${START_BATCH}" -lt 1 ]]; then
+  echo "START_BATCH must be a positive integer (1-based). Got: ${START_BATCH}" >&2
+  exit 1
+fi
+if ! [[ "${END_BATCH}" =~ ^[0-9]+$ ]] || [[ "${END_BATCH}" -lt 0 ]]; then
+  echo "END_BATCH must be an integer >= 0 (0 = no limit). Got: ${END_BATCH}" >&2
   exit 1
 fi
 
@@ -61,6 +66,7 @@ echo "[backfill] Bucket=$BUCKET"
 echo "[backfill] Tenant=$TENANT"
 echo "[backfill] DataStore=$DATA_STORE_ID"
 echo "[backfill] BatchSize=$BATCH_SIZE"
+echo "[backfill] StartBatch=$START_BATCH EndBatch=$END_BATCH"
 echo "[backfill] Listing: $LIST_PATH"
 
 gcloud storage ls "$LIST_PATH" > "$TMP_DIR/uris.txt" || true
@@ -76,9 +82,20 @@ split -l "$BATCH_SIZE" -d -a 4 "$TMP_DIR/uris.txt" "$TMP_DIR/batch_"
 
 IMPORT_URL="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT}/locations/global/collections/default_collection/dataStores/${DATA_STORE_ID}/branches/default_branch/documents:import"
 
+get_access_token() {
+  # Refresh token per batch to avoid mid-run expiry/reauth issues.
+  gcloud auth print-access-token --project="$PROJECT" 2>/dev/null || true
+}
+
 batch_idx=0
 for batch_file in "$TMP_DIR"/batch_*; do
   batch_idx=$((batch_idx + 1))
+  if [[ "${batch_idx}" -lt "${START_BATCH}" ]]; then
+    continue
+  fi
+  if [[ "${END_BATCH}" -gt 0 && "${batch_idx}" -gt "${END_BATCH}" ]]; then
+    break
+  fi
   req_json="$TMP_DIR/req_${batch_idx}.json"
 
   echo -n "{\"gcsSource\":{\"inputUris\":[" > "$req_json"
@@ -99,12 +116,31 @@ for batch_file in "$TMP_DIR"/batch_*; do
   count_in_batch="$(wc -l < "$batch_file" | tr -d ' ')"
   echo "[backfill] Importing batch ${batch_idx} (files=${count_in_batch})..."
 
+  ACCESS_TOKEN="$(get_access_token)"
+  if [[ -z "$ACCESS_TOKEN" ]]; then
+    echo "[backfill] Failed to get access token. Run: gcloud auth login" >&2
+    exit 1
+  fi
+
   resp="$(curl -sS -X POST \
     -H "Authorization: Bearer ${ACCESS_TOKEN}" \
     -H "X-Goog-User-Project: ${PROJECT}" \
     -H "Content-Type: application/json" \
     "${IMPORT_URL}" \
     --data-binary @"${req_json}")"
+
+  # If token expired mid-run, refresh once and retry.
+  if echo "$resp" | grep -q "\"status\"[ ]*:[ ]*\"UNAUTHENTICATED\""; then
+    ACCESS_TOKEN="$(get_access_token)"
+    if [[ -n "$ACCESS_TOKEN" ]]; then
+      resp="$(curl -sS -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "X-Goog-User-Project: ${PROJECT}" \
+        -H "Content-Type: application/json" \
+        "${IMPORT_URL}" \
+        --data-binary @"${req_json}")"
+    fi
+  fi
 
   if echo "$resp" | grep -q "\"name\""; then
     op="$(echo "$resp" | sed -n 's/.*"name"[ ]*:[ ]*"\([^"]*\)".*/\1/p' | head -n 1)"

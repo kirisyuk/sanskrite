@@ -54,6 +54,11 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	// LB-friendly health check (some setups route only /api/* to the service)
+	http.HandleFunc("/api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		// Authorization: Bearer <FirebaseIDToken> or ?token=
 		idToken := ""

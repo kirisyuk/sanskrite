@@ -233,25 +233,29 @@ if entity := findEntityByCanonicalPath(path); entity != nil {
 
 ### Pub/Sub события
 
-**События для Horizon**:
-- `horizon_fragment.created` — создание нового HorizonFragment
-- `horizon_fragment.updated` — обновление HorizonFragment
-- `lens.recalculated` — пересчет Lens
-- `propagation.started` — начало распространения изменений
-- `propagation.completed` — завершение распространения
+**События для Horizon (актуально)**:
+
+- `horizon.assembly.*` — сборка Lens (Hook → Sled: phase/progress/ready)
+- `horizon.scout.job.*` — создание и выполнение Scout jobs (state/log/completed)
+- `horizon.graph.node.upserted` — материализация/обновление узла в графе
+- `horizon.propagation.started` — начало распространения
+- `horizon.lens.updated` — обновление метрик Lens
+
+**Routing**:
+- Все `horizon.*` события маршрутизируются в отдельный Pub/Sub топик `hatlone.horizon.events`.
+- Для WS delivery требуется `projectId` в payload (WS клиенты подписываются по projectId).
+- `tenantId` используется как security namespace (коннекты bucket'ятся по tenant).
 
 **Публикация событий**:
 ```go
-publisher := realtime.NewPublisher(ctx, projectID)
-publisher.Publish(ctx, realtime.Event{
-    Type: "horizon_fragment.updated",
-    TenantID: tenantID,
-    ProjectID: projectID,
-    Data: map[string]interface{}{
-        "fragmentId": fragmentID,
-        "canonicalPath": canonicalPath,
-        "version": version,
-    },
+_ = publisher.PublishJSON(ctx, realtime.EventType("horizon.graph.node.upserted"), tenantID, map[string]interface{}{
+    "tenantId": tenantID,
+    "projectId": projectID,
+    "lensId": lensID,
+    "fragmentId": fragmentID,
+    "canonicalPath": canonicalPath,
+    "status": "cached",
+    "ts": time.Now().UTC().Format(time.RFC3339Nano),
 })
 ```
 
@@ -259,20 +263,10 @@ publisher.Publish(ctx, realtime.Event{
 
 **Интеграция с существующей системой**:
 - Использование существующего WebSocket hub
-- Подписка на события через `sessionId`
-- Обновления Lens в реальном времени
+- Подписка на события через control message `subscribe` по `projectId`
+- Lens/Lens-assembly события поставляются в реальном времени
 
-**События для фронтенда**:
-```json
-{
-  "type": "lens.updated",
-  "lensId": "uuid",
-  "data": {
-    "metrics": {...},
-    "updatedAt": "2025-12-17T14:30:00Z"
-  }
-}
-```
+Подробнее: [Realtime (implementation)](../realtime.md).
 
 ## Репозитории (`internal/repo`)
 
