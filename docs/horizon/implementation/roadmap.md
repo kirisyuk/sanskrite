@@ -99,7 +99,16 @@
     - ontology_facts (уже есть),
     - определить, как tenant/scope разделяются и как объединяются в выдаче.
 - **Мульти‑классификация без взрыва словаря**
-  - При необходимости: “primary sector/entity + tags” или аккуратные `[]string` поля, но без попытки сделать дерево бесконечным.
+  - При необходимости: "primary sector/entity + tags" или аккуратные `[]string` поля, но без попытки сделать дерево бесконечным.
+- **Intent/Keywords Resolution (Lens-driven)**
+  - Реализовать механизм инкрементального резолва keywords в canonical paths и sphere paths по мере работы агентов.
+  - Keywords должны жить на Lens (в `ViewConfig.keywords`), передаваться в `ScoutingJob.State`, и по мере нахождения сущностей агентами — резолвиться обратно в Lens (`resolvedKeywords` mapping).
+  - `QueryAddress` должен поддерживать `keyword:` префикс для динамического резолва (например, `/query/(canonicalPath:/org/tesla AND keyword:batteries AND sphere:/sphere/logistics)`).
+  - Гарантировать, что сущности, относящиеся к сфере (через `spherePaths` в facts), получают связи со сферой в графе (sphere fragments и `INFLUENCES` edges).
+  - **Expose NL precheck in backend API (Hook-ready)**
+    - `POST /api/horizon/intent/resolve` (NL query → taxonomy-aligned intent: anchors + spherePaths + keywords + focus).
+    - `POST /api/horizon/lenses/from-query` (resolve intent → create Lens with scope=anchors and viewConfig steering).
+    - Подключить Horizon Hook UX к этим endpoint'ам (в идеале: typed draft preview перед созданием Lens).
 
 **Критерии приемки**:
 - Можно отвечать на вопросы “что было верно на дату X” (минимально для edges/facts).
@@ -312,6 +321,20 @@
 
 **Причины отложения**:
 - Firestore с индексами достаточен для начального этапа
+
+## Intent / Taxonomy: Dynamic Spheres (Lens-driven)
+
+**Требование**: поддержать “динамические сферы” из intent (LLM / precheck) — когда система сама предлагает/нормализует `spherePaths` под запрос, без ручного выбора пользователем.
+
+**Зачем**: базовые запросы часто не мапятся на заранее известную сферу; сейчас всё падает в `/sphere/other`, что ухудшает переиспользуемость и качество графа/UX.
+
+**Acceptance criteria**:
+- `spherePaths` формируются из intent и **валидируются/нормализуются runtime taxonomy** (`/sphere/...` allowlist + synonyms).
+- Если сферы нет в allowlist — система либо:
+  - выбирает ближайшую существующую сферу (через synonyms/иерархию), либо
+  - создаёт новую canonical `spherePath` через админ‑workflow и добавляет её в runtime taxonomy (желательно с synonyms).
+- Для выбранных `spherePaths` автоматически создаётся sphere-fragment и `INFLUENCES` edge (**sphere → target**) с provenance `lens_intent_sphere_link`.
+- Результат должен быть **переиспользуем**: похожий следующий запрос должен приходить к тем же `spherePaths` (при неизменной runtime taxonomy).
 - Сложность миграции и синхронизации данных
 - Дополнительные затраты на инфраструктуру
 

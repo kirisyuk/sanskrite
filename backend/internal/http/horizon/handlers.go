@@ -21,8 +21,13 @@ func NewHorizonHandlers(service *horizon.HorizonService) *HorizonHandlers {
 
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
+	// Intent precheck (NL -> taxonomy-aligned intent)
+	mux.Handle("/api/horizon/intent/resolve", authMiddleware(http.HandlerFunc(h.ResolveIntent)))
+
 	// Lens endpoints
 	mux.Handle("/api/horizon/lenses", authMiddleware(http.HandlerFunc(h.HandleLensesRoot)))
+	// Lens creation from NL query (resolve intent -> create lens)
+	mux.Handle("/api/horizon/lenses/from-query", authMiddleware(http.HandlerFunc(h.CreateLensFromQuery)))
 	mux.Handle("/api/horizon/lenses/", authMiddleware(http.HandlerFunc(h.HandleLensRoutes)))
 
 	// Fragment endpoints

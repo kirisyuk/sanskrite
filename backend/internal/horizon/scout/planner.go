@@ -14,9 +14,9 @@ import (
 
 // SourcePlan план источников для ScoutingJob
 type SourcePlan struct {
-	DataSourceIDs []string              `json:"dataSourceIds"` // DataSource IDs из проекта
-	Strategy      string                `json:"strategy"`       // "Snapshot" или "DeepDive"
-	Sources       []*models.DataSource  `json:"sources"`       // Полные объекты DataSource
+	DataSourceIDs []string             `json:"dataSourceIds"` // DataSource IDs из проекта
+	Strategy      string               `json:"strategy"`      // "Snapshot" или "DeepDive"
+	Sources       []*models.DataSource `json:"sources"`       // Полные объекты DataSource
 }
 
 // ScoutPlanner планирует источники данных для ScoutingJob
@@ -36,7 +36,10 @@ func NewScoutPlanner(dataSourcesRepo *repo.DataSourcesRepository, factsRepo *rep
 }
 
 // PlanSources планирует источники для ScoutingJob
-func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID string, targetCanonicalPath string, strategy horizonmodels.ScoutingStrategy, since *time.Time) (*SourcePlan, error) {
+// searchQuery is an optional free-form focus query (e.g. "battery logistics procurement") that is used
+// for semantic retrieval (Vertex/doc search) but MUST NOT replace targetCanonicalPath as the key for
+// facts/fragments.
+func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID string, targetCanonicalPath string, strategy horizonmodels.ScoutingStrategy, since *time.Time, searchQuery string) (*SourcePlan, error) {
 	// 1. Получаем Sources проекта
 	projectSources, err := p.dataSourcesRepo.ListByProject(ctx, tenantID, projectID)
 	if err != nil {
@@ -51,10 +54,10 @@ func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID stri
 
 	// 3. Фильтруем релевантные Sources для целевого узла.
 	// Приоритет: фактовый срез (Vertex AI Search по ontology_facts) -> Firestore facts -> legacy doc-based -> heuristic.
-	relevantSources := p.filterRelevantSourcesByFacts(ctx, tenantID, projectSources, targetCanonicalPath, strategy, since)
+	relevantSources := p.filterRelevantSourcesByFacts(ctx, tenantID, projectSources, targetCanonicalPath, strategy, since, searchQuery)
 	if relevantSources == nil {
 		// legacy behavior: use doc search heuristic
-		relevantSources = p.filterRelevantSources(ctx, projectSources, targetCanonicalPath, strategy)
+		relevantSources = p.filterRelevantSources(ctx, projectSources, targetCanonicalPath, strategy, searchQuery)
 	}
 
 	return &SourcePlan{
@@ -75,9 +78,14 @@ func (p *ScoutPlanner) filterRelevantSourcesByFacts(
 	targetCanonicalPath string,
 	strategy horizonmodels.ScoutingStrategy,
 	since *time.Time,
+	searchQuery string,
 ) []*models.DataSource {
 	if strings.TrimSpace(targetCanonicalPath) == "" {
 		return nil
+	}
+	q := strings.TrimSpace(searchQuery)
+	if q == "" {
+		q = strings.TrimSpace(targetCanonicalPath)
 	}
 
 	// Prefer Vertex AI Search over ontology_facts (native) when configured.
@@ -91,7 +99,7 @@ func (p *ScoutPlanner) filterRelevantSourcesByFacts(
 		}
 		req := &ai.SearchRequest{
 			// Query uses vectorText/content (semantic), while canonicalPaths filter is not guaranteed in all DS schemas.
-			Query:    strings.TrimSpace(targetCanonicalPath),
+			Query:    q,
 			PageSize: 30,
 			Filter:   strings.Join(filterParts, " AND "),
 		}
@@ -190,16 +198,21 @@ func (p *ScoutPlanner) materializeSources(ctx context.Context, allSources []*mod
 }
 
 // filterRelevantSources фильтрует релевантные источники с помощью Vertex AI Search
-func (p *ScoutPlanner) filterRelevantSources(ctx context.Context, sources []*models.DataSource, targetCanonicalPath string, strategy horizonmodels.ScoutingStrategy) []*models.DataSource {
+func (p *ScoutPlanner) filterRelevantSources(ctx context.Context, sources []*models.DataSource, targetCanonicalPath string, strategy horizonmodels.ScoutingStrategy, searchQuery string) []*models.DataSource {
 	// Fallback: если клиент не настроен или нет источников, используем эвристику
 	if p.vertexSearchClient == nil || !p.vertexSearchClient.IsConfigured() || len(sources) == 0 {
 		return p.fallbackFiltering(sources, strategy)
 	}
 
+	q := strings.TrimSpace(searchQuery)
+	if q == "" {
+		q = strings.TrimSpace(targetCanonicalPath)
+	}
+
 	// Ищем релевантные документы в Vertex AI Search
 	// Это найдет источники, в которых упоминается тема (targetCanonicalPath)
 	req := &ai.SearchRequest{
-		Query:    targetCanonicalPath,
+		Query:    q,
 		PageSize: 20, // Проверяем топ-20 документов
 		// Можно добавить фильтр по типу документов, если нужно
 	}
@@ -259,4 +272,3 @@ func extractDataSourceIDs(sources []*models.DataSource) []string {
 	}
 	return ids
 }
-

@@ -224,14 +224,34 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Optional behavior knobs for Horizon assembly (kept in ViewConfig to avoid breaking schema):
 	// - requestedMetrics: []string | []any(strings) | "a,b,c"
 	// - maxRecursionDepth: number | string
+	// - focus: string (free-form, e.g. "battery logistics procurement")
+	// - spherePaths: []string | []any(strings) | "a,b,c" (e.g. "/sphere/logistics")
+	// - keywords: []string | []any(strings) | "a,b,c" (free-form tokens; not required to be canonical paths)
 	requestedMetrics := []string(nil)
 	maxRecursionDepth := 2
+	focus := ""
+	spherePaths := []string(nil)
+	keywords := []string(nil)
 	if lens.ViewConfig != nil {
 		if v, ok := lens.ViewConfig["requestedMetrics"]; ok {
 			requestedMetrics = parseStringSlice(v)
 		}
 		if v, ok := lens.ViewConfig["maxRecursionDepth"]; ok {
 			maxRecursionDepth = parseInt(v, 2)
+		}
+		if v, ok := lens.ViewConfig["focus"]; ok {
+			if s, ok2 := v.(string); ok2 {
+				focus = strings.TrimSpace(s)
+			}
+		}
+		// Accept both "spherePaths" (preferred) and legacy "spheres".
+		if v, ok := lens.ViewConfig["spherePaths"]; ok {
+			spherePaths = parseStringSlice(v)
+		} else if v, ok := lens.ViewConfig["spheres"]; ok {
+			spherePaths = parseStringSlice(v)
+		}
+		if v, ok := lens.ViewConfig["keywords"]; ok {
+			keywords = parseStringSlice(v)
 		}
 	}
 	if maxRecursionDepth < 0 {
@@ -271,6 +291,17 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	scoutingPlanned := 0
 	for _, canonicalPath := range staticPaths {
 		fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
+		isCacheHit := err == nil && fragment != nil
+		isFragmentFreshEnough := false
+		if isCacheHit {
+			// If we already have verified (or at least non-low-confidence) data, do NOT create a new Scout job.
+			// This keeps "known queries" fast and avoids generating Cloud Tasks for cached graphs.
+			//
+			// Note: Watchdog/explicit refresh paths can still generate jobs when needed.
+			if !fragment.Metadata.LastVerifiedAt.IsZero() && fragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+				isFragmentFreshEnough = true
+			}
+		}
 		if err == nil && fragment != nil {
 			cacheHits++
 			// Сохраняем в кэш для будущих операций
@@ -301,9 +332,9 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			})
 		}
 
-		// Создаем ScoutingJob для сборки/освежения данных (ScoutEngine выполнит freshness-check и быстро завершит,
-		// если данные уже достаточно свежие). Это убирает расхождения между тестовым сценарием и ядром.
-		if s.scoutingJobsRepo != nil {
+		// Create ScoutingJob only when we DON'T already have sufficiently verified data.
+		// This prevents excessive Cloud Tasks for queries that are already in the system (e.g., Astana/LRT).
+		if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
 			scoutingPlanned++
 			now := time.Now().UTC()
 			state := map[string]interface{}{
@@ -326,6 +357,15 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			}
 			if len(requestedMetrics) > 0 {
 				state["requestedMetrics"] = requestedMetrics
+			}
+			if focus != "" {
+				state["focus"] = focus
+			}
+			if len(spherePaths) > 0 {
+				state["spherePaths"] = spherePaths
+			}
+			if len(keywords) > 0 {
+				state["keywords"] = keywords
 			}
 			scoutingJob := &models.ScoutingJob{
 				AgentJob: agentmodels.AgentJob{
@@ -365,6 +405,19 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"canonicalPath": canonicalPath,
 				"status":        "scouting",
 				"jobId":         scoutingJob.ID,
+			})
+		} else if isCacheHit && isFragmentFreshEnough {
+			// Best-effort: signal that no scouting is needed for this node.
+			s.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+				"tenantId":        lens.TenantID,
+				"projectId":       lens.ProjectID,
+				"lensId":          lensID,
+				"jobId":           "",
+				"fragmentId":      fragment.ID,
+				"canonicalPath":   strings.TrimSpace(canonicalPath),
+				"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
+				"confidence":      1.0,
+				"hint":            "cached_verified_skip_scout",
 			})
 		}
 	}
@@ -564,14 +617,33 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	// Optional behavior knobs for Horizon assembly (kept in ViewConfig to avoid breaking schema):
 	// - requestedMetrics: []string | []any(strings) | "a,b,c"
 	// - maxRecursionDepth: number | string
+	// - focus: string (free-form)
+	// - spherePaths: []string | []any(strings) | "a,b,c"
+	// - keywords: []string | []any(strings) | "a,b,c"
 	requestedMetrics := []string(nil)
 	maxRecursionDepth := 2
+	focus := ""
+	spherePaths := []string(nil)
+	keywords := []string(nil)
 	if lens.ViewConfig != nil {
 		if v, ok := lens.ViewConfig["requestedMetrics"]; ok {
 			requestedMetrics = parseStringSlice(v)
 		}
 		if v, ok := lens.ViewConfig["maxRecursionDepth"]; ok {
 			maxRecursionDepth = parseInt(v, 2)
+		}
+		if v, ok := lens.ViewConfig["focus"]; ok {
+			if s, ok2 := v.(string); ok2 {
+				focus = strings.TrimSpace(s)
+			}
+		}
+		if v, ok := lens.ViewConfig["spherePaths"]; ok {
+			spherePaths = parseStringSlice(v)
+		} else if v, ok := lens.ViewConfig["spheres"]; ok {
+			spherePaths = parseStringSlice(v)
+		}
+		if v, ok := lens.ViewConfig["keywords"]; ok {
+			keywords = parseStringSlice(v)
 		}
 	}
 	if maxRecursionDepth < 0 {
@@ -588,6 +660,13 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	for _, path := range allNewStaticPaths {
 		if !oldPathsMap[path] {
 			fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, path)
+			isCacheHit := err == nil && fragment != nil
+			isFragmentFreshEnough := false
+			if isCacheHit {
+				if !fragment.Metadata.LastVerifiedAt.IsZero() && fragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+					isFragmentFreshEnough = true
+				}
+			}
 			if err == nil && fragment != nil {
 				// Обновляем кэш для нового узла
 				lens.ScopeFragments[path] = fragment.ID
@@ -603,7 +682,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			// Создаем ScoutingJob для нового узла в scope (аналогично CreateLens)
 			// Это гарантирует, что данные для нового узла будут собраны немедленно,
 			// а не ждать первого Watchdog scan (который может быть через 1 час)
-			if s.scoutingJobsRepo != nil {
+			if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
 				now := time.Now().UTC()
 				state := map[string]interface{}{
 					"targetCanonicalPath": path,
@@ -616,6 +695,15 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 				if len(requestedMetrics) > 0 {
 					state["requestedMetrics"] = requestedMetrics
+				}
+				if focus != "" {
+					state["focus"] = focus
+				}
+				if len(spherePaths) > 0 {
+					state["spherePaths"] = spherePaths
+				}
+				if len(keywords) > 0 {
+					state["keywords"] = keywords
 				}
 				scoutingJob := &models.ScoutingJob{
 					AgentJob: agentmodels.AgentJob{
@@ -638,6 +726,19 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 				// Создаем job, но не прерываем UpdateLens при ошибке
 				_, _ = s.scoutingJobsRepo.Create(ctx, scoutingJob)
+			} else if isCacheHit && isFragmentFreshEnough {
+				// Best-effort: signal skip for UI.
+				s.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+					"tenantId":        lens.TenantID,
+					"projectId":       lens.ProjectID,
+					"lensId":          lens.ID,
+					"jobId":           "",
+					"fragmentId":      fragment.ID,
+					"canonicalPath":   strings.TrimSpace(path),
+					"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
+					"confidence":      1.0,
+					"hint":            "cached_verified_skip_scout",
+				})
 			}
 		}
 	}

@@ -22,3 +22,4 @@ func horizonVertexClient(base *ai.VertexAISearchClient) *ai.VertexAISearchClient
 }
 
 
+

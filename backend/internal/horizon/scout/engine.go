@@ -13,6 +13,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
@@ -198,9 +199,6 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if _, ok := applied[strings.TrimSpace(f.ID)]; !ok {
 			continue
 		}
-		if len(f.MetricUpdates) == 0 {
-			continue // wave dimensions are currently metric-driven
-		}
 
 		// 1) sphere dimensions
 		if len(f.SpherePaths) > 0 {
@@ -217,7 +215,8 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 					continue
 				}
 				ensureInfluenceEdge(sfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "sphere", "path": sp, "factId": f.ID})
-				if applyMetricUpdates(sfrag, f) {
+				// Metric updates are optional; sphere linkage should exist even without metrics.
+				if len(f.MetricUpdates) > 0 && applyMetricUpdates(sfrag, f) {
 					_ = e.fragmentsRepo.Update(ctx, sfrag)
 					dimensionFragmentIDsToPropagate[sfrag.ID] = struct{}{}
 				}
@@ -231,7 +230,8 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 				gfrag, err := ensureFragment(lp, models.FragmentTypeGeoRegion, lp, "/Geo/Region", "/Geography")
 				if err == nil && gfrag != nil {
 					ensureInfluenceEdge(gfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "geo", "path": lp, "factId": f.ID})
-					if applyMetricUpdates(gfrag, f) {
+					// Metric updates are optional; geo linkage should exist even without metrics.
+					if len(f.MetricUpdates) > 0 && applyMetricUpdates(gfrag, f) {
 						_ = e.fragmentsRepo.Update(ctx, gfrag)
 						dimensionFragmentIDsToPropagate[gfrag.ID] = struct{}{}
 					}
@@ -585,7 +585,89 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		fmt.Printf("[ScoutEngine] Running full planning for %s (Lens-driven)\n", job.TargetCanonicalPath)
 		e.logLine(ctx, job, "info", "> running full planning (lens-driven)")
 		var err error
-		sourcePlan, err = e.planner.PlanSources(ctx, tenantID, projectID, job.TargetCanonicalPath, models.ScoutingStrategy(job.ScoutingStrategy), sinceFacts)
+		// Optional focus query from Lens/ViewConfig (stored in job.State).
+		searchQuery := ""
+		if job != nil && job.State != nil {
+			if v, ok := job.State["focus"].(string); ok && strings.TrimSpace(v) != "" {
+				searchQuery = strings.TrimSpace(v)
+			} else if v, ok := job.State["searchQuery"].(string); ok && strings.TrimSpace(v) != "" {
+				// Legacy/experimental alias.
+				searchQuery = strings.TrimSpace(v)
+			}
+			// Optional free-form keywords (not necessarily canonical paths).
+			if v, ok := job.State["keywords"]; ok {
+				switch t := v.(type) {
+				case []string:
+					for _, s := range t {
+						s = strings.TrimSpace(s)
+						if s == "" {
+							continue
+						}
+						if searchQuery != "" {
+							searchQuery += " "
+						}
+						searchQuery += s
+					}
+				case []interface{}:
+					for _, it := range t {
+						if s, ok2 := it.(string); ok2 {
+							s = strings.TrimSpace(s)
+							if s == "" {
+								continue
+							}
+							if searchQuery != "" {
+								searchQuery += " "
+							}
+							searchQuery += s
+						}
+					}
+				case string:
+					s := strings.TrimSpace(t)
+					if s != "" {
+						if searchQuery != "" {
+							searchQuery += " "
+						}
+						searchQuery += s
+					}
+				}
+			}
+			// If caller also provided spherePaths, treat them as additional query tokens.
+			if v, ok := job.State["spherePaths"]; ok {
+				switch t := v.(type) {
+				case []string:
+					for _, s := range t {
+						s = strings.TrimSpace(s)
+						if s != "" {
+							if searchQuery != "" {
+								searchQuery += " "
+							}
+							searchQuery += s
+						}
+					}
+				case []interface{}:
+					for _, it := range t {
+						if s, ok2 := it.(string); ok2 {
+							s = strings.TrimSpace(s)
+							if s != "" {
+								if searchQuery != "" {
+									searchQuery += " "
+								}
+								searchQuery += s
+							}
+						}
+					}
+				case string:
+					s := strings.TrimSpace(t)
+					if s != "" {
+						if searchQuery != "" {
+							searchQuery += " "
+						}
+						searchQuery += s
+					}
+				}
+			}
+		}
+		sourcePlan, err = e.planner.PlanSources(ctx, tenantID, projectID, job.TargetCanonicalPath, models.ScoutingStrategy(job.ScoutingStrategy), sinceFacts, searchQuery)
 		if err != nil {
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "planning_failed")
 			return fmt.Errorf("failed to plan sources: %w", err)
@@ -757,7 +839,50 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		fmt.Printf("[ScoutEngine] Starting research for job %s, missing info: %v\n", job.ID, validationResult.MissingInfo)
 		e.logLine(ctx, job, "info", fmt.Sprintf("> research started (missing=%d)", len(validationResult.MissingInfo)))
 		researchCtx := ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.research", lensID, cascadeID)
-		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo)
+		// Pass focus signals to grounded research (best-effort).
+		focus := ""
+		var spherePaths []string
+		var keywords []string
+		if job != nil && job.State != nil {
+			if v, ok := job.State["focus"].(string); ok {
+				focus = strings.TrimSpace(v)
+			}
+			if v, ok := job.State["spherePaths"]; ok {
+				switch t := v.(type) {
+				case []string:
+					spherePaths = append(spherePaths, t...)
+				case []interface{}:
+					for _, it := range t {
+						if s, ok2 := it.(string); ok2 {
+							spherePaths = append(spherePaths, s)
+						}
+					}
+				case string:
+					parts := strings.Split(t, ",")
+					for _, p := range parts {
+						spherePaths = append(spherePaths, p)
+					}
+				}
+			}
+			if v, ok := job.State["keywords"]; ok {
+				switch t := v.(type) {
+				case []string:
+					keywords = append(keywords, t...)
+				case []interface{}:
+					for _, it := range t {
+						if s, ok2 := it.(string); ok2 {
+							keywords = append(keywords, s)
+						}
+					}
+				case string:
+					parts := strings.Split(t, ",")
+					for _, p := range parts {
+						keywords = append(keywords, p)
+					}
+				}
+			}
+		}
+		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords)
 		if err == nil {
 			extractedFragment = enrichedFragment
 			if len(newRelations) > 0 {
@@ -947,6 +1072,20 @@ SKIP_RESEARCH:
 		fragmentID = existingFragment.ID
 	}
 
+	// Intent-based sphere linking: ensure sphere fragments and INFLUENCES edges exist for this target
+	// when the Lens requested spherePaths. This is intentionally independent of ontology facts/metrics
+	// so the UI can group/cluster entities by sphere even in early/partial graphs.
+	if err := e.applyIntentSphereLinks(ctx, job, existingFragment); err != nil {
+		// Best effort: do not fail job completion for linkage issues.
+		fmt.Printf("[ScoutEngine] Failed to apply intent sphere links for %s: %v\n", job.TargetCanonicalPath, err)
+	}
+
+	// Ontology-first intent decomposition: propose reusable relations/facts even when local corpus is empty.
+	// This seeds exploration for the requested spheres and makes future similar queries faster.
+	if err := e.seedOntologyFromIntent(ctx, job, existingFragment); err != nil {
+		fmt.Printf("[ScoutEngine] Intent decomposition failed for %s: %v\n", job.TargetCanonicalPath, err)
+	}
+
 	// Realtime: job completed + node materialized/updated.
 	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
 		"tenantId":        tenantID,
@@ -999,6 +1138,272 @@ SKIP_RESEARCH:
 				fmt.Printf("Propagation trigger failed for fragment %s: %v\n", fid, err)
 			}
 		}(fragmentID)
+	}
+
+	return nil
+}
+
+func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.ScoutingJob, sourceFragment *models.HorizonFragment) error {
+	if e == nil || job == nil || sourceFragment == nil || strings.TrimSpace(sourceFragment.ID) == "" {
+		return nil
+	}
+	if e.aiExecutor == nil {
+		return nil
+	}
+	if job.State == nil {
+		return nil
+	}
+	// Only run on root jobs to avoid exponential growth; recursion inherits intent for grounded scouting.
+	if v, ok := job.State["recursionDepth"].(float64); ok && int(v) > 0 {
+		return nil
+	}
+	if v, ok := job.State["intentDecompositionDone"].(bool); ok && v {
+		return nil
+	}
+
+	focus := ""
+	if v, ok := job.State["focus"].(string); ok {
+		focus = strings.TrimSpace(v)
+	}
+	// keywords (optional)
+	keywords := []string{}
+	if v, ok := job.State["keywords"]; ok {
+		switch t := v.(type) {
+		case []string:
+			keywords = append(keywords, t...)
+		case []interface{}:
+			for _, it := range t {
+				if s, ok2 := it.(string); ok2 {
+					keywords = append(keywords, s)
+				}
+			}
+		case string:
+			for _, p := range strings.Split(t, ",") {
+				keywords = append(keywords, p)
+			}
+		}
+	}
+	// spherePaths (optional)
+	spherePaths := []string{}
+	if v, ok := job.State["spherePaths"]; ok {
+		switch t := v.(type) {
+		case []string:
+			spherePaths = append(spherePaths, t...)
+		case []interface{}:
+			for _, it := range t {
+				if s, ok2 := it.(string); ok2 {
+					spherePaths = append(spherePaths, s)
+				}
+			}
+		case string:
+			for _, p := range strings.Split(t, ",") {
+				spherePaths = append(spherePaths, p)
+			}
+		}
+	}
+	spherePaths = taxonomy.NormalizeSpherePaths(spherePaths)
+
+	// If there's no intent signal, do nothing.
+	if focus == "" && len(keywords) == 0 && len(spherePaths) == 0 {
+		return nil
+	}
+
+	agent := agents.NewIntentDecomposerAgent(e.aiExecutor)
+	rels, err := agent.Decompose(ctx, strings.TrimSpace(job.TargetCanonicalPath), focus, spherePaths, keywords)
+	if err != nil {
+		return err
+	}
+	if len(rels) == 0 {
+		job.State["intentDecompositionDone"] = true
+		_ = e.scoutingJobsRepo.Update(ctx, job)
+		return nil
+	}
+
+	// Persist reusable ontology facts (kind=relation) so future queries can reuse them (and Vertex can index them).
+	if e.planner != nil && e.planner.factsRepo != nil {
+		now := time.Now().UTC()
+		for _, r := range rels {
+			targetCP := strings.TrimSpace(r.TargetCanonicalPath)
+			if targetCP == "" {
+				continue
+			}
+			rt := strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType))
+			title := fmt.Sprintf("%s %s %s", strings.TrimSpace(job.TargetCanonicalPath), rt, targetCP)
+			f := &coreModels.OntologyFact{
+				BaseOntologyFields: coreModels.BaseOntologyFields{
+					TenantID:       strings.TrimSpace(job.TenantID),
+					Version:        1,
+					CreatedAt:      now,
+					UpdatedAt:      now,
+					CreatedBy:      "system",
+					UpdatedBy:      "system",
+					Labels:         map[string]string{"en": title},
+					Status:         "active",
+					Tags:           []string{"hypothesis", "intent", "relation"},
+					CanonicalPaths: []string{strings.TrimSpace(job.TargetCanonicalPath), targetCP},
+					ActorPaths:     []string{strings.TrimSpace(job.TargetCanonicalPath), targetCP},
+					SpherePaths:    spherePaths,
+					VectorText:     "",
+					LocationPath:   nil,
+					Description:    "",
+				},
+				Kind:       "relation",
+				Type:       rt,
+				Title:      title,
+				Summary:    strings.TrimSpace(r.Reason),
+				ObservedAt: &now,
+				SourceRefs: []coreModels.SourceRef{{SourceID: strings.TrimSpace(job.ID), SourceType: "agent_job"}},
+				Confidence: func() float64 {
+					c := r.Confidence
+					if c <= 0 || c > 0.65 {
+						return 0.35
+					}
+					return c
+				}(),
+			}
+			f.VectorText = f.GenerateVectorText()
+			_, _ = e.planner.factsRepo.Create(ctx, f) // best effort
+		}
+	}
+
+	// Materialize hypothesis edges/fragments and schedule recursive scouting.
+	if err := e.processHypothesisRelations(ctx, job, sourceFragment, rels); err != nil {
+		return err
+	}
+
+	job.State["intentDecompositionDone"] = true
+	_ = e.scoutingJobsRepo.Update(ctx, job)
+	return nil
+}
+
+// applyIntentSphereLinks ensures the graph contains sphere dimension nodes and edges requested by Lens/job intent.
+// This is a lightweight linkage (not an extracted fact) and should be treated as a UI/analysis hint.
+func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.ScoutingJob, target *models.HorizonFragment) error {
+	if e == nil || job == nil || target == nil || target.ID == "" {
+		return nil
+	}
+	if job.State == nil {
+		return nil
+	}
+	raw, ok := job.State["spherePaths"]
+	if !ok {
+		return nil
+	}
+
+	// Parse to []string (accept []string, []any, comma-separated string).
+	paths := []string{}
+	switch t := raw.(type) {
+	case []string:
+		paths = append(paths, t...)
+	case []interface{}:
+		for _, it := range t {
+			if s, ok := it.(string); ok {
+				paths = append(paths, s)
+			}
+		}
+	case string:
+		for _, p := range strings.Split(t, ",") {
+			paths = append(paths, p)
+		}
+	}
+
+	now := time.Now().UTC()
+	for _, sp := range paths {
+		sp = strings.TrimSpace(sp)
+		if sp == "" {
+			continue
+		}
+
+		// Ensure sphere fragment exists.
+		sfrag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, sp)
+		if err != nil || sfrag == nil {
+			sfrag = &models.HorizonFragment{
+				TenantID:      "global",
+				CanonicalPath: sp,
+				Type:          models.FragmentTypeSphere,
+				Status:        "active",
+				Labels:        map[string]string{"en": sp},
+				EntityPath:    "/Influence/Sphere",
+				SectorPath:    "/Influence",
+				State:         make(map[string]models.MetricValue),
+				Governance:    models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
+				Provenance: models.Provenance{
+					Method:    "lens_intent_sphere_link",
+					SourceIDs: []string{strings.TrimSpace(job.ID)},
+				},
+				Metadata: models.FragmentMetadata{
+					CreatedAt:     now,
+					LastUpdatedAt: now,
+				},
+			}
+			id, cerr := e.fragmentsRepo.Create(ctx, sfrag)
+			if cerr != nil {
+				// If create races or fails for other reasons, re-read once.
+				if reread, rerr := e.fragmentsRepo.GetByCanonicalPath(ctx, sp); rerr == nil && reread != nil {
+					sfrag = reread
+				} else {
+					return cerr
+				}
+			} else {
+				sfrag.ID = id
+			}
+		}
+
+		if sfrag.ID == "" || sfrag.ID == target.ID {
+			continue
+		}
+
+		edgeType := models.DependencyTypeInfluences
+		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sfrag.ID, target.ID, edgeType); err == nil {
+			continue
+		}
+
+		edge := &models.DependencyEdge{
+			TenantID:         "global",
+			SourceFragmentID: sfrag.ID,
+			TargetFragmentID: target.ID,
+			Type:             edgeType,
+			Properties: models.EdgeProperties{
+				Criticality:   0.6,
+				Amplification: 1.0,
+				LatencyHours:  1,
+			},
+			Qualifiers: map[string]interface{}{
+				"dimension": "sphere",
+				"path":      sp,
+				"source":    "lens_intent",
+				"lensId":    strings.TrimSpace(job.LensID),
+				"cascadeRootJobId": func() string {
+					if v, ok := job.State["cascadeRootJobId"].(string); ok {
+						return strings.TrimSpace(v)
+					}
+					return ""
+				}(),
+			},
+			Provenance: models.Provenance{
+				Method:    "lens_intent_sphere_link",
+				SourceIDs: []string{strings.TrimSpace(job.ID)},
+			},
+			Metadata: models.EdgeMetadata{
+				CreatedAt:     now,
+				LastUpdatedAt: now,
+			},
+		}
+		if id, err := e.edgesRepo.Create(ctx, edge); err == nil {
+			edge.ID = id
+			// Realtime: edge materialized/updated for UI graph.
+			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
+				"tenantId":         job.TenantID,
+				"projectId":        job.ProjectID,
+				"lensId":           strings.TrimSpace(job.LensID),
+				"edgeId":           edge.ID,
+				"sourceFragmentId": edge.SourceFragmentID,
+				"targetFragmentId": edge.TargetFragmentID,
+				"type":             string(edge.Type),
+				"properties":       edge.Properties,
+				"qualifiers":       edge.Qualifiers,
+			})
+		}
 	}
 
 	return nil

@@ -481,12 +481,47 @@ func (r *HorizonFragmentsRepository) SearchByVectorText(ctx context.Context, que
 	return nil, fmt.Errorf("vector search not yet implemented, requires Firestore vector index")
 }
 
-// Delete удаляет HorizonFragment
+// Delete удаляет HorizonFragment, его файл из GCS и триггерит синхронизацию с Vertex AI Search
 func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrInvalidDocument
 	}
-	_, err := r.col.Doc(id).Delete(ctx)
+
+	// Получаем фрагмент перед удалением, чтобы удалить файл из GCS
+	fragment, err := r.Get(ctx, id)
+	if err == nil && fragment != nil {
+		// Удаляем файл из GCS если настроено хранилище
+		if r.useGCS && r.storage != nil {
+			objectPath := fmt.Sprintf("%s/horizon_fragments/%s.json", fragment.TenantID, fragment.ID)
+			if err := r.storage.DeleteObject(ctx, r.bucket, objectPath); err != nil {
+				// Логируем, но не фейлим удаление из Firestore
+				log.Printf("WARNING: failed to delete fragment %s from GCS (%s): %v", id, objectPath, err)
+			} else {
+				log.Printf("[HorizonFragments] Deleted fragment %s from GCS: %s", id, objectPath)
+			}
+
+			// Триггерим синхронизацию Vertex AI Search для удаления документа из индекса
+			// При INCREMENTAL режиме удаление файла из GCS приведет к удалению из индекса при следующей синхронизации
+			// Но мы можем триггерить синхронизацию явно
+			if r.vertexSearchSync != nil {
+				gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
+				go func(uri string) {
+					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					// Note: Vertex AI Search использует INCREMENTAL режим, который автоматически удаляет
+					// документы из индекса если файл удален из GCS. Но мы триггерим синхронизацию для ускорения.
+					if op, err := r.vertexSearchSync(syncCtx, uri); err == nil {
+						log.Printf("[HorizonFragments] Vertex AI Search sync triggered for deletion: %s", op)
+					} else {
+						log.Printf("[HorizonFragments] Vertex AI Search sync failed for deletion %s: %v", uri, err)
+					}
+				}(gcsURI)
+			}
+		}
+	}
+
+	// Удаляем из Firestore
+	_, err = r.col.Doc(id).Delete(ctx)
 	return err
 }
 

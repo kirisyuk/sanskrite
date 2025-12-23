@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
 // GetScoutingJob получает статус ScoutingJob
@@ -45,11 +45,11 @@ func (h *HorizonHandlers) GetScoutingJob(w http.ResponseWriter, r *http.Request)
 		"id":                  job.ID,
 		"status":              job.CurrentState,
 		"targetCanonicalPath": job.TargetCanonicalPath,
-		"progress":             0.0, // TODO: Вычислить прогресс на основе состояния
-		"currentStep":          string(job.CurrentState),
+		"progress":            0.0, // TODO: Вычислить прогресс на основе состояния
+		"currentStep":         string(job.CurrentState),
 		"steps":               []map[string]interface{}{}, // TODO: Извлечь steps из AgentJob
-		"createdAt":            job.CreatedAt,
-		"estimatedCompletion":  nil, // TODO: Вычислить на основе стратегии
+		"createdAt":           job.CreatedAt,
+		"estimatedCompletion": nil, // TODO: Вычислить на основе стратегии
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -81,9 +81,23 @@ func (h *HorizonHandlers) ListScoutingJobs(w http.ResponseWriter, r *http.Reques
 	var jobs []*models.ScoutingJob
 	var err error
 
-	// Получаем jobs через ListByLens (если lensID пустой, вернет все ScoutingJob)
-	jobs, err = h.service.ScoutingJobs().ListByLens(r.Context(), authInfo.TenantID, lensID, limit*2) // Увеличиваем лимит для фильтрации по status
-	
+	// Prefer project-scoped listing (more reliable Firestore index) when lensId is provided.
+	if lensID != "" {
+		lens, lerr := h.service.Lens().GetLens(r.Context(), lensID)
+		if lerr != nil {
+			http.Error(w, "Lens not found", http.StatusNotFound)
+			return
+		}
+		if lens.TenantID != authInfo.TenantID {
+			http.Error(w, "Access denied", http.StatusForbidden)
+			return
+		}
+		jobs, err = h.service.ScoutingJobs().ListByProjectAndLens(r.Context(), authInfo.TenantID, lens.ProjectID, lensID, limit*2)
+	} else {
+		// Fallback: tenant-wide listing (may depend on composite indexes).
+		jobs, err = h.service.ScoutingJobs().ListByLens(r.Context(), authInfo.TenantID, lensID, limit*2) // Увеличиваем лимит для фильтрации по status
+	}
+
 	// Фильтруем по статусу если указан
 	if err == nil && status != "" {
 		var filteredJobs []*models.ScoutingJob
@@ -126,4 +140,3 @@ func (h *HorizonHandlers) ListScoutingJobs(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
-

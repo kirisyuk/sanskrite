@@ -66,7 +66,89 @@ func (r *ScoutingJobsRepository) Get(ctx context.Context, id string) (*models.Sc
 		AgentJob: *agentJob,
 		// Дополнительные поля будут извлекаться из State или отдельной коллекции
 	}
+	r.populateFromState(scoutingJob)
 	return scoutingJob, nil
+}
+
+func (r *ScoutingJobsRepository) populateFromState(job *models.ScoutingJob) {
+	if job == nil || job.State == nil {
+		return
+	}
+	if job.TargetCanonicalPath == "" {
+		if v, ok := job.State["targetCanonicalPath"].(string); ok {
+			job.TargetCanonicalPath = v
+		}
+	}
+	if job.LensID == "" {
+		if v, ok := job.State["lensId"].(string); ok {
+			job.LensID = v
+		}
+	}
+	if job.CurrentState == "" {
+		if v, ok := job.State["currentState"].(string); ok {
+			job.CurrentState = models.ScoutingJobState(v)
+		}
+	}
+	if job.ScoutingStrategy == "" {
+		if v, ok := job.State["scoutingStrategy"].(string); ok {
+			job.ScoutingStrategy = v
+		}
+	}
+	// Best-effort: SourceIDs may be persisted either as top-level field or in state.
+	if len(job.SourceIDs) == 0 {
+		if v, ok := job.State["sourceIds"]; ok {
+			switch t := v.(type) {
+			case []string:
+				job.SourceIDs = t
+			case []interface{}:
+				out := make([]string, 0, len(t))
+				for _, it := range t {
+					if s, ok2 := it.(string); ok2 {
+						out = append(out, s)
+					}
+				}
+				if len(out) > 0 {
+					job.SourceIDs = out
+				}
+			}
+		}
+	}
+}
+
+// ListByProjectAndLens lists scout jobs for a given project and (optionally) lensId.
+// This is preferred over ListByLens because it relies on a more commonly provisioned index:
+// (tenantId, projectId, createdAt DESC).
+func (r *ScoutingJobsRepository) ListByProjectAndLens(ctx context.Context, tenantID, projectID, lensID string, limit int) ([]*models.ScoutingJob, error) {
+	if r == nil || r.agentJobsRepo == nil {
+		return nil, fmt.Errorf("scouting jobs repo not configured")
+	}
+	if tenantID == "" || projectID == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	// Pull more than requested and filter client-side.
+	agentJobs, err := r.agentJobsRepo.ListByProject(ctx, tenantID, projectID, limit*4)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.ScoutingJob, 0, limit)
+	for _, aj := range agentJobs {
+		if aj == nil || aj.AgentID != "scout" {
+			continue
+		}
+		sj := &models.ScoutingJob{AgentJob: *aj}
+		r.populateFromState(sj)
+		if lensID != "" && sj.LensID != lensID {
+			continue
+		}
+		out = append(out, sj)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 // Update обновляет ScoutingJob
@@ -90,7 +172,7 @@ func (r *ScoutingJobsRepository) ListByLens(ctx context.Context, tenantID, lensI
 		coremodels.AgentJobStatusFailed,
 		coremodels.AgentJobStatusPartial,
 	}
-	
+
 	var allAgentJobs []*coremodels.AgentJob
 	for _, status := range allStatuses {
 		jobs, err := r.agentJobsRepo.ListByStatus(ctx, tenantID, status, limit*3) // Увеличиваем лимит для фильтрации
@@ -99,37 +181,27 @@ func (r *ScoutingJobsRepository) ListByLens(ctx context.Context, tenantID, lensI
 		}
 		allAgentJobs = append(allAgentJobs, jobs...)
 	}
-	
+
 	var scoutingJobs []*models.ScoutingJob
 	for _, agentJob := range allAgentJobs {
 		// Фильтруем только ScoutingJob (AgentID="scout")
 		if agentJob.AgentID != "scout" {
 			continue
 		}
-		
+
 		// Преобразуем AgentJob в ScoutingJob
 		scoutingJob := &models.ScoutingJob{
 			AgentJob: *agentJob,
 		}
-		
-		// Извлекаем дополнительные поля из State
-		if targetPath, ok := agentJob.State["targetCanonicalPath"].(string); ok {
-			scoutingJob.TargetCanonicalPath = targetPath
-		}
-		if currentState, ok := agentJob.State["currentState"].(string); ok {
-			scoutingJob.CurrentState = models.ScoutingJobState(currentState)
-		}
-		if lensIDFromState, ok := agentJob.State["lensId"].(string); ok {
-			scoutingJob.LensID = lensIDFromState
-		}
-		
+		r.populateFromState(scoutingJob)
+
 		// Если lensID указан, фильтруем по нему
 		if lensID != "" {
 			if scoutingJob.LensID != lensID {
 				continue
 			}
 		}
-		
+
 		scoutingJobs = append(scoutingJobs, scoutingJob)
 		if len(scoutingJobs) >= limit {
 			break
@@ -139,4 +211,3 @@ func (r *ScoutingJobsRepository) ListByLens(ctx context.Context, tenantID, lensI
 }
 
 // ErrInvalidDocument определен в fragments.go
-

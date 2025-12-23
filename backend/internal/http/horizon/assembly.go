@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
 // GetAssemblyStatus получает статус сборки графа для Lens
@@ -46,7 +46,8 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 
 	// Получаем активные ScoutingJob для Lens
 	scoutingJobsRepo := h.service.ScoutingJobs()
-	jobs, err := scoutingJobsRepo.ListByLens(r.Context(), authInfo.TenantID, lensID, 100)
+	// Prefer project-scoped listing (more reliable Firestore index).
+	jobs, err := scoutingJobsRepo.ListByProjectAndLens(r.Context(), authInfo.TenantID, lens.ProjectID, lensID, 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -107,4 +108,3 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
-

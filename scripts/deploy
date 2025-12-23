@@ -20,6 +20,7 @@ TARGET_VERIFIED_PROXY=0
 TARGET_CHECK_INFRA=0
 TARGET_HORIZON_WATCHDOG=0
 TARGET_HORIZON_WATCHDOG_ONLY=0
+TARGET_CLEANUP_REVISIONS=0
 
 REGION=${REGION:-us-central1}
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null || true)
@@ -35,7 +36,7 @@ SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
 SECRET_ADMIN_JOB_TOKEN="admin_job_token"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws] [--hatlone-ws] [--verified-proxy] [--check-infra] [--horizon-watchdog] [--horizon-watchdog-only]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws] [--hatlone-ws] [--verified-proxy] [--check-infra] [--horizon-watchdog] [--horizon-watchdog-only] [--cleanup-revisions]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
@@ -48,6 +49,7 @@ usage() {
   echo "  --check-infra   Run infrastructure checks only (no deployments)"
   echo "  --horizon-watchdog Ensure Cloud Scheduler job for Horizon Watchdog (calls API cron endpoint)"
   echo "  --horizon-watchdog-only Only ensure Horizon Watchdog infra/job/env (no API build/deploy)"
+  echo "  --cleanup-revisions Clean up old Cloud Run revisions (keeps last 10 per service, manual operation)"
 }
 
 TARGET_PY=0
@@ -62,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
     --horizon-watchdog) TARGET_HORIZON_WATCHDOG=1 ;;
     --horizon-watchdog-only) TARGET_HORIZON_WATCHDOG=1; TARGET_HORIZON_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
   esac
@@ -284,7 +287,8 @@ setup_infrastructure() {
   fi
 
   # 3.2 Ensure Cloud Tasks queue for Scout exists and is configured (managed retries).
-  local scout_queue="sanskrite-scout"
+  # NOTE: The original queue name "sanskrite-scout" may be temporarily unavailable after deletion.
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-sanskrite-scout-v2}"
   if gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scout_queue"
   else
@@ -1175,7 +1179,8 @@ deploy_api() {
   fi
 
   # Ensure Cloud Tasks queue exists even for --api-only deploys (managed Scout execution).
-  local scout_queue="sanskrite-scout"
+  # NOTE: default queue is v2 to avoid the "recently deleted queue" lockout.
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-sanskrite-scout-v2}"
   if ! gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $scout_queue"
     gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1257,7 +1262,7 @@ deploy_api() {
     existing_api_url=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
   fi
 
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=sanskrite-scout,CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=0,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h"
   # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-horizon-fragments}"
@@ -1308,9 +1313,6 @@ deploy_api() {
     --region "$REGION" \
     --to-latest \
     --quiet
-  
-  # Clean up old revisions (keep last 10)
-  cleanup_old_revisions "$service" "$REGION" 10
   
   local current_revision=$(gcloud run services describe "$service" --region "$REGION" --format="value(status.traffic[0].revisionName)")
   echo -e "${GREEN}[api] Traffic routed to:${NC} $current_revision"
@@ -1504,9 +1506,6 @@ deploy_ws() {
 
   # Route traffic to latest revision
   gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet
-  
-  # Clean up old revisions (keep last 10)
-  cleanup_old_revisions "$service" "$REGION" 10
 
   WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[ws] Deployed successfully${NC}"
@@ -1542,7 +1541,6 @@ deploy_hatlone_ws() {
     --quiet
 
   gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet
-  cleanup_old_revisions "$service" "$REGION" 10
 
   HATLONE_WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[hatlone-ws] Deployed successfully${NC}"
@@ -1567,9 +1565,6 @@ deploy_py() {
   
   # Route traffic to latest revision (if not already)
   gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet 2>/dev/null || true
-  
-  # Clean up old revisions (keep last 10)
-  cleanup_old_revisions "$service" "$REGION" 10
   
   echo -e "${GREEN}[py] Deployed successfully${NC}"
   TG_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
@@ -1821,6 +1816,27 @@ if [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARG
   if [[ "$TARGET_API" -eq 1 || "$TARGET_PY" -eq 1 ]]; then
     create_indexes
   fi
+fi
+
+# Cleanup old revisions (manual operation, separate from deployment)
+if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
+  echo ""
+  echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
+  echo -e "${BLUE}Cleaning up old Cloud Run revisions...${NC}"
+  echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
+  
+  # Clean up revisions for all services (keep last 10 per service)
+  local services=("sanskrite-api" "sanskrite-telegram" "sanskrite-ws" "hatlone-ws" "verified-proxy")
+  for service in "${services[@]}"; do
+    if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      cleanup_old_revisions "$service" "$REGION" 10
+    else
+      echo -e "${YELLOW}[cleanup] Service $service not found, skipping${NC}"
+    fi
+  done
+  
+  echo ""
+  echo -e "${GREEN}✓ Cleanup Complete${NC}"
 fi
 
 echo ""

@@ -55,9 +55,8 @@ func NewHorizonService(
 	if deps.EmbeddingProvider == nil {
 		return nil, fmt.Errorf("EmbeddingProvider is required")
 	}
-	if deps.VertexSearchClient == nil {
-		return nil, fmt.Errorf("VertexSearchClient is required")
-	}
+	// VertexSearchClient is optional: ScoutPlanner and SearchFragments can fall back to Firestore/doc heuristics.
+	// In production, it SHOULD be configured for quality/recall, but we must not hard-fail Horizon initialization.
 	if deps.AgentJobsRepo == nil {
 		return nil, fmt.Errorf("AgentJobsRepo is required")
 	}

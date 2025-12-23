@@ -42,14 +42,26 @@ export interface HorizonEdgeState {
   updatedAt?: number;
 }
 
+export interface HorizonRealtimeEvent {
+  id: string;
+  ts: number;
+  type: string;
+  projectId?: string;
+  lensId?: string;
+  text: string;
+  data?: any;
+}
+
 interface HorizonRealtimeStore {
   assembly: HorizonAssemblyState;
   jobs: Record<string, HorizonScoutJobState>;
   nodes: Record<string, HorizonNodeState>; // key: fragmentId || canonicalPath
   edges: Record<string, HorizonEdgeState>; // key: edgeId
+  events: HorizonRealtimeEvent[];
 
   handleWsEvent: (type: string, data: any) => void;
   reset: () => void;
+  resetEvents: () => void;
 }
 
 function keyForNode(data: any): string {
@@ -63,11 +75,66 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
   jobs: {},
   nodes: {},
   edges: {},
+  events: [],
 
   reset: () => set({ assembly: {}, jobs: {}, nodes: {}, edges: {} }),
+  resetEvents: () => set({ events: [] }),
 
   handleWsEvent: (type, data) => {
     const now = Date.now();
+
+    // Append a compact event message for UI (bounded).
+    try {
+      const projectId = typeof data?.projectId === 'string' ? data.projectId : undefined;
+      const lensId = typeof data?.lensId === 'string' ? data.lensId : undefined;
+      const mk = (text: string): HorizonRealtimeEvent => ({
+        id: `${now}-${Math.random().toString(16).slice(2)}`,
+        ts: now,
+        type,
+        projectId,
+        lensId,
+        text,
+        data,
+      });
+
+      const short = (s: any) => {
+        const t = typeof s === 'string' ? s : '';
+        return t.length > 220 ? t.slice(0, 217) + '...' : t;
+      };
+
+      let text = type;
+      if (type.startsWith('horizon.assembly.')) {
+        const phase = typeof data?.phase === 'string' ? data.phase : '';
+        const progress = typeof data?.progress === 'number' ? `${Math.round(data.progress * 100)}%` : '';
+        text = `assembly${phase ? `.${phase}` : ''}${progress ? ` (${progress})` : ''}`;
+      } else if (type === 'horizon.scout.job.log') {
+        const jobId = typeof data?.jobId === 'string' ? data.jobId : '';
+        const line = short(data?.line);
+        text = `${jobId ? `job ${jobId}: ` : ''}${line || 'log'}`;
+      } else if (type === 'horizon.scout.job.state' || type === 'horizon.scout.job.completed' || type === 'horizon.scout.job.created') {
+        const jobId = typeof data?.jobId === 'string' ? data.jobId : '';
+        const st = typeof data?.state === 'string' ? data.state : '';
+        const target = typeof data?.targetCanonicalPath === 'string' ? data.targetCanonicalPath : '';
+        text = `${jobId ? `job ${jobId}` : 'job'}${st ? ` ${st}` : ''}${target ? ` • ${target}` : ''}`;
+      } else if (type === 'horizon.graph.node.upserted') {
+        const cp = typeof data?.canonicalPath === 'string' ? data.canonicalPath : '';
+        const st = typeof data?.status === 'string' ? data.status : '';
+        text = `node${st ? ` ${st}` : ''}${cp ? ` • ${cp}` : ''}`;
+      } else if (type === 'horizon.graph.edge.upserted') {
+        const et = typeof data?.type === 'string' ? data.type : '';
+        const src = typeof data?.sourceFragmentId === 'string' ? data.sourceFragmentId : '';
+        const dst = typeof data?.targetFragmentId === 'string' ? data.targetFragmentId : '';
+        text = `edge${et ? ` ${et}` : ''}${src && dst ? ` • ${src} → ${dst}` : ''}`;
+      } else if (type.startsWith('horizon.propagation.')) {
+        text = `propagation${typeof data?.nodesUpdated === 'number' ? ` (${data.nodesUpdated} nodes)` : ''}`;
+      }
+
+      set((s) => ({
+        events: [...(s.events || []), mk(text)].slice(-400),
+      }));
+    } catch {
+      // ignore
+    }
 
     // Assembly orchestration
     if (type === 'horizon.assembly.started' || type === 'horizon.assembly.phase' || type === 'horizon.assembly.progress' || type === 'horizon.assembly.ready' || type === 'horizon.assembly.failed') {

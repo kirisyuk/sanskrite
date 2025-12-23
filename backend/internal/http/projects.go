@@ -25,6 +25,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/services"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ProjectsHandler handles project-related HTTP requests
@@ -798,8 +800,19 @@ func (h *ProjectsHandler) ListProjectDocs(w http.ResponseWriter, r *http.Request
 	}
 	docs, err := h.coreDocs.ListByProject(r.Context(), authInfo.TenantID, projectID, 0, excludeDocumentType)
 	if err != nil {
-		h.logger.Printf("ListProjectDocs error: %v", err)
-		WriteInternalError(w, "Failed to list documents")
+		// Firestore may return FAILED_PRECONDITION "The query requires an index"
+		if h.logger != nil {
+			h.logger.Printf("ListProjectDocs error: tenantId=%s projectId=%s err=%v", authInfo.TenantID, projectID, err)
+		}
+		if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition && strings.Contains(strings.ToLower(err.Error()), "requires an index") {
+			_ = WriteError(w, http.StatusInternalServerError, "FIRESTORE_INDEX_REQUIRED", "Firestore composite index is required for this query", map[string]any{
+				"collection": "core_docs",
+				"query":      "tenantId == ? AND projectId == ? ORDER BY createdAt DESC",
+				"hint":       "Deploy Firestore index: core_docs(tenantId ASC, projectId ASC, createdAt DESC)",
+			})
+			return
+		}
+		_ = WriteInternalError(w, "Failed to list documents")
 		return
 	}
 	WriteJSON(w, http.StatusOK, docs)

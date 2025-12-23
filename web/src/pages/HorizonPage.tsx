@@ -31,6 +31,10 @@ const HorizonPage: React.FC = () => {
   const [showAdmin, setShowAdmin] = React.useState(false);
   const [selectedLensId, setSelectedLensId] = React.useState<string | null>(null);
   const assembly = useHorizonRealtimeStore((s) => s.assembly);
+  const events = useHorizonRealtimeStore((s) => s.events);
+  const resetEvents = useHorizonRealtimeStore((s) => s.resetEvents);
+  const [lensStarted, setLensStarted] = React.useState(false);
+  const feedRef = React.useRef<HTMLDivElement | null>(null);
   
   const isAdmin = currentUser?.email === 'igor@hatl.one' || currentUser?.email === 'admin@hatl.one';
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
@@ -122,7 +126,7 @@ const HorizonPage: React.FC = () => {
 
   const handleAssembleLens = React.useCallback(async (request: AssembleLensRequest) => {
     try {
-      // We currently "assemble" by creating a Lens with a scope derived from selected entities.
+      // Assemble via NL query -> intent -> lens (backend precheck).
       // Realtime assembly/scout progress is delivered via horizon.* websocket events.
       const correlationId = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
         ? (globalThis.crypto as any).randomUUID()
@@ -130,23 +134,32 @@ const HorizonPage: React.FC = () => {
       const sessionId = (window as any).__horizonSessionId || correlationId;
       (window as any).__horizonSessionId = sessionId;
 
-      const lens = await api.createHorizonLens({
-        projectId: request.projectId,
-        name: request.name || 'New Lens',
-        scope: request.targetEntities.map((e) => e.canonicalPath),
-        viewConfig: {
-          depth: request.filters?.depth,
-          horizon: request.filters?.horizon,
-          focus: request.filters?.focus,
-        },
-      }, { correlationId, sessionId });
+      resetEvents();
+      setLensStarted(true);
 
-      // Open the lens canvas; realtime updates will arrive via WS for this project.
-      setSelectedLensId(lens.id);
+      await api.createHorizonLensFromQuery(
+        {
+          projectId: request.projectId,
+          query: request.query,
+          maxRecursionDepth: request.filters?.maxRecursionDepth ?? 2,
+        },
+        { correlationId, sessionId }
+      );
+
+      // Keep Hook UI visible; LensCanvas can be opened manually from Sidebar lens list.
+      setSelectedLensId(null);
     } catch (error) {
       console.error('Failed to assemble lens:', error);
     }
-  }, []);
+  }, [resetEvents]);
+
+  // Auto-scroll realtime feed to bottom while started.
+  React.useEffect(() => {
+    if (!lensStarted) return;
+    const el = feedRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [lensStarted, events.length]);
   
   return (
     <div
@@ -245,11 +258,53 @@ const HorizonPage: React.FC = () => {
                   {typeof assembly.progress === 'number' && <div>progress: {(assembly.progress * 100).toFixed(0)}%</div>}
                 </div>
               )}
+
+              {/* Horizon realtime WS messages (shown above input after start) */}
+              {lensStarted && (
+                <div
+                  ref={feedRef}
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    width: '100%',
+                    overflowY: 'auto',
+                    padding: '16px 24px 0 24px',
+                  }}
+                >
+                  {(events || [])
+                    .filter((ev) => !currentProject?.id || !ev.projectId || ev.projectId === currentProject.id)
+                    .map((ev) => (
+                      <div
+                        key={ev.id}
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 10,
+                          border: '1px solid var(--overlay-line-90)',
+                          background: 'var(--bg-elevated)',
+                          color: 'var(--text-secondary-strong)',
+                          fontSize: 13,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 12 }}>
+                            {ev.type}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                            {new Date(ev.ts).toLocaleTimeString()}
+                          </div>
+                        </div>
+                        <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{ev.text}</div>
+                      </div>
+                    ))}
+                </div>
+              )}
               {currentProject ? (
                 <AssembleLensRequestComponent
                   projectId={currentProject.id}
                   onAssemble={handleAssembleLens}
                   disabled={false}
+                  pinnedBottom={lensStarted}
                 />
               ) : (
                 <div style={{ 

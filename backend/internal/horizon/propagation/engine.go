@@ -3,6 +3,7 @@ package propagation
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
+
+const hotPathMaxHops = 64
 
 // PropagationEngine распространяет изменения в графе зависимостей
 type PropagationEngine struct {
@@ -209,10 +212,16 @@ func (e *PropagationEngine) TriggerPropagation(ctx context.Context, fragmentID s
 	// Запускаем распространение для всех метрик фрагмента
 	var result *PropagationResult
 	for metricName, metricValue := range fragment.State {
-		oldValue := models.MetricValue{}
+		// IMPORTANT:
+		// - If we don't have a previous version (prevState == nil), we must NOT treat the metric as changed from 0.
+		//   That would trigger massive propagation waves on first trigger, even when no "change" actually happened.
+		// - If the metric didn't exist in prevState, treat it as unchanged baseline for TriggerPropagation purposes.
+		oldValue := metricValue
 		if prevState != nil {
 			if pv, ok := prevState[metricName]; ok {
 				oldValue = pv
+			} else {
+				oldValue = metricValue
 			}
 		}
 
@@ -352,52 +361,124 @@ func (e *PropagationEngine) propagateHotPath(
 	affectedFragments map[string]bool,
 	affectedLenses map[string]bool,
 ) error {
-	// Получаем исходящие связи
-	edges, err := e.edgesRepo.ListBySource(ctx, "global", sourceFragment.ID, nil, 100)
-	if err != nil {
-		return fmt.Errorf("failed to list edges: %w", err)
+	if e == nil || sourceFragment == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	// Обрабатываем каждую связь
-	for _, edge := range edges {
-		// Best-effort unit: use the current unit on the source fragment metric, if present.
+	type waveItem struct {
+		frag *models.HorizonFragment
+		d    float64
+		hops int
+	}
+
+	// visitedMagnitude tracks the strongest (absolute) delta we've already processed for a fragment
+	// during this wave, to prevent infinite loops on cyclic graphs.
+	visitedMagnitude := map[string]float64{sourceFragment.ID: math.Abs(delta)}
+	stack := []waveItem{{frag: sourceFragment, d: delta, hops: 0}}
+	hitHopLimit := false
+	cycleSkips := 0
+
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		// pop (DFS)
+		it := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if it.frag == nil || strings.TrimSpace(it.frag.ID) == "" {
+			continue
+		}
+		if it.hops >= hotPathMaxHops {
+			hitHopLimit = true
+			continue
+		}
+
+		// Get outgoing edges for current fragment
+		edges, err := e.edgesRepo.ListBySource(ctx, "global", it.frag.ID, nil, 100)
+		if err != nil {
+			return fmt.Errorf("failed to list edges: %w", err)
+		}
+
+		// Best-effort unit: use the current unit on the fragment metric, if present.
 		var unit *string
-		if mv, ok := sourceFragment.State[metricName]; ok {
+		if mv, ok := it.frag.State[metricName]; ok {
 			unit = mv.Unit
 		}
-		// Применяем затухание волны
-		dampedDelta := e.damping.ApplyDamping(delta, edge.Properties.Amplification, edge.Properties.Criticality)
 
-		// Проверяем порог после затухания
-		if !e.threshold.ExceedsThreshold(metricName, dampedDelta, unit) {
-			continue
-		}
-
-		// Получаем целевой фрагмент
-		targetFragment, err := e.fragmentsRepo.Get(ctx, edge.TargetFragmentID)
-		if err != nil {
-			continue // Пропускаем недоступные фрагменты
-		}
-
-		// Обновляем метрику в целевом фрагменте
-		if err := e.updateFragmentMetric(ctx, targetFragment, metricName, dampedDelta); err != nil {
-			continue
-		}
-
-		affectedFragments[targetFragment.ID] = true
-
-		// Находим Lens, которые используют этот фрагмент
-		lenses, err := e.lensesRepo.FindByScope(ctx, "global", targetFragment.CanonicalPath, 100)
-		if err == nil {
-			for _, lens := range lenses {
-				affectedLenses[lens.ID] = true
+		for _, edge := range edges {
+			if edge == nil {
+				continue
 			}
-		}
+			// Guard self-edge cycles
+			if strings.TrimSpace(edge.TargetFragmentID) == "" || edge.TargetFragmentID == it.frag.ID {
+				continue
+			}
 
-		// Рекурсивно распространяем дальше
-		if err := e.propagateHotPath(ctx, targetFragment, metricName, dampedDelta, affectedFragments, affectedLenses); err != nil {
-			// Логируем ошибку, но продолжаем распространение
-			_ = err
+			dampedDelta := e.damping.ApplyDamping(it.d, edge.Properties.Amplification, edge.Properties.Criticality)
+			if !e.threshold.ExceedsThreshold(metricName, dampedDelta, unit) {
+				continue
+			}
+
+			// Cycle guard: if we've already propagated an equal-or-stronger delta to this node in this wave, skip.
+			absD := math.Abs(dampedDelta)
+			if prev, ok := visitedMagnitude[edge.TargetFragmentID]; ok && prev >= absD {
+				cycleSkips++
+				continue
+			}
+
+			targetFragment, err := e.fragmentsRepo.Get(ctx, edge.TargetFragmentID)
+			if err != nil || targetFragment == nil {
+				continue
+			}
+
+			if err := e.updateFragmentMetric(ctx, targetFragment, metricName, dampedDelta); err != nil {
+				continue
+			}
+
+			affectedFragments[targetFragment.ID] = true
+			visitedMagnitude[targetFragment.ID] = absD
+
+			// Find lenses that scope this fragment (best-effort; tenant routing may vary).
+			if e.lensesRepo != nil {
+				lenses, err := e.lensesRepo.FindByScope(ctx, "global", targetFragment.CanonicalPath, 100)
+				if err == nil {
+					for _, lens := range lenses {
+						if lens == nil {
+							continue
+						}
+						affectedLenses[lens.ID] = true
+					}
+				}
+			}
+
+			stack = append(stack, waveItem{frag: targetFragment, d: dampedDelta, hops: it.hops + 1})
+		}
+	}
+
+	// Best-effort diagnostics for "stuck" requests: cycles or extremely deep traversals.
+	// Keep it a single line to avoid log spam.
+	if hitHopLimit || cycleSkips > 0 {
+		rc, ok := rtctx.Get(ctx)
+		if ok {
+			fmt.Printf("[PropagationEngine] hotPath diagnostics: fragmentId=%s metric=%s hitHopLimit=%v cycleSkips=%d correlationId=%s sessionId=%s\n",
+				strings.TrimSpace(sourceFragment.ID),
+				strings.TrimSpace(metricName),
+				hitHopLimit,
+				cycleSkips,
+				strings.TrimSpace(rc.CorrelationID),
+				strings.TrimSpace(rc.SessionID),
+			)
+		} else {
+			fmt.Printf("[PropagationEngine] hotPath diagnostics: fragmentId=%s metric=%s hitHopLimit=%v cycleSkips=%d\n",
+				strings.TrimSpace(sourceFragment.ID),
+				strings.TrimSpace(metricName),
+				hitHopLimit,
+				cycleSkips,
+			)
 		}
 	}
 

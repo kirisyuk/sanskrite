@@ -998,7 +998,9 @@ func main() {
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_SCOUT", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
 				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
-				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_QUEUE", "sanskrite-scout"))
+				// NOTE: The original queue name "sanskrite-scout" may be temporarily unavailable after deletion.
+				// Use env override in prod; default to a safe v2 name.
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_QUEUE", "sanskrite-scout-v2"))
 				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
 				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
 				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
@@ -1191,21 +1193,28 @@ func main() {
 			logger.Printf("Scout Engine initialized")
 
 			// Initialize Watchdog subsystem (requires ScoutEngine + SourceExecutor)
-			watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec)
-			watchdogScheduler := horizonwatchdog.NewScheduler()
-			watchdogService := horizonwatchdog.NewWatchdogService(
-				horizonWatchdogRepo,
-				horizonFragmentsRepo,
-				watchdogMonitor,
-				watchdogScheduler,
-				scoutEngine,
-			)
-			horizonService.SetWatchdogService(watchdogService)
+			// Watchdog (background monitoring) can generate large volumes of Scout jobs.
+			// Keep it disabled by default; enable explicitly via env.
+			if strings.TrimSpace(getEnv("ENABLE_HORIZON_WATCHDOG", "0")) == "1" {
+				watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec)
+				watchdogScheduler := horizonwatchdog.NewScheduler()
+				watchdogService := horizonwatchdog.NewWatchdogService(
+					horizonWatchdogRepo,
+					horizonFragmentsRepo,
+					watchdogMonitor,
+					watchdogScheduler,
+					scoutEngine,
+				)
+				horizonService.SetWatchdogService(watchdogService)
 
-			// Wire Lens lifecycle -> Watchdog lifecycle (create/pause configs on ACTIVE/DORMANT)
-			lensService.SetWatchdogLifecycleHook(func(ctx context.Context, fragmentID string) {
-				_ = watchdogService.UpdateConfigLifecycle(ctx, fragmentID)
-			})
+				// Wire Lens lifecycle -> Watchdog lifecycle (create/pause configs on ACTIVE/DORMANT)
+				lensService.SetWatchdogLifecycleHook(func(ctx context.Context, fragmentID string) {
+					_ = watchdogService.UpdateConfigLifecycle(ctx, fragmentID)
+				})
+				logger.Printf("Horizon Watchdog enabled")
+			} else {
+				logger.Printf("Horizon Watchdog disabled (set ENABLE_HORIZON_WATCHDOG=1 to enable)")
+			}
 
 			// Legacy Firestore poller (disabled by default in prod).
 			// Cloud Tasks is the preferred mechanism for executing Scout jobs.
@@ -1242,6 +1251,28 @@ func main() {
 								continue
 							}
 							jobs = append(jobs, backlog...)
+
+							// Priority: Lens-driven jobs (have state.lensId) should not be starved by global backlog.
+							// This keeps Hook→Assemble latency acceptable even when watchdog/system jobs pile up.
+							lensFirst := make([]*horizonmodels.ScoutingJob, 0, len(jobs))
+							rest := make([]*horizonmodels.ScoutingJob, 0, len(jobs))
+							for _, j := range jobs {
+								if j == nil {
+									continue
+								}
+								lid := strings.TrimSpace(j.LensID)
+								if lid == "" && j.State != nil {
+									if v, ok := j.State["lensId"].(string); ok {
+										lid = strings.TrimSpace(v)
+									}
+								}
+								if lid != "" {
+									lensFirst = append(lensFirst, j)
+								} else {
+									rest = append(rest, j)
+								}
+							}
+							jobs = append(lensFirst, rest...)
 
 							for _, job := range jobs {
 								if job == nil || job.ID == "" {

@@ -107,6 +107,9 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 // Supported legacy patterns:
 // - /region/na/{country}/{admin1}/{city} -> /loc/{country}/{admin1}/{city}
 // - /region/{country}/{admin1}/{city}    -> /loc/{country}/{admin1}/{city}
+// - /region/iso-3166-1-alpha-2/{country} -> /loc/{country}/na/na
+// - /region/country/{country}            -> /loc/{country}/na/na
+// - /region/{country}                    -> /loc/{country}/na/na (if looks like ISO code)
 func normalizeLegacyGeoPath(path string) string {
 	p := strings.TrimSpace(path)
 	if p == "" {
@@ -120,12 +123,42 @@ func normalizeLegacyGeoPath(path string) string {
 	}
 	parts := strings.Split(strings.Trim(p, "/"), "/")
 	// parts[0] == "region"
+	
+	// Pattern: /region/na/{country}/{admin1}/{city} -> /loc/{country}/{admin1}/{city}
 	if len(parts) == 5 && parts[1] == "na" {
 		return fmt.Sprintf("/loc/%s/%s/%s", parts[2], parts[3], parts[4])
 	}
+	
+	// Pattern: /region/{country}/{admin1}/{city} -> /loc/{country}/{admin1}/{city}
 	if len(parts) == 4 {
 		return fmt.Sprintf("/loc/%s/%s/%s", parts[1], parts[2], parts[3])
 	}
+	
+	// Pattern: /region/iso-3166-1-alpha-2/{country} -> /loc/{country}/na/na
+	if len(parts) == 3 && parts[1] == "iso-3166-1-alpha-2" {
+		country := strings.ToLower(strings.TrimSpace(parts[2]))
+		if len(country) == 2 {
+			return fmt.Sprintf("/loc/%s/na/na", country)
+		}
+	}
+	
+	// Pattern: /region/country/{country} -> /loc/{country}/na/na
+	if len(parts) == 3 && parts[1] == "country" {
+		country := strings.ToLower(strings.TrimSpace(parts[2]))
+		if len(country) == 2 {
+			return fmt.Sprintf("/loc/%s/na/na", country)
+		}
+	}
+	
+	// Pattern: /region/{country} -> /loc/{country}/na/na (if looks like ISO code: 2 lowercase letters)
+	if len(parts) == 2 {
+		country := strings.ToLower(strings.TrimSpace(parts[1]))
+		// Heuristic: if it's exactly 2 lowercase letters, treat as ISO country code
+		if len(country) == 2 && strings.Trim(country, "abcdefghijklmnopqrstuvwxyz") == "" {
+			return fmt.Sprintf("/loc/%s/na/na", country)
+		}
+	}
+	
 	return ""
 }
 

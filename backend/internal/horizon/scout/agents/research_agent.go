@@ -26,13 +26,21 @@ type researchResult struct {
 	Relations []DiscoveredRelation   `json:"relations,omitempty"`
 }
 
-// EnrichFragment обогащает HorizonFragment и находит новые связи
-func (a *ResearchAgent) EnrichFragment(ctx context.Context, fragment *models.HorizonFragment, missingInfo []string) (*models.HorizonFragment, []DiscoveredRelation, error) {
+// EnrichFragment обогащает HorizonFragment и находит новые связи.
+// focus/spherePaths/keywords are optional steering signals for grounded search (they may be non-canonical).
+func (a *ResearchAgent) EnrichFragment(
+	ctx context.Context,
+	fragment *models.HorizonFragment,
+	missingInfo []string,
+	focus string,
+	spherePaths []string,
+	keywords []string,
+) (*models.HorizonFragment, []DiscoveredRelation, error) {
 	if len(missingInfo) == 0 {
 		return fragment, nil, nil
 	}
 
-	prompt := a.buildEnrichmentPrompt(fragment, missingInfo)
+	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -149,15 +157,33 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 }
 
 // buildEnrichmentPrompt строит промпт для дообогащения фрагмента
-func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string) string {
+func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string) string {
 	fragmentJSON, _ := json.MarshalIndent(fragment, "", "  ")
 	questions := strings.Join(missingInfo, "\n- ")
+	focus = strings.TrimSpace(focus)
+	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
+	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
+	focusBlock := ""
+	if focus != "" || spheresLine != "" || keywordsLine != "" {
+		focusBlock = "FOCUS CONTEXT (use this to steer your grounded search; it may include non-canonical keywords):\n"
+		if focus != "" {
+			focusBlock += fmt.Sprintf("- focus: %s\n", focus)
+		}
+		if spheresLine != "" {
+			focusBlock += fmt.Sprintf("- spherePaths: %s\n", spheresLine)
+		}
+		if keywordsLine != "" {
+			focusBlock += fmt.Sprintf("- keywords: %s\n", keywordsLine)
+		}
+		focusBlock += "\n"
+	}
 
 	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided Horizon Fragment using your search capabilities.
 
 CURRENT HORIZON FRAGMENT DATA:
 %s
 
+%s
 CRITICAL MISSING INFORMATION (QUESTIONS TO ANSWER):
 - %s
 
@@ -171,6 +197,18 @@ Name Normalization Rules:
   - fragment.identifiers.legalName (and/or fragment.labels.en): legal/official name including ownership suffix if relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC...)
   - fragment.identifiers.shortName: base name without ownership suffix
 - For relations, ALWAYS provide targetLegalName and targetShortName in addition to targetName.
+
+RELATION DIRECTION RULES (STRICT):
+Each relation object describes a directed edge FROM THIS FRAGMENT (source) TO targetCanonicalPath (target).
+Choose relationType to match this direction:
+- DEPENDS_ON: source depends on target (use for suppliers, contractors, infrastructure dependencies).
+  Example: If CRRC supplies trains for the Astana LRT project, Astana/CTS may DEPEND_ON CRRC.
+- SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
+- LOCATED_IN / OPERATES_IN: source is located/operates in a GEO target.
+- REGULATES: source (usually a government agency/organization) regulates target.
+- OWNS: source owns target.
+- PRODUCES: source produces target (target is typically a product).
+- COMPETES_WITH / INFLUENCES: as labeled.
 
 DiscoveredRelation Schema:
 {
@@ -207,5 +245,22 @@ CANONICAL PATH RULES:
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the HorizonFragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), questions)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), focusBlock, questions)
+}
+
+func dedupNonEmptyStrings(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }

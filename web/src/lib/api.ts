@@ -1587,6 +1587,67 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  // Horizon - Intent precheck (NL -> taxonomy-aligned intent)
+  async resolveHorizonIntent(input: { query: string }): Promise<{
+    intent: {
+      focus: string;
+      spherePaths: string[];
+      keywords: string[];
+      anchors: Array<{ canonicalPath: string; type?: string; confidence?: number; reason?: string }>;
+    };
+  }> {
+    try {
+      const response = await this.client.post('/api/horizon/intent/resolve', input);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] resolveHorizonIntent error:`, error);
+      throw error;
+    }
+  }
+
+  // Horizon - Create Lens from NL query (resolve intent -> create lens)
+  async createHorizonLensFromQuery(
+    input: {
+      projectId: string;
+      query: string;
+      name?: string;
+      maxRecursionDepth?: number;
+      requestedMetrics?: string[];
+      status?: string;
+    },
+    options?: { correlationId?: string; sessionId?: string }
+  ): Promise<{
+    intent: {
+      focus: string;
+      spherePaths: string[];
+      keywords: string[];
+      anchors: Array<{ canonicalPath: string; type?: string; confidence?: number; reason?: string }>;
+    };
+    lens: {
+      id: string;
+      tenantId: string;
+      projectId: string;
+      name: string;
+      scope: string[];
+      viewConfig?: Record<string, any>;
+      alertConfig?: Record<string, any>;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+    };
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post('/api/horizon/lenses/from-query', input, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] createHorizonLensFromQuery error:`, error);
+      throw error;
+    }
+  }
+
   async listHorizonLenses(projectId: string, options?: { status?: string; limit?: number }): Promise<{
     lenses: Array<{
       id: string;

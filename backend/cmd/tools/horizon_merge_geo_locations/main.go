@@ -142,11 +142,18 @@ func main() {
 	)
 
 	for i, f := range candidates {
+		// Skip fragments that are already in correct /loc/{country}/{admin1}/{city} format
 		if strings.HasPrefix(f.CanonicalPath, "/loc/") {
-			skippedAlreadyLoc++
-			continue
+			if isLoc3(f.CanonicalPath) {
+				log.Printf("---- [%d/%d] SKIP (already correct /loc/): id=%s canonical=%s type=%s ----", i+1, len(candidates), f.ID, f.CanonicalPath, f.Type)
+				skippedAlreadyLoc++
+				continue
+			}
+			// Fragment has /loc/ prefix but wrong format - process it
+			log.Printf("---- [%d/%d] PROCESSING (wrong /loc/ format): id=%s canonical=%s type=%s ----", i+1, len(candidates), f.ID, f.CanonicalPath, f.Type)
+		} else {
+			log.Printf("---- [%d/%d] PROCESSING geo fragment: id=%s canonical=%s type=%s ----", i+1, len(candidates), f.ID, f.CanonicalPath, f.Type)
 		}
-		log.Printf("---- [%d/%d] geo fragment: id=%s canonical=%s type=%s ----", i+1, len(candidates), f.ID, f.CanonicalPath, f.Type)
 
 		locPath, err := chooseLocPath(ctx, vertexSearchClient, execAI, f)
 		if err != nil {
@@ -350,12 +357,43 @@ func normalizeLegacyGeoPath(path string) string {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(p, "/"), "/")
+	// parts[0] == "region"
+	
+	// Pattern: /region/na/{country}/{admin1}/{city} -> /loc/{country}/{admin1}/{city}
 	if len(parts) == 5 && parts[1] == "na" {
 		return fmt.Sprintf("/loc/%s/%s/%s", parts[2], parts[3], parts[4])
 	}
+	
+	// Pattern: /region/{country}/{admin1}/{city} -> /loc/{country}/{admin1}/{city}
 	if len(parts) == 4 {
 		return fmt.Sprintf("/loc/%s/%s/%s", parts[1], parts[2], parts[3])
 	}
+	
+	// Pattern: /region/iso-3166-1-alpha-2/{country} -> /loc/{country}/na/na
+	if len(parts) == 3 && parts[1] == "iso-3166-1-alpha-2" {
+		country := strings.ToLower(strings.TrimSpace(parts[2]))
+		if len(country) == 2 {
+			return fmt.Sprintf("/loc/%s/na/na", country)
+		}
+	}
+	
+	// Pattern: /region/country/{country} -> /loc/{country}/na/na
+	if len(parts) == 3 && parts[1] == "country" {
+		country := strings.ToLower(strings.TrimSpace(parts[2]))
+		if len(country) == 2 {
+			return fmt.Sprintf("/loc/%s/na/na", country)
+		}
+	}
+	
+	// Pattern: /region/{country} -> /loc/{country}/na/na (if looks like ISO code: 2 lowercase letters)
+	if len(parts) == 2 {
+		country := strings.ToLower(strings.TrimSpace(parts[1]))
+		// Heuristic: if it's exactly 2 lowercase letters, treat as ISO country code
+		if len(country) == 2 && strings.Trim(country, "abcdefghijklmnopqrstuvwxyz") == "" {
+			return fmt.Sprintf("/loc/%s/na/na", country)
+		}
+	}
+	
 	return ""
 }
 

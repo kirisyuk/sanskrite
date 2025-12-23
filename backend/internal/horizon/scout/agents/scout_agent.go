@@ -246,6 +246,20 @@ TASK: Extract all relevant information about this entity and return it as a JSON
 
 2. "relations" Field (Array of Objects):
    Identify key dependencies, suppliers, customers, subsidiaries, competitors, or locations mentioned in the text.
+   IMPORTANT: Relation direction is STRICT.
+   Each relation object describes a directed edge FROM the TARGET ENTITY (source) TO the relation's targetCanonicalPath (target).
+   Choose relationType to match this direction:
+   - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
+     Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
+   - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients).
+   - LOCATED_IN: source is located in target (target must be GEO region/location).
+   - OPERATES_IN: source operates in target (target must be GEO region/location).
+   - REGULATES: source regulates target (source is typically an organization/agency).
+   - OWNS: source owns target.
+   - PRODUCES: source produces target (target is typically a product).
+   - COMPETES_WITH: competitor relationship (direction is not important, but still output as source->target).
+   - INFLUENCES: source influences target.
+   - SUBSIDIARY_OF: source is a subsidiary of target (will be normalized in graph).
    Each object must include:
    - targetName: Full legal/official name where relevant (e.g., "Tesla, Inc.")
    - targetLegalName: Same as targetName (explicit field)
