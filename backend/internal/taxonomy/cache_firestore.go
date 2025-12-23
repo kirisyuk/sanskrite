@@ -125,6 +125,44 @@ func (c *FirestoreRuntimeTaxonomyCache) Get(ctx context.Context) (*RuntimeTaxono
 		}
 	}
 
+	// Load signal types
+	if len(t.AllowedSignalKinds) > 0 {
+		rt.AllowedSignalKinds = map[string]struct{}{}
+		for _, kind := range t.AllowedSignalKinds {
+			kind = strings.ToLower(strings.TrimSpace(kind))
+			if kind == "" {
+				continue
+			}
+			rt.AllowedSignalKinds[kind] = struct{}{}
+		}
+	}
+	if len(t.SignalTypes) > 0 {
+		rt.SignalTypes = map[string]SignalTypeSpec{}
+		for k, v := range t.SignalTypes {
+			k = strings.ToLower(strings.TrimSpace(k))
+			if k == "" {
+				continue
+			}
+			rt.SignalTypes[k] = SignalTypeSpec{
+				Kind:               strings.ToLower(strings.TrimSpace(v.Kind)),
+				Label:              strings.TrimSpace(v.Label),
+				DefaultMetric:      strings.TrimSpace(v.DefaultMetric),
+				PropagationProfile: strings.TrimSpace(v.PropagationProfile),
+			}
+		}
+	}
+	if len(t.SignalTypeSynonyms) > 0 {
+		rt.SignalTypeSynonyms = map[string]string{}
+		for k, v := range t.SignalTypeSynonyms {
+			k = strings.ToLower(strings.TrimSpace(k))
+			v = strings.ToLower(strings.TrimSpace(v))
+			if k == "" || v == "" {
+				continue
+			}
+			rt.SignalTypeSynonyms[k] = v
+		}
+	}
+
 	c.cached = rt
 	c.loadedAt = now
 	return rt, nil

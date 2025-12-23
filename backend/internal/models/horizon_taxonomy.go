@@ -23,7 +23,20 @@ type HorizonTaxonomy struct {
 	// Relation types for horizon_dependency_edges.
 	AllowedRelationTypes []string `json:"allowedRelationTypes,omitempty" firestore:"allowedRelationTypes,omitempty"`
 
+	// Signal types for OntologyFact(kind=signal)
+	AllowedSignalKinds []string                      `json:"allowedSignalKinds,omitempty" firestore:"allowedSignalKinds,omitempty"` // "risk", "opportunity", "trend", "direction"
+	SignalTypes        map[string]SignalTypeSpecData `json:"signalTypes,omitempty" firestore:"signalTypes,omitempty"`              // "risk:supply_disruption" -> spec
+	SignalTypeSynonyms map[string]string             `json:"signalTypeSynonyms,omitempty" firestore:"signalTypeSynonyms,omitempty"` // alias -> canonical type
+
 	// Optional: metric vocabulary and constraints (kept as data, used by prompts/validators as needed).
 	AllowedMetricUnits []string `json:"allowedMetricUnits,omitempty" firestore:"allowedMetricUnits,omitempty"`
+}
+
+// SignalTypeSpecData is the Firestore representation of SignalTypeSpec.
+type SignalTypeSpecData struct {
+	Kind               string `json:"kind" firestore:"kind"`                             // "risk", "opportunity", "trend", "direction"
+	Label              string `json:"label" firestore:"label"`                          // Human-readable label
+	DefaultMetric      string `json:"defaultMetric" firestore:"defaultMetric"`          // Default metric name for rollup
+	PropagationProfile string `json:"propagationProfile" firestore:"propagationProfile"` // "upstream_amplified", "downstream_amplified", "jurisdiction_scoped", etc.
 }
 

@@ -11,7 +11,9 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -275,6 +277,8 @@ type ScoutEngine struct {
 	spendLedger        *repo.HorizonSpendLedger
 	budgetPolicy       BudgetPolicy
 	propagationTrigger func(ctx context.Context, fragmentID string) error
+	signalSynthesizer  *signals.Synthesizer      // Optional: for signal synthesis from facts
+	factsRepo          *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
@@ -495,6 +499,60 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				if err == nil && applyRes != nil && applyRes.Applied {
 					fmt.Printf("[ScoutEngine] Fast-path applied facts for %s: appliedFacts=%d maxRelevance=%.3f\n",
 						job.TargetCanonicalPath, applyRes.AppliedFacts, applyRes.MaxRelevance)
+					
+					// Signal synthesis: synthesize signals from applied facts
+					if e.signalSynthesizer != nil && e.factsRepo != nil {
+						for _, fact := range facts {
+							if fact == nil {
+								continue
+							}
+							synthesizedSignals, err := e.signalSynthesizer.Synthesize(ctx, fact)
+							if err == nil && len(synthesizedSignals) > 0 {
+								for _, signal := range synthesizedSignals {
+									// Save signal as OntologyFact
+									if signalID, err := e.factsRepo.Create(ctx, signal); err == nil {
+										fmt.Printf("[ScoutEngine] Synthesized signal %s from fact %s\n", signalID, fact.ID)
+										// Apply signal's MetricUpdates to target fragments
+										for _, path := range signal.CanonicalPaths {
+											frag, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, path)
+											if frag != nil && len(signal.MetricUpdates) > 0 {
+												// Apply metric updates
+												for _, mu := range signal.MetricUpdates {
+													if frag.State == nil {
+														frag.State = make(map[string]models.MetricValue)
+													}
+													obs := time.Now()
+													if mu.ObservedAt != nil {
+														obs = *mu.ObservedAt
+													}
+													frag.State[mu.MetricName] = models.MetricValue{
+														Value:      mu.Value,
+														Unit:       mu.Unit,
+														Confidence: mu.Confidence,
+														ObservedAt: obs,
+														Provenance: models.Provenance{
+															Method:    "signal_synthesis",
+															SourceIDs: []string{signalID},
+														},
+													}
+												}
+												_ = e.fragmentsRepo.Update(ctx, frag)
+												// Trigger propagation for signal-derived metrics
+												if e.propagationTrigger != nil {
+													go func(fid string) {
+														propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+														defer cancel()
+														_ = e.propagationTrigger(propCtx, fid)
+													}(frag.ID)
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+					
 					// Dimension propagation: for applied facts, map sphere/location to dimension fragments and trigger waves.
 					_ = e.applyDimensionWavesFromAppliedFacts(ctx, existingFragment, facts, applyRes.AppliedFactIDs)
 					// Trigger propagation for deterministic updates as well (non-blocking).

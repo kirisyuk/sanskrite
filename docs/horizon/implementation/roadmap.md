@@ -126,13 +126,155 @@
 - **Batching: аккумулировать вызовы Scout и изменения**
   - Очередь/батчинг для ScoutingJob (группировка/дедуп), чтобы один факт не раздувал десятки вызовов.
   - Батч-обработка обновлений в Propagation Engine и (по возможности) batch writes в Firestore.
+- **LLM-free эвристики корректности и “анти-взрыва” графа (graph shaping without LLM)**
+  - **Зачем**: уменьшить “мусор” в графе и экспоненциальный рост ScoutingJobs/propagation **без** дополнительных LLM вызовов; сделать поведение предсказуемым (bounded worst-case).
+  - `canonicalPath → fragmentType` как **hard rule** (path-based type inference).
+    - Зачем: детерминированная нормализация типов (`/org/*`, `/loc/*`, `/fac/*`, `/sphere/*`), устраняет класс ошибок агентов, упрощает direction/rules.
+  - Soft-валидация `relationType × (sourceType,targetType)` как **penalty/ранжирование** (не hard reject) + **audit** для грубых нарушений.
+    - Зачем: отсекать явно бессмысленные комбинации типов, но не ломать “реальный мир” (конгломераты/нетипичные связи).
+  - Depth-decay: затухание `effectiveConfidence/effectivePriority` с глубиной + пороги/бюджеты на создание child jobs.
+    - Зачем: главный анти-экспоненциальный механизм даже при `maxDepth=2` (мягко режет хвосты, где больше шума).
+  - Hub-aware expansion: **не блокировать** хабы, а ограничивать раскрытие по relevance к `Lens.viewConfig.focus/spherePaths` + бюджетам.
+    - Зачем: хабы (страны/мегакорпы) важны, но раскрывать “целиком” нельзя — иначе граф превращается в энциклопедию.
+  - Negative evidence cache (short TTL, soft signal): если уже пытались подтвердить/найти и не нашли — понижать приоритет повторов, но не блокировать полностью.
+    - Зачем: ускорять повторные/похожие запросы и снижать стоимость на “мы это уже проверяли”, не кешируя “навсегда”.
+  - Anomaly/audit сигналы (без авто-фильтра): fan-in/fan-out дисбаланс, self-edges, транзитивный шум `LOCATED_IN`, конфликтные/цикличные отношения.
+    - Зачем: безопасно повышать наблюдаемость качества и облегчать дебаг без риска false negatives.
+  - **Acceptance**:
+    - Worst-case по созданию child jobs должен быть предсказуем и ограничен бюджетами/порогами.
+    - Не добавляем новые LLM вызовы (правила должны быть детерминированными/конфигурируемыми).
+    - Алерты/audit должны быть трассируемыми: “почему это помечено/понижено”.
 - **Watchdog: “соседние пути” в графе**
   - Реагировать не только на прямой canonicalPath, но и на соседние узлы по ребрам (глубина 1–2) при обработке релевантных фактов.
   - Кэш/снапшот графа зависимостей для удешевления обхода.
 - **Conditional dependencies (условные зависимости)**
   - Возможность задавать условия/контекст ребра (когда зависимость “включена”), чтобы волны и watchdog не применяли изменения “вслепую”.
 - **Relevance / distance heuristics**
-  - Механизм “расстояния/релевантности” между запросом/фактом и фрагментами (например, учитывать географический контекст), чтобы выборка не касалась всего пула игроков.
+  - Механизм "расстояния/релевантности" между запросом/фактом и фрагментами (например, учитывать географический контекст), чтобы выборка не касалась всего пула игроков.
+
+### D) Unified Policy Architecture (высокий приоритет)
+
+**Цель**: выделить класс задач "принятие решений" в унифицированный артефакт **Policy**, который содержит:
+- **(a) LLM fallback**: инструменты для случаев, когда детерминированные методы пока не покрывают
+- **(b) Deterministic rules**: эвристики и алгоритмы, удерживающие строгость таксономии и графа
+
+**Зачем**:
+- **Телеметрия**: видеть ratio (a)/(b), latency, cost по каждой Policy в реальном времени
+- **Эволюция**: начинаем с высоким (a), смотрим паттерны в LLM решениях, "кристаллизуем" в правила, (b) растёт, costs↓
+- **Качество**: правила проверены на реальных данных, не теряем quality при снижении LLM usage
+- **Testability**: детерминированная часть покрыта unit-тестами, LLM — smoke/integration
+
+**Policies**:
+
+| Policy | Зона ответственности |
+|--------|---------------------|
+| `PropagationPolicy` | Как метрики текут по рёбрам (weight, damping, direction, critical path boost) |
+| `ScoutPolicy` | Когда скаутить, какие источники, глубина, freshness thresholds, budget limits |
+| `CanonizationPolicy` | Нормализация paths, types, names, synonyms resolution |
+| `SynthesisPolicy` | Fact → Signal rules (когда детерминированно, когда LLM) |
+| `ValidationPolicy` | Какие комбинации (source×target×relationType) валидны, soft penalties, hard rejects |
+| `PrioritizationPolicy` | Critical paths, hub handling, relevance scoring |
+| `AggregationPolicy` | Как агрегировать метрики (max, sum_capped, decay) |
+
+**Unified Contract**:
+```go
+type Policy interface {
+    Name() string
+    Decide(ctx context.Context, input PolicyInput) (PolicyDecision, error)
+    Explain(decision PolicyDecision) string
+}
+
+type PolicyDecision struct {
+    Action       string                 // "propagate", "skip", "normalize_to", etc.
+    Params       map[string]interface{}
+    DecisionPath string                 // "rule:exact_match" | "rule:pattern" | "llm:fallback"
+    RuleID       *string
+    Confidence   float64
+    LatencyMs    int
+    LLMTokens    *int
+}
+```
+
+**TODO**:
+- [ ] Определить `Policy` interface и `PolicyDecision` struct
+- [ ] Реализовать `PolicyExecutor` с телеметрией (rule-first, LLM-fallback)
+- [ ] Создать Firestore collections для правил каждой Policy (`horizon_propagation_policies`, `horizon_scout_policies`, `horizon_canonization_rules`, etc.)
+- [ ] Реализовать базовые Policies: `PropagationPolicy`, `CanonizationPolicy`, `ValidationPolicy`
+- [ ] Интегрировать телеметрию (Firestore `policy_telemetry` или Pub/Sub → BigQuery)
+- [ ] Dashboard для визуализации ratio (a)/(b), top LLM fallback reasons, cost per policy
+
+**Acceptance**:
+- Все Horizon-службы используют Policy interface для принятия решений
+- Телеметрия показывает % rule-based vs LLM-based решений
+- Можно добавить новое правило в Firestore без редеплоя и увидеть изменение ratio
+
+---
+
+### E) Semantic Propagation & Signals (risk/opportunity/trend/direction)
+
+**Цель**: создать структурный слой для ответов на вопросы типа "What are the top supply disruption risks for Tesla battery logistics?" — из графа и фактов, а не через LLM каждый раз.
+
+**Детальный план**: см. [signals-and-semantic-propagation-plan.md](signals-and-semantic-propagation-plan.md)
+
+**TODO (критические пути)**:
+
+- **Critical Paths в Propagation (высокий приоритет)**
+  - **Проблема**: сейчас затухание "тупое" — все рёбра равны, а некоторые ветки распространения важнее других.
+  - **Решение**:
+    - Определить **critical path** как путь с высокой `criticality` на рёбрах, между anchor-узлами Lens'а, или явно помеченный.
+    - При создании/обновлении Lens вычислять critical paths (BFS/Dijkstra по criticality) и сохранять в `lens.ViewConfig["criticalPathEdges"]`.
+    - В PropagationEngine: **меньше затухания** на critical paths (`dampingFactor *= 1.2`), **больше глубина** (`maxDepth += 1`), **приоритет** в hot path.
+  - **Acceptance**: critical paths вычисляются при создании Lens; propagation через critical path затухает медленнее на 20%+.
+
+- **Propagation Policies как данные (высокий приоритет)**
+  - **Проблема**: сейчас propagation "тупой" — гоняет числовые дельты одинаково по любому ребру. Логистический риск должен течь сильно по `SUPPLIES_TO`, слабо по `COMPETES_WITH`.
+  - **Решение**:
+    - Firestore collection `horizon_propagation_policies` с матрицей `(metricPattern × relationType) → behavior` (passes, weight, maxDepth, dampingOverride, direction, criticalPathBoost).
+    - `PolicyMatcher` выбирает policy по приоритету (exact match > pattern > wildcard).
+    - PropagationEngine использует policy для каждой комбинации metric × edge.
+  - **Acceptance**: можно задать "risk_supply_* проходит по SUPPLIES_TO с weight=1.2, по COMPETES_WITH с weight=0.3" без изменения кода.
+
+- **Metric Registry & Handlers (средний приоритет)**
+  - **Проблема**: нет контракта на aggregation/decay для метрик; все метрики обрабатываются одинаково.
+  - **Решение**:
+    - Firestore collection `horizon_metric_specs` с `MetricSpec` (name, kind, aggregationFunc, decayHalfLife, propagationThreshold).
+    - `MetricHandler` interface: `Aggregate(inputs) → MetricValue`, `Decay(value, now) → MetricValue`.
+    - Built-in handlers: `MaxHandler`, `SumCappedHandler`, `WeightedAvgHandler`, `ExponentialDecayHandler`.
+  - **Acceptance**: risk-метрики агрегируются как "max", opportunity-метрики как "sum_capped".
+
+- **Signal Types в Runtime Taxonomy (средний приоритет)**
+  - **Проблема**: нет структурного слоя для risk/opportunity/trend/direction — всё "размазано" по фактам.
+  - **Решение**:
+    - Расширить `horizon_taxonomy/v1`: `allowedSignalKinds`, `signalTypes` (с label, synonyms, defaultMetric, propagationProfile).
+    - `OntologyFact(kind=signal, type=risk:supply_disruption)` — не новая коллекция, а расширение существующей.
+    - `NormalizeSignalType()` в `taxonomy/runtime.go`.
+  - **Acceptance**: можно создать факт `kind=signal, type=risk:supply_disruption` и он валидируется runtime taxonomy.
+
+- **Signal Synthesis (Fact → Signal) (средний приоритет)**
+  - **Проблема**: каждый факт требует LLM для классификации как сигнал.
+  - **Решение**:
+    - Firestore collection `horizon_synthesis_rules` с детерминированными правилами `(factKind, factTypePattern, spherePattern) → (outputSignalType, metricName, confidenceMultiplier)`.
+    - `SignalSynthesizer` применяет правила без LLM.
+    - Интеграция в Scout/Watchdog: при обработке факта автоматически синтезируются сигналы.
+  - **Acceptance**: 80%+ фактов покрыты synthesis rules и не требуют LLM для классификации.
+
+- **Async LLM Queue для сложных Propagation-решений (низкий приоритет)**
+  - **Когда**: классификация неоднозначна, conflict resolution, causal inference для explain trace.
+  - **Решение**:
+    - Отдельная Cloud Tasks queue `sanskrite-propagation-llm` с throttling.
+    - `PropagationLLMTask` содержит контекст (fragment, metric, signals, damping state).
+    - `PropagationLLMExecutor` подчиняется тем же правилам затухания (depth check, damping factor), использует `min_capability_score=6`.
+  - **Acceptance**: LLM вызывается только async, подчиняется damping, не блокирует hot path.
+
+- **Rollup & Explain (после Signal Synthesis)**
+  - `GetFragmentRollup(fragmentID, metricKind)` возвращает агрегированный score + explain trace.
+  - `ExplainTrace` содержит top contributors, propagation path, rules applied.
+  - **Acceptance**: каждый rollup имеет explain trace с топ-3 contributors.
+
+**Критерии приемки (общие)**:
+- Rollup computation < 100ms (без LLM).
+- Можно ответить на "Top supply disruption risks for Tesla battery logistics" из структурированных данных.
+- Propagation policies и synthesis rules управляются через Firestore без редеплоя.
 
 ## Этап 1: Модели данных и репозитории
 

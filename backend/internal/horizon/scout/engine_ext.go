@@ -120,6 +120,29 @@ func (e *ScoutEngine) processRelationsInternal(
 	scheduledChildren := map[string]struct{}{}
 	scheduledCount := 0
 
+	// Relation-level guardrails:
+	// - Do not recurse on COMPETES_WITH (explodes breadth and is rarely needed for local intent).
+	// - Do not recurse on INFLUENCES (spheres and vague influences create huge expansions).
+	// - Require a moderate confidence for recursion to avoid "broad hallucinated" graphs.
+	shouldRecurse := func(relType string, conf float64, targetPath string, targetType models.FragmentType) bool {
+		rt := strings.TrimSpace(relType)
+		if rt == "" {
+			return false
+		}
+		if conf > 0 && conf < 0.55 {
+			return false
+		}
+		if strings.HasPrefix(strings.TrimSpace(targetPath), "/sphere/") || targetType == models.FragmentTypeSphere {
+			return false
+		}
+		switch rt {
+		case string(models.DependencyTypeCompetesWith), string(models.DependencyTypeInfluences):
+			return false
+		default:
+			return true
+		}
+	}
+
 	for _, rel := range relations {
 		if rel.TargetName == "" {
 			continue
@@ -250,10 +273,19 @@ func (e *ScoutEngine) processRelationsInternal(
 			// Ограничиваем глубину
 			if currentDepth < maxDepth {
 				// Breadth cap + per-parent dedup (in-memory).
-				if maxChildren == 0 || scheduledCount >= maxChildren {
+				effectiveCap := maxChildren
+				// Depth-aware cap: keep the graph tight for shallow (depth=2) lenses.
+				if currentDepth <= 0 && effectiveCap > 12 {
+					effectiveCap = 12
+				} else if currentDepth >= 1 && effectiveCap > 6 {
+					effectiveCap = 6
+				}
+				if effectiveCap == 0 || scheduledCount >= effectiveCap {
 					// skip recursive expansion
 				} else if _, ok := scheduledChildren[targetPath]; ok {
 					// already scheduled from another relation in the same job
+				} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
+					// relation type / confidence not eligible for recursion
 				} else {
 					scheduledChildren[targetPath] = struct{}{}
 					scheduledCount++
@@ -403,10 +435,18 @@ func (e *ScoutEngine) processRelationsInternal(
 
 			if shouldScout && currentDepth < maxDepth {
 				// Breadth cap + per-parent dedup (in-memory).
-				if maxChildren == 0 || scheduledCount >= maxChildren {
+				effectiveCap := maxChildren
+				if currentDepth <= 0 && effectiveCap > 12 {
+					effectiveCap = 12
+				} else if currentDepth >= 1 && effectiveCap > 6 {
+					effectiveCap = 6
+				}
+				if effectiveCap == 0 || scheduledCount >= effectiveCap {
 					// skip recursive expansion
 				} else if _, ok := scheduledChildren[targetPath]; ok {
 					// already scheduled from another relation in the same job
+				} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
+					// relation type / confidence not eligible for recursion
 				} else {
 					scheduledChildren[targetPath] = struct{}{}
 					scheduledCount++

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
@@ -87,8 +88,10 @@ type LensService struct {
 	lifecycle         *LifecycleManager
 	calculator        *MetricsCalculator
 	watchdogHook      func(ctx context.Context, fragmentID string)
-	queryResolver     *QueryResolver
-	realtime          *realtime.Publisher
+	queryResolver        *QueryResolver
+	realtime             *realtime.Publisher
+	criticalPathDetector *critical_path.Detector // Optional: for critical path detection
+	edgesRepo            *repo.DependencyEdgesRepository // Required for critical path detection
 }
 
 // NewLensService создает новый Lens Service
@@ -112,6 +115,13 @@ func NewLensService(
 		queryResolver:     queryResolver,
 		realtime:          rt,
 	}
+}
+
+// WithCriticalPathDetector sets the critical path detector for LensService.
+func (s *LensService) WithCriticalPathDetector(detector *critical_path.Detector, edgesRepo *repo.DependencyEdgesRepository) *LensService {
+	s.criticalPathDetector = detector
+	s.edgesRepo = edgesRepo
+	return s
 }
 
 func (s *LensService) publish(ctx context.Context, et realtime.EventType, data map[string]interface{}) {
@@ -284,6 +294,22 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Логируем ошибки резолва (если есть)
 	if len(resolveErrors) > 0 {
 		log.Printf("[LensService] CreateLens: %d query address resolution errors (continuing with partial results)", len(resolveErrors))
+	}
+
+	// Detect critical paths before creating lens (if detector is available)
+	if s.criticalPathDetector != nil && s.edgesRepo != nil && len(staticPaths) >= 2 {
+		criticalEdges, err := s.criticalPathDetector.DetectCriticalPaths(ctx, staticPaths, 0.7)
+		if err == nil && len(criticalEdges) > 0 {
+			// Store critical path edges in ViewConfig
+			if lens.ViewConfig == nil {
+				lens.ViewConfig = make(map[string]interface{})
+			}
+			edgeIDs := make([]string, 0, len(criticalEdges))
+			for edgeID := range criticalEdges {
+				edgeIDs = append(edgeIDs, edgeID)
+			}
+			lens.ViewConfig["criticalPathEdges"] = edgeIDs
+		}
 	}
 
 	// Увеличиваем activeSubscribers для всех HorizonFragment в scope
@@ -491,11 +517,6 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 		return fmt.Errorf("failed to get old lens: %w", err)
 	}
 
-	// Обновляем Lens
-	if err := s.lensesRepo.Update(ctx, lens); err != nil {
-		return fmt.Errorf("failed to update lens: %w", err)
-	}
-
 	// Управляем подписками: отписываемся от старых, подписываемся на новые
 	oldScope := make(map[string]bool)
 	for _, path := range oldLens.Scope {
@@ -549,6 +570,27 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	// Логируем ошибки резолва (если есть)
 	if len(resolveErrors) > 0 {
 		log.Printf("[LensService] UpdateLens: %d query address resolution errors (continuing with partial results)", len(resolveErrors))
+	}
+
+	// Detect critical paths before updating lens (if detector is available)
+	if s.criticalPathDetector != nil && s.edgesRepo != nil && len(allNewStaticPaths) >= 2 {
+		criticalEdges, err := s.criticalPathDetector.DetectCriticalPaths(ctx, allNewStaticPaths, 0.7)
+		if err == nil && len(criticalEdges) > 0 {
+			// Store critical path edges in ViewConfig
+			if lens.ViewConfig == nil {
+				lens.ViewConfig = make(map[string]interface{})
+			}
+			edgeIDs := make([]string, 0, len(criticalEdges))
+			for edgeID := range criticalEdges {
+				edgeIDs = append(edgeIDs, edgeID)
+			}
+			lens.ViewConfig["criticalPathEdges"] = edgeIDs
+		}
+	}
+
+	// Обновляем Lens
+	if err := s.lensesRepo.Update(ctx, lens); err != nil {
+		return fmt.Errorf("failed to update lens: %w", err)
 	}
 
 	// Резолвим старые QueryAddress для корректного сравнения

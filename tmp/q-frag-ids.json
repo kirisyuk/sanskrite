@@ -1,0 +1,15 @@
+{
+  "structuredQuery": {
+    "from": [{"collectionId": "horizon_fragments"}],
+    "where": {
+      "compositeFilter": {
+        "op": "AND",
+        "filters": [
+          {"fieldFilter": {"field": {"fieldPath": "tenantId"}, "op": "EQUAL", "value": {"stringValue": "global"}}},
+          {"fieldFilter": {"field": {"fieldPath": "canonicalPath"}, "op": "IN", "value": {"arrayValue": {"values": [{"stringValue": "/sphere/logistics"}, {"stringValue": "/org/tesla"}]}}}}
+        ]
+      }
+    },
+    "limit": 10
+  }
+}

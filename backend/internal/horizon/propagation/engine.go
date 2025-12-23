@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	criticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -26,6 +28,8 @@ type PropagationEngine struct {
 	threshold     *ThresholdManager
 	damping       *WaveDamping
 	lazyEval      *LazyEvaluator
+	policyExecutor      *policy.PolicyExecutor      // Optional: for semantic propagation policies
+	criticalPathDetector *criticalpath.Detector      // Optional: for critical path detection
 
 	// Трекинг активных распространений
 	activePropagations map[string]*PropagationStatus
@@ -67,6 +71,18 @@ func NewPropagationEngine(
 		lazyEval:           NewLazyEvaluator(),
 		activePropagations: make(map[string]*PropagationStatus),
 	}
+}
+
+// WithPolicyExecutor sets the policy executor for semantic propagation.
+func (e *PropagationEngine) WithPolicyExecutor(executor *policy.PolicyExecutor) *PropagationEngine {
+	e.policyExecutor = executor
+	return e
+}
+
+// WithCriticalPathDetector sets the critical path detector.
+func (e *PropagationEngine) WithCriticalPathDetector(detector *criticalpath.Detector) *PropagationEngine {
+	e.criticalPathDetector = detector
+	return e
 }
 
 // PropagationResult результат распространения влияния
@@ -418,8 +434,74 @@ func (e *PropagationEngine) propagateHotPath(
 				continue
 			}
 
-			dampedDelta := e.damping.ApplyDamping(it.d, edge.Properties.Amplification, edge.Properties.Criticality)
+			// Use policy if available, otherwise fallback to default behavior
+			var dampedDelta float64
+			var shouldPropagate bool
+			var maxDepth int = hotPathMaxHops
+
+			if e.policyExecutor != nil {
+				// Check if edge is on critical path
+				isCriticalPath := false
+				if e.criticalPathDetector != nil {
+					targetFragment, _ := e.fragmentsRepo.Get(ctx, edge.TargetFragmentID)
+					if targetFragment != nil {
+						isCriticalPath = e.criticalPathDetector.IsCriticalPath(edge, it.frag, targetFragment)
+					}
+				}
+
+				// Get policy decision
+				decision, err := e.policyExecutor.Execute(ctx, policy.PolicyInput{
+					Kind: "propagation",
+					Context: map[string]interface{}{
+						"metricName":     metricName,
+						"relationType":   string(edge.Type),
+						"currentDepth":   it.hops,
+						"isCriticalPath": isCriticalPath,
+						"delta":          it.d,
+					},
+					Edge: edge,
+				})
+
+				if err == nil && decision.Action == "propagate" {
+					shouldPropagate = true
+					weight, _ := decision.Params["weight"].(float64)
+					if weight == 0 {
+						weight = 1.0
+					}
+					dampingOverride, _ := decision.Params["dampingOverride"].(*float64)
+					if dampingOverride != nil {
+						dampedDelta = it.d * weight * (*dampingOverride)
+					} else {
+						dampedDelta = e.damping.ApplyDamping(it.d*weight, edge.Properties.Amplification, edge.Properties.Criticality)
+					}
+					if md, ok := decision.Params["maxDepth"].(int); ok {
+						maxDepth = md
+					}
+					// Apply critical path boost if applicable
+					if isCriticalPath {
+						if boost, ok := decision.Params["criticalPathBoost"].(float64); ok && boost > 1.0 {
+							dampedDelta *= boost
+						}
+					}
+				} else {
+					shouldPropagate = false
+				}
+			} else {
+				// Fallback to default behavior
+				dampedDelta = e.damping.ApplyDamping(it.d, edge.Properties.Amplification, edge.Properties.Criticality)
+				shouldPropagate = true
+			}
+
+			if !shouldPropagate {
+				continue
+			}
+
 			if !e.threshold.ExceedsThreshold(metricName, dampedDelta, unit) {
+				continue
+			}
+
+			// Check depth limit
+			if it.hops >= maxDepth {
 				continue
 			}
 

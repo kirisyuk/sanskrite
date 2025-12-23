@@ -1,0 +1,305 @@
+[{
+  "document": {
+    "name": "projects/sanskrite/databases/(default)/documents/horizon_fragments/dtuf4KJhMaCeKyhKjxJB",
+    "fields": {
+      "metadata": {
+        "mapValue": {
+          "fields": {
+            "lastUpdatedAt": {
+              "timestampValue": "2025-12-23T15:42:16.759266Z"
+            },
+            "lastVerifiedAt": {
+              "timestampValue": "2025-12-23T15:43:44.451373Z"
+            },
+            "sourceFrameId": {
+              "stringValue": "9B1Hu77naAq5RlbukJQ5"
+            },
+            "lastFactsAppliedAt": {
+              "timestampValue": "0001-01-01T00:00:00Z"
+            },
+            "epistemicStatus": {
+              "stringValue": "VERIFIED"
+            },
+            "lastFactsSeenAt": {
+              "timestampValue": "0001-01-01T00:00:00Z"
+            },
+            "createdAt": {
+              "timestampValue": "2025-12-23T15:42:16.759266Z"
+            }
+          }
+        }
+      },
+      "createdBy": {
+        "stringValue": ""
+      },
+      "version": {
+        "integerValue": "1"
+      },
+      "labels": {
+        "mapValue": {
+          "fields": {
+            "en": {
+              "stringValue": "Astana"
+            }
+          }
+        }
+      },
+      "canonicalPath": {
+        "stringValue": "/loc/astana"
+      },
+      "state": {
+        "mapValue": {
+          "fields": {
+            "/metric/risk/corruption_vulnerability": {
+              "mapValue": {
+                "fields": {
+                  "provenance": {
+                    "mapValue": {
+                      "fields": {
+                        "observedAt": {
+                          "timestampValue": "2025-12-23T15:43:44Z"
+                        },
+                        "sourceIds": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "stringValue": "https://en.wikipedia.org/wiki/Red_Sea_crisis"
+                              }
+                            ]
+                          }
+                        },
+                        "method": {
+                          "stringValue": "llm_metric_inference"
+                        }
+                      }
+                    }
+                  },
+                  "confidence": {
+                    "doubleValue": 0.6
+                  },
+                  "observedAt": {
+                    "timestampValue": "2025-12-23T15:43:44Z"
+                  },
+                  "value": {
+                    "doubleValue": 0.5
+                  }
+                }
+              }
+            },
+            "/metric/risk/public_perception": {
+              "mapValue": {
+                "fields": {
+                  "provenance": {
+                    "mapValue": {
+                      "fields": {
+                        "method": {
+                          "stringValue": "llm_metric_inference"
+                        },
+                        "sourceIds": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "stringValue": "https://en.wikipedia.org/wiki/Red_Sea_crisis"
+                              }
+                            ]
+                          }
+                        },
+                        "observedAt": {
+                          "timestampValue": "2025-12-23T15:43:44Z"
+                        }
+                      }
+                    }
+                  },
+                  "confidence": {
+                    "doubleValue": 0.5
+                  },
+                  "observedAt": {
+                    "timestampValue": "2025-12-23T15:43:44Z"
+                  },
+                  "value": {
+                    "doubleValue": -0.4
+                  }
+                }
+              }
+            },
+            "/metric/risk/stability_index": {
+              "mapValue": {
+                "fields": {
+                  "provenance": {
+                    "mapValue": {
+                      "fields": {
+                        "method": {
+                          "stringValue": "llm_metric_inference"
+                        },
+                        "observedAt": {
+                          "timestampValue": "2025-12-23T15:43:44Z"
+                        },
+                        "sourceIds": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "stringValue": "https://en.wikipedia.org/wiki/Red_Sea_crisis"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "observedAt": {
+                    "timestampValue": "2025-12-23T15:43:44Z"
+                  },
+                  "confidence": {
+                    "doubleValue": 0.7
+                  },
+                  "value": {
+                    "doubleValue": 0.4
+                  }
+                }
+              }
+            },
+            "/metric/risk/sanction_exposure": {
+              "mapValue": {
+                "fields": {
+                  "provenance": {
+                    "mapValue": {
+                      "fields": {
+                        "method": {
+                          "stringValue": "llm_metric_inference"
+                        },
+                        "sourceIds": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "stringValue": "https://en.wikipedia.org/wiki/Red_Sea_crisis"
+                              }
+                            ]
+                          }
+                        },
+                        "observedAt": {
+                          "timestampValue": "2025-12-23T15:43:44Z"
+                        }
+                      }
+                    }
+                  },
+                  "observedAt": {
+                    "timestampValue": "2025-12-23T15:43:44Z"
+                  },
+                  "confidence": {
+                    "doubleValue": 0.5
+                  },
+                  "value": {
+                    "doubleValue": 0.2
+                  }
+                }
+              }
+            },
+            "/metric/risk/geopolitical_alignment": {
+              "mapValue": {
+                "fields": {
+                  "confidence": {
+                    "doubleValue": 0.6
+                  },
+                  "value": {
+                    "doubleValue": -0.3
+                  },
+                  "provenance": {
+                    "mapValue": {
+                      "fields": {
+                        "method": {
+                          "stringValue": "llm_metric_inference"
+                        },
+                        "observedAt": {
+                          "timestampValue": "2025-12-23T15:43:44Z"
+                        },
+                        "sourceIds": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "stringValue": "https://en.wikipedia.org/wiki/Red_Sea_crisis"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "observedAt": {
+                    "timestampValue": "2025-12-23T15:43:44Z"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "updatedAt": {
+        "timestampValue": "2025-12-23T15:43:57.422243Z"
+      },
+      "identifiers": {
+        "mapValue": {
+          "fields": {
+            "shortName": {
+              "stringValue": "Astana"
+            },
+            "legalName": {
+              "stringValue": "Astana"
+            }
+          }
+        }
+      },
+      "governance": {
+        "mapValue": {
+          "fields": {
+            "activeSubscribers": {
+              "integerValue": "0"
+            },
+            "owner": {
+              "stringValue": "SYSTEM"
+            },
+            "status": {
+              "stringValue": "ACTIVE"
+            }
+          }
+        }
+      },
+      "provenance": {
+        "mapValue": {
+          "fields": {
+            "sourceIds": {
+              "nullValue": null
+            }
+          }
+        }
+      },
+      "updatedBy": {
+        "stringValue": ""
+      },
+      "entityPath": {
+        "stringValue": ""
+      },
+      "type": {
+        "stringValue": "GEO_REGION"
+      },
+      "createdAt": {
+        "timestampValue": "2025-12-23T15:43:57.422243Z"
+      },
+      "id": {
+        "stringValue": "dtuf4KJhMaCeKyhKjxJB"
+      },
+      "status": {
+        "stringValue": ""
+      },
+      "tenantId": {
+        "stringValue": "global"
+      },
+      "sectorPath": {
+        "stringValue": ""
+      }
+    },
+    "createTime": "2025-12-23T15:43:57.663705Z",
+    "updateTime": "2025-12-23T15:43:57.663705Z"
+  },
+  "readTime": "2025-12-23T15:45:39.872197Z"
+}
+]
