@@ -29,7 +29,50 @@ const HorizonPage: React.FC = () => {
   const [showSettings, setShowSettings] = React.useState(false);
   const [showAccount, setShowAccount] = React.useState(false);
   const [showAdmin, setShowAdmin] = React.useState(false);
-  const [selectedLensId, setSelectedLensId] = React.useState<string | null>(null);
+  
+  // Load saved Horizon state from localStorage
+  const getSavedHorizonState = React.useCallback(() => {
+    try {
+      const savedProjectId = localStorage.getItem('horizon.selectedProjectId');
+      const savedLensId = localStorage.getItem('horizon.selectedLensId');
+      return {
+        projectId: savedProjectId || null,
+        lensId: savedLensId || null,
+      };
+    } catch {
+      return { projectId: null, lensId: null };
+    }
+  }, []);
+
+  // Save Horizon state to localStorage
+  const saveHorizonState = React.useCallback((projectId: string | null, lensId: string | null) => {
+    try {
+      if (projectId) {
+        localStorage.setItem('horizon.selectedProjectId', projectId);
+      } else {
+        localStorage.removeItem('horizon.selectedProjectId');
+      }
+      if (lensId) {
+        localStorage.setItem('horizon.selectedLensId', lensId);
+      } else {
+        localStorage.removeItem('horizon.selectedLensId');
+      }
+    } catch (err) {
+      console.warn('[HorizonPage] Failed to save state to localStorage:', err);
+    }
+  }, []);
+
+  const [selectedLensId, setSelectedLensIdState] = React.useState<string | null>(() => {
+    return getSavedHorizonState().lensId;
+  });
+  
+  // Wrapper for setSelectedLensId that also saves to localStorage
+  const setSelectedLensId = React.useCallback((lensId: string | null) => {
+    setSelectedLensIdState(lensId);
+    const currentProjectId = currentProject?.id || null;
+    saveHorizonState(currentProjectId, lensId);
+  }, [currentProject?.id, saveHorizonState]);
+
   const assembly = useHorizonRealtimeStore((s) => s.assembly);
   const events = useHorizonRealtimeStore((s) => s.events);
   const resetEvents = useHorizonRealtimeStore((s) => s.resetEvents);
@@ -65,6 +108,79 @@ const HorizonPage: React.FC = () => {
     }
   }, [currentUser, fetchProjects]);
 
+  // Restore saved Horizon state on mount and when projects are loaded
+  const [hasRestoredProject, setHasRestoredProject] = React.useState(false);
+  const [hasRestoredLens, setHasRestoredLens] = React.useState(false);
+  
+  // Step 1: Restore project selection
+  React.useEffect(() => {
+    if (!currentUser || projects.length === 0 || hasRestoredProject) return;
+    
+    const saved = getSavedHorizonState();
+    
+    if (saved.projectId && !currentProject) {
+      const project = projects.find((p) => p.id === saved.projectId && p.projectType === 'horizon');
+      if (project) {
+        setCurrentProject(project);
+        setHasRestoredProject(true);
+      } else {
+        // Project not found, clear saved state
+        setHasRestoredProject(true);
+      }
+    } else {
+      setHasRestoredProject(true);
+    }
+  }, [currentUser, projects, currentProject, getSavedHorizonState, setCurrentProject, hasRestoredProject]);
+
+  // Step 2: Restore lens selection after project is restored
+  React.useEffect(() => {
+    if (!hasRestoredProject || hasRestoredLens || !currentProject) return;
+    
+    const saved = getSavedHorizonState();
+    
+    if (currentProject.id === saved.projectId && saved.lensId) {
+      setSelectedLensId(saved.lensId);
+    } else if (currentProject.id !== saved.projectId) {
+      // Project changed, clear lens selection
+      setSelectedLensId(null);
+    }
+    
+    setHasRestoredLens(true);
+  }, [hasRestoredProject, hasRestoredLens, currentProject, getSavedHorizonState, setSelectedLensId]);
+
+  // Track previous project ID to detect project changes
+  const prevProjectIdRef = React.useRef<string | null>(null);
+  
+  // Save project selection when currentProject changes (from SidebarPanel)
+  React.useEffect(() => {
+    if (!hasRestoredLens) {
+      // Store current project ID for next render
+      prevProjectIdRef.current = currentProject?.id || null;
+      return; // Don't save during initial restore
+    }
+    
+    const currentProjectId = currentProject?.id || null;
+    const projectChanged = prevProjectIdRef.current !== currentProjectId;
+    
+    if (currentProject?.projectType === 'horizon') {
+      // If project changed, clear lens selection (lens belongs to old project)
+      if (projectChanged && prevProjectIdRef.current !== null) {
+        setSelectedLensId(null);
+        saveHorizonState(currentProjectId, null);
+      } else {
+        // Same project, save current lens selection
+        const currentLensId = selectedLensId;
+        saveHorizonState(currentProjectId, currentLensId);
+      }
+    } else if (!currentProject) {
+      // Project was cleared, also clear lens
+      setSelectedLensId(null);
+      saveHorizonState(null, null);
+    }
+    
+    prevProjectIdRef.current = currentProjectId;
+  }, [currentProject, selectedLensId, saveHorizonState, hasRestoredLens, setSelectedLensId]);
+
   // Initialize WebSocket connection (same flow as Discovery).
   useWebSocketConnection();
   
@@ -87,6 +203,8 @@ const HorizonPage: React.FC = () => {
       // If we deleted the current project, reset it
       if (isCurrentProject) {
         setCurrentProject(null);
+        setSelectedLensId(null);
+        saveHorizonState(null, null);
       }
     } catch (err) {
       console.error('Failed to delete project:', err);
@@ -115,7 +233,9 @@ const HorizonPage: React.FC = () => {
   
   const handleResetChat = React.useCallback(() => {
     setCurrentProject(null);
-  }, [setCurrentProject]);
+    setSelectedLensId(null);
+    saveHorizonState(null, null);
+  }, [setCurrentProject, setSelectedLensId, saveHorizonState]);
   
   const handleCloseAllModals = React.useCallback(() => {
     setShowSettings(false);
@@ -137,7 +257,7 @@ const HorizonPage: React.FC = () => {
       resetEvents();
       setLensStarted(true);
 
-      await api.createHorizonLensFromQuery(
+      const result = await api.createHorizonLensFromQuery(
         {
           projectId: request.projectId,
           query: request.query,
@@ -146,8 +266,13 @@ const HorizonPage: React.FC = () => {
         { correlationId, sessionId }
       );
 
-      // Keep Hook UI visible; LensCanvas can be opened manually from Sidebar lens list.
-      setSelectedLensId(null);
+      // Save new lens ID and open it automatically
+      if (result?.lens?.id) {
+        setSelectedLensId(result.lens.id);
+      } else {
+        // Keep Hook UI visible; LensCanvas can be opened manually from Sidebar lens list.
+        setSelectedLensId(null);
+      }
     } catch (error) {
       console.error('Failed to assemble lens:', error);
     }
@@ -197,7 +322,9 @@ const HorizonPage: React.FC = () => {
         onStartEditingProject={startEditingProject}
         currentMode="horizon"
         projectId={currentProject?.id || null}
-        onSelectLens={setSelectedLensId}
+        onSelectLens={(lensId) => {
+          setSelectedLensId(lensId);
+        }}
         selectedLensId={selectedLensId}
       />
 
@@ -228,7 +355,10 @@ const HorizonPage: React.FC = () => {
             <LensCanvas
               isOpen={true}
               lensId={selectedLensId}
-              onClose={() => setSelectedLensId(null)}
+              onClose={() => {
+                // Close lens but keep project selected
+                setSelectedLensId(null);
+              }}
             />
           ) : (
             /* Main content - Assemble Lens Request */

@@ -9,7 +9,8 @@ import (
 
 // HorizonHandlers содержит все HTTP handlers для Horizon API
 type HorizonHandlers struct {
-	service *horizon.HorizonService
+	service        *horizon.HorizonService
+	lensItemsHandler *LensItemsHandler
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -17,6 +18,12 @@ func NewHorizonHandlers(service *horizon.HorizonService) *HorizonHandlers {
 	return &HorizonHandlers{
 		service: service,
 	}
+}
+
+// WithLensItemsHandler добавляет LensItemsHandler
+func (h *HorizonHandlers) WithLensItemsHandler(handler *LensItemsHandler) *HorizonHandlers {
+	h.lensItemsHandler = handler
+	return h
 }
 
 // RegisterRoutes регистрирует все routes для Horizon API
@@ -31,6 +38,7 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/lenses/", authMiddleware(http.HandlerFunc(h.HandleLensRoutes)))
 
 	// Fragment endpoints
+	mux.Handle("/api/horizon/fragments", authMiddleware(http.HandlerFunc(h.HandleFragmentsRoot)))
 	mux.Handle("/api/horizon/fragments/by-path", authMiddleware(http.HandlerFunc(h.GetFragmentByPath)))
 	mux.Handle("/api/horizon/fragments/", authMiddleware(http.HandlerFunc(h.HandleFragmentRoutes)))
 
@@ -53,6 +61,17 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 
 	// Co-Pilot chat
 	mux.Handle("/api/horizon/co-pilot/chat", authMiddleware(http.HandlerFunc(h.CoPilotChat)))
+}
+
+// HandleFragmentsRoot handles /api/horizon/fragments (list fragments via lens scope).
+// GET /api/horizon/fragments?lensId={lensId}
+func (h *HorizonHandlers) HandleFragmentsRoot(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.ListFragments(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // HandleLensesRoot обрабатывает корневой путь /api/horizon/lenses
@@ -114,6 +133,39 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 	if len(pathParts) > 1 {
 		subPath := pathParts[1]
 		switch subPath {
+		case "items":
+			// Delegate to LensItemsHandler
+			if h.lensItemsHandler != nil {
+				// Extract remaining path after /items
+				if len(pathParts) > 2 {
+					// /api/horizon/lenses/{lensId}/items/{itemId}
+					switch r.Method {
+					case http.MethodPatch:
+						h.lensItemsHandler.UpdateLensItem(w, r)
+						return
+					case http.MethodDelete:
+						h.lensItemsHandler.DeleteLensItem(w, r)
+						return
+					default:
+						http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+						return
+					}
+				} else {
+					// /api/horizon/lenses/{lensId}/items
+					switch r.Method {
+					case http.MethodGet:
+						h.lensItemsHandler.ListLensItems(w, r)
+						return
+					case http.MethodPost:
+						h.lensItemsHandler.CreateLensItem(w, r)
+						return
+					default:
+						http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+						return
+					}
+				}
+			}
+			return
 		case "assembly-status":
 			h.GetAssemblyStatus(w, r)
 			return
@@ -187,6 +239,8 @@ func (h *HorizonHandlers) HandleEdgeRoutes(w http.ResponseWriter, r *http.Reques
 	}
 
 	switch r.Method {
+	case http.MethodGet:
+		h.GetEdge(w, r)
 	case http.MethodPut:
 		h.UpdateEdge(w, r)
 	case http.MethodDelete:

@@ -47,6 +47,41 @@ func (h *HorizonHandlers) publishEdgeUpserted(ctx context.Context, authTenant st
 	_ = pub.PublishJSON(ctx, realtime.EventType("horizon.graph.edge.upserted"), strings.TrimSpace(authTenant), payload)
 }
 
+// GetEdge returns a DependencyEdge by ID.
+// GET /api/horizon/edges/{id}
+func (h *HorizonHandlers) GetEdge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	edgeID := extractIDFromPath(r, "/api/horizon/edges/")
+	if edgeID == "" {
+		http.Error(w, "Edge ID required in path", http.StatusBadRequest)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	edge, err := h.service.Edges().Get(r.Context(), edgeID)
+	if err != nil {
+		http.Error(w, "Edge not found", http.StatusNotFound)
+		return
+	}
+
+	if edge.TenantID != authInfo.TenantID {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(edge)
+}
+
 // CreateEdge создает новый DependencyEdge
 func (h *HorizonHandlers) CreateEdge(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

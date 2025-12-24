@@ -982,6 +982,7 @@ func main() {
 		horizonFragmentsRepo := horizonrepo.NewHorizonFragmentsRepository(fsClient.Client())
 		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
+		horizonLensItemsRepo := horizonrepo.NewLensItemsRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
@@ -1319,6 +1320,13 @@ func main() {
 
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)
+			// Create LensItems handler
+			lensItemsHandler := horizonhttp.NewLensItemsHandler(
+				horizonLensItemsRepo,
+				horizonLensesRepo,
+				s.projs,
+			)
+			horizonHandlers.WithLensItemsHandler(lensItemsHandler)
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete

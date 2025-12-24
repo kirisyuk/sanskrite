@@ -3,8 +3,7 @@ package horizon
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
 // GetFragmentRollup returns aggregated rollup for a fragment.
@@ -12,10 +11,8 @@ import (
 func (h *HorizonHandlers) GetFragmentRollup(w http.ResponseWriter, r *http.Request, fragmentID, metricKind string) {
 	ctx := r.Context()
 
-	// Get tenant from context
-	rc, ok := rtctx.Get(ctx)
-	if !ok || rc.TenantID == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if auth := httputil.GetAuthInfo(ctx); auth == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
 		return
 	}
 
@@ -35,10 +32,8 @@ func (h *HorizonHandlers) GetFragmentRollup(w http.ResponseWriter, r *http.Reque
 func (h *HorizonHandlers) GetFragmentExplain(w http.ResponseWriter, r *http.Request, fragmentID, metricKind string) {
 	ctx := r.Context()
 
-	// Get tenant from context
-	rc, ok := rtctx.Get(ctx)
-	if !ok || rc.TenantID == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if auth := httputil.GetAuthInfo(ctx); auth == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
 		return
 	}
 

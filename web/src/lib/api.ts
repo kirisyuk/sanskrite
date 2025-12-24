@@ -1752,6 +1752,263 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       throw error;
     }
   }
+
+  // --- Horizon LensItems ---
+  async getLensItems(lensId: string): Promise<import('../types/lensItem').LensItem[]> {
+    try {
+      const response = await this.client.get<{ items: import('../types/lensItem').LensItem[] }>(`/api/horizon/lenses/${lensId}/items`);
+      return response.data.items;
+    } catch (error: any) {
+      console.error(`[API] getLensItems error:`, error);
+      throw error;
+    }
+  }
+
+  async createLensItem(lensId: string, data: Partial<import('../types/lensItem').LensItem>): Promise<{ id: string }> {
+    try {
+      const response = await this.client.post<{ id: string }>(`/api/horizon/lenses/${lensId}/items`, data);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] createLensItem error:`, error);
+      throw error;
+    }
+  }
+
+  async updateLensItem(lensId: string, itemId: string, data: Partial<import('../types/lensItem').LensItem>): Promise<{ success: boolean }> {
+    try {
+      const response = await this.client.patch<{ success: boolean }>(`/api/horizon/lenses/${lensId}/items/${itemId}`, data);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] updateLensItem error:`, error);
+      throw error;
+    }
+  }
+
+  async deleteLensItem(lensId: string, itemId: string): Promise<{ success: boolean }> {
+    try {
+      const response = await this.client.delete<{ success: boolean }>(`/api/horizon/lenses/${lensId}/items/${itemId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] deleteLensItem error:`, error);
+      throw error;
+    }
+  }
+
+  // --- Horizon Fragments ---
+  async getHorizonFragment(fragmentId: string): Promise<any> {
+    try {
+      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonFragment error:`, error);
+      throw error;
+    }
+  }
+
+  async getHorizonFragmentByPath(canonicalPath: string): Promise<any> {
+    try {
+      const response = await this.client.get('/api/horizon/fragments/by-path', {
+        params: { path: canonicalPath },
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonFragmentByPath error:`, error);
+      throw error;
+    }
+  }
+
+  async listHorizonFragments(lensId: string): Promise<{
+    fragments: any[];
+    total: number;
+  }> {
+    try {
+      const response = await this.client.get('/api/horizon/fragments', {
+        params: { lensId },
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] listHorizonFragments error:`, error);
+      throw error;
+    }
+  }
+
+  async getFragmentDependencies(
+    fragmentId: string,
+    options?: { direction?: 'outgoing' | 'incoming' | 'both'; type?: string }
+  ): Promise<{
+    edges: any[];
+    total: number;
+  }> {
+    try {
+      const params: Record<string, string> = {};
+      if (options?.direction) {
+        params.direction = options.direction;
+      }
+      if (options?.type) {
+        params.type = options.type;
+      }
+      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/dependencies`, { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getFragmentDependencies error:`, error);
+      throw error;
+    }
+  }
+
+  // --- Horizon Edges ---
+  async getHorizonEdge(edgeId: string): Promise<any> {
+    try {
+      const response = await this.client.get(`/api/horizon/edges/${edgeId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonEdge error:`, error);
+      throw error;
+    }
+  }
+
+  async createHorizonEdge(edge: {
+    sourceFragmentId: string;
+    targetFragmentId: string;
+    type: string;
+    properties?: {
+      criticality?: number;
+      amplification?: number;
+      latencyHours?: number;
+    };
+    qualifiers?: Record<string, any>;
+  }): Promise<any> {
+    try {
+      const response = await this.client.post('/api/horizon/edges', edge);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] createHorizonEdge error:`, error);
+      throw error;
+    }
+  }
+
+  async updateHorizonEdge(
+    edgeId: string,
+    updates: {
+      properties?: {
+        criticality?: number;
+        amplification?: number;
+        latencyHours?: number;
+      };
+      qualifiers?: Record<string, any>;
+    }
+  ): Promise<any> {
+    try {
+      const response = await this.client.put(`/api/horizon/edges/${edgeId}`, updates);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] updateHorizonEdge error:`, error);
+      throw error;
+    }
+  }
+
+  async deleteHorizonEdge(edgeId: string): Promise<void> {
+    try {
+      await this.client.delete(`/api/horizon/edges/${edgeId}`);
+    } catch (error: any) {
+      console.error(`[API] deleteHorizonEdge error:`, error);
+      throw error;
+    }
+  }
+
+  // --- Horizon Rollup & Metrics ---
+  async getFragmentRollup(fragmentId: string, kind: string = 'risk'): Promise<{
+    fragmentId: string;
+    canonicalPath: string;
+    metricKind: string;
+    metricName?: string;
+    value: number;
+    confidence: number;
+    metrics?: Record<string, number>;
+    explainTrace?: {
+      topContributors: Array<{
+        signalId: string;
+        signalType: string;
+        sourcePath: string;
+        contribution: number;
+        reasoning: string;
+      }>;
+      propagationPath: string[];
+      rulesApplied: string[];
+    };
+  }> {
+    try {
+      const response = await this.client.get(`/api/horizon/rollup/${fragmentId}`, {
+        params: { kind },
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getFragmentRollup error:`, error);
+      throw error;
+    }
+  }
+
+  async getFragmentExplain(fragmentId: string, kind: string = 'risk'): Promise<{
+    topContributors: Array<{
+      signalId: string;
+      signalType: string;
+      sourcePath: string;
+      contribution: number;
+      reasoning: string;
+    }>;
+    propagationPath: string[];
+    rulesApplied: string[];
+  }> {
+    try {
+      const response = await this.client.get(`/api/horizon/rollup/${fragmentId}/explain`, {
+        params: { kind },
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getFragmentExplain error:`, error);
+      throw error;
+    }
+  }
+
+  async getHorizonLensCockpit(lensId: string): Promise<{
+    lens: {
+      id: string;
+      name: string;
+      scope: string[];
+      metrics: Record<string, number>;
+    };
+    graph: {
+      nodes: any[];
+      edges: any[];
+    };
+    summary: {
+      totalFragments: number;
+      totalEdges: number;
+      metrics: Record<string, number>;
+    };
+  }> {
+    try {
+      const response = await this.client.get(`/api/horizon/lenses/${lensId}/cockpit`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonLensCockpit error:`, error);
+      throw error;
+    }
+  }
+
+  async recalculateHorizonLensMetrics(lensId: string): Promise<{
+    jobId: string;
+    status: string;
+    estimatedCompletion: string | null;
+    metrics: Record<string, number>;
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/recalculate`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] recalculateHorizonLensMetrics error:`, error);
+      throw error;
+    }
+  }
 }
 
 export const api = new ApiClient();
