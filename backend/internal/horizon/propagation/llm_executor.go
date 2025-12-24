@@ -2,7 +2,6 @@ package propagation
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"time"
@@ -84,7 +83,15 @@ func (e *PropagationLLMExecutor) Execute(ctx context.Context, task *PropagationL
 			MinCapabilityScore: 6,
 			TextGenerationCapability: true,
 		},
-		Verifier: ai.NewSimpleJSONVerifier(),
+		Verifier: ai.NewGenericVerifier(func(r PropagationLLMResponse) error {
+			if math.IsNaN(r.SuggestedDelta) || math.IsInf(r.SuggestedDelta, 0) {
+				return fmt.Errorf("invalid suggestedDelta")
+			}
+			if r.Confidence < 0 || r.Confidence > 1 {
+				return fmt.Errorf("confidence out of range: %v", r.Confidence)
+			}
+			return nil
+		}),
 	}
 
 	resultInterface, err := e.aiExecutor.ExecuteStructuredTask(ctx, aiTask)
@@ -92,15 +99,10 @@ func (e *PropagationLLMExecutor) Execute(ctx context.Context, task *PropagationL
 		return fmt.Errorf("LLM execution failed: %w", err)
 	}
 
-	// Parse LLM response - ExecuteStructuredTask returns []byte (clean JSON)
-	resultBytes, ok := resultInterface.([]byte)
+	// Parse LLM response - ExecuteStructuredTask returns the verifier-parsed result
+	response, ok := resultInterface.(PropagationLLMResponse)
 	if !ok {
 		return fmt.Errorf("unexpected result type from LLM: %T", resultInterface)
-	}
-
-	var response PropagationLLMResponse
-	if err := json.Unmarshal(resultBytes, &response); err != nil {
-		return fmt.Errorf("failed to parse LLM response: %w", err)
 	}
 
 	// Apply damping to LLM's suggested delta
