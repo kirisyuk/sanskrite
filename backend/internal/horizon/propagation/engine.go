@@ -20,16 +20,16 @@ const hotPathMaxHops = 64
 
 // PropagationEngine распространяет изменения в графе зависимостей
 type PropagationEngine struct {
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	versionsRepo  *repo.HorizonFragmentVersionsRepository
-	edgesRepo     *repo.DependencyEdgesRepository
-	lensesRepo    *repo.LensesRepository
-	realtime      *realtime.Publisher
-	threshold     *ThresholdManager
-	damping       *WaveDamping
-	lazyEval      *LazyEvaluator
-	policyExecutor      *policy.PolicyExecutor      // Optional: for semantic propagation policies
-	criticalPathDetector *criticalpath.Detector      // Optional: for critical path detection
+	fragmentsRepo        *repo.HorizonFragmentsRepository
+	versionsRepo         *repo.HorizonFragmentVersionsRepository
+	edgesRepo            *repo.DependencyEdgesRepository
+	lensesRepo           *repo.LensesRepository
+	realtime             *realtime.Publisher
+	threshold            *ThresholdManager
+	damping              *WaveDamping
+	lazyEval             *LazyEvaluator
+	policyExecutor       *policy.PolicyExecutor // Optional: for semantic propagation policies
+	criticalPathDetector *criticalpath.Detector // Optional: for critical path detection
 
 	// Трекинг активных распространений
 	activePropagations map[string]*PropagationStatus
@@ -739,8 +739,9 @@ func (e *PropagationEngine) SimulatePropagation(ctx context.Context, fragmentID 
 	affectedFragments := make(map[string]bool)
 	affectedLenses := make(map[string]bool)
 
-	// Симулируем распространение по критическим путям
-	if err := e.simulateHotPath(ctx, sourceFragment, metricName, delta, affectedFragments, affectedLenses); err != nil {
+	// Симулируем распространение по критическим путям (с защитой от циклов)
+	visitedMagnitude := map[string]float64{sourceFragment.ID: math.Abs(delta)}
+	if err := e.simulateHotPath(ctx, sourceFragment, metricName, delta, affectedFragments, affectedLenses, visitedMagnitude, 0); err != nil {
 		return nil, fmt.Errorf("hot path simulation failed: %w", err)
 	}
 
@@ -775,7 +776,22 @@ func (e *PropagationEngine) simulateHotPath(
 	delta float64,
 	affectedFragments map[string]bool,
 	affectedLenses map[string]bool,
+	visitedMagnitude map[string]float64,
+	hops int,
 ) error {
+	if e == nil || sourceFragment == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if hops >= hotPathMaxHops {
+		return nil
+	}
+	if visitedMagnitude == nil {
+		visitedMagnitude = map[string]float64{}
+	}
+
 	// Получаем исходящие связи
 	edges, err := e.edgesRepo.ListBySource(ctx, "global", sourceFragment.ID, nil, 100)
 	if err != nil {
@@ -784,6 +800,9 @@ func (e *PropagationEngine) simulateHotPath(
 
 	// Обрабатываем каждую связь
 	for _, edge := range edges {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// Применяем затухание волны
 		dampedDelta := e.damping.ApplyDamping(delta, edge.Properties.Amplification, edge.Properties.Criticality)
 
@@ -792,11 +811,22 @@ func (e *PropagationEngine) simulateHotPath(
 			continue
 		}
 
+		absD := dampedDelta
+		if absD < 0 {
+			absD = -absD
+		}
+		// Защита от циклов: если мы уже приходили в target с более сильной волной — дальше не идём.
+		if prev, ok := visitedMagnitude[edge.TargetFragmentID]; ok && prev >= absD {
+			continue
+		}
+
 		// Получаем целевой фрагмент
 		targetFragment, err := e.fragmentsRepo.Get(ctx, edge.TargetFragmentID)
 		if err != nil {
 			continue // Пропускаем недоступные фрагменты
 		}
+
+		visitedMagnitude[targetFragment.ID] = absD
 
 		// Симулируем обновление метрики (без сохранения)
 		affectedFragments[targetFragment.ID] = true
@@ -810,7 +840,7 @@ func (e *PropagationEngine) simulateHotPath(
 		}
 
 		// Рекурсивно симулируем дальше
-		if err := e.simulateHotPath(ctx, targetFragment, metricName, dampedDelta, affectedFragments, affectedLenses); err != nil {
+		if err := e.simulateHotPath(ctx, targetFragment, metricName, dampedDelta, affectedFragments, affectedLenses, visitedMagnitude, hops+1); err != nil {
 			// Логируем ошибку, но продолжаем симуляцию
 			_ = err
 		}

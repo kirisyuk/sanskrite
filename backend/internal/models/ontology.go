@@ -161,6 +161,22 @@ type SourceRef struct {
 	SourceType string `json:"sourceType" firestore:"sourceType"` // тип источника: document, telegram_channel, rss, web, chat, etc.
 }
 
+// SourceType is a shared vocabulary for SourceRef.SourceType across the system.
+// NOTE: this is intentionally a string (not enum) to allow safe expansion without migrations.
+const (
+	SourceTypeDocument               = "document"
+	SourceTypeWeb                    = "web"
+	SourceTypeRSS                    = "rss"
+	SourceTypeTelegramChannel        = "telegram_channel"
+	SourceTypeChat                   = "chat"
+	SourceTypeAgentJob               = "agent_job"                // horizon scout job / agent job id
+	SourceTypeHorizonFrame           = "horizon_frame"            // horizon frame id
+	SourceTypeOntologyFact           = "ontology_fact"            // ontology_facts doc id
+	SourceTypeHorizonPolicyTelemetry = "horizon_policy_telemetry" // horizon_policy_telemetry doc id
+	SourceTypeAITrace                = "ai_trace"                 // correlation/trace id
+	SourceTypeAITask                 = "ai_task"                  // AI task/run id (if available)
+)
+
 // Provenance информация о происхождении данных
 type Provenance struct {
 	SourceIDs  []string    `json:"sourceIds" firestore:"sourceIds"`                       // ID источников данных (DataSource IDs) - для обратной совместимости

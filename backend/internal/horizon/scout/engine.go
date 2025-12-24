@@ -3,6 +3,7 @@ package scout
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,8 +14,9 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
-	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -277,8 +279,9 @@ type ScoutEngine struct {
 	spendLedger        *repo.HorizonSpendLedger
 	budgetPolicy       BudgetPolicy
 	propagationTrigger func(ctx context.Context, fragmentID string) error
-	signalSynthesizer  *signals.Synthesizer      // Optional: for signal synthesis from facts
+	signalSynthesizer  *signals.Synthesizer              // Optional: for signal synthesis from facts
 	factsRepo          *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
+	factEmitter        *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
@@ -295,6 +298,12 @@ func (e *ScoutEngine) WithSpendLedger(ledger *repo.HorizonSpendLedger) *ScoutEng
 
 func (e *ScoutEngine) WithBudgetPolicy(policy BudgetPolicy) *ScoutEngine {
 	e.budgetPolicy = policy
+	return e
+}
+
+// WithFactEmitter wires a shared fact emitter for producing ontology facts from Scout results.
+func (e *ScoutEngine) WithFactEmitter(emitter *coreontology.FactEmitter) *ScoutEngine {
+	e.factEmitter = emitter
 	return e
 }
 
@@ -499,7 +508,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				if err == nil && applyRes != nil && applyRes.Applied {
 					fmt.Printf("[ScoutEngine] Fast-path applied facts for %s: appliedFacts=%d maxRelevance=%.3f\n",
 						job.TargetCanonicalPath, applyRes.AppliedFacts, applyRes.MaxRelevance)
-					
+
 					// Signal synthesis: synthesize signals from applied facts
 					if e.signalSynthesizer != nil && e.factsRepo != nil {
 						for _, fact := range facts {
@@ -552,7 +561,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 							}
 						}
 					}
-					
+
 					// Dimension propagation: for applied facts, map sphere/location to dimension fragments and trigger waves.
 					_ = e.applyDimensionWavesFromAppliedFacts(ctx, existingFragment, facts, applyRes.AppliedFactIDs)
 					// Trigger propagation for deterministic updates as well (non-blocking).
@@ -1130,6 +1139,10 @@ SKIP_RESEARCH:
 		fragmentID = existingFragment.ID
 	}
 
+	// Emit minimal ontology facts from Scout's LLM output/state (best-effort).
+	// This is intentionally small-volume: 1 fact per root job, focusing on risk metrics.
+	_ = e.emitMinimalFactsFromScoutRun(ctx, job, existingFragment, frameID)
+
 	// Intent-based sphere linking: ensure sphere fragments and INFLUENCES edges exist for this target
 	// when the Lens requested spherePaths. This is intentionally independent of ontology facts/metrics
 	// so the UI can group/cluster entities by sphere even in early/partial graphs.
@@ -1198,6 +1211,201 @@ SKIP_RESEARCH:
 		}(fragmentID)
 	}
 
+	return nil
+}
+
+func (e *ScoutEngine) emitMinimalFactsFromScoutRun(ctx context.Context, job *models.ScoutingJob, fragment *models.HorizonFragment, frameID string) error {
+	if e == nil || job == nil || fragment == nil {
+		return nil
+	}
+	// Avoid exponential growth: only root jobs.
+	if job.State != nil {
+		if v, ok := job.State["recursionDepth"].(float64); ok && int(v) > 0 {
+			return nil
+		}
+		if v, ok := job.State["scoutFactsEmitted"].(bool); ok && v {
+			return nil
+		}
+	}
+	if e.factEmitter == nil && (e.planner == nil || e.planner.factsRepo == nil) {
+		return nil
+	}
+
+	// Collect only risk metrics to keep it minimal.
+	type pair struct {
+		name string
+		mv   models.MetricValue
+	}
+	riskMetrics := make([]pair, 0)
+	for k, mv := range fragment.State {
+		k2 := strings.TrimSpace(k)
+		if strings.HasPrefix(k2, "/metric/risk/") {
+			riskMetrics = append(riskMetrics, pair{name: k2, mv: mv})
+		}
+	}
+	if len(riskMetrics) == 0 {
+		return nil
+	}
+	if len(riskMetrics) > 12 {
+		riskMetrics = riskMetrics[:12]
+	}
+
+	now := time.Now().UTC()
+	title := fmt.Sprintf("Scout inferred risk metrics for %s", strings.TrimSpace(fragment.CanonicalPath))
+	f := &coreModels.OntologyFact{
+		BaseOntologyFields: coreModels.BaseOntologyFields{
+			TenantID:       strings.TrimSpace(job.TenantID),
+			Version:        1,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+			CreatedBy:      "system",
+			UpdatedBy:      "system",
+			Labels:         map[string]string{"en": title},
+			Status:         "active",
+			Tags:           []string{"scout", "llm", "metric", "risk"},
+			CanonicalPaths: []string{strings.TrimSpace(fragment.CanonicalPath)},
+			ActorPaths:     []string{strings.TrimSpace(fragment.CanonicalPath)},
+			SpherePaths: func() []string {
+				if job.State == nil {
+					return nil
+				}
+				raw, ok := job.State["spherePaths"]
+				if !ok {
+					return nil
+				}
+				paths := []string{}
+				switch t := raw.(type) {
+				case []string:
+					paths = append(paths, t...)
+				case []interface{}:
+					for _, it := range t {
+						if s, ok := it.(string); ok {
+							paths = append(paths, s)
+						}
+					}
+				case string:
+					for _, p := range strings.Split(t, ",") {
+						paths = append(paths, p)
+					}
+				}
+				return taxonomy.NormalizeSpherePaths(paths)
+			}(),
+		},
+		Kind:       "metric",
+		Type:       "scout_inferred_risk_metrics",
+		Title:      title,
+		Summary:    "Minimal metric patch emitted by Scout after LLM research; used to seed ontology_facts when sources pipeline is paused.",
+		ObservedAt: &now,
+		SourceRefs: []coreModels.SourceRef{
+			{SourceID: strings.TrimSpace(job.ID), SourceType: coreModels.SourceTypeAgentJob},
+			{SourceID: strings.TrimSpace(frameID), SourceType: coreModels.SourceTypeHorizonFrame},
+		},
+		Confidence: 0.6,
+	}
+
+	for _, p := range riskMetrics {
+		mv := p.mv
+		observed := mv.ObservedAt
+		f.MetricUpdates = append(f.MetricUpdates, coreModels.FactMetricUpdate{
+			MetricName: p.name,
+			Value:      mv.Value,
+			Unit:       mv.Unit,
+			Confidence: mv.Confidence,
+			ObservedAt: &observed,
+		})
+		if mv.Confidence > f.Confidence {
+			f.Confidence = mv.Confidence
+		}
+	}
+	f.VectorText = f.GenerateVectorText()
+
+	rc, _ := rtctx.Get(ctx)
+	// Add correlation/trace link when available (so facts can be traced back to LLM/tool telemetry).
+	if v := strings.TrimSpace(rc.CorrelationID); v != "" {
+		f.SourceRefs = append(f.SourceRefs, coreModels.SourceRef{SourceID: v, SourceType: coreModels.SourceTypeAITrace})
+	}
+	emitOpts := coreontology.EmitFactOptions{
+		TenantID:         strings.TrimSpace(job.TenantID),
+		ProjectID:        strings.TrimSpace(job.ProjectID),
+		LensID:           strings.TrimSpace(job.LensID),
+		SessionID:        strings.TrimSpace(rc.SessionID),
+		CorrelationID:    strings.TrimSpace(rc.CorrelationID),
+		PublishFeedEvent: true,
+		Actor:            "system",
+	}
+
+	metricFactID := ""
+	if e.factEmitter != nil {
+		if id, err := e.factEmitter.Emit(ctx, f, emitOpts); err == nil {
+			metricFactID = id
+		}
+	} else if e.planner != nil && e.planner.factsRepo != nil {
+		if id, err := e.planner.factsRepo.Create(ctx, f); err == nil {
+			metricFactID = id
+		}
+	}
+
+	// Also emit a minimal signal snapshot so the system can answer "risks" queries even when source ingestion is paused.
+	// This is intentionally one signal per root job to avoid feed spam.
+	if job.State != nil {
+		if v, ok := job.State["scoutSignalsEmitted"].(bool); ok && v {
+			// nothing
+		} else {
+			sTitle := fmt.Sprintf("Risk snapshot for %s", strings.TrimSpace(fragment.CanonicalPath))
+			parts := make([]string, 0, len(riskMetrics))
+			for _, p := range riskMetrics {
+				parts = append(parts, fmt.Sprintf("%s=%.2f", p.name, p.mv.Value))
+			}
+			sort.Strings(parts)
+			sSummary := "Risk metrics snapshot synthesized by Scout from LLM state. " + strings.Join(parts, "; ")
+
+			s := &coreModels.OntologyFact{
+				BaseOntologyFields: coreModels.BaseOntologyFields{
+					TenantID:       strings.TrimSpace(job.TenantID),
+					Version:        1,
+					CreatedAt:      now,
+					UpdatedAt:      now,
+					CreatedBy:      "system",
+					UpdatedBy:      "system",
+					Labels:         map[string]string{"en": sTitle},
+					Status:         "active",
+					Tags:           []string{"scout", "llm", "signal", "risk"},
+					CanonicalPaths: []string{strings.TrimSpace(fragment.CanonicalPath)},
+					ActorPaths:     []string{strings.TrimSpace(fragment.CanonicalPath)},
+					SpherePaths:    f.SpherePaths,
+				},
+				Kind:       "signal",
+				Type:       "risk_snapshot",
+				Title:      sTitle,
+				Summary:    sSummary,
+				ObservedAt: &now,
+				SourceRefs: []coreModels.SourceRef{
+					{SourceID: strings.TrimSpace(job.ID), SourceType: coreModels.SourceTypeAgentJob},
+					{SourceID: strings.TrimSpace(frameID), SourceType: coreModels.SourceTypeHorizonFrame},
+				},
+				Confidence: f.Confidence,
+			}
+			if strings.TrimSpace(metricFactID) != "" {
+				s.SourceRefs = append(s.SourceRefs, coreModels.SourceRef{SourceID: strings.TrimSpace(metricFactID), SourceType: coreModels.SourceTypeOntologyFact})
+			}
+			if v := strings.TrimSpace(rc.CorrelationID); v != "" {
+				s.SourceRefs = append(s.SourceRefs, coreModels.SourceRef{SourceID: v, SourceType: coreModels.SourceTypeAITrace})
+			}
+			s.VectorText = s.GenerateVectorText()
+
+			if e.factEmitter != nil {
+				_, _ = e.factEmitter.Emit(ctx, s, emitOpts) // best effort
+			} else if e.planner != nil && e.planner.factsRepo != nil {
+				_, _ = e.planner.factsRepo.Create(ctx, s) // best effort
+			}
+			job.State["scoutSignalsEmitted"] = true
+		}
+	}
+
+	if job.State != nil {
+		job.State["scoutFactsEmitted"] = true
+		_ = e.scoutingJobsRepo.Update(ctx, job)
+	}
 	return nil
 }
 
@@ -1278,7 +1486,7 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 	}
 
 	// Persist reusable ontology facts (kind=relation) so future queries can reuse them (and Vertex can index them).
-	if e.planner != nil && e.planner.factsRepo != nil {
+	if e.factEmitter != nil || (e.planner != nil && e.planner.factsRepo != nil) {
 		now := time.Now().UTC()
 		for _, r := range rels {
 			targetCP := strings.TrimSpace(r.TargetCanonicalPath)
@@ -1310,7 +1518,7 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 				Title:      title,
 				Summary:    strings.TrimSpace(r.Reason),
 				ObservedAt: &now,
-				SourceRefs: []coreModels.SourceRef{{SourceID: strings.TrimSpace(job.ID), SourceType: "agent_job"}},
+				SourceRefs: []coreModels.SourceRef{{SourceID: strings.TrimSpace(job.ID), SourceType: coreModels.SourceTypeAgentJob}},
 				Confidence: func() float64 {
 					c := r.Confidence
 					if c <= 0 || c > 0.65 {
@@ -1319,8 +1527,27 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 					return c
 				}(),
 			}
+			// Add correlation/trace link when available (so facts can be traced back to LLM/tool telemetry).
+			if rc, ok := rtctx.Get(ctx); ok {
+				if v := strings.TrimSpace(rc.CorrelationID); v != "" {
+					f.SourceRefs = append(f.SourceRefs, coreModels.SourceRef{SourceID: v, SourceType: coreModels.SourceTypeAITrace})
+				}
+			}
 			f.VectorText = f.GenerateVectorText()
-			_, _ = e.planner.factsRepo.Create(ctx, f) // best effort
+			if e.factEmitter != nil {
+				rc, _ := rtctx.Get(ctx)
+				_, _ = e.factEmitter.Emit(ctx, f, coreontology.EmitFactOptions{
+					TenantID:         strings.TrimSpace(job.TenantID),
+					ProjectID:        strings.TrimSpace(job.ProjectID),
+					LensID:           strings.TrimSpace(job.LensID),
+					SessionID:        strings.TrimSpace(rc.SessionID),
+					CorrelationID:    strings.TrimSpace(rc.CorrelationID),
+					PublishFeedEvent: true,
+					Actor:            "system",
+				}) // best effort
+			} else if e.planner != nil && e.planner.factsRepo != nil {
+				_, _ = e.planner.factsRepo.Create(ctx, f) // best effort
+			}
 		}
 	}
 

@@ -196,12 +196,23 @@ type PolicyDecision struct {
 ```
 
 **TODO**:
-- [ ] Определить `Policy` interface и `PolicyDecision` struct
-- [ ] Реализовать `PolicyExecutor` с телеметрией (rule-first, LLM-fallback)
-- [ ] Создать Firestore collections для правил каждой Policy (`horizon_propagation_policies`, `horizon_scout_policies`, `horizon_canonization_rules`, etc.)
-- [ ] Реализовать базовые Policies: `PropagationPolicy`, `CanonizationPolicy`, `ValidationPolicy`
-- [ ] Интегрировать телеметрию (Firestore `policy_telemetry` или Pub/Sub → BigQuery)
-- [ ] Dashboard для визуализации ratio (a)/(b), top LLM fallback reasons, cost per policy
+- [x] Определить `Policy` interface и `PolicyDecision` struct (`policy/policy.go`)
+- [x] Реализовать `PolicyExecutor` с телеметрией (rule-first, LLM-fallback) (`policy/policy.go`)
+- [x] Создать Firestore collections для правил каждой Policy (`horizon_propagation_policies`, `horizon_canonization_rules`, `horizon_validation_rules`, `horizon_synthesis_rules`, `horizon_metric_specs`)
+- [x] Реализовать базовые Policies: `PropagationPolicy`, `CanonizationPolicy`, `ValidationPolicy` (`policy/*.go`)
+- [x] Интегрировать телеметрию Firestore (`horizon_policy_telemetry`) (`policy/telemetry.go`)
+- [x] Интегрировать `PolicyExecutor` в `PropagationEngine` hot path (`cmd/server/main.go`)
+- [x] Посеять минимальные propagation policies (7 правил: risk × SUPPLIES_TO/DEPENDS_ON/OWNS/COMPETES_WITH/LOCATED_IN/INFLUENCES/PRODUCES)
+- [ ] **Dashboard для Policy Telemetry** (приоритет: средний, см. ниже)
+
+**Dashboard для Policy Telemetry (отдельный TODO)**:
+- [ ] BigQuery pipeline: экспорт `horizon_policy_telemetry` → BigQuery (batch или Pub/Sub → streaming)
+- [ ] Looker Studio / Data Studio дашборд:
+  - Ratio rule-based vs LLM-based решений по policy
+  - Top LLM fallback reasons (DecisionPath анализ)
+  - Cost per policy (tokens × pricing)
+  - Latency distribution (p50/p95/p99) по policy
+- [ ] Альтернатива (lightweight): простой Firestore-based UI в админке hatl.one для просмотра последних N решений и агрегированных метрик
 
 **Acceptance**:
 - Все Horizon-службы используют Policy interface для принятия решений

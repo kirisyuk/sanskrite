@@ -41,8 +41,10 @@ import (
 
 	// Horizon system
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
@@ -1142,6 +1144,18 @@ func main() {
 				horizonLensesRepo,
 				pub,
 			)
+
+			// Wire Policy Architecture for semantic propagation
+			propagationPoliciesRepo := horizonrepo.NewPropagationPoliciesRepository(fsClient.Client())
+			propagationPolicy := horizonpolicy.NewPropagationPolicy(propagationPoliciesRepo)
+			policyTelemetry := horizonpolicy.NewFirestoreTelemetryWriter(fsClient.Client())
+			policyExecutor := horizonpolicy.NewPolicyExecutor(propagationPolicy, policyTelemetry, nil) // LLM executor nil for now
+			propagationEngine.WithPolicyExecutor(policyExecutor)
+
+			// Wire Critical Path Detector
+			criticalPathDetector := horizoncriticalpath.NewDetector(horizonFragmentsRepo, horizonEdgesRepo)
+			propagationEngine.WithCriticalPathDetector(criticalPathDetector)
+
 			horizonService.SetPropagationEngine(propagationEngine)
 
 			// Запускаем фоновый процессор Cold Path задач (каждые 30 секунд)
@@ -1180,6 +1194,8 @@ func main() {
 				pub,
 				exec,
 			)
+			// Unified ontology facts emitter: allows Scout to persist minimal OntologyFacts even when sources pipeline is paused.
+			scoutEngine.WithFactEmitter(ontology.NewFactEmitter(ontologyFactsRepo, pub))
 			// Budget enforcement wiring.
 			scoutEngine.WithSpendLedger(horizonSpendLedger)
 

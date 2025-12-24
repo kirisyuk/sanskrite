@@ -73,6 +73,7 @@ build.log
 *.tmp
 *.bak
 *.cache
+tmp/
 timeline.txt
 timeline2.txt
 req.json
