@@ -313,3 +313,65 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 	}
 	return out, nil
 }
+
+// GetFragmentRollup computes aggregated rollup for a fragment and metric kind.
+// Uses RollupService if available, otherwise returns basic fragment state metrics.
+func (s *HorizonService) GetFragmentRollup(ctx context.Context, fragmentID, metricKind string) (*FragmentRollupResponse, error) {
+	fragment, err := s.fragmentsRepo.Get(ctx, fragmentID)
+	if err != nil {
+		return nil, fmt.Errorf("fragment not found: %w", err)
+	}
+
+	// Build basic response from fragment state
+	response := &FragmentRollupResponse{
+		FragmentID:    fragmentID,
+		CanonicalPath: fragment.CanonicalPath,
+		MetricKind:    metricKind,
+	}
+
+	// Extract relevant metrics from fragment state
+	for name, value := range fragment.State {
+		if strings.HasPrefix(name, metricKind+"_") {
+			if response.Metrics == nil {
+				response.Metrics = make(map[string]float64)
+			}
+			response.Metrics[name] = value.Value
+			// Use highest value as primary
+			if value.Value > response.Value {
+				response.Value = value.Value
+				response.Confidence = value.Confidence
+				response.MetricName = name
+			}
+		}
+	}
+
+	return response, nil
+}
+
+// FragmentRollupResponse is the API response for fragment rollups.
+type FragmentRollupResponse struct {
+	FragmentID    string             `json:"fragmentId"`
+	CanonicalPath string             `json:"canonicalPath"`
+	MetricKind    string             `json:"metricKind"`
+	MetricName    string             `json:"metricName,omitempty"`
+	Value         float64            `json:"value"`
+	Confidence    float64            `json:"confidence"`
+	Metrics       map[string]float64 `json:"metrics,omitempty"`
+	ExplainTrace  *ExplainTrace      `json:"explainTrace,omitempty"`
+}
+
+// ExplainTrace explains how a rollup was computed.
+type ExplainTrace struct {
+	TopContributors []ExplainContributor `json:"topContributors"`
+	PropagationPath []string             `json:"propagationPath"`
+	RulesApplied    []string             `json:"rulesApplied"`
+}
+
+// ExplainContributor represents a contributing signal.
+type ExplainContributor struct {
+	SignalID     string  `json:"signalId"`
+	SignalType   string  `json:"signalType"`
+	SourcePath   string  `json:"sourcePath"`
+	Contribution float64 `json:"contribution"`
+	Reasoning    string  `json:"reasoning"`
+}

@@ -88,6 +88,7 @@ func (r *Registry) registerBuiltinHandlers() {
 	r.handlers["sum_capped"] = &SumCappedHandler{cap: 1.0}
 	r.handlers["weighted_avg"] = &WeightedAvgHandler{}
 	r.handlers["min"] = &MinHandler{}
+	r.handlers["exponential"] = &ExponentialDecayHandler{HalfLife: 30 * 24 * time.Hour} // 30 days default
 	r.handlers["default"] = &MaxHandler{} // Default to max
 }
 
@@ -185,5 +186,102 @@ func (h *MinHandler) Aggregate(inputs []horizonmodels.MetricValue) horizonmodels
 func (h *MinHandler) Decay(value horizonmodels.MetricValue, now time.Time) horizonmodels.MetricValue {
 	// No decay for min handler
 	return value
+}
+
+// ExponentialDecayHandler applies exponential decay based on half-life.
+type ExponentialDecayHandler struct {
+	HalfLife time.Duration
+}
+
+func (h *ExponentialDecayHandler) Aggregate(inputs []horizonmodels.MetricValue) horizonmodels.MetricValue {
+	// Use max for aggregation, decay is applied separately
+	if len(inputs) == 0 {
+		return horizonmodels.MetricValue{Value: 0, Confidence: 0}
+	}
+	max := inputs[0]
+	for _, v := range inputs[1:] {
+		if v.Value > max.Value {
+			max = v
+		}
+	}
+	return max
+}
+
+func (h *ExponentialDecayHandler) Decay(value horizonmodels.MetricValue, now time.Time) horizonmodels.MetricValue {
+	if h.HalfLife <= 0 {
+		return value // No decay if half-life not set
+	}
+	
+	age := now.Sub(value.ObservedAt)
+	if age <= 0 {
+		return value
+	}
+	
+	// Exponential decay: value * 0.5^(age/halfLife)
+	decayFactor := 0.5
+	exponent := float64(age) / float64(h.HalfLife)
+	multiplier := pow(decayFactor, exponent)
+	
+	decayed := value
+	decayed.Value = value.Value * multiplier
+	decayed.Confidence = value.Confidence * multiplier
+	return decayed
+}
+
+// pow computes base^exp for float64
+func pow(base, exp float64) float64 {
+	// Simple implementation using logarithms
+	if base <= 0 {
+		return 0
+	}
+	if exp == 0 {
+		return 1
+	}
+	// exp(exp * ln(base))
+	return expFunc(exp * lnFunc(base))
+}
+
+// expFunc is a simple exponential approximation
+func expFunc(x float64) float64 {
+	// Use Taylor series for small x, clamped for large x
+	if x > 700 {
+		return 1e308 // Avoid overflow
+	}
+	if x < -700 {
+		return 0
+	}
+	// Use math.Exp equivalent via series for portability
+	result := 1.0
+	term := 1.0
+	for i := 1; i < 100; i++ {
+		term *= x / float64(i)
+		result += term
+		if term < 1e-15 && term > -1e-15 {
+			break
+		}
+	}
+	return result
+}
+
+// lnFunc is a simple natural log approximation
+func lnFunc(x float64) float64 {
+	if x <= 0 {
+		return -1e308
+	}
+	if x == 1 {
+		return 0
+	}
+	// Use identity: ln(x) = 2 * artanh((x-1)/(x+1)) for x > 0
+	z := (x - 1) / (x + 1)
+	result := 0.0
+	term := z
+	for i := 1; i < 200; i += 2 {
+		result += term / float64(i)
+		term *= z * z
+		if term < 1e-15 && term > -1e-15 {
+			break
+		}
+	}
+	return 2 * result
 }
 

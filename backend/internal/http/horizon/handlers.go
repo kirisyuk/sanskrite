@@ -34,6 +34,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/fragments/by-path", authMiddleware(http.HandlerFunc(h.GetFragmentByPath)))
 	mux.Handle("/api/horizon/fragments/", authMiddleware(http.HandlerFunc(h.HandleFragmentRoutes)))
 
+	// Rollup & Explain endpoints (Signals & Semantic Propagation)
+	mux.Handle("/api/horizon/rollup/", authMiddleware(http.HandlerFunc(h.HandleRollupRoutes)))
+
 	// DependencyEdge endpoints
 	mux.Handle("/api/horizon/edges", authMiddleware(http.HandlerFunc(h.CreateEdge)))
 	mux.Handle("/api/horizon/edges/", authMiddleware(http.HandlerFunc(h.HandleEdgeRoutes)))
@@ -62,6 +65,37 @@ func (h *HorizonHandlers) HandleLensesRoot(w http.ResponseWriter, r *http.Reques
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// HandleRollupRoutes handles rollup and explain requests for fragments.
+// GET /api/horizon/rollup/{fragmentID}?kind=risk
+// GET /api/horizon/rollup/{fragmentID}/explain?kind=risk
+func (h *HorizonHandlers) HandleRollupRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/horizon/rollup/")
+	if path == "" {
+		http.Error(w, "Fragment ID required", http.StatusBadRequest)
+		return
+	}
+
+	pathParts := strings.Split(path, "/")
+	fragmentID := pathParts[0]
+	metricKind := r.URL.Query().Get("kind")
+	if metricKind == "" {
+		metricKind = "risk" // Default to risk
+	}
+
+	// Check if this is an explain request
+	if len(pathParts) > 1 && pathParts[1] == "explain" {
+		h.GetFragmentExplain(w, r, fragmentID, metricKind)
+		return
+	}
+
+	h.GetFragmentRollup(w, r, fragmentID, metricKind)
 }
 
 // HandleLensRoutes обрабатывает все запросы к /api/horizon/lenses/{id} и подпутям

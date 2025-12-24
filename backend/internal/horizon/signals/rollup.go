@@ -188,7 +188,16 @@ func (s *RollupService) topContributors(contributors []ExplainContributor, n int
 	if len(contributors) <= n {
 		return contributors
 	}
-	// Simple selection: return first N (in production, would sort by contribution)
-	return contributors[:n]
+	// Sort by contribution descending
+	sorted := make([]ExplainContributor, len(contributors))
+	copy(sorted, contributors)
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].Contribution > sorted[i].Contribution {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	return sorted[:n]
 }
 
