@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
@@ -104,6 +105,11 @@ func (e *PropagationLLMExecutor) Execute(ctx context.Context, task *PropagationL
 
 	// Apply damping to LLM's suggested delta
 	dampedDelta := response.SuggestedDelta * task.DampingFactor
+
+	// Skip insignificant updates to avoid noise
+	if math.Abs(dampedDelta) < 0.001 {
+		return nil // Delta too small, skip update
+	}
 
 	// Update fragment
 	fragment, err := e.fragmentsRepo.Get(ctx, task.FragmentID)

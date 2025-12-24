@@ -3,6 +3,7 @@ package signals
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -186,16 +187,12 @@ func (s *RollupService) topContributors(contributors []ExplainContributor, n int
 	if len(contributors) <= n {
 		return contributors
 	}
-	// Sort by contribution descending
+	// Sort by contribution descending using sort.Slice
 	sorted := make([]ExplainContributor, len(contributors))
 	copy(sorted, contributors)
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].Contribution > sorted[i].Contribution {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Contribution > sorted[j].Contribution
+	})
 	return sorted[:n]
 }
 
