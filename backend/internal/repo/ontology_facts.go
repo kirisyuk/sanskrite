@@ -151,6 +151,37 @@ func (r *OntologyFactsRepository) ListUpdatedSinceByCanonicalPath(ctx context.Co
 	return out, nil
 }
 
+// ListByCanonicalPathAndKind returns facts linked to the given canonicalPath with specific kind.
+// This is optimized for signal queries (kind="signal").
+func (r *OntologyFactsRepository) ListByCanonicalPathAndKind(ctx context.Context, tenantID string, canonicalPath string, kind string, limit int) ([]*models.OntologyFact, error) {
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	q := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("canonicalPaths", "array-contains", canonicalPath).
+		Where("kind", "==", kind).
+		OrderBy("updatedAt", firestore.Desc).
+		Limit(limit)
+
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.OntologyFact, 0, len(docs))
+	for _, d := range docs {
+		var f models.OntologyFact
+		if err := d.DataTo(&f); err != nil {
+			continue
+		}
+		out = append(out, &f)
+	}
+	return out, nil
+}
+
 // ListCanonicalPathsBySpherePath returns a deduplicated list of canonicalPaths for facts
 // that contain the given exact spherePath in their spherePaths.
 //

@@ -89,6 +89,7 @@ func (e *PropagationEngine) WithCriticalPathDetector(detector *criticalpath.Dete
 type PropagationResult struct {
 	AffectedFragments []string           `json:"affectedFragments"`
 	AffectedLenses    []string           `json:"affectedLenses"`
+	PropagationPaths  [][]string         `json:"propagationPaths"` // Paths of fragment IDs showing propagation routes
 	PropagationTime   time.Duration      `json:"propagationTime"`
 	Metrics           map[string]float64 `json:"metrics"`
 }
@@ -118,9 +119,10 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 	// Запускаем волну распространения
 	affectedFragments := make(map[string]bool)
 	affectedLenses := make(map[string]bool)
+	propagationPaths := make([][]string, 0) // Track propagation paths for explain trace
 
 	// Hot Path: немедленное распространение по критическим путям
-	if err := e.propagateHotPath(ctx, sourceFragment, metricName, delta, affectedFragments, affectedLenses); err != nil {
+	if err := e.propagateHotPath(ctx, sourceFragment, metricName, delta, affectedFragments, affectedLenses, &propagationPaths); err != nil {
 		return nil, fmt.Errorf("hot path propagation failed: %w", err)
 	}
 
@@ -150,6 +152,7 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 	return &PropagationResult{
 		AffectedFragments: affectedFragmentsList,
 		AffectedLenses:    affectedLensesList,
+		PropagationPaths:  propagationPaths,
 		PropagationTime:   time.Since(startTime),
 		Metrics: map[string]float64{
 			"hotPathFragments": float64(len(affectedFragments)),
@@ -253,6 +256,7 @@ func (e *PropagationEngine) TriggerPropagation(ctx context.Context, fragmentID s
 			// Объединяем результаты
 			result.AffectedFragments = append(result.AffectedFragments, res.AffectedFragments...)
 			result.AffectedLenses = append(result.AffectedLenses, res.AffectedLenses...)
+			result.PropagationPaths = append(result.PropagationPaths, res.PropagationPaths...)
 		}
 	}
 
@@ -267,6 +271,7 @@ func (e *PropagationEngine) TriggerPropagation(ctx context.Context, fragmentID s
 		return &PropagationResult{
 			AffectedFragments: []string{},
 			AffectedLenses:    []string{},
+			PropagationPaths:  [][]string{},
 			PropagationTime:   0,
 			Metrics:           map[string]float64{},
 		}, nil
@@ -376,6 +381,7 @@ func (e *PropagationEngine) propagateHotPath(
 	delta float64,
 	affectedFragments map[string]bool,
 	affectedLenses map[string]bool,
+	propagationPaths *[][]string, // Track paths for explain trace
 ) error {
 	if e == nil || sourceFragment == nil {
 		return nil
@@ -388,12 +394,13 @@ func (e *PropagationEngine) propagateHotPath(
 		frag *models.HorizonFragment
 		d    float64
 		hops int
+		path []string // Track path from source
 	}
 
 	// visitedMagnitude tracks the strongest (absolute) delta we've already processed for a fragment
 	// during this wave, to prevent infinite loops on cyclic graphs.
 	visitedMagnitude := map[string]float64{sourceFragment.ID: math.Abs(delta)}
-	stack := []waveItem{{frag: sourceFragment, d: delta, hops: 0}}
+	stack := []waveItem{{frag: sourceFragment, d: delta, hops: 0, path: []string{sourceFragment.ID}}}
 	hitHopLimit := false
 	cycleSkips := 0
 
@@ -524,6 +531,14 @@ func (e *PropagationEngine) propagateHotPath(
 			affectedFragments[targetFragment.ID] = true
 			visitedMagnitude[targetFragment.ID] = absD
 
+			// Track propagation path
+			newPath := make([]string, len(it.path)+1)
+			copy(newPath, it.path)
+			newPath[len(newPath)-1] = targetFragment.ID
+			if propagationPaths != nil {
+				*propagationPaths = append(*propagationPaths, newPath)
+			}
+
 			// Find lenses that scope this fragment (best-effort; tenant routing may vary).
 			if e.lensesRepo != nil {
 				lenses, err := e.lensesRepo.FindByScope(ctx, "global", targetFragment.CanonicalPath, 100)
@@ -537,7 +552,7 @@ func (e *PropagationEngine) propagateHotPath(
 				}
 			}
 
-			stack = append(stack, waveItem{frag: targetFragment, d: dampedDelta, hops: it.hops + 1})
+			stack = append(stack, waveItem{frag: targetFragment, d: dampedDelta, hops: it.hops + 1, path: newPath})
 		}
 	}
 
@@ -743,6 +758,7 @@ func (e *PropagationEngine) SimulatePropagation(ctx context.Context, fragmentID 
 	return &PropagationResult{
 		AffectedFragments: affectedFragmentsList,
 		AffectedLenses:    affectedLensesList,
+		PropagationPaths:  [][]string{}, // Simulate doesn't track paths
 		PropagationTime:   time.Since(startTime),
 		Metrics: map[string]float64{
 			"simulatedFragments": float64(len(affectedFragments)),

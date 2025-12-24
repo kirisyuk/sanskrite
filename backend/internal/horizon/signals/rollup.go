@@ -66,17 +66,10 @@ func (s *RollupService) GetFragmentRollup(ctx context.Context, fragmentID, metri
 		return nil, fmt.Errorf("fragment not found: %w", err)
 	}
 
-	// Get all signals attached to this fragment
-	// Use ListUpdatedSinceByCanonicalPath with a very old timestamp to get all facts
-	allFacts, err := s.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, "global", fragment.CanonicalPath, time.Time{}, 1000)
+	// Get all signals attached to this fragment (optimized query with kind filter)
+	signals, err := s.factsRepo.ListByCanonicalPathAndKind(ctx, "global", fragment.CanonicalPath, "signal", 1000)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list facts: %w", err)
-	}
-	signals := make([]*coremodels.OntologyFact, 0)
-	for _, fact := range allFacts {
-		if fact.Kind == "signal" {
-			signals = append(signals, fact)
-		}
+		return nil, fmt.Errorf("failed to list signals: %w", err)
 	}
 
 	// Filter by kind (e.g., "risk")
@@ -159,6 +152,10 @@ func (s *RollupService) GetFragmentRollup(ctx context.Context, fragmentID, metri
 	// Sort by contribution (top 3)
 	topContributors := s.topContributors(contributors, 3)
 
+	// Get propagation paths from fragment metadata or recent propagation results
+	// For now, we'll leave it empty - it will be populated when propagation completes
+	propagationPath := []string{} // TODO: Extract from fragment metadata or propagation history
+
 	return &Rollup{
 		MetricName:  spec.Name,
 		Value:       aggregated.Value,
@@ -167,6 +164,7 @@ func (s *RollupService) GetFragmentRollup(ctx context.Context, fragmentID, metri
 		LastUpdated: now,
 		ExplainTrace: &ExplainTrace{
 			TopContributors: topContributors,
+			PropagationPath: propagationPath,
 			RulesApplied:     []string{"synthesis_rule"},
 		},
 	}, nil
