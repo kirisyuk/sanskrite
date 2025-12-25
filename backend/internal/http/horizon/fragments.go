@@ -89,6 +89,9 @@ func (h *HorizonHandlers) GetFragment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ensure entity mapping on access (best-effort)
+	_, _, _, _ = h.service.EnsureEntityForFragmentObject(r.Context(), fragment)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fragment)
 }
@@ -118,8 +121,136 @@ func (h *HorizonHandlers) GetFragmentByPath(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Ensure entity mapping on access (best-effort)
+	_, _, _, _ = h.service.EnsureEntityForFragmentObject(r.Context(), fragment)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fragment)
+}
+
+// EnsureFragmentEntity triggers create/link/enrich for a fragment's entity mapping.
+// POST /api/horizon/fragments/{id}/ensure-entity
+func (h *HorizonHandlers) EnsureFragmentEntity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	fragmentID := extractIDFromPath(r, "/api/horizon/fragments/")
+	fragmentID = strings.TrimSpace(strings.TrimSuffix(fragmentID, "/ensure-entity"))
+	if fragmentID == "" {
+		http.Error(w, "Fragment ID required", http.StatusBadRequest)
+		return
+	}
+
+	entity, created, enriched, err := h.service.EnsureEntityForFragment(r.Context(), fragmentID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if entity == nil {
+		// Not supported / no-op
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"fragmentId": fragmentID,
+			"entity":     nil,
+			"created":    false,
+			"enriched":   false,
+			"status":     "noop",
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"fragmentId": fragmentID,
+		"entityId":   entity.ID,
+		"entity":     entity,
+		"created":    created,
+		"enriched":   enriched,
+		"status":     "ok",
+	})
+}
+
+// GetFragmentEntity returns the entity mapped to a fragment (ensuring it exists by default).
+// GET /api/horizon/fragments/{id}/entity
+func (h *HorizonHandlers) GetFragmentEntity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	fragmentID := extractIDFromPath(r, "/api/horizon/fragments/")
+	fragmentID = strings.TrimSpace(strings.TrimSuffix(fragmentID, "/entity"))
+	if fragmentID == "" {
+		http.Error(w, "Fragment ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Ensure on access (default behavior)
+	entity, _, _, err := h.service.EnsureEntityForFragment(r.Context(), fragmentID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if entity == nil {
+		http.Error(w, "Entity not available for this fragment type", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entity)
+}
+
+// EnrichFragmentEntity forces or triggers Wikidata enrichment for the entity linked to a fragment.
+// POST /api/horizon/fragments/{id}/enrich-entity?force=1
+func (h *HorizonHandlers) EnrichFragmentEntity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	fragmentID := extractIDFromPath(r, "/api/horizon/fragments/")
+	fragmentID = strings.TrimSpace(strings.TrimSuffix(fragmentID, "/enrich-entity"))
+	if fragmentID == "" {
+		http.Error(w, "Fragment ID required", http.StatusBadRequest)
+		return
+	}
+
+	force := r.URL.Query().Get("force")
+	forceBool := force == "1" || strings.EqualFold(force, "true")
+
+	entity, err := h.service.EnrichEntityForFragment(r.Context(), fragmentID, forceBool)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"fragmentId": fragmentID,
+		"entityId":   entity.ID,
+		"force":      forceBool,
+		"entity":     entity,
+	})
 }
 
 // RefreshFragment создает ScoutingJob для принудительного обновления HorizonFragment

@@ -206,6 +206,21 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 	}
 
 	// Проверяем подпути
+	if strings.HasSuffix(r.URL.Path, "/ensure-entity") {
+		h.EnsureFragmentEntity(w, r)
+		return
+	}
+
+	if strings.HasSuffix(r.URL.Path, "/entity") {
+		h.GetFragmentEntity(w, r)
+		return
+	}
+
+	if strings.HasSuffix(r.URL.Path, "/enrich-entity") {
+		h.EnrichFragmentEntity(w, r)
+		return
+	}
+
 	if strings.HasSuffix(r.URL.Path, "/dependencies") {
 		h.GetFragmentDependencies(w, r)
 		return

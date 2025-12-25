@@ -10,6 +10,9 @@ import { api } from '../lib/api';
 import { LensCanvasDetails } from './LensCanvasDetails';
 import { LensCanvasCockpit } from './LensCanvasCockpit';
 import { LensCanvasList } from './LensCanvasList';
+import { HorizonDrawers, HorizonPanelType } from './HorizonDrawers';
+import { HorizonPanelButtons } from './HorizonPanelButtons';
+import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 
 export interface LensCanvasProps {
   isOpen: boolean;
@@ -30,6 +33,14 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [loadingJobs, setLoadingJobs] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [viewMode, setViewMode] = React.useState<'details' | 'cockpit' | 'list'>('details');
+  
+  // Drawer state for cockpit mode
+  const [panelType, setPanelType] = React.useState<HorizonPanelType>(null);
+  const [drawerWidth, setDrawerWidth] = React.useState(400);
+  const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
+  const [selectedNodeData, setSelectedNodeData] = React.useState<HorizonNodeData | null>(null);
+  
+  const isMobile = React.useMemo(() => window.innerWidth < 768, []);
 
   // Load lens data when lensId changes
   React.useEffect(() => {
@@ -187,8 +198,50 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               />
             )}
             {viewMode === 'cockpit' && (
-              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
-                <LensCanvasCockpit lensId={lensId} projectId={lens.projectId} />
+              <div style={{ 
+                flex: 1, 
+                minHeight: 0, 
+                display: 'flex', 
+                flexDirection: 'row',
+                gap: '16px',
+                width: '100%', 
+                height: '100%' 
+              }}>
+                {/* Graph area - flexible width */}
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <LensCanvasCockpit 
+                    lensId={lensId} 
+                    projectId={lens.projectId}
+                    onNodeSelect={(nodeId, nodeData) => {
+                      setSelectedNodeId(nodeId);
+                      setSelectedNodeData(nodeData);
+                      // Don't auto-open drawer - user must click button manually
+                    }}
+                  />
+                </div>
+
+                {/* Right drawer */}
+                <HorizonDrawers
+                  panelType={panelType}
+                  isMobile={isMobile}
+                  drawerWidth={drawerWidth}
+                  setDrawerWidth={setDrawerWidth}
+                  closeAllPanels={() => setPanelType(null)}
+                  getPanelVisibilityStyles={(visible: boolean) => ({
+                    display: visible ? 'block' : 'none',
+                    opacity: visible ? 1 : 0,
+                    transition: 'opacity 0.2s ease-in-out',
+                  })}
+                  selectedNodeId={selectedNodeId}
+                  selectedNodeData={selectedNodeData}
+                />
+
+                {/* Right buttons column - always visible */}
+                <HorizonPanelButtons
+                  panelType={panelType}
+                  onPanelTypeChange={setPanelType}
+                  selectedNodeId={selectedNodeId}
+                />
               </div>
             )}
             {viewMode === 'list' && (

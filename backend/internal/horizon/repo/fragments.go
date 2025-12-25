@@ -30,6 +30,7 @@ type HorizonFragmentsRepository struct {
 	useGCS           bool
 	uploadLimiter    *rate.Limiter                                                                // Rate limiter for GCS uploads
 	limiterMu        sync.Mutex
+	onUpsert         func(ctx context.Context, fragment *models.HorizonFragment)                 // Best-effort hook after create/update
 	// vertexSearchSync triggers Vertex AI Search import for specific GCS URIs.
 	// We pass the exact object URI to avoid Discovery Engine file expansion limits (max 1000 files per import).
 	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error) // Sync trigger
@@ -58,6 +59,13 @@ func (r *HorizonFragmentsRepository) WithStorage(storage *gcp.GCSClient, bucket 
 // WithVertexSearchSync настраивает синхронизацию с Vertex AI Search
 func (r *HorizonFragmentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, gcsURI string) (operationName string, err error)) *HorizonFragmentsRepository {
 	r.vertexSearchSync = syncFn
+	return r
+}
+
+// WithOnUpsert registers a best-effort callback called after Create/Update succeeds.
+// Intended for side-effects like linking/enriching Entities.
+func (r *HorizonFragmentsRepository) WithOnUpsert(fn func(ctx context.Context, fragment *models.HorizonFragment)) *HorizonFragmentsRepository {
+	r.onUpsert = fn
 	return r
 }
 
@@ -184,6 +192,16 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 		log.Printf("WARNING: failed to export fragment to GCS: %v", err)
 	}
 
+	// Best-effort onUpsert hook (async)
+	if r.onUpsert != nil {
+		f := fragment
+		go func() {
+			hctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			r.onUpsert(hctx, f)
+		}()
+	}
+
 	return fragment.ID, nil
 }
 
@@ -268,6 +286,16 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 	// Экспорт в GCS для поиска (с синхронизацией)
 	if err := r.uploadToGCS(ctx, fragment, false); err != nil {
 		log.Printf("WARNING: failed to export updated fragment to GCS: %v", err)
+	}
+
+	// Best-effort onUpsert hook (async)
+	if r.onUpsert != nil {
+		f := fragment
+		go func() {
+			hctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			r.onUpsert(hctx, f)
+		}()
 	}
 
 	return nil

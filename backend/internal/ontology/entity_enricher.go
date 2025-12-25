@@ -68,8 +68,26 @@ func (e *EntityEnricher) EnrichEntity(
 	tenantID string,
 	entity *models.Entity,
 ) error {
+	return e.enrichEntity(ctx, tenantID, entity, false)
+}
+
+// EnrichEntityForce обогащает Entity данными из Wikidata, игнорируя TTL (для ручного обновления).
+func (e *EntityEnricher) EnrichEntityForce(
+	ctx context.Context,
+	tenantID string,
+	entity *models.Entity,
+) error {
+	return e.enrichEntity(ctx, tenantID, entity, true)
+}
+
+func (e *EntityEnricher) enrichEntity(
+	ctx context.Context,
+	tenantID string,
+	entity *models.Entity,
+	force bool,
+) error {
 	// Проверяем, не обогащен ли уже Entity
-	if len(entity.KBRefs) > 0 {
+	if !force && len(entity.KBRefs) > 0 {
 		// Проверяем, есть ли уже Wikidata ссылка
 		for _, ref := range entity.KBRefs {
 			if ref.KB == "Wikidata" && ref.LastSync != nil {

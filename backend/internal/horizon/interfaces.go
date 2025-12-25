@@ -3,9 +3,10 @@ package horizon
 import (
 	"context"
 
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
+	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -29,6 +30,10 @@ type HorizonServiceDependencies struct {
 	DocumentsRepo  *repo.DocumentsRepository
 	ChunksRepo     *repo.ChunksRepository
 	DataSourcesRepo *repo.DataSourcesRepository
+
+	// Ontology helpers (optional, but recommended for entity linking + enrichment)
+	EntityResolver *ontology.EntityResolver
+	EntityEnricher *ontology.EntityEnricher
 
 	// Другие зависимости
 	Crawler CrawlerInterface // Абстракция над internal/crawler

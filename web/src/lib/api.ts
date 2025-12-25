@@ -1855,6 +1855,49 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  // Ensure Entity for fragment (create/link/enrich)
+  async ensureFragmentEntity(fragmentId: string): Promise<{
+    entityId: string;
+    entity: any;
+    created: boolean;
+    enriched: boolean;
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/fragments/${fragmentId}/ensure-entity`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] ensureFragmentEntity error:`, error);
+      throw error;
+    }
+  }
+
+  // Get Entity linked to fragment
+  async getFragmentEntity(fragmentId: string): Promise<any> {
+    try {
+      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/entity`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getFragmentEntity error:`, error);
+      throw error;
+    }
+  }
+
+  // Enrich Entity linked to fragment (force refresh if force=true)
+  async enrichFragmentEntity(fragmentId: string, force: boolean = false): Promise<{
+    entityId: string;
+    entity: any;
+    enriched: boolean;
+  }> {
+    try {
+      const params = force ? { force: '1' } : {};
+      const response = await this.client.post(`/api/horizon/fragments/${fragmentId}/enrich-entity`, null, { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] enrichFragmentEntity error:`, error);
+      throw error;
+    }
+  }
+
   // --- Horizon Edges ---
   async getHorizonEdge(edgeId: string): Promise<any> {
     try {
