@@ -53,11 +53,19 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 	// Получаем DependencyEdge для всех фрагментов
 	edgesRepo := h.service.Edges()
 	var allEdges []interface{}
+	seen := make(map[string]struct{}, 1024)
 	for _, fragment := range fragments {
 		// Получаем исходящие рёбра
 		outgoingEdges, err := edgesRepo.ListBySource(r.Context(), "global", fragment.ID, nil, 100)
 		if err == nil {
 			for _, edge := range outgoingEdges {
+				// Dedup: edges can be returned twice (source list + target list) or via multiple scope nodes.
+				// Key: source|target|type to avoid duplicates in UI (ReactFlow requires unique ids).
+				k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
+				if _, ok := seen[k]; ok {
+					continue
+				}
+				seen[k] = struct{}{}
 				allEdges = append(allEdges, edge)
 			}
 		}
@@ -65,6 +73,11 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		incomingEdges, err := edgesRepo.ListByTarget(r.Context(), "global", fragment.ID, nil, 100)
 		if err == nil {
 			for _, edge := range incomingEdges {
+				k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
+				if _, ok := seen[k]; ok {
+					continue
+				}
+				seen[k] = struct{}{}
 				allEdges = append(allEdges, edge)
 			}
 		}

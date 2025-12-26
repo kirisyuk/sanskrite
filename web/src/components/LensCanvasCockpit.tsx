@@ -414,6 +414,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       // Создаём рёбра из edges (только для существующих узлов)
       const missingEdges: string[] = [];
+      const seenEdgeKeys = new Set<string>();
       edges.forEach((edge: any) => {
         const sourceFragmentId = norm(edge.sourceFragmentId || edge.source);
         const targetFragmentId = norm(edge.targetFragmentId || edge.target);
@@ -421,22 +422,33 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const targetId = targetFragmentId ? fragmentToNodeId.get(targetFragmentId) : undefined;
 
         if (sourceId && targetId) {
+          const edgeType = edge.type || edge.edgeType || 'UNKNOWN';
+          // Dedup to avoid ReactFlow duplicate key warnings.
+          // We treat identical (source,target,type) as duplicates for visualization.
+          const key = `${sourceId}::${targetId}::${edgeType}`;
+          if (seenEdgeKeys.has(key)) {
+            return;
+          }
+          seenEdgeKeys.add(key);
+
           const baseStyle = getEdgeStyle(edge.type || edge.edgeType, edge.properties?.criticality);
           graphEdges.push({
-            id: edge.id || `${sourceId}-${targetId}`,
+            // Make ids stable and unique even if backend returns duplicates or lacks id.
+            // Use backend edge.id if present; otherwise key.
+            id: edge.id || `edge-${key}`,
             source: sourceId,
             target: targetId,
             sourceHandle: 'source-bottom', // Исходящие связи снизу (от кнопки +)
             targetHandle: 'target-top', // Входящие связи сверху
             type: 'default',
-            label: edge.type || edge.edgeType,
+            label: edgeType,
             markerEnd: {
               type: MarkerType.ArrowClosed,
             },
             style: baseStyle,
             data: {
               lensItemId: '', // Будет обновлено после сохранения
-              edgeType: edge.type || edge.edgeType,
+              edgeType,
               criticality: edge.properties?.criticality,
               amplification: edge.properties?.amplification,
               latencyHours: edge.properties?.latencyHours,
@@ -879,7 +891,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       // Обновляем состояние
       setNodes(finalNodes);
-      setEdges((prev) => [...prev, ...newEdges]);
+      setEdges((prev) => {
+        const out: any[] = [];
+        const seen = new Set<string>();
+        for (const e of [...prev, ...newEdges]) {
+          if (!e) continue;
+          const id = String((e as any).id || '');
+          if (id) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            out.push(e);
+            continue;
+          }
+          // Fallback: source/target/type-based key
+          const t = String((e as any).data?.edgeType || (e as any).label || (e as any).type || 'UNKNOWN');
+          const k = `${(e as any).source}::${(e as any).target}::${t}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          out.push({ ...(e as any), id: `edge-${k}` });
+        }
+        return out;
+      });
 
       // Подгоняем вид к родителю и новым узлам
       const newNodeIds = newNodes.map((n) => n.id);
