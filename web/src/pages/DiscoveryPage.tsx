@@ -623,16 +623,27 @@ const DiscoveryPage: React.FC = () => {
   }, []);
 
   // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
-  // Also use fold mode (medium) for portrait orientation (height > width)
+  // Rules:
+  // 1. Desktop (> 768px): desktop interface
+  // 2. Tablet/Galaxy Fold (600-768px): fold mode (medium) - reduced but no major simplifications
+  // 3. Small smartphone (< 600px): simplified smartphone interface (both portrait and landscape)
+  //    Simplified interface is especially useful in portrait orientation
   const [isSmartphone, setIsSmartphone] = React.useState(false);
   React.useEffect(() => {
     const checkSmartphone = () => {
-      const isPortrait = window.innerHeight > window.innerWidth;
-      // Use fold mode (medium) if portrait orientation, otherwise check width
-      setIsSmartphone(window.innerWidth <= 600 && !isPortrait);
+      // Simplified smartphone interface for screens <= 600px (both orientations)
+      setIsSmartphone(window.innerWidth <= 600);
     };
     checkSmartphone();
     window.addEventListener('resize', checkSmartphone);
+    // Also listen to orientation changes to update when device rotates
+    if (window.screen?.orientation) {
+      window.screen.orientation.addEventListener('change', checkSmartphone);
+      return () => {
+        window.removeEventListener('resize', checkSmartphone);
+        window.screen.orientation.removeEventListener('change', checkSmartphone);
+      };
+    }
     return () => window.removeEventListener('resize', checkSmartphone);
   }, []);
 
@@ -1144,6 +1155,58 @@ const DiscoveryPage: React.FC = () => {
 
   // Auto-scroll is handled by useAdvancedAutoScroll hook
   useAdvancedAutoScroll(messagesRef);
+  
+  // Scroll to assistant thinking placeholder when streaming starts (especially for Second Opinion from compliance eval)
+  const lastStreamingMessageIdRef = React.useRef<string | null>(null);
+  const lastUpdateTimestamp = useGenaiChatStore((state) => (state as any)._lastUpdate || 0);
+  useEffect(() => {
+    // Only in chat view
+    if (unfoldSubView !== 'chat') return;
+    
+    // Check if streaming just started and there's a new assistant message without content
+    if (genaiChat.streaming && messagesRef.current) {
+      const messages = genaiChat.messages || [];
+      const lastAssistantMessage = messages.length > 0 
+        ? messages[messages.length - 1]
+        : null;
+      
+      // If last message is assistant and has no content (thinking...), scroll to it
+      if (lastAssistantMessage && 
+          lastAssistantMessage.role === 'assistant' && 
+          (!lastAssistantMessage.content || !lastAssistantMessage.content.trim()) &&
+          lastAssistantMessage.id !== lastStreamingMessageIdRef.current) {
+        // Mark this message as processed
+        lastStreamingMessageIdRef.current = lastAssistantMessage.id;
+        
+        // Use timeout to ensure DOM is fully updated
+        const timeoutId = window.setTimeout(() => {
+          if (messagesRef.current) {
+            // Find all ChatMessage elements (they have rounded-2xl class)
+            const chatMessages = messagesRef.current.querySelectorAll('.rounded-2xl');
+            if (chatMessages.length > 0) {
+              // Get the last message (should be the thinking placeholder)
+              const lastMessage = chatMessages[chatMessages.length - 1] as HTMLElement;
+              if (lastMessage) {
+                lastMessage.scrollIntoView({ 
+                  behavior: 'smooth', 
+                  block: 'start',
+                  inline: 'nearest'
+                });
+              }
+            } else {
+              // Fallback: scroll to bottom
+              messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+            }
+          }
+        }, 150);
+        
+        return () => clearTimeout(timeoutId);
+      }
+    } else if (!genaiChat.streaming) {
+      // Reset when streaming stops
+      lastStreamingMessageIdRef.current = null;
+    }
+  }, [genaiChat.streaming, genaiChat.messages.length, lastUpdateTimestamp, unfoldSubView]);
   
   // Track text selection within assistant markdown and position a floating action button
   useTextSelection({

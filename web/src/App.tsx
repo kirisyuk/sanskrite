@@ -31,6 +31,12 @@ function AppContent() {
   
   // Determine which page to show
   const isUnfold = new URLSearchParams(location.search).get('app') === 'unfold';
+
+  // Some pages manage their own internal scrolling (chat history, panels, etc.).
+  // On mobile this avoids "double scroll" where the whole app page becomes taller than the viewport.
+  const lockContentAreaScroll =
+    (location.pathname === '/' && (isUnfold || !!user)) ||
+    location.pathname === '/horizon';
   
   // Handle modal from query parameter
   useEffect(() => {
@@ -76,7 +82,10 @@ function AppContent() {
       <div className="main-content">
         <TopBar />
         <ServerUnavailableBanner />
-        <div className="content-area">
+        <div
+          className="content-area"
+          style={lockContentAreaScroll ? { overflowY: 'hidden' } : undefined}
+        >
           <Routes>
             <Route path="/shared/:token" element={<ShareViewPage />} />
             <Route path="/verified" element={<VerifiedPage />} />

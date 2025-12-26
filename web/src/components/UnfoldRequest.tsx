@@ -274,18 +274,29 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
   }, []);
 
   // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
-  // Also use fold mode (medium) for portrait orientation (height > width)
+  // Rules:
+  // 1. Desktop (> 768px): desktop interface
+  // 2. Tablet/Galaxy Fold (600-768px): fold mode (medium) - reduced but no major simplifications
+  // 3. Small smartphone (< 600px): simplified smartphone interface (both portrait and landscape)
+  //    Simplified interface is especially useful in portrait orientation
   const [isSmartphone, setIsSmartphone] = React.useState(false);
   React.useEffect(() => {
     const checkSmartphone = () => {
       if (typeof window === 'undefined') return;
-      const isPortrait = window.innerHeight > window.innerWidth;
-      // Smartphones are typically < 600px width (Galaxy Fold is ~512px folded, but we want to target smaller phones)
-      // Use fold mode (medium) if portrait orientation, otherwise check width
-      setIsSmartphone(window.innerWidth <= 600 && !isPortrait);
+      
+      // Simplified smartphone interface for screens <= 600px (both orientations)
+      setIsSmartphone(window.innerWidth <= 600);
     };
     checkSmartphone();
     window.addEventListener('resize', checkSmartphone);
+    // Also listen to orientation changes to update when device rotates
+    if (window.screen?.orientation) {
+      window.screen.orientation.addEventListener('change', checkSmartphone);
+      return () => {
+        window.removeEventListener('resize', checkSmartphone);
+        window.screen.orientation.removeEventListener('change', checkSmartphone);
+      };
+    }
     return () => window.removeEventListener('resize', checkSmartphone);
   }, []);
 

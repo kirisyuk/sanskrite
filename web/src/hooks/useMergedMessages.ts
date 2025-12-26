@@ -103,10 +103,9 @@ export function useMergedMessages(excludeModelChat: boolean = false) {
         }
         // Exclude Graph chat interactions when in Discussion view (skip during streaming to save resources)
         if (shouldExcludeModelChat) {
-          // Exclude all interactions with subkind='graph.chat' (created from Graph tab)
-          if (it.subkind === 'graph.chat') {
-            return false;
-          }
+          // Exclude graph-tab *responses* (subkind='graph.chat'), but keep the originating USER prompt.
+          // Otherwise the first user message sent from Graph/Models can "disappear" in Discussion view.
+          if (it.subkind === 'graph.chat' && it.kind !== 'user') return false;
           // Exclude ontology interactions (they belong to Graph view)
           if (it.kind === 'ontology') {
             return false;

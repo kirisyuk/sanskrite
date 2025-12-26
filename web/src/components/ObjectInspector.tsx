@@ -33,6 +33,12 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       try {
         const fragmentId = nodeData.fragmentId;
         
+        if (!fragmentId) {
+          setError('Fragment ID is missing');
+          setLoading(false);
+          return;
+        }
+        
         // Load fragment
         const fragmentData = await api.getHorizonFragment(fragmentId);
         setFragment(fragmentData);

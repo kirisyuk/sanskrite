@@ -982,7 +982,6 @@ func main() {
 		horizonFragmentsRepo := horizonrepo.NewHorizonFragmentsRepository(fsClient.Client())
 		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
-		horizonLensItemsRepo := horizonrepo.NewLensItemsRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
@@ -1113,8 +1112,6 @@ func main() {
 			DocumentsRepo:      docsRepo,
 			ChunksRepo:         chunksRepo,
 			DataSourcesRepo:    s.dsrcs,
-			EntityResolver:     entityResolver,
-			EntityEnricher:     entityEnricher,
 			Crawler:            wc,
 			Logger:             logger,
 		}
@@ -1133,19 +1130,6 @@ func main() {
 		if err != nil {
 			logger.Printf("WARNING: Horizon service initialization failed: %v", err)
 		} else {
-			// Auto-link/enrich entities for newly created/updated fragments (best-effort).
-			// This covers Scout (frame-based) fragment creation and any other upsert path.
-			horizonFragmentsRepo.WithOnUpsert(func(c context.Context, f *horizonmodels.HorizonFragment) {
-				if horizonService == nil || f == nil {
-					return
-				}
-				// Ensure only when mapping is missing (idempotent).
-				if f.EntityID != nil && strings.TrimSpace(*f.EntityID) != "" {
-					return
-				}
-				_, _, _, _ = horizonService.EnsureEntityForFragmentObject(c, f)
-			})
-
 			// Initialize Lens subsystem
 			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
 			lensCalculator := horizonlens.NewMetricsCalculator(horizonFragmentsRepo)
@@ -1335,13 +1319,6 @@ func main() {
 
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService)
-			// Create LensItems handler
-			lensItemsHandler := horizonhttp.NewLensItemsHandler(
-				horizonLensItemsRepo,
-				horizonLensesRepo,
-				s.projs,
-			)
-			horizonHandlers.WithLensItemsHandler(lensItemsHandler)
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete

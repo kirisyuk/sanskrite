@@ -385,6 +385,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             rootFragmentId: fragmentId,
             depth: 0,
             canonicalPath: fragment.canonicalPath,
+            indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
             label: fragment.labels?.en || fragment.canonicalPath?.split('/').pop() || `Fragment ${index}`,
             type: fragment.type,
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
@@ -750,6 +751,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             directionFromParent, // 'incoming' (сверху) или 'outgoing' (снизу)
             depth: childDepth,
             canonicalPath: fragment.canonicalPath,
+            indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
             label: fragment.labels?.en || fragment.canonicalPath?.split('/').pop() || 'Fragment',
             type: fragment.type,
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
@@ -942,6 +944,93 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     }
   }, [nodes, edges, arranging, handleLoadRelatedFragments, setNodes]);
 
+  // Функция для скачивания всех видимых Lens Items в JSON
+  const handleDownload = useCallback(() => {
+    if (nodes.length === 0 && edges.length === 0) {
+      setError('No graph data to download');
+      return;
+    }
+
+    try {
+      const now = new Date().toISOString();
+      const lensItems: LensItem[] = [];
+
+      // Преобразуем nodes в LensItems
+      nodes.forEach((node) => {
+        const nodeData = node.data;
+        const lensItem: LensItem = {
+          id: nodeData.lensItemId || `node-${node.id}`,
+          tenantId: '',
+          projectId: projectId || '',
+          lensId: lensId || '',
+          kind: 'node',
+          subkind: 'fragment',
+          fragmentId: nodeData.fragmentId,
+          canonicalPath: nodeData.canonicalPath,
+          label: nodeData.label,
+          type: nodeData.type,
+          state: nodeData.state,
+          status: nodeData.status,
+          expanded: nodeData.expanded,
+          collapsed: nodeData.collapsed,
+          critical: nodeData.critical,
+          position: node.position ? { x: node.position.x, y: node.position.y } : undefined,
+          createdAt: now,
+          updatedAt: now,
+        };
+        lensItems.push(lensItem);
+      });
+
+      // Преобразуем edges в LensItems
+      edges.forEach((edge) => {
+        const edgeData = edge.data;
+        const sourceNode = nodes.find((n) => n.id === edge.source);
+        const targetNode = nodes.find((n) => n.id === edge.target);
+        
+        if (!sourceNode || !targetNode) {
+          console.warn('[Cockpit] Skipping edge with missing nodes:', edge.id);
+          return;
+        }
+
+        const lensItem: LensItem = {
+          id: edgeData.lensItemId || `edge-${edge.id}`,
+          tenantId: '',
+          projectId: projectId || '',
+          lensId: lensId || '',
+          kind: 'edge',
+          subkind: edgeData.edgeType || edge.label || 'DEPENDS_ON',
+          sourceFragmentId: sourceNode.data.fragmentId || sourceNode.id,
+          targetFragmentId: targetNode.data.fragmentId || targetNode.id,
+          edgeType: edgeData.edgeType || edge.label as any,
+          criticality: edgeData.criticality,
+          amplification: edgeData.amplification,
+          latencyHours: edgeData.latencyHours,
+          direction: edgeData.direction || 'forward',
+          createdAt: now,
+          updatedAt: now,
+        };
+        lensItems.push(lensItem);
+      });
+
+      // Создаем JSON файл
+      const jsonContent = JSON.stringify(lensItems, null, 2);
+      const blob = new Blob([jsonContent], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `lens-items-${lensId || 'export'}-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      console.log('[Cockpit] Downloaded', lensItems.length, 'lens items');
+    } catch (err: any) {
+      console.error('[Cockpit] Download failed:', err);
+      setError(err.message || 'Failed to download graph data');
+    }
+  }, [nodes, edges, lensId, projectId]);
+
   const bgColor = theme === 'dark' ? 'var(--bg-primary)' : 'var(--bg-primary)';
   const bgPatternColor = theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)';
 
@@ -1001,6 +1090,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           }}
         >
           {arranging ? 'Arranging...' : 'Arrange'}
+        </button>
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={nodes.length === 0 && edges.length === 0}
+          style={{
+            padding: '6px 12px',
+            fontSize: '12px',
+            fontWeight: 500,
+            color: 'var(--text-heading)',
+            background: 'var(--bg-tertiary)',
+            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
+            borderRadius: '6px',
+            cursor: nodes.length === 0 && edges.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: nodes.length === 0 && edges.length === 0 ? 0.6 : 1,
+          }}
+        >
+          Download
         </button>
         {error && (
           <div style={{ fontSize: '11px', color: '#EF4444', marginLeft: '8px' }}>

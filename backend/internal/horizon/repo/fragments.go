@@ -2,9 +2,9 @@ package repo
 
 import (
 	"context"
-	"errors"
-	"encoding/json"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -22,15 +22,15 @@ var ErrFragmentNotFound = errors.New("horizon fragment not found")
 
 // HorizonFragmentsRepository репозиторий для работы с HorizonFragment
 type HorizonFragmentsRepository struct {
-	col              *firestore.CollectionRef
-	db               *firestore.Client
-	versionsRepo     *HorizonFragmentVersionsRepository // Репозиторий для версий
-	storage          *gcp.GCSClient
-	bucket           string
-	useGCS           bool
-	uploadLimiter    *rate.Limiter                                                                // Rate limiter for GCS uploads
-	limiterMu        sync.Mutex
-	onUpsert         func(ctx context.Context, fragment *models.HorizonFragment)                 // Best-effort hook after create/update
+	col           *firestore.CollectionRef
+	db            *firestore.Client
+	versionsRepo  *HorizonFragmentVersionsRepository // Репозиторий для версий
+	storage       *gcp.GCSClient
+	bucket        string
+	useGCS        bool
+	uploadLimiter *rate.Limiter // Rate limiter for GCS uploads
+	limiterMu     sync.Mutex
+	onUpsert      func(ctx context.Context, fragment *models.HorizonFragment) // Best-effort hook after create/update
 	// vertexSearchSync triggers Vertex AI Search import for specific GCS URIs.
 	// We pass the exact object URI to avoid Discovery Engine file expansion limits (max 1000 files per import).
 	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error) // Sync trigger
@@ -96,7 +96,7 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 	// ВАЖНО: Discovery Engine ожидает Document.content как объект (mimeType/rawBytes), а не строку.
 	objectPath := fmt.Sprintf("%s/horizon_fragments/%s.json", fragment.TenantID, fragment.ID)
 	gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
-	
+
 	doc := map[string]interface{}{
 		"id": fragment.ID,
 		// IMPORTANT: ImportDocuments(dataSchema=document) is strict about top-level fields.
@@ -111,6 +111,7 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 			"canonicalPath": fragment.CanonicalPath,
 			"entityPath":    fragment.EntityPath,
 			"sectorPath":    fragment.SectorPath,
+			"indexPaths":    fragment.IndexPaths,
 			"status":        fragment.Governance.Status,
 			"updatedAt":     fragment.UpdatedAt.Format(time.RFC3339),
 			"createdAt":     fragment.CreatedAt.Format(time.RFC3339),
@@ -122,7 +123,7 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 	if err != nil {
 		return fmt.Errorf("failed to marshal fragment to json: %w", err)
 	}
-	
+
 	metadata := map[string]string{
 		"type":     "horizon_fragment",
 		"tenantId": fragment.TenantID,
@@ -244,6 +245,102 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	return &fragment, nil
 }
 
+// GetMany fetches multiple fragments by IDs (best-effort).
+// Missing fragments are skipped; returned map contains only successfully decoded items.
+func (r *HorizonFragmentsRepository) GetMany(ctx context.Context, ids []string) (map[string]*models.HorizonFragment, error) {
+	if r == nil || r.db == nil {
+		return nil, ErrInvalidDocument
+	}
+	if len(ids) == 0 {
+		return map[string]*models.HorizonFragment{}, nil
+	}
+
+	seen := map[string]struct{}{}
+	refs := make([]*firestore.DocumentRef, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		refs = append(refs, r.col.Doc(id))
+	}
+	if len(refs) == 0 {
+		return map[string]*models.HorizonFragment{}, nil
+	}
+
+	snaps, err := r.db.GetAll(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*models.HorizonFragment{}
+	for _, snap := range snaps {
+		if snap == nil || !snap.Exists() {
+			continue
+		}
+		var f models.HorizonFragment
+		if err := snap.DataTo(&f); err != nil {
+			continue
+		}
+		if f.ID == "" {
+			f.ID = snap.Ref.ID
+		}
+		out[f.ID] = &f
+	}
+	return out, nil
+}
+
+// UpdateIndexPaths performs a lightweight update of only indexPaths (+ timestamps).
+// Intended for derived/indexing changes (e.g., adding intent sphere coordinates) without bumping fragment versions.
+func (r *HorizonFragmentsRepository) UpdateIndexPaths(ctx context.Context, id string, extra []string) error {
+	if r == nil || id == "" {
+		return ErrInvalidDocument
+	}
+	frag, err := r.Get(ctx, id)
+	if err != nil || frag == nil {
+		return err
+	}
+	merged := models.MergeIndexPaths(frag, extra)
+
+	now := time.Now().UTC()
+	_, err = r.col.Doc(id).Update(ctx, []firestore.Update{
+		{Path: "indexPaths", Value: merged},
+		{Path: "updatedAt", Value: now},
+		{Path: "metadata.lastUpdatedAt", Value: now},
+	})
+	return err
+}
+
+// FindByIdentifier finds fragments by a specific identifier key and value.
+// For example: FindByIdentifier(ctx, "wikidata", "Q312") returns fragments with identifiers.wikidata == "Q312"
+func (r *HorizonFragmentsRepository) FindByIdentifier(ctx context.Context, key, value string) ([]*models.HorizonFragment, error) {
+	if key == "" || value == "" {
+		return nil, ErrInvalidDocument
+	}
+
+	// Firestore query for nested map field: identifiers.{key} == value
+	fieldPath := fmt.Sprintf("identifiers.%s", key)
+	q := r.col.Where("tenantId", "==", "global").Where(fieldPath, "==", value).Limit(10)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	fragments := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		fragments = append(fragments, &fragment)
+	}
+
+	return fragments, nil
+}
+
 // Update обновляет HorizonFragment и сохраняет версию
 func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *models.HorizonFragment) error {
 	if fragment == nil || fragment.ID == "" {
@@ -307,12 +404,23 @@ func (r *HorizonFragmentsRepository) UpdateGovernance(ctx context.Context, id st
 		return ErrInvalidDocument
 	}
 	now := time.Now().UTC()
-	_, err := r.col.Doc(id).Update(ctx, []firestore.Update{
-		{Path: "governance", Value: governance},
-		{Path: "updatedAt", Value: now},
-		{Path: "metadata.lastUpdatedAt", Value: now},
+	docRef := r.col.Doc(id)
+	// Use a transaction so we can best-effort backfill derived fields (indexPaths) on any write path.
+	return r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		doc, err := tx.Get(docRef)
+		if err != nil {
+			return err
+		}
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			return err
+		}
+		fragment.Governance = governance
+		fragment.UpdatedAt = now
+		fragment.Metadata.LastUpdatedAt = now
+		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
+		return tx.Set(docRef, fragment)
 	})
-	return err
 }
 
 // IncrementActiveSubscribers увеличивает счетчик активных подписчиков
@@ -338,6 +446,8 @@ func (r *HorizonFragmentsRepository) IncrementActiveSubscribers(ctx context.Cont
 		}
 		fragment.UpdatedAt = now
 		fragment.Metadata.LastUpdatedAt = now
+		// Best-effort backfill: ensure indexPaths is present on any write-path.
+		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)
 	})
 	return err
@@ -367,6 +477,8 @@ func (r *HorizonFragmentsRepository) DecrementActiveSubscribers(ctx context.Cont
 		}
 		fragment.UpdatedAt = now
 		fragment.Metadata.LastUpdatedAt = now
+		// Best-effort backfill: ensure indexPaths is present on any write-path.
+		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)
 	})
 	return err
@@ -554,4 +666,3 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 }
 
 var ErrInvalidDocument = errors.New("invalid document")
-

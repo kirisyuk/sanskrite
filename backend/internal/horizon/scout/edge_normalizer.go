@@ -1,0 +1,226 @@
+package scout
+
+import (
+	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+)
+
+// =============================================================================
+// EDGE POLICIES
+// =============================================================================
+// This file defines normalization and validation policies for dependency edges.
+// Policies are enforced at creation time and during cleanup operations.
+
+// =============================================================================
+// Policy 1: Symmetric Edge Normalization
+// =============================================================================
+// Some edge types represent symmetric relationships where direction doesn't matter.
+// To avoid duplicates (A->B and B->A), we normalize by always placing the
+// lexicographically smaller ID as source.
+
+// SymmetricEdgeTypes defines edge types where the relationship is reciprocal.
+// For these types, we normalize source/target to ensure consistent representation.
+var SymmetricEdgeTypes = map[models.DependencyType]bool{
+	models.DependencyTypeCompetesWith: true, // "A competes with B" = "B competes with A"
+	// Note: PARTNERS_WITH is not yet defined in DependencyType enum.
+	// Add more symmetric types as they are defined in the schema.
+}
+
+// NormalizeSymmetricEdge ensures consistent source/target ordering for symmetric edges.
+// Returns: (normalizedSourceID, normalizedTargetID, edgeType, wasSwapped)
+func NormalizeSymmetricEdge(sourceID, targetID string, edgeType models.DependencyType) (string, string, models.DependencyType, bool) {
+	if !SymmetricEdgeTypes[edgeType] {
+		return sourceID, targetID, edgeType, false
+	}
+
+	// Normalize by placing smaller ID as source
+	if strings.Compare(sourceID, targetID) > 0 {
+		return targetID, sourceID, edgeType, true
+	}
+	return sourceID, targetID, edgeType, false
+}
+
+// =============================================================================
+// Policy 2: Edge Direction Validation
+// =============================================================================
+// Certain edge types have semantically meaningful directions that must be enforced.
+// When an edge violates direction rules, it should be reversed (not deleted).
+
+// EdgeDirectionRule defines valid source and target fragment types for an edge type.
+type EdgeDirectionRule struct {
+	ValidSourceTypes []models.FragmentType
+	ValidTargetTypes []models.FragmentType
+	Description      string // Human-readable explanation
+}
+
+// EdgeDirectionPolicies defines which fragment types are allowed as source/target.
+// If an edge violates these rules, reverse source<->target if the reverse is valid.
+var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
+	// REGULATES: Only regulatory bodies (Organizations) can regulate.
+	// Facilities, Products, Persons cannot be regulators.
+	models.DependencyTypeRegulates: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
+			models.FragmentTypeGeoRegion,
+		},
+		Description: "Regulator (org) regulates regulated entity",
+	},
+
+	// OWNS: Ownership flows from owner to owned.
+	// Organizations and Persons can own; Facilities and Products cannot.
+	models.DependencyTypeOwns: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypePerson,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
+		},
+		Description: "Owner owns asset/subsidiary",
+	},
+
+	// PRODUCES: Production flows from producer to product.
+	// Only Organizations and Facilities can produce.
+	models.DependencyTypeProduces: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
+		Description: "Producer produces product",
+	},
+
+	// LOCATED_IN: Entity is located within a geographic region.
+	// Target must always be GEO_REGION.
+	models.DependencyTypeLocatedIn: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeFacility,
+			models.FragmentTypeOrganization,
+			models.FragmentTypePerson,
+			models.FragmentTypeGeoRegion, // Nested regions: city in state
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion},
+		Description: "Entity is located within region",
+	},
+
+	// OPERATES_IN: Organization operates in a region or facility.
+	// Only Organizations can operate.
+	models.DependencyTypeOperatesIn: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeGeoRegion,
+			models.FragmentTypeFacility,
+		},
+		Description: "Organization operates in location",
+	},
+
+	// SUPPLIES_TO: Supply chain relationship.
+	// Organizations and Facilities supply to each other.
+	models.DependencyTypeSuppliesTo: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		Description: "Supplier supplies to customer",
+	},
+
+	// DEPENDS_ON: Dependency relationship.
+	// Almost any entity can depend on another.
+	models.DependencyTypeDependsOn: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
+			models.FragmentTypeGeoRegion,
+		},
+		Description: "Dependent entity depends on dependency",
+	},
+}
+
+// ValidateEdgeDirection checks if an edge has correct direction according to policies.
+// Returns: (isValid, shouldReverse, rule)
+// - isValid: true if current direction is valid
+// - shouldReverse: true if reversing would make it valid
+// - rule: the applicable rule (nil if no rule defined)
+func ValidateEdgeDirection(edgeType models.DependencyType, sourceType, targetType models.FragmentType) (bool, bool, *EdgeDirectionRule) {
+	rule, exists := EdgeDirectionPolicies[edgeType]
+	if !exists {
+		return true, false, nil // No rule = valid
+	}
+
+	sourceValid := containsType(rule.ValidSourceTypes, sourceType)
+	targetValid := containsType(rule.ValidTargetTypes, targetType)
+
+	if sourceValid && targetValid {
+		return true, false, &rule
+	}
+
+	// Check if reversed direction would be valid
+	reversedSourceValid := containsType(rule.ValidSourceTypes, targetType)
+	reversedTargetValid := containsType(rule.ValidTargetTypes, sourceType)
+
+	if reversedSourceValid && reversedTargetValid {
+		return false, true, &rule
+	}
+
+	return false, false, &rule
+}
+
+// ShouldReverseEdge is a convenience function that returns true if the edge
+// should be reversed to comply with direction policies.
+func ShouldReverseEdge(edgeType models.DependencyType, sourceType, targetType models.FragmentType) bool {
+	_, shouldReverse, _ := ValidateEdgeDirection(edgeType, sourceType, targetType)
+	return shouldReverse
+}
+
+func containsType(types []models.FragmentType, t models.FragmentType) bool {
+	for _, vt := range types {
+		if vt == t {
+			return true
+		}
+	}
+	return false
+}
+
+// =============================================================================
+// Policy 3: Self-Loop Prevention
+// =============================================================================
+// Edges where source == target are typically errors and should be rejected.
+
+// IsSelfLoop returns true if the edge points to itself.
+func IsSelfLoop(sourceID, targetID string) bool {
+	return strings.TrimSpace(sourceID) == strings.TrimSpace(targetID)
+}
+
+// =============================================================================
+// Policy 4: Edge Deduplication
+// =============================================================================
+// Duplicate edges (same source, target, type) should be merged, not duplicated.
+// This is handled at the repository level, but the policy is documented here.
+
+// EdgeKey generates a unique key for edge deduplication.
+// For symmetric edges, the key is normalized to ensure A->B and B->A produce the same key.
+func EdgeKey(sourceID, targetID string, edgeType models.DependencyType) string {
+	if SymmetricEdgeTypes[edgeType] {
+		if strings.Compare(sourceID, targetID) > 0 {
+			sourceID, targetID = targetID, sourceID
+		}
+	}
+	return sourceID + "|" + targetID + "|" + string(edgeType)
+}
+

@@ -1834,7 +1834,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
 
   async getFragmentDependencies(
     fragmentId: string,
-    options?: { direction?: 'outgoing' | 'incoming' | 'both'; type?: string }
+    options?: { direction?: 'outgoing' | 'incoming' | 'both'; type?: string; includeUnindexed?: boolean }
   ): Promise<{
     edges: any[];
     total: number;
@@ -1846,6 +1846,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       }
       if (options?.type) {
         params.type = options.type;
+      }
+      if (options?.includeUnindexed) {
+        params.includeUnindexed = '1';
       }
       const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/dependencies`, { params });
       return response.data;

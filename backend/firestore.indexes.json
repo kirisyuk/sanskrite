@@ -612,6 +612,23 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "indexPaths", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "governance.status", "order": "ASCENDING" },
+        { "fieldPath": "indexPaths", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "governance.status", "order": "ASCENDING" },
         { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]

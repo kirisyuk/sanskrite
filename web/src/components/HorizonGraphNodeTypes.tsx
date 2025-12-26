@@ -13,6 +13,7 @@ export interface HorizonNodeData {
   directionFromParent?: 'incoming' | 'outgoing'; // Направление связи: incoming (сверху) или outgoing (снизу)
   depth?: number;
   canonicalPath?: string;
+  indexPaths?: string[];
   label?: string;
   type?: string; // FragmentType
   state?: Record<string, number>; // Метрики

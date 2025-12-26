@@ -261,27 +261,31 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 
 // ScoutEngine основной движок Scout для сбора и верификации данных
 type ScoutEngine struct {
-	planner            *ScoutPlanner
-	executor           *SourceExecutor
-	scoutAgent         *agents.ScoutAgent
-	criticAgent        *agents.CriticAgent
-	resolverAgent      *agents.ResolverAgent
-	researchAgent      *agents.ResearchAgent // New
-	frameBuilder       *FrameBuilder
-	workflow           *ScoutWorkflow
-	fragmentsRepo      *repo.HorizonFragmentsRepository
-	framesRepo         *repo.FramesRepository
-	edgesRepo          *repo.DependencyEdgesRepository
-	scoutingJobsRepo   *repo.ScoutingJobsRepository
-	realtime           *realtime.Publisher
-	taxonomyClassifier *TaxonomyClassifier
-	aiExecutor         *ai.AITaskExecutor
-	spendLedger        *repo.HorizonSpendLedger
-	budgetPolicy       BudgetPolicy
-	propagationTrigger func(ctx context.Context, fragmentID string) error
-	signalSynthesizer  *signals.Synthesizer              // Optional: for signal synthesis from facts
-	factsRepo          *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
-	factEmitter        *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
+	planner             *ScoutPlanner
+	executor            *SourceExecutor
+	scoutAgent          *agents.ScoutAgent
+	criticAgent         *agents.CriticAgent
+	resolverAgent       *agents.ResolverAgent
+	researchAgent       *agents.ResearchAgent // New
+	frameBuilder        *FrameBuilder
+	workflow            *ScoutWorkflow
+	fragmentsRepo       *repo.HorizonFragmentsRepository
+	framesRepo          *repo.FramesRepository
+	edgesRepo           *repo.DependencyEdgesRepository
+	scoutingJobsRepo    *repo.ScoutingJobsRepository
+	realtime            *realtime.Publisher
+	taxonomyClassifier  *TaxonomyClassifier
+	aiExecutor          *ai.AITaskExecutor
+	spendLedger         *repo.HorizonSpendLedger
+	budgetPolicy        BudgetPolicy
+	propagationTrigger  func(ctx context.Context, fragmentID string) error
+	signalSynthesizer   *signals.Synthesizer              // Optional: for signal synthesis from facts
+	factsRepo           *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
+	factEmitter         *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
+	geoHierarchyBuilder *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
+	orgDeduplicator     *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
+	preCreateValidator  *PreCreateValidator               // Validates fragments before creation
+	orgHierarchyBuilder *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
@@ -324,25 +328,44 @@ func NewScoutEngine(
 	realtime *realtime.Publisher,
 	aiExecutor *ai.AITaskExecutor,
 ) *ScoutEngine {
-	return &ScoutEngine{
-		planner:            planner,
-		executor:           executor,
-		scoutAgent:         scoutAgent,
-		criticAgent:        criticAgent,
-		resolverAgent:      resolverAgent,
-		researchAgent:      researchAgent,
-		frameBuilder:       frameBuilder,
-		workflow:           workflow,
-		fragmentsRepo:      fragmentsRepo,
-		framesRepo:         framesRepo,
-		edgesRepo:          edgesRepo,
-		scoutingJobsRepo:   scoutingJobsRepo,
-		realtime:           realtime,
-		taxonomyClassifier: NewTaxonomyClassifier(aiExecutor),
-		aiExecutor:         aiExecutor,
-		spendLedger:        nil,
-		budgetPolicy:       BudgetPolicyFromEnv(),
+	geoBuilder := NewGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
+	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
+	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
+
+	engine := &ScoutEngine{
+		planner:             planner,
+		executor:            executor,
+		scoutAgent:          scoutAgent,
+		criticAgent:         criticAgent,
+		resolverAgent:       resolverAgent,
+		researchAgent:       researchAgent,
+		frameBuilder:        frameBuilder,
+		workflow:            workflow,
+		fragmentsRepo:       fragmentsRepo,
+		framesRepo:          framesRepo,
+		edgesRepo:           edgesRepo,
+		scoutingJobsRepo:    scoutingJobsRepo,
+		realtime:            realtime,
+		taxonomyClassifier:  NewTaxonomyClassifier(aiExecutor),
+		aiExecutor:          aiExecutor,
+		spendLedger:         nil,
+		budgetPolicy:        BudgetPolicyFromEnv(),
+		geoHierarchyBuilder: geoBuilder,
+		orgDeduplicator:     orgDedup,
+		orgHierarchyBuilder: orgHierarchy,
 	}
+	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup)
+	return engine
+}
+
+// WithWikidataClient sets the Wikidata client for organization deduplication
+func (e *ScoutEngine) WithWikidataClient(client coreontology.WikidataClientInterface) *ScoutEngine {
+	if e.orgDeduplicator != nil {
+		e.orgDeduplicator.wikidataClient = client
+	} else {
+		e.orgDeduplicator = NewOrgDeduplicator(e.fragmentsRepo, client)
+	}
+	return e
 }
 
 func (e *ScoutEngine) publish(ctx context.Context, et realtime.EventType, data map[string]interface{}) {
@@ -1106,6 +1129,7 @@ SKIP_RESEARCH:
 	// Обновляем или создаем HorizonFragment
 	existingFragment, err := e.fragmentsRepo.GetByCanonicalPath(ctx, job.TargetCanonicalPath)
 	var fragmentID string
+
 	if err != nil {
 		// Создаем новый фрагмент
 		extractedFragment.CanonicalPath = job.TargetCanonicalPath
@@ -1116,12 +1140,56 @@ SKIP_RESEARCH:
 			extractedFragment.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
 		}
 
-		fragmentID, err = e.fragmentsRepo.Create(ctx, extractedFragment)
-		if err != nil {
-			return fmt.Errorf("failed to create fragment: %w", err)
+		// Pre-create validation: check policies and deduplication
+		usedExistingDuplicate := false
+		if e.preCreateValidator != nil {
+			preValidation, valErr := e.preCreateValidator.ValidateAndProcess(ctx, extractedFragment)
+			if valErr != nil {
+				fmt.Printf("[ScoutEngine] Warning: pre-create validation error: %v\n", valErr)
+			} else if preValidation != nil {
+				// Log warnings
+				for _, w := range preValidation.Warnings {
+					fmt.Printf("[ScoutEngine] Pre-create warning: %s\n", w)
+				}
+				// Check if creation should be blocked
+				if !preValidation.IsValid {
+					return fmt.Errorf("fragment creation blocked: %s", preValidation.BlockReason)
+				}
+				// Check if we should use an existing fragment instead (deduplication)
+				if preValidation.ReplacementFrag != nil && preValidation.ReplacementFrag.ID != "" {
+					fmt.Printf("[ScoutEngine] Using existing fragment %s instead of creating new\n", preValidation.ReplacementFrag.ID)
+					existingFragment = preValidation.ReplacementFrag
+					fragmentID = existingFragment.ID
+					usedExistingDuplicate = true
+				}
+			}
 		}
-		extractedFragment.ID = fragmentID
-		existingFragment = extractedFragment
+
+		// Only create if we didn't find a duplicate
+		if !usedExistingDuplicate {
+			fragmentID, err = e.fragmentsRepo.Create(ctx, extractedFragment)
+			if err != nil {
+				return fmt.Errorf("failed to create fragment: %w", err)
+			}
+			extractedFragment.ID = fragmentID
+			existingFragment = extractedFragment
+
+			// Auto-create geo hierarchy for GEO_REGION fragments
+			if extractedFragment.Type == models.FragmentTypeGeoRegion && e.geoHierarchyBuilder != nil {
+				if strings.HasPrefix(extractedFragment.CanonicalPath, "/loc/") {
+					if err := e.geoHierarchyBuilder.EnsureAndLinkGeoHierarchy(ctx, fragmentID, extractedFragment.CanonicalPath, "scout_job", job.ID); err != nil {
+						fmt.Printf("[ScoutEngine] Warning: failed to build geo hierarchy for %s: %v\n", extractedFragment.CanonicalPath, err)
+					}
+				}
+			}
+
+			// Auto-create org hierarchy for ORGANIZATION fragments (infer parent from name)
+			if extractedFragment.Type == models.FragmentTypeOrganization && e.orgHierarchyBuilder != nil {
+				if err := e.orgHierarchyBuilder.EnsureOrgHierarchy(ctx, fragmentID, extractedFragment, "scout_job", job.ID); err != nil {
+					fmt.Printf("[ScoutEngine] Warning: failed to build org hierarchy for %s: %v\n", extractedFragment.CanonicalPath, err)
+				}
+			}
+		}
 	} else {
 		// Обновляем существующий фрагмент
 		existingFragment.State = extractedFragment.State
@@ -1636,6 +1704,21 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 
 		if sfrag.ID == "" || sfrag.ID == target.ID {
 			continue
+		}
+
+		// Ensure target fragment carries this sphere coordinate in its indexPaths (best-effort).
+		// This enables deterministic "map by sphere" without requiring ontology facts or LLM.
+		hasSphere := false
+		for _, ip := range target.IndexPaths {
+			if ip == sp {
+				hasSphere = true
+				break
+			}
+		}
+		if !hasSphere && e.fragmentsRepo != nil {
+			_ = e.fragmentsRepo.UpdateIndexPaths(ctx, target.ID, []string{sp}) // best effort
+			// Keep local copy consistent for subsequent iterations in this job.
+			target.IndexPaths = models.MergeIndexPaths(target, []string{sp})
 		}
 
 		edgeType := models.DependencyTypeInfluences

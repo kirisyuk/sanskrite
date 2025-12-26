@@ -299,6 +299,10 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	if direction == "" {
 		direction = "both"
 	}
+	// Default behavior: only return dependencies to fragments that already have indexPaths populated.
+	// This keeps UI expansion bounded on partially backfilled datasets.
+	includeUnindexedStr := strings.TrimSpace(r.URL.Query().Get("includeUnindexed"))
+	includeUnindexed := includeUnindexedStr == "1" || strings.EqualFold(includeUnindexedStr, "true")
 	edgeTypeStr := r.URL.Query().Get("type")
 
 	var edgeType *models.DependencyType
@@ -335,6 +339,60 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Filter out edges pointing to unindexed neighbor fragments (default), to avoid exploding graphs.
+	if !includeUnindexed && len(edges) > 0 {
+		neighborIDs := make([]string, 0, len(edges))
+		for _, e := range edges {
+			if e == nil {
+				continue
+			}
+			// Neighbor = the other endpoint relative to fragmentID
+			if e.SourceFragmentID == fragmentID {
+				if strings.TrimSpace(e.TargetFragmentID) != "" {
+					neighborIDs = append(neighborIDs, e.TargetFragmentID)
+				}
+			} else if e.TargetFragmentID == fragmentID {
+				if strings.TrimSpace(e.SourceFragmentID) != "" {
+					neighborIDs = append(neighborIDs, e.SourceFragmentID)
+				}
+			} else {
+				// Fallback: include both endpoints if we can't determine (shouldn't happen)
+				if strings.TrimSpace(e.SourceFragmentID) != "" {
+					neighborIDs = append(neighborIDs, e.SourceFragmentID)
+				}
+				if strings.TrimSpace(e.TargetFragmentID) != "" {
+					neighborIDs = append(neighborIDs, e.TargetFragmentID)
+				}
+			}
+		}
+
+		neighborMap, ferr := h.service.Fragments().GetMany(r.Context(), neighborIDs)
+		if ferr == nil {
+			filtered := make([]*models.DependencyEdge, 0, len(edges))
+			for _, e := range edges {
+				if e == nil {
+					continue
+				}
+				neighborID := ""
+				if e.SourceFragmentID == fragmentID {
+					neighborID = strings.TrimSpace(e.TargetFragmentID)
+				} else if e.TargetFragmentID == fragmentID {
+					neighborID = strings.TrimSpace(e.SourceFragmentID)
+				}
+				// If we can't determine neighbor, keep edge (best-effort).
+				if neighborID == "" {
+					filtered = append(filtered, e)
+					continue
+				}
+				n := neighborMap[neighborID]
+				if n != nil && len(n.IndexPaths) > 0 {
+					filtered = append(filtered, e)
+				}
+			}
+			edges = filtered
+		}
 	}
 
 	response := map[string]interface{}{
