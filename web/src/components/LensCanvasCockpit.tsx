@@ -37,6 +37,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [lensItems, setLensItems] = React.useState<LensItem[]>([]);
   const [loadingFragmentId, setLoadingFragmentId] = React.useState<string | null>(null);
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
 
   // Normalize IDs coming from backend / firestore / UI (avoid whitespace or non-string surprises)
   const norm = (v: unknown) => String(v ?? '').trim();
@@ -914,50 +915,96 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
   // Derive edges styles for hover highlighting (do not mutate base edges)
   const displayEdges = React.useMemo(() => {
-    if (!hoveredGroupId) return edges;
+    const DIM_OPACITY = 0.22;
+    const FADE_OPACITY = 0.12;
 
-    const groupNode = nodes.find((n) => n.id === hoveredGroupId);
-    const gd: any = groupNode?.data;
-    if (!groupNode || !gd?.isGroup) return edges;
-
-    const groupEdgeType = normalizeEdgeType(gd.groupEdgeType);
-    const groupParentId = String(gd.groupParentId || '').trim();
-    const groupDirection: 'incoming' | 'outgoing' = gd.groupDirection === 'incoming' ? 'incoming' : 'outgoing';
-
-    const childIds = new Set(nodes.filter((n) => (n as any).parentId === hoveredGroupId).map((n) => n.id));
-    if (!groupParentId || childIds.size === 0) return edges;
-
-    const isGroupEdge = (e: any) => {
-      const et = normalizeEdgeType(e?.data?.edgeType || e?.label);
-      if (groupEdgeType && et !== groupEdgeType) return false;
-      if (groupDirection === 'outgoing') {
-        return e.source === groupParentId && childIds.has(e.target);
-      }
-      return e.target === groupParentId && childIds.has(e.source);
+    const baseStyled = (e: Edge) => {
+      const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
+      return { baseStyle };
     };
 
-    return edges.map((e) => {
-      const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
-      if (isGroupEdge(e)) {
-        const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+    // Group hover has priority over node hover
+    if (hoveredGroupId) {
+      const groupNode = nodes.find((n) => n.id === hoveredGroupId);
+      const gd: any = groupNode?.data;
+      if (!groupNode || !gd?.isGroup) {
+        return edges.map((e) => {
+          const { baseStyle } = baseStyled(e);
+          return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
+        });
+      }
+
+      const groupEdgeType = normalizeEdgeType(gd.groupEdgeType);
+      const groupParentId = String(gd.groupParentId || '').trim();
+      const groupDirection: 'incoming' | 'outgoing' = gd.groupDirection === 'incoming' ? 'incoming' : 'outgoing';
+
+      const childIds = new Set(nodes.filter((n) => (n as any).parentId === hoveredGroupId).map((n) => n.id));
+      if (!groupParentId || childIds.size === 0) {
+        return edges.map((e) => {
+          const { baseStyle } = baseStyled(e);
+          return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
+        });
+      }
+
+      const isGroupEdge = (e: any) => {
+        const et = normalizeEdgeType(e?.data?.edgeType || e?.label);
+        if (groupEdgeType && et !== groupEdgeType) return false;
+        if (groupDirection === 'outgoing') {
+          return e.source === groupParentId && childIds.has(e.target);
+        }
+        return e.target === groupParentId && childIds.has(e.source);
+      };
+
+      return edges.map((e) => {
+        const { baseStyle } = baseStyled(e);
+        if (isGroupEdge(e)) {
+          const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+          return {
+            ...e,
+            style: {
+              ...baseStyle,
+              opacity: 1,
+              strokeWidth: strokeWidth + 1.5,
+            },
+          };
+        }
         return {
           ...e,
           style: {
             ...baseStyle,
-            opacity: 1,
-            strokeWidth: strokeWidth + 1.5,
+            opacity: FADE_OPACITY,
           },
         };
-      }
-      return {
-        ...e,
-        style: {
-          ...baseStyle,
-          opacity: 0.12,
-        },
-      };
+      });
+    }
+
+    // Node hover: highlight incident edges
+    if (hoveredNodeId) {
+      const nodeId = hoveredNodeId;
+      return edges.map((e) => {
+        const { baseStyle } = baseStyled(e);
+        const isIncident = e.source === nodeId || e.target === nodeId;
+        if (isIncident) {
+          const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+          return {
+            ...e,
+            style: {
+              ...baseStyle,
+              opacity: 1,
+              strokeWidth: strokeWidth + 1.0,
+            },
+          };
+        }
+        return { ...e, style: { ...baseStyle, opacity: FADE_OPACITY } };
+      });
+    }
+
+    // Default: dim all edges
+    return edges.map((e) => {
+      const { baseStyle } = baseStyled(e);
+      return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
     });
-  }, [edges, hoveredGroupId, nodes, normalizeEdgeType]);
+  }, [edges, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType]);
 
   // Функция для перераспределения всех видимых нод
   const handleArrange = useCallback(async () => {
@@ -1230,11 +1277,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             onNodeDragStop={handleNodeDragStop}
             onNodeMouseEnter={(_, node) => {
               const d: any = node?.data;
-              if (d?.isGroup) setHoveredGroupId(node.id);
+              if (d?.isGroup) {
+                setHoveredGroupId(node.id);
+                setHoveredNodeId(null);
+              } else {
+                setHoveredNodeId(node.id);
+                setHoveredGroupId(null);
+              }
             }}
             onNodeMouseLeave={(_, node) => {
               const d: any = node?.data;
               if (d?.isGroup) setHoveredGroupId(null);
+              else setHoveredNodeId(null);
             }}
             nodeTypes={HORIZON_NODE_TYPES}
             onInit={(instance) => {
