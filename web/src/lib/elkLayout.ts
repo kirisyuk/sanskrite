@@ -83,6 +83,57 @@ const GROUP_GAP_Y = 40;
 const defaultGroupId = (parentId: string, direction: 'incoming' | 'outgoing', edgeType: string) =>
   makeSafeId(`group:${parentId}:${direction}:${edgeType || 'OTHER'}`);
 
+function makeGroupParentNode<T = any>(params: {
+  id: string;
+  position: { x: number; y: number };
+  parentId: string;
+  direction: 'incoming' | 'outgoing';
+  edgeType: string;
+  count: number;
+  nodeWidth: number;
+  nodeHeight: number;
+  exemplarData?: any;
+}): Node<T> {
+  const { id, position, parentId, direction, edgeType, count, nodeWidth, nodeHeight, exemplarData } = params;
+  return {
+    id,
+    type: 'horizonGroup' as any,
+    position,
+    selectable: false,
+    draggable: false,
+    connectable: false,
+    focusable: false,
+    deletable: false,
+    // Minimal size; ReactFlow will expand parent if children have expandParent=true
+    style: { width: Math.max(220, nodeWidth + 40), height: Math.max(120, nodeHeight + 60), zIndex: 0 } as any,
+    data: {
+      ...(exemplarData || {}),
+      isGroup: true,
+      groupParentId: parentId,
+      groupDirection: direction,
+      groupEdgeType: edgeType,
+      groupCount: count,
+    } as any,
+  };
+}
+
+function attachChildToGroup<T = any>(
+  child: Node<T>,
+  groupId: string,
+  relPos: { x: number; y: number },
+): Node<T> {
+  return {
+    ...child,
+    parentId: groupId,
+    // ReactFlow legacy prop still supported, but we should use parentId
+    // parentNode: groupId,
+    extent: 'parent' as any,
+    expandParent: true,
+    zIndex: 1,
+    position: relPos,
+  };
+}
+
 export interface LayoutOptions_Custom {
   /** Use incremental layout (existing nodes keep positions) */
   incremental?: boolean;
@@ -613,29 +664,17 @@ export async function layoutExpansionWithGroups<T = any>(
         const pos = findFreeRect(desiredX, desiredY, dim.w, dim.h, dir === 'outgoing');
 
         const groupId = defaultGroupId(parentNodeId, dir, g.edgeType);
-        const groupNode: Node<T> = {
+        const groupNode: Node<T> = makeGroupParentNode({
           id: groupId,
-          type: 'horizonGroup' as any,
           position: pos,
-          selectable: false,
-          draggable: false,
-          connectable: false,
-          focusable: false,
-          deletable: false,
-          style: {
-            width: dim.w,
-            height: dim.h,
-            zIndex: 0,
-          } as any,
-          data: {
-            ...(g.nodes[0]?.data as any),
-            isGroup: true,
-            groupParentId: parentNodeId,
-            groupDirection: dir,
-            groupEdgeType: g.edgeType,
-            groupCount: g.nodes.length,
-          } as any,
-        };
+          parentId: parentNodeId,
+          direction: dir,
+          edgeType: g.edgeType,
+          count: g.nodes.length,
+          nodeWidth,
+          nodeHeight,
+          exemplarData: g.nodes[0]?.data,
+        });
         positionedGroupNodes.push(groupNode);
 
         // Layout children inside group
@@ -644,9 +683,9 @@ export async function layoutExpansionWithGroups<T = any>(
           const child = g.nodes[idx];
           const rowIdx = Math.floor(idx / dim.nodesPerRow);
           const colIdx = idx % dim.nodesPerRow;
-          const cx = pos.x + GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
-          const cy = pos.y + padTop + rowIdx * (nodeHeight + childGapY);
-          positionedChildren.push({ ...child, position: { x: cx, y: cy } });
+          const cx = GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
+          const cy = padTop + rowIdx * (nodeHeight + childGapY);
+          positionedChildren.push(attachChildToGroup(child, groupId, { x: cx, y: cy }));
         }
 
         xCursor += dim.w + GROUP_GAP_X;
@@ -672,7 +711,8 @@ export async function layoutExpansionWithGroups<T = any>(
 
 /**
  * Rebuild visual group containers for all parents based on current child positions.
- * Does NOT move fragment nodes; only adds/updates group nodes.
+ * Converts groups into true parent containers (`parentId`) and converts child positions to be relative.
+ * Does NOT re-layout fragments; only wraps existing positions into containers.
  */
 export function rebuildGroupContainers<T = any>(
   nodes: Node<T>[],
@@ -683,7 +723,15 @@ export function rebuildGroupContainers<T = any>(
     nodeHeight = DEFAULT_NODE_HEIGHT,
   } = options;
 
-  const fragments = nodes.filter((n) => !isGroupNode(n as any));
+  const fragments = nodes.filter((n) => !isGroupNode(n as any)).map((n) => {
+    // ensure we drop any previous grouping so we can rebuild deterministically
+    const out: any = { ...n };
+    delete out.parentId;
+    delete out.parentNode;
+    delete out.extent;
+    delete out.expandParent;
+    return out as Node<T>;
+  });
 
   type Key = string;
   const groups = new Map<Key, Node<T>[]>();
@@ -700,6 +748,7 @@ export function rebuildGroupContainers<T = any>(
   }
 
   const groupNodes: Node<T>[] = [];
+  const updatedChildren: Node<T>[] = [];
   for (const [key, kids] of groups.entries()) {
     if (kids.length === 0) continue;
     const [parentId, direction, edgeType] = key.split('::');
@@ -718,31 +767,32 @@ export function rebuildGroupContainers<T = any>(
 
     const x = minX - GROUP_PADDING_X;
     const y = minY - GROUP_HEADER_HEIGHT;
-    const w = (maxX - minX) + GROUP_PADDING_X * 2;
-    const h = (maxY - minY) + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM;
+    // No manual sizing: parent will expand to include children.
 
-    groupNodes.push({
-      id: defaultGroupId(parentId, direction as any, edgeType),
-      type: 'horizonGroup' as any,
-      position: { x, y },
-      selectable: false,
-      draggable: false,
-      connectable: false,
-      focusable: false,
-      deletable: false,
-      style: { width: w, height: h, zIndex: 0 } as any,
-      data: {
-        ...(kids[0]?.data as any),
-        isGroup: true,
-        groupParentId: parentId,
-        groupDirection: direction as any,
-        groupEdgeType: edgeType,
-        groupCount: kids.length,
-      } as any,
-    });
+    const gid = defaultGroupId(parentId, direction as any, edgeType);
+    groupNodes.push(
+      makeGroupParentNode({
+        id: gid,
+        position: { x, y },
+        parentId,
+        direction: direction as any,
+        edgeType,
+        count: kids.length,
+        nodeWidth,
+        nodeHeight,
+        exemplarData: kids[0]?.data,
+      }),
+    );
+
+    for (const child of kids) {
+      updatedChildren.push(attachChildToGroup(child, gid, { x: child.position.x - x, y: child.position.y - y }));
+    }
   }
 
-  return [...fragments, ...groupNodes];
+  // Include fragments that weren't part of any group (roots, etc.)
+  const groupedChildIds = new Set(updatedChildren.map((n) => n.id));
+  const passthrough = fragments.filter((n) => !groupedChildIds.has(n.id));
+  return [...passthrough, ...updatedChildren, ...groupNodes];
 }
 
 /**
