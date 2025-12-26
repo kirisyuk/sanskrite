@@ -23,6 +23,12 @@ export interface HorizonNodeData {
   critical?: boolean;
   onLoadRelated?: (fragmentId: string) => void; // Функция для загрузки связанных элементов
   isLoadingRelated?: boolean; // Флаг загрузки связанных элементов
+  // Group/container nodes (UI-only, not persisted)
+  isGroup?: boolean;
+  groupParentId?: string;
+  groupDirection?: 'incoming' | 'outgoing';
+  groupEdgeType?: string;
+  groupCount?: number;
   [key: string]: any;
 }
 
@@ -262,6 +268,152 @@ const getMetricColor = (key: string, value: number): string => {
   if (normalizedValue >= 0.7) return '#22C55E'; // green
   if (normalizedValue >= 0.4) return '#F59E0B'; // amber
   return '#EF4444'; // red
+};
+
+const EDGE_GROUP_COLORS: Record<
+  string,
+  { light: string; dark: string; borderLight: string; borderDark: string }
+> = {
+  // Competition / conflict
+  COMPETES_WITH: {
+    light: 'rgba(239, 68, 68, 0.10)',
+    dark: 'rgba(239, 68, 68, 0.12)',
+    borderLight: 'rgba(239, 68, 68, 0.50)',
+    borderDark: 'rgba(248, 113, 113, 0.55)',
+  },
+  CONFLICTS_WITH: {
+    light: 'rgba(239, 68, 68, 0.10)',
+    dark: 'rgba(239, 68, 68, 0.12)',
+    borderLight: 'rgba(239, 68, 68, 0.50)',
+    borderDark: 'rgba(248, 113, 113, 0.55)',
+  },
+  OPPOSES: {
+    light: 'rgba(239, 68, 68, 0.10)',
+    dark: 'rgba(239, 68, 68, 0.12)',
+    borderLight: 'rgba(239, 68, 68, 0.50)',
+    borderDark: 'rgba(248, 113, 113, 0.55)',
+  },
+  // Influence
+  INFLUENCES: {
+    light: 'rgba(249, 115, 22, 0.10)',
+    dark: 'rgba(249, 115, 22, 0.12)',
+    borderLight: 'rgba(249, 115, 22, 0.45)',
+    borderDark: 'rgba(251, 146, 60, 0.55)',
+  },
+  AFFECTS: {
+    light: 'rgba(249, 115, 22, 0.10)',
+    dark: 'rgba(249, 115, 22, 0.12)',
+    borderLight: 'rgba(249, 115, 22, 0.45)',
+    borderDark: 'rgba(251, 146, 60, 0.55)',
+  },
+  REGULATES: {
+    light: 'rgba(249, 115, 22, 0.10)',
+    dark: 'rgba(249, 115, 22, 0.12)',
+    borderLight: 'rgba(249, 115, 22, 0.45)',
+    borderDark: 'rgba(251, 146, 60, 0.55)',
+  },
+  IMPACTS: {
+    light: 'rgba(249, 115, 22, 0.10)',
+    dark: 'rgba(249, 115, 22, 0.12)',
+    borderLight: 'rgba(249, 115, 22, 0.45)',
+    borderDark: 'rgba(251, 146, 60, 0.55)',
+  },
+  // Ownership / hierarchy
+  OWNS: {
+    light: 'rgba(59, 130, 246, 0.10)',
+    dark: 'rgba(59, 130, 246, 0.12)',
+    borderLight: 'rgba(59, 130, 246, 0.45)',
+    borderDark: 'rgba(96, 165, 250, 0.55)',
+  },
+  MANAGES: {
+    light: 'rgba(59, 130, 246, 0.10)',
+    dark: 'rgba(59, 130, 246, 0.12)',
+    borderLight: 'rgba(59, 130, 246, 0.45)',
+    borderDark: 'rgba(96, 165, 250, 0.55)',
+  },
+  CONTROLS: {
+    light: 'rgba(59, 130, 246, 0.10)',
+    dark: 'rgba(59, 130, 246, 0.12)',
+    borderLight: 'rgba(59, 130, 246, 0.45)',
+    borderDark: 'rgba(96, 165, 250, 0.55)',
+  },
+  PARENT_OF: {
+    light: 'rgba(59, 130, 246, 0.10)',
+    dark: 'rgba(59, 130, 246, 0.12)',
+    borderLight: 'rgba(59, 130, 246, 0.45)',
+    borderDark: 'rgba(96, 165, 250, 0.55)',
+  },
+  SUBSIDIARY_OF: {
+    light: 'rgba(59, 130, 246, 0.10)',
+    dark: 'rgba(59, 130, 246, 0.12)',
+    borderLight: 'rgba(59, 130, 246, 0.45)',
+    borderDark: 'rgba(96, 165, 250, 0.55)',
+  },
+  // Default / other
+  OTHER: {
+    light: 'rgba(100, 116, 139, 0.08)',
+    dark: 'rgba(148, 163, 184, 0.10)',
+    borderLight: 'rgba(100, 116, 139, 0.35)',
+    borderDark: 'rgba(148, 163, 184, 0.40)',
+  },
+};
+
+const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().trim() || 'OTHER';
+
+const HorizonGroupNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
+  const { theme } = React.useContext(ThemeContext);
+  const edgeType = normalizeEdgeType(data.groupEdgeType);
+  const scheme = EDGE_GROUP_COLORS[edgeType] || EDGE_GROUP_COLORS.OTHER;
+  const bg = theme === 'dark' ? scheme.dark : scheme.light;
+  const border = theme === 'dark' ? scheme.borderDark : scheme.borderLight;
+  const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.85)';
+  const subtitleColor = theme === 'dark' ? 'rgba(255,255,255,0.55)' : 'rgba(15,23,42,0.55)';
+  const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
+  const dir = data.groupDirection || 'outgoing';
+
+  return (
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        background: bg,
+        border: `1px dashed ${border}`,
+        borderRadius: 12,
+        boxShadow: theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)',
+        pointerEvents: 'none',
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          left: 12,
+          top: 10,
+          right: 12,
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          gap: 10,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', color: titleColor, textTransform: 'uppercase' }}>
+            {edgeType}
+          </div>
+          {count !== undefined && (
+            <div style={{ fontSize: 11, fontWeight: 600, color: subtitleColor }}>
+              {count}
+            </div>
+          )}
+        </div>
+        <div style={{ fontSize: 10, fontWeight: 600, color: subtitleColor, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+          {dir === 'incoming' ? 'incoming' : 'outgoing'}
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // Базовый узел для Horizon фрагмента
@@ -553,4 +705,5 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
 // Экспортируем типы нод для Horizon графа
 export const HORIZON_NODE_TYPES: NodeTypes = Object.freeze({
   horizonFragment: HorizonFragmentNode,
+  horizonGroup: HorizonGroupNode,
 });

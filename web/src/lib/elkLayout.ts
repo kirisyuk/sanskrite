@@ -68,6 +68,21 @@ const getEdgePriority = (edgeType: string | undefined): number => {
   return EDGE_TYPE_PRIORITY[type] ?? DEFAULT_EDGE_PRIORITY;
 };
 
+const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().trim() || 'OTHER';
+
+const makeSafeId = (raw: string) => raw.replace(/[^a-zA-Z0-9:_-]/g, '_');
+
+const isGroupNode = (n: Node<any>) => Boolean((n.data as any)?.isGroup);
+
+const GROUP_PADDING_X = 16;
+const GROUP_PADDING_BOTTOM = 16;
+const GROUP_HEADER_HEIGHT = 34; // space for label row in container
+const GROUP_GAP_X = 40;
+const GROUP_GAP_Y = 40;
+
+const defaultGroupId = (parentId: string, direction: 'incoming' | 'outgoing', edgeType: string) =>
+  makeSafeId(`group:${parentId}:${direction}:${edgeType || 'OTHER'}`);
+
 export interface LayoutOptions_Custom {
   /** Use incremental layout (existing nodes keep positions) */
   incremental?: boolean;
@@ -371,6 +386,363 @@ export async function layoutNewNodesAroundParent<T = any>(
   const positionedOutgoing = layoutGroup(outgoingNodes, outgoingStartY, false);
   
   return [...existingNodes, ...positionedIncoming, ...positionedOutgoing];
+}
+
+/**
+ * Variant C (local re-layout): group children by (incoming/outgoing × edgeType) and layout
+ * only the expanded neighborhood (its children + their group containers). All other nodes stay fixed.
+ *
+ * This drastically reduces "spaghetti" on hub expansions while preserving mental map.
+ */
+export async function layoutExpansionWithGroups<T = any>(
+  existingNodes: Node<T>[],
+  newNodes: Node<T>[],
+  parentNodeId: string,
+  options: LayoutOptions_Custom = {},
+): Promise<Node<T>[]> {
+  if (newNodes.length === 0) return existingNodes;
+
+  const parentNode = existingNodes.find((n) => n.id === parentNodeId);
+  if (!parentNode) {
+    console.warn('[ELK] Parent node not found:', parentNodeId);
+    return [...existingNodes, ...newNodes];
+  }
+
+  const {
+    nodeWidth = DEFAULT_NODE_WIDTH,
+    nodeHeight = DEFAULT_NODE_HEIGHT,
+    nodeSpacing = 60,
+    layerSpacing = 150,
+    maxChildRows = MAX_CHILD_ROWS,
+  } = options;
+
+  // Neighborhood to re-layout: all existing children of the parent + newly added children.
+  const existingChildren = existingNodes.filter((n) => {
+    if (isGroupNode(n as any)) return false;
+    const d: any = n.data;
+    return d?.parentFragmentId === parentNodeId;
+  });
+
+  // Remove any old group containers for this parent; we'll rebuild them.
+  const fixedNodes = existingNodes.filter((n) => {
+    const d: any = n.data;
+    if (d?.isGroup && d?.groupParentId === parentNodeId) return false;
+    if (!isGroupNode(n as any) && d?.parentFragmentId === parentNodeId) return false;
+    return true;
+  });
+
+  const neighborhoodChildren: Node<T>[] = [...existingChildren, ...newNodes];
+
+  // Build occupancy grid for fixed nodes only (avoid overlaps while placing containers)
+  const cellSize = 40;
+  const occupied = new Map<string, boolean>();
+  const padding = 20;
+
+  const gridKey = (x: number, y: number) => `${Math.floor(x / cellSize)},${Math.floor(y / cellSize)}`;
+
+  const markRectOccupied = (x: number, y: number, w: number, h: number) => {
+    const left = x - padding;
+    const right = x + w + padding;
+    const top = y - padding;
+    const bottom = y + h + padding;
+    for (let xx = left; xx <= right; xx += cellSize) {
+      for (let yy = top; yy <= bottom; yy += cellSize) {
+        occupied.set(gridKey(xx, yy), true);
+      }
+    }
+  };
+
+  const isRectFree = (x: number, y: number, w: number, h: number): boolean => {
+    for (let dx = 0; dx <= w; dx += cellSize) {
+      for (let dy = 0; dy <= h; dy += cellSize) {
+        if (occupied.get(gridKey(x + dx, y + dy))) return false;
+      }
+    }
+    return true;
+  };
+
+  for (const node of fixedNodes) {
+    // Group nodes for other parents are treated as fixed obstacles too
+    const rawW: any = (node.style as any)?.width;
+    const rawH: any = (node.style as any)?.height;
+    const w =
+      typeof rawW === 'number'
+        ? rawW
+        : typeof rawW === 'string'
+          ? parseFloat(rawW)
+          : nodeWidth;
+    const h =
+      typeof rawH === 'number'
+        ? rawH
+        : typeof rawH === 'string'
+          ? parseFloat(rawH)
+          : nodeHeight;
+
+    const ww = isGroupNode(node as any) && Number.isFinite(w) ? w : nodeWidth;
+    const hh = isGroupNode(node as any) && Number.isFinite(h) ? h : nodeHeight;
+    markRectOccupied(node.position.x, node.position.y, ww, hh);
+  }
+
+  const findFreeRect = (
+    desiredX: number,
+    desiredY: number,
+    w: number,
+    h: number,
+    preferDown: boolean,
+  ): { x: number; y: number } => {
+    if (isRectFree(desiredX, desiredY, w, h)) {
+      markRectOccupied(desiredX, desiredY, w, h);
+      return { x: desiredX, y: desiredY };
+    }
+
+    const stepX = Math.max(nodeWidth + nodeSpacing, Math.floor(w / 2));
+    const stepY = Math.max(nodeHeight + Math.floor(nodeSpacing / 2), Math.floor(h / 2));
+
+    for (let ring = 1; ring <= 10; ring++) {
+      for (let dx = -ring; dx <= ring; dx++) {
+        // Prefer down (outgoing) or up (incoming)
+        for (let dy = 0; dy <= ring; dy++) {
+          const ddy = preferDown ? dy : -dy;
+          const x = desiredX + dx * stepX;
+          const y = desiredY + ddy * stepY;
+          if (isRectFree(x, y, w, h)) {
+            markRectOccupied(x, y, w, h);
+            return { x, y };
+          }
+        }
+      }
+    }
+
+    markRectOccupied(desiredX, desiredY, w, h);
+    return { x: desiredX, y: desiredY };
+  };
+
+  // Group children by direction and edge type
+  type GroupKey = string;
+  type Group = { direction: 'incoming' | 'outgoing'; edgeType: string; nodes: Node<T>[] };
+  const groupsMap = new Map<GroupKey, Group>();
+  for (const child of neighborhoodChildren) {
+    const d: any = child.data;
+    const direction: 'incoming' | 'outgoing' = d?.directionFromParent === 'incoming' ? 'incoming' : 'outgoing';
+    const edgeType = normalizeEdgeType(d?.edgeTypeFromParent);
+    const key = `${direction}::${edgeType}`;
+    const g = groupsMap.get(key) || { direction, edgeType, nodes: [] };
+    g.nodes.push(child);
+    groupsMap.set(key, g);
+  }
+
+  const groups = Array.from(groupsMap.values())
+    .map((g) => {
+      // Stable order of children within group: by edge priority then label/id.
+      const sorted = [...g.nodes].sort((a, b) => {
+        const ap = getEdgePriority((a.data as any)?.edgeTypeFromParent);
+        const bp = getEdgePriority((b.data as any)?.edgeTypeFromParent);
+        if (ap !== bp) return ap - bp;
+        const al = String((a.data as any)?.label || a.id);
+        const bl = String((b.data as any)?.label || b.id);
+        return al.localeCompare(bl);
+      });
+      return { ...g, nodes: sorted };
+    })
+    .sort((a, b) => {
+      const ap = getEdgePriority(a.edgeType);
+      const bp = getEdgePriority(b.edgeType);
+      if (ap !== bp) return ap - bp;
+      return a.edgeType.localeCompare(b.edgeType);
+    });
+
+  const parentX = parentNode.position.x;
+  const parentY = parentNode.position.y;
+  const parentCenterX = parentX + nodeWidth / 2;
+
+  // Precompute group bbox sizes from child grid
+  const childGapX = nodeSpacing;
+  const childGapY = Math.max(32, Math.floor(nodeSpacing * 0.8));
+
+  const groupDims = (count: number) => {
+    const nodesPerRow = Math.max(1, Math.ceil(count / maxChildRows));
+    const rows = Math.min(maxChildRows, Math.ceil(count / nodesPerRow));
+    const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * childGapX;
+    const innerH = rows * nodeHeight + Math.max(0, rows - 1) * childGapY;
+    const w = innerW + GROUP_PADDING_X * 2;
+    const h = innerH + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM;
+    return { w, h, nodesPerRow, rows };
+  };
+
+  const layoutDirection = (dir: 'incoming' | 'outgoing') => {
+    const dirGroups = groups.filter((g) => g.direction === dir);
+    if (dirGroups.length === 0) return { groupNodes: [] as Node<T>[], positionedChildren: [] as Node<T>[] };
+
+    const maxGroupRows = 2;
+    const groupsPerRow = Math.max(1, Math.ceil(dirGroups.length / maxGroupRows));
+    const rows = Math.ceil(dirGroups.length / groupsPerRow);
+
+    const rowGroups: Array<Array<{ g: Group; dim: ReturnType<typeof groupDims> }>> = [];
+    for (let r = 0; r < rows; r++) {
+      const start = r * groupsPerRow;
+      const slice = dirGroups.slice(start, start + groupsPerRow).map((g) => ({ g, dim: groupDims(g.nodes.length) }));
+      rowGroups.push(slice);
+    }
+
+    // For incoming: row 0 is closest to parent (lower); for outgoing: row 0 is closest (upper)
+    const positionedGroupNodes: Node<T>[] = [];
+    const positionedChildren: Node<T>[] = [];
+
+    let currentRowAnchorY: number;
+    if (dir === 'incoming') {
+      // Place the closest row just above parent
+      const firstRowMaxH = Math.max(...rowGroups[0].map((x) => x.dim.h));
+      currentRowAnchorY = parentY - layerSpacing - firstRowMaxH;
+    } else {
+      currentRowAnchorY = parentY + nodeHeight + layerSpacing;
+    }
+
+    for (let r = 0; r < rowGroups.length; r++) {
+      const row = rowGroups[r];
+      const rowMaxH = Math.max(...row.map((x) => x.dim.h));
+      const rowW = row.reduce((acc, x) => acc + x.dim.w, 0) + Math.max(0, row.length - 1) * GROUP_GAP_X;
+      const startX = parentCenterX - rowW / 2;
+
+      let xCursor = startX;
+      // For incoming, ensure anchor accounts for the tallest group in the row
+      const rowY = dir === 'incoming' ? currentRowAnchorY : currentRowAnchorY;
+
+      for (const { g, dim } of row) {
+        const desiredX = xCursor;
+        const desiredY = rowY + (dir === 'incoming' ? (rowMaxH - dim.h) : 0);
+        const pos = findFreeRect(desiredX, desiredY, dim.w, dim.h, dir === 'outgoing');
+
+        const groupId = defaultGroupId(parentNodeId, dir, g.edgeType);
+        const groupNode: Node<T> = {
+          id: groupId,
+          type: 'horizonGroup' as any,
+          position: pos,
+          selectable: false,
+          draggable: false,
+          connectable: false,
+          focusable: false,
+          deletable: false,
+          style: {
+            width: dim.w,
+            height: dim.h,
+            zIndex: 0,
+          } as any,
+          data: {
+            ...(g.nodes[0]?.data as any),
+            isGroup: true,
+            groupParentId: parentNodeId,
+            groupDirection: dir,
+            groupEdgeType: g.edgeType,
+            groupCount: g.nodes.length,
+          } as any,
+        };
+        positionedGroupNodes.push(groupNode);
+
+        // Layout children inside group
+        const padTop = GROUP_HEADER_HEIGHT;
+        for (let idx = 0; idx < g.nodes.length; idx++) {
+          const child = g.nodes[idx];
+          const rowIdx = Math.floor(idx / dim.nodesPerRow);
+          const colIdx = idx % dim.nodesPerRow;
+          const cx = pos.x + GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
+          const cy = pos.y + padTop + rowIdx * (nodeHeight + childGapY);
+          positionedChildren.push({ ...child, position: { x: cx, y: cy } });
+        }
+
+        xCursor += dim.w + GROUP_GAP_X;
+      }
+
+      if (dir === 'incoming') {
+        // Move next row further up
+        const nextRowMaxH = r + 1 < rowGroups.length ? Math.max(...rowGroups[r + 1].map((x) => x.dim.h)) : 0;
+        currentRowAnchorY = currentRowAnchorY - GROUP_GAP_Y - nextRowMaxH;
+      } else {
+        currentRowAnchorY = currentRowAnchorY + rowMaxH + GROUP_GAP_Y;
+      }
+    }
+
+    return { groupNodes: positionedGroupNodes, positionedChildren };
+  };
+
+  const incoming = layoutDirection('incoming');
+  const outgoing = layoutDirection('outgoing');
+
+  return [...fixedNodes, ...incoming.groupNodes, ...outgoing.groupNodes, ...incoming.positionedChildren, ...outgoing.positionedChildren];
+}
+
+/**
+ * Rebuild visual group containers for all parents based on current child positions.
+ * Does NOT move fragment nodes; only adds/updates group nodes.
+ */
+export function rebuildGroupContainers<T = any>(
+  nodes: Node<T>[],
+  options: LayoutOptions_Custom = {},
+): Node<T>[] {
+  const {
+    nodeWidth = DEFAULT_NODE_WIDTH,
+    nodeHeight = DEFAULT_NODE_HEIGHT,
+  } = options;
+
+  const fragments = nodes.filter((n) => !isGroupNode(n as any));
+
+  type Key = string;
+  const groups = new Map<Key, Node<T>[]>();
+  for (const n of fragments) {
+    const d: any = n.data;
+    const parentId = d?.parentFragmentId;
+    if (!parentId) continue;
+    const direction: 'incoming' | 'outgoing' = d?.directionFromParent === 'incoming' ? 'incoming' : 'outgoing';
+    const edgeType = normalizeEdgeType(d?.edgeTypeFromParent);
+    const key = `${parentId}::${direction}::${edgeType}`;
+    const arr = groups.get(key) || [];
+    arr.push(n);
+    groups.set(key, arr);
+  }
+
+  const groupNodes: Node<T>[] = [];
+  for (const [key, kids] of groups.entries()) {
+    if (kids.length === 0) continue;
+    const [parentId, direction, edgeType] = key.split('::');
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (const k of kids) {
+      minX = Math.min(minX, k.position.x);
+      minY = Math.min(minY, k.position.y);
+      maxX = Math.max(maxX, k.position.x + nodeWidth);
+      maxY = Math.max(maxY, k.position.y + nodeHeight);
+    }
+
+    const x = minX - GROUP_PADDING_X;
+    const y = minY - GROUP_HEADER_HEIGHT;
+    const w = (maxX - minX) + GROUP_PADDING_X * 2;
+    const h = (maxY - minY) + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM;
+
+    groupNodes.push({
+      id: defaultGroupId(parentId, direction as any, edgeType),
+      type: 'horizonGroup' as any,
+      position: { x, y },
+      selectable: false,
+      draggable: false,
+      connectable: false,
+      focusable: false,
+      deletable: false,
+      style: { width: w, height: h, zIndex: 0 } as any,
+      data: {
+        ...(kids[0]?.data as any),
+        isGroup: true,
+        groupParentId: parentId,
+        groupDirection: direction as any,
+        groupEdgeType: edgeType,
+        groupCount: kids.length,
+      } as any,
+    });
+  }
+
+  return [...fragments, ...groupNodes];
 }
 
 /**

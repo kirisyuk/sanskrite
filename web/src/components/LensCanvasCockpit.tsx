@@ -14,7 +14,7 @@ import 'reactflow/dist/style.css';
 import { ThemeContext } from './ThemeProvider';
 import { HORIZON_NODE_TYPES } from './HorizonGraphNodeTypes';
 import { api } from '../lib/api';
-import { layoutFullGraph, layoutNewNodesAroundParent } from '../lib/elkLayout';
+import { layoutExpansionWithGroups, layoutFullGraph, rebuildGroupContainers } from '../lib/elkLayout';
 import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 
@@ -160,7 +160,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
     const loadLensItems = async () => {
       try {
-        const items = await api.getLensItems(lensId);
+        const itemsRaw = await api.getLensItems(lensId);
+        const items = Array.isArray(itemsRaw) ? (itemsRaw as LensItem[]) : [];
+        if (!Array.isArray(itemsRaw)) {
+          console.warn('[Cockpit] getLensItems returned non-array, defaulting to []:', itemsRaw);
+        }
         setLensItems(items);
         
         // Преобразуем LensItems в ноды и рёбра
@@ -185,9 +189,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   }, [lensId, setNodes, setEdges]);
 
   // Преобразование LensItems в ReactFlow ноды и рёбра
-  const convertLensItemsToGraph = useCallback((items: LensItem[]) => {
-    console.log('[Cockpit] convertLensItemsToGraph called with items:', items.length);
-    console.log('[Cockpit] Sample items:', items.slice(0, 3).map(item => ({ 
+  const convertLensItemsToGraph = useCallback((items: LensItem[] | null | undefined) => {
+    const safeItems: LensItem[] = Array.isArray(items) ? items : [];
+    if (!Array.isArray(items)) {
+      console.warn('[Cockpit] convertLensItemsToGraph received non-array, defaulting to []:', items);
+    }
+    console.log('[Cockpit] convertLensItemsToGraph called with items:', safeItems.length);
+    console.log('[Cockpit] Sample items:', safeItems.slice(0, 3).map(item => ({ 
       id: item.id, 
       kind: item.kind, 
       fragmentId: item.fragmentId,
@@ -204,7 +212,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
     // Обрабатываем ноды
     // Determine node items: explicit kind='node' OR has fragmentId (fallback for items without kind)
-    const nodeItems = items.filter(item => {
+    const nodeItems = safeItems.filter(item => {
       const kind = item.kind;
       const isExplicitNode = kind === 'node';
       const hasFragmentId = !!item.fragmentId;
@@ -217,7 +225,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       
       return isExplicitNode || isLikelyNode;
     });
-    console.log('[Cockpit] Filtered node items:', nodeItems.length, 'out of', items.length);
+    console.log('[Cockpit] Filtered node items:', nodeItems.length, 'out of', safeItems.length);
     console.log('[Cockpit] Node items details:', nodeItems.map(item => ({
       id: item.id,
       fragmentId: item.fragmentId,
@@ -266,7 +274,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
     // Обрабатываем рёбра
     // Determine edge items: explicit kind='edge' OR has sourceFragmentId and targetFragmentId (fallback)
-    const edgeItems = items.filter(item => {
+    const edgeItems = safeItems.filter(item => {
       const kind = item.kind;
       const isExplicitEdge = kind === 'edge';
       const hasSourceAndTarget = !!(item.sourceFragmentId && item.targetFragmentId);
@@ -839,11 +847,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       // Применяем ELK layout для позиционирования новых узлов относительно родителя
       console.log('[Cockpit] Applying ELK layout for new nodes:', newNodes.length);
-      const allEdges = [...currentEdges, ...newEdges];
-      const layoutedNodes = await layoutNewNodesAroundParent(
+      const layoutedNodes = await layoutExpansionWithGroups(
         currentNodes,
         newNodes,
-        allEdges,
         fragmentId,
         {
           nodeWidth: ELK_NODE_WIDTH,
@@ -907,8 +913,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     try {
       console.log('[Cockpit] Arranging', nodes.length, 'nodes and', edges.length, 'edges');
 
-      // Применяем полный ELK layout ко всем нодам
-      const arrangedNodes = await layoutFullGraph(nodes, edges, {
+      // Применяем полный layout только к фрагментам (UI-группы пересоберём отдельно)
+      const fragmentNodes = nodes.filter((n) => !(n.data as any)?.isGroup);
+      const arrangedFragments = await layoutFullGraph(fragmentNodes, edges, {
         direction: 'DOWN',
         nodeWidth: ELK_NODE_WIDTH,
         nodeHeight: ELK_NODE_HEIGHT,
@@ -918,7 +925,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       });
 
       // Сохраняем onLoadRelated callback для каждой ноды
-      const finalNodes = arrangedNodes.map((node) => ({
+      const finalFragments = arrangedFragments.map((node) => ({
         ...node,
         data: {
           ...node.data,
@@ -926,11 +933,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         },
       }));
 
-      setNodes(finalNodes);
+      const withGroups = rebuildGroupContainers(finalFragments, {
+        nodeWidth: ELK_NODE_WIDTH,
+        nodeHeight: ELK_NODE_HEIGHT,
+      });
+      setNodes(withGroups);
 
       // Fit view после arrange
       setTimeout(() => {
-        if (reactFlowInstanceRef.current && finalNodes.length > 0) {
+        if (reactFlowInstanceRef.current && withGroups.length > 0) {
           reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 400 });
         }
       }, 100);
@@ -958,6 +969,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       // Преобразуем nodes в LensItems
       nodes.forEach((node) => {
         const nodeData = node.data;
+        // Skip UI-only container nodes
+        if ((nodeData as any)?.isGroup) return;
         const lensItem: LensItem = {
           id: nodeData.lensItemId || `node-${node.id}`,
           tenantId: '',
