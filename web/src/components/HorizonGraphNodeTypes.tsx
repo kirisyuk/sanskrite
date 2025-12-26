@@ -1,5 +1,5 @@
 import React from 'react';
-import { NodeTypes, Handle, Position } from 'reactflow';
+import { NodeTypes, Handle, Position, NodeProps } from 'reactflow';
 import { ThemeContext } from './ThemeProvider';
 
 // Типы нод для Horizon графа (на основе LensItem)
@@ -360,7 +360,7 @@ const EDGE_GROUP_COLORS: Record<
 
 const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().trim() || 'OTHER';
 
-const HorizonGroupNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
+const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected }) => {
   const { theme } = React.useContext(ThemeContext);
   const edgeType = normalizeEdgeType(data.groupEdgeType);
   const scheme = EDGE_GROUP_COLORS[edgeType] || EDGE_GROUP_COLORS.OTHER;
@@ -370,6 +370,7 @@ const HorizonGroupNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
   const subtitleColor = theme === 'dark' ? 'rgba(255,255,255,0.55)' : 'rgba(15,23,42,0.55)';
   const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
   const dir = data.groupDirection || 'outgoing';
+  const ring = selected ? (theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.20)') : undefined;
 
   return (
     <div
@@ -379,7 +380,9 @@ const HorizonGroupNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
         background: bg,
         border: `1px dashed ${border}`,
         borderRadius: 12,
-        boxShadow: theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)',
+        boxShadow:
+          (theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)') +
+          (ring ? `, 0 0 0 3px ${ring}` : ''),
         pointerEvents: 'auto',
         position: 'relative',
         overflow: 'hidden',
@@ -418,13 +421,14 @@ const HorizonGroupNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
 };
 
 // Базовый узел для Horizon фрагмента
-const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
+const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected }) => {
   const { theme } = React.useContext(ThemeContext);
   const colors = getNodeColors(data.type, theme);
   
   const isCritical = data.critical;
   const isCollapsed = data.collapsed;
   const isExpanded = data.expanded;
+  const isSelected = Boolean(selected);
   
   // Цвета с учётом состояния
   const bgColor = colors.bg;
@@ -432,9 +436,14 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
   const borderWidth = isCritical ? 3 : 2;
   const textColor = colors.text;
   const accentColor = isCritical ? '#EF4444' : colors.accent;
+  const selectedRing = theme === 'dark' ? 'rgba(255,255,255,0.30)' : 'rgba(15,23,42,0.18)';
 
   const displayLabel = data.label || data.canonicalPath?.split('/').pop() || 'Fragment';
   const displayType = data.type || 'Unknown';
+  // Keep node size consistent with ELK layout defaults used in the canvas (see LensCanvasCockpit)
+  const NODE_WIDTH_PX = 180;
+  const NODE_CARD_HEIGHT_PX = 148;
+  const PLUS_BUTTON_SIZE_PX = 26;
 
   // Форматирование типа для отображения
   const formatType = (type: string) => {
@@ -447,9 +456,11 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
         background: bgColor,
         border: `${borderWidth}px solid ${borderColor}`,
         borderRadius: '10px',
-        padding: isCollapsed ? '8px 12px' : '10px 14px',
-        minWidth: isCollapsed ? '100px' : '160px',
-        maxWidth: '280px',
+        // Reserve room at the bottom so the "+" button never overlaps metrics
+        padding: isCollapsed ? '8px 12px 32px' : '10px 14px 40px',
+        width: `${NODE_WIDTH_PX}px`,
+        height: `${NODE_CARD_HEIGHT_PX}px`,
+        boxSizing: 'border-box',
         boxShadow: isCritical
           ? `0 0 0 2px rgba(239, 68, 68, 0.3), 0 4px 12px rgba(239, 68, 68, 0.2)`
           : theme === 'dark' 
@@ -458,6 +469,9 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
         position: 'relative',
         opacity: isCollapsed ? 0.7 : 1,
         transition: 'all 0.2s ease',
+        // Selection highlight: use an outer ring (doesn't change layout/size)
+        outline: isSelected ? `3px solid ${selectedRing}` : undefined,
+        outlineOffset: isSelected ? 2 : undefined,
       }}
     >
       {/* Source handle снизу (для исходящих связей - от кнопки +) */}
@@ -470,7 +484,7 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
           width: '10px',
           height: '10px',
           border: `2px solid ${bgColor}`,
-          bottom: '-5px',
+          bottom: '0px',
         }}
       />
       
@@ -484,7 +498,7 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
           width: '10px',
           height: '10px',
           border: `2px solid ${bgColor}`,
-          top: '-5px',
+          top: '0px',
         }}
       />
       
@@ -537,7 +551,10 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
               fontWeight: 600,
               color: textColor,
               lineHeight: 1.3,
-              wordBreak: 'break-word',
+              overflow: 'hidden',
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical' as any,
+              WebkitLineClamp: 2 as any,
             }}
             title={displayLabel}
           >
@@ -647,10 +664,11 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
         <div
           style={{
             position: 'absolute',
-            bottom: '-16px',
+            bottom: '0px',
             left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 10,
+            // Place the CENTER of the circle exactly on the bottom border line of the card.
+            transform: 'translate(-50%, 50%)',
+            zIndex: 20,
           }}
         >
           <button
@@ -663,8 +681,8 @@ const HorizonFragmentNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
             }}
             disabled={data.isLoadingRelated}
             style={{
-              width: '26px',
-              height: '26px',
+              width: `${PLUS_BUTTON_SIZE_PX}px`,
+              height: `${PLUS_BUTTON_SIZE_PX}px`,
               borderRadius: '50%',
               border: `2px solid ${accentColor}`,
               background: bgColor,

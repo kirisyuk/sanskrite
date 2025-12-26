@@ -38,6 +38,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [loadingFragmentId, setLoadingFragmentId] = React.useState<string | null>(null);
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
+  const selectedNodeId = React.useMemo(() => {
+    const selected = nodes.find((n) => (n as any)?.selected && !((n.data as any)?.isGroup));
+    return selected?.id || null;
+  }, [nodes]);
 
   // Normalize IDs coming from backend / firestore / UI (avoid whitespace or non-string surprises)
   const norm = (v: unknown) => String(v ?? '').trim();
@@ -148,10 +152,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
   // ELK layout options
   const ELK_NODE_WIDTH = 180;
-  const ELK_NODE_HEIGHT = 80;
+  // Layout height includes the "+" button protruding half outside the visual card:
+  // visual card is 148px, plus button is 26px => add radius 13px => 161px.
+  const ELK_NODE_HEIGHT = 161;
   const ELK_NODE_SPACING = 60;
   const ELK_LAYER_SPACING = 150; // Увеличено для incoming/outgoing
-  const ELK_MAX_CHILD_ROWS = 2; // Максимум 2 строки детей
+  const ELK_MAX_CHILD_ROWS = 3; // Максимум 3 строки детей
 
   // Загружаем существующие LensItems при монтировании
   React.useEffect(() => {
@@ -1031,12 +1037,33 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       });
     }
 
+    // Selected node (when not hovering): highlight incident edges
+    if (selectedNodeId) {
+      const nodeId = selectedNodeId;
+      return edges.map((e) => {
+        const { baseStyle } = baseStyled(e);
+        const isIncident = e.source === nodeId || e.target === nodeId;
+        if (isIncident) {
+          const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+          return {
+            ...e,
+            style: {
+              ...baseStyle,
+              opacity: 1,
+              strokeWidth: strokeWidth + 0.75,
+            },
+          };
+        }
+        return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
+      });
+    }
+
     // Default: dim all edges
     return edges.map((e) => {
       const { baseStyle } = baseStyled(e);
       return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
     });
-  }, [edges, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType]);
+  }, [edges, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId]);
 
   // Функция для перераспределения всех видимых нод
   const handleArrange = useCallback(async () => {

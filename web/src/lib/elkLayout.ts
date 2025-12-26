@@ -15,10 +15,11 @@ const elk = new ELK();
 
 // Default node dimensions (should match your HorizonFragmentNode)
 const DEFAULT_NODE_WIDTH = 180;
-const DEFAULT_NODE_HEIGHT = 80;
+// Layout height includes the "+" button protruding half outside the visual card (26px button => +13px).
+const DEFAULT_NODE_HEIGHT = 161;
 
-// Maximum rows for children (2 = spread wider, fewer rows)
-const MAX_CHILD_ROWS = 2;
+// Maximum rows for children (3 = more rows, fewer columns)
+const MAX_CHILD_ROWS = 3;
 
 // Will be calculated dynamically to fit MAX_CHILD_ROWS
 const DEFAULT_MAX_NODES_PER_ROW = 8;
@@ -70,6 +71,16 @@ const getEdgePriority = (edgeType: string | undefined): number => {
 
 const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().trim() || 'OTHER';
 
+/**
+ * Normalize edge type for grouping purposes.
+ * OPERATES_IN and LOCATED_IN are grouped together as LOCATED_IN.
+ */
+const normalizeEdgeTypeForGrouping = (t: string | undefined): string => {
+  const normalized = normalizeEdgeType(t);
+  if (normalized === 'OPERATES_IN') return 'LOCATED_IN';
+  return normalized;
+};
+
 const makeSafeId = (raw: string) => raw.replace(/[^a-zA-Z0-9:_-]/g, '_');
 
 const isGroupNode = (n: Node<any>) => Boolean((n.data as any)?.isGroup);
@@ -90,11 +101,29 @@ function makeGroupParentNode<T = any>(params: {
   direction: 'incoming' | 'outgoing';
   edgeType: string;
   count: number;
+  /** Explicit container width (used to preserve padding and collision sizing) */
+  containerWidth?: number;
+  /** Explicit container height (used to preserve padding and collision sizing) */
+  containerHeight?: number;
   nodeWidth: number;
   nodeHeight: number;
   exemplarData?: any;
 }): Node<T> {
-  const { id, position, parentId, direction, edgeType, count, nodeWidth, nodeHeight, exemplarData } = params;
+  const {
+    id,
+    position,
+    parentId,
+    direction,
+    edgeType,
+    count,
+    containerWidth,
+    containerHeight,
+    nodeWidth,
+    nodeHeight,
+    exemplarData,
+  } = params;
+  const w = typeof containerWidth === 'number' && Number.isFinite(containerWidth) ? containerWidth : Math.max(220, nodeWidth + 40);
+  const h = typeof containerHeight === 'number' && Number.isFinite(containerHeight) ? containerHeight : Math.max(120, nodeHeight + 60);
   return {
     id,
     type: 'horizonGroup' as any,
@@ -104,8 +133,8 @@ function makeGroupParentNode<T = any>(params: {
     connectable: false,
     focusable: false,
     deletable: false,
-    // Minimal size; ReactFlow will expand parent if children have expandParent=true
-    style: { width: Math.max(220, nodeWidth + 40), height: Math.max(120, nodeHeight + 60), zIndex: 0 } as any,
+    // Explicit size so we preserve padding and collision detection is correct.
+    style: { width: w, height: h, zIndex: 0 } as any,
     data: {
       ...(exemplarData || {}),
       isGroup: true,
@@ -128,7 +157,6 @@ function attachChildToGroup<T = any>(
     // ReactFlow legacy prop still supported, but we should use parentId
     // parentNode: groupId,
     extent: 'parent' as any,
-    expandParent: true,
     zIndex: 1,
     position: relPos,
   };
@@ -151,7 +179,7 @@ export interface LayoutOptions_Custom {
   fixedNodeIds?: Set<string>;
   /** Maximum nodes per row before wrapping */
   maxNodesPerRow?: number;
-  /** Maximum number of rows for children (default 2) */
+  /** Maximum number of rows for children (default 3) */
   maxChildRows?: number;
 }
 
@@ -581,7 +609,7 @@ export async function layoutExpansionWithGroups<T = any>(
   for (const child of neighborhoodChildren) {
     const d: any = child.data;
     const direction: 'incoming' | 'outgoing' = d?.directionFromParent === 'incoming' ? 'incoming' : 'outgoing';
-    const edgeType = normalizeEdgeType(d?.edgeTypeFromParent);
+    const edgeType = normalizeEdgeTypeForGrouping(d?.edgeTypeFromParent);
     const key = `${direction}::${edgeType}`;
     const g = groupsMap.get(key) || { direction, edgeType, nodes: [] };
     g.nodes.push(child);
@@ -614,7 +642,8 @@ export async function layoutExpansionWithGroups<T = any>(
 
   // Precompute group bbox sizes from child grid
   const childGapX = nodeSpacing;
-  const childGapY = Math.max(32, Math.floor(nodeSpacing * 0.8));
+  // More vertical breathing room between nodes inside a group.
+  const childGapY = Math.max(48, Math.floor(nodeSpacing * 1.05));
 
   const groupDims = (count: number) => {
     const nodesPerRow = Math.max(1, Math.ceil(count / maxChildRows));
@@ -677,6 +706,8 @@ export async function layoutExpansionWithGroups<T = any>(
           direction: dir,
           edgeType: g.edgeType,
           count: g.nodes.length,
+          containerWidth: dim.w,
+          containerHeight: dim.h,
           nodeWidth,
           nodeHeight,
           exemplarData: g.nodes[0]?.data,
@@ -746,7 +777,7 @@ export function rebuildGroupContainers<T = any>(
     const parentId = d?.parentFragmentId;
     if (!parentId) continue;
     const direction: 'incoming' | 'outgoing' = d?.directionFromParent === 'incoming' ? 'incoming' : 'outgoing';
-    const edgeType = normalizeEdgeType(d?.edgeTypeFromParent);
+    const edgeType = normalizeEdgeTypeForGrouping(d?.edgeTypeFromParent);
     const key = `${parentId}::${direction}::${edgeType}`;
     const arr = groups.get(key) || [];
     arr.push(n);
@@ -773,7 +804,9 @@ export function rebuildGroupContainers<T = any>(
 
     const x = minX - GROUP_PADDING_X;
     const y = minY - GROUP_HEADER_HEIGHT;
-    // No manual sizing: parent will expand to include children.
+    // Explicit sizing to preserve padding (right/bottom) and avoid overlaps.
+    const w = (maxX - minX) + GROUP_PADDING_X * 2;
+    const h = (maxY - minY) + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM;
 
     const gid = defaultGroupId(parentId, direction as any, edgeType);
     groupNodes.push(
@@ -784,6 +817,8 @@ export function rebuildGroupContainers<T = any>(
         direction: direction as any,
         edgeType,
         count: kids.length,
+        containerWidth: w,
+        containerHeight: h,
         nodeWidth,
         nodeHeight,
         exemplarData: kids[0]?.data,
