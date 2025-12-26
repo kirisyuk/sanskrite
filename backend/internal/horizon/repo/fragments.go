@@ -183,6 +183,9 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	doc := r.col.NewDoc()
 	fragment.ID = doc.ID
 
+	// Build index paths for search/filtering
+	fragment.IndexPaths = models.BuildIndexPaths(fragment, nil)
+
 	if _, err := doc.Set(ctx, fragment); err != nil {
 		return "", err
 	}
@@ -374,6 +377,9 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 		// Версионирование не должно блокировать обновление
 		log.Printf("[HorizonFragments] Failed to create version for fragment %s: %v", currentFragment.ID, err)
 	}
+
+	// Rebuild index paths to reflect any changes
+	fragment.IndexPaths = models.BuildIndexPaths(fragment, nil)
 
 	_, err = r.col.Doc(fragment.ID).Set(ctx, fragment)
 	if err != nil {

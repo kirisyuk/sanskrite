@@ -88,6 +88,9 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 			Labels: map[string]string{
 				"en": strings.TrimSpace(label),
 			},
+			Identifiers: map[string]string{
+				"shortName": strings.TrimSpace(label),
+			},
 			Status: string(models.FragmentStatusActive),
 			State:  map[string]models.MetricValue{},
 			Governance: models.Governance{
@@ -96,12 +99,13 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 				Status: string(models.FragmentStatusActive),
 			},
 			Metadata: models.FragmentMetadata{
-				CreatedAt:      time.Now().UTC(),
-				LastUpdatedAt:  time.Now().UTC(),
-				LastVerifiedAt: time.Now().UTC(),
+				CreatedAt:       time.Now().UTC(),
+				LastUpdatedAt:   time.Now().UTC(),
+				LastVerifiedAt:  time.Now().UTC(),
 				EpistemicStatus: models.EpistemicStatusLowConfidence,
 			},
 		}
+		// IndexPaths will be built by fragmentsRepo.Create()
 		id, err := b.fragmentsRepo.Create(ctx, f)
 		if err != nil {
 			// Best-effort only.

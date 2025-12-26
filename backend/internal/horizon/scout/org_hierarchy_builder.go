@@ -193,6 +193,7 @@ func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, p
 			EpistemicStatus: models.EpistemicStatusLowConfidence,
 		},
 	}
+	// IndexPaths will be built by fragmentsRepo.Create()
 
 	id, err := b.fragmentsRepo.Create(ctx, f)
 	if err != nil {
