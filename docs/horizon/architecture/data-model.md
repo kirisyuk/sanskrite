@@ -212,6 +212,9 @@
     "/loc/tw/na/na",
     "/query/sector:/Technology/Semiconductors/**"
   ],
+  "exposurePaths": [
+    "/exposure/SUPPLY_CHAIN_RISK/objective/fragment/FRAGMENT_ID/path/PATH_ID"
+  ],
   "scopeFragments": {
     "/fac/tsmc/fab-21": "fragment-uuid-1",
     "/loc/tw/na/na": "fragment-uuid-2"
@@ -241,6 +244,58 @@
   "updatedAt": "2025-12-17T14:30:00Z"
 }
 ```
+
+#### Exposure Paths (канонизированные)
+
+**Идея**: ExposurePath — отдельный артефакт, который:
+- **ссылается** на объект внимания (objective) и, при необходимости, на related-объект
+- имеет **строгий тип сценария** (enum `ExposureType`)
+- хранится в линзе как **строка-ключ** (для быстрого UI/фильтрации)
+- хранится отдельно как документ (для дальнейшей сложной логики: пути, evidence, рейтинги, дельты во времени)
+
+**Канонический ключ** (строка в `lens.exposurePaths`):
+
+`/exposure/<EXPOSURE_TYPE>/objective/<kind>/<id>[/related/<kind>/<id>][/path/<pathId>]`
+
+Пример:
+- `/exposure/SUPPLY_CHAIN_RISK/objective/fragment/FRAGMENT_ID/path/PATH_ID`
+- `/exposure/SUPPLY_CHAIN_RISK/objective/fragment/FRAGMENT_ID/related/fragment/SUPPLIER_ID/path/PATH_ID`
+
+**Enum (пока)**:
+- `SUPPLY_CHAIN_RISK`
+
+### horizon_exposure_paths
+
+**Назначение**: Персистентные артефакты exposure paths (детали хранятся здесь, ключи — в Lens).
+
+**Структура документа (минимум)**:
+```json
+{
+  "id": "tenant__lens__hash",
+  "tenantId": "string",
+  "projectId": "string",
+  "lensId": "string",
+  "canonicalKey": "/exposure/SUPPLY_CHAIN_RISK/objective/fragment/FRAGMENT_ID/path/PATH_ID",
+  "prefixKey": "/exposure/SUPPLY_CHAIN_RISK/objective/fragment/FRAGMENT_ID",
+  "type": "SUPPLY_CHAIN_RISK",
+  "objectiveKind": "fragment",
+  "objectiveId": "FRAGMENT_ID",
+  "relatedKind": "fragment",
+  "relatedId": "SUPPLIER_ID",
+  "pathId": "PATH_ID",
+  "nodeIds": ["..."],
+  "edgeIds": ["..."],
+  "createdAt": "2025-12-26T00:00:00Z",
+  "updatedAt": "2025-12-26T00:00:00Z"
+}
+```
+
+**Индексы (Firestore)**:
+- `(tenantId, lensId, updatedAt DESC)` — list exposures by lens
+- `(tenantId, lensId, type, updatedAt DESC)` — list by lens + type
+
+**Дедуп/идемпотентность**:
+- DocID детерминирован: `tenantId__lensId__sha1(canonicalKey)` → позволяет Upsert без query по canonicalKey.
 
 **Индексы**:
 - `(tenantId, projectId, status, updatedAt DESC)` — для списка Lens проекта

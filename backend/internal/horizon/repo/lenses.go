@@ -159,3 +159,21 @@ func (r *LensesRepository) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// AddExposurePathKey appends a canonical exposure key string to the lens document using array union.
+// This is intentionally partial (does not validate full Lens), to support incremental workflows.
+func (r *LensesRepository) AddExposurePathKey(ctx context.Context, lensID string, rawKey string) (string, error) {
+	if lensID == "" {
+		return "", ErrInvalidDocument
+	}
+	canon, _, err := models.CanonicalizeExposureKey(rawKey)
+	if err != nil {
+		return "", err
+	}
+	updates := map[string]interface{}{
+		"exposurePaths": firestore.ArrayUnion(canon),
+		"updatedAt":     time.Now().UTC(),
+	}
+	_, err = r.col.Doc(lensID).Set(ctx, updates, firestore.MergeAll)
+	return canon, err
+}
+

@@ -38,6 +38,14 @@ type Lens struct {
 
 	// Timestamp последнего разрешения QueryAddress
 	LastResolved *time.Time `json:"lastResolved,omitempty" firestore:"lastResolved,omitempty"`
+
+	// ExposurePaths: canonical exposure path keys associated with this lens.
+	// Stored as strings for fast listing/filtering and to keep lens lightweight.
+	// Full details live in horizon_exposure_paths artifacts collection.
+	//
+	// Example:
+	//   /exposure/SUPPLY_CHAIN_RISK/objective/fragment/<fragmentId>/path/<pathId>
+	ExposurePaths []string `json:"exposurePaths,omitempty" firestore:"exposurePaths,omitempty"`
 }
 
 // LensStatus статус Lens

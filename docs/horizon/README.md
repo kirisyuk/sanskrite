@@ -96,6 +96,20 @@ Lens поддерживает два типа адресации в поле `sc
 
 Подробнее см. [QueryAddress](architecture/query-address.md).
 
+### ExposurePath (ранний фундамент)
+
+ExposurePath — **канонический, типизированный артефакт** вида “почему X экспонирован к Y”.
+
+- В `Lens` хранится массив строк: `exposurePaths[]` (канонические ключи)
+- Полные детали хранятся отдельными документами в `horizon_exposure_paths` (для последующей сложной логики: пути, evidence, версии во времени)
+
+Канонический ключ:
+
+`/exposure/<EXPOSURE_TYPE>/objective/<kind>/<id>[/related/<kind>/<id>][/path/<pathId>]`
+
+Реализованный `ExposureType`:
+- `SUPPLY_CHAIN_RISK`
+
 ### DependencyEdge (Ребро Зависимости)
 
 Направленная типизированная связь между двумя HorizonFragment, описывающая характер и силу влияния одного узла на другой.
