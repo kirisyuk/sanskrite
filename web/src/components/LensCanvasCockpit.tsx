@@ -36,6 +36,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [error, setError] = React.useState<string | null>(null);
   const [lensItems, setLensItems] = React.useState<LensItem[]>([]);
   const [loadingFragmentId, setLoadingFragmentId] = React.useState<string | null>(null);
+  const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
 
   // Normalize IDs coming from backend / firestore / UI (avoid whitespace or non-string surprises)
   const norm = (v: unknown) => String(v ?? '').trim();
@@ -141,6 +142,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       strokeWidth: baseWidth,
     };
   };
+
+  const normalizeEdgeType = useCallback((t: string | undefined) => (t || '').toUpperCase().trim(), []);
 
   // ELK layout options
   const ELK_NODE_WIDTH = 180;
@@ -289,6 +292,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const targetId = tFrag ? fragmentToNodeId.get(tFrag) : null;
 
         if (sourceId && targetId) {
+          const baseStyle = getEdgeStyle(item.edgeType, item.criticality);
           graphEdges.push({
             id: item.id,
             source: sourceId,
@@ -298,7 +302,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             markerEnd: {
               type: MarkerType.ArrowClosed,
             },
-            style: getEdgeStyle(item.edgeType, item.criticality),
+            style: baseStyle,
             data: {
               lensItemId: item.id,
               edgeType: item.edgeType,
@@ -306,6 +310,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               amplification: item.amplification,
               latencyHours: item.latencyHours,
               direction: item.direction,
+              baseStyle,
             },
           });
         } else if (sFrag || tFrag) {
@@ -415,6 +420,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const targetId = targetFragmentId ? fragmentToNodeId.get(targetFragmentId) : undefined;
 
         if (sourceId && targetId) {
+          const baseStyle = getEdgeStyle(edge.type || edge.edgeType, edge.properties?.criticality);
           graphEdges.push({
             id: edge.id || `${sourceId}-${targetId}`,
             source: sourceId,
@@ -426,7 +432,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             markerEnd: {
               type: MarkerType.ArrowClosed,
             },
-            style: getEdgeStyle(edge.type || edge.edgeType, edge.properties?.criticality),
+            style: baseStyle,
             data: {
               lensItemId: '', // Будет обновлено после сохранения
               edgeType: edge.type || edge.edgeType,
@@ -434,6 +440,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               amplification: edge.properties?.amplification,
               latencyHours: edge.properties?.latencyHours,
               direction: 'forward',
+              baseStyle,
             },
           });
         }
@@ -824,6 +831,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const targetId = fragmentToNodeIdMap.get(t);
         if (!sourceId || !targetId) continue;
 
+        const baseStyle = getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality);
         newEdges.push({
           id: edgeId,
           source: sourceId,
@@ -833,7 +841,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           type: 'default',
           label: e?.type || e?.edgeType,
           markerEnd: { type: MarkerType.ArrowClosed },
-          style: getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality),
+          style: baseStyle,
           data: {
             lensItemId: '',
             edgeType: e?.type || e?.edgeType,
@@ -841,6 +849,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             amplification: e?.properties?.amplification,
             latencyHours: e?.properties?.latencyHours,
             direction: 'forward',
+            baseStyle,
           },
         });
       }
@@ -901,7 +910,54 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       );
       setLoadingFragmentId(null);
     }
-  }, [loadingFragmentId, setEdges, setNodes]);
+  }, [loadingFragmentId, setEdges, setNodes, normalizeEdgeType]);
+
+  // Derive edges styles for hover highlighting (do not mutate base edges)
+  const displayEdges = React.useMemo(() => {
+    if (!hoveredGroupId) return edges;
+
+    const groupNode = nodes.find((n) => n.id === hoveredGroupId);
+    const gd: any = groupNode?.data;
+    if (!groupNode || !gd?.isGroup) return edges;
+
+    const groupEdgeType = normalizeEdgeType(gd.groupEdgeType);
+    const groupParentId = String(gd.groupParentId || '').trim();
+    const groupDirection: 'incoming' | 'outgoing' = gd.groupDirection === 'incoming' ? 'incoming' : 'outgoing';
+
+    const childIds = new Set(nodes.filter((n) => (n as any).parentId === hoveredGroupId).map((n) => n.id));
+    if (!groupParentId || childIds.size === 0) return edges;
+
+    const isGroupEdge = (e: any) => {
+      const et = normalizeEdgeType(e?.data?.edgeType || e?.label);
+      if (groupEdgeType && et !== groupEdgeType) return false;
+      if (groupDirection === 'outgoing') {
+        return e.source === groupParentId && childIds.has(e.target);
+      }
+      return e.target === groupParentId && childIds.has(e.source);
+    };
+
+    return edges.map((e) => {
+      const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
+      if (isGroupEdge(e)) {
+        const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+        return {
+          ...e,
+          style: {
+            ...baseStyle,
+            opacity: 1,
+            strokeWidth: strokeWidth + 1.5,
+          },
+        };
+      }
+      return {
+        ...e,
+        style: {
+          ...baseStyle,
+          opacity: 0.12,
+        },
+      };
+    });
+  }, [edges, hoveredGroupId, nodes, normalizeEdgeType]);
 
   // Функция для перераспределения всех видимых нод
   const handleArrange = useCallback(async () => {
@@ -1138,10 +1194,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       <div style={{ flex: 1, minHeight: 0, position: 'relative', width: '100%' }}>
         <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={displayEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={handleNodeClick}
+            onNodeMouseEnter={(_, node) => {
+              const d: any = node?.data;
+              if (d?.isGroup) setHoveredGroupId(node.id);
+            }}
+            onNodeMouseLeave={(_, node) => {
+              const d: any = node?.data;
+              if (d?.isGroup) setHoveredGroupId(null);
+            }}
             nodeTypes={HORIZON_NODE_TYPES}
             onInit={(instance) => {
               reactFlowInstanceRef.current = instance;

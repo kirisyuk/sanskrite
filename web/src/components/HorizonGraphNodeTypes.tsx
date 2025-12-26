@@ -380,9 +380,10 @@ const HorizonGroupNode: React.FC<{ data: HorizonNodeData }> = ({ data }) => {
         border: `1px dashed ${border}`,
         borderRadius: 12,
         boxShadow: theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)',
-        pointerEvents: 'none',
+        pointerEvents: 'auto',
         position: 'relative',
         overflow: 'hidden',
+        cursor: 'grab',
       }}
     >
       <div
