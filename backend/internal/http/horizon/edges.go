@@ -14,6 +14,99 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
 
+func getLensIDFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	// Query param takes precedence to make this easy to test/invoke.
+	if v := strings.TrimSpace(r.URL.Query().Get("lensId")); v != "" {
+		return v
+	}
+	// Headers: support both common casings used across the codebase.
+	if v := strings.TrimSpace(r.Header.Get("X-Lens-Id")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(r.Header.Get("X-Lens-ID")); v != "" {
+		return v
+	}
+	return ""
+}
+
+func extractStringSlice(v interface{}) []string {
+	if v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case []string:
+		out := make([]string, 0, len(t))
+		for _, s := range t {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			if x == nil {
+				continue
+			}
+			if s, ok := x.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func indexPathMatchesFilter(filterPath, indexPath string) bool {
+	filterPath = strings.TrimSpace(filterPath)
+	indexPath = strings.TrimSpace(indexPath)
+	if filterPath == "" || indexPath == "" {
+		return false
+	}
+	// Exact match is the primary mode (indexPaths include ancestors, so this is powerful).
+	if filterPath == indexPath {
+		return true
+	}
+	// Optional wildcard support for future flexibility:
+	// - "/Foo/Bar/**" => prefix match
+	// - "/Foo/Bar*"   => prefix match
+	if strings.Contains(filterPath, "*") {
+		prefix := strings.Split(filterPath, "*")[0]
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			return false
+		}
+		return strings.HasPrefix(indexPath, prefix)
+	}
+	return false
+}
+
+func indexPathsIntersectFilter(indexPaths []string, filterPaths []string) bool {
+	if len(indexPaths) == 0 || len(filterPaths) == 0 {
+		return false
+	}
+	for _, fp := range filterPaths {
+		fp = strings.TrimSpace(fp)
+		if fp == "" {
+			continue
+		}
+		for _, ip := range indexPaths {
+			if indexPathMatchesFilter(fp, ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (h *HorizonHandlers) publishEdgeUpserted(ctx context.Context, authTenant string, projectID string, lensID string, correlationID string, sessionID string, edge *models.DependencyEdge) {
 	if h == nil || h.service == nil || edge == nil {
 		return
@@ -341,7 +434,29 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Filter out edges pointing to unindexed neighbor fragments (default), to avoid exploding graphs.
+	// Optional lens-aware filtering:
+	// If a lensId is provided, and it contains viewConfig.filterPaths (or viewConfig.FilterPaths),
+	// we filter neighbors by intersection with neighbor.indexPaths.
+	// NOTE: We do NOT require the caller to pass lensId (frontend currently doesn't),
+	// so behavior remains backward-compatible.
+	filterPaths := []string(nil)
+	if !includeUnindexed {
+		if lensID := getLensIDFromRequest(r); lensID != "" && h != nil && h.service != nil && h.service.Lens() != nil {
+			if lens, lerr := h.service.Lens().GetLens(r.Context(), lensID); lerr == nil && lens != nil && lens.TenantID == authInfo.TenantID {
+				if lens.ViewConfig != nil {
+					// Accept both keys to be resilient to casing changes.
+					filterPaths = extractStringSlice(lens.ViewConfig["filterPaths"])
+					if len(filterPaths) == 0 {
+						filterPaths = extractStringSlice(lens.ViewConfig["FilterPaths"])
+					}
+				}
+			}
+		}
+	}
+
+	// Filter out edges pointing to irrelevant or unindexed neighbor fragments (default), to avoid exploding graphs.
+	// - If filterPaths are provided by lens, keep only neighbors whose indexPaths intersect filterPaths.
+	// - Else, keep only neighbors with non-empty indexPaths.
 	if !includeUnindexed && len(edges) > 0 {
 		neighborIDs := make([]string, 0, len(edges))
 		for _, e := range edges {
@@ -387,8 +502,19 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 					continue
 				}
 				n := neighborMap[neighborID]
-				if n != nil && len(n.IndexPaths) > 0 {
-					filtered = append(filtered, e)
+				if n == nil {
+					continue
+				}
+				if len(filterPaths) > 0 {
+					// Lens-aware: require intersection (also implicitly requires indexPaths to be non-empty).
+					if indexPathsIntersectFilter(n.IndexPaths, filterPaths) {
+						filtered = append(filtered, e)
+					}
+				} else {
+					// Legacy default: only require that the neighbor has any indexPaths at all.
+					if len(n.IndexPaths) > 0 {
+						filtered = append(filtered, e)
+					}
 				}
 			}
 			edges = filtered

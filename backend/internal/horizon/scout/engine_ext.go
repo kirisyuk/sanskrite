@@ -120,6 +120,11 @@ func (e *ScoutEngine) processRelationsInternal(
 	scheduledChildren := map[string]struct{}{}
 	scheduledCount := 0
 
+	// Edge-level guardrails:
+	// - Deduplicate edges within this job run to reduce Firestore reads/writes.
+	// - Normalize symmetric edges so A<->B is represented consistently.
+	seenEdgeKeys := map[string]struct{}{}
+
 	// Relation-level guardrails:
 	// - Do not recurse on COMPETES_WITH (explodes breadth and is rarely needed for local intent).
 	// - Do not recurse on INFLUENCES (spheres and vague influences create huge expansions).
@@ -524,7 +529,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		edgeSourceID := sourceFragment.ID
 		edgeTargetID := targetID
 
-		// Enforce directional semantics for common relations (best-effort).
+		// Enforce directional semantics for common relations (best-effort, heuristic).
 		// This prevents obviously inverted edges like "/loc/astana SUPPLIES_TO /org/crrc".
 		edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(sourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType)
 		switch edgeType {
@@ -533,16 +538,45 @@ func (e *ScoutEngine) processRelationsInternal(
 			edgeType = models.DependencyTypeOwns
 			edgeSourceID, edgeTargetID = targetID, sourceFragment.ID
 		}
-		// Guard against self-edges (can happen when LLM accidentally points a relation back to the source).
-		// Self-edges are almost always noise and can create cycles during propagation/aggregation.
-		if strings.TrimSpace(edgeSourceID) != "" && edgeSourceID == edgeTargetID {
+
+		// Policy: self-loop prevention (reject).
+		if IsSelfLoop(edgeSourceID, edgeTargetID) {
 			fmt.Printf("Skipping self-edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
 			continue
 		}
 
-		// Проверка на дубликат ребра
+		// Policy: symmetric edge normalization (avoid A->B and B->A duplicates).
+		edgeSourceID, edgeTargetID, edgeType, symmetricSwapped := NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
+		if symmetricSwapped {
+			directionChanged = true
+		}
+
+		// Policy: direction validation and reversal (enforced for known edge types).
+		if sourceFragment != nil {
+			if valid, shouldReverse, rule := ValidateEdgeDirection(edgeType, sourceFragment.Type, targetType); !valid {
+				if shouldReverse {
+					edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+					directionChanged = true
+					// If we reversed, re-apply symmetric normalization (noop for non-symmetric types).
+					edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
+				} else if rule != nil {
+					// Neither direction is valid: reject the edge to keep the graph consistent.
+					fmt.Printf("Skipping invalid-direction edge: %s -> %s (%s) rule=%s\n", sourceFragment.CanonicalPath, targetPath, edgeType, rule.Description)
+					continue
+				}
+			}
+		}
+
+		// In-memory dedup (per job run), after all normalization.
+		ek := EdgeKey(edgeSourceID, edgeTargetID, edgeType)
+		if _, ok := seenEdgeKeys[ek]; ok {
+			fmt.Printf("Skipping duplicate edge (in-memory): %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+			continue
+		}
+		seenEdgeKeys[ek] = struct{}{}
+
+		// Firestore dedup check (cross-run).
 		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", edgeSourceID, edgeTargetID, edgeType); err == nil {
-			// Ребро уже существует, пропускаем создание
 			fmt.Printf("Skipping duplicate edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
 			continue
 		}
