@@ -516,18 +516,24 @@ export async function layoutExpansionWithGroups<T = any>(
     // Group nodes for other parents are treated as fixed obstacles too
     const rawW: any = (node.style as any)?.width;
     const rawH: any = (node.style as any)?.height;
+    const measuredW: any = (node as any)?.width;
+    const measuredH: any = (node as any)?.height;
     const w =
-      typeof rawW === 'number'
-        ? rawW
-        : typeof rawW === 'string'
-          ? parseFloat(rawW)
-          : nodeWidth;
+      typeof measuredW === 'number'
+        ? measuredW
+        : typeof rawW === 'number'
+          ? rawW
+          : typeof rawW === 'string'
+            ? parseFloat(rawW)
+            : nodeWidth;
     const h =
-      typeof rawH === 'number'
-        ? rawH
-        : typeof rawH === 'string'
-          ? parseFloat(rawH)
-          : nodeHeight;
+      typeof measuredH === 'number'
+        ? measuredH
+        : typeof rawH === 'number'
+          ? rawH
+          : typeof rawH === 'string'
+            ? parseFloat(rawH)
+            : nodeHeight;
 
     const ww = isGroupNode(node as any) && Number.isFinite(w) ? w : nodeWidth;
     const hh = isGroupNode(node as any) && Number.isFinite(h) ? h : nodeHeight;

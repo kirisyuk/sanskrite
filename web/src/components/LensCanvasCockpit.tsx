@@ -1110,6 +1110,35 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     }
   }, [onNodeSelect]);
 
+  const handleNodeDragStop = useCallback(async (_event: React.MouseEvent, node: Node<HorizonNodeData>) => {
+    const d: any = node?.data;
+    // Only re-layout when a fragment (not a group container) is moved and it has expanded children
+    if (!node?.id || d?.isGroup) return;
+
+    const inst: any = reactFlowInstanceRef.current;
+    const currentNodes: Node<HorizonNodeData>[] = inst?.getNodes?.() || nodes;
+    const hasChildren = currentNodes.some((n) => !((n.data as any)?.isGroup) && (n.data as any)?.parentFragmentId === node.id);
+    if (!hasChildren) return;
+
+    try {
+      const relayouted = await layoutExpansionWithGroups(
+        currentNodes,
+        [],
+        node.id,
+        {
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        },
+      );
+      setNodes(relayouted);
+    } catch (err) {
+      console.warn('[Cockpit] Failed to relayout groups after drag stop', err);
+    }
+  }, [nodes, setNodes]);
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: '600px' }}>
       {/* Toolbar */}
@@ -1198,6 +1227,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={handleNodeClick}
+            onNodeDragStop={handleNodeDragStop}
             onNodeMouseEnter={(_, node) => {
               const d: any = node?.data;
               if (d?.isGroup) setHoveredGroupId(node.id);
