@@ -212,6 +212,65 @@ X-Tenant-ID: <tenant_id>
 }
 ```
 
+#### Hypothesis: Product IO (v1, PRODUCT-only)
+
+Этот набор endpoints предназначен для “живого тестирования гипотез” из инспектора:
+- **LLM** извлекает кандидатов продуктов (produces/consumes)
+- **Бэкенд** материализует продукты как **HorizonFragment типа PRODUCT** и создаёт ребра `PRODUCES` / `CONSUMES`
+
+Важно:
+- граф глобальный (`tenantId = "global"` для фрагментов и ребер)
+- HorizonFragment первичен, Entity — best-effort enrichment по ссылке
+- v1 поддерживает **только PRODUCT** (позже расширим на market/service/technology)
+
+##### Extract products (LLM only)
+
+**POST** `/api/horizon/fragments/{fragmentId}/product-io:extract`
+
+**Request Body**:
+```json
+{
+  "direction": "both",
+  "hint": "optional short hint for the model",
+  "lang": "en"
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "fragmentId": "uuid",
+  "direction": "both",
+  "produces": [{ "productName": "string", "confidence": 0.8, "reason": "string" }],
+  "consumes": [{ "productName": "string", "confidence": 0.7, "reason": "string" }]
+}
+```
+
+##### Apply materialization (create/dedup + edges)
+
+**POST** `/api/horizon/lenses/{lensId}/product-io:apply`
+
+**Request Body**:
+```json
+{
+  "objectiveFragmentId": "uuid",
+  "produces": [{ "productName": "string", "confidence": 0.8, "reason": "string" }],
+  "consumes": [{ "productName": "string", "confidence": 0.7, "reason": "string" }]
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "lensId": "uuid",
+  "objectiveFragmentId": "uuid",
+  "delta": {
+    "fragmentsUpserted": [{ "...": "HorizonFragment" }],
+    "edgesUpserted": [{ "...": "DependencyEdge" }]
+  }
+}
+```
+
 #### Получение HorizonFragment по canonical path
 
 **GET** `/api/horizon/fragments/by-path?path={canonicalPath}`

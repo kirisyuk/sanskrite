@@ -28,6 +28,9 @@ const (
 	DependencyTypeLocatedIn    DependencyType = "LOCATED_IN"
 	DependencyTypeOwns         DependencyType = "OWNS"
 	DependencyTypeProduces     DependencyType = "PRODUCES"
+	// DependencyTypeConsumes captures "X consumes/uses product Y".
+	// v1 usage: hypothesis-driven Product IO materialization (PRODUCT-only).
+	DependencyTypeConsumes     DependencyType = "CONSUMES"
 	DependencyTypeOperatesIn   DependencyType = "OPERATES_IN"
 	DependencyTypeRegulates    DependencyType = "REGULATES"
 	DependencyTypeCompetesWith DependencyType = "COMPETES_WITH"

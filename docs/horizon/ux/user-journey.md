@@ -218,6 +218,25 @@ GET /api/horizon/lenses/:lensId/assembly-status
   
 - **Metadata**:
   - Когда обновлено: `Last updated: 2 hours ago`
+
+##### Hypothesis testing: Product IO (v1)
+
+В инспекторе выбранной сущности (HorizonFragment) пользователь может быстро проверить гипотезу:
+“что этот объект **производит** и что он **потребляет**”.
+
+Поток:
+- UI вызывает LLM-extract и показывает кандидаты
+- затем UI вызывает apply, который материализует новые PRODUCT-фрагменты и ребра
+- результат (delta: новые узлы/ребра) добавляется на Canvas
+
+Endpoints:
+- `POST /api/horizon/fragments/{fragmentId}/product-io:extract`
+- `POST /api/horizon/lenses/{lensId}/product-io:apply`
+
+Ограничения v1:
+- создаём только `PRODUCT` фрагменты
+- граф глобальный (`tenantId="global"`)
+- фрагмент первичен, entity — только enrichment
   - Сколько стоит мониторинг: `Watchdog cost: $0.15/day`
   - Источники данных: `3 sources active`
 

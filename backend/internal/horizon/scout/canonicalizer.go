@@ -23,6 +23,14 @@ func slugify(s string) string {
 	return s
 }
 
+// Slugify is an exported wrapper for Horizon canonical path slugging.
+// It is used by non-scout workflows to ensure consistent canonicalization rules.
+func Slugify(s string) string { return slugify(s) }
+
+// PreferredCanonicalPaths is an exported wrapper returning ordered canonical path candidates.
+// It is used by non-scout workflows to ensure consistent canonicalization rules.
+func PreferredCanonicalPaths(rel agents.DiscoveredRelation) []string { return preferredCanonicalPaths(rel) }
+
 // preferredCanonicalPaths returns ordered canonical path candidates derived from names only.
 // For facilities we emit both:
 //  1. /fac/{orgSlug}/{facilitySlug} (if name appears prefixed by an org token)

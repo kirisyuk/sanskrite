@@ -133,6 +133,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 	if len(pathParts) > 1 {
 		subPath := pathParts[1]
 		switch subPath {
+		case "product-io:apply":
+			h.ApplyProductIO(w, r)
+			return
 		case "items":
 			// Delegate to LensItemsHandler
 			if h.lensItemsHandler != nil {
@@ -218,6 +221,11 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 
 	if strings.HasSuffix(r.URL.Path, "/enrich-entity") {
 		h.EnrichFragmentEntity(w, r)
+		return
+	}
+
+	if strings.HasSuffix(r.URL.Path, "/product-io:extract") {
+		h.ExtractProductIO(w, r)
 		return
 	}
 
