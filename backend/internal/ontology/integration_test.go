@@ -10,16 +10,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
-	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
-	"github.com/igorkirisyuk/sanskrite/internal/domain"
-	"github.com/igorkirisyuk/sanskrite/internal/models"
-	"github.com/igorkirisyuk/sanskrite/internal/prompts"
-	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"cloud.google.com/go/firestore"
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/domain"
+	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
+	"github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/prompts"
+	"github.com/igorkirisyuk/sanskrite/internal/repo"
 	"google.golang.org/api/option"
 )
 
@@ -35,8 +35,8 @@ func loadSecretFromGCP(ctx context.Context, projectID, secretName string) (strin
 
 	// Пробуем разные варианты имен секретов (lowercase в GCP)
 	secretNames := []string{
-		secretName,                    // Как есть
-		strings.ToLower(secretName),   // lowercase
+		secretName,                  // Как есть
+		strings.ToLower(secretName), // lowercase
 		strings.ToLower(strings.ReplaceAll(secretName, "_", "-")), // lowercase с дефисами
 	}
 
@@ -861,9 +861,9 @@ func extractDataWithLLM(t *testing.T, ctx context.Context, genaiClient *gen_comb
 		return nil
 	}
 
-	t.Logf("LLM response received: content=%d chars, tool calls=%d, usage=%+v, isToolStep=%v", 
+	t.Logf("LLM response received: content=%d chars, tool calls=%d, usage=%+v, isToolStep=%v",
 		len(resp.Content), len(resp.ToolCalls), resp.Usage, resp.IsToolStep)
-	
+
 	if resp.RawJSON != "" {
 		t.Logf("Raw JSON preview: %.500s", resp.RawJSON)
 	}
@@ -879,15 +879,15 @@ func extractDataWithLLM(t *testing.T, ctx context.Context, genaiClient *gen_comb
 		Events   []ExtractedEvent  `json:"events"`
 		Claims   []ExtractedClaim  `json:"claims"`
 		// Другие поля из DocumentExtractionPrompt (игнорируем)
-		Language     string `json:"language,omitempty"`
-		Sentiment    float64 `json:"sentiment,omitempty"`
+		Language     string      `json:"language,omitempty"`
+		Sentiment    float64     `json:"sentiment,omitempty"`
 		Categories   interface{} `json:"categories,omitempty"`
 		Topics       interface{} `json:"topics,omitempty"`
-		DocumentType string `json:"documentType,omitempty"`
+		DocumentType string      `json:"documentType,omitempty"`
 		KeyPoints    interface{} `json:"keyPoints,omitempty"`
 		Outlinks     interface{} `json:"outlinks,omitempty"`
 	}
-	
+
 	var result struct {
 		Entities []ExtractedEntity `json:"entities"`
 		Events   []ExtractedEvent  `json:"events"`
@@ -895,7 +895,7 @@ func extractDataWithLLM(t *testing.T, ctx context.Context, genaiClient *gen_comb
 	}
 
 	content := strings.TrimSpace(resp.Content)
-	
+
 	// Если Content пустой, но есть tool calls, извлекаем из них
 	if content == "" && len(resp.ToolCalls) > 0 {
 		for _, tc := range resp.ToolCalls {
@@ -912,7 +912,7 @@ func extractDataWithLLM(t *testing.T, ctx context.Context, genaiClient *gen_comb
 		// Находим первый { после ```json или ```
 		jsonStart := strings.Index(content, "{")
 		jsonEnd := strings.LastIndex(content, "}")
-		
+
 		if jsonStart >= 0 && jsonEnd > jsonStart {
 			content = content[jsonStart : jsonEnd+1]
 		} else {
@@ -953,7 +953,7 @@ func extractDataWithLLM(t *testing.T, ctx context.Context, genaiClient *gen_comb
 	result.Events = fullResult.Events
 	result.Claims = fullResult.Claims
 
-	t.Logf("Extracted: %d entities, %d events, %d claims", 
+	t.Logf("Extracted: %d entities, %d events, %d claims",
 		len(result.Entities), len(result.Events), len(result.Claims))
 
 	return &DocumentExtraction{
@@ -1007,4 +1007,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-
