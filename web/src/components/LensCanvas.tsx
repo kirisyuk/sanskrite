@@ -232,6 +232,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                     opacity: visible ? 1 : 0,
                     transition: 'opacity 0.2s ease-in-out',
                   })}
+                  lensId={lensId}
                   selectedNodeId={selectedNodeId}
                   selectedNodeData={selectedNodeData}
                 />

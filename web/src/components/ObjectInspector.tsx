@@ -5,11 +5,13 @@ import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 interface ObjectInspectorProps {
   nodeId: string | null;
   nodeData: HorizonNodeData | null;
+  lensId: string | null;
 }
 
 export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   nodeId,
   nodeData,
+  lensId,
 }) => {
   const [fragment, setFragment] = React.useState<any>(null);
   const [entity, setEntity] = React.useState<any>(null);
@@ -17,6 +19,9 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   const [error, setError] = React.useState<string | null>(null);
   const [ensuring, setEnsuring] = React.useState(false);
   const [enriching, setEnriching] = React.useState(false);
+  const [productIOLoading, setProductIOLoading] = React.useState(false);
+  const [productIOError, setProductIOError] = React.useState<string | null>(null);
+  const [productIOResult, setProductIOResult] = React.useState<{ nodes: number; edges: number } | null>(null);
 
   // Load fragment and entity data when nodeId changes
   React.useEffect(() => {
@@ -61,6 +66,45 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
     loadData();
   }, [nodeId, nodeData?.fragmentId]);
+
+  const handleMaterializeProductIO = React.useCallback(async () => {
+    const fragmentId = nodeData?.fragmentId;
+    if (!lensId) {
+      setProductIOError('Lens ID is missing (open this inspector from a Lens cockpit)');
+      return;
+    }
+    if (!fragmentId) {
+      setProductIOError('Fragment ID is missing');
+      return;
+    }
+
+    setProductIOLoading(true);
+    setProductIOError(null);
+    setProductIOResult(null);
+
+    try {
+      const extracted = await api.extractProductIO(fragmentId, { direction: 'both', lang: 'en' });
+      const applied = await api.applyProductIO(lensId, {
+        objectiveFragmentId: fragmentId,
+        produces: extracted.produces || [],
+        consumes: extracted.consumes || [],
+      });
+      const nodesCount = Array.isArray(applied?.delta?.fragmentsUpserted) ? applied.delta.fragmentsUpserted.length : 0;
+      const edgesCount = Array.isArray(applied?.delta?.edgesUpserted) ? applied.delta.edgesUpserted.length : 0;
+      setProductIOResult({ nodes: nodesCount, edges: edgesCount });
+
+      // Best-effort: expand the selected node to show newly materialized neighbors.
+      const expand = (nodeData as any)?.onLoadRelated as undefined | ((id: string) => void);
+      if (typeof expand === 'function') {
+        expand(fragmentId);
+      }
+    } catch (err: any) {
+      console.error('[ObjectInspector] Product IO materialization failed', err);
+      setProductIOError(err.response?.data?.error || err.message || 'Failed to materialize Product IO');
+    } finally {
+      setProductIOLoading(false);
+    }
+  }, [lensId, nodeData]);
 
   if (!nodeId || !nodeData) {
     return (
@@ -223,6 +267,64 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Hypothesis: Product IO (v1) */}
+      {nodeData?.fragmentId && (
+        <div style={{ marginBottom: '24px' }}>
+          <h4 style={{ 
+            fontSize: '12px', 
+            fontWeight: 600, 
+            color: 'var(--text-heading)',
+            marginBottom: '8px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Hypothesis: Product IO (v1)
+          </h4>
+          <div style={{ 
+            padding: '12px',
+            borderRadius: '8px',
+            backgroundColor: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+          }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary-strong)', marginBottom: 10, lineHeight: 1.35 }}>
+              Extract products this object <b>produces</b> and <b>consumes</b>, then materialize them into the global Horizon graph.
+              <div style={{ marginTop: 6, fontSize: '11px', color: 'var(--text-tertiary-weak)' }}>
+                v1: PRODUCT-only. Fragment is primary; entity link is enrichment.
+              </div>
+            </div>
+            {productIOError && (
+              <div style={{ fontSize: '12px', color: '#f87171', marginBottom: 8 }}>
+                {productIOError}
+              </div>
+            )}
+            {productIOResult && (
+              <div style={{ fontSize: '12px', color: 'var(--text-heading)', marginBottom: 8 }}>
+                Materialized: <b>{productIOResult.nodes}</b> nodes, <b>{productIOResult.edges}</b> edges
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleMaterializeProductIO}
+              disabled={productIOLoading || !lensId}
+              style={{
+                padding: '8px 10px',
+                fontSize: '12px',
+                fontWeight: 600,
+                borderRadius: 8,
+                border: '1px solid var(--border-subtle)',
+                background: productIOLoading ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
+                color: 'var(--text-heading)',
+                cursor: productIOLoading || !lensId ? 'not-allowed' : 'pointer',
+                opacity: productIOLoading || !lensId ? 0.7 : 1,
+                width: '100%',
+              }}
+            >
+              {productIOLoading ? 'Materializing…' : 'Materialize Product IO'}
+            </button>
           </div>
         </div>
       )}

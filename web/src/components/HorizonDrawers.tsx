@@ -12,6 +12,7 @@ interface HorizonDrawersProps {
   closeAllPanels: () => void;
   getPanelVisibilityStyles: (visible: boolean) => React.CSSProperties;
   // Object Inspector props
+  lensId?: string | null;
   selectedNodeId: string | null;
   selectedNodeData: any;
 }
@@ -23,6 +24,7 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
   setDrawerWidth,
   closeAllPanels,
   getPanelVisibilityStyles,
+  lensId,
   selectedNodeId,
   selectedNodeData,
 }) => {
@@ -244,6 +246,7 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
                     <ObjectInspector
                       nodeId={selectedNodeId}
                       nodeData={selectedNodeData}
+                      lensId={lensId || null}
                     />
                   </div>
                 )}

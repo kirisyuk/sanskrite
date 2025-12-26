@@ -1858,6 +1858,46 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  // --- Horizon Product IO (Hypothesis workflow, v1 PRODUCT-only) ---
+  async extractProductIO(
+    fragmentId: string,
+    body?: { direction?: 'produces' | 'consumes' | 'both'; hint?: string; lang?: string }
+  ): Promise<{
+    fragmentId: string;
+    direction: string;
+    produces: Array<{ productName: string; confidence: number; reason?: string }>;
+    consumes: Array<{ productName: string; confidence: number; reason?: string }>;
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/fragments/${fragmentId}/product-io:extract`, body || {});
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] extractProductIO error:`, error);
+      throw error;
+    }
+  }
+
+  async applyProductIO(
+    lensId: string,
+    body: {
+      objectiveFragmentId: string;
+      produces: Array<{ productName: string; confidence: number; reason?: string }>;
+      consumes: Array<{ productName: string; confidence: number; reason?: string }>;
+    }
+  ): Promise<{
+    lensId: string;
+    objectiveFragmentId: string;
+    delta: { fragmentsUpserted: any[]; edgesUpserted: any[] };
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/product-io:apply`, body);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] applyProductIO error:`, error);
+      throw error;
+    }
+  }
+
   // Ensure Entity for fragment (create/link/enrich)
   async ensureFragmentEntity(fragmentId: string): Promise<{
     entityId: string;
