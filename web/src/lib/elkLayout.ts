@@ -171,6 +171,12 @@ const GROUP_HEADER_HEIGHT = 34; // space for label row in container
 const GROUP_GAP_X = 40;
 const GROUP_GAP_Y = 40;
 
+// Pagination constants for groups
+const GROUP_PAGE_SIZE = 12;        // Max items per page (4x3 matrix)
+const GROUP_MAX_COLS = 4;          // Max columns in group
+const GROUP_MAX_ROWS = 3;          // Max rows in group
+const GROUP_PAGINATION_HEIGHT = 24; // Height for "Page N of M" footer
+
 // Group containers are keyed by (parentId, semanticGroup).
 // This creates exactly 4 groups max per parent (one per side of the node).
 const defaultGroupId = (parentId: string, semanticGroup: SemanticGroup) =>
@@ -190,6 +196,10 @@ function makeGroupParentNode<T = any>(params: {
   nodeWidth: number;
   nodeHeight: number;
   exemplarData?: any;
+  // Pagination fields
+  allChildIds?: string[];
+  currentPage?: number;
+  onGroupPageChange?: (groupId: string, page: number) => void;
 }): Node<T> {
   const {
     id,
@@ -203,9 +213,19 @@ function makeGroupParentNode<T = any>(params: {
     nodeWidth,
     nodeHeight,
     exemplarData,
+    allChildIds,
+    currentPage = 0,
+    onGroupPageChange,
   } = params;
+
+  const totalPages = Math.ceil(count / GROUP_PAGE_SIZE);
+  const hasPagination = totalPages > 1;
+
   const w = typeof containerWidth === 'number' && Number.isFinite(containerWidth) ? containerWidth : Math.max(220, nodeWidth + 40);
-  const h = typeof containerHeight === 'number' && Number.isFinite(containerHeight) ? containerHeight : Math.max(120, nodeHeight + 60);
+  // Add pagination height if there are multiple pages
+  const baseH = typeof containerHeight === 'number' && Number.isFinite(containerHeight) ? containerHeight : Math.max(120, nodeHeight + 60);
+  const h = hasPagination ? baseH + GROUP_PAGINATION_HEIGHT : baseH;
+
   return {
     id,
     type: 'horizonGroup' as any,
@@ -225,9 +245,15 @@ function makeGroupParentNode<T = any>(params: {
       groupEdgeTypes: edgeTypes,
       groupCount: count,
       // Legacy fields for backwards compatibility with hover logic
-      groupDirection: SEMANTIC_GROUP_POSITION[semanticGroup] === 'top' ? 'incoming' 
+      groupDirection: SEMANTIC_GROUP_POSITION[semanticGroup] === 'top' ? 'incoming'
         : SEMANTIC_GROUP_POSITION[semanticGroup] === 'bottom' ? 'outgoing' : 'both',
       groupEdgeType: edgeTypes[0] || 'OTHER',
+      // Pagination fields
+      groupCurrentPage: currentPage,
+      groupTotalPages: totalPages,
+      groupPageSize: GROUP_PAGE_SIZE,
+      groupAllChildIds: allChildIds || [],
+      onGroupPageChange,
     } as any,
   };
 }
@@ -731,18 +757,32 @@ export async function layoutExpansionWithGroups<T = any>(
   const childGapX = nodeSpacing;
   const childGapY = Math.max(48, Math.floor(nodeSpacing * 1.05));
 
-  // Max columns before wrapping to next row (horizontal-first layout)
-  const MAX_COLS = 4;
-
+  // Calculate group dimensions based on item count
+  // If pagination needed (>12 items): fixed 4x3 grid
+  // If no pagination: size matches actual item count
   const groupDims = (count: number) => {
-    // Horizontal-first layout: fill columns first, then wrap to rows
-    const nodesPerRow = Math.min(count, MAX_COLS);
-    const rows = Math.ceil(count / nodesPerRow);
+    const totalPages = Math.ceil(count / GROUP_PAGE_SIZE);
+    const hasPagination = totalPages > 1;
+
+    let nodesPerRow: number;
+    let rows: number;
+
+    if (hasPagination) {
+      // Fixed 4x3 grid for paginated groups
+      nodesPerRow = GROUP_MAX_COLS;
+      rows = GROUP_MAX_ROWS;
+    } else {
+      // Size matches actual item count (max 4 columns)
+      nodesPerRow = Math.min(count, GROUP_MAX_COLS);
+      rows = Math.ceil(count / nodesPerRow);
+    }
+
     const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * childGapX;
     const innerH = rows * nodeHeight + Math.max(0, rows - 1) * childGapY;
     const w = innerW + GROUP_PADDING_X * 2;
-    const h = innerH + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM;
-    return { w, h, nodesPerRow, rows };
+    // Add pagination footer height if multiple pages
+    const h = innerH + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM + (hasPagination ? GROUP_PAGINATION_HEIGHT : 0);
+    return { w, h, nodesPerRow, rows, totalPages, hasPagination };
   };
 
   const positionedGroupNodes: Node<T>[] = [];
@@ -787,6 +827,9 @@ export async function layoutExpansionWithGroups<T = any>(
     const pos = findFreeRect(desiredX, desiredY, dim.w, dim.h, preferDown);
 
     const groupId = defaultGroupId(parentNodeId, g.semanticGroup);
+    const allChildIds = g.nodes.map((n) => n.id);
+    const currentPage = 0; // Start on first page
+
     const groupNode: Node<T> = makeGroupParentNode({
       id: groupId,
       position: pos,
@@ -799,18 +842,32 @@ export async function layoutExpansionWithGroups<T = any>(
       nodeWidth,
       nodeHeight,
       exemplarData: g.nodes[0]?.data,
+      allChildIds,
+      currentPage,
     });
     positionedGroupNodes.push(groupNode);
 
-    // Layout children inside group
+    // Layout children inside group with pagination
     const padTop = GROUP_HEADER_HEIGHT;
+    const startIdx = currentPage * GROUP_PAGE_SIZE;
+    const endIdx = Math.min(startIdx + GROUP_PAGE_SIZE, g.nodes.length);
+
     for (let idx = 0; idx < g.nodes.length; idx++) {
       const child = g.nodes[idx];
-      const rowIdx = Math.floor(idx / dim.nodesPerRow);
-      const colIdx = idx % dim.nodesPerRow;
+      const isVisible = idx >= startIdx && idx < endIdx;
+      // Position relative to current page (visible items only)
+      const pageIdx = idx - startIdx;
+      const rowIdx = Math.floor(pageIdx / dim.nodesPerRow);
+      const colIdx = pageIdx % dim.nodesPerRow;
       const cx = GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
       const cy = padTop + rowIdx * (nodeHeight + childGapY);
-      positionedChildren.push(attachChildToGroup(child, groupId, { x: cx, y: cy }));
+
+      const positioned = attachChildToGroup(child, groupId, { x: cx, y: cy });
+      // Hide nodes that are not on the current page
+      positionedChildren.push({
+        ...positioned,
+        hidden: !isVisible,
+      });
     }
   }
 
@@ -871,30 +928,96 @@ export function rebuildGroupContainers<T = any>(
     }
   }
 
+  // Find existing group nodes to preserve current page
+  const existingGroups = new Map<string, Node<T>>();
+  for (const n of nodes) {
+    if (isGroupNode(n as any)) {
+      existingGroups.set(n.id, n);
+    }
+  }
+
   const groupNodes: Node<T>[] = [];
   const updatedChildren: Node<T>[] = [];
-  
+
+  // Spacing for child layout
+  const childGapX = 60; // nodeSpacing
+  const childGapY = Math.max(48, Math.floor(60 * 1.05));
+
   for (const [, g] of groups.entries()) {
     if (g.kids.length === 0) continue;
 
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
+    const gid = defaultGroupId(g.parentId, g.semanticGroup);
 
-    for (const k of g.kids) {
-      minX = Math.min(minX, k.position.x);
-      minY = Math.min(minY, k.position.y);
-      maxX = Math.max(maxX, k.position.x + nodeWidth);
-      maxY = Math.max(maxY, k.position.y + nodeHeight);
+    // Get current page from existing group (preserve pagination state)
+    const existingGroup = existingGroups.get(gid);
+    const currentPage = (existingGroup?.data as any)?.groupCurrentPage || 0;
+    const totalPages = Math.ceil(g.kids.length / GROUP_PAGE_SIZE);
+    const hasPagination = totalPages > 1;
+    const allChildIds = g.kids.map((k) => k.id);
+
+    // Calculate size based on item count
+    // If pagination needed: fixed 4x3 grid
+    // If no pagination: size matches actual item count
+    let nodesPerRow: number;
+    let rows: number;
+
+    if (hasPagination) {
+      nodesPerRow = GROUP_MAX_COLS;
+      rows = GROUP_MAX_ROWS;
+    } else {
+      nodesPerRow = Math.min(g.kids.length, GROUP_MAX_COLS);
+      rows = Math.ceil(g.kids.length / nodesPerRow);
     }
 
-    const x = minX - GROUP_PADDING_X;
-    const y = minY - GROUP_HEADER_HEIGHT;
-    const w = (maxX - minX) + GROUP_PADDING_X * 2;
-    const h = (maxY - minY) + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM;
+    const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * childGapX;
+    const innerH = rows * nodeHeight + Math.max(0, rows - 1) * childGapY;
+    const w = innerW + GROUP_PADDING_X * 2;
+    const h = innerH + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM + (hasPagination ? GROUP_PAGINATION_HEIGHT : 0);
 
-    const gid = defaultGroupId(g.parentId, g.semanticGroup);
+    // Find parent node to center groups properly
+    const parentNode = fragments.find((n) => n.id === g.parentId || (n.data as any)?.fragmentId === g.parentId);
+    const parentX = parentNode?.position.x ?? 0;
+    const parentY = parentNode?.position.y ?? 0;
+    const parentCenterX = parentX + nodeWidth / 2;
+    const parentCenterY = parentY + nodeHeight / 2;
+
+    // Determine position based on semantic group
+    const position = SEMANTIC_GROUP_POSITION[g.semanticGroup];
+    const layerSpacing = 150;
+
+    let x: number;
+    let y: number;
+
+    const startIdx = currentPage * GROUP_PAGE_SIZE;
+    const endIdx = Math.min(startIdx + GROUP_PAGE_SIZE, g.kids.length);
+
+    switch (position) {
+      case 'top':
+        // Center horizontally above parent
+        x = parentCenterX - w / 2;
+        y = parentY - layerSpacing - h;
+        break;
+      case 'bottom':
+        // Center horizontally below parent
+        x = parentCenterX - w / 2;
+        y = parentY + nodeHeight + layerSpacing;
+        break;
+      case 'left':
+        // Center vertically to the left of parent
+        x = parentX - layerSpacing - w;
+        y = parentCenterY - h / 2;
+        break;
+      case 'right':
+        // Center vertically to the right of parent
+        x = parentX + nodeWidth + layerSpacing;
+        y = parentCenterY - h / 2;
+        break;
+      default:
+        // Fallback: use first child position
+        x = (g.kids[0]?.position.x ?? 0) - GROUP_PADDING_X;
+        y = (g.kids[0]?.position.y ?? 0) - GROUP_HEADER_HEIGHT;
+    }
+
     groupNodes.push(
       makeGroupParentNode({
         id: gid,
@@ -908,11 +1031,27 @@ export function rebuildGroupContainers<T = any>(
         nodeWidth,
         nodeHeight,
         exemplarData: g.kids[0]?.data,
+        allChildIds,
+        currentPage,
       }),
     );
 
-    for (const child of g.kids) {
-      updatedChildren.push(attachChildToGroup(child, gid, { x: child.position.x - x, y: child.position.y - y }));
+    // Layout children with pagination
+    const padTop = GROUP_HEADER_HEIGHT;
+    for (let idx = 0; idx < g.kids.length; idx++) {
+      const child = g.kids[idx];
+      const isVisible = idx >= startIdx && idx < endIdx;
+      const pageIdx = idx - startIdx;
+      const rowIdx = Math.floor(pageIdx / nodesPerRow);
+      const colIdx = pageIdx % nodesPerRow;
+      const cx = GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
+      const cy = padTop + rowIdx * (nodeHeight + childGapY);
+
+      const positioned = attachChildToGroup(child, gid, { x: cx, y: cy });
+      updatedChildren.push({
+        ...positioned,
+        hidden: !isVisible,
+      });
     }
   }
 

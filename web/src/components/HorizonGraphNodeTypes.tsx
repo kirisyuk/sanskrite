@@ -32,6 +32,12 @@ export interface HorizonNodeData {
   groupDirection?: 'incoming' | 'outgoing' | 'both';  // Legacy, derived from semantic group
   groupEdgeType?: string;  // Legacy, first edge type
   groupCount?: number;
+  // Pagination for groups
+  groupCurrentPage?: number;  // Current page (0-indexed)
+  groupTotalPages?: number;   // Total number of pages
+  groupPageSize?: number;     // Items per page (default 12)
+  groupAllChildIds?: string[]; // All child IDs for edge filtering
+  onGroupPageChange?: (groupId: string, page: number) => void; // Callback for page change
   [key: string]: any;
 }
 
@@ -407,18 +413,24 @@ const formatEdgeTypes = (edgeTypes: string[] | undefined): string => {
   return `${unique.slice(0, 2).join(', ')} +${unique.length - 2}`;
 };
 
-const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected }) => {
+const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected, id }) => {
   const { theme } = React.useContext(ThemeContext);
-  
+
   // Use semantic group if available, fall back to edge type
   const semanticGroup = data.groupSemanticGroup;
   const edgeTypes = data.groupEdgeTypes || (data.groupEdgeType ? [data.groupEdgeType] : []);
-  
+
+  // Pagination data
+  const currentPage = data.groupCurrentPage ?? 0;
+  const totalPages = data.groupTotalPages ?? 1;
+  const hasPagination = totalPages > 1;
+  const onGroupPageChange = data.onGroupPageChange;
+
   // Get colors based on semantic group or fall back to edge type colors
   let bg: string;
   let border: string;
   let icon: string;
-  
+
   if (semanticGroup && SEMANTIC_GROUP_COLORS[semanticGroup]) {
     const scheme = SEMANTIC_GROUP_COLORS[semanticGroup];
     bg = theme === 'dark' ? scheme.dark : scheme.light;
@@ -432,7 +444,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected
     border = theme === 'dark' ? scheme.borderDark : scheme.borderLight;
     icon = '';
   }
-  
+
   const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.85)';
   const subtitleColor = theme === 'dark' ? 'rgba(255,255,255,0.55)' : 'rgba(15,23,42,0.55)';
   const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
@@ -442,6 +454,47 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected
   const title = semanticGroup ? SEMANTIC_GROUP_LABELS[semanticGroup] : normalizeEdgeType(data.groupEdgeType);
   // Subtitle: edge types in this group
   const subtitle = formatEdgeTypes(edgeTypes);
+
+  // Arrow button styles
+  const arrowButtonStyle: React.CSSProperties = {
+    position: 'absolute',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    width: 24,
+    height: 24,
+    borderRadius: '50%',
+    border: `1px solid ${border}`,
+    background: theme === 'dark' ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.9)',
+    color: titleColor,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    fontSize: 14,
+    fontWeight: 'bold',
+    zIndex: 10,
+    transition: 'all 0.15s ease',
+  };
+
+  const disabledArrowStyle: React.CSSProperties = {
+    ...arrowButtonStyle,
+    opacity: 0.3,
+    cursor: 'not-allowed',
+  };
+
+  const handlePrevPage = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (currentPage > 0 && onGroupPageChange) {
+      onGroupPageChange(id, currentPage - 1);
+    }
+  };
+
+  const handleNextPage = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (currentPage < totalPages - 1 && onGroupPageChange) {
+      onGroupPageChange(id, currentPage + 1);
+    }
+  };
 
   return (
     <div
@@ -460,6 +513,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected
         cursor: 'grab',
       }}
     >
+      {/* Header */}
       <div
         style={{
           position: 'absolute',
@@ -485,12 +539,12 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected
           )}
         </div>
         {subtitle && (
-          <div 
-            style={{ 
-              fontSize: 9, 
-              fontWeight: 500, 
-              color: subtitleColor, 
-              textTransform: 'uppercase', 
+          <div
+            style={{
+              fontSize: 9,
+              fontWeight: 500,
+              color: subtitleColor,
+              textTransform: 'uppercase',
               letterSpacing: '0.3px',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -502,6 +556,51 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected
           </div>
         )}
       </div>
+
+      {/* Pagination: Left Arrow */}
+      {hasPagination && (
+        <button
+          type="button"
+          onClick={handlePrevPage}
+          disabled={currentPage === 0}
+          style={currentPage === 0 ? { ...disabledArrowStyle, left: -12 } : { ...arrowButtonStyle, left: -12 }}
+          title="Previous page"
+        >
+          {'<'}
+        </button>
+      )}
+
+      {/* Pagination: Right Arrow */}
+      {hasPagination && (
+        <button
+          type="button"
+          onClick={handleNextPage}
+          disabled={currentPage >= totalPages - 1}
+          style={currentPage >= totalPages - 1 ? { ...disabledArrowStyle, right: -12 } : { ...arrowButtonStyle, right: -12 }}
+          title="Next page"
+        >
+          {'>'}
+        </button>
+      )}
+
+      {/* Pagination: Page indicator */}
+      {hasPagination && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 6,
+            left: 0,
+            right: 0,
+            textAlign: 'center',
+            fontSize: 10,
+            fontWeight: 500,
+            color: subtitleColor,
+            letterSpacing: '0.3px',
+          }}
+        >
+          Page {currentPage + 1} of {totalPages}
+        </div>
+      )}
     </div>
   );
 };

@@ -760,14 +760,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         if (fid) fragmentToNodeIdMap.set(fid, nid);
       }
 
-      // Фильтруем только новые фрагменты
+      // Separate new fragments from existing ones
       const newFragmentsUnsorted = relatedFragments.filter((f) => {
         const fid = norm(f?.id || '');
         return fid && !existingNodeIds.has(fid);
       });
 
-      if (newFragmentsUnsorted.length === 0) {
-        console.log('[Cockpit] No new fragments to add');
+      // Find existing nodes that are related to the expanded node
+      // These need to be updated and included in groups
+      const existingRelatedIds = new Set<string>();
+      for (const f of relatedFragments) {
+        const fid = norm(f?.id || '');
+        if (fid && existingNodeIds.has(fid) && fid !== fragmentId) {
+          existingRelatedIds.add(fid);
+        }
+      }
+
+      if (newFragmentsUnsorted.length === 0 && existingRelatedIds.size === 0) {
+        console.log('[Cockpit] No new or existing related fragments to process');
         setNodes((prev) =>
           prev.map((n) =>
             n.id === fragmentId || n.data.fragmentId === fragmentId
@@ -945,10 +955,37 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         });
       }
 
+      // Update existing related nodes to include parentFragmentId so they get grouped
+      // This handles cases like: Tesla and BYD both on graph, expanding Tesla should group BYD
+      const updatedCurrentNodes = currentNodes.map((n) => {
+        const nodeFragmentId = norm(n.data?.fragmentId || n.id);
+
+        // Skip if not an existing related node, or if it already has a parent, or if it's the expanded node
+        if (!existingRelatedIds.has(nodeFragmentId)) return n;
+        if (n.data?.parentFragmentId) return n; // Already has a parent, don't override
+        if (nodeFragmentId === fragmentId) return n;
+
+        const edgeTypeFromParent = fragmentEdgeType.get(nodeFragmentId) || '';
+        const directionFromParent = fragmentDirection.get(nodeFragmentId) || 'outgoing';
+
+        console.log('[Cockpit] Updating existing node for grouping:', nodeFragmentId, { edgeTypeFromParent, directionFromParent });
+
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            parentFragmentId: fragmentId,
+            edgeTypeFromParent,
+            directionFromParent,
+            depth: childDepth,
+          },
+        };
+      });
+
       // Применяем ELK layout для позиционирования новых узлов относительно родителя
-      console.log('[Cockpit] Applying ELK layout for new nodes:', newNodes.length);
+      console.log('[Cockpit] Applying ELK layout for new nodes:', newNodes.length, 'existing related:', existingRelatedIds.size);
       const layoutedNodes = await layoutExpansionWithGroups(
-        currentNodes,
+        updatedCurrentNodes,
         newNodes,
         fragmentId,
         {
@@ -960,12 +997,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         },
       );
 
-      // Снимаем флаг загрузки с раскрытого узла
-      const finalNodes = layoutedNodes.map((n) =>
-        n.id === fragmentId || n.data.fragmentId === fragmentId
-          ? { ...n, data: { ...n.data, isLoadingRelated: false } }
-          : n,
-      );
+      // Снимаем флаг загрузки с раскрытого узла и добавляем callbacks
+      const finalNodes = layoutedNodes.map((n) => {
+        const updates: any = {};
+        // Add onGroupPageChange to groups
+        if ((n.data as any)?.isGroup) {
+          updates.onGroupPageChange = handleGroupPageChange;
+        }
+        // Remove loading flag from expanded node
+        if (n.id === fragmentId || n.data.fragmentId === fragmentId) {
+          updates.isLoadingRelated = false;
+        }
+        if (Object.keys(updates).length > 0) {
+          return { ...n, data: { ...n.data, ...updates } };
+        }
+        return n;
+      });
 
       // Обновляем состояние
       setNodes(finalNodes);
@@ -1023,11 +1070,83 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     }
   }, [loadingFragmentId, setEdges, setNodes, normalizeEdgeType]);
 
+  // Callback for group pagination - changes the visible page of children in a group
+  const handleGroupPageChange = useCallback((groupId: string, newPage: number) => {
+    setNodes((prevNodes) => {
+      // Find the group node to get its data
+      const groupNode = prevNodes.find((n) => n.id === groupId);
+      if (!groupNode || !(groupNode.data as any)?.isGroup) return prevNodes;
+
+      const gd = groupNode.data as any;
+      const allChildIds: string[] = gd.groupAllChildIds || [];
+      const pageSize = gd.groupPageSize || 12;
+      const totalPages = Math.ceil(allChildIds.length / pageSize);
+
+      // Validate new page
+      if (newPage < 0 || newPage >= totalPages) return prevNodes;
+
+      const startIdx = newPage * pageSize;
+      const endIdx = Math.min(startIdx + pageSize, allChildIds.length);
+      const visibleIds = new Set(allChildIds.slice(startIdx, endIdx));
+
+      // Calculate child positions for new page
+      const nodeWidth = 180;
+      const nodeHeight = 161;
+      const childGapX = 60;
+      const childGapY = Math.max(48, Math.floor(60 * 1.05));
+      const padTop = 34; // GROUP_HEADER_HEIGHT
+      const padX = 16;   // GROUP_PADDING_X
+      const nodesPerRow = 4; // GROUP_MAX_COLS
+
+      return prevNodes.map((n) => {
+        // Update group's current page
+        if (n.id === groupId) {
+          return {
+            ...n,
+            data: { ...n.data, groupCurrentPage: newPage },
+          };
+        }
+
+        // Update child visibility and positions
+        if ((n as any).parentId === groupId) {
+          const childIdx = allChildIds.indexOf(n.id);
+          if (childIdx === -1) return n;
+
+          const isVisible = visibleIds.has(n.id);
+          // Calculate position relative to current page
+          const pageIdx = childIdx - startIdx;
+          const rowIdx = Math.floor(pageIdx / nodesPerRow);
+          const colIdx = pageIdx % nodesPerRow;
+          const cx = padX + colIdx * (nodeWidth + childGapX);
+          const cy = padTop + rowIdx * (nodeHeight + childGapY);
+
+          return {
+            ...n,
+            hidden: !isVisible,
+            position: isVisible ? { x: cx, y: cy } : n.position,
+          };
+        }
+
+        return n;
+      });
+    });
+  }, [setNodes]);
+
   // Derive edges styles for hover highlighting (do not mutate base edges)
   // Labels are hidden by default to reduce visual noise, shown only on hover
   const displayEdges = React.useMemo(() => {
     const DIM_OPACITY = 0.22;
     const FADE_OPACITY = 0.12;
+
+    // Collect hidden node IDs (for pagination filtering)
+    const hiddenNodeIds = new Set(
+      nodes.filter((n) => (n as any).hidden).map((n) => n.id)
+    );
+
+    // Filter out edges connected to hidden nodes
+    const visibleEdges = edges.filter((e) =>
+      !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target)
+    );
 
     const baseStyled = (e: Edge) => {
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
@@ -1047,7 +1166,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
     // Edge hover: show only this edge's label
     if (hoveredEdgeId) {
-      return edges.map((e) => {
+      return visibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isHovered = e.id === hoveredEdgeId;
         if (isHovered) {
@@ -1067,7 +1186,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       const groupNode = nodes.find((n) => n.id === hoveredGroupId);
       const gd: any = groupNode?.data;
       if (!groupNode || !gd?.isGroup) {
-        return edges.map((e) => {
+        return visibleEdges.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
         });
@@ -1078,9 +1197,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       const groupDirection: 'incoming' | 'outgoing' | 'both' =
         gd.groupDirection === 'incoming' ? 'incoming' : gd.groupDirection === 'both' ? 'both' : 'outgoing';
 
-      const childIds = new Set(nodes.filter((n) => (n as any).parentId === hoveredGroupId).map((n) => n.id));
+      // Only consider visible (non-hidden) children for edge highlighting
+      const childIds = new Set(
+        nodes.filter((n) => (n as any).parentId === hoveredGroupId && !(n as any).hidden).map((n) => n.id)
+      );
       if (!groupParentId || childIds.size === 0) {
-        return edges.map((e) => {
+        return visibleEdges.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
         });
@@ -1106,7 +1228,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         return e.target === groupParentId && childIds.has(e.source);
       };
 
-      return edges.map((e) => {
+      return visibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         if (isGroupEdge(e)) {
           const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
@@ -1123,7 +1245,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     // Node hover: highlight incident edges and show their labels
     if (hoveredNodeId) {
       const nodeId = hoveredNodeId;
-      return edges.map((e) => {
+      return visibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
@@ -1141,7 +1263,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     // Selected node (when not hovering): highlight incident edges, show labels
     if (selectedNodeId) {
       const nodeId = selectedNodeId;
-      return edges.map((e) => {
+      return visibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
@@ -1157,7 +1279,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     }
 
     // Default: dim all edges, hide labels
-    return edges.map((e) => {
+    return visibleEdges.map((e) => {
       const { baseStyle } = baseStyled(e);
       return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
     });
@@ -1197,7 +1319,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         nodeWidth: ELK_NODE_WIDTH,
         nodeHeight: ELK_NODE_HEIGHT,
       });
-      setNodes(withGroups);
+      // Add onGroupPageChange callback to group nodes
+      const withCallbacks = withGroups.map((node) => {
+        if ((node.data as any)?.isGroup) {
+          return {
+            ...node,
+            data: { ...node.data, onGroupPageChange: handleGroupPageChange },
+          };
+        }
+        return node;
+      });
+      setNodes(withCallbacks);
 
       // Fit view после arrange
       setTimeout(() => {
@@ -1213,7 +1345,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     } finally {
       setArranging(false);
     }
-  }, [nodes, edges, arranging, handleLoadRelatedFragments, setNodes]);
+  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes]);
 
   // Функция для скачивания всех видимых Lens Items в JSON
   const handleDownload = useCallback(() => {
@@ -1431,11 +1563,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           maxChildRows: ELK_MAX_CHILD_ROWS,
         },
       );
-      setNodes(relayouted);
+      // Add onGroupPageChange callback to groups
+      const withCallbacks = relayouted.map((n) => {
+        if ((n.data as any)?.isGroup) {
+          return { ...n, data: { ...n.data, onGroupPageChange: handleGroupPageChange } };
+        }
+        return n;
+      });
+      setNodes(withCallbacks);
     } catch (err) {
       console.warn('[Cockpit] Failed to relayout groups after drag stop', err);
     }
-  }, [nodes, setNodes]);
+  }, [nodes, setNodes, handleGroupPageChange]);
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: '600px' }}>
