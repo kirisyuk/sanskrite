@@ -39,10 +39,17 @@ func NewOrgDeduplicator(fragmentsRepo *repo.HorizonFragmentsRepository, client c
 // the given fragment. If found, returns the existing fragment; otherwise returns
 // the original fragment unchanged.
 //
-// Matching priority:
-// 1. Wikidata ID from LinkedEntity.KBRefs
-// 2. Wikidata ID from Identifiers["wikidataId"]
-// 3. Exact shortName match
+// Matching priority (Tier 1 = 100% confidence, Tier 2 = high confidence):
+// Tier 1:
+//   1. Wikidata ID match (from KBRefs or Identifiers)
+//   2. Exact legalName match (case-insensitive) — юридическое название уникально
+// Tier 2:
+//   3. Exact label[en] match + same type
+//   4. Exact shortName match
+//   5. Normalized legalName match (removes LLC, Inc, Ltd, etc.)
+// Tier 3 (not implemented — requires manual review):
+//   - shortName prefix/suffix overlap
+//   - canonicalPath slug containment
 func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
 	if d == nil || d.fragmentsRepo == nil {
 		return fragment, nil
@@ -51,16 +58,42 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		return fragment, nil
 	}
 
+	// =========================================================================
+	// Tier 1: Highest confidence — auto-merge
+	// =========================================================================
+
 	// Strategy 1: Match by Wikidata ID
 	wikidataID := extractWikidataIDFromFragment(fragment)
 	if wikidataID != "" {
 		existing, err := d.findByWikidataID(ctx, wikidataID)
-		if err == nil && existing != nil {
+		if err == nil && existing != nil && existing.ID != fragment.ID {
 			return existing, nil
 		}
 	}
 
-	// Strategy 2: Match by shortName
+	// Strategy 2: Exact legalName match (case-insensitive)
+	legalName := strings.TrimSpace(fragment.Identifiers["legalName"])
+	if legalName != "" {
+		existing, err := d.findByLegalName(ctx, legalName)
+		if err == nil && existing != nil && existing.ID != fragment.ID {
+			return existing, nil
+		}
+	}
+
+	// =========================================================================
+	// Tier 2: High confidence — auto-merge with logging
+	// =========================================================================
+
+	// Strategy 3: Exact label[en] match
+	labelEN := strings.TrimSpace(fragment.Labels["en"])
+	if labelEN != "" {
+		existing, err := d.findByLabelEN(ctx, labelEN)
+		if err == nil && existing != nil && existing.ID != fragment.ID {
+			return existing, nil
+		}
+	}
+
+	// Strategy 4: Match by shortName
 	shortName := strings.TrimSpace(fragment.Identifiers["shortName"])
 	if shortName != "" {
 		existing, err := d.findByShortName(ctx, shortName)
@@ -69,12 +102,23 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		}
 	}
 
-	// Strategy 3: Try to resolve Wikidata ID via API if we have a client
+	// Strategy 5: Normalized legalName match (fallback for minor suffix differences)
+	if legalName != "" {
+		normalizedLegal := NormalizeLegalName(legalName)
+		if normalizedLegal != "" {
+			existing, err := d.findByNormalizedLegalName(ctx, normalizedLegal)
+			if err == nil && existing != nil && existing.ID != fragment.ID {
+				return existing, nil
+			}
+		}
+	}
+
+	// Strategy 6: Try to resolve Wikidata ID via API if we have a client
 	if d.wikidataClient != nil && wikidataID == "" {
 		resolvedID := d.resolveWikidataID(ctx, fragment)
 		if resolvedID != "" {
 			existing, err := d.findByWikidataID(ctx, resolvedID)
-			if err == nil && existing != nil {
+			if err == nil && existing != nil && existing.ID != fragment.ID {
 				return existing, nil
 			}
 			// Store resolved Wikidata ID in the fragment for future use
@@ -110,6 +154,51 @@ func (d *OrgDeduplicator) findByShortName(ctx context.Context, shortName string)
 	}
 
 	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, "shortName", shortName)
+	if err == nil && len(existing) > 0 && existing[0].Type == models.FragmentTypeOrganization {
+		return existing[0], nil
+	}
+
+	return nil, nil
+}
+
+// findByLegalName searches for an existing organization with the exact legalName (case-insensitive).
+func (d *OrgDeduplicator) findByLegalName(ctx context.Context, legalName string) (*models.HorizonFragment, error) {
+	if legalName == "" {
+		return nil, nil
+	}
+
+	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, "legalName", legalName)
+	if err == nil && len(existing) > 0 && existing[0].Type == models.FragmentTypeOrganization {
+		return existing[0], nil
+	}
+
+	return nil, nil
+}
+
+// findByLabelEN searches for an existing organization with the exact label[en].
+func (d *OrgDeduplicator) findByLabelEN(ctx context.Context, labelEN string) (*models.HorizonFragment, error) {
+	if labelEN == "" {
+		return nil, nil
+	}
+
+	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, models.FragmentTypeOrganization)
+	if err == nil && len(existing) > 0 {
+		return existing[0], nil
+	}
+
+	return nil, nil
+}
+
+// findByNormalizedLegalName searches for organizations where normalized legalName matches.
+// This catches cases like "Wingtech Technology Co., Ltd." vs "Wingtech Technology Ltd".
+func (d *OrgDeduplicator) findByNormalizedLegalName(ctx context.Context, normalizedName string) (*models.HorizonFragment, error) {
+	if normalizedName == "" {
+		return nil, nil
+	}
+
+	// FindByNormalizedLegalName is a specialized search that normalizes before comparison.
+	// If repo doesn't support it, fall back to nil (skip this strategy).
+	existing, err := d.fragmentsRepo.FindByNormalizedLegalName(ctx, normalizedName)
 	if err == nil && len(existing) > 0 && existing[0].Type == models.FragmentTypeOrganization {
 		return existing[0], nil
 	}

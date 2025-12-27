@@ -344,6 +344,113 @@ func (r *HorizonFragmentsRepository) FindByIdentifier(ctx context.Context, key, 
 	return fragments, nil
 }
 
+// FindByLabel finds fragments by a specific label language and value, filtered by type.
+// For example: FindByLabel(ctx, "en", "Wingtech Technology Co., Ltd.", "ORGANIZATION")
+func (r *HorizonFragmentsRepository) FindByLabel(ctx context.Context, lang, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+	if lang == "" || value == "" {
+		return nil, ErrInvalidDocument
+	}
+
+	// Firestore query for nested map field: labels.{lang} == value
+	fieldPath := fmt.Sprintf("labels.%s", lang)
+	q := r.col.Where("tenantId", "==", "global").Where(fieldPath, "==", value)
+	if fragType != "" {
+		q = q.Where("type", "==", string(fragType))
+	}
+	q = q.Limit(10)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	fragments := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		fragments = append(fragments, &fragment)
+	}
+
+	return fragments, nil
+}
+
+// FindByNormalizedLegalName finds organizations whose normalized legalName matches.
+// Normalization removes legal suffixes (LLC, Inc, Ltd, etc.) and standardizes punctuation.
+// This is a client-side filter because Firestore doesn't support computed field queries.
+func (r *HorizonFragmentsRepository) FindByNormalizedLegalName(ctx context.Context, normalizedName string) ([]*models.HorizonFragment, error) {
+	if normalizedName == "" {
+		return nil, ErrInvalidDocument
+	}
+
+	// We can't query by normalized name directly in Firestore (no computed fields).
+	// Strategy: query organizations that have legalName set, then filter client-side.
+	// To limit scope, we try to match by the first word as a prefix heuristic.
+	// This is imperfect but catches most cases without scanning all orgs.
+	words := strings.Fields(normalizedName)
+	if len(words) == 0 {
+		return nil, nil
+	}
+
+	// Query orgs (limit to reasonable number for client-side filtering)
+	q := r.col.Where("tenantId", "==", "global").Where("type", "==", string(models.FragmentTypeOrganization)).Limit(500)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []*models.HorizonFragment
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		legalName := strings.TrimSpace(fragment.Identifiers["legalName"])
+		if legalName == "" {
+			continue
+		}
+		fragNormalized := normalizeLegalNameForSearch(legalName)
+		if fragNormalized == normalizedName {
+			matches = append(matches, &fragment)
+			if len(matches) >= 5 {
+				break // Enough candidates
+			}
+		}
+	}
+
+	return matches, nil
+}
+
+// normalizeLegalNameForSearch is a local helper matching scout.NormalizeLegalName logic.
+func normalizeLegalNameForSearch(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	// Remove common legal suffixes
+	suffixes := []string{
+		" jsc", " llc", " inc", " ltd", " co", " corp", " corporation",
+		" group", " holdings", " limited", " company", " pty ltd",
+		" sa", " ag", " se", " gmbh", " ab", " oy", " as", " spa",
+		" nv", " bv", " sarl", " plc", " lp", " llp",
+		" s.a.", " a.g.", " s.p.a.", " n.v.", " b.v.", " s.à r.l.", " p.l.c.",
+		" co., ltd.", " co.,ltd.", " co., ltd", " co.,ltd",
+	}
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(name, suffix) {
+			name = strings.TrimSuffix(name, suffix)
+			break
+		}
+	}
+	// Normalize punctuation and spacing
+	name = strings.ReplaceAll(name, ".", "")
+	name = strings.ReplaceAll(name, ",", "")
+	name = strings.ReplaceAll(name, "&", "and")
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.Join(strings.Fields(name), " ")
+	return name
+}
+
 // Update обновляет HorizonFragment и сохраняет версию
 func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *models.HorizonFragment) error {
 	if fragment == nil || fragment.ID == "" {

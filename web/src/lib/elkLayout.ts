@@ -92,6 +92,141 @@ export const SEMANTIC_GROUP_POSITION: Record<SemanticGroup, 'top' | 'bottom' | '
 };
 
 /**
+ * Grid-based layout system for hierarchical node expansion.
+ * Each cell can contain a node or a group. The grid grows dynamically
+ * as nodes are expanded.
+ */
+export interface GridCell {
+  row: number;
+  col: number;
+  type: 'node' | 'group' | 'empty';
+  nodeId?: string;           // Fragment ID if type is 'node'
+  groupId?: string;          // Group ID if type is 'group'
+  semanticGroup?: SemanticGroup; // For groups: which semantic category
+  parentNodeId?: string;     // Which node this cell belongs to (for groups)
+}
+
+export interface GridState {
+  cells: Map<string, GridCell>;  // Key: "row:col"
+  bounds: {
+    minRow: number;
+    maxRow: number;
+    minCol: number;
+    maxCol: number;
+  };
+  rootNodeId: string | null;     // The first expanded node (center of grid)
+  expandedNodes: Set<string>;    // Nodes that have been expanded (have children)
+}
+
+// Grid cell size matches max group size (4x3 nodes + padding)
+export const GRID_CELL_WIDTH = 4 * DEFAULT_NODE_WIDTH + 3 * 60 + 32;  // ~920px
+export const GRID_CELL_HEIGHT = 3 * DEFAULT_NODE_HEIGHT + 2 * 63 + 34 + 16 + 24; // ~631px
+
+const gridKey = (row: number, col: number) => `${row}:${col}`;
+
+export function createEmptyGrid(): GridState {
+  return {
+    cells: new Map(),
+    bounds: { minRow: 0, maxRow: 0, minCol: 0, maxCol: 0 },
+    rootNodeId: null,
+    expandedNodes: new Set(),
+  };
+}
+
+export function getGridCell(grid: GridState, row: number, col: number): GridCell | undefined {
+  return grid.cells.get(gridKey(row, col));
+}
+
+export function setGridCell(grid: GridState, cell: GridCell): GridState {
+  const newCells = new Map(grid.cells);
+  newCells.set(gridKey(cell.row, cell.col), cell);
+
+  return {
+    ...grid,
+    cells: newCells,
+    bounds: {
+      minRow: Math.min(grid.bounds.minRow, cell.row),
+      maxRow: Math.max(grid.bounds.maxRow, cell.row),
+      minCol: Math.min(grid.bounds.minCol, cell.col),
+      maxCol: Math.max(grid.bounds.maxCol, cell.col),
+    },
+  };
+}
+
+/**
+ * Find the grid cell for a node that's being expanded from a group.
+ * Returns the cell position based on the semantic group's direction.
+ */
+export function findCellForExpandedNode(
+  grid: GridState,
+  parentNodeId: string,
+  semanticGroup: SemanticGroup,
+): { row: number; col: number } {
+  // Find parent node's cell
+  let parentRow = 0;
+  let parentCol = 0;
+  for (const [, cell] of grid.cells) {
+    if (cell.type === 'node' && cell.nodeId === parentNodeId) {
+      parentRow = cell.row;
+      parentCol = cell.col;
+      break;
+    }
+  }
+
+  // Determine offset based on semantic group direction
+  const position = SEMANTIC_GROUP_POSITION[semanticGroup];
+  let offsetRow = 0;
+  let offsetCol = 0;
+
+  switch (position) {
+    case 'top':
+      offsetRow = -1;
+      break;
+    case 'bottom':
+      offsetRow = 1;
+      break;
+    case 'left':
+      offsetCol = -1;
+      break;
+    case 'right':
+      offsetCol = 1;
+      break;
+  }
+
+  // Find first free cell in that direction
+  let row = parentRow + offsetRow;
+  let col = parentCol + offsetCol;
+
+  while (getGridCell(grid, row, col)?.type === 'node') {
+    row += offsetRow;
+    col += offsetCol;
+  }
+
+  return { row, col };
+}
+
+/**
+ * Convert grid coordinates to canvas position.
+ */
+export function gridToCanvasPosition(
+  row: number,
+  col: number,
+  nodeWidth: number = DEFAULT_NODE_WIDTH,
+  nodeHeight: number = DEFAULT_NODE_HEIGHT,
+): { x: number; y: number } {
+  // Center of grid is (0, 0)
+  // Each cell is GRID_CELL_WIDTH x GRID_CELL_HEIGHT
+  // Node is centered within its cell
+  const cellCenterX = col * GRID_CELL_WIDTH;
+  const cellCenterY = row * GRID_CELL_HEIGHT;
+
+  return {
+    x: cellCenterX - nodeWidth / 2,
+    y: cellCenterY - nodeHeight / 2,
+  };
+}
+
+/**
  * Map edge type + direction to semantic group.
  * Direction is relative to the expanded node:
  * - outgoing: edge goes FROM expanded node TO neighbor

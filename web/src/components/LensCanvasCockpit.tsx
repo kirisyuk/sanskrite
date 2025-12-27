@@ -14,7 +14,20 @@ import 'reactflow/dist/style.css';
 import { ThemeContext } from './ThemeProvider';
 import { HORIZON_NODE_TYPES } from './HorizonGraphNodeTypes';
 import { api } from '../lib/api';
-import { layoutExpansionWithGroups, layoutFullGraph, rebuildGroupContainers, getSemanticGroup, SEMANTIC_GROUP_POSITION } from '../lib/elkLayout';
+import {
+  layoutExpansionWithGroups,
+  layoutFullGraph,
+  rebuildGroupContainers,
+  getSemanticGroup,
+  SEMANTIC_GROUP_POSITION,
+  createEmptyGrid,
+  setGridCell,
+  getGridCell,
+  findCellForExpandedNode,
+  gridToCanvasPosition,
+  type GridState,
+  type GridCell,
+} from '../lib/elkLayout';
 import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 
@@ -43,6 +56,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
+  const [gridState, setGridState] = React.useState<GridState>(createEmptyGrid());
   const selectedNodeId = React.useMemo(() => {
     const selected = nodes.find((n) => (n as any)?.selected && !((n.data as any)?.isGroup));
     return selected?.id || null;
@@ -706,6 +720,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     const sourceDepth = typeof sourceSnapshot?.data?.depth === 'number' ? sourceSnapshot.data.depth : 0;
     const sourceRootId = norm(sourceSnapshot?.data?.rootFragmentId || sourceSnapshot?.data?.fragmentId || sourceSnapshot?.id);
 
+    // Grid management: determine if this is root expansion or second-order expansion
+    const isFirstExpansion = gridState.rootNodeId === null;
+    const isNodeInGroup = !!(sourceSnapshot as any).parentId && !(sourceSnapshot.data as any)?.isGroup;
+    const nodeSemanticGroup = isNodeInGroup
+      ? getSemanticGroup(
+          (sourceSnapshot.data as any)?.edgeTypeFromParent,
+          (sourceSnapshot.data as any)?.directionFromParent !== 'incoming'
+        )
+      : null;
+
+    console.log('[Cockpit] Expansion context:', {
+      fragmentId,
+      isFirstExpansion,
+      isNodeInGroup,
+      nodeSemanticGroup,
+      expandedNodes: Array.from(gridState.expandedNodes),
+    });
+
     setLoadingFragmentId(fragmentId);
     setNodes((prev) =>
       prev.map((n) =>
@@ -768,11 +800,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       // Find existing nodes that are related to the expanded node
       // These need to be updated and included in groups
+      // EXCLUDE nodes that have already been expanded (they should not be grouped)
       const existingRelatedIds = new Set<string>();
       for (const f of relatedFragments) {
         const fid = norm(f?.id || '');
         if (fid && existingNodeIds.has(fid) && fid !== fragmentId) {
-          existingRelatedIds.add(fid);
+          // Don't group nodes that have been expanded (they are "root" nodes of their own subgraph)
+          if (!gridState.expandedNodes.has(fid)) {
+            existingRelatedIds.add(fid);
+          } else {
+            console.log('[Cockpit] Skipping already expanded node from grouping:', fid);
+          }
         }
       }
 
@@ -955,9 +993,47 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         });
       }
 
+      // If expanding a node that's in a group, extract it from the group first
+      // This node becomes a "local root" of its own subgraph
+      let preprocessedNodes = currentNodes;
+      if (isNodeInGroup && nodeSemanticGroup) {
+        console.log('[Cockpit] Extracting node from group:', fragmentId, 'semantic group:', nodeSemanticGroup);
+
+        // Find the parent node (the one that expanded and created the group containing this node)
+        const expandingNodeParentId = (sourceSnapshot.data as any)?.parentFragmentId;
+
+        preprocessedNodes = currentNodes.map((n) => {
+          const nodeFragmentId = norm(n.data?.fragmentId || n.id);
+
+          // Remove the expanding node from its group
+          if (nodeFragmentId === fragmentId) {
+            // Clear parent relationship so it's no longer grouped
+            const newData = { ...n.data };
+            delete (newData as any).parentFragmentId;
+            delete (newData as any).edgeTypeFromParent;
+            delete (newData as any).directionFromParent;
+
+            // Calculate new position based on grid
+            const cellPos = findCellForExpandedNode(gridState, expandingNodeParentId || '', nodeSemanticGroup);
+            const canvasPos = gridToCanvasPosition(cellPos.row, cellPos.col);
+
+            console.log('[Cockpit] Repositioning extracted node to grid cell:', cellPos, 'canvas:', canvasPos);
+
+            return {
+              ...n,
+              parentId: undefined, // Remove from group container
+              extent: undefined,
+              position: canvasPos,
+              data: newData,
+            };
+          }
+          return n;
+        });
+      }
+
       // Update existing related nodes to include parentFragmentId so they get grouped
       // This handles cases like: Tesla and BYD both on graph, expanding Tesla should group BYD
-      const updatedCurrentNodes = currentNodes.map((n) => {
+      const updatedCurrentNodes = preprocessedNodes.map((n) => {
         const nodeFragmentId = norm(n.data?.fragmentId || n.id);
 
         // Skip if not an existing related node, or if it already has a parent, or if it's the expanded node
@@ -1036,6 +1112,47 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           out.push({ ...(e as any), id: `edge-${k}` });
         }
         return out;
+      });
+
+      // Update grid state: add expanded node to the grid
+      setGridState((prevGrid) => {
+        let newGrid = { ...prevGrid };
+
+        // If this is the first expansion, set root node at (0, 0)
+        if (prevGrid.rootNodeId === null) {
+          newGrid.rootNodeId = fragmentId;
+          newGrid = setGridCell(newGrid, {
+            row: 0,
+            col: 0,
+            type: 'node',
+            nodeId: fragmentId,
+          });
+          console.log('[Cockpit] Grid: set root node at (0, 0):', fragmentId);
+        } else if (isNodeInGroup && nodeSemanticGroup) {
+          // Node was extracted from a group, add it to its new cell
+          const expandingNodeParentId = (sourceSnapshot.data as any)?.parentFragmentId;
+          const cellPos = findCellForExpandedNode(prevGrid, expandingNodeParentId || '', nodeSemanticGroup);
+          newGrid = setGridCell(newGrid, {
+            row: cellPos.row,
+            col: cellPos.col,
+            type: 'node',
+            nodeId: fragmentId,
+          });
+          console.log('[Cockpit] Grid: added extracted node at cell:', cellPos, fragmentId);
+        }
+
+        // Mark this node as expanded
+        const newExpandedNodes = new Set(prevGrid.expandedNodes);
+        newExpandedNodes.add(fragmentId);
+        newGrid.expandedNodes = newExpandedNodes;
+
+        console.log('[Cockpit] Grid state updated:', {
+          rootNodeId: newGrid.rootNodeId,
+          expandedNodes: Array.from(newGrid.expandedNodes),
+          cellCount: newGrid.cells.size,
+        });
+
+        return newGrid;
       });
 
       // Подгоняем вид к родителю и новым узлам
