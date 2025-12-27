@@ -5,12 +5,14 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
 // HorizonHandlers содержит все HTTP handlers для Horizon API
 type HorizonHandlers struct {
 	service        *horizon.HorizonService
 	lensItemsHandler *LensItemsHandler
+	genAIHandler   *httputil.GenAIHandler
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -23,6 +25,12 @@ func NewHorizonHandlers(service *horizon.HorizonService) *HorizonHandlers {
 // WithLensItemsHandler добавляет LensItemsHandler
 func (h *HorizonHandlers) WithLensItemsHandler(handler *LensItemsHandler) *HorizonHandlers {
 	h.lensItemsHandler = handler
+	return h
+}
+
+// WithGenAIHandler добавляет GenAIHandler для вызова LLM
+func (h *HorizonHandlers) WithGenAIHandler(handler *httputil.GenAIHandler) *HorizonHandlers {
+	h.genAIHandler = handler
 	return h
 }
 

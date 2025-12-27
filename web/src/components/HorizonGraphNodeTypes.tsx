@@ -1,6 +1,7 @@
 import React from 'react';
 import { NodeTypes, Handle, Position, NodeProps } from 'reactflow';
 import { ThemeContext } from './ThemeProvider';
+import { SemanticGroup, SEMANTIC_GROUP_LABELS } from '../lib/elkLayout';
 
 // Типы нод для Horizon графа (на основе LensItem)
 export interface HorizonNodeData {
@@ -26,8 +27,10 @@ export interface HorizonNodeData {
   // Group/container nodes (UI-only, not persisted)
   isGroup?: boolean;
   groupParentId?: string;
-  groupDirection?: 'incoming' | 'outgoing';
-  groupEdgeType?: string;
+  groupSemanticGroup?: SemanticGroup;  // New: semantic category
+  groupEdgeTypes?: string[];  // New: all edge types in this group
+  groupDirection?: 'incoming' | 'outgoing' | 'both';  // Legacy, derived from semantic group
+  groupEdgeType?: string;  // Legacy, first edge type
   groupCount?: number;
   [key: string]: any;
 }
@@ -360,17 +363,85 @@ const EDGE_GROUP_COLORS: Record<
 
 const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().trim() || 'OTHER';
 
+// Color scheme for semantic groups (business-oriented)
+const SEMANTIC_GROUP_COLORS: Record<
+  SemanticGroup,
+  { light: string; dark: string; borderLight: string; borderDark: string; icon: string }
+> = {
+  'supply-chain': {
+    light: 'rgba(59, 130, 246, 0.10)',
+    dark: 'rgba(59, 130, 246, 0.12)',
+    borderLight: 'rgba(59, 130, 246, 0.45)',
+    borderDark: 'rgba(96, 165, 250, 0.55)',
+    icon: '⬆️',  // Upstream
+  },
+  'customers': {
+    light: 'rgba(34, 197, 94, 0.10)',
+    dark: 'rgba(34, 197, 94, 0.12)',
+    borderLight: 'rgba(34, 197, 94, 0.45)',
+    borderDark: 'rgba(74, 222, 128, 0.55)',
+    icon: '⬇️',  // Downstream
+  },
+  'market': {
+    light: 'rgba(239, 68, 68, 0.10)',
+    dark: 'rgba(239, 68, 68, 0.12)',
+    borderLight: 'rgba(239, 68, 68, 0.45)',
+    borderDark: 'rgba(248, 113, 113, 0.55)',
+    icon: '⚔️',  // Competition/Partnership
+  },
+  'context': {
+    light: 'rgba(168, 85, 247, 0.10)',
+    dark: 'rgba(168, 85, 247, 0.12)',
+    borderLight: 'rgba(168, 85, 247, 0.45)',
+    borderDark: 'rgba(192, 132, 252, 0.55)',
+    icon: '🌍',  // Geography/Context
+  },
+};
+
+// Format edge types for subtitle (e.g., "OWNS, SUPPLIES_TO")
+const formatEdgeTypes = (edgeTypes: string[] | undefined): string => {
+  if (!edgeTypes || edgeTypes.length === 0) return '';
+  // Dedupe and limit to 3 for display
+  const unique = [...new Set(edgeTypes.map(t => normalizeEdgeType(t)))];
+  if (unique.length <= 3) return unique.join(', ');
+  return `${unique.slice(0, 2).join(', ')} +${unique.length - 2}`;
+};
+
 const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected }) => {
   const { theme } = React.useContext(ThemeContext);
-  const edgeType = normalizeEdgeType(data.groupEdgeType);
-  const scheme = EDGE_GROUP_COLORS[edgeType] || EDGE_GROUP_COLORS.OTHER;
-  const bg = theme === 'dark' ? scheme.dark : scheme.light;
-  const border = theme === 'dark' ? scheme.borderDark : scheme.borderLight;
+  
+  // Use semantic group if available, fall back to edge type
+  const semanticGroup = data.groupSemanticGroup;
+  const edgeTypes = data.groupEdgeTypes || (data.groupEdgeType ? [data.groupEdgeType] : []);
+  
+  // Get colors based on semantic group or fall back to edge type colors
+  let bg: string;
+  let border: string;
+  let icon: string;
+  
+  if (semanticGroup && SEMANTIC_GROUP_COLORS[semanticGroup]) {
+    const scheme = SEMANTIC_GROUP_COLORS[semanticGroup];
+    bg = theme === 'dark' ? scheme.dark : scheme.light;
+    border = theme === 'dark' ? scheme.borderDark : scheme.borderLight;
+    icon = scheme.icon;
+  } else {
+    // Fallback to edge type colors
+    const edgeType = normalizeEdgeType(data.groupEdgeType);
+    const scheme = EDGE_GROUP_COLORS[edgeType] || EDGE_GROUP_COLORS.OTHER;
+    bg = theme === 'dark' ? scheme.dark : scheme.light;
+    border = theme === 'dark' ? scheme.borderDark : scheme.borderLight;
+    icon = '';
+  }
+  
   const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.85)';
   const subtitleColor = theme === 'dark' ? 'rgba(255,255,255,0.55)' : 'rgba(15,23,42,0.55)';
   const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
-  const dir = data.groupDirection || 'outgoing';
   const ring = selected ? (theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.20)') : undefined;
+
+  // Title: semantic group label or edge type
+  const title = semanticGroup ? SEMANTIC_GROUP_LABELS[semanticGroup] : normalizeEdgeType(data.groupEdgeType);
+  // Subtitle: edge types in this group
+  const subtitle = formatEdgeTypes(edgeTypes);
 
   return (
     <div
@@ -403,18 +474,33 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected
         }}
       >
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', color: titleColor, textTransform: 'uppercase' }}>
-            {edgeType}
+          {icon && <span style={{ fontSize: 12 }}>{icon}</span>}
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', color: titleColor }}>
+            {title}
           </div>
           {count !== undefined && (
             <div style={{ fontSize: 11, fontWeight: 600, color: subtitleColor }}>
-              {count}
+              ({count})
             </div>
           )}
         </div>
-        <div style={{ fontSize: 10, fontWeight: 600, color: subtitleColor, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-          {dir === 'incoming' ? 'incoming' : 'outgoing'}
-        </div>
+        {subtitle && (
+          <div 
+            style={{ 
+              fontSize: 9, 
+              fontWeight: 500, 
+              color: subtitleColor, 
+              textTransform: 'uppercase', 
+              letterSpacing: '0.3px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              maxWidth: '50%',
+            }}
+            title={edgeTypes.join(', ')}
+          >
+            {subtitle}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -502,30 +588,55 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selec
         }}
       />
       
-      {/* Старые handle'ы для обратной совместимости (лево/право) */}
+      {/* Left handles for Market Position group */}
       <Handle
-        id="source-right"
+        id="source-left"
         type="source"
-        position={Position.Right}
+        position={Position.Left}
         style={{
           background: accentColor,
-          width: '8px',
-          height: '8px',
+          width: '10px',
+          height: '10px',
           border: `2px solid ${bgColor}`,
-          opacity: 0.5,
         }}
       />
-      
       <Handle
         id="target-left"
         type="target"
         position={Position.Left}
         style={{
           background: accentColor,
-          width: '8px',
-          height: '8px',
+          width: '10px',
+          height: '10px',
           border: `2px solid ${bgColor}`,
-          opacity: 0.5,
+          left: '-5px',
+          top: '60%',
+        }}
+      />
+      
+      {/* Right handles for Operating Context group */}
+      <Handle
+        id="source-right"
+        type="source"
+        position={Position.Right}
+        style={{
+          background: accentColor,
+          width: '10px',
+          height: '10px',
+          border: `2px solid ${bgColor}`,
+        }}
+      />
+      <Handle
+        id="target-right"
+        type="target"
+        position={Position.Right}
+        style={{
+          background: accentColor,
+          width: '10px',
+          height: '10px',
+          border: `2px solid ${bgColor}`,
+          right: '-5px',
+          top: '60%',
         }}
       />
 

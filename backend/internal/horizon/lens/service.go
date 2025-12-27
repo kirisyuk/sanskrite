@@ -79,6 +79,26 @@ func parseInt(v interface{}, def int) int {
 	}
 }
 
+func dedupeCanonicalPaths(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
 // LensService управляет Lens и подписками на HorizonFragment
 type LensService struct {
 	lensesRepo        *repo.LensesRepository
@@ -290,6 +310,8 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		// Добавляем resolved paths к static paths для последующей обработки
 		staticPaths = append(staticPaths, resolvedPaths...)
 	}
+	// Avoid duplicate work (e.g. repeated anchors / resolved queries).
+	staticPaths = dedupeCanonicalPaths(staticPaths)
 
 	// Логируем ошибки резолва (если есть)
 	if len(resolveErrors) > 0 {
@@ -566,6 +588,8 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 		lens.LastResolved = &now
 		allNewStaticPaths = append(allNewStaticPaths, resolvedPaths...)
 	}
+	// Avoid duplicate work (e.g. repeated anchors / resolved queries).
+	allNewStaticPaths = dedupeCanonicalPaths(allNewStaticPaths)
 
 	// Логируем ошибки резолва (если есть)
 	if len(resolveErrors) > 0 {
@@ -602,6 +626,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			allOldStaticPaths = append(allOldStaticPaths, oldPaths...)
 		}
 	}
+	allOldStaticPaths = dedupeCanonicalPaths(allOldStaticPaths)
 
 	// Удаляем QueryAddress, которые больше не используются
 	for _, queryAddr := range oldQueryAddresses {

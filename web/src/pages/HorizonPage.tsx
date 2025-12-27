@@ -77,6 +77,8 @@ const HorizonPage: React.FC = () => {
   const events = useHorizonRealtimeStore((s) => s.events);
   const resetEvents = useHorizonRealtimeStore((s) => s.resetEvents);
   const [lensStarted, setLensStarted] = React.useState(false);
+  const [isCreatingLens, setIsCreatingLens] = React.useState(false);
+  const creatingLensRef = React.useRef(false);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
   
   const isAdmin = currentUser?.email === 'igor@hatl.one' || currentUser?.email === 'admin@hatl.one';
@@ -256,6 +258,11 @@ const HorizonPage: React.FC = () => {
   }, []);
 
   const handleAssembleLens = React.useCallback(async (request: AssembleLensRequest) => {
+    // Guard against double-submit (e.g. double Enter / fast double click)
+    if (creatingLensRef.current) return;
+    creatingLensRef.current = true;
+    setIsCreatingLens(true);
+
     try {
       // Assemble via NL query -> intent -> lens (backend precheck).
       // Realtime assembly/scout progress is delivered via horizon.* websocket events.
@@ -272,7 +279,7 @@ const HorizonPage: React.FC = () => {
         {
           projectId: request.projectId,
           query: request.query,
-          maxRecursionDepth: request.filters?.maxRecursionDepth ?? 2,
+          maxRecursionDepth: request.filters?.maxRecursionDepth ?? 1,
         },
         { correlationId, sessionId }
       );
@@ -286,6 +293,9 @@ const HorizonPage: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to assemble lens:', error);
+    } finally {
+      creatingLensRef.current = false;
+      setIsCreatingLens(false);
     }
   }, [resetEvents]);
 
@@ -444,7 +454,7 @@ const HorizonPage: React.FC = () => {
                 <AssembleLensRequestComponent
                   projectId={currentProject.id}
                   onAssemble={handleAssembleLens}
-                  disabled={false}
+                  disabled={isCreatingLens}
                   pinnedBottom={lensStarted}
                 />
               ) : (

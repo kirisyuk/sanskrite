@@ -15,6 +15,8 @@ interface HorizonDrawersProps {
   lensId?: string | null;
   selectedNodeId: string | null;
   selectedNodeData: any;
+  selectedEdgeId: string | null;
+  selectedEdgeData: any;
 }
 
 export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
@@ -27,6 +29,8 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
   lensId,
   selectedNodeId,
   selectedNodeData,
+  selectedEdgeId,
+  selectedEdgeData,
 }) => {
   const { t } = useTranslation();
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -246,6 +250,8 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
                     <ObjectInspector
                       nodeId={selectedNodeId}
                       nodeData={selectedNodeData}
+                      edgeId={selectedEdgeId}
+                      edgeData={selectedEdgeData}
                       lensId={lensId || null}
                     />
                   </div>

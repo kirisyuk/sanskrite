@@ -14,7 +14,7 @@ import 'reactflow/dist/style.css';
 import { ThemeContext } from './ThemeProvider';
 import { HORIZON_NODE_TYPES } from './HorizonGraphNodeTypes';
 import { api } from '../lib/api';
-import { layoutExpansionWithGroups, layoutFullGraph, rebuildGroupContainers } from '../lib/elkLayout';
+import { layoutExpansionWithGroups, layoutFullGraph, rebuildGroupContainers, getSemanticGroup, SEMANTIC_GROUP_POSITION } from '../lib/elkLayout';
 import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 
@@ -22,10 +22,14 @@ export interface LensCanvasCockpitProps {
   lensId: string | null;
   projectId?: string | null;
   onNodeSelect?: (nodeId: string | null, nodeData: HorizonNodeData | null) => void;
+  onEdgeSelect?: (edgeId: string | null, edgeData: any | null) => void;
 }
 
-export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, projectId, onNodeSelect }) => {
+export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, projectId, onNodeSelect, onEdgeSelect }) => {
   const { theme } = React.useContext(ThemeContext);
+  // Guard: ReactFlow can sometimes fire onPaneClick after node/edge click (sometimes twice).
+  // We ignore pane clicks for a short window after selecting to avoid clearing selection immediately.
+  const ignorePaneClicksUntilRef = React.useRef<number>(0);
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
   
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -38,6 +42,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [loadingFragmentId, setLoadingFragmentId] = React.useState<string | null>(null);
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
   const selectedNodeId = React.useMemo(() => {
     const selected = nodes.find((n) => (n as any)?.selected && !((n.data as any)?.isGroup));
     return selected?.id || null;
@@ -149,6 +154,63 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   };
 
   const normalizeEdgeType = useCallback((t: string | undefined) => (t || '').toUpperCase().trim(), []);
+
+  /**
+   * Determine source and target handles based on semantic group.
+   * Handles are assigned to edge.source and edge.target nodes respectively.
+   * 
+   * For vertical groups (top/bottom): always bottom → top
+   * For horizontal groups (left/right): depends on who is source in the edge data
+   * 
+   * Visual layout:
+   * - Supply Chain (top): child above parent, edge bottom → top
+   * - Customers (bottom): child below parent, edge bottom → top  
+   * - Market (left): child left of parent, edge left ↔ right
+   * - Context (right): child right of parent, edge right ↔ left
+   */
+  const getEdgeHandles = useCallback((edgeType: string | undefined, isOutgoing: boolean): { sourceHandle: string; targetHandle: string } => {
+    const sg = getSemanticGroup(edgeType, isOutgoing);
+    const position = SEMANTIC_GROUP_POSITION[sg];
+    
+    switch (position) {
+      case 'top':
+        // Supply chain: vertical, always bottom → top
+        return { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+      case 'bottom':
+        // Customers: vertical, always bottom → top
+        return { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+      case 'left':
+        // Market: child is to the left of parent
+        // Visual: parent.left → child.right
+        if (isOutgoing) {
+          // edge: parent(source) → child(target)
+          // source node = parent → use left handle
+          // target node = child → use right handle
+          return { sourceHandle: 'source-left', targetHandle: 'target-right' };
+        } else {
+          // edge: child(source) → parent(target)
+          // source node = child → use right handle (towards parent on right)
+          // target node = parent → use left handle (from child on left)
+          return { sourceHandle: 'source-right', targetHandle: 'target-left' };
+        }
+      case 'right':
+        // Context: child is to the right of parent
+        // Visual: parent.right → child.left
+        if (isOutgoing) {
+          // edge: parent(source) → child(target)
+          // source node = parent → use right handle
+          // target node = child → use left handle
+          return { sourceHandle: 'source-right', targetHandle: 'target-left' };
+        } else {
+          // edge: child(source) → parent(target)
+          // source node = child → use left handle (towards parent on left)
+          // target node = parent → use right handle (from child on right)
+          return { sourceHandle: 'source-left', targetHandle: 'target-right' };
+        }
+      default:
+        return { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+    }
+  }, []);
 
   // ELK layout options
   const ELK_NODE_WIDTH = 180;
@@ -306,6 +368,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             target: targetId,
             type: 'default',
             label: item.edgeType || item.subkind,
+            // Increase hit-area for clicking thin edges (compatible with ReactFlow v11 types)
+            interactionWidth: 18,
             markerEnd: {
               type: MarkerType.ArrowClosed,
             },
@@ -447,14 +511,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             sourceHandle: 'source-bottom', // Исходящие связи снизу (от кнопки +)
             targetHandle: 'target-top', // Входящие связи сверху
             type: 'default',
-            label: edgeType,
+            // label hidden by default, shown on hover via displayEdges
+            // Increase hit-area for clicking thin edges (compatible with ReactFlow v11 types)
+            interactionWidth: 18,
             markerEnd: {
               type: MarkerType.ArrowClosed,
             },
             style: baseStyle,
             data: {
               lensItemId: '', // Будет обновлено после сохранения
-              edgeType,
+              edgeType,  // Used for label on hover
               criticality: edge.properties?.criticality,
               amplification: edge.properties?.amplification,
               latencyHours: edge.properties?.latencyHours,
@@ -850,20 +916,26 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const targetId = fragmentToNodeIdMap.get(t);
         if (!sourceId || !targetId) continue;
 
+        // Determine handles based on semantic group
+        // isOutgoing = true if the expanded node (fragmentId) is the source
+        const isOutgoing = s === fragmentId;
+        const handles = getEdgeHandles(edgeType, isOutgoing);
+
         const baseStyle = getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality);
         newEdges.push({
           id: edgeId,
           source: sourceId,
           target: targetId,
-          sourceHandle: 'source-bottom',
-          targetHandle: 'target-top',
+          sourceHandle: handles.sourceHandle,
+          targetHandle: handles.targetHandle,
           type: 'default',
-          label: e?.type || e?.edgeType,
+          // label hidden by default, shown on hover via displayEdges
+          interactionWidth: 18,
           markerEnd: { type: MarkerType.ArrowClosed },
           style: baseStyle,
           data: {
             lensItemId: '',
-            edgeType: e?.type || e?.edgeType,
+            edgeType: e?.type || e?.edgeType,  // Used for label on hover
             criticality: e?.properties?.criticality,
             amplification: e?.properties?.amplification,
             latencyHours: e?.properties?.latencyHours,
@@ -952,14 +1024,43 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   }, [loadingFragmentId, setEdges, setNodes, normalizeEdgeType]);
 
   // Derive edges styles for hover highlighting (do not mutate base edges)
+  // Labels are hidden by default to reduce visual noise, shown only on hover
   const displayEdges = React.useMemo(() => {
     const DIM_OPACITY = 0.22;
     const FADE_OPACITY = 0.12;
 
     const baseStyled = (e: Edge) => {
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
-      return { baseStyle };
+      const edgeLabel = (e as any)?.data?.edgeType || e.label;
+      return { baseStyle, edgeLabel };
     };
+
+    // Helper to create edge with optional label
+    const withLabel = (e: Edge, showLabel: boolean, style: any) => {
+      const { edgeLabel } = baseStyled(e);
+      return {
+        ...e,
+        label: showLabel ? edgeLabel : undefined,
+        style,
+      };
+    };
+
+    // Edge hover: show only this edge's label
+    if (hoveredEdgeId) {
+      return edges.map((e) => {
+        const { baseStyle } = baseStyled(e);
+        const isHovered = e.id === hoveredEdgeId;
+        if (isHovered) {
+          const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+          return withLabel(e, true, {
+            ...baseStyle,
+            opacity: 1,
+            strokeWidth: strokeWidth + 1.5,
+          });
+        }
+        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY });
+      });
+    }
 
     // Group hover has priority over node hover
     if (hoveredGroupId) {
@@ -968,25 +1069,37 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       if (!groupNode || !gd?.isGroup) {
         return edges.map((e) => {
           const { baseStyle } = baseStyled(e);
-          return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
+          return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
         });
       }
 
       const groupEdgeType = normalizeEdgeType(gd.groupEdgeType);
       const groupParentId = String(gd.groupParentId || '').trim();
-      const groupDirection: 'incoming' | 'outgoing' = gd.groupDirection === 'incoming' ? 'incoming' : 'outgoing';
+      const groupDirection: 'incoming' | 'outgoing' | 'both' =
+        gd.groupDirection === 'incoming' ? 'incoming' : gd.groupDirection === 'both' ? 'both' : 'outgoing';
 
       const childIds = new Set(nodes.filter((n) => (n as any).parentId === hoveredGroupId).map((n) => n.id));
       if (!groupParentId || childIds.size === 0) {
         return edges.map((e) => {
           const { baseStyle } = baseStyled(e);
-          return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
+          return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
         });
       }
 
       const isGroupEdge = (e: any) => {
         const et = normalizeEdgeType(e?.data?.edgeType || e?.label);
-        if (groupEdgeType && et !== groupEdgeType) return false;
+        // For LOCATED_IN group, also match OPERATES_IN edges
+        if (groupEdgeType === 'LOCATED_IN') {
+          if (et !== 'LOCATED_IN' && et !== 'OPERATES_IN') return false;
+        } else if (groupEdgeType && et !== groupEdgeType) {
+          return false;
+        }
+        if (groupDirection === 'both') {
+          return (
+            (e.source === groupParentId && childIds.has(e.target)) ||
+            (e.target === groupParentId && childIds.has(e.source))
+          );
+        }
         if (groupDirection === 'outgoing') {
           return e.source === groupParentId && childIds.has(e.target);
         }
@@ -997,26 +1110,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const { baseStyle } = baseStyled(e);
         if (isGroupEdge(e)) {
           const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
-          return {
-            ...e,
-            style: {
-              ...baseStyle,
-              opacity: 1,
-              strokeWidth: strokeWidth + 1.5,
-            },
-          };
-        }
-        return {
-          ...e,
-          style: {
+          return withLabel(e, true, {
             ...baseStyle,
-            opacity: FADE_OPACITY,
-          },
-        };
+            opacity: 1,
+            strokeWidth: strokeWidth + 1.5,
+          });
+        }
+        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY });
       });
     }
 
-    // Node hover: highlight incident edges
+    // Node hover: highlight incident edges and show their labels
     if (hoveredNodeId) {
       const nodeId = hoveredNodeId;
       return edges.map((e) => {
@@ -1024,20 +1128,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
           const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
-          return {
-            ...e,
-            style: {
-              ...baseStyle,
-              opacity: 1,
-              strokeWidth: strokeWidth + 1.0,
-            },
-          };
+          return withLabel(e, true, {
+            ...baseStyle,
+            opacity: 1,
+            strokeWidth: strokeWidth + 1.0,
+          });
         }
-        return { ...e, style: { ...baseStyle, opacity: FADE_OPACITY } };
+        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY });
       });
     }
 
-    // Selected node (when not hovering): highlight incident edges
+    // Selected node (when not hovering): highlight incident edges, show labels
     if (selectedNodeId) {
       const nodeId = selectedNodeId;
       return edges.map((e) => {
@@ -1045,25 +1146,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
           const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
-          return {
-            ...e,
-            style: {
-              ...baseStyle,
-              opacity: 1,
-              strokeWidth: strokeWidth + 0.75,
-            },
-          };
+          return withLabel(e, true, {
+            ...baseStyle,
+            opacity: 1,
+            strokeWidth: strokeWidth + 0.75,
+          });
         }
-        return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
+        return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
       });
     }
 
-    // Default: dim all edges
+    // Default: dim all edges, hide labels
     return edges.map((e) => {
       const { baseStyle } = baseStyled(e);
-      return { ...e, style: { ...baseStyle, opacity: DIM_OPACITY } };
+      return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
     });
-  }, [edges, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId]);
+  }, [edges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId]);
 
   // Функция для перераспределения всех видимых нод
   const handleArrange = useCallback(async () => {
@@ -1211,10 +1309,104 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
   // Handle node click
   const handleNodeClick = useCallback((event: React.MouseEvent, node: Node<HorizonNodeData>) => {
-    if (onNodeSelect) {
-      onNodeSelect(node.id, node.data);
+    // If this click was already handled by edge click, ignore to prevent overriding edge selection.
+    if ((event as any)?.defaultPrevented) return;
+    // Extra guard: if the click originated from an edge element, ignore.
+    const targetEl = event?.target as any;
+    if (targetEl?.closest?.('.react-flow__edge') || targetEl?.classList?.contains?.('react-flow__edge-path')) {
+      return;
     }
-  }, [onNodeSelect]);
+    if (import.meta.env.DEV) console.log('[Cockpit] Node clicked:', node.id, node.data);
+    ignorePaneClicksUntilRef.current = Date.now() + 250;
+    event.stopPropagation();
+    event.preventDefault();
+    if (onNodeSelect) {
+      const selectedId = node.id;
+      const selectedFragmentId = (node.data as any)?.fragmentId || selectedId;
+
+      // Visible edges/nodes context (only what's currently in ReactFlow state)
+      const incidentEdges = edges
+        .filter((e) => e.source === selectedId || e.target === selectedId)
+        .map((e) => {
+          const src = nodes.find((n) => n.id === e.source);
+          const tgt = nodes.find((n) => n.id === e.target);
+          return {
+            id: e.id,
+            edgeType: (e as any)?.data?.edgeType || e.label || 'UNKNOWN',
+            sourceNodeId: e.source,
+            targetNodeId: e.target,
+            sourceFragmentId: (src?.data as any)?.fragmentId || e.source,
+            targetFragmentId: (tgt?.data as any)?.fragmentId || e.target,
+            criticality: (e as any)?.data?.criticality,
+            amplification: (e as any)?.data?.amplification,
+            latencyHours: (e as any)?.data?.latencyHours,
+          };
+        });
+
+      const neighborNodeIds = new Set<string>();
+      for (const e of incidentEdges) {
+        if (e.sourceNodeId && e.sourceNodeId !== selectedId) neighborNodeIds.add(e.sourceNodeId);
+        if (e.targetNodeId && e.targetNodeId !== selectedId) neighborNodeIds.add(e.targetNodeId);
+      }
+
+      const neighborNodes = Array.from(neighborNodeIds)
+        .map((id) => nodes.find((n) => n.id === id))
+        .filter(Boolean)
+        .map((n: any) => ({
+          nodeId: n.id,
+          fragmentId: n.data?.fragmentId || n.id,
+          label: n.data?.label || null,
+          canonicalPath: n.data?.canonicalPath || null,
+          type: n.data?.type || null,
+        }));
+
+      const nodeDataWithContext: any = {
+        ...node.data,
+        fragmentId: selectedFragmentId,
+        visibleIncidentEdges: incidentEdges,
+        visibleNeighborNodes: neighborNodes,
+      };
+
+      onNodeSelect(selectedId, nodeDataWithContext);
+    }
+  }, [onNodeSelect, onEdgeSelect, edges, nodes]);
+
+  // Handle edge click
+  const handleEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
+    if (import.meta.env.DEV) console.log('[Cockpit] Edge clicked:', edge.id, edge.data);
+    ignorePaneClicksUntilRef.current = Date.now() + 250;
+    event.stopPropagation();
+    event.preventDefault();
+    if (onEdgeSelect) {
+      // Get source and target nodes to extract fragmentIds
+      const sourceNode = nodes.find((n) => n.id === edge.source);
+      const targetNode = nodes.find((n) => n.id === edge.target);
+      
+      // Build edge data with source and target fragment IDs
+      const edgeDataWithFragments = {
+        ...(edge.data || {}),
+        sourceFragmentId: sourceNode?.data?.fragmentId || edge.source,
+        targetFragmentId: targetNode?.data?.fragmentId || edge.target,
+        edgeType: edge.data?.edgeType || edge.label,
+      };
+      
+      onEdgeSelect(edge.id, edgeDataWithFragments);
+    }
+  }, [onEdgeSelect, nodes]);
+
+  // Handle pane click (click on empty space) - clear selection
+  const handlePaneClick = useCallback(() => {
+    if (Date.now() < ignorePaneClicksUntilRef.current) {
+      return;
+    }
+    if (import.meta.env.DEV) console.log('[Cockpit] Pane clicked - clearing selection');
+    if (onNodeSelect) {
+      onNodeSelect(null, null);
+    }
+    if (onEdgeSelect) {
+      onEdgeSelect(null, null);
+    }
+  }, [onNodeSelect, onEdgeSelect]);
 
   const handleNodeDragStop = useCallback(async (_event: React.MouseEvent, node: Node<HorizonNodeData>) => {
     const d: any = node?.data;
@@ -1333,6 +1525,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={handleNodeClick}
+            onEdgeClick={handleEdgeClick}
+            onPaneClick={handlePaneClick}
             onNodeDragStop={handleNodeDragStop}
             onNodeMouseEnter={(_, node) => {
               const d: any = node?.data;
@@ -1348,6 +1542,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               const d: any = node?.data;
               if (d?.isGroup) setHoveredGroupId(null);
               else setHoveredNodeId(null);
+            }}
+            onEdgeMouseEnter={(_, edge) => {
+              setHoveredEdgeId(edge.id);
+            }}
+            onEdgeMouseLeave={() => {
+              setHoveredEdgeId(null);
             }}
             nodeTypes={HORIZON_NODE_TYPES}
             onInit={(instance) => {

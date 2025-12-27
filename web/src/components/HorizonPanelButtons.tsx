@@ -10,12 +10,14 @@ interface HorizonPanelButtonsProps {
   panelType: HorizonPanelType;
   onPanelTypeChange: (type: HorizonPanelType) => void;
   selectedNodeId: string | null;
+  selectedEdgeId: string | null;
 }
 
 export const HorizonPanelButtons: React.FC<HorizonPanelButtonsProps> = ({
   panelType,
   onPanelTypeChange,
   selectedNodeId,
+  selectedEdgeId,
 }) => {
   const { t } = useTranslation();
 
@@ -56,7 +58,7 @@ export const HorizonPanelButtons: React.FC<HorizonPanelButtonsProps> = ({
       <button
         type="button"
         aria-label="Object Inspector"
-        title={selectedNodeId ? "Object Inspector" : "Select a node to inspect"}
+        title={selectedNodeId || selectedEdgeId ? "Object Inspector" : "Select a node or edge to inspect"}
         onClick={() => handleButtonClick('object-inspector')}
         className="rounded-lg flex items-center justify-center transition-all duration-300"
         style={getRightPanelButtonStyle(panelType === 'object-inspector')}

@@ -39,6 +39,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [drawerWidth, setDrawerWidth] = React.useState(400);
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
   const [selectedNodeData, setSelectedNodeData] = React.useState<HorizonNodeData | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
+  const [selectedEdgeData, setSelectedEdgeData] = React.useState<any | null>(null);
   
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
 
@@ -213,9 +215,24 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                     lensId={lensId} 
                     projectId={lens.projectId}
                     onNodeSelect={(nodeId, nodeData) => {
+                      if (import.meta.env.DEV) console.log('[LensCanvas] onNodeSelect', { nodeId, hasNodeData: !!nodeData });
                       setSelectedNodeId(nodeId);
                       setSelectedNodeData(nodeData);
-                      // Don't auto-open drawer - user must click button manually
+                      // Clear edge selection when node is selected
+                      setSelectedEdgeId(null);
+                      setSelectedEdgeData(null);
+                      // Auto-open inspector when selecting something (most users expect this)
+                      if (nodeId) setPanelType('object-inspector');
+                    }}
+                    onEdgeSelect={(edgeId, edgeData) => {
+                      if (import.meta.env.DEV) console.log('[LensCanvas] onEdgeSelect', { edgeId, hasEdgeData: !!edgeData, edgeData });
+                      setSelectedEdgeId(edgeId);
+                      setSelectedEdgeData(edgeData);
+                      // Clear node selection when edge is selected
+                      setSelectedNodeId(null);
+                      setSelectedNodeData(null);
+                      // Auto-open inspector when selecting something (most users expect this)
+                      if (edgeId) setPanelType('object-inspector');
                     }}
                   />
                 </div>
@@ -235,6 +252,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                   lensId={lensId}
                   selectedNodeId={selectedNodeId}
                   selectedNodeData={selectedNodeData}
+                  selectedEdgeId={selectedEdgeId}
+                  selectedEdgeData={selectedEdgeData}
                 />
 
                 {/* Right buttons column - always visible */}
@@ -242,6 +261,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                   panelType={panelType}
                   onPanelTypeChange={setPanelType}
                   selectedNodeId={selectedNodeId}
+                  selectedEdgeId={selectedEdgeId}
                 />
               </div>
             )}

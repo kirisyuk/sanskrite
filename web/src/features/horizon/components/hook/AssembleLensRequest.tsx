@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ThemeContext } from '../../../../components/ThemeProvider';
 
 interface AssembleLensRequestProps {
@@ -17,6 +18,14 @@ export interface AssembleLensRequest {
   };
 }
 
+const PLACEHOLDER_VARIANTS = [
+  "What are you analyzing?",
+  "What are you investigating?",
+  "What would you like to explore?",
+  "What is your focus area?",
+  "What are you looking at?",
+];
+
 const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({ 
   projectId, 
   onAssemble, 
@@ -26,9 +35,13 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   const { theme } = React.useContext(ThemeContext);
   const [inputValue, setInputValue] = useState('');
   const [filters, setFilters] = useState({
-    maxRecursionDepth: 2,
+    maxRecursionDepth: 1,
   });
+  const [showSettings, setShowSettings] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [placeholder] = useState(() => 
+    PLACEHOLDER_VARIANTS[Math.floor(Math.random() * PLACEHOLDER_VARIANTS.length)]
+  );
 
   // Focus input on mount
   useEffect(() => {
@@ -77,121 +90,185 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
-    // extra right padding for the "send" arrow button
+    // extra right padding for the "send" arrow button and settings button
     padding: '1.5rem 3.75rem 1.5rem 1.25rem',
     fontSize: '1.25rem',
-    backgroundColor: 'var(--bg-elevated)',
-    border: `2px solid var(--overlay-line-90)`,
+    backgroundColor: 'transparent', // Transparent since container has bg
+    border: 'none', // No border since container has border
     borderRadius: '12px',
     outline: 'none',
     color: 'var(--text-heading)',
-    transition: 'border-color 0.2s, box-shadow 0.2s',
-    boxShadow: theme === 'light' ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
+  };
+
+  const containerStyleForInput: React.CSSProperties = {
+    width: '100%',
+    maxWidth: '800px',
+    borderRadius: '12px',
+    overflow: 'hidden',
+    transition: 'all 0.2s ease',
+    backgroundColor: theme === 'dark' ? 'var(--bg-input, #1A1A1A)' : 'var(--bg-input, #FFFFFF)',
+    boxShadow: theme === 'light' ? '0 4px 16px rgba(0,0,0,0.12)' : 'none',
   };
 
   const sendBtnDisabled = disabled || !inputValue.trim();
 
-  const controlsRowStyle: React.CSSProperties = {
-    width: '100%',
-    maxWidth: '800px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: 12,
-    marginTop: 12,
-  };
-
-  const labelStyle: React.CSSProperties = {
-    fontSize: 12,
-    color: 'var(--text-secondary)',
-  };
-
-  const smallInputStyle: React.CSSProperties = {
-    width: 110,
-    padding: '8px 10px',
-    borderRadius: 10,
-    border: '1px solid var(--overlay-line-90)',
-    background: 'var(--bg-elevated)',
-    color: 'var(--text-heading)',
-    outline: 'none',
-  };
-
   return (
     <div style={containerStyle}>
       <div style={inputContainerStyle}>
-        <input
-          ref={inputRef}
-          type="text"
-          value={inputValue}
-          onChange={handleInputChange}
-          placeholder="Define your Lens intent (English)..."
-          style={inputStyle}
-          disabled={disabled}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !disabled) {
-              e.preventDefault();
-              handleAssemble();
-            }
-          }}
-        />
-
-        {/* Send arrow (same look/placement as UnfoldRequest) */}
-        <button
-          type="button"
-          aria-label="Start"
-          className="flex items-center justify-center rounded-full"
-          onClick={handleAssemble}
-          disabled={sendBtnDisabled}
-          style={{
-            position: 'absolute',
-            right: 14,
-            top: 30,
-            width: '32px',
-            height: '32px',
-            backgroundColor: 'transparent',
-            opacity: sendBtnDisabled ? 0.6 : 1,
-            cursor: sendBtnDisabled ? 'not-allowed' : 'pointer',
-          }}
-          onMouseEnter={(e) => {
-            if (sendBtnDisabled) return;
-            const svg = e.currentTarget.querySelector('svg path');
-            if (svg) {
-              (svg as SVGPathElement).style.fill = theme === 'light' ? '#FFB366' : '#FF9538';
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (sendBtnDisabled) return;
-            const svg = e.currentTarget.querySelector('svg path');
-            if (svg) {
-              (svg as SVGPathElement).style.fill = theme === 'dark' ? '#FF9538' : '#FFB366';
-            }
-          }}
+        <div 
+          className="rounded-xl overflow-hidden unfold-request-gradient-border relative"
+          style={containerStyleForInput}
         >
-          <svg className="w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8 5v14l11-7z" style={{ fill: theme === 'dark' ? '#FF9538' : '#FFB366' }} />
-          </svg>
-        </button>
-
-        <div style={controlsRowStyle}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={labelStyle}>Max recursion depth</span>
-            <input
-              type="number"
-              min={0}
-              max={5}
-              value={filters.maxRecursionDepth}
-              onChange={(e) =>
-                setFilters({
-                  ...filters,
-                  maxRecursionDepth: Math.max(0, Math.min(5, parseInt(e.target.value || '0', 10))),
-                })
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputValue}
+            onChange={handleInputChange}
+            placeholder={placeholder}
+            style={inputStyle}
+            disabled={disabled}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !disabled) {
+                e.preventDefault();
+                handleAssemble();
               }
-              style={smallInputStyle}
-              disabled={disabled}
-            />
-          </div>
+            }}
+          />
+
+          {/* Settings button (gear icon) */}
+          <button
+            type="button"
+            aria-label="Settings"
+            className="flex items-center justify-center rounded-full"
+            onClick={() => setShowSettings(true)}
+            style={{
+              position: 'absolute',
+              right: 54,
+              top: 30,
+              width: '32px',
+              height: '32px',
+              backgroundColor: 'transparent',
+            }}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+
+          {/* Send arrow (same look/placement as UnfoldRequest) */}
+          <button
+            type="button"
+            aria-label="Start"
+            className="flex items-center justify-center rounded-full"
+            onClick={handleAssemble}
+            disabled={sendBtnDisabled}
+            style={{
+              position: 'absolute',
+              right: 14,
+              top: 30,
+              width: '32px',
+              height: '32px',
+              backgroundColor: 'transparent',
+              opacity: sendBtnDisabled ? 0.6 : 1,
+              cursor: sendBtnDisabled ? 'not-allowed' : 'pointer',
+            }}
+            onMouseEnter={(e) => {
+              if (sendBtnDisabled) return;
+              const svg = e.currentTarget.querySelector('svg path');
+              if (svg) {
+                (svg as SVGPathElement).style.fill = theme === 'light' ? '#FFB366' : '#FF9538';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (sendBtnDisabled) return;
+              const svg = e.currentTarget.querySelector('svg path');
+              if (svg) {
+                (svg as SVGPathElement).style.fill = theme === 'dark' ? '#FF9538' : '#FFB366';
+              }
+            }}
+          >
+            <svg className="w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 5v14l11-7z" style={{ fill: theme === 'dark' ? '#FF9538' : '#FFB366' }} />
+            </svg>
+          </button>
         </div>
       </div>
+
+      {/* Settings Modal */}
+      {showSettings && createPortal(
+        <div className="fixed inset-0 z-[80] flex items-center justify-center" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setShowSettings(false)} />
+          <div className="relative w-full max-w-lg rounded-xl border p-4" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--overlay-line-90)', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)' }}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-lg" style={{ color: 'var(--text-heading)' }}>Settings</div>
+              <button onClick={() => setShowSettings(false)} aria-label="Close" className="rounded-full" style={{ width: 32, height: 32 }}>
+                <svg viewBox="0 0 24 24" className="w-6 h-6"><path d="M6 6l12 12M18 6L6 18" stroke="var(--text-secondary-strong)" strokeWidth="2"/></svg>
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div className="rounded-lg p-3" style={{ backgroundColor: 'var(--white-06)' }}>
+                <div>
+                  <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>Max recursion depth</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={5}
+                    value={filters.maxRecursionDepth}
+                    onChange={(e) =>
+                      setFilters({
+                        ...filters,
+                        maxRecursionDepth: Math.max(0, Math.min(5, parseInt(e.target.value || '1', 10))),
+                      })
+                    }
+                    className="w-full"
+                    style={{
+                      backgroundColor: 'var(--bg-input)',
+                      color: 'var(--text-heading)',
+                      border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
+                      borderRadius: '8px',
+                      padding: '8px 12px',
+                      outline: 'none',
+                      fontSize: '14px',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                    }}
+                  />
+                  <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                    Maximum depth for recursive fragment expansion (0-5)
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 text-right">
+              <button
+                className="px-3 py-2 rounded transition-colors"
+                onClick={() => setShowSettings(false)}
+                style={{ background: 'transparent', color: 'var(--text-heading)' }}
+                onMouseEnter={(e) => { 
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                }}
+                onMouseLeave={(e) => { 
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

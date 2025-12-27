@@ -72,6 +72,86 @@ const getEdgePriority = (edgeType: string | undefined): number => {
 const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().trim() || 'OTHER';
 
 /**
+ * Semantic groups for business-oriented graph layout.
+ * Maps edge types to one of 4 groups positioned around the parent node.
+ */
+export type SemanticGroup = 'supply-chain' | 'customers' | 'market' | 'context';
+
+export const SEMANTIC_GROUP_LABELS: Record<SemanticGroup, string> = {
+  'supply-chain': 'Supply Chain',
+  'customers': 'Customers & Outputs',
+  'market': 'Market Position',
+  'context': 'Operating Context',
+};
+
+export const SEMANTIC_GROUP_POSITION: Record<SemanticGroup, 'top' | 'bottom' | 'left' | 'right'> = {
+  'supply-chain': 'top',    // upstream — сверху
+  'customers': 'bottom',     // downstream — снизу
+  'market': 'left',          // peers — слева
+  'context': 'right',        // context — справа
+};
+
+/**
+ * Map edge type + direction to semantic group.
+ * Direction is relative to the expanded node:
+ * - outgoing: edge goes FROM expanded node TO neighbor
+ * - incoming: edge goes FROM neighbor TO expanded node
+ */
+export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boolean): SemanticGroup {
+  const type = normalizeEdgeType(edgeType);
+  
+  switch (type) {
+    // Supply Chain vs Customers depends on direction
+    case 'SUPPLIES_TO':
+      return isOutgoing ? 'customers' : 'supply-chain';  // outgoing = we supply to them (customer), incoming = they supply to us (supplier)
+    case 'DEPENDS_ON':
+      return isOutgoing ? 'supply-chain' : 'customers';  // outgoing = we depend on them (upstream), incoming = they depend on us (downstream)
+    case 'CONSUMES':
+      return 'supply-chain';  // we consume something = upstream
+    
+    // Ownership: outgoing = we own them (downstream), incoming = they own us (upstream)
+    case 'OWNS':
+    case 'MANAGES':
+    case 'CONTROLS':
+    case 'PARENT_OF':
+      return isOutgoing ? 'customers' : 'supply-chain';
+    case 'SUBSIDIARY_OF':
+      return isOutgoing ? 'supply-chain' : 'customers';  // inverse of OWNS
+    
+    // Production always downstream
+    case 'PRODUCES':
+      return 'customers';
+    
+    // Symmetric / Peers — market position
+    case 'COMPETES_WITH':
+    case 'CONFLICTS_WITH':
+    case 'OPPOSES':
+    case 'PARTNERS_WITH':
+    case 'COOPERATES_WITH':
+    case 'RELATED_TO':
+    case 'SIMILAR_TO':
+      return 'market';
+    
+    // Context — geography, regulation, influence
+    case 'LOCATED_IN':
+    case 'OPERATES_IN':
+    case 'BASED_IN':
+    case 'HEADQUARTERED_IN':
+      return 'context';
+    case 'REGULATES':
+      return 'context';  // regulator = context for the entity
+    case 'INFLUENCES':
+    case 'AFFECTS':
+    case 'IMPACTS':
+      return 'context';
+    
+    default:
+      // Unknown types: use direction as hint
+      return isOutgoing ? 'customers' : 'supply-chain';
+  }
+}
+
+/**
  * Normalize edge type for grouping purposes.
  * OPERATES_IN and LOCATED_IN are grouped together as LOCATED_IN.
  */
@@ -91,15 +171,17 @@ const GROUP_HEADER_HEIGHT = 34; // space for label row in container
 const GROUP_GAP_X = 40;
 const GROUP_GAP_Y = 40;
 
-const defaultGroupId = (parentId: string, direction: 'incoming' | 'outgoing', edgeType: string) =>
-  makeSafeId(`group:${parentId}:${direction}:${edgeType || 'OTHER'}`);
+// Group containers are keyed by (parentId, semanticGroup).
+// This creates exactly 4 groups max per parent (one per side of the node).
+const defaultGroupId = (parentId: string, semanticGroup: SemanticGroup) =>
+  makeSafeId(`group:${parentId}:${semanticGroup}`);
 
 function makeGroupParentNode<T = any>(params: {
   id: string;
   position: { x: number; y: number };
   parentId: string;
-  direction: 'incoming' | 'outgoing';
-  edgeType: string;
+  semanticGroup: SemanticGroup;
+  edgeTypes: string[];  // All edge types in this semantic group (for display)
   count: number;
   /** Explicit container width (used to preserve padding and collision sizing) */
   containerWidth?: number;
@@ -113,8 +195,8 @@ function makeGroupParentNode<T = any>(params: {
     id,
     position,
     parentId,
-    direction,
-    edgeType,
+    semanticGroup,
+    edgeTypes,
     count,
     containerWidth,
     containerHeight,
@@ -139,9 +221,13 @@ function makeGroupParentNode<T = any>(params: {
       ...(exemplarData || {}),
       isGroup: true,
       groupParentId: parentId,
-      groupDirection: direction,
-      groupEdgeType: edgeType,
+      groupSemanticGroup: semanticGroup,
+      groupEdgeTypes: edgeTypes,
       groupCount: count,
+      // Legacy fields for backwards compatibility with hover logic
+      groupDirection: SEMANTIC_GROUP_POSITION[semanticGroup] === 'top' ? 'incoming' 
+        : SEMANTIC_GROUP_POSITION[semanticGroup] === 'bottom' ? 'outgoing' : 'both',
+      groupEdgeType: edgeTypes[0] || 'OTHER',
     } as any,
   };
 }
@@ -602,23 +688,29 @@ export async function layoutExpansionWithGroups<T = any>(
     return { x: desiredX, y: desiredY };
   };
 
-  // Group children by direction and edge type
-  type GroupKey = string;
-  type Group = { direction: 'incoming' | 'outgoing'; edgeType: string; nodes: Node<T>[] };
-  const groupsMap = new Map<GroupKey, Group>();
+  // Group children by semantic group (4 groups max: supply-chain, customers, market, context)
+  type SemanticGroupData = {
+    semanticGroup: SemanticGroup;
+    edgeTypes: Set<string>;
+    nodes: Node<T>[];
+  };
+  const groupsMap = new Map<SemanticGroup, SemanticGroupData>();
+  
   for (const child of neighborhoodChildren) {
     const d: any = child.data;
-    const direction: 'incoming' | 'outgoing' = d?.directionFromParent === 'incoming' ? 'incoming' : 'outgoing';
-    const edgeType = normalizeEdgeTypeForGrouping(d?.edgeTypeFromParent);
-    const key = `${direction}::${edgeType}`;
-    const g = groupsMap.get(key) || { direction, edgeType, nodes: [] };
+    const isOutgoing = d?.directionFromParent !== 'incoming';
+    const edgeType = normalizeEdgeType(d?.edgeTypeFromParent);
+    const sg = getSemanticGroup(edgeType, isOutgoing);
+    
+    const g = groupsMap.get(sg) || { semanticGroup: sg, edgeTypes: new Set<string>(), nodes: [] };
     g.nodes.push(child);
-    groupsMap.set(key, g);
+    g.edgeTypes.add(edgeType);
+    groupsMap.set(sg, g);
   }
 
+  // Convert to array and sort children within each group
   const groups = Array.from(groupsMap.values())
     .map((g) => {
-      // Stable order of children within group: by edge priority then label/id.
       const sorted = [...g.nodes].sort((a, b) => {
         const ap = getEdgePriority((a.data as any)?.edgeTypeFromParent);
         const bp = getEdgePriority((b.data as any)?.edgeTypeFromParent);
@@ -627,27 +719,25 @@ export async function layoutExpansionWithGroups<T = any>(
         const bl = String((b.data as any)?.label || b.id);
         return al.localeCompare(bl);
       });
-      return { ...g, nodes: sorted };
-    })
-    .sort((a, b) => {
-      const ap = getEdgePriority(a.edgeType);
-      const bp = getEdgePriority(b.edgeType);
-      if (ap !== bp) return ap - bp;
-      return a.edgeType.localeCompare(b.edgeType);
+      return { ...g, nodes: sorted, edgeTypes: Array.from(g.edgeTypes) };
     });
 
   const parentX = parentNode.position.x;
   const parentY = parentNode.position.y;
   const parentCenterX = parentX + nodeWidth / 2;
+  const parentCenterY = parentY + nodeHeight / 2;
 
   // Precompute group bbox sizes from child grid
   const childGapX = nodeSpacing;
-  // More vertical breathing room between nodes inside a group.
   const childGapY = Math.max(48, Math.floor(nodeSpacing * 1.05));
 
+  // Max columns before wrapping to next row (horizontal-first layout)
+  const MAX_COLS = 4;
+
   const groupDims = (count: number) => {
-    const nodesPerRow = Math.max(1, Math.ceil(count / maxChildRows));
-    const rows = Math.min(maxChildRows, Math.ceil(count / nodesPerRow));
+    // Horizontal-first layout: fill columns first, then wrap to rows
+    const nodesPerRow = Math.min(count, MAX_COLS);
+    const rows = Math.ceil(count / nodesPerRow);
     const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * childGapX;
     const innerH = rows * nodeHeight + Math.max(0, rows - 1) * childGapY;
     const w = innerW + GROUP_PADDING_X * 2;
@@ -655,101 +745,83 @@ export async function layoutExpansionWithGroups<T = any>(
     return { w, h, nodesPerRow, rows };
   };
 
-  const layoutDirection = (dir: 'incoming' | 'outgoing') => {
-    const dirGroups = groups.filter((g) => g.direction === dir);
-    if (dirGroups.length === 0) return { groupNodes: [] as Node<T>[], positionedChildren: [] as Node<T>[] };
+  const positionedGroupNodes: Node<T>[] = [];
+  const positionedChildren: Node<T>[] = [];
 
-    const maxGroupRows = 2;
-    const groupsPerRow = Math.max(1, Math.ceil(dirGroups.length / maxGroupRows));
-    const rows = Math.ceil(dirGroups.length / groupsPerRow);
+  // Layout each semantic group at its designated position
+  for (const g of groups) {
+    const position = SEMANTIC_GROUP_POSITION[g.semanticGroup];
+    const dim = groupDims(g.nodes.length);
 
-    const rowGroups: Array<Array<{ g: Group; dim: ReturnType<typeof groupDims> }>> = [];
-    for (let r = 0; r < rows; r++) {
-      const start = r * groupsPerRow;
-      const slice = dirGroups.slice(start, start + groupsPerRow).map((g) => ({ g, dim: groupDims(g.nodes.length) }));
-      rowGroups.push(slice);
+    let desiredX: number;
+    let desiredY: number;
+    let preferDown = false;
+
+    switch (position) {
+      case 'top':
+        // Center horizontally above parent
+        desiredX = parentCenterX - dim.w / 2;
+        desiredY = parentY - layerSpacing - dim.h;
+        preferDown = false;
+        break;
+      case 'bottom':
+        // Center horizontally below parent
+        desiredX = parentCenterX - dim.w / 2;
+        desiredY = parentY + nodeHeight + layerSpacing;
+        preferDown = true;
+        break;
+      case 'left':
+        // Center vertically to the left of parent
+        desiredX = parentX - layerSpacing - dim.w;
+        desiredY = parentCenterY - dim.h / 2;
+        preferDown = true;
+        break;
+      case 'right':
+        // Center vertically to the right of parent
+        desiredX = parentX + nodeWidth + layerSpacing;
+        desiredY = parentCenterY - dim.h / 2;
+        preferDown = true;
+        break;
     }
 
-    // For incoming: row 0 is closest to parent (lower); for outgoing: row 0 is closest (upper)
-    const positionedGroupNodes: Node<T>[] = [];
-    const positionedChildren: Node<T>[] = [];
+    const pos = findFreeRect(desiredX, desiredY, dim.w, dim.h, preferDown);
 
-    let currentRowAnchorY: number;
-    if (dir === 'incoming') {
-      // Place the closest row just above parent
-      const firstRowMaxH = Math.max(...rowGroups[0].map((x) => x.dim.h));
-      currentRowAnchorY = parentY - layerSpacing - firstRowMaxH;
-    } else {
-      currentRowAnchorY = parentY + nodeHeight + layerSpacing;
+    const groupId = defaultGroupId(parentNodeId, g.semanticGroup);
+    const groupNode: Node<T> = makeGroupParentNode({
+      id: groupId,
+      position: pos,
+      parentId: parentNodeId,
+      semanticGroup: g.semanticGroup,
+      edgeTypes: g.edgeTypes,
+      count: g.nodes.length,
+      containerWidth: dim.w,
+      containerHeight: dim.h,
+      nodeWidth,
+      nodeHeight,
+      exemplarData: g.nodes[0]?.data,
+    });
+    positionedGroupNodes.push(groupNode);
+
+    // Layout children inside group
+    const padTop = GROUP_HEADER_HEIGHT;
+    for (let idx = 0; idx < g.nodes.length; idx++) {
+      const child = g.nodes[idx];
+      const rowIdx = Math.floor(idx / dim.nodesPerRow);
+      const colIdx = idx % dim.nodesPerRow;
+      const cx = GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
+      const cy = padTop + rowIdx * (nodeHeight + childGapY);
+      positionedChildren.push(attachChildToGroup(child, groupId, { x: cx, y: cy }));
     }
+  }
 
-    for (let r = 0; r < rowGroups.length; r++) {
-      const row = rowGroups[r];
-      const rowMaxH = Math.max(...row.map((x) => x.dim.h));
-      const rowW = row.reduce((acc, x) => acc + x.dim.w, 0) + Math.max(0, row.length - 1) * GROUP_GAP_X;
-      const startX = parentCenterX - rowW / 2;
-
-      let xCursor = startX;
-      // For incoming, ensure anchor accounts for the tallest group in the row
-      const rowY = dir === 'incoming' ? currentRowAnchorY : currentRowAnchorY;
-
-      for (const { g, dim } of row) {
-        const desiredX = xCursor;
-        const desiredY = rowY + (dir === 'incoming' ? (rowMaxH - dim.h) : 0);
-        const pos = findFreeRect(desiredX, desiredY, dim.w, dim.h, dir === 'outgoing');
-
-        const groupId = defaultGroupId(parentNodeId, dir, g.edgeType);
-        const groupNode: Node<T> = makeGroupParentNode({
-          id: groupId,
-          position: pos,
-          parentId: parentNodeId,
-          direction: dir,
-          edgeType: g.edgeType,
-          count: g.nodes.length,
-          containerWidth: dim.w,
-          containerHeight: dim.h,
-          nodeWidth,
-          nodeHeight,
-          exemplarData: g.nodes[0]?.data,
-        });
-        positionedGroupNodes.push(groupNode);
-
-        // Layout children inside group
-        const padTop = GROUP_HEADER_HEIGHT;
-        for (let idx = 0; idx < g.nodes.length; idx++) {
-          const child = g.nodes[idx];
-          const rowIdx = Math.floor(idx / dim.nodesPerRow);
-          const colIdx = idx % dim.nodesPerRow;
-          const cx = GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
-          const cy = padTop + rowIdx * (nodeHeight + childGapY);
-          positionedChildren.push(attachChildToGroup(child, groupId, { x: cx, y: cy }));
-        }
-
-        xCursor += dim.w + GROUP_GAP_X;
-      }
-
-      if (dir === 'incoming') {
-        // Move next row further up
-        const nextRowMaxH = r + 1 < rowGroups.length ? Math.max(...rowGroups[r + 1].map((x) => x.dim.h)) : 0;
-        currentRowAnchorY = currentRowAnchorY - GROUP_GAP_Y - nextRowMaxH;
-      } else {
-        currentRowAnchorY = currentRowAnchorY + rowMaxH + GROUP_GAP_Y;
-      }
-    }
-
-    return { groupNodes: positionedGroupNodes, positionedChildren };
-  };
-
-  const incoming = layoutDirection('incoming');
-  const outgoing = layoutDirection('outgoing');
-
-  return [...fixedNodes, ...incoming.groupNodes, ...outgoing.groupNodes, ...incoming.positionedChildren, ...outgoing.positionedChildren];
+  return [...fixedNodes, ...positionedGroupNodes, ...positionedChildren];
 }
 
 /**
  * Rebuild visual group containers for all parents based on current child positions.
  * Converts groups into true parent containers (`parentId`) and converts child positions to be relative.
  * Does NOT re-layout fragments; only wraps existing positions into containers.
+ * Groups by semantic category (supply-chain, customers, market, context).
  */
 export function rebuildGroupContainers<T = any>(
   nodes: Node<T>[],
@@ -770,32 +842,47 @@ export function rebuildGroupContainers<T = any>(
     return out as Node<T>;
   });
 
+  // Group by (parentId, semanticGroup)
+  type GroupData = {
+    parentId: string;
+    semanticGroup: SemanticGroup;
+    edgeTypes: Set<string>;
+    kids: Node<T>[];
+  };
   type Key = string;
-  const groups = new Map<Key, Node<T>[]>();
+  const groups = new Map<Key, GroupData>();
+  
   for (const n of fragments) {
     const d: any = n.data;
     const parentId = d?.parentFragmentId;
     if (!parentId) continue;
-    const direction: 'incoming' | 'outgoing' = d?.directionFromParent === 'incoming' ? 'incoming' : 'outgoing';
-    const edgeType = normalizeEdgeTypeForGrouping(d?.edgeTypeFromParent);
-    const key = `${parentId}::${direction}::${edgeType}`;
-    const arr = groups.get(key) || [];
-    arr.push(n);
-    groups.set(key, arr);
+    
+    const edgeType = normalizeEdgeType(d?.edgeTypeFromParent);
+    const isOutgoing = d?.directionFromParent !== 'incoming';
+    const sg = getSemanticGroup(edgeType, isOutgoing);
+    
+    const key = `${parentId}::${sg}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.kids.push(n);
+      existing.edgeTypes.add(edgeType);
+    } else {
+      groups.set(key, { parentId, semanticGroup: sg, edgeTypes: new Set<string>([edgeType]), kids: [n] });
+    }
   }
 
   const groupNodes: Node<T>[] = [];
   const updatedChildren: Node<T>[] = [];
-  for (const [key, kids] of groups.entries()) {
-    if (kids.length === 0) continue;
-    const [parentId, direction, edgeType] = key.split('::');
+  
+  for (const [, g] of groups.entries()) {
+    if (g.kids.length === 0) continue;
 
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
 
-    for (const k of kids) {
+    for (const k of g.kids) {
       minX = Math.min(minX, k.position.x);
       minY = Math.min(minY, k.position.y);
       maxX = Math.max(maxX, k.position.x + nodeWidth);
@@ -804,28 +891,27 @@ export function rebuildGroupContainers<T = any>(
 
     const x = minX - GROUP_PADDING_X;
     const y = minY - GROUP_HEADER_HEIGHT;
-    // Explicit sizing to preserve padding (right/bottom) and avoid overlaps.
     const w = (maxX - minX) + GROUP_PADDING_X * 2;
     const h = (maxY - minY) + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM;
 
-    const gid = defaultGroupId(parentId, direction as any, edgeType);
+    const gid = defaultGroupId(g.parentId, g.semanticGroup);
     groupNodes.push(
       makeGroupParentNode({
         id: gid,
         position: { x, y },
-        parentId,
-        direction: direction as any,
-        edgeType,
-        count: kids.length,
+        parentId: g.parentId,
+        semanticGroup: g.semanticGroup,
+        edgeTypes: Array.from(g.edgeTypes),
+        count: g.kids.length,
         containerWidth: w,
         containerHeight: h,
         nodeWidth,
         nodeHeight,
-        exemplarData: kids[0]?.data,
+        exemplarData: g.kids[0]?.data,
       }),
     );
 
-    for (const child of kids) {
+    for (const child of g.kids) {
       updatedChildren.push(attachChildToGroup(child, gid, { x: child.position.x - x, y: child.position.y - y }));
     }
   }

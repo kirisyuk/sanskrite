@@ -5,16 +5,29 @@ import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 interface ObjectInspectorProps {
   nodeId: string | null;
   nodeData: HorizonNodeData | null;
+  edgeId: string | null;
+  edgeData: any | null;
   lensId: string | null;
 }
 
 export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   nodeId,
   nodeData,
+  edgeId,
+  edgeData,
   lensId,
 }) => {
   const [fragment, setFragment] = React.useState<any>(null);
   const [entity, setEntity] = React.useState<any>(null);
+  const [edge, setEdge] = React.useState<any>(null);
+  const [sourceFragment, setSourceFragment] = React.useState<any>(null);
+  const [targetFragment, setTargetFragment] = React.useState<any>(null);
+  const [edgeExplainLoading, setEdgeExplainLoading] = React.useState(false);
+  const [edgeExplainError, setEdgeExplainError] = React.useState<string | null>(null);
+  const [edgeExplainText, setEdgeExplainText] = React.useState<string | null>(null);
+  const [nodeExplainLoading, setNodeExplainLoading] = React.useState(false);
+  const [nodeExplainError, setNodeExplainError] = React.useState<string | null>(null);
+  const [nodeExplainText, setNodeExplainText] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [ensuring, setEnsuring] = React.useState(false);
@@ -25,10 +38,12 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
   // Load fragment and entity data when nodeId changes
   React.useEffect(() => {
-    if (!nodeId || !nodeData?.fragmentId) {
+    if (!nodeId) {
       setFragment(null);
       setEntity(null);
       setError(null);
+      setNodeExplainError(null);
+      setNodeExplainText(null);
       return;
     }
 
@@ -36,7 +51,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       setLoading(true);
       setError(null);
       try {
-        const fragmentId = nodeData.fragmentId;
+        // Use fragmentId from nodeData, or fallback to nodeId if fragmentId is not available
+        const fragmentId = nodeData?.fragmentId || nodeId;
         
         if (!fragmentId) {
           setError('Fragment ID is missing');
@@ -65,10 +81,232 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     };
 
     loadData();
-  }, [nodeId, nodeData?.fragmentId]);
+  }, [nodeId, nodeData]);
+
+  const handleExplainNode = React.useCallback(async () => {
+    if (!nodeId) return;
+    setNodeExplainLoading(true);
+    setNodeExplainError(null);
+    setNodeExplainText(null);
+
+    try {
+      const preferredLanguage =
+        (typeof navigator !== 'undefined' && navigator.language) ? navigator.language : 'en';
+
+      const fragmentId = nodeData?.fragmentId || nodeId;
+
+      const payload = {
+        preferredLanguage,
+        node: {
+          nodeId,
+          fragmentId,
+          label:
+            nodeData?.label ||
+            fragment?.labels?.en ||
+            fragment?.canonicalPath?.split('/')?.pop() ||
+            null,
+          canonicalPath: nodeData?.canonicalPath || fragment?.canonicalPath || null,
+          type: nodeData?.type || fragment?.type || null,
+          status: nodeData?.status || fragment?.status || null,
+        },
+        visibleIncomingOutgoingEdges: (nodeData as any)?.visibleIncidentEdges || [],
+        visibleNeighborNodes: (nodeData as any)?.visibleNeighborNodes || [],
+      };
+
+      const prompt =
+        `Explain this node and the visible incoming/outgoing relationships.\n` +
+        `- Output language: ${preferredLanguage}\n` +
+        `- Use Google Search grounding.\n` +
+        `- Output: plain text only.\n` +
+        `- Be detailed (but structured): 2-4 short paragraphs.\n` +
+        `- If you are unsure about anything, say so explicitly.\n\n` +
+        `Graph context (JSON):\n` +
+        `${JSON.stringify(payload, null, 2)}\n`;
+
+      const resp: any = await api.genaiComplete({
+        prompt,
+        options: {
+          profile: 'fast',
+          modelOverride: 'gemini-3-flash-preview',
+          groundingEnabled: true,
+          temperature: 0.2,
+          maxOutputTokens: 8192,
+          systemInstruction:
+            'You are a careful analyst. Explain the node and relationships in plain language. Do not invent facts. Prefer grounded statements.',
+        },
+      });
+
+      const text = String(resp?.content || '').trim();
+      if (!text) {
+        setNodeExplainError('Empty response from model');
+      } else {
+        setNodeExplainText(text);
+      }
+    } catch (err: any) {
+      console.error('[ObjectInspector] Explain node failed', err);
+      setNodeExplainError(err.response?.data?.error || err.message || 'Failed to explain node');
+    } finally {
+      setNodeExplainLoading(false);
+    }
+  }, [nodeId, nodeData, fragment]);
+
+  // Load edge data when edgeId changes
+  React.useEffect(() => {
+    if (!edgeId) {
+      setEdge(null);
+      setSourceFragment(null);
+      setTargetFragment(null);
+      setEdgeExplainError(null);
+      setEdgeExplainText(null);
+      setError(null);
+      return;
+    }
+
+    const loadEdgeData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        let loadedEdge: any = null;
+        // Try to load edge from API if we have lensItemId
+        if (edgeData?.lensItemId) {
+          try {
+            const edgeDataFromApi = await api.getHorizonEdge(edgeData.lensItemId);
+            loadedEdge = edgeDataFromApi;
+            setEdge(edgeDataFromApi);
+          } catch (err) {
+            // If API call fails, use the data from edgeData
+            console.warn('[ObjectInspector] Failed to load edge from API, using provided data', err);
+            loadedEdge = edgeData;
+            setEdge(edgeData);
+          }
+        } else {
+          // Use the data from edgeData directly
+          loadedEdge = edgeData;
+          setEdge(edgeData);
+        }
+
+        // Load source and target fragments if we have their IDs
+        // Try to get from loadedEdge first, then from edgeData (passed from click handler)
+        const sourceId = loadedEdge?.sourceFragmentId || edgeData?.sourceFragmentId;
+        const targetId = loadedEdge?.targetFragmentId || edgeData?.targetFragmentId;
+
+        if (sourceId) {
+          try {
+            const sourceFrag = await api.getHorizonFragment(sourceId);
+            setSourceFragment(sourceFrag);
+          } catch (err) {
+            console.warn('[ObjectInspector] Failed to load source fragment', err);
+            setSourceFragment(null);
+          }
+        } else {
+          setSourceFragment(null);
+        }
+
+        if (targetId) {
+          try {
+            const targetFrag = await api.getHorizonFragment(targetId);
+            setTargetFragment(targetFrag);
+          } catch (err) {
+            console.warn('[ObjectInspector] Failed to load target fragment', err);
+            setTargetFragment(null);
+          }
+        } else {
+          setTargetFragment(null);
+        }
+      } catch (err: any) {
+        console.error('[ObjectInspector] Failed to load edge data', err);
+        setError(err.response?.data?.error || err.message || 'Failed to load edge data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadEdgeData();
+  }, [edgeId, edgeData]);
+
+  const handleExplainEdge = React.useCallback(async () => {
+    if (!edgeId) return;
+    setEdgeExplainLoading(true);
+    setEdgeExplainError(null);
+    setEdgeExplainText(null);
+
+    try {
+      const preferredLanguage =
+        (typeof navigator !== 'undefined' && navigator.language) ? navigator.language : 'en';
+
+      const edgeType = String(edgeData?.edgeType || edge?.type || 'UNKNOWN');
+      const sourceId = String(edgeData?.sourceFragmentId || edge?.sourceFragmentId || '').trim();
+      const targetId = String(edgeData?.targetFragmentId || edge?.targetFragmentId || '').trim();
+
+      const payload = {
+        preferredLanguage,
+        edge: {
+          id: edgeId,
+          edgeType,
+          criticality: edgeData?.criticality ?? edge?.properties?.criticality,
+          amplification: edgeData?.amplification ?? edge?.properties?.amplification,
+          latencyHours: edgeData?.latencyHours ?? edge?.properties?.latencyHours,
+        },
+        source: {
+          fragmentId: sourceId,
+          label:
+            sourceFragment?.labels?.en ||
+            sourceFragment?.labels?.[Object.keys(sourceFragment?.labels || {})[0]] ||
+            sourceFragment?.canonicalPath?.split('/')?.pop() ||
+            null,
+          canonicalPath: sourceFragment?.canonicalPath || null,
+          type: sourceFragment?.type || null,
+        },
+        target: {
+          fragmentId: targetId,
+          label:
+            targetFragment?.labels?.en ||
+            targetFragment?.labels?.[Object.keys(targetFragment?.labels || {})[0]] ||
+            targetFragment?.canonicalPath?.split('/')?.pop() ||
+            null,
+          canonicalPath: targetFragment?.canonicalPath || null,
+          type: targetFragment?.type || null,
+        },
+      };
+
+      const prompt =
+        `Explain why this graph edge exists.\n` +
+        `- Output language: ${preferredLanguage}\n` +
+        `- Use Google Search grounding.\n` +
+        `- Keep it concise (3-6 sentences). Plain text only.\n` +
+        `- If you are unsure, say so explicitly.\n\n` +
+        `Graph edge context (JSON):\n` +
+        `${JSON.stringify(payload, null, 2)}\n`;
+
+      const resp: any = await api.genaiComplete({
+        prompt,
+        options: {
+          profile: 'fast',
+          modelOverride: 'gemini-3-flash-preview',
+          groundingEnabled: true,
+          temperature: 0.2,
+          maxOutputTokens: 2048,
+          systemInstruction:
+            'You are a careful analyst. Explain the edge in plain language. Do not invent facts. Prefer grounded statements.',
+        },
+      });
+
+      const text = String(resp?.content || '').trim();
+      if (!text) {
+        setEdgeExplainError('Empty response from model');
+      } else {
+        setEdgeExplainText(text);
+      }
+    } catch (err: any) {
+      console.error('[ObjectInspector] Explain edge failed', err);
+      setEdgeExplainError(err.response?.data?.error || err.message || 'Failed to explain edge');
+    } finally {
+      setEdgeExplainLoading(false);
+    }
+  }, [edgeId, edgeData, edge, sourceFragment, targetFragment]);
 
   const handleMaterializeProductIO = React.useCallback(async () => {
-    const fragmentId = nodeData?.fragmentId;
+    const fragmentId = nodeData?.fragmentId || nodeId;
     if (!lensId) {
       setProductIOError('Lens ID is missing (open this inspector from a Lens cockpit)');
       return;
@@ -106,24 +344,22 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     }
   }, [lensId, nodeData]);
 
-  if (!nodeId || !nodeData) {
+  if (!nodeId && !edgeId) {
     return (
       <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-        Select a node to inspect
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-        Loading...
+        Select a node or edge to inspect
       </div>
     );
   }
 
   return (
     <div style={{ padding: '8px 0' }}>
+      {/* Loading indicator (do not block rendering; selection info should stay visible) */}
+      {loading && (
+        <div style={{ padding: '8px 12px', marginBottom: '12px', color: 'var(--text-secondary-strong)', fontSize: '12px' }}>
+          Loading…
+        </div>
+      )}
       {/* Error message */}
       {error && (
         <div style={{ 
@@ -139,7 +375,306 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
         </div>
       )}
       
+      {/* Edge Info */}
+      {edgeId && (
+        <>
+          <div style={{ marginBottom: '24px' }}>
+            <h4 style={{ 
+              fontSize: '12px', 
+              fontWeight: 600, 
+              color: 'var(--text-heading)',
+              marginBottom: '8px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}>
+              Edge Information
+            </h4>
+            <div style={{ 
+              padding: '12px',
+              borderRadius: '8px',
+              backgroundColor: 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+            }}>
+              <button
+                type="button"
+                onClick={handleExplainEdge}
+                disabled={edgeExplainLoading}
+                style={{
+                  padding: '8px 10px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  borderRadius: 8,
+                  border: '1px solid var(--border-subtle)',
+                  background: edgeExplainLoading ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
+                  color: 'var(--text-heading)',
+                  cursor: edgeExplainLoading ? 'not-allowed' : 'pointer',
+                  opacity: edgeExplainLoading ? 0.7 : 1,
+                  width: '100%',
+                  marginBottom: 12,
+                }}
+                title="Explain this edge using Gemini 3 Flash Preview (with Search grounding)"
+              >
+                {edgeExplainLoading ? 'Explaining…' : 'Explain'}
+              </button>
+              {edgeExplainError && (
+                <div style={{ fontSize: '12px', color: '#f87171', marginBottom: 10 }}>
+                  {edgeExplainError}
+                </div>
+              )}
+              {edgeExplainText && (
+                <div
+                  style={{
+                    fontSize: '12px',
+                    color: 'var(--text-heading)',
+                    lineHeight: 1.45,
+                    whiteSpace: 'pre-wrap',
+                    padding: 10,
+                    borderRadius: 8,
+                    backgroundColor: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                    marginBottom: 12,
+                  }}
+                >
+                  {edgeExplainText}
+                </div>
+              )}
+              <div style={{ marginBottom: '8px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                  Edge ID
+                </span>
+                <span style={{ fontSize: '13px', color: 'var(--text-heading)', fontFamily: 'monospace' }}>
+                  {edgeId}
+                </span>
+              </div>
+              {edgeData?.lensItemId && (
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                    Lens Item ID
+                  </span>
+                  <span style={{ fontSize: '13px', color: 'var(--text-heading)', fontFamily: 'monospace' }}>
+                    {edgeData.lensItemId}
+                  </span>
+                </div>
+              )}
+              {edge?.id && (
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                    Dependency Edge ID
+                  </span>
+                  <span style={{ fontSize: '13px', color: 'var(--text-heading)', fontFamily: 'monospace' }}>
+                    {edge.id}
+                  </span>
+                </div>
+              )}
+              {(edgeData?.edgeType || edge?.type) && (
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                    Edge Type
+                  </span>
+                  <span style={{ fontSize: '13px', color: 'var(--text-heading)' }}>
+                    {edgeData?.edgeType || edge?.type}
+                  </span>
+                </div>
+              )}
+              {(edge?.sourceFragmentId || edgeData?.sourceFragmentId) && (
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                    From (Source)
+                  </span>
+                  <div style={{ fontSize: '13px', color: 'var(--text-heading)' }}>
+                    {sourceFragment ? (
+                      <>
+                        <div style={{ fontWeight: 500, marginBottom: '2px' }}>
+                          {sourceFragment.labels?.en || sourceFragment.labels?.[Object.keys(sourceFragment.labels || {})[0]] || sourceFragment.canonicalPath?.split('/').pop() || 'Unknown'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                          {edge?.sourceFragmentId || edgeData?.sourceFragmentId}
+                        </div>
+                      </>
+                    ) : (
+                      <span style={{ fontFamily: 'monospace' }}>{edge?.sourceFragmentId || edgeData?.sourceFragmentId}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+              {(edge?.targetFragmentId || edgeData?.targetFragmentId) && (
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                    To (Target)
+                  </span>
+                  <div style={{ fontSize: '13px', color: 'var(--text-heading)' }}>
+                    {targetFragment ? (
+                      <>
+                        <div style={{ fontWeight: 500, marginBottom: '2px' }}>
+                          {targetFragment.labels?.en || targetFragment.labels?.[Object.keys(targetFragment.labels || {})[0]] || targetFragment.canonicalPath?.split('/').pop() || 'Unknown'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                          {edge?.targetFragmentId || edgeData?.targetFragmentId}
+                        </div>
+                      </>
+                    ) : (
+                      <span style={{ fontFamily: 'monospace' }}>{edge?.targetFragmentId || edgeData?.targetFragmentId}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Edge Properties */}
+          {(edgeData?.criticality !== undefined || edgeData?.amplification !== undefined || edgeData?.latencyHours !== undefined || 
+            edge?.properties) && (
+            <div style={{ marginBottom: '24px' }}>
+              <h4 style={{ 
+                fontSize: '12px', 
+                fontWeight: 600, 
+                color: 'var(--text-heading)',
+                marginBottom: '8px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}>
+                Edge Properties
+              </h4>
+              <div style={{ 
+                padding: '12px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--bg-elevated)',
+                border: '1px solid var(--border-subtle)',
+              }}>
+                {(edgeData?.criticality !== undefined || edge?.properties?.criticality !== undefined) && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Criticality
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-heading)', fontFamily: 'monospace' }}>
+                      {edge?.properties?.criticality ?? edgeData?.criticality}
+                    </span>
+                  </div>
+                )}
+                {(edgeData?.amplification !== undefined || edge?.properties?.amplification !== undefined) && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Amplification
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-heading)', fontFamily: 'monospace' }}>
+                      {edge?.properties?.amplification ?? edgeData?.amplification}
+                    </span>
+                  </div>
+                )}
+                {(edgeData?.latencyHours !== undefined || edge?.properties?.latencyHours !== undefined) && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Latency (hours)
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-heading)', fontFamily: 'monospace' }}>
+                      {edge?.properties?.latencyHours ?? edgeData?.latencyHours}
+                    </span>
+                  </div>
+                )}
+                {edge?.direction && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Direction
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-heading)' }}>
+                      {edge.direction}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Edge Qualifiers */}
+          {edge?.qualifiers && Object.keys(edge.qualifiers).length > 0 && (
+            <div style={{ marginBottom: '24px' }}>
+              <h4 style={{ 
+                fontSize: '12px', 
+                fontWeight: 600, 
+                color: 'var(--text-heading)',
+                marginBottom: '8px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}>
+                Qualifiers
+              </h4>
+              <div style={{ 
+                padding: '12px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--bg-elevated)',
+                border: '1px solid var(--border-subtle)',
+              }}>
+                {Object.entries(edge.qualifiers).map(([key, value]) => (
+                  <div key={key} style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      {key}
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-heading)' }}>
+                      {String(value)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Edge Metadata */}
+          {edge?.metadata && (
+            <div style={{ marginBottom: '24px' }}>
+              <h4 style={{ 
+                fontSize: '12px', 
+                fontWeight: 600, 
+                color: 'var(--text-heading)',
+                marginBottom: '8px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}>
+                Metadata
+              </h4>
+              <div style={{ 
+                padding: '12px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--bg-elevated)',
+                border: '1px solid var(--border-subtle)',
+              }}>
+                {edge.metadata.sourceFrameId && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Source Frame ID
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-heading)', fontFamily: 'monospace' }}>
+                      {edge.metadata.sourceFrameId}
+                    </span>
+                  </div>
+                )}
+                {edge.metadata.createdAt && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Created At
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-heading)' }}>
+                      {new Date(edge.metadata.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {edge.metadata.lastUpdatedAt && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                      Last Updated At
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-heading)' }}>
+                      {new Date(edge.metadata.lastUpdatedAt).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      
       {/* Node Info */}
+      {nodeId && (
       <div style={{ marginBottom: '24px' }}>
         <h4 style={{ 
           fontSize: '12px', 
@@ -157,6 +692,49 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           backgroundColor: 'var(--bg-elevated)',
           border: '1px solid var(--border-subtle)',
         }}>
+          <button
+            type="button"
+            onClick={handleExplainNode}
+            disabled={nodeExplainLoading}
+            style={{
+              padding: '8px 10px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: 8,
+              border: '1px solid var(--border-subtle)',
+              background: nodeExplainLoading ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
+              color: 'var(--text-heading)',
+              cursor: nodeExplainLoading ? 'not-allowed' : 'pointer',
+              opacity: nodeExplainLoading ? 0.7 : 1,
+              width: '100%',
+              marginBottom: 12,
+            }}
+            title="Explain this node using Gemini 3 Flash Preview (with Search grounding)"
+          >
+            {nodeExplainLoading ? 'Explaining…' : 'Explain'}
+          </button>
+          {nodeExplainError && (
+            <div style={{ fontSize: '12px', color: '#f87171', marginBottom: 10 }}>
+              {nodeExplainError}
+            </div>
+          )}
+          {nodeExplainText && (
+            <div
+              style={{
+                fontSize: '12px',
+                color: 'var(--text-heading)',
+                lineHeight: 1.45,
+                whiteSpace: 'pre-wrap',
+                padding: 10,
+                borderRadius: 8,
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+                marginBottom: 12,
+              }}
+            >
+              {nodeExplainText}
+            </div>
+          )}
           <div style={{ marginBottom: '8px' }}>
             <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
               Node ID
@@ -165,17 +743,17 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               {nodeId}
             </span>
           </div>
-          {nodeData.fragmentId && (
+          {(nodeData?.fragmentId || nodeId) && (
             <div style={{ marginBottom: '8px' }}>
               <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                 Fragment ID
               </span>
               <span style={{ fontSize: '13px', color: 'var(--text-heading)', fontFamily: 'monospace' }}>
-                {nodeData.fragmentId}
+                {nodeData?.fragmentId || nodeId}
               </span>
             </div>
           )}
-          {nodeData.type && (
+          {nodeData?.type && (
             <div style={{ marginBottom: '8px' }}>
               <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                 Type
@@ -185,7 +763,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               </span>
             </div>
           )}
-          {nodeData.label && (
+          {nodeData?.label && (
             <div>
               <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                 Label
@@ -197,9 +775,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           )}
         </div>
       </div>
+      )}
 
       {/* Fragment Info */}
-      {fragment && (
+      {nodeId && nodeData && fragment && (
         <div style={{ marginBottom: '24px' }}>
           <h4 style={{ 
             fontSize: '12px', 
@@ -330,7 +909,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       )}
 
       {/* Entity Info */}
-      {entity && (
+      {nodeId && nodeData && entity && (
         <div style={{ marginBottom: '24px' }}>
           <h4 style={{ 
             fontSize: '12px', 
@@ -461,7 +1040,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       )}
 
       {/* Actions */}
-      {fragment && (
+      {nodeId && nodeData && fragment && (
         <div>
           <h4 style={{ 
             fontSize: '12px', 

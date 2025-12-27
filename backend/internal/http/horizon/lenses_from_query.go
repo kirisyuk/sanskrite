@@ -103,11 +103,16 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 
 	// 2) Build Lens.
 	scope := make([]string, 0, len(intent.Anchors))
+	seenScope := make(map[string]struct{}, len(intent.Anchors))
 	for _, a := range intent.Anchors {
 		cp := strings.TrimSpace(a.CanonicalPath)
 		if cp == "" {
 			continue
 		}
+		if _, ok := seenScope[cp]; ok {
+			continue
+		}
+		seenScope[cp] = struct{}{}
 		scope = append(scope, cp)
 	}
 	if len(scope) == 0 {
