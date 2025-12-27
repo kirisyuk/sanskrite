@@ -57,6 +57,40 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
   const [gridState, setGridState] = React.useState<GridState>(createEmptyGrid());
+
+  // Performance controls (large graphs)
+  // Defaults: enable features on small graphs, auto-disable on large graphs (but allow manual override).
+  const isLargeGraph = React.useMemo(() => {
+    const n = nodes.length;
+    const e = edges.length;
+    return n >= 160 || e >= 260 || (n + e) >= 420;
+  }, [nodes.length, edges.length]);
+
+  const [forcePerfMode, setForcePerfMode] = React.useState<boolean | null>(null);
+  const perfMode = forcePerfMode ?? isLargeGraph;
+
+  const [showMiniMap, setShowMiniMap] = React.useState(true);
+  const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(true);
+
+  // When graph grows large and user didn't override perf mode, auto-disable heavy visuals once.
+  React.useEffect(() => {
+    if (!isLargeGraph) return;
+    if (forcePerfMode !== null) return;
+    setShowMiniMap(false);
+    setShowBackgroundGrid(false);
+  }, [isLargeGraph, forcePerfMode]);
+
+  // If perf mode is enabled, clear hover states that are used only for expensive styling.
+  React.useEffect(() => {
+    if (!perfMode) return;
+    setHoveredGroupId(null);
+    setHoveredNodeId(null);
+  }, [perfMode]);
+
+  // Refs for synchronous tracking of expanded nodes (avoids stale state issues)
+  const expandedNodesRef = React.useRef<Set<string>>(new Set());
+  const rootNodeIdRef = React.useRef<string | null>(null);
+
   const selectedNodeId = React.useMemo(() => {
     const selected = nodes.find((n) => (n as any)?.selected && !((n.data as any)?.isGroup));
     return selected?.id || null;
@@ -423,6 +457,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     setError(null);
 
     try {
+      // Reset expansion/grid bookkeeping for a fresh load.
+      expandedNodesRef.current = new Set();
+      rootNodeIdRef.current = null;
+      setGridState(createEmptyGrid());
+
       // 1. Удаляем существующие LensItems (идемпотентно)
       if (lensItems.length > 0) {
         console.log('[Cockpit] Clearing existing lens items...', lensItems.length);
@@ -560,6 +599,37 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       setNodes(layoutedNodes);
       setEdges(graphEdges);
       setLoading(false);
+
+      // Initialize grid cells for all central nodes (depth=0) so second-order expansions
+      // can place new centers relative to the correct parent, not (0,0).
+      try {
+        const roots = layoutedNodes
+          .filter((n) => !(n.data as any)?.isGroup)
+          .filter((n) => typeof (n.data as any)?.depth === 'number' && (n.data as any).depth === 0)
+          .sort((a, b) => (a.position?.x || 0) - (b.position?.x || 0));
+
+        const rootId = roots[0]?.id || null;
+        rootNodeIdRef.current = rootId;
+
+        let g = createEmptyGrid();
+        if (rootId) g.rootNodeId = rootId;
+        for (let i = 0; i < roots.length; i++) {
+          const rid = String(roots[i].id || '').trim();
+          if (!rid) continue;
+          g = setGridCell(g, { row: 0, col: i, type: 'node', nodeId: rid });
+        }
+        setGridState(g);
+
+        if (import.meta.env.DEV) {
+          console.log('[Cockpit] Grid initialized from root nodes:', {
+            roots: roots.map((r) => r.id),
+            rootNodeId: g.rootNodeId,
+            cellCount: g.cells.size,
+          });
+        }
+      } catch (e) {
+        console.warn('[Cockpit] Failed to init grid from roots', e);
+      }
 
       // Fit view after a short delay
       setTimeout(() => {
@@ -703,6 +773,68 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     }
   }, [lensId, lensItems, convertLensItemsToGraph, setNodes, setEdges]);
 
+  // Callback for group pagination - changes the visible page of children in a group
+  const handleGroupPageChange = useCallback((groupId: string, newPage: number) => {
+    setNodes((prevNodes) => {
+      // Find the group node to get its data
+      const groupNode = prevNodes.find((n) => n.id === groupId);
+      if (!groupNode || !(groupNode.data as any)?.isGroup) return prevNodes;
+
+      const gd = groupNode.data as any;
+      const allChildIds: string[] = gd.groupAllChildIds || [];
+      const pageSize = gd.groupPageSize || 12;
+      const totalPages = Math.ceil(allChildIds.length / pageSize);
+
+      // Validate new page
+      if (newPage < 0 || newPage >= totalPages) return prevNodes;
+
+      const startIdx = newPage * pageSize;
+      const endIdx = Math.min(startIdx + pageSize, allChildIds.length);
+      const visibleIds = new Set(allChildIds.slice(startIdx, endIdx));
+
+      // Calculate child positions for new page
+      const nodeWidth = 180;
+      const nodeHeight = 161;
+      const childGapX = 60;
+      const childGapY = Math.max(48, Math.floor(60 * 1.05));
+      const padTop = 34; // GROUP_HEADER_HEIGHT
+      const padX = 16;   // GROUP_PADDING_X
+      const nodesPerRow = 4; // GROUP_MAX_COLS
+
+      return prevNodes.map((n) => {
+        // Update group's current page
+        if (n.id === groupId) {
+          return {
+            ...n,
+            data: { ...n.data, groupCurrentPage: newPage },
+          };
+        }
+
+        // Update child visibility and positions
+        if ((n as any).parentId === groupId) {
+          const childIdx = allChildIds.indexOf(n.id);
+          if (childIdx === -1) return n;
+
+          const isVisible = visibleIds.has(n.id);
+          // Calculate position relative to current page
+          const pageIdx = childIdx - startIdx;
+          const rowIdx = Math.floor(pageIdx / nodesPerRow);
+          const colIdx = pageIdx % nodesPerRow;
+          const cx = padX + colIdx * (nodeWidth + childGapX);
+          const cy = padTop + rowIdx * (nodeHeight + childGapY);
+
+          return {
+            ...n,
+            hidden: !isVisible,
+            position: isVisible ? { x: cx, y: cy } : n.position,
+          };
+        }
+
+        return n;
+      });
+    });
+  }, [setNodes]);
+
   // Функция для загрузки связанных элементов фрагмента
   const handleLoadRelatedFragments = useCallback(async (rawFragmentId: string) => {
     const fragmentId = (rawFragmentId || '').trim();
@@ -717,12 +849,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       return;
     }
 
-    const sourceDepth = typeof sourceSnapshot?.data?.depth === 'number' ? sourceSnapshot.data.depth : 0;
-    const sourceRootId = norm(sourceSnapshot?.data?.rootFragmentId || sourceSnapshot?.data?.fragmentId || sourceSnapshot?.id);
+    const isNodeInGroup = !!(sourceSnapshot as any).parentId && !(sourceSnapshot.data as any)?.isGroup;
+    // If expanding a node extracted from a group, it becomes a new local root.
+    const sourceRootIdRaw = norm(sourceSnapshot?.data?.rootFragmentId || sourceSnapshot?.data?.fragmentId || sourceSnapshot?.id);
+    const sourceRootId = isNodeInGroup ? fragmentId : sourceRootIdRaw;
+    const sourceDepthRaw = typeof sourceSnapshot?.data?.depth === 'number' ? sourceSnapshot.data.depth : 0;
+    const sourceDepth = isNodeInGroup ? 0 : sourceDepthRaw;
 
     // Grid management: determine if this is root expansion or second-order expansion
-    const isFirstExpansion = gridState.rootNodeId === null;
-    const isNodeInGroup = !!(sourceSnapshot as any).parentId && !(sourceSnapshot.data as any)?.isGroup;
+    // Use refs for synchronous checks (gridState may be stale)
+    const isFirstExpansion = rootNodeIdRef.current === null;
     const nodeSemanticGroup = isNodeInGroup
       ? getSemanticGroup(
           (sourceSnapshot.data as any)?.edgeTypeFromParent,
@@ -735,7 +871,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       isFirstExpansion,
       isNodeInGroup,
       nodeSemanticGroup,
-      expandedNodes: Array.from(gridState.expandedNodes),
+      expandedNodes: Array.from(expandedNodesRef.current),
     });
 
     setLoadingFragmentId(fragmentId);
@@ -801,16 +937,35 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       // Find existing nodes that are related to the expanded node
       // These need to be updated and included in groups
       // EXCLUDE nodes that have already been expanded (they should not be grouped)
+      // EXCLUDE root node - it should never be grouped
       const existingRelatedIds = new Set<string>();
       for (const f of relatedFragments) {
         const fid = norm(f?.id || '');
         if (fid && existingNodeIds.has(fid) && fid !== fragmentId) {
-          // Don't group nodes that have been expanded (they are "root" nodes of their own subgraph)
-          if (!gridState.expandedNodes.has(fid)) {
-            existingRelatedIds.add(fid);
-          } else {
-            console.log('[Cockpit] Skipping already expanded node from grouping:', fid);
+          // Don't group the root node - it's the center of the entire graph
+          if (fid === rootNodeIdRef.current) {
+            console.log('[Cockpit] Skipping root node from grouping:', fid);
+            continue;
           }
+          // Don't group other central nodes (multiple roots / grid centers)
+          const existingNode = currentNodes.find((n) => norm(n?.id) === fid || norm((n.data as any)?.fragmentId) === fid);
+          const existingDepth = typeof (existingNode?.data as any)?.depth === 'number' ? (existingNode!.data as any).depth : undefined;
+          if (existingDepth === 0) {
+            console.log('[Cockpit] Skipping depth=0 node from grouping:', fid);
+            continue;
+          }
+          // Don't group across different subgraphs (rootFragmentId mismatch)
+          const existingRoot = norm((existingNode?.data as any)?.rootFragmentId || '');
+          if (existingRoot && existingRoot !== sourceRootId) {
+            console.log('[Cockpit] Skipping cross-root node from grouping:', { fid, existingRoot, sourceRootId });
+            continue;
+          }
+          // Don't group nodes that have been expanded (they are centers of their own subgraphs)
+          if (expandedNodesRef.current.has(fid)) {
+            console.log('[Cockpit] Skipping already expanded node from grouping:', fid);
+            continue;
+          }
+          existingRelatedIds.add(fid);
         }
       }
 
@@ -1012,6 +1167,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             delete (newData as any).parentFragmentId;
             delete (newData as any).edgeTypeFromParent;
             delete (newData as any).directionFromParent;
+            // Promote to a new subgraph center
+            (newData as any).rootFragmentId = fragmentId;
+            (newData as any).depth = 0;
 
             // Calculate new position based on grid
             const cellPos = findCellForExpandedNode(gridState, expandingNodeParentId || '', nodeSemanticGroup);
@@ -1040,6 +1198,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         if (!existingRelatedIds.has(nodeFragmentId)) return n;
         if (n.data?.parentFragmentId) return n; // Already has a parent, don't override
         if (nodeFragmentId === fragmentId) return n;
+        // Double-check: never group root node or already expanded nodes
+        if (nodeFragmentId === rootNodeIdRef.current) return n;
+        if (expandedNodesRef.current.has(nodeFragmentId)) return n;
+        // Never group central nodes (depth=0) or nodes from a different subgraph root
+        const nodeDepth = typeof (n.data as any)?.depth === 'number' ? (n.data as any).depth : undefined;
+        if (nodeDepth === 0) return n;
+        const nodeRoot = norm((n.data as any)?.rootFragmentId || '');
+        if (nodeRoot && nodeRoot !== sourceRootId) return n;
 
         const edgeTypeFromParent = fragmentEdgeType.get(nodeFragmentId) || '';
         const directionFromParent = fragmentDirection.get(nodeFragmentId) || 'outgoing';
@@ -1114,6 +1280,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         return out;
       });
 
+      // Update refs SYNCHRONOUSLY before state (refs are immediate, state is async)
+      // This ensures subsequent expansions see the correct values
+      expandedNodesRef.current.add(fragmentId);
+      if (rootNodeIdRef.current === null) {
+        rootNodeIdRef.current = fragmentId;
+        console.log('[Cockpit] Refs: set root node:', fragmentId);
+      }
+      console.log('[Cockpit] Refs: marked as expanded:', fragmentId, 'expandedNodes:', Array.from(expandedNodesRef.current));
+
       // Update grid state: add expanded node to the grid
       setGridState((prevGrid) => {
         let newGrid = { ...prevGrid };
@@ -1185,69 +1360,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       );
       setLoadingFragmentId(null);
     }
-  }, [loadingFragmentId, setEdges, setNodes, normalizeEdgeType]);
-
-  // Callback for group pagination - changes the visible page of children in a group
-  const handleGroupPageChange = useCallback((groupId: string, newPage: number) => {
-    setNodes((prevNodes) => {
-      // Find the group node to get its data
-      const groupNode = prevNodes.find((n) => n.id === groupId);
-      if (!groupNode || !(groupNode.data as any)?.isGroup) return prevNodes;
-
-      const gd = groupNode.data as any;
-      const allChildIds: string[] = gd.groupAllChildIds || [];
-      const pageSize = gd.groupPageSize || 12;
-      const totalPages = Math.ceil(allChildIds.length / pageSize);
-
-      // Validate new page
-      if (newPage < 0 || newPage >= totalPages) return prevNodes;
-
-      const startIdx = newPage * pageSize;
-      const endIdx = Math.min(startIdx + pageSize, allChildIds.length);
-      const visibleIds = new Set(allChildIds.slice(startIdx, endIdx));
-
-      // Calculate child positions for new page
-      const nodeWidth = 180;
-      const nodeHeight = 161;
-      const childGapX = 60;
-      const childGapY = Math.max(48, Math.floor(60 * 1.05));
-      const padTop = 34; // GROUP_HEADER_HEIGHT
-      const padX = 16;   // GROUP_PADDING_X
-      const nodesPerRow = 4; // GROUP_MAX_COLS
-
-      return prevNodes.map((n) => {
-        // Update group's current page
-        if (n.id === groupId) {
-          return {
-            ...n,
-            data: { ...n.data, groupCurrentPage: newPage },
-          };
-        }
-
-        // Update child visibility and positions
-        if ((n as any).parentId === groupId) {
-          const childIdx = allChildIds.indexOf(n.id);
-          if (childIdx === -1) return n;
-
-          const isVisible = visibleIds.has(n.id);
-          // Calculate position relative to current page
-          const pageIdx = childIdx - startIdx;
-          const rowIdx = Math.floor(pageIdx / nodesPerRow);
-          const colIdx = pageIdx % nodesPerRow;
-          const cx = padX + colIdx * (nodeWidth + childGapX);
-          const cy = padTop + rowIdx * (nodeHeight + childGapY);
-
-          return {
-            ...n,
-            hidden: !isVisible,
-            position: isVisible ? { x: cx, y: cy } : n.position,
-          };
-        }
-
-        return n;
-      });
-    });
-  }, [setNodes]);
+  }, [loadingFragmentId, setEdges, setNodes, normalizeEdgeType, getEdgeHandles, handleGroupPageChange]);
 
   // Derive edges styles for hover highlighting (do not mutate base edges)
   // Labels are hidden by default to reduce visual noise, shown only on hover
@@ -1264,6 +1377,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     const visibleEdges = edges.filter((e) =>
       !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target)
     );
+
+    // Perf mode: do not derive per-edge styles/labels (avoids O(E) object cloning on hover),
+    // just return filtered edges.
+    if (perfMode) return visibleEdges;
 
     const baseStyled = (e: Edge) => {
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
@@ -1400,7 +1517,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       const { baseStyle } = baseStyled(e);
       return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
     });
-  }, [edges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId]);
+  }, [edges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode]);
+
+  // Lightweight info for perf mode (no re-styling of edges)
+  const perfHoveredEdgeInfo = React.useMemo(() => {
+    if (!perfMode || !hoveredEdgeId) return null;
+    const e = edges.find((x) => x.id === hoveredEdgeId) as any;
+    if (!e) return null;
+    const edgeType = String(e?.data?.edgeType || e?.label || e?.data?.subkind || '').trim();
+    return edgeType ? { id: hoveredEdgeId, edgeType } : { id: hoveredEdgeId, edgeType: 'EDGE' };
+  }, [perfMode, hoveredEdgeId, edges]);
 
   // Функция для перераспределения всех видимых нод
   const handleArrange = useCallback(async () => {
@@ -1761,6 +1887,59 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         >
           Download
         </button>
+
+        {/* Perf/visual toggles */}
+        <button
+          type="button"
+          onClick={() => setForcePerfMode((v) => (v === null ? !isLargeGraph : !v))}
+          style={{
+            padding: '6px 10px',
+            fontSize: '12px',
+            fontWeight: 500,
+            color: 'var(--text-heading)',
+            background: perfMode ? 'var(--white-10)' : 'transparent',
+            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
+            borderRadius: '6px',
+            cursor: 'pointer',
+          }}
+          title="Performance mode reduces hover highlighting and heavy visuals to keep big graphs smooth."
+        >
+          Perf {perfMode ? 'On' : 'Off'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowMiniMap((v) => !v)}
+          style={{
+            padding: '6px 10px',
+            fontSize: '12px',
+            fontWeight: 500,
+            color: 'var(--text-heading)',
+            background: showMiniMap ? 'var(--white-10)' : 'transparent',
+            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
+            borderRadius: '6px',
+            cursor: 'pointer',
+          }}
+          title="Toggle minimap (can be expensive on large graphs)."
+        >
+          MiniMap {showMiniMap ? 'On' : 'Off'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowBackgroundGrid((v) => !v)}
+          style={{
+            padding: '6px 10px',
+            fontSize: '12px',
+            fontWeight: 500,
+            color: 'var(--text-heading)',
+            background: showBackgroundGrid ? 'var(--white-10)' : 'transparent',
+            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
+            borderRadius: '6px',
+            cursor: 'pointer',
+          }}
+          title="Toggle background grid (can be expensive on large graphs)."
+        >
+          Grid {showBackgroundGrid ? 'On' : 'Off'}
+        </button>
         {error && (
           <div style={{ fontSize: '11px', color: '#EF4444', marginLeft: '8px' }}>
             {error}
@@ -1785,6 +1964,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             onPaneClick={handlePaneClick}
             onNodeDragStop={handleNodeDragStop}
             onNodeMouseEnter={(_, node) => {
+              if (perfMode) return;
               const d: any = node?.data;
               if (d?.isGroup) {
                 setHoveredGroupId(node.id);
@@ -1795,14 +1975,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               }
             }}
             onNodeMouseLeave={(_, node) => {
+              if (perfMode) return;
               const d: any = node?.data;
               if (d?.isGroup) setHoveredGroupId(null);
               else setHoveredNodeId(null);
             }}
             onEdgeMouseEnter={(_, edge) => {
+              if (perfMode) return;
               setHoveredEdgeId(edge.id);
             }}
             onEdgeMouseLeave={() => {
+              if (perfMode) return;
               setHoveredEdgeId(null);
             }}
             nodeTypes={HORIZON_NODE_TYPES}
@@ -1815,8 +1998,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             maxZoom={2}
             defaultViewport={{ x: 0, y: 0, zoom: 1 }}
             proOptions={{ hideAttribution: true }}
+            onlyRenderVisibleElements={true}
+            nodesConnectable={false}
+            nodesDraggable={true}
+            elementsSelectable={true}
           >
-          <Background color={bgPatternColor} gap={16} />
+          {showBackgroundGrid && <Background color={bgPatternColor} gap={16} />}
           <Controls
             style={{
               background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
@@ -1824,19 +2011,42 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               borderRadius: '8px',
             }}
           />
-          <MiniMap
-            style={{
-              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-              border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-              borderRadius: '8px',
-            }}
-            nodeColor={(node) => {
-              const data = node.data as HorizonNodeData;
-              return data.critical ? '#EF4444' : '#3B82F6';
-            }}
-            maskColor={theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)'}
-          />
+          {showMiniMap && (
+            <MiniMap
+              style={{
+                background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+                border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
+                borderRadius: '8px',
+              }}
+              nodeColor={(node) => {
+                const data = node.data as HorizonNodeData;
+                return data.critical ? '#EF4444' : '#3B82F6';
+              }}
+              maskColor={theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)'}
+            />
+          )}
         </ReactFlow>
+
+        {/* Perf-mode edge info (avoids heavy edge relabel/restyling) */}
+        {perfMode && perfHoveredEdgeInfo && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 12,
+              bottom: 12,
+              padding: '6px 10px',
+              borderRadius: 10,
+              background: theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.75)',
+              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'}`,
+              color: 'var(--text-heading)',
+              fontSize: 12,
+              pointerEvents: 'none',
+              backdropFilter: 'blur(6px)',
+            }}
+          >
+            {perfHoveredEdgeInfo.edgeType}
+          </div>
+        )}
 
         {/* Overlay empty-state (граф всё равно виден как canvas) */}
         {nodes.length === 0 && !loading && (

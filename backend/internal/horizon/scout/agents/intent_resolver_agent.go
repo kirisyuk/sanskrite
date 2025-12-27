@@ -13,10 +13,10 @@ import (
 // IntentResolution is a lightweight, reusable representation of user intent.
 // It is intentionally taxonomy-first: spherePaths must be canonical (/sphere/...), and anchors must be canonical paths.
 type IntentResolution struct {
-	Focus      string   `json:"focus"`
+	Focus       string   `json:"focus"`
 	SpherePaths []string `json:"spherePaths"`
-	Keywords   []string `json:"keywords"`
-	Anchors    []struct {
+	Keywords    []string `json:"keywords"`
+	Anchors     []struct {
 		CanonicalPath string  `json:"canonicalPath"`
 		Type          string  `json:"type"` // ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET (best-effort)
 		Confidence    float64 `json:"confidence"`
@@ -118,6 +118,13 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 		cp := strings.TrimSpace(an.CanonicalPath)
 		// Fix MSYS conversion if any.
 		cp = normalizeCanonicalPathForTools(cp)
+		// Best-effort legacy geo normalization: older flows may still emit /region/... paths.
+		// We normalize only supported legacy shapes into strict /loc/{country}/{admin1}/{city}.
+		if strings.HasPrefix(cp, "/region/") {
+			if norm := normalizeLegacyGeoPathForIntent(cp); norm != "" {
+				cp = norm
+			}
+		}
 		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
 			continue
 		}
@@ -167,7 +174,7 @@ OUTPUT JSON SCHEMA:
 RULES:
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
 - canonicalPath MUST be a valid Horizon canonical path with allowed namespaces:
-  /org, /person, /product, /program, /market, /fac, /loc, /region, /sphere, /event
+  /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event
 - Prefer STABLE anchors:
   - companies: /org/{slug}
   - products: /product/{orgSlug}/{productSlug} when org is known
@@ -185,7 +192,7 @@ func normalizeCanonicalPathForTools(raw string) string {
 	if s == "" {
 		return s
 	}
-	candidates := []string{"/org/", "/person/", "/product/", "/fac/", "/loc/", "/region/", "/event/", "/sphere/", "/program/", "/market/"}
+	candidates := []string{"/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/"}
 	for _, c := range candidates {
 		if idx := strings.Index(s, c); idx > 0 {
 			s = s[idx:]
@@ -198,4 +205,28 @@ func normalizeCanonicalPathForTools(raw string) string {
 	return s
 }
 
-
+// normalizeLegacyGeoPathForIntent maps older geo namespaces to the strict /loc/{country}/{admin1}/{city} model.
+// Supported legacy patterns:
+// - /region/na/{country}/{admin1}/{city} -> /loc/{country}/{admin1}/{city}
+// - /region/{country}/{admin1}/{city}    -> /loc/{country}/{admin1}/{city}
+func normalizeLegacyGeoPathForIntent(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return ""
+	}
+	if strings.HasPrefix(p, "/loc/") {
+		return p
+	}
+	if !strings.HasPrefix(p, "/region/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	// parts[0] == "region"
+	if len(parts) == 5 && parts[1] == "na" {
+		return fmt.Sprintf("/loc/%s/%s/%s", parts[2], parts[3], parts[4])
+	}
+	if len(parts) == 4 {
+		return fmt.Sprintf("/loc/%s/%s/%s", parts[1], parts[2], parts[3])
+	}
+	return ""
+}

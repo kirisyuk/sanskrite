@@ -9,20 +9,31 @@ import { ThemeContext } from './ThemeProvider';
 import { api } from '../lib/api';
 import { LensCanvasDetails } from './LensCanvasDetails';
 import { LensCanvasCockpit } from './LensCanvasCockpit';
-import { LensCanvasList } from './LensCanvasList';
+import { LensCanvasProgress } from './LensCanvasProgress';
 import { HorizonDrawers, HorizonPanelType } from './HorizonDrawers';
 import { HorizonPanelButtons } from './HorizonPanelButtons';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
+import type { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 
 export interface LensCanvasProps {
   isOpen: boolean;
   lensId: string | null;
+  projectId?: string | null;
+  initialViewMode?: 'details' | 'cockpit' | 'progress';
+  showInputInProgress?: boolean;
+  onAssemble?: (request: AssembleLensRequest) => void;
+  isCreatingLens?: boolean;
   onClose: () => void;
 }
 
 export const LensCanvas: React.FC<LensCanvasProps> = ({
   isOpen,
   lensId,
+  projectId,
+  initialViewMode = 'details',
+  showInputInProgress = false,
+  onAssemble,
+  isCreatingLens = false,
   onClose,
 }) => {
   const { theme } = React.useContext(ThemeContext);
@@ -32,7 +43,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [loading, setLoading] = React.useState(false);
   const [loadingJobs, setLoadingJobs] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [viewMode, setViewMode] = React.useState<'details' | 'cockpit' | 'list'>('details');
+  const [viewMode, setViewMode] = React.useState<'details' | 'cockpit' | 'progress'>(initialViewMode);
   
   // Drawer state for cockpit mode
   const [panelType, setPanelType] = React.useState<HorizonPanelType>(null);
@@ -43,6 +54,18 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [selectedEdgeData, setSelectedEdgeData] = React.useState<any | null>(null);
   
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
+
+  // Update view mode when initialViewMode changes
+  React.useEffect(() => {
+    setViewMode(initialViewMode);
+  }, [initialViewMode]);
+
+  // If lens is not loaded and user tries to switch to details/cockpit, switch back to progress
+  React.useEffect(() => {
+    if (!lens && (viewMode === 'details' || viewMode === 'cockpit')) {
+      setViewMode('progress');
+    }
+  }, [lens, viewMode]);
 
   // Load lens data when lensId changes
   React.useEffect(() => {
@@ -94,9 +117,16 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
 
   if (!isOpen) return null;
 
+  // Determine title: use lens name if available, otherwise use project name or default
+  const getTitle = () => {
+    if (lens) return lens.name;
+    if (projectId) return 'New Lens';
+    return 'Lens';
+  };
+
   return (
     <ModalWithHeader
-      title={lens ? lens.name : 'Lens'}
+      title={getTitle()}
       onClose={onClose}
     >
       {/* View mode switcher */}
@@ -112,56 +142,60 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 : 'rgba(255, 255, 255, 0.04)',
           }}
         >
+          {lens && (
+            <>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'details'}
+                aria-controls="lens-details-panel"
+                onClick={() => setViewMode('details')}
+                className="px-2 py-1 text-12 rounded"
+                style={{
+                  background:
+                    viewMode === 'details'
+                      ? 'var(--white-10)'
+                      : 'transparent',
+                  color: 'var(--text-heading)',
+                }}
+              >
+                Details
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'cockpit'}
+                aria-controls="lens-cockpit-panel"
+                onClick={() => setViewMode('cockpit')}
+                className="px-2 py-1 text-12 rounded"
+                style={{
+                  background:
+                    viewMode === 'cockpit'
+                      ? 'var(--white-10)'
+                      : 'transparent',
+                  color: 'var(--text-heading)',
+                }}
+              >
+                Cockpit
+              </button>
+            </>
+          )}
           <button
             type="button"
             role="tab"
-            aria-selected={viewMode === 'details'}
-            aria-controls="lens-details-panel"
-            onClick={() => setViewMode('details')}
+            aria-selected={viewMode === 'progress'}
+            aria-controls="lens-progress-panel"
+            onClick={() => setViewMode('progress')}
             className="px-2 py-1 text-12 rounded"
             style={{
               background:
-                viewMode === 'details'
+                viewMode === 'progress'
                   ? 'var(--white-10)'
                   : 'transparent',
               color: 'var(--text-heading)',
             }}
           >
-            Details
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewMode === 'cockpit'}
-            aria-controls="lens-cockpit-panel"
-            onClick={() => setViewMode('cockpit')}
-            className="px-2 py-1 text-12 rounded"
-            style={{
-              background:
-                viewMode === 'cockpit'
-                  ? 'var(--white-10)'
-                  : 'transparent',
-              color: 'var(--text-heading)',
-            }}
-          >
-            Cockpit
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewMode === 'list'}
-            aria-controls="lens-list-panel"
-            onClick={() => setViewMode('list')}
-            className="px-2 py-1 text-12 rounded"
-            style={{
-              background:
-                viewMode === 'list'
-                  ? 'var(--white-10)'
-                  : 'transparent',
-              color: 'var(--text-heading)',
-            }}
-          >
-            List
+            Progress
           </button>
         </div>
       </div>
@@ -188,9 +222,18 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               {error}
             </div>
           </div>
-        ) : lens ? (
+        ) : (
           <>
-            {viewMode === 'details' && (
+            {viewMode === 'progress' && (
+              <LensCanvasProgress 
+                lensId={lensId} 
+                projectId={projectId || lens?.projectId} 
+                showInput={showInputInProgress}
+                onAssemble={onAssemble}
+                isCreatingLens={isCreatingLens}
+              />
+            )}
+            {viewMode === 'details' && lens && (
               <LensCanvasDetails
                 lens={lens}
                 assemblyStatus={assemblyStatus}
@@ -199,7 +242,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 onRefreshJobs={loadScoutingJobs}
               />
             )}
-            {viewMode === 'cockpit' && (
+            {viewMode === 'cockpit' && lens && (
               <div style={{ 
                 flex: 1, 
                 minHeight: 0, 
@@ -265,11 +308,15 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 />
               </div>
             )}
-            {viewMode === 'list' && (
-              <LensCanvasList lensId={lensId} projectId={lens.projectId} />
+            {viewMode !== 'progress' && !lens && (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-pulse text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
+                  Loading lens...
+                </div>
+              </div>
             )}
           </>
-        ) : null}
+        )}
       </div>
     </ModalWithHeader>
   );

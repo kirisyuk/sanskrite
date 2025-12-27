@@ -49,6 +49,12 @@ export interface HorizonRealtimeEvent {
   projectId?: string;
   lensId?: string;
   text: string;
+  icon?: 'assembly' | 'scout' | 'node' | 'edge' | 'propagation' | 'success' | 'error' | 'info';
+  humanReadable?: {
+    title: string;
+    description?: string;
+    entityName?: string;
+  };
   data?: any;
 }
 
@@ -102,35 +108,141 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         return t.length > 220 ? t.slice(0, 217) + '...' : t;
       };
 
+      // Helper to extract human-readable name from canonical path
+      const getEntityName = (canonicalPath: string): string => {
+        if (!canonicalPath) return '';
+        // Extract last meaningful part: /org/tesla -> tesla, /fac/tsmc/fab-21 -> fab-21
+        const parts = canonicalPath.split('/').filter(p => p);
+        if (parts.length === 0) return canonicalPath;
+        const last = parts[parts.length - 1];
+        // Capitalize first letter and replace dashes/underscores with spaces
+        return last
+          .replace(/[-_]/g, ' ')
+          .replace(/\b\w/g, (l) => l.toUpperCase());
+      };
+
+      // Helper to get phase display name
+      const getPhaseName = (phase: string): string => {
+        const phaseMap: Record<string, string> = {
+          'decomposition': 'Decomposing',
+          'cache_hit': 'Loading from cache',
+          'scouting': 'Scouting',
+          'propagation': 'Propagating',
+          'ready': 'Ready',
+          'failed': 'Failed',
+        };
+        return phaseMap[phase] || phase.charAt(0).toUpperCase() + phase.slice(1);
+      };
+
+      // Helper to get state display name
+      const getStateName = (state: string): string => {
+        const stateMap: Record<string, string> = {
+          'PENDING': 'Pending',
+          'PLANNING': 'Planning',
+          'EXECUTION': 'Executing',
+          'EXTRACTION': 'Extracting',
+          'VALIDATION': 'Validating',
+          'RESOLUTION': 'Resolving',
+          'VERIFIED': 'Verified',
+          'FAILED': 'Failed',
+          'COMPLETED': 'Completed',
+        };
+        return stateMap[state] || state;
+      };
+
       let text = type;
+      let icon: HorizonRealtimeEvent['icon'] = 'info';
+      let humanReadable: HorizonRealtimeEvent['humanReadable'] | undefined;
+
       if (type.startsWith('horizon.assembly.')) {
+        icon = type.includes('failed') ? 'error' : type.includes('ready') ? 'success' : 'assembly';
         const phase = typeof data?.phase === 'string' ? data.phase : '';
         const progress = typeof data?.progress === 'number' ? `${Math.round(data.progress * 100)}%` : '';
-        text = `assembly${phase ? `.${phase}` : ''}${progress ? ` (${progress})` : ''}`;
+        const phaseName = phase ? getPhaseName(phase) : 'Assembly';
+        text = `${phaseName}${progress ? ` (${progress})` : ''}`;
+        humanReadable = {
+          title: phaseName,
+          description: progress ? `Progress: ${progress}` : undefined,
+        };
       } else if (type === 'horizon.scout.job.log') {
-        const jobId = typeof data?.jobId === 'string' ? data.jobId : '';
+        icon = 'scout';
         const line = short(data?.line);
-        text = `${jobId ? `job ${jobId}: ` : ''}${line || 'log'}`;
-      } else if (type === 'horizon.scout.job.state' || type === 'horizon.scout.job.completed' || type === 'horizon.scout.job.created') {
-        const jobId = typeof data?.jobId === 'string' ? data.jobId : '';
+        text = line || 'Scout activity';
+        humanReadable = {
+          title: 'Scout Activity',
+          description: line,
+        };
+      } else if (type === 'horizon.scout.job.created') {
+        icon = 'scout';
+        const target = typeof data?.targetCanonicalPath === 'string' ? data.targetCanonicalPath : '';
+        const entityName = target ? getEntityName(target) : 'Unknown entity';
+        text = `Scout job created for ${entityName}`;
+        humanReadable = {
+          title: 'Scout Job Created',
+          description: target ? `Analyzing ${entityName}` : undefined,
+          entityName: entityName,
+        };
+      } else if (type === 'horizon.scout.job.state') {
+        icon = 'scout';
         const st = typeof data?.state === 'string' ? data.state : '';
         const target = typeof data?.targetCanonicalPath === 'string' ? data.targetCanonicalPath : '';
-        text = `${jobId ? `job ${jobId}` : 'job'}${st ? ` ${st}` : ''}${target ? ` • ${target}` : ''}`;
+        const stateName = st ? getStateName(st) : 'Unknown state';
+        const entityName = target ? getEntityName(target) : '';
+        text = entityName ? `${stateName}: ${entityName}` : stateName;
+        humanReadable = {
+          title: stateName,
+          description: entityName ? `Processing ${entityName}` : undefined,
+          entityName: entityName,
+        };
+      } else if (type === 'horizon.scout.job.completed') {
+        icon = 'success';
+        const target = typeof data?.targetCanonicalPath === 'string' ? data.targetCanonicalPath : '';
+        const entityName = target ? getEntityName(target) : 'Unknown entity';
+        text = `Scout job completed for ${entityName}`;
+        humanReadable = {
+          title: 'Scout Job Completed',
+          description: `Finished analyzing ${entityName}`,
+          entityName: entityName,
+        };
       } else if (type === 'horizon.graph.node.upserted') {
+        icon = 'node';
         const cp = typeof data?.canonicalPath === 'string' ? data.canonicalPath : '';
         const st = typeof data?.status === 'string' ? data.status : '';
-        text = `node${st ? ` ${st}` : ''}${cp ? ` • ${cp}` : ''}`;
+        const entityName = cp ? getEntityName(cp) : 'Unknown node';
+        const statusText = st === 'cached' ? 'loaded from cache' : st === 'verified' ? 'verified' : st || 'updated';
+        text = `${entityName} ${statusText}`;
+        humanReadable = {
+          title: `${entityName} ${statusText}`,
+          description: cp ? `Entity: ${cp}` : undefined,
+          entityName: entityName,
+        };
       } else if (type === 'horizon.graph.edge.upserted') {
-        const et = typeof data?.type === 'string' ? data.type : '';
+        icon = 'edge';
         const src = typeof data?.sourceFragmentId === 'string' ? data.sourceFragmentId : '';
         const dst = typeof data?.targetFragmentId === 'string' ? data.targetFragmentId : '';
-        text = `edge${et ? ` ${et}` : ''}${src && dst ? ` • ${src} → ${dst}` : ''}`;
+        const srcName = src ? getEntityName(src) : 'Unknown';
+        const dstName = dst ? getEntityName(dst) : 'Unknown';
+        text = `Connection: ${srcName} → ${dstName}`;
+        humanReadable = {
+          title: 'Connection Created',
+          description: `${srcName} → ${dstName}`,
+        };
       } else if (type.startsWith('horizon.propagation.')) {
-        text = `propagation${typeof data?.nodesUpdated === 'number' ? ` (${data.nodesUpdated} nodes)` : ''}`;
+        icon = 'propagation';
+        const nodesUpdated = typeof data?.nodesUpdated === 'number' ? data.nodesUpdated : 0;
+        text = `Propagation: ${nodesUpdated} node${nodesUpdated !== 1 ? 's' : ''} updated`;
+        humanReadable = {
+          title: 'Propagation',
+          description: nodesUpdated > 0 ? `Updated ${nodesUpdated} node${nodesUpdated !== 1 ? 's' : ''}` : undefined,
+        };
       }
 
+      const event: HorizonRealtimeEvent = mk(text);
+      if (icon) event.icon = icon;
+      if (humanReadable) event.humanReadable = humanReadable;
+
       set((s) => ({
-        events: [...(s.events || []), mk(text)].slice(-400),
+        events: [...(s.events || []), event].slice(-400),
       }));
     } catch {
       // ignore

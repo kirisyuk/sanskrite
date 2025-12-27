@@ -154,7 +154,7 @@ RULES:
   - Organizations: /org/{slug}
   - Facilities: /fac/{orgSlug}/{slug} when possible
   - Products: /product/{orgSlug}/{slug} when org known
-  - Geo regions/locations: /region/... or /loc/... (country-level ok)
+  - GEO regions/locations: MUST be /loc/{country}/{admin1}/{city} (country-level ok: /loc/{country}/na/na)
 - NEVER use "/discovered/*".
 - Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock)
 }

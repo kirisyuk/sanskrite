@@ -3,10 +3,13 @@ package scout
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
+
+var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
 
 // =============================================================================
 // PRE-CREATE VALIDATION POLICY
@@ -94,14 +97,36 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Legacy /region/ paths should be migrated to /loc/.
 	if fragment.Type == models.FragmentTypeGeoRegion {
 		if strings.HasPrefix(fragment.CanonicalPath, "/region/") {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("legacy /region/ path %q - should use /loc/ prefix", fragment.CanonicalPath))
-			// Auto-fix: convert /region/ to /loc/
-			fragment.CanonicalPath = "/loc/" + strings.TrimPrefix(fragment.CanonicalPath, "/region/")
+			// NOTE: legacy /region/ had multiple shapes (including /region/na/{cc}/{admin1}/{city}).
+			// Do NOT do a naive prefix replace; normalize into strict /loc/{cc}/{admin1}/{city}.
+			if norm := normalizeLegacyGeoPath(fragment.CanonicalPath); norm != "" {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("legacy /region/ path %q normalized to %q", fragment.CanonicalPath, norm))
+				fragment.CanonicalPath = norm
+			} else {
+				result.BlockReason = fmt.Sprintf("legacy GEO_REGION canonicalPath %q cannot be normalized to /loc/{country}/{admin1}/{city}", fragment.CanonicalPath)
+				result.IsValid = false
+				return result, nil
+			}
 		}
+
 		if !strings.HasPrefix(fragment.CanonicalPath, "/loc/") {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("GEO_REGION path %q does not use /loc/ prefix", fragment.CanonicalPath))
+			result.BlockReason = fmt.Sprintf("GEO_REGION canonicalPath %q must use /loc/ prefix", fragment.CanonicalPath)
+			result.IsValid = false
+			return result, nil
+		}
+
+		// Enforce strict 3-position geo model: /loc/{country}/{admin1}/{city}
+		parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
+		if len(parts) != 4 || parts[0] != "loc" {
+			result.BlockReason = fmt.Sprintf("GEO_REGION canonicalPath %q must be /loc/{country}/{admin1}/{city}", fragment.CanonicalPath)
+			result.IsValid = false
+			return result, nil
+		}
+		if !reCountryAlpha2.MatchString(parts[1]) {
+			result.BlockReason = fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country code %q (expected ISO3166-1 alpha2 lowercase)", fragment.CanonicalPath, parts[1])
+			result.IsValid = false
+			return result, nil
 		}
 	}
 
@@ -147,7 +172,7 @@ func (v *PreCreateValidator) expectedPathPrefix(fragType models.FragmentType) st
 	case models.FragmentTypeGeoRegion:
 		return "/loc/"
 	case models.FragmentTypeProduct:
-		return "/prod/"
+		return "/product/"
 	case models.FragmentTypePerson:
 		return "/person/"
 	default:
@@ -185,8 +210,8 @@ var CanonicalPathPolicies = map[models.FragmentType]CanonicalPathPolicy{
 		Description: "Geographic paths use /loc/{country}/{admin1}/{city} format",
 	},
 	models.FragmentTypeProduct: {
-		Prefix:      "/prod/",
-		Example:     "/prod/tesla/model-3",
+		Prefix:      "/product/",
+		Example:     "/product/tesla/model-3",
 		Description: "Product paths are nested under manufacturer organization",
 	},
 	models.FragmentTypePerson: {

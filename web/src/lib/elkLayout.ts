@@ -118,9 +118,16 @@ export interface GridState {
   expandedNodes: Set<string>;    // Nodes that have been expanded (have children)
 }
 
-// Grid cell size matches max group size (4x3 nodes + padding)
-export const GRID_CELL_WIDTH = 4 * DEFAULT_NODE_WIDTH + 3 * 60 + 32;  // ~920px
-export const GRID_CELL_HEIGHT = 3 * DEFAULT_NODE_HEIGHT + 2 * 63 + 34 + 16 + 24; // ~631px
+// Grid cell size must fit a full subgraph around a center node (node + groups on all sides).
+// We conservatively size it based on the maximum possible group container (4x3 children + padding),
+// plus layer spacing between the center and each group.
+const GRID_LAYER_SPACING = 150; // keep in sync with default layout layerSpacing
+const MAX_GROUP_CONTAINER_WIDTH = 4 * DEFAULT_NODE_WIDTH + 3 * 60 + 32;  // ~920px
+const MAX_GROUP_CONTAINER_HEIGHT = 3 * DEFAULT_NODE_HEIGHT + 2 * 63 + 34 + 16 + 24; // ~631px
+export const GRID_CELL_WIDTH =
+  DEFAULT_NODE_WIDTH + 2 * GRID_LAYER_SPACING + 2 * MAX_GROUP_CONTAINER_WIDTH; // ~2320px
+export const GRID_CELL_HEIGHT =
+  DEFAULT_NODE_HEIGHT + 2 * GRID_LAYER_SPACING + 2 * MAX_GROUP_CONTAINER_HEIGHT; // ~1723px
 
 const gridKey = (row: number, col: number) => `${row}:${col}`;
 
@@ -165,11 +172,24 @@ export function findCellForExpandedNode(
   // Find parent node's cell
   let parentRow = 0;
   let parentCol = 0;
+  let foundParent = false;
   for (const [, cell] of grid.cells) {
     if (cell.type === 'node' && cell.nodeId === parentNodeId) {
       parentRow = cell.row;
       parentCol = cell.col;
+      foundParent = true;
       break;
+    }
+  }
+  // Fallback: if parent isn't registered in grid yet, anchor to root (if available).
+  // This avoids silently anchoring to (0,0) when we actually have a known root elsewhere.
+  if (!foundParent && grid.rootNodeId) {
+    for (const [, cell] of grid.cells) {
+      if (cell.type === 'node' && cell.nodeId === grid.rootNodeId) {
+        parentRow = cell.row;
+        parentCol = cell.col;
+        break;
+      }
     }
   }
 
@@ -197,7 +217,8 @@ export function findCellForExpandedNode(
   let row = parentRow + offsetRow;
   let col = parentCol + offsetCol;
 
-  while (getGridCell(grid, row, col)?.type === 'node') {
+  // Treat any non-empty cell (node or group marker) as occupied.
+  while (getGridCell(grid, row, col) && getGridCell(grid, row, col)?.type !== 'empty') {
     row += offsetRow;
     col += offsetCol;
   }

@@ -284,9 +284,13 @@ const HorizonPage: React.FC = () => {
         { correlationId, sessionId }
       );
 
-      // Save new lens ID and open it automatically
+      // Save new lens ID and open it in Progress view
       if (result?.lens?.id) {
         setSelectedLensId(result.lens.id);
+        // Dispatch event to refresh lenses list in SidebarPanel
+        window.dispatchEvent(new CustomEvent('horizon:lens-created', { 
+          detail: { lensId: result.lens.id, projectId: request.projectId } 
+        }));
       } else {
         // Keep Hook UI visible; LensCanvas can be opened manually from Sidebar lens list.
         setSelectedLensId(null);
@@ -371,112 +375,42 @@ const HorizonPage: React.FC = () => {
             position: 'relative',
           }}
         >
-          {/* Lens Canvas overlay */}
-          {selectedLensId ? (
+          {/* Lens Canvas overlay - show Progress view for both project and lens selection */}
+          {currentProject ? (
             <LensCanvas
               isOpen={true}
               lensId={selectedLensId}
+              projectId={currentProject.id}
+              initialViewMode="progress"
+              showInputInProgress={true}
+              onAssemble={handleAssembleLens}
+              isCreatingLens={isCreatingLens}
               onClose={() => {
-                // Close lens but keep project selected
-                setSelectedLensId(null);
+                // Only close lens if one is selected, otherwise just reset state
+                if (selectedLensId) {
+                  setSelectedLensId(null);
+                }
+                setLensStarted(false);
               }}
             />
           ) : (
-            /* Main content - Assemble Lens Request */
             <div style={{ 
               flex: 1,
               display: 'flex',
-              flexDirection: 'column',
-              minHeight: 0,
-              height: '100%',
+              alignItems: 'center', 
+              justifyContent: 'center',
+              padding: '2rem',
+              color: 'var(--text-secondary)'
             }}>
-              {/* Minimal realtime debug for assembly (can be replaced by dedicated Sled UI) */}
-              {assembly?.phase && (
-                <div style={{
-                  position: 'absolute',
-                  top: 12,
-                  right: 24,
-                  padding: '8px 12px',
-                  borderRadius: 10,
-                  border: '1px solid var(--overlay-line-90)',
-                  background: 'var(--bg-elevated)',
-                  color: 'var(--text-secondary)',
-                  fontSize: 12,
-                  zIndex: 10,
-                }}>
-                  <div><strong>Assembly</strong></div>
-                  <div>phase: {assembly.phase}</div>
-                  {typeof assembly.progress === 'number' && <div>progress: {(assembly.progress * 100).toFixed(0)}%</div>}
-                </div>
-              )}
-
-              {/* Horizon realtime WS messages (shown above input after start) */}
-              {lensStarted && (
-                <div
-                  ref={feedRef}
-                  style={{
-                    flex: 1,
-                    minHeight: 0,
-                    width: '100%',
-                    overflowY: 'auto',
-                    padding: '16px 24px 0 24px',
-                  }}
-                >
-                  {(events || [])
-                    .filter((ev) => !currentProject?.id || !ev.projectId || ev.projectId === currentProject.id)
-                    .map((ev) => (
-                      <div
-                        key={ev.id}
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: 10,
-                          border: '1px solid var(--overlay-line-90)',
-                          background: 'var(--bg-elevated)',
-                          color: 'var(--text-secondary-strong)',
-                          fontSize: 13,
-                          marginBottom: 8,
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                          <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 12 }}>
-                            {ev.type}
-                          </div>
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                            {new Date(ev.ts).toLocaleTimeString()}
-                          </div>
-                        </div>
-                        <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{ev.text}</div>
-                      </div>
-                    ))}
-                </div>
-              )}
-              {currentProject ? (
-                <AssembleLensRequestComponent
-                  projectId={currentProject.id}
-                  onAssemble={handleAssembleLens}
-                  disabled={isCreatingLens}
-                  pinnedBottom={lensStarted}
-                />
-              ) : (
-                <div style={{ 
-                  flex: 1,
-                  display: 'flex',
-                  alignItems: 'center', 
-                  justifyContent: 'center',
-                  padding: '2rem',
-                  color: 'var(--text-secondary)'
-                }}>
-                  <div style={{ textAlign: 'center' }}>
-                    <h1 style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
-                      Horizon
-                    </h1>
-                    <p>Risk monitoring and dependency analysis</p>
-                    <p style={{ marginTop: '1rem', fontSize: '0.875rem' }}>
-                      Select a project from the sidebar to begin.
-                    </p>
-                  </div>
-                </div>
-              )}
+              <div style={{ textAlign: 'center' }}>
+                <h1 style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
+                  Horizon
+                </h1>
+                <p>Risk monitoring and dependency analysis</p>
+                <p style={{ marginTop: '1rem', fontSize: '0.875rem' }}>
+                  Select a project from the sidebar to begin.
+                </p>
+              </div>
             </div>
           )}
         </div>

@@ -559,8 +559,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     loadJobs();
   }, [currentProject?.id]);
 
-  // Load lenses for the current project in horizon mode
-  React.useEffect(() => {
+  // Function to load lenses (can be called manually)
+  const loadLenses = React.useCallback(async () => {
     // Only load lenses in horizon mode
     if (currentMode !== 'horizon') {
       setLenses([]);
@@ -581,31 +581,48 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       setLensesProjectId(null);
     }
 
-    const loadLenses = async () => {
-      // Capture the project ID at the start of the async operation
-      const projectIdForLoading = currentProject.id;
-      setLensesLoading(true);
-      try {
-        const result = await api.listHorizonLenses(projectIdForLoading, { limit: 50 });
-        // Only set lenses if we're still on the same project (prevent race conditions)
-        if (currentProject?.id === projectIdForLoading) {
-          setLenses(result.lenses || []);
-          setLensesProjectId(projectIdForLoading);
-        }
-      } catch (err) {
-        console.error('[SidebarPanel] Failed to load lenses', err);
-        // Only clear if we're still on the same project
-        if (currentProject?.id === projectIdForLoading) {
-          setLenses([]);
-          setLensesProjectId(null);
-        }
-      } finally {
-        setLensesLoading(false);
+    const projectIdForLoading = currentProject.id;
+    setLensesLoading(true);
+    try {
+      const result = await api.listHorizonLenses(projectIdForLoading, { limit: 50 });
+      // Only set lenses if we're still on the same project (prevent race conditions)
+      if (currentProject?.id === projectIdForLoading) {
+        setLenses(result.lenses || []);
+        setLensesProjectId(projectIdForLoading);
+      }
+    } catch (err) {
+      console.error('[SidebarPanel] Failed to load lenses', err);
+      // Only clear if we're still on the same project
+      if (currentProject?.id === projectIdForLoading) {
+        setLenses([]);
+        setLensesProjectId(null);
+      }
+    } finally {
+      setLensesLoading(false);
+    }
+  }, [currentProject?.id, currentMode, lensesProjectId]);
+
+  // Load lenses for the current project in horizon mode
+  React.useEffect(() => {
+    loadLenses();
+  }, [loadLenses]);
+
+  // Listen for lens creation events to refresh the list
+  React.useEffect(() => {
+    const handleLensCreated = (event: CustomEvent) => {
+      const { projectId: eventProjectId } = event.detail || {};
+      // Only refresh if the event is for the current project
+      if (eventProjectId && currentProject?.id === eventProjectId && currentMode === 'horizon') {
+        console.log('[SidebarPanel] Lens created event received, refreshing lenses list');
+        loadLenses();
       }
     };
 
-    loadLenses();
-  }, [currentProject?.id, currentMode]);
+    window.addEventListener('horizon:lens-created', handleLensCreated as EventListener);
+    return () => {
+      window.removeEventListener('horizon:lens-created', handleLensCreated as EventListener);
+    };
+  }, [currentProject?.id, currentMode, loadLenses]);
 
   // Render lens row
   const renderLensRow = React.useCallback((lens: {

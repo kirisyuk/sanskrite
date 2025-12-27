@@ -413,7 +413,7 @@ const formatEdgeTypes = (edgeTypes: string[] | undefined): string => {
   return `${unique.slice(0, 2).join(', ')} +${unique.length - 2}`;
 };
 
-const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected, id }) => {
+const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected, id }) => {
   const { theme } = React.useContext(ThemeContext);
 
   // Use semantic group if available, fall back to edge type
@@ -603,10 +603,10 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected
       )}
     </div>
   );
-};
+});
 
 // Базовый узел для Horizon фрагмента
-const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selected }) => {
+const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected }) => {
   const { theme } = React.useContext(ThemeContext);
   const colors = getNodeColors(data.type, theme);
   
@@ -797,7 +797,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selec
               background: '#EF4444',
               flexShrink: 0,
               boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)',
-              animation: 'pulse 2s infinite',
+              animation: 'horizon-pulse 2s infinite',
             }}
             title="Critical"
           />
@@ -921,15 +921,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = ({ data, selec
       )}
 
       {/* CSS для анимации пульса */}
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.7; transform: scale(1.1); }
-        }
-      `}</style>
     </div>
   );
-};
+});
 
 // Экспортируем типы нод для Horizon графа
 export const HORIZON_NODE_TYPES: NodeTypes = Object.freeze({

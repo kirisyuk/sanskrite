@@ -60,6 +60,12 @@
   }
 }
 
+/* Horizon graph: pulse used by critical indicator on nodes */
+@keyframes horizon-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.1); }
+}
+
 /* Gradient border for UnfoldRequest in dark theme */
 [data-theme="dark"] .unfold-request-gradient-border {
   border: 2px solid transparent;

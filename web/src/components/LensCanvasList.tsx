@@ -1,12 +1,21 @@
 import React from 'react';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 
-export interface LensCanvasListProps {
+export interface LensCanvasProgressProps {
   lensId: string | null;
   projectId?: string | null;
+  showInput?: boolean;
+  onAssemble?: (request: { projectId: string; query: string; filters: { maxRecursionDepth: number } }) => void;
+  isCreatingLens?: boolean;
 }
 
-export const LensCanvasList: React.FC<LensCanvasListProps> = ({ lensId, projectId }) => {
+export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({ 
+  lensId, 
+  projectId,
+  showInput = false,
+  onAssemble,
+  isCreatingLens = false,
+}) => {
   const events = useHorizonRealtimeStore((s) => s.events);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
 

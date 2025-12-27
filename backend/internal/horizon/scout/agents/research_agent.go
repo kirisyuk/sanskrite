@@ -239,7 +239,11 @@ CANONICAL PATH RULES:
   - Facilities:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred
     - Otherwise /fac/{facilitySlug}
-  - Geo regions / locations: prefer /region/... or /loc/... when you can be specific; otherwise /region/{lowercase-slug}
+  - GEO regions / locations: MUST be /loc/{country}/{admin1}/{city}
+    - country: ISO3166-1 alpha2 lowercase (e.g., us, de, ru)
+    - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
+    - city: lowercase slug; use "na" if not applicable/unknown
+    - country-only locations: /loc/{country}/na/na
 - canonicalPath slug SHOULD be derived from targetShortName (without ownership suffix) to avoid duplicates when legal form changes.
 - ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
