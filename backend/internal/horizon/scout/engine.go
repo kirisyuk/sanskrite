@@ -625,7 +625,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 
 		// If fragment is fresh AND there are no new facts since watermark, skip expensive scouting.
-		if isFresh && len(facts) == 0 {
+		// IMPORTANT: do NOT skip Watchdog-driven jobs (they carry explicit SourceIDs and are triggered by content changes).
+		if isFresh && len(facts) == 0 && len(job.SourceIDs) == 0 {
 			fmt.Printf("[ScoutEngine] Data for %s is fresh (verified %v ago) and no new facts. Skipping active scouting.\n",
 				job.TargetCanonicalPath, time.Since(existingFragment.Metadata.LastVerifiedAt))
 			_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "fresh_no_new_facts")

@@ -337,6 +337,30 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Увеличиваем activeSubscribers для всех HorizonFragment в scope
 	cacheHits := 0
 	scoutingPlanned := 0
+
+	// Best-effort: prefetch active (pending/running) scout jobs for this lens to avoid duplicates per canonicalPath.
+	// This addresses observed repeated processing in logs when multiple jobs are enqueued for the same node.
+	activeScoutJobs := map[string]string{} // canonicalPath -> jobId
+	if s.scoutingJobsRepo != nil {
+		if jobs, jerr := s.scoutingJobsRepo.ListByProjectAndLens(ctx, lens.TenantID, lens.ProjectID, lensID, 400); jerr == nil {
+			for _, j := range jobs {
+				if j == nil {
+					continue
+				}
+				if j.Status != agentmodels.AgentJobStatusPending && j.Status != agentmodels.AgentJobStatusRunning {
+					continue
+				}
+				p := strings.TrimSpace(j.TargetCanonicalPath)
+				if p == "" {
+					continue
+				}
+				if _, ok := activeScoutJobs[p]; !ok {
+					activeScoutJobs[p] = j.ID
+				}
+			}
+		}
+	}
+
 	for _, canonicalPath := range staticPaths {
 		fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
 		isCacheHit := err == nil && fragment != nil
@@ -383,6 +407,19 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		// Create ScoutingJob only when we DON'T already have sufficiently verified data.
 		// This prevents excessive Cloud Tasks for queries that are already in the system (e.g., Astana/LRT).
 		if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
+			if existingJobID, ok := activeScoutJobs[strings.TrimSpace(canonicalPath)]; ok && existingJobID != "" {
+				// Best-effort: signal "scouting" state but reuse existing job id.
+				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+					"tenantId":      lens.TenantID,
+					"projectId":     lens.ProjectID,
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"status":        "scouting",
+					"jobId":         existingJobID,
+					"hint":          "dedup_existing_scout_job",
+				})
+				continue
+			}
 			scoutingPlanned++
 			now := time.Now().UTC()
 			state := map[string]interface{}{
@@ -434,7 +471,8 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				},
 				CurrentState: models.ScoutingJobStatePending,
 			}
-			if _, createErr := s.scoutingJobsRepo.Create(ctx, scoutingJob); createErr != nil {
+			jobID, createErr := s.scoutingJobsRepo.Create(ctx, scoutingJob)
+			if createErr != nil {
 				s.publish(ctx, realtime.EventType("horizon.assembly.failed"), map[string]interface{}{
 					"tenantId":      lens.TenantID,
 					"projectId":     lens.ProjectID,
@@ -445,6 +483,9 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				})
 				return "", fmt.Errorf("failed to create scouting job for %s: %w", canonicalPath, createErr)
 			}
+			if strings.TrimSpace(jobID) != "" {
+				activeScoutJobs[strings.TrimSpace(canonicalPath)] = strings.TrimSpace(jobID)
+			}
 			// Graph materialization hint: node requires scouting (even if fragment didn't exist at cache-hit time).
 			s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 				"tenantId":      lens.TenantID,
@@ -452,7 +493,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"lensId":        lensID,
 				"canonicalPath": canonicalPath,
 				"status":        "scouting",
-				"jobId":         scoutingJob.ID,
+				"jobId":         strings.TrimSpace(jobID),
 			})
 		} else if isCacheHit && isFragmentFreshEnough {
 			// Best-effort: signal that no scouting is needed for this node.
@@ -724,6 +765,29 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	}
 
 	// Подписываемся на новые в scope
+	// Best-effort: avoid duplicate Scout jobs for the same canonicalPath within the same lens/project.
+	// We prefetch active (pending/running) scout jobs and skip creation if one already exists.
+	activeScoutJobs := map[string]string{} // canonicalPath -> jobId
+	if s.scoutingJobsRepo != nil {
+		if jobs, jerr := s.scoutingJobsRepo.ListByProjectAndLens(ctx, lens.TenantID, lens.ProjectID, lens.ID, 400); jerr == nil {
+			for _, j := range jobs {
+				if j == nil {
+					continue
+				}
+				if j.Status != agentmodels.AgentJobStatusPending && j.Status != agentmodels.AgentJobStatusRunning {
+					continue
+				}
+				p := strings.TrimSpace(j.TargetCanonicalPath)
+				if p == "" {
+					continue
+				}
+				if _, ok := activeScoutJobs[p]; !ok {
+					activeScoutJobs[p] = j.ID
+				}
+			}
+		}
+	}
+
 	for _, path := range allNewStaticPaths {
 		if !oldPathsMap[path] {
 			fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, path)
@@ -750,6 +814,19 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			// Это гарантирует, что данные для нового узла будут собраны немедленно,
 			// а не ждать первого Watchdog scan (который может быть через 1 час)
 			if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
+				if existingJobID, ok := activeScoutJobs[strings.TrimSpace(path)]; ok && existingJobID != "" {
+					// Skip creating duplicate job; best-effort signal for UI.
+					s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+						"tenantId":      lens.TenantID,
+						"projectId":     lens.ProjectID,
+						"lensId":        lens.ID,
+						"canonicalPath": strings.TrimSpace(path),
+						"status":        "scouting",
+						"jobId":         existingJobID,
+						"hint":          "dedup_existing_scout_job",
+					})
+					continue
+				}
 				now := time.Now().UTC()
 				state := map[string]interface{}{
 					"targetCanonicalPath": path,
@@ -792,7 +869,9 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					CurrentState: models.ScoutingJobStatePending,
 				}
 				// Создаем job, но не прерываем UpdateLens при ошибке
-				_, _ = s.scoutingJobsRepo.Create(ctx, scoutingJob)
+				if id, err := s.scoutingJobsRepo.Create(ctx, scoutingJob); err == nil {
+					activeScoutJobs[strings.TrimSpace(path)] = id
+				}
 			} else if isCacheHit && isFragmentFreshEnough {
 				// Best-effort: signal skip for UI.
 				s.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{

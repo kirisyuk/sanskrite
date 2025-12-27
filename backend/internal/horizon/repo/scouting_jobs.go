@@ -3,6 +3,8 @@ package repo
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -37,17 +39,105 @@ func (r *ScoutingJobsRepository) Create(ctx context.Context, job *models.Scoutin
 	}
 	// ScoutingJob встраивает AgentJob, поэтому используем его напрямую
 	agentJob := &job.AgentJob
-	id, err := r.agentJobsRepo.Create(ctx, agentJob)
+	lockKey := buildScoutJobDedupKey(job)
+	id, created, err := r.agentJobsRepo.CreateDedup(ctx, agentJob, lockKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to create scouting job: %w", err)
 	}
 	job.ID = id
-	if r.onCreate != nil {
+	// Only enqueue when a new job was actually created.
+	if created && r.onCreate != nil {
 		if err := r.onCreate(ctx, job); err != nil {
 			return "", fmt.Errorf("scouting job created but enqueue hook failed: %w", err)
 		}
 	}
+
+	// Best-effort: if we deduped onto an existing job, merge incoming sourceIds into its state.
+	// This avoids dropping watchdog-driven triggers when multiple sources change concurrently.
+	if !created && r.agentJobsRepo != nil {
+		srcIDs := extractSourceIDsFromScoutingJob(job)
+		if len(srcIDs) > 0 {
+			_ = r.agentJobsRepo.MergeStateStringArray(ctx, id, "sourceIds", srcIDs)
+		}
+	}
 	return id, nil
+}
+
+func buildScoutJobDedupKey(job *models.ScoutingJob) string {
+	if job == nil {
+		return ""
+	}
+	tenantID := strings.TrimSpace(job.TenantID)
+	projectID := strings.TrimSpace(job.ProjectID)
+	agentID := strings.TrimSpace(job.AgentID)
+	if agentID == "" {
+		agentID = "scout"
+	}
+
+	lensID := strings.TrimSpace(job.LensID)
+	if lensID == "" && job.State != nil {
+		if v, ok := job.State["lensId"].(string); ok {
+			lensID = strings.TrimSpace(v)
+		}
+	}
+	target := strings.TrimSpace(job.TargetCanonicalPath)
+	if target == "" && job.State != nil {
+		if v, ok := job.State["targetCanonicalPath"].(string); ok {
+			target = strings.TrimSpace(v)
+		}
+	}
+
+	// The core idempotency scope:
+	// (tenant, project, lens, agent, canonicalPath)
+	// NOTE: We intentionally do NOT include sourceIds here. If a job already exists, we merge sourceIds.
+	return fmt.Sprintf("agent_job_dedup|tenant=%s|project=%s|lens=%s|agent=%s|target=%s", tenantID, projectID, lensID, agentID, target)
+}
+
+func extractSourceIDsFromScoutingJob(job *models.ScoutingJob) []string {
+	if job == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 8)
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	for _, s := range job.SourceIDs {
+		add(s)
+	}
+	if job.State != nil {
+		if v, ok := job.State["sourceIds"]; ok {
+			switch t := v.(type) {
+			case []string:
+				for _, s := range t {
+					add(s)
+				}
+			case []interface{}:
+				for _, it := range t {
+					if s, ok2 := it.(string); ok2 {
+						add(s)
+					}
+				}
+			case string:
+				// allow comma-separated
+				for _, p := range strings.Split(t, ",") {
+					add(p)
+				}
+			}
+		}
+	}
+	if len(out) > 1 {
+		sort.Strings(out)
+	}
+	return out
 }
 
 // Get получает ScoutingJob по ID

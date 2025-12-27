@@ -53,7 +53,7 @@ func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID stri
 	}
 
 	// 3. Фильтруем релевантные Sources для целевого узла.
-	// Приоритет: фактовый срез (Vertex AI Search по ontology_facts) -> Firestore facts -> legacy doc-based -> heuristic.
+	// Приоритет: Firestore facts (immediate availability) -> Vertex AI Search (fallback for semantic search) -> legacy doc-based -> heuristic.
 	relevantSources := p.filterRelevantSourcesByFacts(ctx, tenantID, projectSources, targetCanonicalPath, strategy, since, searchQuery)
 	if relevantSources == nil {
 		// legacy behavior: use doc search heuristic
@@ -67,10 +67,13 @@ func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID stri
 	}, nil
 }
 
-// filterRelevantSourcesByFacts selects sources referenced by recent ontology facts for the target canonicalPath.
-// Returns:
-// - []*models.DataSource{} (empty slice) if no facts found (signals ScoutEngine to go Research)
-// - nil if it cannot run fact mode (so caller may fall back to legacy doc-based filtering)
+// filterRelevantSourcesByFacts selects sources referenced by ontology facts for the target canonicalPath.
+//
+// IMPORTANT:
+// - If we cannot confidently select sources from facts (no facts, no sourceIds, query failure),
+//   we return nil so caller may fall back to doc-based planning or heuristic source selection.
+// - We intentionally avoid returning an empty slice to force Research, because internal documents
+//   may exist even when facts are not yet present/indexed.
 func (p *ScoutPlanner) filterRelevantSourcesByFacts(
 	ctx context.Context,
 	tenantID string,
@@ -88,7 +91,45 @@ func (p *ScoutPlanner) filterRelevantSourcesByFacts(
 		q = strings.TrimSpace(targetCanonicalPath)
 	}
 
-	// Prefer Vertex AI Search over ontology_facts (native) when configured.
+	// PRIORITY 1: Firestore facts first (immediate availability, no indexing delay)
+	// This ensures newly created facts are immediately available for planning.
+	if p.factsRepo != nil {
+		// If since is provided, use it; otherwise check all facts (use zero time to get all facts)
+		var facts []*models.OntologyFact
+		var err error
+		if since != nil {
+			facts, err = p.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, tenantID, strings.TrimSpace(targetCanonicalPath), since.UTC(), 200)
+		} else {
+			// No since timestamp - check all facts for this canonicalPath (use zero time = beginning of epoch)
+			facts, err = p.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, tenantID, strings.TrimSpace(targetCanonicalPath), time.Time{}, 200)
+		}
+		if err == nil && len(facts) > 0 {
+			sourceIDs := make(map[string]struct{})
+			for _, f := range facts {
+				if f == nil {
+					continue
+				}
+				for _, sid := range f.SourceIDs {
+					sid = strings.TrimSpace(sid)
+					if sid != "" {
+						sourceIDs[sid] = struct{}{}
+					}
+				}
+			}
+			if len(sourceIDs) > 0 {
+				return p.materializeSources(ctx, allSources, sourceIDs, strategy)
+			}
+			// Facts exist but do not reference sources (or data is incomplete) -> fall back.
+			return nil
+		}
+		// No facts -> fall back (do NOT force Research).
+		if err == nil && len(facts) == 0 {
+			return nil
+		}
+	}
+
+	// PRIORITY 2: Vertex AI Search fallback (for semantic search when Firestore doesn't have facts)
+	// Use Vertex AI Search only if Firestore didn't return facts, as it may have indexing delay.
 	if p.vertexSearchClient != nil && p.vertexSearchClient.IsConfigured() {
 		filterParts := []string{`structData.type: "ontology_fact"`}
 		if strings.TrimSpace(tenantID) != "" {
@@ -128,35 +169,11 @@ func (p *ScoutPlanner) filterRelevantSourcesByFacts(
 				}
 			}
 
-			// If Vertex returned zero facts, treat as "no internal facts" -> trigger Research.
+			// If Vertex returned zero facts, fall back (do NOT force Research).
 			if len(resp.Results) == 0 || len(sourceIDs) == 0 {
-				return []*models.DataSource{}
+				return nil
 			}
 
-			return p.materializeSources(ctx, allSources, sourceIDs, strategy)
-		}
-		// If Vertex query fails, fall through to Firestore facts (if available).
-	}
-
-	// Firestore fallback: deterministic delta list over facts.
-	if p.factsRepo != nil && since != nil {
-		facts, err := p.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, tenantID, strings.TrimSpace(targetCanonicalPath), since.UTC(), 200)
-		if err == nil {
-			sourceIDs := make(map[string]struct{})
-			for _, f := range facts {
-				if f == nil {
-					continue
-				}
-				for _, sid := range f.SourceIDs {
-					sid = strings.TrimSpace(sid)
-					if sid != "" {
-						sourceIDs[sid] = struct{}{}
-					}
-				}
-			}
-			if len(facts) == 0 || len(sourceIDs) == 0 {
-				return []*models.DataSource{}
-			}
 			return p.materializeSources(ctx, allSources, sourceIDs, strategy)
 		}
 	}

@@ -120,6 +120,35 @@ func (e *ScoutEngine) processRelationsInternal(
 	scheduledChildren := map[string]struct{}{}
 	scheduledCount := 0
 
+	// Best-effort: prefetch active (pending/running) scout jobs for this project/lens,
+	// so we can avoid enqueueing duplicate child jobs for the same canonicalPath.
+	activeJobByPath := map[string]string{} // canonicalPath -> jobId
+	if e != nil && e.scoutingJobsRepo != nil && job != nil && strings.TrimSpace(job.TenantID) != "" && strings.TrimSpace(job.ProjectID) != "" {
+		lensID := strings.TrimSpace(job.LensID)
+		if lensID == "" && job.State != nil {
+			if v, ok := job.State["lensId"]; ok {
+				lensID = parseStateString(v)
+			}
+		}
+		if jobs, err := e.scoutingJobsRepo.ListByProjectAndLens(ctx, job.TenantID, job.ProjectID, lensID, 300); err == nil {
+			for _, j := range jobs {
+				if j == nil {
+					continue
+				}
+				if j.Status != agentmodels.AgentJobStatusPending && j.Status != agentmodels.AgentJobStatusRunning {
+					continue
+				}
+				p := strings.TrimSpace(j.TargetCanonicalPath)
+				if p == "" {
+					continue
+				}
+				if _, ok := activeJobByPath[p]; !ok {
+					activeJobByPath[p] = j.ID
+				}
+			}
+		}
+	}
+
 	// Edge-level guardrails:
 	// - Deduplicate edges within this job run to reduce Firestore reads/writes.
 	// - Normalize symmetric edges so A<->B is represented consistently.
@@ -292,6 +321,39 @@ func (e *ScoutEngine) processRelationsInternal(
 				} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
 					// relation type / confidence not eligible for recursion
 				} else {
+					// Check if we should skip creating scouting job
+					shouldSkipJob := false
+
+					// Check if edge already exists and target fragment is verified
+					// This prevents duplicate scouting jobs for already-processed entities
+					edgeType := models.DependencyType(rel.RelationType)
+					if e.edgesRepo != nil && sourceFragment != nil && sourceFragment.ID != "" && targetID != "" {
+						if existingEdge, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceFragment.ID, targetID, edgeType); err == nil && existingEdge != nil {
+							// Edge already exists, check if target fragment is verified
+							if targetFragment != nil && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+								// Fragment is verified, skip creating new scouting job
+								fmt.Printf("[ScoutEngine] Edge already exists and target fragment is verified: %s -> %s (%s). Skipping scouting job.\n",
+									sourceFragment.CanonicalPath, targetPath, rel.RelationType)
+								shouldSkipJob = true
+							}
+						}
+					}
+
+					// Check if there's already an active scouting job for this canonicalPath (pending/running).
+					// Uses a prefetched snapshot to avoid per-relation queries.
+					if !shouldSkipJob {
+						if existingJobID, ok := activeJobByPath[strings.TrimSpace(targetPath)]; ok && strings.TrimSpace(existingJobID) != "" {
+							fmt.Printf("[ScoutEngine] Active scouting job already exists for %s (jobId=%s). Skipping duplicate.\n",
+								targetPath, existingJobID)
+							scheduledChildren[targetPath] = struct{}{}
+							shouldSkipJob = true
+						}
+					}
+
+					if shouldSkipJob {
+						continue // Skip to next relation
+					}
+
 					scheduledChildren[targetPath] = struct{}{}
 					scheduledCount++
 
@@ -453,6 +515,35 @@ func (e *ScoutEngine) processRelationsInternal(
 				} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
 					// relation type / confidence not eligible for recursion
 				} else {
+					// Check if we should skip creating scouting job
+					shouldSkipJob := false
+
+					// Check if edge already exists and target fragment is verified
+					edgeType := models.DependencyType(rel.RelationType)
+					if e.edgesRepo != nil && sourceFragment != nil && sourceFragment.ID != "" && targetFragment != nil && targetFragment.ID != "" {
+						if existingEdge, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceFragment.ID, targetFragment.ID, edgeType); err == nil && existingEdge != nil {
+							if targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+								fmt.Printf("[ScoutEngine] Edge already exists and target fragment is verified: %s -> %s (%s). Skipping scouting job.\n",
+									sourceFragment.CanonicalPath, targetPath, rel.RelationType)
+								shouldSkipJob = true
+							}
+						}
+					}
+
+					// Check if there's already an active scouting job for this canonicalPath (pending/running).
+					if !shouldSkipJob {
+						if existingJobID, ok := activeJobByPath[strings.TrimSpace(targetPath)]; ok && strings.TrimSpace(existingJobID) != "" {
+							fmt.Printf("[ScoutEngine] Active scouting job already exists for %s (jobId=%s). Skipping duplicate.\n",
+								targetPath, existingJobID)
+							scheduledChildren[targetPath] = struct{}{}
+							shouldSkipJob = true
+						}
+					}
+
+					if shouldSkipJob {
+						continue // Skip to next relation
+					}
+
 					scheduledChildren[targetPath] = struct{}{}
 					scheduledCount++
 

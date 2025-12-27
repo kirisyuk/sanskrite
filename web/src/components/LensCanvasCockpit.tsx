@@ -1,4 +1,5 @@
 import React, { useCallback, useRef } from 'react';
+import ReactDOM from 'react-dom';
 import ReactFlow, {
   Node,
   Edge,
@@ -34,11 +35,12 @@ import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 export interface LensCanvasCockpitProps {
   lensId: string | null;
   projectId?: string | null;
+  toolbarContainer?: HTMLDivElement | null;
   onNodeSelect?: (nodeId: string | null, nodeData: HorizonNodeData | null) => void;
   onEdgeSelect?: (edgeId: string | null, edgeData: any | null) => void;
 }
 
-export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, projectId, onNodeSelect, onEdgeSelect }) => {
+export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, projectId, toolbarContainer, onNodeSelect, onEdgeSelect }) => {
   const { theme } = React.useContext(ThemeContext);
   // Guard: ReactFlow can sometimes fire onPaneClick after node/edge click (sometimes twice).
   // We ignore pane clicks for a short window after selecting to avoid clearing selection immediately.
@@ -69,13 +71,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [forcePerfMode, setForcePerfMode] = React.useState<boolean | null>(null);
   const perfMode = forcePerfMode ?? isLargeGraph;
 
-  const [showMiniMap, setShowMiniMap] = React.useState(true);
-  const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(true);
+  const [showMiniMap, setShowMiniMap] = React.useState(false);
+  const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
 
   // When graph grows large and user didn't override perf mode, auto-disable heavy visuals once.
   React.useEffect(() => {
     if (!isLargeGraph) return;
     if (forcePerfMode !== null) return;
+    // defaults are already false, but explicit ensure:
     setShowMiniMap(false);
     setShowBackgroundGrid(false);
   }, [isLargeGraph, forcePerfMode]);
@@ -1851,138 +1854,83 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     }
   }, [nodes, setNodes, handleGroupPageChange]);
 
+  // Toolbar components
+  const IconButton = ({ onClick, active, disabled, title, icon }: any) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        background: active ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
+        border: 'none',
+        borderRadius: '6px',
+        padding: '6px',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+        opacity: disabled ? 0.4 : 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        transition: 'all 0.2s ease',
+      }}
+    >
+      {icon}
+    </button>
+  );
+
+  const Icons = {
+    Refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" /></svg>,
+    Magic: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M9 3v4"/><path d="M3 7h4"/><path d="M3 3h4"/></svg>,
+    Download: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+    Zap: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
+    Map: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>,
+    Grid: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
+  };
+
+  const toolbarContent = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+      <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load Graph" icon={Icons.Refresh} />
+      <IconButton onClick={handleArrange} disabled={arranging || nodes.length === 0} title="Arrange Graph" icon={Icons.Magic} />
+      <IconButton onClick={handleDownload} disabled={nodes.length === 0 && edges.length === 0} title="Download Graph" icon={Icons.Download} />
+      
+      <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
+      
+      <IconButton onClick={() => setForcePerfMode((v) => (v === null ? !isLargeGraph : !v))} active={perfMode} title={`Performance Mode: ${perfMode ? 'On' : 'Off'}`} icon={Icons.Zap} />
+      <IconButton onClick={() => setShowMiniMap((v) => !v)} active={showMiniMap} title={`MiniMap: ${showMiniMap ? 'On' : 'Off'}`} icon={Icons.Map} />
+      <IconButton onClick={() => setShowBackgroundGrid((v) => !v)} active={showBackgroundGrid} title={`Background Grid: ${showBackgroundGrid ? 'On' : 'Off'}`} icon={Icons.Grid} />
+      
+      {error && (
+        <div style={{ fontSize: '11px', color: '#EF4444', marginLeft: '8px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={error}>
+          {error}
+        </div>
+      )}
+      {(nodes.length > 0 || edges.length > 0) && (
+        <div style={{ fontSize: '10px', color: 'var(--text-secondary-strong)', marginLeft: '8px', fontFamily: 'monospace' }}>
+          {nodes.length}n/{edges.length}e
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: '600px' }}>
-      {/* Toolbar */}
-      <div
-        style={{
-          padding: '8px 12px',
-          borderBottom: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-          flexShrink: 0,
-        }}
-      >
-        <button
-          type="button"
-          onClick={handleLoadGraph}
-          disabled={loading || !lensId}
+      {/* Toolbar via Portal if container provided, otherwise inline fallback */}
+      {toolbarContainer ? ReactDOM.createPortal(toolbarContent, toolbarContainer) : (
+        <div
           style={{
-            padding: '6px 12px',
-            fontSize: '12px',
-            fontWeight: 500,
-            color: 'var(--text-heading)',
-            background: loading ? 'var(--bg-secondary)' : 'var(--accent-primary)',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: loading || !lensId ? 'not-allowed' : 'pointer',
-            opacity: loading || !lensId ? 0.6 : 1,
+            padding: '8px 12px',
+            borderBottom: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+            flexShrink: 0,
           }}
         >
-          {loading ? 'Loading...' : 'Load Graph'}
-        </button>
-        <button
-          type="button"
-          onClick={handleArrange}
-          disabled={arranging || nodes.length === 0}
-          style={{
-            padding: '6px 12px',
-            fontSize: '12px',
-            fontWeight: 500,
-            color: 'var(--text-heading)',
-            background: arranging ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
-            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-            borderRadius: '6px',
-            cursor: arranging || nodes.length === 0 ? 'not-allowed' : 'pointer',
-            opacity: arranging || nodes.length === 0 ? 0.6 : 1,
-          }}
-        >
-          {arranging ? 'Arranging...' : 'Arrange'}
-        </button>
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={nodes.length === 0 && edges.length === 0}
-          style={{
-            padding: '6px 12px',
-            fontSize: '12px',
-            fontWeight: 500,
-            color: 'var(--text-heading)',
-            background: 'var(--bg-tertiary)',
-            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-            borderRadius: '6px',
-            cursor: nodes.length === 0 && edges.length === 0 ? 'not-allowed' : 'pointer',
-            opacity: nodes.length === 0 && edges.length === 0 ? 0.6 : 1,
-          }}
-        >
-          Download
-        </button>
-
-        {/* Perf/visual toggles */}
-        <button
-          type="button"
-          onClick={() => setForcePerfMode((v) => (v === null ? !isLargeGraph : !v))}
-          style={{
-            padding: '6px 10px',
-            fontSize: '12px',
-            fontWeight: 500,
-            color: 'var(--text-heading)',
-            background: perfMode ? 'var(--white-10)' : 'transparent',
-            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-            borderRadius: '6px',
-            cursor: 'pointer',
-          }}
-          title="Performance mode reduces hover highlighting and heavy visuals to keep big graphs smooth."
-        >
-          Perf {perfMode ? 'On' : 'Off'}
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowMiniMap((v) => !v)}
-          style={{
-            padding: '6px 10px',
-            fontSize: '12px',
-            fontWeight: 500,
-            color: 'var(--text-heading)',
-            background: showMiniMap ? 'var(--white-10)' : 'transparent',
-            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-            borderRadius: '6px',
-            cursor: 'pointer',
-          }}
-          title="Toggle minimap (can be expensive on large graphs)."
-        >
-          MiniMap {showMiniMap ? 'On' : 'Off'}
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowBackgroundGrid((v) => !v)}
-          style={{
-            padding: '6px 10px',
-            fontSize: '12px',
-            fontWeight: 500,
-            color: 'var(--text-heading)',
-            background: showBackgroundGrid ? 'var(--white-10)' : 'transparent',
-            border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-            borderRadius: '6px',
-            cursor: 'pointer',
-          }}
-          title="Toggle background grid (can be expensive on large graphs)."
-        >
-          Grid {showBackgroundGrid ? 'On' : 'Off'}
-        </button>
-        {error && (
-          <div style={{ fontSize: '11px', color: '#EF4444', marginLeft: '8px' }}>
-            {error}
-          </div>
-        )}
-        {(nodes.length > 0 || edges.length > 0) && (
-          <div style={{ fontSize: '11px', color: 'var(--text-secondary-strong)', marginLeft: 'auto' }}>
-            {nodes.length} nodes, {edges.length} edges
-          </div>
-        )}
-      </div>
+          {toolbarContent}
+        </div>
+      )}
 
       {/* Graph */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', width: '100%' }}>

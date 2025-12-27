@@ -53,6 +53,9 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
   const [selectedEdgeData, setSelectedEdgeData] = React.useState<any | null>(null);
   
+  // Toolbar container for Cockpit
+  const [toolbarContainer, setToolbarContainer] = React.useState<HTMLDivElement | null>(null);
+  
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
 
   // Update view mode when initialViewMode changes
@@ -130,8 +133,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
       onClose={onClose}
     >
       <div className="flex flex-col h-full">
-        {/* View mode switcher */}
-        <div className="mb-4 flex-shrink-0">
+        {/* View mode switcher and Toolbar */}
+        <div className="mb-4 flex-shrink-0 flex items-center justify-between gap-4">
           <div 
             className="inline-flex items-center gap-1 rounded-xl px-2 py-1" 
             role="tablist" 
@@ -199,6 +202,9 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               Progress
             </button>
           </div>
+          
+          {/* Toolbar Slot (Portal Target) */}
+          <div ref={setToolbarContainer} className="flex items-center gap-1" />
         </div>
 
         <div 
@@ -258,6 +264,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                   <LensCanvasCockpit 
                     lensId={lensId} 
                     projectId={lens.projectId}
+                    toolbarContainer={toolbarContainer}
                     onNodeSelect={(nodeId, nodeData) => {
                       if (import.meta.env.DEV) console.log('[LensCanvas] onNodeSelect', { nodeId, hasNodeData: !!nodeData });
                       setSelectedNodeId(nodeId);
