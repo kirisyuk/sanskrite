@@ -129,16 +129,33 @@ func (r *OntologyFactsRepository) ListUpdatedSinceByCanonicalPath(ctx context.Co
 	if limit <= 0 {
 		limit = 100
 	}
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if canonicalPath == "" {
+		return nil, fmt.Errorf("canonicalPath is required")
+	}
+
+	// Build query: tenantId == X AND canonicalPaths array-contains Y
 	q := r.col.
 		Where("tenantId", "==", tenantID).
-		Where("canonicalPaths", "array-contains", canonicalPath).
-		Where("updatedAt", ">", since).
-		OrderBy("updatedAt", firestore.Asc).
-		Limit(limit)
+		Where("canonicalPaths", "array-contains", canonicalPath)
+
+	// CRITICAL: When since is zero time, don't use updatedAt filter to avoid index issues.
+	// Zero time means "get all facts", which can be slow but should work with existing index.
+	// When since is provided, use the range filter with OrderBy (requires composite index).
+	if !since.IsZero() {
+		q = q.Where("updatedAt", ">", since).OrderBy("updatedAt", firestore.Asc)
+	} else {
+		// For zero time, order by updatedAt but without range filter (uses index: tenantId, canonicalPaths, updatedAt)
+		q = q.OrderBy("updatedAt", firestore.Desc) // Desc to get most recent first
+	}
+	q = q.Limit(limit)
 
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
-		return nil, err
+		// Log detailed error for debugging Firestore index issues
+		fmt.Printf("[OntologyFacts] ListUpdatedSinceByCanonicalPath failed: tenantID=%s, canonicalPath=%s, since=%v (zero=%v), limit=%d, error=%v\n",
+			tenantID, canonicalPath, since, since.IsZero(), limit, err)
+		return nil, fmt.Errorf("firestore query failed (may need composite index): %w", err)
 	}
 	out := make([]*models.OntologyFact, 0, len(docs))
 	for _, d := range docs {

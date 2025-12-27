@@ -477,6 +477,86 @@ func (e *ScoutEngine) logLine(ctx context.Context, job *models.ScoutingJob, leve
 
 // ExecuteScoutingJob выполняет полный цикл ScoutingJob
 func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.ScoutingJob) error {
+	if job == nil {
+		return fmt.Errorf("job is nil")
+	}
+
+	// IDEMPOTENCY CHECK: Skip already-completed jobs (handles Cloud Tasks retries gracefully).
+	// This prevents duplicate work when Cloud Tasks retries due to timeout/transient errors.
+	if job.CurrentState == models.ScoutingJobStateVerified ||
+		job.CurrentState == models.ScoutingJobStateFailed ||
+		job.Status == coreModels.AgentJobStatusCompleted ||
+		job.Status == coreModels.AgentJobStatusFailed {
+		fmt.Printf("[ScoutEngine] Job %s already terminal (CurrentState=%s, Status=%s). Skipping (idempotent).\n",
+			job.ID, job.CurrentState, job.Status)
+		return nil // Success: already processed
+	}
+
+	// CIRCUIT BREAKER: prevent infinite retarget/alias loops within a single job.
+	// If the same canonicalPath is processed repeatedly (e.g., due to alias/dedup oscillation),
+	// hard-stop this branch to avoid runaway Cloud Tasks retries and repeated research.
+	{
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		cp := strings.TrimSpace(job.TargetCanonicalPath)
+		if cp != "" {
+			// Keep per-path attempt counters inside job.State to survive Cloud Tasks retries.
+			// Shape: state["canonicalPathAttempts"] = map[string]int
+			attempts := map[string]int{}
+			if raw, ok := job.State["canonicalPathAttempts"]; ok {
+				switch t := raw.(type) {
+				case map[string]int:
+					attempts = t
+				case map[string]interface{}:
+					for k, v := range t {
+						k = strings.TrimSpace(k)
+						if k == "" {
+							continue
+						}
+						// Firestore may decode ints as float64/int64/string.
+						n := 0
+						switch vv := v.(type) {
+						case int:
+							n = vv
+						case int32:
+							n = int(vv)
+						case int64:
+							n = int(vv)
+						case float64:
+							n = int(vv)
+						case float32:
+							n = int(vv)
+						case string:
+							n = parseStateInt(vv, 0)
+						default:
+							n = parseStateInt(fmt.Sprintf("%v", vv), 0)
+						}
+						attempts[k] = n
+					}
+				}
+			}
+			attempts[cp] = attempts[cp] + 1
+			job.State["canonicalPathAttempts"] = attempts
+			_ = e.scoutingJobsRepo.Update(ctx, job) // best-effort
+
+			if attempts[cp] >= 5 {
+				fmt.Printf("[ScoutEngine] Circuit breaker tripped: job=%s canonicalPath=%s attempts=%d. Hard-stopping.\n",
+					strings.TrimSpace(job.ID), cp, attempts[cp])
+				_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "circuit_breaker")
+				e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+					"tenantId":      job.TenantID,
+					"projectId":     job.ProjectID,
+					"lensId":        strings.TrimSpace(job.LensID),
+					"jobId":         job.ID,
+					"canonicalPath": cp,
+					"hint":          "circuit_breaker",
+				})
+				return nil // ACK: stop Cloud Tasks retries for this branch
+			}
+		}
+	}
+
 	tenantID := job.TenantID
 	projectID := job.ProjectID
 
@@ -1086,6 +1166,33 @@ SKIP_RESEARCH:
 		}
 	}
 
+	// CANONICAL RETARGET:
+	// If Research (or any upstream step) produced a different canonicalPath than the job started with,
+	// we must continue work on THAT entity. Otherwise we end up verifying/storing data under one path
+	// while repeatedly scouting another alias (infinite "no internal content" loop).
+	effectiveCanonicalPath := strings.TrimSpace(job.TargetCanonicalPath)
+	if extractedFragment != nil {
+		if cp := strings.TrimSpace(extractedFragment.CanonicalPath); cp != "" {
+			effectiveCanonicalPath = cp
+		}
+	}
+	if effectiveCanonicalPath != "" && strings.TrimSpace(job.TargetCanonicalPath) != effectiveCanonicalPath {
+		old := strings.TrimSpace(job.TargetCanonicalPath)
+		fmt.Printf("[ScoutEngine] Retargeting job %s: %s -> %s (using canonicalPath from research/dedup)\n",
+			strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
+		// Persist into job + state so Cloud Tasks retries execute the correct target as well.
+		job.TargetCanonicalPath = effectiveCanonicalPath
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		job.State["targetCanonicalPath"] = effectiveCanonicalPath
+		// Keep original path for later anti-dedup / alias cleanup (best-effort).
+		if _, ok := job.State["aliasCanonicalPath"]; !ok && old != "" {
+			job.State["aliasCanonicalPath"] = old
+		}
+		_ = e.scoutingJobsRepo.Update(ctx, job)
+	}
+
 	// VERIFIED: Создание Frame и обновление HorizonFragment
 	if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "verified"); err != nil {
 		return fmt.Errorf("failed to transition to VERIFIED: %w", err)
@@ -1105,7 +1212,7 @@ SKIP_RESEARCH:
 		tenantID,
 		projectID,
 		job.ID,
-		job.TargetCanonicalPath,
+		effectiveCanonicalPath,
 		extractedFragment.State,
 		evidence,
 		models.ClaimProvenance{
@@ -1128,12 +1235,12 @@ SKIP_RESEARCH:
 	frame.ID = frameID
 
 	// Обновляем или создаем HorizonFragment
-	existingFragment, err := e.fragmentsRepo.GetByCanonicalPath(ctx, job.TargetCanonicalPath)
+	existingFragment, err := e.fragmentsRepo.GetByCanonicalPath(ctx, effectiveCanonicalPath)
 	var fragmentID string
 
 	if err != nil {
 		// Создаем новый фрагмент
-		extractedFragment.CanonicalPath = job.TargetCanonicalPath
+		extractedFragment.CanonicalPath = effectiveCanonicalPath
 		extractedFragment.TenantID = "global"
 		extractedFragment.Metadata.SourceFrameID = frameID
 		extractedFragment.Metadata.EpistemicStatus = models.EpistemicStatusVerified
@@ -1162,6 +1269,26 @@ SKIP_RESEARCH:
 					existingFragment = preValidation.ReplacementFrag
 					fragmentID = existingFragment.ID
 					usedExistingDuplicate = true
+
+					// If dedup selected a replacement fragment, we must retarget the job to it as well.
+					// Otherwise subsequent steps (events, decomposition, retries) will keep using the alias.
+					if existingFragment != nil {
+						if cp := strings.TrimSpace(existingFragment.CanonicalPath); cp != "" && cp != effectiveCanonicalPath {
+							old := effectiveCanonicalPath
+							effectiveCanonicalPath = cp
+							fmt.Printf("[ScoutEngine] Retargeting job %s to dedup replacement canonicalPath: %s -> %s\n",
+								strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
+							job.TargetCanonicalPath = effectiveCanonicalPath
+							if job.State == nil {
+								job.State = map[string]interface{}{}
+							}
+							job.State["targetCanonicalPath"] = effectiveCanonicalPath
+							if _, ok := job.State["aliasCanonicalPath"]; !ok && strings.TrimSpace(old) != "" {
+								job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
+							}
+							_ = e.scoutingJobsRepo.Update(ctx, job)
+						}
+					}
 				}
 			}
 		}

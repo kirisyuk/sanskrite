@@ -1423,6 +1423,9 @@ func main() {
 		defer cancel()
 
 		if err := scoutEngine.ExecuteScoutingJob(execCtx, job); err != nil {
+			// Log detailed error for debugging
+			logger.Printf("ERROR: Scout job execution failed: jobId=%s, canonicalPath=%s, error=%v", jobID, job.TargetCanonicalPath, err)
+			
 			// Retry behavior:
 			// - transient failures: return 500 to let Cloud Tasks retry
 			// - last attempt: mark failed and ACK (200) so it becomes "poison" (no more retries)
@@ -1435,12 +1438,13 @@ func main() {
 			// MaxAttempts is configured on the queue (we set to 5). On the last attempt, retryCount will be 4.
 			if retryCount >= 4 {
 				// Best-effort: ensure job is terminal, then ACK to stop retries.
+				logger.Printf("ERROR: Scout job failed after max retries: jobId=%s, marking as failed", jobID)
 				_ = horizonscout.NewScoutWorkflow(agentJobsRepo).TransitionState(context.Background(), jobID, horizonmodels.ScoutingJobStateFailed)
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte("failed (poisoned)"))
 				return
 			}
-			http.Error(w, "scout execution failed (will retry)", http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("scout execution failed (will retry): %v", err), http.StatusInternalServerError)
 			return
 		}
 
