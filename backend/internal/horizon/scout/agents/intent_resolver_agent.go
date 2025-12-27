@@ -115,7 +115,8 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 		Reason        string  `json:"reason"`
 	}, 0, len(out.Anchors))
 	for _, an := range out.Anchors {
-		cp := strings.TrimSpace(an.CanonicalPath)
+		originalCP := strings.TrimSpace(an.CanonicalPath)
+		cp := originalCP
 		// Fix MSYS conversion if any.
 		cp = normalizeCanonicalPathForTools(cp)
 		// Best-effort legacy geo normalization: older flows may still emit /region/... paths.
@@ -125,7 +126,12 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 				cp = norm
 			}
 		}
+		// Slugify each segment of the path to handle LLM outputs with spaces/uppercase.
+		// Example: "/loc/Saudi Arabia" -> "/loc/saudi-arabia"
+		cp = slugifyCanonicalPath(cp)
 		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+			// Log rejected anchors for debugging
+			fmt.Printf("[IntentResolver] Anchor rejected: original=%q, normalized=%q, error=%v\n", originalCP, cp, err)
 			continue
 		}
 		an.CanonicalPath = cp
@@ -163,7 +169,7 @@ OUTPUT JSON SCHEMA:
   "keywords": ["string (non-canonical tokens)"],
   "anchors": [
     {
-      "canonicalPath": "string (canonical path like /org/tesla, /product/tesla/4680-cell)",
+      "canonicalPath": "string (canonical path like /org/tesla, /loc/saudi-arabia)",
       "type": "ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET",
       "confidence": 0.0,
       "reason": "short reason"
@@ -175,14 +181,60 @@ RULES:
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
 - canonicalPath MUST be a valid Horizon canonical path with allowed namespaces:
   /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event
+- ALL path segments MUST be lowercase slugs (use hyphens instead of spaces):
+  - CORRECT: /loc/saudi-arabia, /loc/uae, /org/saudi-aramco
+  - WRONG: /loc/Saudi Arabia, /loc/UAE (uppercase/spaces not allowed)
+- For countries/regions use /loc/{country-slug}:
+  - /loc/saudi-arabia (not /loc/Saudi Arabia)
+  - /loc/uae (not /loc/UAE or /loc/United Arab Emirates)
+  - /loc/usa, /loc/china, /loc/germany, etc.
 - Prefer STABLE anchors:
-  - companies: /org/{slug}
+  - companies: /org/{slug} (e.g., /org/saudi-aramco, /org/adnoc)
   - products: /product/{orgSlug}/{productSlug} when org is known
   - facilities: /fac/{orgSlug}/{facilitySlug} when org is known
-- Provide 1-3 anchors максимум (anchor = what the Lens should attach to).
-- Provide 1-3 spherePaths максимум.
+  - countries/regions: /loc/{country-slug} (e.g., /loc/saudi-arabia, /loc/uae)
+- Provide 1-3 anchors (anchor = what the Lens should attach to).
+- Provide 1-3 spherePaths.
 - Return ONLY JSON. No markdown. No commentary.`,
 		query)
+}
+
+// slugifyCanonicalPath normalizes each segment of a canonical path to handle LLM outputs
+// with spaces, uppercase, or special characters.
+// Example: "/loc/Saudi Arabia" -> "/loc/saudi-arabia"
+// Example: "/org/Tesla, Inc." -> "/org/tesla-inc"
+func slugifyCanonicalPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return path
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return path
+	}
+	// Keep namespace as-is (it should already be lowercase), slugify rest
+	out := make([]string, 0, len(parts))
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		if i == 0 {
+			// Namespace: just lowercase, no other changes
+			out = append(out, strings.ToLower(p))
+		} else {
+			// Slugify: lowercase, replace non-alnum with hyphens
+			out = append(out, taxonomy.Slugify(p))
+		}
+	}
+	// Filter out empty segments
+	filtered := make([]string, 0, len(out))
+	for _, p := range out {
+		if p != "" {
+			filtered = append(filtered, p)
+		}
+	}
+	if len(filtered) == 0 {
+		return path
+	}
+	return "/" + strings.Join(filtered, "/")
 }
 
 // normalizeCanonicalPathForTools fixes MSYS/Git-Bash path conversion for canonical paths.
