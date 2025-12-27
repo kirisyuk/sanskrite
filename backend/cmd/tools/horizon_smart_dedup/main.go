@@ -41,7 +41,7 @@ var (
 
 // DuplicateCluster represents a group of fragments that are duplicates of each other
 type DuplicateCluster struct {
-	MatchType   string                    // "wikidata", "shortName", "legalName"
+	MatchType   string                    // "wikidata", "shortName", "legalName", "labelEN", "normalizedLegal", "geoCity"
 	MatchValue  string                    // The value that matched
 	Fragments   []*models.HorizonFragment // All fragments in this cluster
 	CanonicalID string                    // ID of the fragment to keep
@@ -128,9 +128,10 @@ func main() {
 
 	// Step 2: Build indexes for duplicate detection
 	log.Printf("\n=== Step 2: Building indexes ===")
-	wikidataIndex := make(map[string][]*models.HorizonFragment)       // wikidataID -> fragments
-	shortNameIndex := make(map[string][]*models.HorizonFragment)      // type:shortName -> fragments
-	legalNameIndex := make(map[string][]*models.HorizonFragment)      // type:legalName -> fragments
+	wikidataIndex := make(map[string][]*models.HorizonFragment)        // wikidataID -> fragments
+	shortNameIndex := make(map[string][]*models.HorizonFragment)       // type:shortName -> fragments
+	legalNameIndex := make(map[string][]*models.HorizonFragment)       // type:legalName -> fragments
+	labelENIndex := make(map[string][]*models.HorizonFragment)         // type:label_en -> fragments (Tier 2)
 	normalizedLegalIndex := make(map[string][]*models.HorizonFragment) // type:normalized_legal -> fragments
 	geoCityIndex := make(map[string][]*models.HorizonFragment)         // city_name -> geo fragments
 
@@ -146,10 +147,16 @@ func main() {
 			shortNameIndex[key] = append(shortNameIndex[key], f)
 		}
 
-		// Index by legalName (type-scoped)
+		// Index by legalName (type-scoped) — Tier 1 (100% confidence for orgs)
 		if legalName := strings.TrimSpace(f.Identifiers["legalName"]); legalName != "" {
 			key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(legalName))
 			legalNameIndex[key] = append(legalNameIndex[key], f)
+		}
+
+		// Index by label[en] (type-scoped) — Tier 2 (high confidence)
+		if labelEN := strings.TrimSpace(f.Labels["en"]); labelEN != "" {
+			key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(labelEN))
+			labelENIndex[key] = append(labelENIndex[key], f)
 		}
 
 		// Index by normalized legalName (removes JSC, LLC, Inc, etc.)
@@ -173,6 +180,7 @@ func main() {
 	log.Printf("✓ Wikidata index: %d unique IDs", len(wikidataIndex))
 	log.Printf("✓ ShortName index: %d unique keys", len(shortNameIndex))
 	log.Printf("✓ LegalName index: %d unique keys", len(legalNameIndex))
+	log.Printf("✓ Label[en] index: %d unique keys", len(labelENIndex))
 	log.Printf("✓ Normalized legal index: %d unique keys", len(normalizedLegalIndex))
 	log.Printf("✓ GEO city index: %d unique cities", len(geoCityIndex))
 
@@ -267,7 +275,34 @@ func main() {
 	}
 	log.Printf("  Found %d legalName-based clusters", legalNameClusters)
 
-	// Priority 4: Normalized legalName matches (removes JSC, LLC, Inc, etc.)
+	// Priority 4: Label[en] matches (same type) — catches duplicates with same display name
+	labelENClusters := 0
+	for key, frags := range labelENIndex {
+		if len(frags) > 1 {
+			var unprocessed []*models.HorizonFragment
+			for _, f := range frags {
+				if !processedFragmentIDs[f.ID] {
+					unprocessed = append(unprocessed, f)
+				}
+			}
+			if len(unprocessed) > 1 {
+				cluster := &DuplicateCluster{
+					MatchType:  "labelEN",
+					MatchValue: key,
+					Fragments:  unprocessed,
+				}
+				cluster.CanonicalID = selectCanonical(unprocessed)
+				clusters = append(clusters, cluster)
+				for _, f := range unprocessed {
+					processedFragmentIDs[f.ID] = true
+				}
+				labelENClusters++
+			}
+		}
+	}
+	log.Printf("  Found %d label[en]-based clusters", labelENClusters)
+
+	// Priority 5: Normalized legalName matches (removes JSC, LLC, Inc, etc.)
 	normalizedLegalClusters := 0
 	for key, frags := range normalizedLegalIndex {
 		if len(frags) > 1 {
@@ -294,7 +329,7 @@ func main() {
 	}
 	log.Printf("  Found %d normalizedLegal-based clusters", normalizedLegalClusters)
 
-	// Priority 5: GEO city name matches
+	// Priority 6: GEO city name matches
 	geoCityClusters := 0
 	for cityName, frags := range geoCityIndex {
 		if len(frags) > 1 {
