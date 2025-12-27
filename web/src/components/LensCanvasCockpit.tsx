@@ -947,26 +947,41 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             console.log('[Cockpit] Skipping root node from grouping:', fid);
             continue;
           }
-          // Don't group other central nodes (multiple roots / grid centers)
-          const existingNode = currentNodes.find((n) => norm(n?.id) === fid || norm((n.data as any)?.fragmentId) === fid);
-          const existingDepth = typeof (existingNode?.data as any)?.depth === 'number' ? (existingNode!.data as any).depth : undefined;
-          if (existingDepth === 0) {
-            console.log('[Cockpit] Skipping depth=0 node from grouping:', fid);
-            continue;
-          }
-          // Don't group across different subgraphs (rootFragmentId mismatch)
-          const existingRoot = norm((existingNode?.data as any)?.rootFragmentId || '');
-          if (existingRoot && existingRoot !== sourceRootId) {
-            console.log('[Cockpit] Skipping cross-root node from grouping:', { fid, existingRoot, sourceRootId });
-            continue;
-          }
           // Don't group nodes that have been expanded (they are centers of their own subgraphs)
           if (expandedNodesRef.current.has(fid)) {
             console.log('[Cockpit] Skipping already expanded node from grouping:', fid);
             continue;
           }
+          
+          // We allow grouping depth=0 and cross-root nodes if they are related and not expanded
+          // This enables multi-root graphs to merge when one root expands and captures another
+          
           existingRelatedIds.add(fid);
         }
+      }
+
+      // Also check existing edges on canvas to catch relations not returned by dependencies API
+      // This ensures visual consistency: if there's an edge, we should group if possible
+      // const currentEdges = (reactFlowInstanceRef.current as any)?.getEdges?.() || []; // Variable already declared above
+      for (const e of currentEdges) {
+         if (norm(e.source) === fragmentId && !expandedNodesRef.current.has(norm(e.target))) {
+             // Outgoing edge from current node to existing target
+             const tId = norm(e.target);
+             const targetNode = currentNodes.find(n => norm(n.id) === tId || norm(n.data?.fragmentId) === tId);
+             if (targetNode && !targetNode.data?.parentFragmentId) {
+                 existingRelatedIds.add(tId);
+                 // We will need edge type later, adding to depEdges-like structure would be complex here,
+                 // but we can add to fragmentEdgeType map directly if we move this logic after map init
+             }
+         }
+         if (norm(e.target) === fragmentId && !expandedNodesRef.current.has(norm(e.source))) {
+             // Incoming edge from existing source to current node
+             const sId = norm(e.source);
+             const sourceNode = currentNodes.find(n => norm(n.id) === sId || norm(n.data?.fragmentId) === sId);
+             if (sourceNode && !sourceNode.data?.parentFragmentId) {
+                 existingRelatedIds.add(sId);
+             }
+         }
       }
 
       if (newFragmentsUnsorted.length === 0 && existingRelatedIds.size === 0) {
@@ -1002,6 +1017,26 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             fragmentEdgeType.set(s, edgeType);
           }
           fragmentDirection.set(s, 'incoming'); // Ребёнок направлен К родителю
+        }
+      }
+
+      // Also populate edge info from current canvas edges if missing from API deps
+      for (const e of currentEdges) {
+        const s = norm(e.source);
+        const t = norm(e.target);
+        const edgeType = e.data?.edgeType || e.type || '';
+        
+        if (s === fragmentId && t) {
+          if (!fragmentEdgeType.has(t)) {
+             fragmentEdgeType.set(t, edgeType);
+             fragmentDirection.set(t, 'outgoing');
+          }
+        }
+        if (t === fragmentId && s) {
+          if (!fragmentEdgeType.has(s)) {
+             fragmentEdgeType.set(s, edgeType);
+             fragmentDirection.set(s, 'incoming');
+          }
         }
       }
 
@@ -1095,14 +1130,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const edgeType = String(e?.type || e?.edgeType || '').toUpperCase();
         const isSymmetric = SYMMETRIC_EDGE_TYPES.has(edgeType);
         
-        // Для симметричных связей: показываем только исходящие от раскрытой ноды
+        // Для симметричных связей: фильтруем дубликаты пар (A-B и B-A считаем одним ребром)
         if (isSymmetric) {
-          // Пропускаем если это входящее ребро к раскрытой ноде (обратное направление)
-          if (t === fragmentId) {
-            console.log('[Cockpit] Skipping reverse symmetric edge:', edgeType, s, '→', t);
-            continue;
-          }
-          
           // Проверяем, не добавили ли мы уже эту пару (в любом направлении)
           const pairKey1 = `${s}-${t}`;
           const pairKey2 = `${t}-${s}`;
@@ -1198,14 +1227,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         if (!existingRelatedIds.has(nodeFragmentId)) return n;
         if (n.data?.parentFragmentId) return n; // Already has a parent, don't override
         if (nodeFragmentId === fragmentId) return n;
-        // Double-check: never group root node or already expanded nodes
-        if (nodeFragmentId === rootNodeIdRef.current) return n;
+        // Double-check: never group already expanded nodes
+        // Note: we allow grouping the current rootNodeId if it gets absorbed by another expanding node
         if (expandedNodesRef.current.has(nodeFragmentId)) return n;
-        // Never group central nodes (depth=0) or nodes from a different subgraph root
+        
+        // Group logic:
+        // 1. If node is already part of another subgraph (depth > 0 and different root), don't steal it.
+        // 2. If node is a root (depth == 0) and NOT expanded, we CAN absorb it into this graph.
         const nodeDepth = typeof (n.data as any)?.depth === 'number' ? (n.data as any).depth : undefined;
-        if (nodeDepth === 0) return n;
         const nodeRoot = norm((n.data as any)?.rootFragmentId || '');
-        if (nodeRoot && nodeRoot !== sourceRootId) return n;
+        
+        if (nodeDepth !== 0 && nodeRoot && nodeRoot !== sourceRootId) return n;
 
         const edgeTypeFromParent = fragmentEdgeType.get(nodeFragmentId) || '';
         const directionFromParent = fragmentDirection.get(nodeFragmentId) || 'outgoing';

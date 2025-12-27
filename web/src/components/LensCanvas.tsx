@@ -129,88 +129,89 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
       title={getTitle()}
       onClose={onClose}
     >
-      {/* View mode switcher */}
-      <div className="mb-4">
-        <div 
-          className="inline-flex items-center gap-1 rounded-xl px-2 py-1" 
-          role="tablist" 
-          aria-label="Lens view mode"
-          style={{
-            backgroundColor:
-              theme === 'light'
-                ? 'rgba(0, 0, 0, 0.02)'
-                : 'rgba(255, 255, 255, 0.04)',
-          }}
-        >
-          {lens && (
-            <>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === 'details'}
-                aria-controls="lens-details-panel"
-                onClick={() => setViewMode('details')}
-                className="px-2 py-1 text-12 rounded"
-                style={{
-                  background:
-                    viewMode === 'details'
-                      ? 'var(--white-10)'
-                      : 'transparent',
-                  color: 'var(--text-heading)',
-                }}
-              >
-                Details
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === 'cockpit'}
-                aria-controls="lens-cockpit-panel"
-                onClick={() => setViewMode('cockpit')}
-                className="px-2 py-1 text-12 rounded"
-                style={{
-                  background:
-                    viewMode === 'cockpit'
-                      ? 'var(--white-10)'
-                      : 'transparent',
-                  color: 'var(--text-heading)',
-                }}
-              >
-                Cockpit
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewMode === 'progress'}
-            aria-controls="lens-progress-panel"
-            onClick={() => setViewMode('progress')}
-            className="px-2 py-1 text-12 rounded"
+      <div className="flex flex-col h-full">
+        {/* View mode switcher */}
+        <div className="mb-4 flex-shrink-0">
+          <div 
+            className="inline-flex items-center gap-1 rounded-xl px-2 py-1" 
+            role="tablist" 
+            aria-label="Lens view mode"
             style={{
-              background:
-                viewMode === 'progress'
-                  ? 'var(--white-10)'
-                  : 'transparent',
-              color: 'var(--text-heading)',
+              backgroundColor:
+                theme === 'light'
+                  ? 'rgba(0, 0, 0, 0.02)'
+                  : 'rgba(255, 255, 255, 0.04)',
             }}
           >
-            Progress
-          </button>
+            {lens && (
+              <>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewMode === 'details'}
+                  aria-controls="lens-details-panel"
+                  onClick={() => setViewMode('details')}
+                  className="px-2 py-1 text-12 rounded"
+                  style={{
+                    background:
+                      viewMode === 'details'
+                        ? 'var(--white-10)'
+                        : 'transparent',
+                    color: 'var(--text-heading)',
+                  }}
+                >
+                  Details
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewMode === 'cockpit'}
+                  aria-controls="lens-cockpit-panel"
+                  onClick={() => setViewMode('cockpit')}
+                  className="px-2 py-1 text-12 rounded"
+                  style={{
+                    background:
+                      viewMode === 'cockpit'
+                        ? 'var(--white-10)'
+                        : 'transparent',
+                    color: 'var(--text-heading)',
+                  }}
+                >
+                  Cockpit
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'progress'}
+              aria-controls="lens-progress-panel"
+              onClick={() => setViewMode('progress')}
+              className="px-2 py-1 text-12 rounded"
+              style={{
+                background:
+                  viewMode === 'progress'
+                    ? 'var(--white-10)'
+                    : 'transparent',
+                color: 'var(--text-heading)',
+              }}
+            >
+              Progress
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div 
-        className={viewMode === 'cockpit' ? '' : 'space-y-6 py-2'} 
-        style={{ 
-          display: 'flex', 
-          flexDirection: 'column', 
-          height: viewMode === 'cockpit' ? '100%' : 'auto',
-          minHeight: viewMode === 'cockpit' ? '600px' : 'auto',
-          overflow: viewMode === 'cockpit' ? 'hidden' : 'visible',
-        }}
-      >
-        {loading ? (
+        <div 
+          className={(viewMode === 'cockpit' || viewMode === 'progress') ? '' : 'space-y-6 py-2'} 
+          style={{ 
+            display: 'flex', 
+            flexDirection: 'column', 
+            flex: (viewMode === 'cockpit' || viewMode === 'progress') ? 1 : 'none',
+            minHeight: (viewMode === 'cockpit' || viewMode === 'progress') ? 0 : 'auto',
+            overflow: (viewMode === 'cockpit' || viewMode === 'progress') ? 'hidden' : 'visible',
+          }}
+        >
+          {loading ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-pulse text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
               Loading lens...
@@ -317,6 +318,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
             )}
           </>
         )}
+      </div>
       </div>
     </ModalWithHeader>
   );

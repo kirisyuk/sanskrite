@@ -26,6 +26,19 @@ const PLACEHOLDER_VARIANTS = [
   "What are you looking at?",
 ];
 
+const SUGGESTIONS = [
+  "Tesla supply chain risks",
+  "Nvidia AI chips competitors",
+  "Apple smartphone suppliers",
+  "BYD vs Tesla battery tech",
+  "OpenAI corporate structure",
+  "Microsoft cloud market share",
+  "SpaceX regulatory challenges",
+  "TSMC manufacturing capacity",
+  "Volkswagen EV strategy",
+  "Amazon logistics network",
+];
+
 const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({ 
   projectId, 
   onAssemble, 
@@ -41,6 +54,9 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const [placeholder] = useState(() => 
     PLACEHOLDER_VARIANTS[Math.floor(Math.random() * PLACEHOLDER_VARIANTS.length)]
+  );
+  const [suggestions] = useState(() => 
+    [...SUGGESTIONS].sort(() => 0.5 - Math.random()).slice(0, 3)
   );
 
   // Focus input on mount
@@ -84,7 +100,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
 
   const inputContainerStyle: React.CSSProperties = {
     width: '100%',
-    maxWidth: '800px',
+    maxWidth: '960px',
     position: 'relative',
   };
 
@@ -102,7 +118,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
 
   const containerStyleForInput: React.CSSProperties = {
     width: '100%',
-    maxWidth: '800px',
+    maxWidth: '960px',
     borderRadius: '12px',
     overflow: 'hidden',
     transition: 'all 0.2s ease',
@@ -194,6 +210,41 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Suggestions (only when centered) */}
+      {!pinnedBottom && (
+        <div style={{ 
+          marginTop: 16, 
+          fontSize: 13, 
+          color: 'var(--text-tertiary)', 
+          textAlign: 'center',
+          maxWidth: '800px',
+          lineHeight: 1.6 
+        }}>
+          <span style={{ marginRight: 6 }}>Try:</span>
+          {suggestions.map((s, i) => (
+            <React.Fragment key={s}>
+              <span 
+                style={{ 
+                  cursor: 'pointer', 
+                  color: 'var(--text-secondary)',
+                  borderBottom: '1px dashed var(--border-subtle, rgba(255,255,255,0.2))',
+                  transition: 'color 0.2s',
+                }}
+                onClick={() => {
+                  setInputValue(s);
+                  if (inputRef.current) inputRef.current.focus();
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-heading)'}
+                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+              >
+                {s}
+              </span>
+              {i < suggestions.length - 1 && <span style={{ margin: '0 8px', color: 'var(--text-disabled, rgba(255,255,255,0.1))' }}>|</span>}
+            </React.Fragment>
+          ))}
+        </div>
+      )}
 
       {/* Settings Modal */}
       {showSettings && createPortal(

@@ -10,6 +10,10 @@ export interface LensCanvasProgressProps {
   isCreatingLens?: boolean;
 }
 
+const formatEdgeType = (type: string) => {
+  return (type || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+};
+
 const getIcon = (icon?: string) => {
   switch (icon) {
     case 'assembly':
@@ -120,96 +124,232 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
     }
   }, [onAssemble]);
 
+  const hasEvents = filteredEvents.length > 0;
+  // Shift input to bottom if we have events or creation is in progress
+  const isContentActive = hasEvents || isCreatingLens;
+
   return (
     <div
       style={{
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        minHeight: 0,
+        flex: 1, 
+        justifyContent: isContentActive ? 'flex-start' : 'center',
       }}
     >
       {/* Events feed */}
-      <div
-        ref={feedRef}
-        style={{
-          flex: showInput ? 1 : 'none',
-          minHeight: showInput ? 0 : 'auto',
-          width: '100%',
-          overflowY: 'auto',
-          padding: '8px 0',
-        }}
-      >
-        {filteredEvents.length > 0 ? (
-          filteredEvents.map((ev) => (
+      {isContentActive && (
+        <div
+          ref={feedRef}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            width: '100%',
+            overflowY: 'auto',
+            padding: '16px 4px', // Небольшой отступ
+          }}
+        >
+          <div style={{ position: 'relative', paddingLeft: 36 }}>
+            {/* Timeline line */}
             <div
-              key={ev.id}
               style={{
-                padding: '12px 14px',
-                borderRadius: 10,
-                border: '1px solid var(--overlay-line-90)',
-                background: 'var(--bg-elevated)',
-                color: 'var(--text-secondary-strong)',
-                fontSize: 13,
-                marginBottom: 8,
+                position: 'absolute',
+                left: 11, // Center of the icon (24px width -> 12px center).
+                top: 4,
+                bottom: 20, // Don't go all the way down
+                width: 2,
+                background: 'var(--border-subtle)',
+                zIndex: 0,
               }}
-            >
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                {/* Icon */}
-                <div style={{ 
-                  flexShrink: 0, 
-                  marginTop: 2,
-                  color: ev.icon === 'success' ? '#2ECC71' : ev.icon === 'error' ? '#f87171' : 'var(--text-secondary-strong)'
-                }}>
-                  {getIcon(ev.icon)}
+            />
+
+            {/* Initial Loading State */}
+            {filteredEvents.length === 0 && isCreatingLens && (
+              <div
+                style={{
+                  position: 'relative',
+                  marginBottom: 16,
+                  color: 'var(--text-secondary-strong)',
+                  fontSize: 13,
+                }}
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: -36,
+                    top: 0,
+                    width: 24,
+                    height: 24,
+                    borderRadius: '50%',
+                    background: 'var(--bg-elevated)',
+                    border: '2px solid var(--border-subtle)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1,
+                    color: 'var(--text-tertiary)',
+                  }}
+                >
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <circle cx="12" cy="12" r="10" strokeOpacity="0.25" strokeWidth="3" />
+                    <path d="M12 2a10 10 0 0 1 10 10" strokeOpacity="0.75" strokeWidth="3" />
+                  </svg>
                 </div>
-                
-                {/* Content */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                    <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 13 }}>
-                      {ev.humanReadable?.title || ev.text}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>
-                      {new Date(ev.ts).toLocaleTimeString()}
-                    </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 13, lineHeight: '20px' }}>
+                    Initializing assembly...
                   </div>
-                  {(ev.humanReadable?.description || ev.humanReadable?.entityName) && (
-                    <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      {ev.humanReadable.description}
-                      {ev.humanReadable.entityName && !ev.humanReadable.description && (
-                        <span style={{ fontStyle: 'italic' }}>{ev.humanReadable.entityName}</span>
-                      )}
-                    </div>
-                  )}
-                  {ev.humanReadable?.description && ev.humanReadable?.entityName && (
-                    <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
-                      {ev.data?.canonicalPath || ev.data?.targetCanonicalPath || ''}
-                    </div>
-                  )}
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
+                    Sending request
+                  </div>
                 </div>
               </div>
-            </div>
-          ))
-        ) : (
-          <div className="flex items-center justify-center py-8">
-            <div className="text-xs text-center" style={{ color: 'var(--text-secondary-strong)' }}>
-              {showInput 
-                ? 'No events yet. Start assembling a lens to see progress here.'
-                : 'No events yet. Events will appear here when lens assembly or scouting is in progress.'}
-            </div>
-          </div>
-        )}
-      </div>
+            )}
 
-      {/* Input field at bottom */}
+            {filteredEvents.map((ev) => {
+              const isEdge = ev.icon === 'edge' || ev.type === 'horizon.graph.edge.upserted';
+              let title = ev.humanReadable?.title || ev.text;
+              let description = ev.humanReadable?.description;
+              let entityPath = ev.data?.canonicalPath || ev.data?.targetCanonicalPath || '';
+              let hasLowConfidence = false;
+
+              if (isEdge) {
+                const type = ev.data?.type || 'Connection';
+                title = `${formatEdgeType(type)} Created`;
+                
+                const s = ev.data?.qualifiers?.sourceCanonicalPath || ev.data?.sourceFragmentId;
+                const t = ev.data?.qualifiers?.targetCanonicalPath || ev.data?.targetFragmentId;
+                // Beautify paths (last segment)
+                const cleanS = s?.includes('/') ? s.split('/').pop() : s;
+                const cleanT = t?.includes('/') ? t.split('/').pop() : t;
+                
+                if (cleanS && cleanT) {
+                   description = `${cleanS} → ${cleanT}`;
+                } else {
+                   description = s && t ? `${s} → ${t}` : 'Connection details';
+                }
+                entityPath = ''; // Don't show path for edge, description covers it
+              } else {
+                // Handle low_confidence in title
+                if (title && title.includes('low_confidence')) {
+                    title = title.replace('low_confidence', '').trim();
+                    hasLowConfidence = true;
+                }
+                // Handle Unknown entity
+                if (title && title.includes('Unknown entity') && entityPath) {
+                    title = `Finished analyzing ${entityPath.split('/').pop()}`;
+                }
+              }
+
+              return (
+                <div
+                  key={ev.id}
+                  style={{
+                    position: 'relative',
+                    marginBottom: 16,
+                    color: 'var(--text-secondary-strong)',
+                    fontSize: 13,
+                  }}
+                >
+                  {/* Icon Marker */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: -36,
+                      top: 0,
+                      width: 24,
+                      height: 24,
+                      borderRadius: '50%',
+                      background: 'var(--bg-elevated)',
+                      border: '2px solid var(--border-subtle)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      zIndex: 1,
+                      color: ev.icon === 'success' ? '#2ECC71' : ev.icon === 'error' ? '#f87171' : 'var(--text-tertiary)',
+                    }}
+                  >
+                    {getIcon(ev.icon)}
+                  </div>
+
+                  {/* Content */}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+                      <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 13, lineHeight: '20px' }}>
+                        {title}
+                        {hasLowConfidence && (
+                          <span 
+                            style={{ 
+                              display: 'inline-block', 
+                              marginLeft: 8, 
+                              fontSize: 10, 
+                              padding: '1px 6px', 
+                              borderRadius: 4, 
+                              background: 'rgba(239, 68, 68, 0.1)', 
+                              color: '#EF4444', 
+                              fontWeight: 500,
+                              verticalAlign: 'middle',
+                            }}
+                          >
+                            Low Confidence
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0, fontFamily: 'monospace' }}>
+                        {new Date(ev.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </div>
+                    </div>
+                    
+                    {(description || ev.humanReadable?.entityName) && (
+                      <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                        {description}
+                        {ev.humanReadable?.entityName && !description && (
+                          <span style={{ fontStyle: 'italic' }}>{ev.humanReadable?.entityName}</span>
+                        )}
+                      </div>
+                    )}
+                    
+                    {entityPath && (
+                      <div 
+                        style={{ 
+                          marginTop: 4, 
+                          fontSize: 10, 
+                          color: 'var(--text-tertiary)', 
+                          fontFamily: 'monospace',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          opacity: 0.7,
+                        }}
+                        title={entityPath}
+                      >
+                        {entityPath}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Input field */}
       {showInput && projectId && (
-        <div style={{ flexShrink: 0, paddingTop: 16 }}>
+        <div style={{ 
+          flexShrink: 0, 
+          paddingTop: isContentActive ? 16 : 0,
+          width: '100%',
+          maxWidth: isContentActive ? '100%' : '600px',
+          margin: isContentActive ? '0' : 'auto', // auto centers both vertically and horizontally in flex
+          transition: 'all 0.3s ease', // Smooth transition if possible
+        }}>
           <AssembleLensRequestComponent
             projectId={projectId}
             onAssemble={handleAssemble}
             disabled={isCreatingLens}
-            pinnedBottom={true}
+            pinnedBottom={isContentActive}
           />
         </div>
       )}

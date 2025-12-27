@@ -557,48 +557,78 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         )}
       </div>
 
-      {/* Pagination: Left Arrow */}
-      {hasPagination && (
-        <button
-          type="button"
-          onClick={handlePrevPage}
-          disabled={currentPage === 0}
-          style={currentPage === 0 ? { ...disabledArrowStyle, left: -12 } : { ...arrowButtonStyle, left: -12 }}
-          title="Previous page"
-        >
-          {'<'}
-        </button>
-      )}
-
-      {/* Pagination: Right Arrow */}
-      {hasPagination && (
-        <button
-          type="button"
-          onClick={handleNextPage}
-          disabled={currentPage >= totalPages - 1}
-          style={currentPage >= totalPages - 1 ? { ...disabledArrowStyle, right: -12 } : { ...arrowButtonStyle, right: -12 }}
-          title="Next page"
-        >
-          {'>'}
-        </button>
-      )}
-
-      {/* Pagination: Page indicator */}
+      {/* Pagination Controls (Bottom) */}
       {hasPagination && (
         <div
           style={{
             position: 'absolute',
-            bottom: 6,
+            bottom: 8,
             left: 0,
             right: 0,
-            textAlign: 'center',
-            fontSize: 10,
-            fontWeight: 500,
-            color: subtitleColor,
-            letterSpacing: '0.3px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 12,
+            pointerEvents: 'none', // Allow clicking through empty space
           }}
         >
-          Page {currentPage + 1} of {totalPages}
+          <button
+            type="button"
+            onClick={handlePrevPage}
+            disabled={currentPage === 0}
+            style={{
+              ...arrowButtonStyle,
+              position: 'static', // Override absolute from base style
+              transform: 'none',
+              pointerEvents: 'auto',
+              width: 26,
+              height: 26,
+              opacity: currentPage === 0 ? 0.3 : 1,
+              cursor: currentPage === 0 ? 'not-allowed' : 'pointer',
+              background: theme === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.95)',
+              boxShadow: theme === 'dark' ? '0 2px 4px rgba(0,0,0,0.3)' : '0 1px 3px rgba(0,0,0,0.1)',
+            }}
+            title="Previous page"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
+
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: subtitleColor,
+              letterSpacing: '0.3px',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {currentPage + 1} / {totalPages}
+          </span>
+
+          <button
+            type="button"
+            onClick={handleNextPage}
+            disabled={currentPage >= totalPages - 1}
+            style={{
+              ...arrowButtonStyle,
+              position: 'static',
+              transform: 'none',
+              pointerEvents: 'auto',
+              width: 26,
+              height: 26,
+              opacity: currentPage >= totalPages - 1 ? 0.3 : 1,
+              cursor: currentPage >= totalPages - 1 ? 'not-allowed' : 'pointer',
+              background: theme === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.95)',
+              boxShadow: theme === 'dark' ? '0 2px 4px rgba(0,0,0,0.3)' : '0 1px 3px rgba(0,0,0,0.1)',
+            }}
+            title="Next page"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
         </div>
       )}
     </div>

@@ -213,17 +213,54 @@ export function findCellForExpandedNode(
       break;
   }
 
-  // Find first free cell in that direction
-  let row = parentRow + offsetRow;
-  let col = parentCol + offsetCol;
+  // Zone Preservation Logic:
+  // If parent is in a specific zone (e.g. Right: col > 0), ensure children don't cross into Center (col=0) or Left (col<0).
+  const parentInRight = parentCol > 0;
+  const parentInLeft = parentCol < 0;
+  const parentInBottom = parentRow > 0;
+  const parentInTop = parentRow < 0;
 
-  // Treat any non-empty cell (node or group marker) as occupied.
-  while (getGridCell(grid, row, col) && getGridCell(grid, row, col)?.type !== 'empty') {
-    row += offsetRow;
-    col += offsetCol;
+  const isValidZone = (r: number, c: number) => {
+    if (parentInRight && c <= 0) return false;
+    if (parentInLeft && c >= 0) return false;
+    if (parentInBottom && r <= 0) return false;
+    if (parentInTop && r >= 0) return false;
+    return true;
+  };
+
+  const isOccupied = (r: number, c: number) => {
+    const cell = getGridCell(grid, r, c);
+    return cell && cell.type !== 'empty';
+  };
+
+  // 1. Try ideal position
+  const idealRow = parentRow + offsetRow;
+  const idealCol = parentCol + offsetCol;
+
+  if (isValidZone(idealRow, idealCol) && !isOccupied(idealRow, idealCol)) {
+    return { row: idealRow, col: idealCol };
   }
 
-  return { row, col };
+  // 2. Search for nearest valid free cell using "expanding square" strategy around the ideal target
+  // We center search around ideal target to prioritize directional intent, but strictly filter by zone.
+  for (let r = 1; r <= 20; r++) {
+    for (let dr = -r; dr <= r; dr++) {
+      for (let dc = -r; dc <= r; dc++) {
+        // Optimization: only check perimeter of current ring
+        if (Math.abs(dr) !== r && Math.abs(dc) !== r) continue;
+
+        const checkRow = idealRow + dr;
+        const checkCol = idealCol + dc;
+
+        if (isValidZone(checkRow, checkCol) && !isOccupied(checkRow, checkCol)) {
+          return { row: checkRow, col: checkCol };
+        }
+      }
+    }
+  }
+
+  // Fallback (should rarely happen): just return ideal and let it overlap or handle elsewhere
+  return { row: idealRow, col: idealCol };
 }
 
 /**
