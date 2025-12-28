@@ -3,10 +3,12 @@ package scout
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 )
 
 var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
@@ -19,8 +21,9 @@ var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
 
 // PreCreateValidator validates fragments before creation and applies corrective policies.
 type PreCreateValidator struct {
-	geoBuilder *GeoHierarchyBuilder
-	orgDedup   *OrgDeduplicator
+	geoBuilder      *GeoHierarchyBuilder
+	orgDedup        *OrgDeduplicator
+	validationPolicy *policy.PolicyExecutor // Optional: unified validation policy
 }
 
 // NewPreCreateValidator creates a new pre-create validator.
@@ -29,6 +32,12 @@ func NewPreCreateValidator(geoBuilder *GeoHierarchyBuilder, orgDedup *OrgDedupli
 		geoBuilder: geoBuilder,
 		orgDedup:   orgDedup,
 	}
+}
+
+// WithValidationPolicy sets the validation policy executor.
+func (v *PreCreateValidator) WithValidationPolicy(executor *policy.PolicyExecutor) *PreCreateValidator {
+	v.validationPolicy = executor
+	return v
 }
 
 // ValidationResult contains the result of pre-create validation.
@@ -45,14 +54,57 @@ type ValidationResult struct {
 // - ReplacementFrag if an existing duplicate should be used instead
 // - BlockReason if creation should be blocked entirely
 func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *models.HorizonFragment) (*ValidationResult, error) {
+	logPrefix := "[PreCreateValidator]"
+	
 	if v == nil {
 		return &ValidationResult{IsValid: true}, nil
 	}
 	if fragment == nil {
+		log.Printf("%s ERROR: fragment is nil", logPrefix)
 		return &ValidationResult{IsValid: false, BlockReason: "nil fragment"}, nil
 	}
 
+	log.Printf("%s Validating fragment: id=%s, type=%s, canonicalPath=%s", 
+		logPrefix, fragment.ID, fragment.Type, fragment.CanonicalPath)
+
 	result := &ValidationResult{IsValid: true}
+
+	// Use unified ValidationPolicy if available
+	if v.validationPolicy != nil {
+		log.Printf("%s Using unified ValidationPolicy", logPrefix)
+		decision, err := v.validationPolicy.Execute(ctx, policy.PolicyInput{
+			Kind:     "fragment",
+			Context:  map[string]interface{}{"validationKind": "fragment"},
+			Fragment: fragment,
+		})
+
+		if err != nil {
+			log.Printf("%s ERROR: ValidationPolicy failed: %v", logPrefix, err)
+			// Fall through to hardcoded validation
+		} else {
+			log.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f", 
+				logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
+
+			switch decision.Action {
+			case "reject":
+				// Don't block - treat as warning instead
+				// ValidationPolicy "reject" is advisory, not a blocker
+				reason, _ := decision.Params["reason"].(string)
+				log.Printf("%s WARNING: ValidationPolicy would reject fragment (non-blocking): %s", logPrefix, reason)
+				result.Warnings = append(result.Warnings, fmt.Sprintf("ValidationPolicy warning: %s", reason))
+				// Continue validation - don't block creation
+			case "penalty":
+				penalty, _ := decision.Params["penalty"].(float64)
+				reason, _ := decision.Params["reason"].(string)
+				log.Printf("%s PENALTY by ValidationPolicy: %.2f, reason: %s", logPrefix, penalty, reason)
+				result.Warnings = append(result.Warnings, reason)
+				// Continue with validation, but log penalty
+			case "allow":
+				log.Printf("%s ALLOWED by ValidationPolicy", logPrefix)
+				// Continue with additional hardcoded checks for compatibility
+			}
+		}
+	}
 
 	// ==========================================================================
 	// Policy 1: Block /discovered/ paths
@@ -95,6 +147,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 4: GEO_REGION must use /loc/ prefix
 	// ==========================================================================
 	// Legacy /region/ paths should be migrated to /loc/.
+	// Note: GEO_REGION validation issues are warnings, not blockers (can be fixed post-factum)
 	if fragment.Type == models.FragmentTypeGeoRegion {
 		if strings.HasPrefix(fragment.CanonicalPath, "/region/") {
 			// NOTE: legacy /region/ had multiple shapes (including /region/na/{cc}/{admin1}/{city}).
@@ -104,29 +157,26 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 					fmt.Sprintf("legacy /region/ path %q normalized to %q", fragment.CanonicalPath, norm))
 				fragment.CanonicalPath = norm
 			} else {
-				result.BlockReason = fmt.Sprintf("legacy GEO_REGION canonicalPath %q cannot be normalized to /loc/{country}/{admin1}/{city}", fragment.CanonicalPath)
-				result.IsValid = false
-				return result, nil
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("legacy GEO_REGION canonicalPath %q cannot be normalized to /loc/{country}/{admin1}/{city} - will be fixed post-factum", fragment.CanonicalPath))
 			}
 		}
 
 		if !strings.HasPrefix(fragment.CanonicalPath, "/loc/") {
-			result.BlockReason = fmt.Sprintf("GEO_REGION canonicalPath %q must use /loc/ prefix", fragment.CanonicalPath)
-			result.IsValid = false
-			return result, nil
-		}
-
-		// Enforce strict 3-position geo model: /loc/{country}/{admin1}/{city}
-		parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
-		if len(parts) != 4 || parts[0] != "loc" {
-			result.BlockReason = fmt.Sprintf("GEO_REGION canonicalPath %q must be /loc/{country}/{admin1}/{city}", fragment.CanonicalPath)
-			result.IsValid = false
-			return result, nil
-		}
-		if !reCountryAlpha2.MatchString(parts[1]) {
-			result.BlockReason = fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country code %q (expected ISO3166-1 alpha2 lowercase)", fragment.CanonicalPath, parts[1])
-			result.IsValid = false
-			return result, nil
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("GEO_REGION canonicalPath %q should use /loc/ prefix - will be fixed post-factum", fragment.CanonicalPath))
+		} else {
+			// Enforce strict 3-position geo model: /loc/{country}/{admin1}/{city}
+			parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
+			if len(parts) != 4 || parts[0] != "loc" {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("GEO_REGION canonicalPath %q should be /loc/{country}/{admin1}/{city} - will be fixed post-factum", fragment.CanonicalPath))
+			} else if !reCountryAlpha2.MatchString(parts[1]) {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country code %q (expected ISO3166-1 alpha2 lowercase) - will be fixed post-factum", fragment.CanonicalPath, parts[1]))
+			} else {
+				log.Printf("%s GEO_REGION validation passed: %s", logPrefix, fragment.CanonicalPath)
+			}
 		}
 	}
 

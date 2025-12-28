@@ -9,6 +9,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 )
 
@@ -138,7 +139,37 @@ func normalizeLegacyGeoPath(path string) string {
 }
 
 // normalizeFragmentType tries to map common human labels to our enum values.
-func normalizeFragmentType(s string) models.FragmentType {
+// Uses CanonizationPolicy if available in ScoutEngine, otherwise falls back to hardcoded rules.
+func (e *ScoutEngine) normalizeFragmentType(ctx context.Context, s string) models.FragmentType {
+	logPrefix := "[ScoutEngine:normalizeFragmentType]"
+	
+	// Try CanonizationPolicy if available
+	if e.canonizationPolicy != nil {
+		decision, err := e.canonizationPolicy.Execute(ctx, policy.PolicyInput{
+			Kind: "canonization",
+			Context: map[string]interface{}{
+				"inputType":  "fragment_type",
+				"inputValue": s,
+			},
+		})
+
+		if err == nil && decision.Action == "normalize_to" {
+			output, _ := decision.Params["output"].(string)
+			if output != "" {
+				fmt.Printf("%s CanonizationPolicy normalized: %s -> %s\n", logPrefix, s, output)
+				return models.FragmentType(output)
+			}
+		} else if err != nil {
+			fmt.Printf("%s ERROR: CanonizationPolicy failed: %v, using fallback\n", logPrefix, err)
+		}
+	}
+
+	// Fallback to hardcoded normalization
+	return normalizeFragmentTypeHardcoded(s)
+}
+
+// normalizeFragmentTypeHardcoded is the hardcoded fallback for fragment type normalization.
+func normalizeFragmentTypeHardcoded(s string) models.FragmentType {
 	switch strings.TrimSpace(strings.ToUpper(s)) {
 	case string(models.FragmentTypeOrganization), "ORG":
 		return models.FragmentTypeOrganization
@@ -161,13 +192,42 @@ func normalizeFragmentType(s string) models.FragmentType {
 	}
 }
 
+// Legacy function for backward compatibility (used in preferredCanonicalPaths)
+func normalizeFragmentType(s string) models.FragmentType {
+	return normalizeFragmentTypeHardcoded(s)
+}
+
 // resolveCanonicalPath tries to produce a stable canonical path for a relation.
 // Priority:
 // 1) Use relation.TargetCanonicalPath if it is provided and not /discovered/*
 // 2) Vertex AI Search lookup by name (prefers already-known canonicalPath)
 // 3) LLM canonicalization (strict JSON) as a last resort
 func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.DiscoveredRelation) (string, error) {
-	relType := normalizeFragmentType(rel.TargetType)
+	logPrefix := "[ScoutEngine:resolveCanonicalPath]"
+	
+	// Normalize fragment type using CanonizationPolicy if available
+	relType := e.normalizeFragmentType(ctx, rel.TargetType)
+	
+	// Try CanonizationPolicy for path normalization if available
+	if e.canonizationPolicy != nil && strings.TrimSpace(rel.TargetCanonicalPath) != "" {
+		decision, err := e.canonizationPolicy.Execute(ctx, policy.PolicyInput{
+			Kind: "canonization",
+			Context: map[string]interface{}{
+				"inputType":  "canonical_path",
+				"inputValue": rel.TargetCanonicalPath,
+			},
+		})
+
+		if err == nil && decision.Action == "normalize_to" {
+			output, _ := decision.Params["output"].(string)
+			if output != "" && output != rel.TargetCanonicalPath {
+				fmt.Printf("%s CanonizationPolicy normalized path: %s -> %s\n", logPrefix, rel.TargetCanonicalPath, output)
+				rel.TargetCanonicalPath = output
+			}
+		} else if err != nil {
+			fmt.Printf("%s ERROR: CanonizationPolicy failed for path: %v, using original\n", logPrefix, err)
+		}
+	}
 
 	// GEO special-case: normalize legacy /region/... into /loc/... when possible.
 	if relType == models.FragmentTypeGeoRegion {
@@ -356,7 +416,43 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 	}
 
-	// GEO strictness: require /loc/{country}/{admin1}/{city}
+	// Validate LLM output through ValidationPolicy if available
+	if e.validationPolicy != nil {
+		// Create a test fragment to validate the canonical path
+		testFragment := &models.HorizonFragment{
+			CanonicalPath: out.CanonicalPath,
+			Type:          relType,
+		}
+		
+		decision, err := e.validationPolicy.Execute(ctx, policy.PolicyInput{
+			Kind:     "fragment",
+			Context:  map[string]interface{}{"validationKind": "fragment"},
+			Fragment: testFragment,
+		})
+
+		if err != nil {
+			fmt.Printf("%s ERROR: ValidationPolicy failed for LLM output: %v\n", logPrefix, err)
+			// Continue with hardcoded validation
+		} else {
+			fmt.Printf("%s ValidationPolicy check for LLM output: action=%s, path=%s\n", 
+				logPrefix, decision.Action, decision.DecisionPath)
+			
+			// Don't block execution - only log warnings/penalties
+			// ValidationPolicy "reject" is treated as warning, not blocker
+			if decision.Action == "reject" {
+				reason, _ := decision.Params["reason"].(string)
+				fmt.Printf("%s WARNING: ValidationPolicy would reject LLM output (non-blocking): %s (canonicalPath=%s)\n", 
+					logPrefix, reason, out.CanonicalPath)
+				// Continue - let hardcoded validation handle critical cases
+			} else if decision.Action == "penalty" {
+				penalty, _ := decision.Params["penalty"].(float64)
+				reason, _ := decision.Params["reason"].(string)
+				fmt.Printf("%s PENALTY from ValidationPolicy: %.2f, reason: %s\n", logPrefix, penalty, reason)
+			}
+		}
+	}
+
+	// GEO strictness: require /loc/{country}/{admin1}/{city} with valid country code
 	if relType == models.FragmentTypeGeoRegion {
 		cp := out.CanonicalPath
 		if !strings.HasPrefix(cp, "/loc/") {
@@ -366,6 +462,12 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		if len(parts) != 4 {
 			return "", fmt.Errorf("geo canonicalization must have 3 components after /loc, got: %s", cp)
 		}
+		// Validate country code format (ISO3166-1 alpha2, lowercase, 2 chars)
+		countryCode := parts[1]
+		if len(countryCode) != 2 || !reCountryAlpha2.MatchString(countryCode) {
+			return "", fmt.Errorf("geo canonicalization has invalid country code %q (must be ISO3166-1 alpha2 lowercase, 2 characters), got: %s", countryCode, cp)
+		}
+		fmt.Printf("%s GEO_REGION validation passed: %s\n", logPrefix, cp)
 	}
 
 	// Final hard preference: if preferred canonicalPath exists, use it (even if LLM suggested a suffix variant).
@@ -435,17 +537,32 @@ RULES:
     - Prefer /fac/{orgSlug}/{facilitySlug} when the org can be inferred from the facility name (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise use /fac/{facilitySlug}
   - GEO_REGION: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase (examples: us, de, ru, fr, br, cn)
-    - admin1: state/province/region code or slug lowercase; use "na" if not applicable
-    - city: lowercase slug
+    - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (examples: us, de, ru, fr, br, cn, kz, jp)
+    - admin1: state/province/region code or slug lowercase; use "na" if not applicable/unknown
+    - city: lowercase slug; use "na" if not applicable/unknown
     - For country-only locations, use: /loc/{country}/na/na
+    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED by validation policy.
     Examples (3-position model):
     - USA / Texas / Austin: /loc/us/tx/austin
     - Germany / Bavaria / Munich: /loc/de/by/munich
     - France / Île-de-France / Paris: /loc/fr/idf/paris
     - Russia / Moscow Oblast / Moscow: /loc/ru/mos/moscow
     - Brazil / São Paulo / São Paulo: /loc/br/sp/sao-paulo
+    - Kazakhstan / Astana: /loc/kz/na/astana
   - EVENT: /event/{lowercase-slug}
+- VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
+  - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
+  - canonicalPath MUST match expected prefix for targetType:
+    - ORGANIZATION -> /org/
+    - FACILITY -> /fac/ (prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug})
+    - GEO_REGION -> /loc/ (strictly enforced)
+    - PRODUCT -> /product/
+    - PROGRAM -> /program/
+    - MARKET -> /market/
+    - EVENT -> /event/
+    - PERSON -> /person/
+  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city}
+  - GEO_REGION country code MUST be valid ISO3166-1 alpha2 (2 lowercase letters)
 - Output only JSON, no markdown, no extra text.
 `, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType)
 }

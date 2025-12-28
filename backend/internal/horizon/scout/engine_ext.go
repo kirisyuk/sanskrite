@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -184,7 +186,7 @@ func (e *ScoutEngine) processRelationsInternal(
 
 		// Normalize relation type early (runtime taxonomy allowlist) to avoid creating edges with unsupported types.
 		rel.RelationType = strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
-		targetTypeHint := normalizeFragmentType(rel.TargetType)
+		targetTypeHint := e.normalizeFragmentType(ctx, rel.TargetType)
 		targetType := targetTypeHint
 
 		// 1. Determine target canonical path
@@ -201,7 +203,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		if err != nil {
 			// Fragment doesn't exist -> Create minimal fragment (low confidence) and schedule scouting to fill it.
 			// We do NOT use /discovered paths; canonicalPath must already be stable here.
-			ft := normalizeFragmentType(rel.TargetType)
+			ft := e.normalizeFragmentType(ctx, rel.TargetType)
 			if ft == "" {
 				ft = models.FragmentTypeOrganization
 			}
@@ -537,6 +539,14 @@ func (e *ScoutEngine) processRelationsInternal(
 
 					// CRITICAL: Skip self-reference (prevents infinite loops)
 					if sourceFragment != nil && strings.TrimSpace(targetPath) == strings.TrimSpace(sourceFragment.CanonicalPath) {
+						trace.Log(ctx, "scout_decompose", "child_job.skip.self_reference", map[string]any{
+							"tenantId":         strings.TrimSpace(job.TenantID),
+							"projectId":        strings.TrimSpace(job.ProjectID),
+							"lensId":           strings.TrimSpace(job.LensID),
+							"jobId":            strings.TrimSpace(job.ID),
+							"sourceCanonicalPath": strings.TrimSpace(sourceFragment.CanonicalPath),
+							"targetCanonicalPath": strings.TrimSpace(targetPath),
+						})
 						fmt.Printf("[ScoutEngine] Skipping self-reference job: %s -> %s. Circular dependency avoided.\n",
 							sourceFragment.CanonicalPath, targetPath)
 						shouldSkipJob = true
@@ -545,6 +555,14 @@ func (e *ScoutEngine) processRelationsInternal(
 					// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
 					// This prevents re-scouting entities that were just processed
 					if !shouldSkipJob && targetFragment != nil && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+						trace.Log(ctx, "scout_decompose", "child_job.skip.target_verified", map[string]any{
+							"tenantId":           strings.TrimSpace(job.TenantID),
+							"projectId":          strings.TrimSpace(job.ProjectID),
+							"lensId":             strings.TrimSpace(job.LensID),
+							"jobId":              strings.TrimSpace(job.ID),
+							"targetCanonicalPath": strings.TrimSpace(targetPath),
+							"epistemicStatus":     string(targetFragment.Metadata.EpistemicStatus),
+						})
 						fmt.Printf("[ScoutEngine] Target fragment already verified: %s (status=%s). Skipping scouting job.\n",
 							targetPath, targetFragment.Metadata.EpistemicStatus)
 						shouldSkipJob = true
@@ -567,6 +585,14 @@ func (e *ScoutEngine) processRelationsInternal(
 					// Check if there's already an active scouting job for this canonicalPath (pending/running).
 					if !shouldSkipJob {
 						if existingJobID, ok := activeJobByPath[strings.TrimSpace(targetPath)]; ok && strings.TrimSpace(existingJobID) != "" {
+							trace.Log(ctx, "scout_decompose", "child_job.skip.active_exists", map[string]any{
+								"tenantId":           strings.TrimSpace(job.TenantID),
+								"projectId":          strings.TrimSpace(job.ProjectID),
+								"lensId":             strings.TrimSpace(job.LensID),
+								"jobId":              strings.TrimSpace(job.ID),
+								"targetCanonicalPath": strings.TrimSpace(targetPath),
+								"existingJobId":      strings.TrimSpace(existingJobID),
+							})
 							fmt.Printf("[ScoutEngine] Active scouting job already exists for %s (jobId=%s). Skipping duplicate.\n",
 								targetPath, existingJobID)
 							scheduledChildren[targetPath] = struct{}{}
@@ -677,7 +703,57 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 
 		// Policy: direction validation and reversal (enforced for known edge types).
-		if sourceFragment != nil {
+		// Use unified ValidationPolicy if available, otherwise fallback to hardcoded rules
+		if e.validationPolicy != nil && sourceFragment != nil {
+			logPrefix := "[ScoutEngine:processRelations]"
+			fmt.Printf("%s Using ValidationPolicy for edge validation\n", logPrefix)
+			
+			decision, err := e.validationPolicy.Execute(ctx, policy.PolicyInput{
+				Kind: "edge",
+				Context: map[string]interface{}{
+					"validationKind":   "edge",
+					"sourceFragmentID": edgeSourceID,
+					"targetFragmentID": edgeTargetID,
+					"sourceType":       string(sourceFragment.Type),
+					"targetType":       string(targetType),
+					"relationType":     string(edgeType),
+				},
+				Fragment: sourceFragment,
+			})
+
+			if err != nil {
+				fmt.Printf("%s ERROR: ValidationPolicy failed: %v, falling back to hardcoded rules\n", logPrefix, err)
+			} else {
+				fmt.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f\n", 
+					logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
+
+				switch decision.Action {
+				case "reject":
+					// Don't block - treat as warning/penalty instead
+					reason, _ := decision.Params["reason"].(string)
+					fmt.Printf("%s WARNING: ValidationPolicy would reject edge (non-blocking): %s\n", logPrefix, reason)
+					fmt.Printf("%s Applying penalty instead of blocking - edge will be created with low confidence\n", logPrefix)
+					// Apply penalty to edge confidence instead of blocking
+					// Continue processing - edge will be created but with lower confidence
+				case "reverse":
+					shouldReverse, _ := decision.Params["shouldReverse"].(bool)
+					if shouldReverse {
+						fmt.Printf("%s REVERSING edge direction by ValidationPolicy\n", logPrefix)
+						edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+						directionChanged = true
+						edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
+					}
+				case "penalty":
+					penalty, _ := decision.Params["penalty"].(float64)
+					reason, _ := decision.Params["reason"].(string)
+					fmt.Printf("%s PENALTY by ValidationPolicy: %.2f, reason: %s\n", logPrefix, penalty, reason)
+					// Penalty will be applied to edge.Properties.Criticality later
+				case "allow":
+					fmt.Printf("%s ALLOWED by ValidationPolicy\n", logPrefix)
+				}
+			}
+		} else if sourceFragment != nil {
+			// Fallback to hardcoded validation
 			if valid, shouldReverse, rule := ValidateEdgeDirection(edgeType, sourceFragment.Type, targetType); !valid {
 				if shouldReverse {
 					edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID

@@ -1149,8 +1149,22 @@ func main() {
 			propagationPoliciesRepo := horizonrepo.NewPropagationPoliciesRepository(fsClient.Client())
 			propagationPolicy := horizonpolicy.NewPropagationPolicy(propagationPoliciesRepo)
 			policyTelemetry := horizonpolicy.NewFirestoreTelemetryWriter(fsClient.Client())
-			policyExecutor := horizonpolicy.NewPolicyExecutor(propagationPolicy, policyTelemetry, nil) // LLM executor nil for now
-			propagationEngine.WithPolicyExecutor(policyExecutor)
+			propagationPolicyExecutor := horizonpolicy.NewPolicyExecutor(propagationPolicy, policyTelemetry, nil) // LLM executor nil for now
+			propagationEngine.WithPolicyExecutor(propagationPolicyExecutor)
+
+			// Wire ValidationPolicy for edge and fragment validation
+			validationRulesRepo := horizonrepo.NewValidationRulesRepository(fsClient.Client())
+			validationPolicy := horizonpolicy.NewValidationPolicy(validationRulesRepo)
+			validationPolicyExecutor := horizonpolicy.NewPolicyExecutor(validationPolicy, policyTelemetry, nil)
+			horizonEdgesRepo.WithValidationPolicy(validationPolicyExecutor)
+			horizonEdgesRepo.WithFragmentsRepo(horizonFragmentsRepo)
+
+			// Wire CanonizationPolicy for normalization
+			canonizationRulesRepo := horizonrepo.NewCanonizationRulesRepository(fsClient.Client())
+			canonizationPolicy := horizonpolicy.NewCanonizationPolicy(canonizationRulesRepo)
+			canonizationPolicyExecutor := horizonpolicy.NewPolicyExecutor(canonizationPolicy, policyTelemetry, nil)
+			scoutEngine.WithCanonizationPolicy(canonizationPolicyExecutor)
+			scoutEngine.WithValidationPolicy(validationPolicyExecutor)
 
 			// Wire Critical Path Detector
 			criticalPathDetector := horizoncriticalpath.NewDetector(horizonFragmentsRepo, horizonEdgesRepo)

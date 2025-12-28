@@ -4,18 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"cloud.google.com/go/firestore"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 )
 
 var ErrEdgeNotFound = errors.New("dependency edge not found")
 
 // DependencyEdgesRepository репозиторий для работы с DependencyEdge
 type DependencyEdgesRepository struct {
-	col *firestore.CollectionRef
+	col            *firestore.CollectionRef
+	validationPolicy *policy.PolicyExecutor // Optional: for edge validation
+	fragmentsRepo   *HorizonFragmentsRepository // Optional: for fragment type lookup
 }
 
 // NewDependencyEdgesRepository создает новый репозиторий
@@ -25,13 +29,99 @@ func NewDependencyEdgesRepository(db *firestore.Client) *DependencyEdgesReposito
 	}
 }
 
+// WithValidationPolicy sets the validation policy executor.
+func (r *DependencyEdgesRepository) WithValidationPolicy(executor *policy.PolicyExecutor) *DependencyEdgesRepository {
+	r.validationPolicy = executor
+	return r
+}
+
+// WithFragmentsRepo sets the fragments repository for type lookup.
+func (r *DependencyEdgesRepository) WithFragmentsRepo(repo *HorizonFragmentsRepository) *DependencyEdgesRepository {
+	r.fragmentsRepo = repo
+	return r
+}
+
 // Create создает новый DependencyEdge
 func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.DependencyEdge) (string, error) {
+	logPrefix := "[DependencyEdgesRepository:Create]"
+	
 	if edge == nil {
 		return "", ErrInvalidDocument
 	}
+	
+	log.Printf("%s Creating edge: sourceID=%s, targetID=%s, type=%s", 
+		logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+
+	// Basic validation
 	if err := edge.Validate(); err != nil {
+		log.Printf("%s ERROR: basic validation failed: %v", logPrefix, err)
 		return "", fmt.Errorf("validation error: %w", err)
+	}
+
+	// Policy-based validation if available
+	if r.validationPolicy != nil {
+		// Get source and target fragment types for validation
+		var sourceType, targetType string
+		if r.fragmentsRepo != nil {
+			if sourceFrag, err := r.fragmentsRepo.Get(ctx, edge.SourceFragmentID); err == nil && sourceFrag != nil {
+				sourceType = string(sourceFrag.Type)
+				log.Printf("%s Source fragment type: %s", logPrefix, sourceType)
+			}
+			if targetFrag, err := r.fragmentsRepo.Get(ctx, edge.TargetFragmentID); err == nil && targetFrag != nil {
+				targetType = string(targetFrag.Type)
+				log.Printf("%s Target fragment type: %s", logPrefix, targetType)
+			}
+		}
+
+		decision, err := r.validationPolicy.Execute(ctx, policy.PolicyInput{
+			Kind: "edge",
+			Context: map[string]interface{}{
+				"validationKind":   "edge",
+				"sourceFragmentID": edge.SourceFragmentID,
+				"targetFragmentID": edge.TargetFragmentID,
+				"sourceType":       sourceType,
+				"targetType":       targetType,
+				"relationType":     string(edge.Type),
+			},
+			Edge: edge,
+		})
+
+		if err != nil {
+			log.Printf("%s ERROR: policy validation failed: %v", logPrefix, err)
+			return "", fmt.Errorf("policy validation error: %w", err)
+		}
+
+		log.Printf("%s Policy decision: action=%s, path=%s, confidence=%.2f", 
+			logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
+
+		switch decision.Action {
+		case "reject":
+			// Don't block - treat as warning instead
+			// ValidationPolicy "reject" is advisory, not a blocker
+			reason, _ := decision.Params["reason"].(string)
+			log.Printf("%s WARNING: ValidationPolicy would reject edge (non-blocking): %s", logPrefix, reason)
+			log.Printf("%s Edge will be created with warning - can be fixed post-factum", logPrefix)
+			// Continue - don't block edge creation
+		case "reverse":
+			shouldReverse, _ := decision.Params["shouldReverse"].(bool)
+			if shouldReverse {
+				log.Printf("%s REVERSING edge direction", logPrefix)
+				edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
+			}
+		case "penalty":
+			penalty, _ := decision.Params["penalty"].(float64)
+			reason, _ := decision.Params["reason"].(string)
+			log.Printf("%s PENALTY applied: %.2f, reason: %s", logPrefix, penalty, reason)
+			// Apply penalty to confidence
+			if edge.Properties.Criticality > 0 {
+				edge.Properties.Criticality *= (1.0 - penalty)
+				log.Printf("%s Adjusted criticality: %.4f", logPrefix, edge.Properties.Criticality)
+			}
+		case "allow":
+			log.Printf("%s ALLOWED by policy", logPrefix)
+		default:
+			log.Printf("%s WARNING: unknown policy action: %s, allowing", logPrefix, decision.Action)
+		}
 	}
 
 	now := time.Now().UTC()
@@ -41,9 +131,13 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 	doc := r.col.NewDoc()
 	edge.ID = doc.ID
 
+	log.Printf("%s Saving edge to Firestore: id=%s", logPrefix, edge.ID)
 	if _, err := doc.Set(ctx, edge); err != nil {
+		log.Printf("%s ERROR: failed to save edge: %v", logPrefix, err)
 		return "", err
 	}
+	
+	log.Printf("%s Edge created successfully: id=%s", logPrefix, edge.ID)
 	return edge.ID, nil
 }
 

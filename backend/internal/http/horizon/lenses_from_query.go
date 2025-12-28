@@ -9,6 +9,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
@@ -82,10 +83,29 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		SessionID:     sessionID,
 	})
 
+	trace.Log(ctx, "lens_create", "lens.from_query.request", map[string]any{
+		"tenantId":          authInfo.TenantID,
+		"projectId":         req.ProjectID,
+		"queryLen":          len(req.Query),
+		"querySha1":         trace.HashText(req.Query),
+		"nameProvided":      req.Name != "",
+		"statusProvided":    req.Status != "",
+		"maxRecursionDepth": req.MaxRecursionDepth,
+		"requestedMetricsN": len(req.RequestedMetrics),
+	})
+
 	// 1) Resolve intent (precheck).
 	intentAgent := agents.NewIntentResolverAgent(h.service.AIExecutor())
+	trace.Log(ctx, "intent", "intent.resolve.start", map[string]any{
+		"projectId": req.ProjectID,
+		"queryLen":  len(req.Query),
+	})
 	intent, err := intentAgent.Resolve(ctx, req.Query)
 	if err != nil {
+		trace.Log(ctx, "intent", "intent.resolve.error", map[string]any{
+			"projectId": req.ProjectID,
+			"error":     err.Error(),
+		})
 		// Best-effort: publish assembly failed for UI visibility.
 		if pub := h.service.RealtimePublisher(); pub != nil {
 			_ = pub.PublishJSON(ctx, realtime.EventType("horizon.assembly.failed"), authInfo.TenantID, map[string]interface{}{
@@ -100,6 +120,19 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	anchorPaths := make([]string, 0, len(intent.Anchors))
+	for _, a := range intent.Anchors {
+		anchorPaths = append(anchorPaths, strings.TrimSpace(a.CanonicalPath))
+	}
+	trace.Log(ctx, "intent", "intent.resolve.ok", map[string]any{
+		"projectId":      req.ProjectID,
+		"focus":          trace.Trunc(intent.Focus, 140),
+		"spherePathsN":   len(intent.SpherePaths),
+		"keywordsN":      len(intent.Keywords),
+		"anchorsN":       len(intent.Anchors),
+		"anchorPaths":    trace.StrSlice(anchorPaths, 10),
+		"spherePathsTop": trace.StrSlice(intent.SpherePaths, 10),
+	})
 
 	// 2) Build Lens.
 	scope := make([]string, 0, len(intent.Anchors))
@@ -116,6 +149,10 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		scope = append(scope, cp)
 	}
 	if len(scope) == 0 {
+		trace.Log(ctx, "scope", "scope.empty", map[string]any{
+			"projectId": req.ProjectID,
+			"anchorsN":  len(intent.Anchors),
+		})
 		http.Error(w, "no anchors resolved", http.StatusBadRequest)
 		return
 	}
@@ -150,8 +187,29 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		Status:    status,
 	}
 
+	trace.Log(ctx, "lens_create", "lens.built", map[string]any{
+		"tenantId":      lens.TenantID,
+		"projectId":     lens.ProjectID,
+		"name":          trace.Trunc(lens.Name, 120),
+		"status":        lens.Status,
+		"scopeN":        len(lens.Scope),
+		"scopeTop":      trace.StrSlice(lens.Scope, 12),
+		"viewConfigKeys": func() []string {
+			keys := make([]string, 0, len(lens.ViewConfig))
+			for k := range lens.ViewConfig {
+				keys = append(keys, k)
+			}
+			return trace.StrSlice(keys, 20)
+		}(),
+	})
+
 	lensID, err := h.service.Lens().CreateLens(ctx, lens)
 	if err != nil {
+		trace.Log(ctx, "lens_create", "lens.create.error", map[string]any{
+			"tenantId":  lens.TenantID,
+			"projectId": lens.ProjectID,
+			"error":     err.Error(),
+		})
 		if pub := h.service.RealtimePublisher(); pub != nil {
 			_ = pub.PublishJSON(ctx, realtime.EventType("horizon.assembly.failed"), authInfo.TenantID, map[string]interface{}{
 				"tenantId":      authInfo.TenantID,
@@ -166,6 +224,12 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		return
 	}
 	lens.ID = lensID
+	trace.Log(ctx, "lens_create", "lens.create.ok", map[string]any{
+		"tenantId":  lens.TenantID,
+		"projectId": lens.ProjectID,
+		"lensId":    lensID,
+		"scopeN":    len(lens.Scope),
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Correlation-Id", correlationID)

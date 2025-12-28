@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -40,16 +41,62 @@ func (r *ScoutingJobsRepository) Create(ctx context.Context, job *models.Scoutin
 	// ScoutingJob встраивает AgentJob, поэтому используем его напрямую
 	agentJob := &job.AgentJob
 	lockKey := buildScoutJobDedupKey(job)
+	trace.Log(ctx, "root_jobs", "scout_job.create.dedup.start", map[string]any{
+		"tenantId":         strings.TrimSpace(job.TenantID),
+		"projectId":        strings.TrimSpace(job.ProjectID),
+		"lensId":           strings.TrimSpace(job.LensID),
+		"agentId":          strings.TrimSpace(job.AgentID),
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"lockKeySha1":      trace.HashText(lockKey),
+	})
 	id, created, err := r.agentJobsRepo.CreateDedup(ctx, agentJob, lockKey)
 	if err != nil {
+		trace.Log(ctx, "root_jobs", "scout_job.create.dedup.error", map[string]any{
+			"tenantId":          strings.TrimSpace(job.TenantID),
+			"projectId":         strings.TrimSpace(job.ProjectID),
+			"lensId":            strings.TrimSpace(job.LensID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"lockKeySha1":       trace.HashText(lockKey),
+			"error":             err.Error(),
+		})
 		return "", fmt.Errorf("failed to create scouting job: %w", err)
 	}
 	job.ID = id
+	trace.Log(ctx, "root_jobs", "scout_job.create.dedup.result", map[string]any{
+		"tenantId":          strings.TrimSpace(job.TenantID),
+		"projectId":         strings.TrimSpace(job.ProjectID),
+		"lensId":            strings.TrimSpace(job.LensID),
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"jobId":             id,
+		"created":           created,
+	})
 	// Only enqueue when a new job was actually created.
 	if created && r.onCreate != nil {
+		trace.Log(ctx, "root_jobs", "scout_job.create.enqueue_hook.start", map[string]any{
+			"tenantId":          strings.TrimSpace(job.TenantID),
+			"projectId":         strings.TrimSpace(job.ProjectID),
+			"lensId":            strings.TrimSpace(job.LensID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"jobId":             id,
+		})
 		if err := r.onCreate(ctx, job); err != nil {
+			trace.Log(ctx, "root_jobs", "scout_job.create.enqueue_hook.error", map[string]any{
+				"tenantId":          strings.TrimSpace(job.TenantID),
+				"projectId":         strings.TrimSpace(job.ProjectID),
+				"lensId":            strings.TrimSpace(job.LensID),
+				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"jobId":             id,
+				"error":             err.Error(),
+			})
 			return "", fmt.Errorf("scouting job created but enqueue hook failed: %w", err)
 		}
+		trace.Log(ctx, "root_jobs", "scout_job.create.enqueue_hook.ok", map[string]any{
+			"tenantId":          strings.TrimSpace(job.TenantID),
+			"projectId":         strings.TrimSpace(job.ProjectID),
+			"lensId":            strings.TrimSpace(job.LensID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"jobId":             id,
+		})
 	}
 
 	// Best-effort: if we deduped onto an existing job, merge incoming sourceIds into its state.
@@ -57,6 +104,14 @@ func (r *ScoutingJobsRepository) Create(ctx context.Context, job *models.Scoutin
 	if !created && r.agentJobsRepo != nil {
 		srcIDs := extractSourceIDsFromScoutingJob(job)
 		if len(srcIDs) > 0 {
+			trace.Log(ctx, "root_jobs", "scout_job.create.dedup.merge_source_ids", map[string]any{
+				"tenantId":          strings.TrimSpace(job.TenantID),
+				"projectId":         strings.TrimSpace(job.ProjectID),
+				"lensId":            strings.TrimSpace(job.LensID),
+				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"jobId":             id,
+				"sourceIdsN":        len(srcIDs),
+			})
 			_ = r.agentJobsRepo.MergeStateStringArray(ctx, id, "sourceIds", srcIDs)
 		}
 	}

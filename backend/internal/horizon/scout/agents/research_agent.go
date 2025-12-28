@@ -204,11 +204,21 @@ Choose relationType to match this direction:
 - DEPENDS_ON: source depends on target (use for suppliers, contractors, infrastructure dependencies).
   Example: If CRRC supplies trains for the Astana LRT project, Astana/CTS may DEPEND_ON CRRC.
 - SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
-- LOCATED_IN / OPERATES_IN: source is located/operates in a GEO target.
-- REGULATES: source (usually a government agency/organization) regulates target.
-- OWNS: source owns target.
-- PRODUCES: source produces target (target is typically a product).
+- LOCATED_IN: source is located in target (target MUST be GEO_REGION).
+- OPERATES_IN: source operates in target (source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY).
+- REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
+- OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
+- PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
 - COMPETES_WITH / INFLUENCES: as labeled.
+
+EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
+- REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
+- OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT
+- PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
+- LOCATED_IN: target MUST be GEO_REGION
+- OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
+- SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
+- DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
 
 DiscoveredRelation Schema:
 {
@@ -240,10 +250,16 @@ CANONICAL PATH RULES:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred
     - Otherwise /fac/{facilitySlug}
   - GEO regions / locations: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase (e.g., us, de, ru)
+    - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (e.g., us, de, ru, kz, jp)
     - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
     - city: lowercase slug; use "na" if not applicable/unknown
     - country-only locations: /loc/{country}/na/na
+    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED.
+- VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
+  - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
+  - canonicalPath MUST match expected prefix for targetType (see namespaces above)
+  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
+  - Facilities: prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug} (flat paths get penalty)
 - canonicalPath slug SHOULD be derived from targetShortName (without ownership suffix) to avoid duplicates when legal form changes.
 - ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).

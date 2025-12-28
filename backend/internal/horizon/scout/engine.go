@@ -9,10 +9,12 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -286,6 +288,8 @@ type ScoutEngine struct {
 	orgDeduplicator     *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
 	preCreateValidator  *PreCreateValidator               // Validates fragments before creation
 	orgHierarchyBuilder *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
+	validationPolicy    *policy.PolicyExecutor            // Optional: unified validation policy for edges
+	canonizationPolicy  *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
@@ -308,6 +312,21 @@ func (e *ScoutEngine) WithBudgetPolicy(policy BudgetPolicy) *ScoutEngine {
 // WithFactEmitter wires a shared fact emitter for producing ontology facts from Scout results.
 func (e *ScoutEngine) WithFactEmitter(emitter *coreontology.FactEmitter) *ScoutEngine {
 	e.factEmitter = emitter
+	return e
+}
+
+// WithValidationPolicy sets the validation policy executor for edge validation.
+func (e *ScoutEngine) WithValidationPolicy(executor *policy.PolicyExecutor) *ScoutEngine {
+	e.validationPolicy = executor
+	if e.preCreateValidator != nil {
+		e.preCreateValidator.WithValidationPolicy(executor)
+	}
+	return e
+}
+
+// WithCanonizationPolicy sets the canonization policy executor for path/type normalization.
+func (e *ScoutEngine) WithCanonizationPolicy(executor *policy.PolicyExecutor) *ScoutEngine {
+	e.canonizationPolicy = executor
 	return e
 }
 
@@ -480,6 +499,16 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if job == nil {
 		return fmt.Errorf("job is nil")
 	}
+	trace.Log(ctx, "scout_exec", "scout.job.start", map[string]any{
+		"tenantId":           strings.TrimSpace(job.TenantID),
+		"projectId":          strings.TrimSpace(job.ProjectID),
+		"lensId":             strings.TrimSpace(job.LensID),
+		"jobId":              strings.TrimSpace(job.ID),
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"status":             strings.TrimSpace(string(job.Status)),
+		"currentState":       string(job.CurrentState),
+		"sourceIdsN":          len(job.SourceIDs),
+	})
 
 	// IDEMPOTENCY CHECK: Skip already-completed jobs (handles Cloud Tasks retries gracefully).
 	// This prevents duplicate work when Cloud Tasks retries due to timeout/transient errors.
@@ -487,6 +516,15 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		job.CurrentState == models.ScoutingJobStateFailed ||
 		job.Status == coreModels.AgentJobStatusCompleted ||
 		job.Status == coreModels.AgentJobStatusFailed {
+		trace.Log(ctx, "scout_exec", "scout.job.idempotent_skip", map[string]any{
+			"tenantId":           strings.TrimSpace(job.TenantID),
+			"projectId":          strings.TrimSpace(job.ProjectID),
+			"lensId":             strings.TrimSpace(job.LensID),
+			"jobId":              strings.TrimSpace(job.ID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"status":             strings.TrimSpace(string(job.Status)),
+			"currentState":       string(job.CurrentState),
+		})
 		fmt.Printf("[ScoutEngine] Job %s already terminal (CurrentState=%s, Status=%s). Skipping (idempotent).\n",
 			job.ID, job.CurrentState, job.Status)
 		return nil // Success: already processed
@@ -539,8 +577,24 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			attempts[cp] = attempts[cp] + 1
 			job.State["canonicalPathAttempts"] = attempts
 			_ = e.scoutingJobsRepo.Update(ctx, job) // best-effort
+			trace.Log(ctx, "scout_exec", "scout.job.circuit_breaker.tick", map[string]any{
+				"tenantId":           strings.TrimSpace(job.TenantID),
+				"projectId":          strings.TrimSpace(job.ProjectID),
+				"lensId":             strings.TrimSpace(job.LensID),
+				"jobId":              strings.TrimSpace(job.ID),
+				"canonicalPath":      cp,
+				"attempts":           attempts[cp],
+			})
 
 			if attempts[cp] >= 5 {
+				trace.Log(ctx, "scout_exec", "scout.job.circuit_breaker.trip", map[string]any{
+					"tenantId":           strings.TrimSpace(job.TenantID),
+					"projectId":          strings.TrimSpace(job.ProjectID),
+					"lensId":             strings.TrimSpace(job.LensID),
+					"jobId":              strings.TrimSpace(job.ID),
+					"canonicalPath":      cp,
+					"attempts":           attempts[cp],
+				})
 				fmt.Printf("[ScoutEngine] Circuit breaker tripped: job=%s canonicalPath=%s attempts=%d. Hard-stopping.\n",
 					strings.TrimSpace(job.ID), cp, attempts[cp])
 				_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "circuit_breaker")
@@ -586,6 +640,14 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 	ctx = ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.scout", lensID, cascadeID)
 	ctx = e.attachRealtimeContext(ctx, job, tenantID, projectID, lensID)
+	trace.Log(ctx, "scout_exec", "scout.job.context", map[string]any{
+		"tenantId":            strings.TrimSpace(tenantID),
+		"projectId":           strings.TrimSpace(projectID),
+		"lensId":              strings.TrimSpace(lensID),
+		"jobId":               strings.TrimSpace(job.ID),
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"cascadeRootJobId":     cascadeID,
+	})
 
 	// FRESHNESS CHECK: Проверяем, есть ли свежие данные
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
@@ -599,16 +661,55 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		} else if !existingFragment.Metadata.LastVerifiedAt.IsZero() {
 			sinceFacts = &existingFragment.Metadata.LastVerifiedAt
 		}
+		trace.Log(ctx, "scout_exec", "scout.freshness.checked", map[string]any{
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(lensID),
+			"jobId":               strings.TrimSpace(job.ID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"fragmentId":          strings.TrimSpace(existingFragment.ID),
+			"isFresh":             isFresh,
+			"epistemicStatus":     string(existingFragment.Metadata.EpistemicStatus),
+			"lastVerifiedAt": func() string {
+				if existingFragment.Metadata.LastVerifiedAt.IsZero() {
+					return ""
+				}
+				return existingFragment.Metadata.LastVerifiedAt.UTC().Format(time.RFC3339Nano)
+			}(),
+			"lastFactsSeenAt": func() string {
+				if existingFragment.Metadata.LastFactsSeenAt.IsZero() {
+					return ""
+				}
+				return existingFragment.Metadata.LastFactsSeenAt.UTC().Format(time.RFC3339Nano)
+			}(),
+		})
 
 		// FAST PATH: if we have fresh facts and they strongly match the fragment, apply deterministically without LLM.
 		var facts []*coreModels.OntologyFact
 		if e.planner != nil && e.planner.factsRepo != nil && sinceFacts != nil {
 			facts, err = e.planner.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, tenantID, job.TargetCanonicalPath, sinceFacts.UTC(), 200)
 			if err == nil && len(facts) > 0 {
+				trace.Log(ctx, "scout_exec", "scout.fast_path.facts_found", map[string]any{
+					"tenantId":            strings.TrimSpace(job.TenantID),
+					"projectId":           strings.TrimSpace(job.ProjectID),
+					"lensId":              strings.TrimSpace(lensID),
+					"jobId":               strings.TrimSpace(job.ID),
+					"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+					"factsN":              len(facts),
+				})
 				applier := &FactApplier{vertex: e.planner.vertexSearchClient}
 				// Thresholds are conservative; can be tuned later or moved into policy doc.
 				applyRes, err := applier.TryApplyFactsFastPath(ctx, e.fragmentsRepo, existingFragment, facts, 0.70 /*relevance*/, 0.80 /*fact confidence*/)
 				if err == nil && applyRes != nil && applyRes.Applied {
+					trace.Log(ctx, "scout_exec", "scout.fast_path.applied", map[string]any{
+						"tenantId":            strings.TrimSpace(job.TenantID),
+						"projectId":           strings.TrimSpace(job.ProjectID),
+						"lensId":              strings.TrimSpace(lensID),
+						"jobId":               strings.TrimSpace(job.ID),
+						"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+						"appliedFacts":        applyRes.AppliedFacts,
+						"maxRelevance":        applyRes.MaxRelevance,
+					})
 					fmt.Printf("[ScoutEngine] Fast-path applied facts for %s: appliedFacts=%d maxRelevance=%.3f\n",
 						job.TargetCanonicalPath, applyRes.AppliedFacts, applyRes.MaxRelevance)
 
@@ -850,6 +951,20 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		return fmt.Errorf("failed to transition to EXECUTION: %w", err)
 	}
 	e.logLine(ctx, job, "info", "> executing sources")
+	trace.Log(ctx, "scout_exec", "scout.execution.start", map[string]any{
+		"tenantId":            strings.TrimSpace(job.TenantID),
+		"projectId":           strings.TrimSpace(job.ProjectID),
+		"lensId":              strings.TrimSpace(lensID),
+		"jobId":               strings.TrimSpace(job.ID),
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"plannedSourcesN": func() int {
+			if sourcePlan == nil {
+				return 0
+			}
+			return len(sourcePlan.Sources)
+		}(),
+		"strategy": strings.TrimSpace(job.ScoutingStrategy),
+	})
 
 	var aggregatedContent string
 	var allSourceIDs []string
@@ -875,6 +990,18 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		allSourceIDs = append(allSourceIDs, result.SourceIDs...)
 		allDocumentIDs = append(allDocumentIDs, result.DocumentIDs...)
 	}
+	trace.Log(ctx, "scout_exec", "scout.execution.done", map[string]any{
+		"tenantId":            strings.TrimSpace(job.TenantID),
+		"projectId":           strings.TrimSpace(job.ProjectID),
+		"lensId":              strings.TrimSpace(lensID),
+		"jobId":               strings.TrimSpace(job.ID),
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"aggregatedContentLen": len(aggregatedContent),
+		"aggregatedContentSha1": trace.HashText(aggregatedContent),
+		"sourceResultsN":       len(sourceResults),
+		"sourceIdsN":           len(allSourceIDs),
+		"documentIdsN":         len(allDocumentIDs),
+	})
 
 	var scoutResult *agents.ScoutResult
 	var extractedFragment *models.HorizonFragment
@@ -883,6 +1010,19 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if aggregatedContent == "" {
 		fmt.Printf("[ScoutEngine] No internal content for %s. Initiating full research.\n", job.TargetCanonicalPath)
 		e.logLine(ctx, job, "info", "> no internal content; initiating full research")
+		trace.Log(ctx, "scout_research", "scout.no_internal_content", map[string]any{
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(lensID),
+			"jobId":               strings.TrimSpace(job.ID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"plannedSourcesN": func() int {
+				if sourcePlan == nil {
+					return 0
+				}
+				return len(sourcePlan.Sources)
+			}(),
+		})
 
 		// Choose a sensible default type from canonicalPath prefix (no LLM needed for this deterministic mapping).
 		defaultType := models.FragmentTypeOrganization
@@ -1053,8 +1193,29 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 			}
 		}
+		trace.Log(ctx, "scout_research", "scout.research.start", map[string]any{
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(lensID),
+			"jobId":               strings.TrimSpace(job.ID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"missingN":            len(validationResult.MissingInfo),
+			"missingTop":          trace.StrSlice(validationResult.MissingInfo, 6),
+			"focus":               trace.Trunc(focus, 140),
+			"spherePathsTop":      trace.StrSlice(spherePaths, 10),
+			"keywordsTop":         trace.StrSlice(keywords, 10),
+		})
 		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords)
 		if err == nil {
+			// Capture canonicalPath drift introduced by research (aliasing).
+			oldCP := ""
+			if extractedFragment != nil {
+				oldCP = strings.TrimSpace(extractedFragment.CanonicalPath)
+			}
+			newCP := ""
+			if enrichedFragment != nil {
+				newCP = strings.TrimSpace(enrichedFragment.CanonicalPath)
+			}
 			extractedFragment = enrichedFragment
 			if len(newRelations) > 0 {
 				scoutResult.Relations = append(scoutResult.Relations, newRelations...)
@@ -1063,9 +1224,34 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 			// Обновляем LastVerifiedAt
 			extractedFragment.Metadata.LastVerifiedAt = time.Now()
+			trace.Log(ctx, "scout_research", "scout.research.ok", map[string]any{
+				"tenantId":            strings.TrimSpace(job.TenantID),
+				"projectId":           strings.TrimSpace(job.ProjectID),
+				"lensId":              strings.TrimSpace(lensID),
+				"jobId":               strings.TrimSpace(job.ID),
+				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"fragmentCanonicalPathBefore": oldCP,
+				"fragmentCanonicalPathAfter":  newCP,
+				"newRelationsN":               len(newRelations),
+				"relationsTopCanonicalPaths": func() []string {
+					out := make([]string, 0, len(newRelations))
+					for _, r := range newRelations {
+						out = append(out, strings.TrimSpace(r.TargetCanonicalPath))
+					}
+					return trace.StrSlice(out, 12)
+				}(),
+			})
 		} else {
 			fmt.Printf("[ScoutEngine] Research failed: %v\n", err)
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> research failed: %v", err))
+			trace.Log(ctx, "scout_research", "scout.research.error", map[string]any{
+				"tenantId":            strings.TrimSpace(job.TenantID),
+				"projectId":           strings.TrimSpace(job.ProjectID),
+				"lensId":              strings.TrimSpace(lensID),
+				"jobId":               strings.TrimSpace(job.ID),
+				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"error":               err.Error(),
+			})
 		}
 	}
 SKIP_RESEARCH:
@@ -1178,6 +1364,15 @@ SKIP_RESEARCH:
 	}
 	if effectiveCanonicalPath != "" && strings.TrimSpace(job.TargetCanonicalPath) != effectiveCanonicalPath {
 		old := strings.TrimSpace(job.TargetCanonicalPath)
+		trace.Log(ctx, "scout_persist", "scout.retarget.start", map[string]any{
+			"tenantId":           strings.TrimSpace(job.TenantID),
+			"projectId":          strings.TrimSpace(job.ProjectID),
+			"lensId":             strings.TrimSpace(lensID),
+			"jobId":              strings.TrimSpace(job.ID),
+			"fromCanonicalPath":  old,
+			"toCanonicalPath":    effectiveCanonicalPath,
+			"hint":               "using_canonicalPath_from_research_or_dedup",
+		})
 		fmt.Printf("[ScoutEngine] Retargeting job %s: %s -> %s (using canonicalPath from research/dedup)\n",
 			strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
 		// Persist into job + state so Cloud Tasks retries execute the correct target as well.
@@ -1191,12 +1386,33 @@ SKIP_RESEARCH:
 			job.State["aliasCanonicalPath"] = old
 		}
 		_ = e.scoutingJobsRepo.Update(ctx, job)
+		trace.Log(ctx, "scout_persist", "scout.retarget.done", map[string]any{
+			"tenantId":           strings.TrimSpace(job.TenantID),
+			"projectId":          strings.TrimSpace(job.ProjectID),
+			"lensId":             strings.TrimSpace(lensID),
+			"jobId":              strings.TrimSpace(job.ID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		})
 	}
 
 	// VERIFIED: Создание Frame и обновление HorizonFragment
 	if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "verified"); err != nil {
 		return fmt.Errorf("failed to transition to VERIFIED: %w", err)
 	}
+	trace.Log(ctx, "scout_persist", "scout.persist.start", map[string]any{
+		"tenantId":            strings.TrimSpace(job.TenantID),
+		"projectId":           strings.TrimSpace(job.ProjectID),
+		"lensId":              strings.TrimSpace(lensID),
+		"jobId":               strings.TrimSpace(job.ID),
+		"effectiveCanonicalPath": effectiveCanonicalPath,
+		"confidence":           validationResult.Confidence,
+		"relationsN": func() int {
+			if scoutResult == nil {
+				return 0
+			}
+			return len(scoutResult.Relations)
+		}(),
+	})
 
 	// Извлекаем Evidence из результатов источников через LLM
 	evidenceExtractor := NewEvidenceExtractorLLM(e.aiExecutor)
@@ -1259,9 +1475,17 @@ SKIP_RESEARCH:
 				for _, w := range preValidation.Warnings {
 					fmt.Printf("[ScoutEngine] Pre-create warning: %s\n", w)
 				}
-				// Check if creation should be blocked
-				if !preValidation.IsValid {
-					return fmt.Errorf("fragment creation blocked: %s", preValidation.BlockReason)
+				// Only block on critical issues (empty path/type, /discovered/ paths)
+				// Warnings don't block creation - they're logged for post-factum fixes
+				if !preValidation.IsValid && preValidation.BlockReason != "" {
+					// Only block on critical cases that cannot be fixed post-factum
+					if strings.Contains(preValidation.BlockReason, "/discovered/") ||
+						strings.Contains(preValidation.BlockReason, "canonical path is required") ||
+						strings.Contains(preValidation.BlockReason, "fragment type is required") {
+						return fmt.Errorf("fragment creation blocked: %s", preValidation.BlockReason)
+					}
+					// For other cases, log warning but continue
+					fmt.Printf("[ScoutEngine] WARNING (non-blocking): %s\n", preValidation.BlockReason)
 				}
 				// Check if we should use an existing fragment instead (deduplication)
 				if preValidation.ReplacementFrag != nil && preValidation.ReplacementFrag.ID != "" {

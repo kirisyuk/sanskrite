@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
@@ -59,8 +60,22 @@ func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 		SessionID:     sessionID,
 	})
 
+	trace.Log(ctx, "lens_create", "lens.create.request", map[string]any{
+		"tenantId":  authInfo.TenantID,
+		"projectId": lens.ProjectID,
+		"name":      trace.Trunc(lens.Name, 120),
+		"status":    strings.TrimSpace(lens.Status),
+		"scopeN":    len(lens.Scope),
+		"scopeTop":  trace.StrSlice(lens.Scope, 12),
+	})
+
 	lensID, err := h.service.Lens().CreateLens(ctx, &lens)
 	if err != nil {
+		trace.Log(ctx, "lens_create", "lens.create.error", map[string]any{
+			"tenantId":  authInfo.TenantID,
+			"projectId": lens.ProjectID,
+			"error":     err.Error(),
+		})
 		// Best-effort: publish assembly failed for UI visibility.
 		if pub := h.service.RealtimePublisher(); pub != nil && strings.TrimSpace(lens.ProjectID) != "" {
 			_ = pub.PublishJSON(ctx, realtime.EventType("horizon.assembly.failed"), authInfo.TenantID, map[string]interface{}{
@@ -77,6 +92,12 @@ func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lens.ID = lensID
+	trace.Log(ctx, "lens_create", "lens.create.ok", map[string]any{
+		"tenantId":  authInfo.TenantID,
+		"projectId": lens.ProjectID,
+		"lensId":    lensID,
+		"scopeN":    len(lens.Scope),
+	})
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Correlation-Id", correlationID)
 	json.NewEncoder(w).Encode(lens)

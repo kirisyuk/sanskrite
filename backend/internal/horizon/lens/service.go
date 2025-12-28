@@ -12,6 +12,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -189,7 +190,20 @@ func (s *LensService) SetWatchdogLifecycleHook(hook func(ctx context.Context, fr
 
 // CreateLens создает новый Lens и управляет подписками
 func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string, error) {
+	trace.Log(ctx, "lens_create", "lens.service.create.start", map[string]any{
+		"tenantId":  strings.TrimSpace(lens.TenantID),
+		"projectId": strings.TrimSpace(lens.ProjectID),
+		"name":      trace.Trunc(lens.Name, 120),
+		"status":    strings.TrimSpace(lens.Status),
+		"scopeN":    len(lens.Scope),
+		"scopeTop":  trace.StrSlice(lens.Scope, 12),
+	})
 	if err := lens.Validate(); err != nil {
+		trace.Log(ctx, "lens_create", "lens.service.create.validation_error", map[string]any{
+			"tenantId":  strings.TrimSpace(lens.TenantID),
+			"projectId": strings.TrimSpace(lens.ProjectID),
+			"error":     err.Error(),
+		})
 		// Best-effort: surface assembly failure to the initiating UI (if realtime ctx exists).
 		s.publish(ctx, realtime.EventType("horizon.assembly.failed"), map[string]interface{}{
 			"tenantId":  lens.TenantID,
@@ -227,6 +241,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Создаем Lens
 	lensID, err := s.lensesRepo.Create(ctx, lens)
 	if err != nil {
+		trace.Log(ctx, "lens_create", "lens.repo.create.error", map[string]any{
+			"tenantId":  strings.TrimSpace(lens.TenantID),
+			"projectId": strings.TrimSpace(lens.ProjectID),
+			"error":     err.Error(),
+		})
 		s.publish(ctx, realtime.EventType("horizon.assembly.failed"), map[string]interface{}{
 			"tenantId":  lens.TenantID,
 			"projectId": lens.ProjectID,
@@ -236,6 +255,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		return "", fmt.Errorf("failed to create lens: %w", err)
 	}
 	lens.ID = lensID
+	trace.Log(ctx, "lens_create", "lens.repo.create.ok", map[string]any{
+		"tenantId":  strings.TrimSpace(lens.TenantID),
+		"projectId": strings.TrimSpace(lens.ProjectID),
+		"lensId":    lensID,
+	})
 
 	// Update realtime ctx with lensId (if present).
 	if rc, ok := rtctx.Get(ctx); ok {
@@ -298,10 +322,26 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 
 	// Разделяем Scope на статические пути и QueryAddress
 	staticPaths, queryAddresses := splitScope(lens.Scope)
+	trace.Log(ctx, "scope", "scope.split", map[string]any{
+		"tenantId":       strings.TrimSpace(lens.TenantID),
+		"projectId":      strings.TrimSpace(lens.ProjectID),
+		"lensId":         lensID,
+		"staticPathsN":   len(staticPaths),
+		"queryAddressesN": len(queryAddresses),
+		"staticPathsTop": trace.StrSlice(staticPaths, 12),
+		"queryAddressesTop": trace.StrSlice(queryAddresses, 12),
+	})
 
 	// Резолвим QueryAddress в canonical paths
 	now := time.Now().UTC()
 	resolvedQueries, resolveErrors := resolveQueryAddresses(ctx, s.queryResolver, lens.TenantID, queryAddresses)
+	trace.Log(ctx, "scope", "scope.query_addresses.resolved", map[string]any{
+		"tenantId":      strings.TrimSpace(lens.TenantID),
+		"projectId":     strings.TrimSpace(lens.ProjectID),
+		"lensId":        lensID,
+		"resolvedN":     len(resolvedQueries),
+		"errorsN":       len(resolveErrors),
+	})
 
 	// Сохраняем resolved queries в кэш
 	for queryAddr, resolvedPaths := range resolvedQueries {
@@ -312,6 +352,13 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	}
 	// Avoid duplicate work (e.g. repeated anchors / resolved queries).
 	staticPaths = dedupeCanonicalPaths(staticPaths)
+	trace.Log(ctx, "scope", "scope.deduped", map[string]any{
+		"tenantId":     strings.TrimSpace(lens.TenantID),
+		"projectId":    strings.TrimSpace(lens.ProjectID),
+		"lensId":       lensID,
+		"staticPathsN": len(staticPaths),
+		"staticPathsTop": trace.StrSlice(staticPaths, 20),
+	})
 
 	// Логируем ошибки резолва (если есть)
 	if len(resolveErrors) > 0 {
@@ -360,6 +407,12 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			}
 		}
 	}
+	trace.Log(ctx, "root_jobs", "root_jobs.prefetch_active", map[string]any{
+		"tenantId":    strings.TrimSpace(lens.TenantID),
+		"projectId":   strings.TrimSpace(lens.ProjectID),
+		"lensId":      lensID,
+		"activeJobsN": len(activeScoutJobs),
+	})
 
 	for _, canonicalPath := range staticPaths {
 		fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
@@ -408,6 +461,15 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		// This prevents excessive Cloud Tasks for queries that are already in the system (e.g., Astana/LRT).
 		if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
 			if existingJobID, ok := activeScoutJobs[strings.TrimSpace(canonicalPath)]; ok && existingJobID != "" {
+				trace.Log(ctx, "root_jobs", "root_jobs.dedup_skip_active", map[string]any{
+					"tenantId":       strings.TrimSpace(lens.TenantID),
+					"projectId":      strings.TrimSpace(lens.ProjectID),
+					"lensId":         lensID,
+					"canonicalPath":  strings.TrimSpace(canonicalPath),
+					"existingJobId":  existingJobID,
+					"cacheHit":       isCacheHit,
+					"freshEnough":    isFragmentFreshEnough,
+				})
 				// Best-effort: signal "scouting" state but reuse existing job id.
 				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 					"tenantId":      lens.TenantID,
@@ -421,6 +483,13 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				continue
 			}
 			scoutingPlanned++
+			trace.Log(ctx, "root_jobs", "root_jobs.create.start", map[string]any{
+				"tenantId":      strings.TrimSpace(lens.TenantID),
+				"projectId":     strings.TrimSpace(lens.ProjectID),
+				"lensId":        lensID,
+				"canonicalPath": strings.TrimSpace(canonicalPath),
+				"cacheHit":      isCacheHit,
+			})
 			now := time.Now().UTC()
 			state := map[string]interface{}{
 				"targetCanonicalPath": canonicalPath,
@@ -473,6 +542,13 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			}
 			jobID, createErr := s.scoutingJobsRepo.Create(ctx, scoutingJob)
 			if createErr != nil {
+				trace.Log(ctx, "root_jobs", "root_jobs.create.error", map[string]any{
+					"tenantId":      strings.TrimSpace(lens.TenantID),
+					"projectId":     strings.TrimSpace(lens.ProjectID),
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"error":         createErr.Error(),
+				})
 				s.publish(ctx, realtime.EventType("horizon.assembly.failed"), map[string]interface{}{
 					"tenantId":      lens.TenantID,
 					"projectId":     lens.ProjectID,
@@ -483,6 +559,13 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				})
 				return "", fmt.Errorf("failed to create scouting job for %s: %w", canonicalPath, createErr)
 			}
+			trace.Log(ctx, "root_jobs", "root_jobs.create.ok", map[string]any{
+				"tenantId":      strings.TrimSpace(lens.TenantID),
+				"projectId":     strings.TrimSpace(lens.ProjectID),
+				"lensId":        lensID,
+				"canonicalPath": strings.TrimSpace(canonicalPath),
+				"jobId":         strings.TrimSpace(jobID),
+			})
 			if strings.TrimSpace(jobID) != "" {
 				activeScoutJobs[strings.TrimSpace(canonicalPath)] = strings.TrimSpace(jobID)
 			}
@@ -496,6 +579,20 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"jobId":         strings.TrimSpace(jobID),
 			})
 		} else if isCacheHit && isFragmentFreshEnough {
+			trace.Log(ctx, "root_jobs", "root_jobs.skip_fresh_verified", map[string]any{
+				"tenantId":      strings.TrimSpace(lens.TenantID),
+				"projectId":     strings.TrimSpace(lens.ProjectID),
+				"lensId":        lensID,
+				"canonicalPath": strings.TrimSpace(canonicalPath),
+				"fragmentId":    strings.TrimSpace(fragment.ID),
+				"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
+				"lastVerifiedAt": func() string {
+					if fragment.Metadata.LastVerifiedAt.IsZero() {
+						return ""
+					}
+					return fragment.Metadata.LastVerifiedAt.UTC().Format(time.RFC3339Nano)
+				}(),
+			})
 			// Best-effort: signal that no scouting is needed for this node.
 			s.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
 				"tenantId":        lens.TenantID,

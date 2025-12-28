@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
@@ -35,6 +36,11 @@ func (r *AgentJobsRepository) CreateDedup(ctx context.Context, job *models.Agent
 	}
 	lockKey = strings.TrimSpace(lockKey)
 	if lockKey == "" {
+		trace.Log(ctx, "root_jobs", "agent_job.create.no_lock_key", map[string]any{
+			"tenantId":  strings.TrimSpace(job.TenantID),
+			"projectId": strings.TrimSpace(job.ProjectID),
+			"agentId":   strings.TrimSpace(job.AgentID),
+		})
 		id, err := r.Create(ctx, job)
 		return id, true, err
 	}
@@ -63,6 +69,13 @@ func (r *AgentJobsRepository) CreateDedup(ctx context.Context, job *models.Agent
 
 	var reusedID string
 
+	trace.Log(ctx, "root_jobs", "agent_job.create_dedup.txn.start", map[string]any{
+		"tenantId":    strings.TrimSpace(job.TenantID),
+		"projectId":   strings.TrimSpace(job.ProjectID),
+		"agentId":     strings.TrimSpace(job.AgentID),
+		"lockKeySha":  lockID,
+		"lockKeySha1": trace.HashText(lockKey),
+	})
 	txnErr := r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		// 1) Read lock
 		lockSnap, lerr := tx.Get(lockRef)
@@ -122,14 +135,35 @@ func (r *AgentJobsRepository) CreateDedup(ctx context.Context, job *models.Agent
 		return nil
 	})
 	if txnErr != nil {
+		trace.Log(ctx, "root_jobs", "agent_job.create_dedup.txn.error", map[string]any{
+			"tenantId":   strings.TrimSpace(job.TenantID),
+			"projectId":  strings.TrimSpace(job.ProjectID),
+			"agentId":    strings.TrimSpace(job.AgentID),
+			"lockKeySha": lockID,
+			"error":      txnErr.Error(),
+		})
 		return "", false, fmt.Errorf("CreateDedup transaction failed: %w", txnErr)
 	}
 
 	if strings.TrimSpace(reusedID) != "" {
 		job.ID = reusedID
+		trace.Log(ctx, "root_jobs", "agent_job.create_dedup.reused", map[string]any{
+			"tenantId":   strings.TrimSpace(job.TenantID),
+			"projectId":  strings.TrimSpace(job.ProjectID),
+			"agentId":    strings.TrimSpace(job.AgentID),
+			"lockKeySha": lockID,
+			"jobId":      reusedID,
+		})
 		return reusedID, false, nil
 	}
 	job.ID = newID
+	trace.Log(ctx, "root_jobs", "agent_job.create_dedup.created", map[string]any{
+		"tenantId":   strings.TrimSpace(job.TenantID),
+		"projectId":  strings.TrimSpace(job.ProjectID),
+		"agentId":    strings.TrimSpace(job.AgentID),
+		"lockKeySha": lockID,
+		"jobId":      newID,
+	})
 	return newID, true, nil
 }
 

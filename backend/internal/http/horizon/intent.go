@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
@@ -44,11 +45,27 @@ func (h *HorizonHandlers) ResolveIntent(w http.ResponseWriter, r *http.Request) 
 	}
 
 	agent := agents.NewIntentResolverAgent(h.service.AIExecutor())
+	trace.Log(r.Context(), "intent", "intent.resolve.http.start", map[string]any{
+		"tenantId": authInfo.TenantID,
+		"queryLen": len(req.Query),
+		"querySha1": trace.HashText(req.Query),
+	})
 	intent, err := agent.Resolve(r.Context(), req.Query)
 	if err != nil {
+		trace.Log(r.Context(), "intent", "intent.resolve.http.error", map[string]any{
+			"tenantId": authInfo.TenantID,
+			"error":    err.Error(),
+		})
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	trace.Log(r.Context(), "intent", "intent.resolve.http.ok", map[string]any{
+		"tenantId":    authInfo.TenantID,
+		"focus":       trace.Trunc(intent.Focus, 140),
+		"anchorsN":    len(intent.Anchors),
+		"spherePathsN": len(intent.SpherePaths),
+		"keywordsN":   len(intent.Keywords),
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resolveIntentResponse{Intent: intent})

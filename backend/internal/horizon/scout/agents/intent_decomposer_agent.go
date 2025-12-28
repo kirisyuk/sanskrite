@@ -152,9 +152,24 @@ RULES:
 - confidence MUST be <= 0.65 (hypothesis), use ~0.25..0.55 typically.
 - Use stable canonical paths:
   - Organizations: /org/{slug}
-  - Facilities: /fac/{orgSlug}/{slug} when possible
+  - Facilities: /fac/{orgSlug}/{slug} when possible (prefer nested over flat /fac/{slug})
   - Products: /product/{orgSlug}/{slug} when org known
-  - GEO regions/locations: MUST be /loc/{country}/{admin1}/{city} (country-level ok: /loc/{country}/na/na)
+  - GEO regions/locations: MUST be /loc/{country}/{admin1}/{city}
+    - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (e.g., us, de, ru, kz, jp)
+    - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
+    - city: lowercase slug; use "na" if not applicable/unknown
+    - country-only locations: /loc/{country}/na/na
+    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED.
+- VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
+  - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
+  - canonicalPath MUST match expected prefix for targetType
+  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
+- EDGE DIRECTION VALIDATION RULES (edges violating these will be REJECTED or REVERSED):
+  - REGULATES: source MUST be ORGANIZATION (only orgs can regulate)
+  - OWNS: source MUST be ORGANIZATION or PERSON (only orgs/persons can own)
+  - PRODUCES: source MUST be ORGANIZATION or FACILITY (only orgs/facilities can produce)
+  - LOCATED_IN: target MUST be GEO_REGION
+  - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
 - NEVER use "/discovered/*".
 - Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock)
 }

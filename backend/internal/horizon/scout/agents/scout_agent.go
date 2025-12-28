@@ -252,14 +252,24 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
      Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
    - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients).
-   - LOCATED_IN: source is located in target (target must be GEO region/location).
-   - OPERATES_IN: source operates in target (target must be GEO region/location).
-   - REGULATES: source regulates target (source is typically an organization/agency).
-   - OWNS: source owns target.
-   - PRODUCES: source produces target (target is typically a product).
+   - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
+   - OPERATES_IN: source operates in target (source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY).
+   - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
+   - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
+   - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
    - COMPETES_WITH: competitor relationship (direction is not important, but still output as source->target).
    - INFLUENCES: source influences target.
-   - SUBSIDIARY_OF: source is a subsidiary of target (will be normalized in graph).
+   - SUBSIDIARY_OF: source is a subsidiary of target (will be normalized to OWNS in graph).
+   
+   EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
+   - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
+   - OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT
+   - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
+   - LOCATED_IN: target MUST be GEO_REGION
+   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
+   - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
+   - DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
+   
    Each object must include:
    - targetName: Full legal/official name where relevant (e.g., "Tesla, Inc.")
    - targetLegalName: Same as targetName (explicit field)
@@ -288,10 +298,16 @@ CANONICAL PATH RULES:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise /fac/{facilitySlug}
   - GEO regions / locations: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase (e.g., us, de, ru)
+    - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (e.g., us, de, ru, kz, jp)
     - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
     - city: lowercase slug; use "na" if not applicable/unknown
     - country-only locations: /loc/{country}/na/na
+    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED.
+- VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
+  - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
+  - canonicalPath MUST match expected prefix for targetType (see namespaces above)
+  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
+  - Facilities: prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug} (flat paths get penalty)
 - canonicalPath slug SHOULD be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
 - ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
