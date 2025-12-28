@@ -1159,12 +1159,10 @@ func main() {
 			horizonEdgesRepo.WithValidationPolicy(validationPolicyExecutor)
 			horizonEdgesRepo.WithFragmentsRepo(horizonFragmentsRepo)
 
-			// Wire CanonizationPolicy for normalization
+			// Wire CanonizationPolicy for normalization (will be set after scoutEngine is created)
 			canonizationRulesRepo := horizonrepo.NewCanonizationRulesRepository(fsClient.Client())
 			canonizationPolicy := horizonpolicy.NewCanonizationPolicy(canonizationRulesRepo)
 			canonizationPolicyExecutor := horizonpolicy.NewPolicyExecutor(canonizationPolicy, policyTelemetry, nil)
-			scoutEngine.WithCanonizationPolicy(canonizationPolicyExecutor)
-			scoutEngine.WithValidationPolicy(validationPolicyExecutor)
 
 			// Wire Critical Path Detector
 			criticalPathDetector := horizoncriticalpath.NewDetector(horizonFragmentsRepo, horizonEdgesRepo)
@@ -1212,6 +1210,10 @@ func main() {
 			scoutEngine.WithFactEmitter(ontology.NewFactEmitter(ontologyFactsRepo, pub))
 			// Budget enforcement wiring.
 			scoutEngine.WithSpendLedger(horizonSpendLedger)
+
+			// Wire CanonizationPolicy and ValidationPolicy for normalization and validation
+			scoutEngine.WithCanonizationPolicy(canonizationPolicyExecutor)
+			scoutEngine.WithValidationPolicy(validationPolicyExecutor)
 
 			// Подключаем триггер распространения изменений
 			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {
