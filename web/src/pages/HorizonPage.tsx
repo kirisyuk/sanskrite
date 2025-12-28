@@ -351,6 +351,15 @@ const HorizonPage: React.FC = () => {
           setSelectedLensId(lensId);
         }}
         selectedLensId={selectedLensId}
+        onNewLens={() => {
+          // Ensure project is selected (should already be selected when hovering, but double-check)
+          // Clear states and show input field for new lens
+          setSelectedLensId(null);
+          setLensStarted(false);
+          resetEvents();
+          // Note: currentProject should already be set from SidebarPanel project selection
+          // LensCanvas will use currentProject.id as projectId for creating the lens
+        }}
       />
 
       {/* Main content area */}

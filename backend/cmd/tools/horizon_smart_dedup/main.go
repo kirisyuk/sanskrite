@@ -17,6 +17,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 )
 
 // Smart deduplication tool that:
@@ -177,12 +178,21 @@ func main() {
 		}
 	}
 
+	// Index GEO_REGION by canonical path (for org-as-country matching)
+	geoByPath := make(map[string]*models.HorizonFragment)
+	for _, f := range fragments {
+		if f.Type == models.FragmentTypeGeoRegion {
+			geoByPath[f.CanonicalPath] = f
+		}
+	}
+
 	log.Printf("✓ Wikidata index: %d unique IDs", len(wikidataIndex))
 	log.Printf("✓ ShortName index: %d unique keys", len(shortNameIndex))
 	log.Printf("✓ LegalName index: %d unique keys", len(legalNameIndex))
 	log.Printf("✓ Label[en] index: %d unique keys", len(labelENIndex))
 	log.Printf("✓ Normalized legal index: %d unique keys", len(normalizedLegalIndex))
 	log.Printf("✓ GEO city index: %d unique cities", len(geoCityIndex))
+	log.Printf("✓ GEO by path index: %d unique paths", len(geoByPath))
 
 	// Build fragment type cache for edge direction fixing (Step 6)
 	fragmentTypes := make(map[string]models.FragmentType)
@@ -195,6 +205,102 @@ func main() {
 	log.Printf("\n=== Step 3: Finding duplicate clusters ===")
 	clusters := make([]*DuplicateCluster, 0)
 	processedFragmentIDs := make(map[string]bool)
+
+	// Priority 0: Organizations that are actually countries (type normalization)
+	// Example: /org/usa with legalName="United States of America" → merge with /loc/us/na/na
+	orgAsCountryClusters := 0
+	for _, f := range fragments {
+		if processedFragmentIDs[f.ID] {
+			continue
+		}
+		if f.Type != models.FragmentTypeOrganization {
+			continue
+		}
+
+		// Check if any name matches a known country
+		namesToCheck := []string{
+			strings.ToLower(strings.TrimSpace(f.Identifiers["legalName"])),
+			strings.ToLower(strings.TrimSpace(f.Labels["en"])),
+			strings.ToLower(strings.TrimSpace(f.Identifiers["shortName"])),
+		}
+
+		for _, name := range namesToCheck {
+			if name == "" {
+				continue
+			}
+			if scout.IsKnownCountryName(name) {
+				geoPath := scout.GetCountryCanonicalPath(name)
+				if geoPath != "" {
+					// Find existing GEO_REGION with this path
+					if geoFrag, exists := geoByPath[geoPath]; exists && geoFrag.ID != f.ID && !processedFragmentIDs[geoFrag.ID] {
+						cluster := &DuplicateCluster{
+							MatchType:   "orgAsCountry",
+							MatchValue:  fmt.Sprintf("%s → %s", f.CanonicalPath, geoPath),
+							Fragments:   []*models.HorizonFragment{geoFrag, f},
+							CanonicalID: geoFrag.ID, // Always prefer the GEO_REGION
+						}
+						clusters = append(clusters, cluster)
+						processedFragmentIDs[f.ID] = true
+						processedFragmentIDs[geoFrag.ID] = true
+						orgAsCountryClusters++
+						break
+					}
+				}
+			}
+		}
+	}
+	log.Printf("  Found %d org-as-country clusters", orgAsCountryClusters)
+
+	// Priority 0.5: Non-canonical GEO paths → merge with canonical /loc/{cc}/na/na
+	// Example: /loc/uae → /loc/ae/na/na, /loc/saudi-arabia → /loc/sa/na/na
+	// CAUTION: Avoid false positives like /loc/georgia (US state) vs /loc/ge/na/na (country Georgia)
+	nonCanonicalGeoClusters := 0
+	for _, f := range fragments {
+		if processedFragmentIDs[f.ID] {
+			continue
+		}
+		if f.Type != models.FragmentTypeGeoRegion {
+			continue
+		}
+		// Check if path is non-canonical (not /loc/{cc}/{admin1}/{city})
+		parts := strings.Split(strings.Trim(f.CanonicalPath, "/"), "/")
+		if len(parts) == 2 && parts[0] == "loc" {
+			// This is /loc/{something} — check if {something} is a country name/alias
+			countrySlug := strings.ReplaceAll(parts[1], "-", " ")
+			countrySlug = strings.ReplaceAll(countrySlug, "_", " ")
+			canonicalPath := scout.GetCountryCanonicalPath(countrySlug)
+			if canonicalPath != "" && canonicalPath != f.CanonicalPath {
+				// Find existing canonical GEO_REGION
+				if geoFrag, exists := geoByPath[canonicalPath]; exists && geoFrag.ID != f.ID && !processedFragmentIDs[geoFrag.ID] {
+					// SAFETY: Only merge if the non-canonical fragment is "empty" (no label/legalName set)
+					// OR if labels/legalName explicitly match a country name.
+					// This prevents merging /loc/georgia (US state) with /loc/ge/na/na (Georgia country).
+					nonCanonLabel := strings.ToLower(strings.TrimSpace(f.Labels["en"]))
+					nonCanonLegal := strings.ToLower(strings.TrimSpace(f.Identifiers["legalName"]))
+					isEmpty := nonCanonLabel == "" && nonCanonLegal == ""
+					labelMatchesCountry := scout.IsKnownCountryName(nonCanonLabel) || scout.IsKnownCountryName(nonCanonLegal)
+					// Also check if label is just the slug (e.g., "uae", "saudi-arabia")
+					labelIsSlug := nonCanonLabel == strings.ToLower(parts[1]) || nonCanonLabel == countrySlug
+
+					if isEmpty || labelMatchesCountry || labelIsSlug {
+						cluster := &DuplicateCluster{
+							MatchType:   "nonCanonicalGeo",
+							MatchValue:  fmt.Sprintf("%s → %s", f.CanonicalPath, canonicalPath),
+							Fragments:   []*models.HorizonFragment{geoFrag, f},
+							CanonicalID: geoFrag.ID, // Always prefer the canonical path
+						}
+						clusters = append(clusters, cluster)
+						processedFragmentIDs[f.ID] = true
+						processedFragmentIDs[geoFrag.ID] = true
+						nonCanonicalGeoClusters++
+					} else if *verbose {
+						log.Printf("  SKIPPED potential false-positive: %s (label=%q) vs %s", f.CanonicalPath, nonCanonLabel, canonicalPath)
+					}
+				}
+			}
+		}
+	}
+	log.Printf("  Found %d non-canonical GEO clusters", nonCanonicalGeoClusters)
 
 	// Priority 1: Wikidata ID matches (highest confidence)
 	for wikidataID, frags := range wikidataIndex {

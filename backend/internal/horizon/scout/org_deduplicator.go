@@ -25,6 +25,7 @@ import (
 type OrgDeduplicator struct {
 	fragmentsRepo  *repo.HorizonFragmentsRepository
 	wikidataClient coreontology.WikidataClientInterface
+	typeNormalizer *TypeNormalizer
 }
 
 // NewOrgDeduplicator creates a new organization deduplicator.
@@ -32,6 +33,7 @@ func NewOrgDeduplicator(fragmentsRepo *repo.HorizonFragmentsRepository, client c
 	return &OrgDeduplicator{
 		fragmentsRepo:  fragmentsRepo,
 		wikidataClient: client,
+		typeNormalizer: NewTypeNormalizer(),
 	}
 }
 
@@ -41,12 +43,14 @@ func NewOrgDeduplicator(fragmentsRepo *repo.HorizonFragmentsRepository, client c
 //
 // Matching priority (Tier 1 = 100% confidence, Tier 2 = high confidence):
 // Tier 1:
-//   1. Wikidata ID match (from KBRefs or Identifiers)
-//   2. Exact legalName match (case-insensitive) — юридическое название уникально
+//  1. Wikidata ID match (from KBRefs or Identifiers)
+//  2. Exact legalName match (case-insensitive) — юридическое название уникально
+//
 // Tier 2:
-//   3. Exact label[en] match + same type
-//   4. Exact shortName match
-//   5. Normalized legalName match (removes LLC, Inc, Ltd, etc.)
+//  3. Exact label[en] match + same type
+//  4. Exact shortName match
+//  5. Normalized legalName match (removes LLC, Inc, Ltd, etc.)
+//
 // Tier 3 (not implemented — requires manual review):
 //   - shortName prefix/suffix overlap
 //   - canonicalPath slug containment
@@ -56,6 +60,24 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	}
 	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
 		return fragment, nil
+	}
+
+	// =========================================================================
+	// Tier 0: Type normalization — is this actually a country?
+	// =========================================================================
+	// Organizations with legalName matching a known country should be treated as GEO_REGION.
+	// Example: /org/usa with legalName="United States of America" → /loc/us/na/na
+	if d.typeNormalizer != nil {
+		normResult := d.typeNormalizer.NormalizeFragmentType(fragment)
+		if normResult.ShouldNormalize && normResult.NormalizedType == models.FragmentTypeGeoRegion && normResult.MergeWithPath != "" {
+			// This is actually a country! Find the existing GEO_REGION fragment
+			existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, normResult.MergeWithPath)
+			if err == nil && existing != nil && existing.ID != fragment.ID {
+				fmt.Printf("[OrgDeduplicator] Detected country-as-org: %s → merging with %s\n",
+					fragment.CanonicalPath, existing.CanonicalPath)
+				return existing, nil
+			}
+		}
 	}
 
 	// =========================================================================

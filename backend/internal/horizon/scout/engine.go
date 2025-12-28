@@ -275,6 +275,7 @@ type ScoutEngine struct {
 	framesRepo          *repo.FramesRepository
 	edgesRepo           *repo.DependencyEdgesRepository
 	scoutingJobsRepo    *repo.ScoutingJobsRepository
+	lensesRepo          *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
 	realtime            *realtime.Publisher
 	taxonomyClassifier  *TaxonomyClassifier
 	aiExecutor          *ai.AITaskExecutor
@@ -290,6 +291,7 @@ type ScoutEngine struct {
 	orgHierarchyBuilder *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
 	validationPolicy    *policy.PolicyExecutor            // Optional: unified validation policy for edges
 	canonizationPolicy  *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
+	canonicalPathResolver *CanonicalPathResolver          // Unified canonicalization and deduplication service
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
@@ -328,6 +330,27 @@ func (e *ScoutEngine) WithValidationPolicy(executor *policy.PolicyExecutor) *Sco
 func (e *ScoutEngine) WithCanonizationPolicy(executor *policy.PolicyExecutor) *ScoutEngine {
 	e.canonizationPolicy = executor
 	return e
+}
+
+// WithCanonicalPathResolver sets the canonical path resolver for early canonicalization and deduplication.
+func (e *ScoutEngine) WithCanonicalPathResolver(resolver *CanonicalPathResolver) *ScoutEngine {
+	e.canonicalPathResolver = resolver
+	return e
+}
+
+// WithLensesRepository sets the lenses repository for updating lens ViewConfig on assembly completion.
+func (e *ScoutEngine) WithLensesRepository(lensesRepo *repo.LensesRepository) *ScoutEngine {
+	e.lensesRepo = lensesRepo
+	return e
+}
+
+// OrgDeduplicator returns the OrgDeduplicator instance used by this engine.
+// This allows other subsystems (e.g. CanonicalPathResolver wired in main) to reuse the same dedup logic.
+func (e *ScoutEngine) OrgDeduplicator() *OrgDeduplicator {
+	if e == nil {
+		return nil
+	}
+	return e.orgDeduplicator
 }
 
 // NewScoutEngine создает новый Scout Engine
@@ -383,6 +406,10 @@ func (e *ScoutEngine) WithWikidataClient(client coreontology.WikidataClientInter
 		e.orgDeduplicator.wikidataClient = client
 	} else {
 		e.orgDeduplicator = NewOrgDeduplicator(e.fragmentsRepo, client)
+	}
+	// Also update canonicalPathResolver if it exists
+	if e.canonicalPathResolver != nil && e.canonicalPathResolver.orgDeduplicator != nil {
+		e.canonicalPathResolver.orgDeduplicator.wikidataClient = client
 	}
 	return e
 }
@@ -606,6 +633,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					"canonicalPath": cp,
 					"hint":          "circuit_breaker",
 				})
+				// Check if all jobs are completed
+				e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
 				return nil // ACK: stop Cloud Tasks retries for this branch
 			}
 		}
@@ -649,10 +678,88 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		"cascadeRootJobId":     cascadeID,
 	})
 
+	// EARLY CANONICALIZATION AND DEDUPLICATION: Resolve canonical path before any processing
+	// This ensures we operate on canonicalized and deduplicated paths throughout the pipeline
+	var resolvedPath *ResolveResult
+	var effectiveCanonicalPath string
+	if e.canonicalPathResolver != nil {
+		// Determine fragment type from canonical path prefix (best-effort)
+		fragmentType := models.FragmentTypeOrganization // Default
+		switch {
+		case strings.HasPrefix(job.TargetCanonicalPath, "/product/"):
+			fragmentType = models.FragmentTypeProduct
+		case strings.HasPrefix(job.TargetCanonicalPath, "/program/"):
+			fragmentType = models.FragmentTypeProgram
+		case strings.HasPrefix(job.TargetCanonicalPath, "/market/"):
+			fragmentType = models.FragmentTypeMarket
+		case strings.HasPrefix(job.TargetCanonicalPath, "/fac/"):
+			fragmentType = models.FragmentTypeFacility
+		case strings.HasPrefix(job.TargetCanonicalPath, "/loc/") || strings.HasPrefix(job.TargetCanonicalPath, "/region/"):
+			fragmentType = models.FragmentTypeGeoRegion
+		case strings.HasPrefix(job.TargetCanonicalPath, "/event/"):
+			fragmentType = models.FragmentTypeEvent
+		case strings.HasPrefix(job.TargetCanonicalPath, "/org/"):
+			fragmentType = models.FragmentTypeOrganization
+		case strings.HasPrefix(job.TargetCanonicalPath, "/person/"):
+			fragmentType = models.FragmentTypePerson
+		}
+
+		resolved, err := e.canonicalPathResolver.Resolve(ctx, job.TargetCanonicalPath, fragmentType)
+		if err == nil && resolved != nil {
+			resolvedPath = resolved
+			effectiveCanonicalPath = resolved.CanonicalPath
+			
+			// If path was changed (canonicalized or deduplicated), update job
+			if effectiveCanonicalPath != strings.TrimSpace(job.TargetCanonicalPath) {
+				oldPath := strings.TrimSpace(job.TargetCanonicalPath)
+				fmt.Printf("[ScoutEngine] Early canonicalization/dedup: %s -> %s\n", oldPath, effectiveCanonicalPath)
+				trace.Log(ctx, "scout_exec", "scout.early_canonicalization", map[string]any{
+					"tenantId":          strings.TrimSpace(job.TenantID),
+					"projectId":         strings.TrimSpace(job.ProjectID),
+					"lensId":            strings.TrimSpace(lensID),
+					"jobId":             strings.TrimSpace(job.ID),
+					"fromCanonicalPath": oldPath,
+					"toCanonicalPath":   effectiveCanonicalPath,
+					"foundExisting":     resolved.ExistingFragment != nil,
+					"normalizationSteps": resolved.NormalizationSteps,
+				})
+				
+				// Update job with canonicalized path
+				job.TargetCanonicalPath = effectiveCanonicalPath
+				if job.State == nil {
+					job.State = make(map[string]interface{})
+				}
+				if _, ok := job.State["aliasCanonicalPath"]; !ok && oldPath != "" {
+					job.State["aliasCanonicalPath"] = oldPath
+				}
+				job.State["targetCanonicalPath"] = effectiveCanonicalPath
+				_ = e.scoutingJobsRepo.Update(ctx, job)
+			}
+		} else {
+			// Fallback to original path if resolution fails
+			effectiveCanonicalPath = strings.TrimSpace(job.TargetCanonicalPath)
+		}
+	} else {
+		effectiveCanonicalPath = strings.TrimSpace(job.TargetCanonicalPath)
+	}
+
 	// FRESHNESS CHECK: Проверяем, есть ли свежие данные
+	// Используем уже канонизированный и дедуплицированный путь
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
 	var sinceFacts *time.Time
-	if existingFragment, err := e.fragmentsRepo.GetByCanonicalPath(ctx, job.TargetCanonicalPath); err == nil && existingFragment != nil {
+	var existingFragment *models.HorizonFragment
+	
+	// If resolver found an existing fragment, use it directly
+	if resolvedPath != nil && resolvedPath.ExistingFragment != nil {
+		existingFragment = resolvedPath.ExistingFragment
+	} else {
+		// Otherwise check by canonical path
+		if existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, effectiveCanonicalPath); err == nil && existing != nil {
+			existingFragment = existing
+		}
+	}
+	
+	if existingFragment != nil {
 		freshnessThreshold := 1 * time.Hour // Для теста. В проде может быть конфигурируемо.
 		isFresh := !existingFragment.Metadata.LastVerifiedAt.IsZero() && time.Since(existingFragment.Metadata.LastVerifiedAt) < freshnessThreshold
 		// Watermark for facts: prefer dedicated LastFactsSeenAt, fall back to LastVerifiedAt.
@@ -687,7 +794,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		// FAST PATH: if we have fresh facts and they strongly match the fragment, apply deterministically without LLM.
 		var facts []*coreModels.OntologyFact
 		if e.planner != nil && e.planner.factsRepo != nil && sinceFacts != nil {
-			facts, err = e.planner.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, tenantID, job.TargetCanonicalPath, sinceFacts.UTC(), 200)
+			var err error
+			facts, err = e.planner.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, tenantID, effectiveCanonicalPath, sinceFacts.UTC(), 200)
 			if err == nil && len(facts) > 0 {
 				trace.Log(ctx, "scout_exec", "scout.fast_path.facts_found", map[string]any{
 					"tenantId":            strings.TrimSpace(job.TenantID),
@@ -790,6 +898,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 						"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
 						"confidence":      1.0,
 					})
+					// Check if all jobs are completed
+					e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, projectID, lensID)
 					e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 						"tenantId":        job.TenantID,
 						"projectId":       projectID,
@@ -821,6 +931,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
 				"confidence":      1.0,
 			})
+			// Check if all jobs are completed
+			e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, projectID, lensID)
 			return nil
 		}
 	}
@@ -859,7 +971,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		var err error
 		// Optional focus query from Lens/ViewConfig (stored in job.State).
 		searchQuery := ""
-		if job != nil && job.State != nil {
+		if job.State != nil {
 			if v, ok := job.State["focus"].(string); ok && strings.TrimSpace(v) != "" {
 				searchQuery = strings.TrimSpace(v)
 			} else if v, ok := job.State["searchQuery"].(string); ok && strings.TrimSpace(v) != "" {
@@ -1154,7 +1266,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		focus := ""
 		var spherePaths []string
 		var keywords []string
-		if job != nil && job.State != nil {
+		if job.State != nil {
 			if v, ok := job.State["focus"].(string); ok {
 				focus = strings.TrimSpace(v)
 			}
@@ -1319,7 +1431,7 @@ SKIP_RESEARCH:
 		// - domain path: "risk/..." or "/risk/..."
 		// - bare name: "battery_supplier_concentration" (will be canonicalized)
 		var requested []string
-		if job != nil && job.State != nil {
+		if job.State != nil {
 			if v, ok := job.State["requestedMetrics"]; ok {
 				switch t := v.(type) {
 				case []string:
@@ -1356,7 +1468,10 @@ SKIP_RESEARCH:
 	// If Research (or any upstream step) produced a different canonicalPath than the job started with,
 	// we must continue work on THAT entity. Otherwise we end up verifying/storing data under one path
 	// while repeatedly scouting another alias (infinite "no internal content" loop).
-	effectiveCanonicalPath := strings.TrimSpace(job.TargetCanonicalPath)
+	// Note: effectiveCanonicalPath is already set from early canonicalization above
+	if effectiveCanonicalPath == "" {
+		effectiveCanonicalPath = strings.TrimSpace(job.TargetCanonicalPath)
+	}
 	if extractedFragment != nil {
 		if cp := strings.TrimSpace(extractedFragment.CanonicalPath); cp != "" {
 			effectiveCanonicalPath = cp
@@ -1451,10 +1566,17 @@ SKIP_RESEARCH:
 	frame.ID = frameID
 
 	// Обновляем или создаем HorizonFragment
-	existingFragment, err := e.fragmentsRepo.GetByCanonicalPath(ctx, effectiveCanonicalPath)
+	// Note: existingFragment may already be set from early canonicalization above
+	if existingFragment == nil {
+		var getErr error
+		existingFragment, getErr = e.fragmentsRepo.GetByCanonicalPath(ctx, effectiveCanonicalPath)
+		if getErr != nil {
+			err = getErr
+		}
+	}
 	var fragmentID string
 
-	if err != nil {
+	if err != nil || existingFragment == nil {
 		// Создаем новый фрагмент
 		extractedFragment.CanonicalPath = effectiveCanonicalPath
 		extractedFragment.TenantID = "global"
@@ -1588,6 +1710,10 @@ SKIP_RESEARCH:
 		"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
 		"confidence":      validationResult.Confidence,
 	})
+	
+	// Check if all scout jobs for this lens are completed and publish final assembly.ready event
+	e.checkAndPublishAssemblyCompletion(ctx, tenantID, projectID, lensID)
+	
 	e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 		"tenantId":      tenantID,
 		"projectId":     projectID,
@@ -2127,4 +2253,116 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 	}
 
 	return nil
+}
+
+// checkAndPublishAssemblyCompletion checks if all scout jobs for a lens are completed
+// and publishes horizon.assembly.ready event when all jobs are done.
+func (e *ScoutEngine) checkAndPublishAssemblyCompletion(ctx context.Context, tenantID, projectID, lensID string) {
+	if e == nil || e.scoutingJobsRepo == nil || lensID == "" {
+		return
+	}
+
+	// Get all scout jobs for this lens
+	jobs, err := e.scoutingJobsRepo.ListByProjectAndLens(ctx, tenantID, projectID, lensID, 1000)
+	if err != nil {
+		return // Best-effort: don't fail if we can't check
+	}
+
+	if len(jobs) == 0 {
+		return // No jobs to check
+	}
+
+	// Count jobs by status
+	var totalJobs, completedJobs, failedJobs, pendingJobs, runningJobs int
+	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
+		totalJobs++
+		switch job.Status {
+		case coreModels.AgentJobStatusCompleted:
+			completedJobs++
+		case coreModels.AgentJobStatusFailed:
+			failedJobs++
+		case coreModels.AgentJobStatusPending:
+			pendingJobs++
+		case coreModels.AgentJobStatusRunning:
+			runningJobs++
+		}
+	}
+
+	// If all jobs are completed or failed, publish assembly.ready
+	if totalJobs > 0 && pendingJobs == 0 && runningJobs == 0 {
+		progress := 1.0
+		if totalJobs > 0 {
+			progress = float64(completedJobs+failedJobs) / float64(totalJobs)
+		}
+
+		// Publish final progress update
+		e.publish(ctx, realtime.EventType("horizon.assembly.progress"), map[string]interface{}{
+			"tenantId":  tenantID,
+			"projectId": projectID,
+			"lensId":    lensID,
+			"phase":     "ready",
+			"progress":  progress,
+			"counters": map[string]interface{}{
+				"jobsTotal":   totalJobs,
+				"jobsDone":    completedJobs,
+				"jobsFailed":  failedJobs,
+				"jobsRunning": 0,
+			},
+		})
+
+		// Publish final assembly.ready event
+		e.publish(ctx, realtime.EventType("horizon.assembly.ready"), map[string]interface{}{
+			"tenantId":  tenantID,
+			"projectId": projectID,
+			"lensId":    lensID,
+			"phase":     "ready",
+			"progress":  progress,
+			"counters": map[string]interface{}{
+				"jobsTotal":  totalJobs,
+				"jobsDone":   completedJobs,
+				"jobsFailed": failedJobs,
+			},
+		})
+
+		// Update lens ViewConfig with assembly completion status
+		if e.lensesRepo != nil {
+			lens, err := e.lensesRepo.Get(ctx, lensID)
+			if err == nil && lens != nil {
+				if lens.ViewConfig == nil {
+					lens.ViewConfig = make(map[string]interface{})
+				}
+				lens.ViewConfig["assemblyStatus"] = map[string]interface{}{
+					"phase":     "ready",
+					"progress":  progress,
+					"completedAt": time.Now().UTC().Format(time.RFC3339Nano),
+					"counters": map[string]interface{}{
+						"jobsTotal":  totalJobs,
+						"jobsDone":   completedJobs,
+						"jobsFailed": failedJobs,
+					},
+				}
+				_ = e.lensesRepo.Update(ctx, lens) // Best-effort: don't fail if update fails
+			}
+		}
+	} else if totalJobs > 0 {
+		// Publish progress update (not final yet)
+		progress := float64(completedJobs+failedJobs) / float64(totalJobs)
+		e.publish(ctx, realtime.EventType("horizon.assembly.progress"), map[string]interface{}{
+			"tenantId":  tenantID,
+			"projectId": projectID,
+			"lensId":    lensID,
+			"phase":     "scouting",
+			"progress":  progress,
+			"counters": map[string]interface{}{
+				"jobsTotal":   totalJobs,
+				"jobsDone":    completedJobs,
+				"jobsFailed":  failedJobs,
+				"jobsRunning": runningJobs,
+				"jobsPending": pendingJobs,
+			},
+		})
+	}
 }

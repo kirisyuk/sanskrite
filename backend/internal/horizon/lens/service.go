@@ -11,6 +11,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -113,6 +114,7 @@ type LensService struct {
 	realtime             *realtime.Publisher
 	criticalPathDetector *critical_path.Detector // Optional: for critical path detection
 	edgesRepo            *repo.DependencyEdgesRepository // Required for critical path detection
+	canonicalPathResolver *scout.CanonicalPathResolver // Optional: for early canonicalization and deduplication
 }
 
 // NewLensService создает новый Lens Service
@@ -142,6 +144,12 @@ func NewLensService(
 func (s *LensService) WithCriticalPathDetector(detector *critical_path.Detector, edgesRepo *repo.DependencyEdgesRepository) *LensService {
 	s.criticalPathDetector = detector
 	s.edgesRepo = edgesRepo
+	return s
+}
+
+// WithCanonicalPathResolver sets the canonical path resolver for early canonicalization and deduplication.
+func (s *LensService) WithCanonicalPathResolver(resolver *scout.CanonicalPathResolver) *LensService {
+	s.canonicalPathResolver = resolver
 	return s
 }
 
@@ -398,6 +406,12 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 					continue
 				}
 				p := strings.TrimSpace(j.TargetCanonicalPath)
+				// Normalize job path so we dedupe even if older jobs were created under alias paths.
+				if s.canonicalPathResolver != nil && p != "" {
+					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, models.FragmentTypeOrganization); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+						p = resolved.CanonicalPath
+					}
+				}
 				if p == "" {
 					continue
 				}
@@ -414,9 +428,57 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		"activeJobsN": len(activeScoutJobs),
 	})
 
-	for _, canonicalPath := range staticPaths {
-		fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
-		isCacheHit := err == nil && fragment != nil
+	for _, inputPath := range staticPaths {
+		// EARLY CANONICALIZATION AND DEDUPLICATION: Resolve canonical path before any processing
+		// This ensures we operate on canonicalized and deduplicated paths throughout the pipeline
+		var canonicalPath string
+		var fragment *models.HorizonFragment
+		var isCacheHit bool
+		
+		if s.canonicalPathResolver != nil {
+			// Determine fragment type from canonical path prefix (best-effort)
+			fragmentType := models.FragmentTypeOrganization // Default
+			switch {
+			case strings.HasPrefix(inputPath, "/product/"):
+				fragmentType = models.FragmentTypeProduct
+			case strings.HasPrefix(inputPath, "/program/"):
+				fragmentType = models.FragmentTypeProgram
+			case strings.HasPrefix(inputPath, "/market/"):
+				fragmentType = models.FragmentTypeMarket
+			case strings.HasPrefix(inputPath, "/fac/"):
+				fragmentType = models.FragmentTypeFacility
+			case strings.HasPrefix(inputPath, "/loc/") || strings.HasPrefix(inputPath, "/region/"):
+				fragmentType = models.FragmentTypeGeoRegion
+			case strings.HasPrefix(inputPath, "/event/"):
+				fragmentType = models.FragmentTypeEvent
+			case strings.HasPrefix(inputPath, "/org/"):
+				fragmentType = models.FragmentTypeOrganization
+			case strings.HasPrefix(inputPath, "/person/"):
+				fragmentType = models.FragmentTypePerson
+			}
+
+			resolved, err := s.canonicalPathResolver.Resolve(ctx, inputPath, fragmentType)
+			if err == nil && resolved != nil {
+				canonicalPath = resolved.CanonicalPath
+				if resolved.ExistingFragment != nil {
+					fragment = resolved.ExistingFragment
+					isCacheHit = true
+				}
+			} else {
+				// Fallback to original path if resolution fails
+				canonicalPath = strings.TrimSpace(inputPath)
+			}
+		} else {
+			canonicalPath = strings.TrimSpace(inputPath)
+		}
+
+		// If fragment not found via resolver, check by canonical path
+		if fragment == nil {
+			var err error
+			fragment, err = s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
+			isCacheHit = err == nil && fragment != nil
+		}
+		
 		isFragmentFreshEnough := false
 		if isCacheHit {
 			// If we already have verified (or at least non-low-confidence) data, do NOT create a new Scout job.
@@ -427,10 +489,15 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				isFragmentFreshEnough = true
 			}
 		}
-		if err == nil && fragment != nil {
+		if isCacheHit && fragment != nil {
 			cacheHits++
 			// Сохраняем в кэш для будущих операций
 			lens.ScopeFragments[canonicalPath] = fragment.ID
+			// Also store by input path (alias) to keep Lens lifecycle (Update/Delete) consistent
+			// even when lens.Scope contains non-canonical aliases.
+			if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
+				lens.ScopeFragments[ap] = fragment.ID
+			}
 
 			if err := s.fragmentsRepo.IncrementActiveSubscribers(ctx, fragment.ID); err != nil {
 				// Логируем ошибку, но не прерываем создание Lens
@@ -499,6 +566,10 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				// Recursion control (used by ScoutEngine.processDiscoveredRelations)
 				"recursionDepth":    0.0,
 				"maxRecursionDepth": float64(maxRecursionDepth),
+			}
+			// Preserve alias for traceability (ScoutEngine will also set aliasCanonicalPath on retarget).
+			if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
+				state["aliasCanonicalPath"] = ap
 			}
 			// Propagate correlation/session IDs into job state for downstream realtime.
 			if rc, ok := rtctx.Get(ctx); ok {
@@ -804,7 +875,15 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 			} else {
 				// Fallback: composite index query
-				fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, path)
+				lookupPath := path
+				if s.canonicalPathResolver != nil {
+					// Best-effort: normalize alias paths so we don't miss unsubscribes.
+					// We assume ORGANIZATION by default; resolver will still apply canonization policy for canonical_path.
+					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, path, models.FragmentTypeOrganization); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+						lookupPath = resolved.CanonicalPath
+					}
+				}
+				fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, lookupPath)
 				if err == nil && fragment != nil {
 					_ = s.fragmentsRepo.DecrementActiveSubscribers(ctx, fragment.ID)
 					_ = s.lifecycle.CheckAndTransition(ctx, fragment.ID)
@@ -875,6 +954,12 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					continue
 				}
 				p := strings.TrimSpace(j.TargetCanonicalPath)
+				// Normalize job path so we dedupe even if older jobs were created under alias paths.
+				if s.canonicalPathResolver != nil && p != "" {
+					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, models.FragmentTypeOrganization); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+						p = resolved.CanonicalPath
+					}
+				}
 				if p == "" {
 					continue
 				}
@@ -885,19 +970,65 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 		}
 	}
 
-	for _, path := range allNewStaticPaths {
-		if !oldPathsMap[path] {
-			fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, path)
-			isCacheHit := err == nil && fragment != nil
+	for _, inputPath := range allNewStaticPaths {
+		if !oldPathsMap[inputPath] {
+			// EARLY CANONICALIZATION AND DEDUPLICATION (UpdateLens): resolve before any processing/job creation.
+			var canonicalPath string
+			var fragment *models.HorizonFragment
+			var isCacheHit bool
+
+			if s.canonicalPathResolver != nil {
+				fragmentType := models.FragmentTypeOrganization
+				switch {
+				case strings.HasPrefix(inputPath, "/product/"):
+					fragmentType = models.FragmentTypeProduct
+				case strings.HasPrefix(inputPath, "/program/"):
+					fragmentType = models.FragmentTypeProgram
+				case strings.HasPrefix(inputPath, "/market/"):
+					fragmentType = models.FragmentTypeMarket
+				case strings.HasPrefix(inputPath, "/fac/"):
+					fragmentType = models.FragmentTypeFacility
+				case strings.HasPrefix(inputPath, "/loc/") || strings.HasPrefix(inputPath, "/region/"):
+					fragmentType = models.FragmentTypeGeoRegion
+				case strings.HasPrefix(inputPath, "/event/"):
+					fragmentType = models.FragmentTypeEvent
+				case strings.HasPrefix(inputPath, "/org/"):
+					fragmentType = models.FragmentTypeOrganization
+				case strings.HasPrefix(inputPath, "/person/"):
+					fragmentType = models.FragmentTypePerson
+				}
+
+				resolved, rerr := s.canonicalPathResolver.Resolve(ctx, inputPath, fragmentType)
+				if rerr == nil && resolved != nil {
+					canonicalPath = resolved.CanonicalPath
+					if resolved.ExistingFragment != nil {
+						fragment = resolved.ExistingFragment
+						isCacheHit = true
+					}
+				} else {
+					canonicalPath = strings.TrimSpace(inputPath)
+				}
+			} else {
+				canonicalPath = strings.TrimSpace(inputPath)
+			}
+
+			if fragment == nil {
+				var err error
+				fragment, err = s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
+				isCacheHit = err == nil && fragment != nil
+			}
 			isFragmentFreshEnough := false
 			if isCacheHit {
 				if !fragment.Metadata.LastVerifiedAt.IsZero() && fragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
 					isFragmentFreshEnough = true
 				}
 			}
-			if err == nil && fragment != nil {
+			if isCacheHit && fragment != nil {
 				// Обновляем кэш для нового узла
-				lens.ScopeFragments[path] = fragment.ID
+				lens.ScopeFragments[canonicalPath] = fragment.ID
+				if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
+					lens.ScopeFragments[ap] = fragment.ID
+				}
 
 				_ = s.fragmentsRepo.IncrementActiveSubscribers(ctx, fragment.ID)
 				_ = s.lifecycle.EnsureActive(ctx, fragment.ID)
@@ -911,13 +1042,13 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			// Это гарантирует, что данные для нового узла будут собраны немедленно,
 			// а не ждать первого Watchdog scan (который может быть через 1 час)
 			if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
-				if existingJobID, ok := activeScoutJobs[strings.TrimSpace(path)]; ok && existingJobID != "" {
+				if existingJobID, ok := activeScoutJobs[strings.TrimSpace(canonicalPath)]; ok && existingJobID != "" {
 					// Skip creating duplicate job; best-effort signal for UI.
 					s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 						"tenantId":      lens.TenantID,
 						"projectId":     lens.ProjectID,
 						"lensId":        lens.ID,
-						"canonicalPath": strings.TrimSpace(path),
+						"canonicalPath": strings.TrimSpace(canonicalPath),
 						"status":        "scouting",
 						"jobId":         existingJobID,
 						"hint":          "dedup_existing_scout_job",
@@ -926,13 +1057,16 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 				now := time.Now().UTC()
 				state := map[string]interface{}{
-					"targetCanonicalPath": path,
+					"targetCanonicalPath": canonicalPath,
 					"lensId":              lens.ID,
 					"currentState":        string(models.ScoutingJobStatePending),
 					"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
 					// Recursion control (used by ScoutEngine.processDiscoveredRelations)
 					"recursionDepth":    0.0,
 					"maxRecursionDepth": float64(maxRecursionDepth),
+				}
+				if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
+					state["aliasCanonicalPath"] = ap
 				}
 				if len(requestedMetrics) > 0 {
 					state["requestedMetrics"] = requestedMetrics
@@ -957,7 +1091,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 						State:     state,
 					},
 					LensID:              lens.ID,
-					TargetCanonicalPath: path,
+					TargetCanonicalPath: canonicalPath,
 					ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
 					BillingContext: models.BillingContext{
 						ChargeModel: string(models.ChargeModelBounty),
@@ -967,7 +1101,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 				// Создаем job, но не прерываем UpdateLens при ошибке
 				if id, err := s.scoutingJobsRepo.Create(ctx, scoutingJob); err == nil {
-					activeScoutJobs[strings.TrimSpace(path)] = id
+					activeScoutJobs[strings.TrimSpace(canonicalPath)] = id
 				}
 			} else if isCacheHit && isFragmentFreshEnough {
 				// Best-effort: signal skip for UI.
@@ -977,7 +1111,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					"lensId":          lens.ID,
 					"jobId":           "",
 					"fragmentId":      fragment.ID,
-					"canonicalPath":   strings.TrimSpace(path),
+					"canonicalPath":   strings.TrimSpace(canonicalPath),
 					"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
 					"confidence":      1.0,
 					"hint":            "cached_verified_skip_scout",
@@ -1000,6 +1134,28 @@ func (s *LensService) DeleteLens(ctx context.Context, lensID string) error {
 	// Удаляем Lens
 	if err := s.lensesRepo.Delete(ctx, lensID); err != nil {
 		return fmt.Errorf("failed to delete lens: %w", err)
+	}
+
+	// Fast path: if we have ScopeFragments cache, decrement by fragment IDs directly.
+	// This avoids alias/canonicalPath mismatches when lens.Scope contains non-canonical paths.
+	if lens.ScopeFragments != nil && len(lens.ScopeFragments) > 0 {
+		seen := map[string]struct{}{}
+		for _, fragmentID := range lens.ScopeFragments {
+			fragmentID = strings.TrimSpace(fragmentID)
+			if fragmentID == "" {
+				continue
+			}
+			if _, ok := seen[fragmentID]; ok {
+				continue
+			}
+			seen[fragmentID] = struct{}{}
+			_ = s.fragmentsRepo.DecrementActiveSubscribers(ctx, fragmentID)
+			_ = s.lifecycle.CheckAndTransition(ctx, fragmentID)
+			if s.watchdogHook != nil {
+				s.watchdogHook(ctx, fragmentID)
+			}
+		}
+		return nil
 	}
 
 	// Уменьшаем activeSubscribers для всех HorizonFragment в scope

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
 import { useProjectsStore } from '../stores/projectsStore';
+import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { api } from '../lib/api';
 import { isArtifact, type Artifact } from '../types/artifact';
 import type { CoreDoc, Project } from '../types/generated';
@@ -37,6 +38,7 @@ interface SidebarPanelProps {
   onSelectScenario?: (scenarioId: string | null) => void;
   onSelectLens?: (lensId: string | null) => void;
   selectedLensId?: string | null;
+  onNewLens?: () => void; // Optional: callback for creating new lens
 }
 
 // Helper functions moved outside component to avoid recreation
@@ -76,6 +78,7 @@ const ProjectRow = React.memo<{
   onRename: (newName: string) => void;
   onCancelEditing: () => void;
   onEditingNameChange: (name: string) => void;
+  onCreateLens?: () => void; // Optional: for creating new lens (horizon mode only)
   t: any; // Pass t function as prop
   currentMode?: 'chat' | 'horizon' | 'perspectives' | 'models' | 'pages' | 'scenarios';
 }>(({ 
@@ -91,6 +94,7 @@ const ProjectRow = React.memo<{
   onRename,
   onCancelEditing,
   onEditingNameChange,
+  onCreateLens,
   t,
   currentMode,
 }) => {
@@ -261,6 +265,37 @@ const ProjectRow = React.memo<{
                 </span>
               )}
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto z-10">
+                {/* Create Lens button - only for horizon projects in horizon mode */}
+                {currentMode === 'horizon' && project.projectType === 'horizon' && onCreateLens && (
+                  <button
+                    className="p-1 rounded"
+                    title="Create New Lens"
+                    style={{ backgroundColor: 'transparent' }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // Ensure project is selected before creating lens
+                      if (!isSelected) {
+                        onSelect();
+                      }
+                      onCreateLens();
+                    }}
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                  </button>
+                )}
                 <button
                   className="p-1 rounded"
                   title={currentMode === 'horizon' ? 'Rename Project' : t('unfold.sections.renameChat')}
@@ -333,6 +368,7 @@ const ProjectRow = React.memo<{
     prevProps.isSelected === nextProps.isSelected &&
     prevProps.isEditing === nextProps.isEditing &&
     editingNameEqual &&
+    prevProps.onCreateLens === nextProps.onCreateLens &&
     prevProps.t === nextProps.t // Compare translation function ref
   );
 });
@@ -366,6 +402,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   onSelectScenario,
   onSelectLens,
   selectedLensId,
+  onNewLens,
 }) => {
   const { t } = useTranslation();
   const location = useLocation();
@@ -416,6 +453,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     status: string;
     scope: string[];
     updatedAt: string;
+    viewConfig?: Record<string, any>;
   }>>([]);
   const [lensesLoading, setLensesLoading] = React.useState(false);
   // Track which project the lenses belong to
@@ -514,9 +552,10 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           onEditingProjectIdChange(null);
           onEditingProjectNameChange('');
         }}
+        onCreateLens={currentMode === 'horizon' && project.projectType === 'horizon' ? onNewLens : undefined}
       />
     );
-  }, [deletingProjectIds, currentProject, editingProjectId, editingProjectName, editingInputRef, onCloseAllModals, setCurrentProject, isMobile, onClose, onStartEditingProject, onDeleteChat, onRenameChat, onEditingProjectIdChange, onEditingProjectNameChange]);
+  }, [deletingProjectIds, currentProject, editingProjectId, editingProjectName, editingInputRef, onCloseAllModals, setCurrentProject, isMobile, onClose, onStartEditingProject, onDeleteChat, onRenameChat, onEditingProjectIdChange, onEditingProjectNameChange, currentMode, onNewLens]);
 
   // Load agent jobs for the current project (only on project selection, updates via WebSocket)
   React.useEffect(() => {
@@ -607,6 +646,9 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     loadLenses();
   }, [loadLenses]);
 
+  // Subscribe to Horizon realtime store for assembly status updates
+  const assemblyState = useHorizonRealtimeStore((s) => s.assembly);
+  
   // Listen for lens creation events to refresh the list
   React.useEffect(() => {
     const handleLensCreated = (event: CustomEvent) => {
@@ -624,6 +666,34 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     };
   }, [currentProject?.id, currentMode, loadLenses]);
 
+  // Update lens assembly status in real-time when assembly.ready event is received
+  React.useEffect(() => {
+    if (!assemblyState?.lensId || currentMode !== 'horizon') return;
+    
+    // Find the lens in the list and update its viewConfig
+    setLenses((prevLenses) => {
+      const lensIndex = prevLenses.findIndex((l) => l.id === assemblyState.lensId);
+      if (lensIndex === -1) return prevLenses;
+      
+      const updatedLenses = [...prevLenses];
+      const lens = { ...updatedLenses[lensIndex] };
+      
+      if (!lens.viewConfig) {
+        lens.viewConfig = {};
+      }
+      
+      lens.viewConfig.assemblyStatus = {
+        phase: assemblyState.phase,
+        progress: assemblyState.progress,
+        completedAt: assemblyState.phase === 'ready' ? new Date().toISOString() : undefined,
+        counters: assemblyState.counters,
+      };
+      
+      updatedLenses[lensIndex] = lens;
+      return updatedLenses;
+    });
+  }, [assemblyState?.lensId, assemblyState?.phase, assemblyState?.progress, currentMode]);
+
   // Render lens row
   const renderLensRow = React.useCallback((lens: {
     id: string;
@@ -631,11 +701,39 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     status: string;
     scope: string[];
     updatedAt: string;
+    viewConfig?: Record<string, any>;
   }) => {
     const isSelected = selectedLensId === lens.id;
     
+    // Get assembly status from viewConfig
+    const assemblyStatus = lens.viewConfig?.assemblyStatus as {
+      phase?: string;
+      progress?: number;
+      completedAt?: string;
+    } | undefined;
+    
     const getStatusIcon = () => {
-      if (lens.status === 'ACTIVE') {
+      // Show assembly status if available (scouting/ready), otherwise show lens lifecycle status
+      if (assemblyStatus?.phase === 'ready') {
+        // Assembly completed - show green checkmark
+        return (
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: '#2ECC71' }}>
+            <circle cx="12" cy="12" r="10" strokeWidth="2" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+        );
+      } else if (assemblyStatus?.phase === 'scouting') {
+        // Assembly in progress - show spinner
+        return (
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: 'var(--text-secondary-strong)' }}>
+            <circle cx="12" cy="12" r="10" strokeWidth="2" strokeDasharray="32" strokeDashoffset="32" strokeLinecap="round">
+              <animate attributeName="stroke-dasharray" dur="1.5s" values="0 32;16 16;0 32;0 32" repeatCount="indefinite" />
+              <animate attributeName="stroke-dashoffset" dur="1.5s" values="0;-16;-32;-32" repeatCount="indefinite" />
+            </circle>
+          </svg>
+        );
+      } else if (lens.status === 'ACTIVE') {
+        // Lens is active but no assembly status - show green checkmark
         return (
           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: '#2ECC71' }}>
             <circle cx="12" cy="12" r="10" strokeWidth="2" />
@@ -643,6 +741,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           </svg>
         );
       } else if (lens.status === 'ARCHIVED') {
+        // Lens is archived
         return (
           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ color: 'var(--text-tertiary-weak)' }}>
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />

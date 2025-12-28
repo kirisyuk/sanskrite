@@ -240,12 +240,42 @@ func (e *ScoutEngine) processRelationsInternal(
 				newFragment.Identifiers["shortName"] = rel.TargetShortName
 			}
 
-			id, err := e.fragmentsRepo.Create(ctx, newFragment)
-			if err != nil {
-				fmt.Printf("Failed to create discovered fragment %s: %v\n", targetPath, err)
-				continue
+			// Pre-create validation: check policies and deduplication (same as in processScoutResult)
+			usedExistingDuplicate := false
+			if e.preCreateValidator != nil {
+				preValidation, valErr := e.preCreateValidator.ValidateAndProcess(ctx, newFragment)
+				if valErr != nil {
+					fmt.Printf("[ScoutEngine] Warning: pre-create validation error for %s: %v\n", targetPath, valErr)
+				} else if preValidation != nil {
+					// Log warnings
+					for _, w := range preValidation.Warnings {
+						fmt.Printf("[ScoutEngine] Pre-create warning for %s: %s\n", targetPath, w)
+					}
+					// Check if creation should be blocked
+					if !preValidation.IsValid {
+						fmt.Printf("[ScoutEngine] Fragment creation blocked for %s: %s\n", targetPath, preValidation.BlockReason)
+						continue
+					}
+					// Check if we should use an existing fragment instead (deduplication)
+					if preValidation.ReplacementFrag != nil && preValidation.ReplacementFrag.ID != "" {
+						fmt.Printf("[ScoutEngine] Using existing fragment %s instead of creating %s\n", preValidation.ReplacementFrag.ID, targetPath)
+						targetFragment = preValidation.ReplacementFrag
+						targetID = targetFragment.ID
+						usedExistingDuplicate = true
+					}
+				}
 			}
-			targetID = id
+
+			if !usedExistingDuplicate {
+				id, err := e.fragmentsRepo.Create(ctx, newFragment)
+				if err != nil {
+					fmt.Printf("Failed to create discovered fragment %s: %v\n", targetPath, err)
+					continue
+				}
+				targetID = id
+				targetFragment = newFragment
+				targetFragment.ID = id
+			}
 
 			// Create Recursive Scouting Job (Decomposition)
 			// Проверяем глубину рекурсии, чтобы не уйти в бесконечность.

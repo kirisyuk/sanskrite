@@ -1215,6 +1215,19 @@ func main() {
 			scoutEngine.WithCanonizationPolicy(canonizationPolicyExecutor)
 			scoutEngine.WithValidationPolicy(validationPolicyExecutor)
 
+			// Create and wire CanonicalPathResolver for early canonicalization and deduplication
+			// This ensures all paths are canonicalized and deduplicated before processing
+			// Reuse the same OrgDeduplicator instance as ScoutEngine to keep dedup logic unified.
+			orgDeduplicator := scoutEngine.OrgDeduplicator()
+			canonicalPathResolver := horizonscout.NewCanonicalPathResolver(
+				horizonFragmentsRepo,
+				canonizationPolicyExecutor,
+				orgDeduplicator,
+			)
+			scoutEngine.WithCanonicalPathResolver(canonicalPathResolver)
+			// Wire LensesRepository for updating lens ViewConfig on assembly completion
+			scoutEngine.WithLensesRepository(horizonLensesRepo)
+
 			// Подключаем триггер распространения изменений
 			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {
 				_, err := propagationEngine.TriggerPropagation(ctx, fragmentID)
@@ -1223,6 +1236,11 @@ func main() {
 
 			horizonService.SetScoutEngine(scoutEngine)
 			logger.Printf("Scout Engine initialized")
+
+			// Wire CanonicalPathResolver into LensService for early canonicalization
+			if lensService != nil && canonicalPathResolver != nil {
+				lensService.WithCanonicalPathResolver(canonicalPathResolver)
+			}
 
 			// Initialize Watchdog subsystem (requires ScoutEngine + SourceExecutor)
 			// Watchdog (background monitoring) can generate large volumes of Scout jobs.

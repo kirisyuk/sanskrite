@@ -168,7 +168,43 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		} else {
 			// Enforce strict 3-position geo model: /loc/{country}/{admin1}/{city}
 			parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
-			if len(parts) != 4 || parts[0] != "loc" {
+			if len(parts) == 2 && parts[0] == "loc" {
+				// Non-canonical path like /loc/uae or /loc/saudi-arabia
+				// Try to normalize to canonical /loc/{cc}/na/na
+				// CAUTION: Avoid false positives like /loc/georgia (US state) vs /loc/ge/na/na (country)
+				countrySlug := strings.ReplaceAll(parts[1], "-", " ")
+				countrySlug = strings.ReplaceAll(countrySlug, "_", " ")
+				canonicalPath := GetCountryCanonicalPath(countrySlug)
+				if canonicalPath != "" && canonicalPath != fragment.CanonicalPath {
+					// SAFETY: Only deduplicate if fragment is "empty" or label matches a country
+					fragLabel := strings.ToLower(strings.TrimSpace(fragment.Labels["en"]))
+					fragLegal := strings.ToLower(strings.TrimSpace(fragment.Identifiers["legalName"]))
+					isEmpty := fragLabel == "" && fragLegal == ""
+					labelMatchesCountry := IsKnownCountryName(fragLabel) || IsKnownCountryName(fragLegal)
+					labelIsSlug := fragLabel == strings.ToLower(parts[1]) || fragLabel == countrySlug
+
+					if isEmpty || labelMatchesCountry || labelIsSlug {
+						result.Warnings = append(result.Warnings,
+							fmt.Sprintf("non-canonical GEO path %q → %q", fragment.CanonicalPath, canonicalPath))
+						// Try to find existing fragment at canonical path and deduplicate
+						if v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil {
+							existing, err := v.geoBuilder.fragmentsRepo.GetByCanonicalPath(context.Background(), canonicalPath)
+							if err == nil && existing != nil && existing.ID != fragment.ID {
+								result.ReplacementFrag = existing
+								result.Warnings = append(result.Warnings,
+									fmt.Sprintf("found existing GEO_REGION %q (%s) - using instead", existing.CanonicalPath, existing.ID))
+							}
+						}
+					} else {
+						// Label doesn't match country — might be US state Georgia, etc.
+						result.Warnings = append(result.Warnings,
+							fmt.Sprintf("GEO_REGION %q has label %q which doesn't match known country - skipping auto-merge", fragment.CanonicalPath, fragLabel))
+					}
+				} else {
+					result.Warnings = append(result.Warnings,
+						fmt.Sprintf("GEO_REGION canonicalPath %q should be /loc/{country}/{admin1}/{city} - will be fixed post-factum", fragment.CanonicalPath))
+				}
+			} else if len(parts) != 4 || parts[0] != "loc" {
 				result.Warnings = append(result.Warnings,
 					fmt.Sprintf("GEO_REGION canonicalPath %q should be /loc/{country}/{admin1}/{city} - will be fixed post-factum", fragment.CanonicalPath))
 			} else if !reCountryAlpha2.MatchString(parts[1]) {
