@@ -328,6 +328,7 @@ func main() {
 	log.Printf("  Found %d Wikidata-based clusters", len(clusters))
 
 	// Priority 2: ShortName matches (same type)
+	// CAUTION: For GEO_REGION, only group if same country or at least one has non-canonical path
 	shortNameClusters := 0
 	for key, frags := range shortNameIndex {
 		if len(frags) > 1 {
@@ -335,6 +336,13 @@ func main() {
 			for _, f := range frags {
 				if !processedFragmentIDs[f.ID] {
 					unprocessed = append(unprocessed, f)
+				}
+			}
+			if len(unprocessed) > 1 {
+				// For GEO_REGION: filter out fragments with different countries
+				fragType := unprocessed[0].Type
+				if fragType == models.FragmentTypeGeoRegion {
+					unprocessed = filterGeoByCountry(unprocessed)
 				}
 			}
 			if len(unprocessed) > 1 {
@@ -365,6 +373,13 @@ func main() {
 				}
 			}
 			if len(unprocessed) > 1 {
+				// For GEO_REGION: filter out fragments with different countries
+				fragType := unprocessed[0].Type
+				if fragType == models.FragmentTypeGeoRegion {
+					unprocessed = filterGeoByCountry(unprocessed)
+				}
+			}
+			if len(unprocessed) > 1 {
 				cluster := &DuplicateCluster{
 					MatchType:  "legalName",
 					MatchValue: key,
@@ -392,6 +407,13 @@ func main() {
 				}
 			}
 			if len(unprocessed) > 1 {
+				// For GEO_REGION: filter out fragments with different countries
+				fragType := unprocessed[0].Type
+				if fragType == models.FragmentTypeGeoRegion {
+					unprocessed = filterGeoByCountry(unprocessed)
+				}
+			}
+			if len(unprocessed) > 1 {
 				cluster := &DuplicateCluster{
 					MatchType:  "labelEN",
 					MatchValue: key,
@@ -409,6 +431,7 @@ func main() {
 	log.Printf("  Found %d label[en]-based clusters", labelENClusters)
 
 	// Priority 5: Normalized legalName matches (removes JSC, LLC, Inc, etc.)
+	// NOTE: Skip for GEO_REGION — normalization is too aggressive (e.g., "City of London" → "London")
 	normalizedLegalClusters := 0
 	for key, frags := range normalizedLegalIndex {
 		if len(frags) > 1 {
@@ -419,6 +442,11 @@ func main() {
 				}
 			}
 			if len(unprocessed) > 1 {
+				// Skip GEO_REGION — normalization removes "City of", "State of", etc.
+				fragType := unprocessed[0].Type
+				if fragType == models.FragmentTypeGeoRegion {
+					continue // Don't create cluster for GEO_REGION with normalized names
+				}
 				cluster := &DuplicateCluster{
 					MatchType:  "normalizedLegal",
 					MatchValue: key,
@@ -435,7 +463,7 @@ func main() {
 	}
 	log.Printf("  Found %d normalizedLegal-based clusters", normalizedLegalClusters)
 
-	// Priority 6: GEO city name matches
+	// Priority 6: GEO city name matches — MUST have same country
 	geoCityClusters := 0
 	for cityName, frags := range geoCityIndex {
 		if len(frags) > 1 {
@@ -444,6 +472,10 @@ func main() {
 				if !processedFragmentIDs[f.ID] {
 					unprocessed = append(unprocessed, f)
 				}
+			}
+			if len(unprocessed) > 1 {
+				// CRITICAL: Filter by country — same city name in different countries are NOT duplicates
+				unprocessed = filterGeoByCountry(unprocessed)
 			}
 			if len(unprocessed) > 1 {
 				cluster := &DuplicateCluster{
@@ -790,6 +822,67 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 	return scoredFragments[0].fragment.ID
 }
 
+// extractCountryCodeFromPath extracts ISO alpha-2 country code from /loc/{cc}/... path.
+// Returns empty string if path is not in canonical format or country code is not ISO alpha-2.
+func extractCountryCodeFromPath(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 2 && parts[0] == "loc" {
+		cc := parts[1]
+		// Check if it's a valid ISO alpha-2 code (2 lowercase letters)
+		if len(cc) == 2 && cc >= "aa" && cc <= "zz" {
+			return cc
+		}
+	}
+	return ""
+}
+
+// filterGeoByCountry filters GEO_REGION fragments to only include those with same country.
+// If fragments have different ISO country codes in their canonical paths, they are NOT duplicates.
+// Example: /loc/us/de/dover and /loc/gb/england/dover are different cities, not duplicates.
+func filterGeoByCountry(fragments []*models.HorizonFragment) []*models.HorizonFragment {
+	if len(fragments) <= 1 {
+		return fragments
+	}
+
+	// Group by country code
+	byCountry := make(map[string][]*models.HorizonFragment)
+	noCountry := make([]*models.HorizonFragment, 0) // Fragments without canonical country code
+
+	for _, f := range fragments {
+		cc := extractCountryCodeFromPath(f.CanonicalPath)
+		if cc != "" {
+			byCountry[cc] = append(byCountry[cc], f)
+		} else {
+			noCountry = append(noCountry, f)
+		}
+	}
+
+	// If all have the same country (or no country), return all
+	if len(byCountry) <= 1 {
+		return fragments
+	}
+
+	// Multiple countries detected — this is likely false positive!
+	// Only return the largest group + fragments without country code
+	var largest []*models.HorizonFragment
+	for _, group := range byCountry {
+		if len(group) > len(largest) {
+			largest = group
+		}
+	}
+
+	// Add non-country fragments (legacy paths) to the largest group
+	// They might be duplicates of the canonical ones
+	result := append(largest, noCountry...)
+
+	if *verbose && len(byCountry) > 1 {
+		log.Printf("    GEO country filter: split %d fragments across %d countries, keeping %d",
+			len(fragments), len(byCountry), len(result))
+	}
+
+	return result
+}
+
 // fixGeoPath adds /loc/ prefix to geo paths that don't have it
 func fixGeoPath(path string) string {
 	path = strings.TrimSpace(path)
@@ -1064,20 +1157,43 @@ func extractCityFromPath(path string) string {
 	if path == "" {
 		return ""
 	}
-	
+
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) == 0 {
+	if len(parts) < 2 {
 		return ""
 	}
-	
-	// Get last non-"na" part
+
+	// For /loc/ paths: validate format /loc/{cc}/{admin1}/{city}
+	if parts[0] == "loc" {
+		if len(parts) < 2 {
+			return ""
+		}
+		cc := parts[1]
+		// Must be ISO alpha-2 (2 lowercase letters), but NOT "na" (placeholder)
+		if len(cc) != 2 || cc < "aa" || cc > "zz" || cc == "na" {
+			return "" // Malformed path like /loc/grapevine/tx/us or /loc/na/us/nv — skip
+		}
+		// ONLY index 4-part paths: /loc/{cc}/{admin1}/{city}
+		// Skip 5+ part paths — they are sub-regions (e.g., /loc/cn/gd/shenzhen/futian)
+		if len(parts) != 4 {
+			return "" // Not canonical 4-part format
+		}
+		// City is the 4th part (index 3) if it's not "na"
+		city := parts[3]
+		if city != "na" && city != "" {
+			return strings.ToLower(city)
+		}
+		return ""
+	}
+
+	// Legacy /region/ paths: get last non-"na" part
 	for i := len(parts) - 1; i >= 0; i-- {
 		part := strings.ToLower(parts[i])
 		if part != "na" && part != "" && part != "loc" && part != "region" {
 			return part
 		}
 	}
-	
+
 	return ""
 }
 

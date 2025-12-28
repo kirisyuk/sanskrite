@@ -118,6 +118,37 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     }
   }, [lensId]);
 
+  const updateLensScope = React.useCallback(
+    async (nextScope: string[]) => {
+      if (!lensId || !lens) return;
+      const updated = await api.updateHorizonLens(lensId, {
+        tenantId: lens.tenantId,
+        projectId: lens.projectId,
+        name: lens.name,
+        scope: nextScope,
+        status: lens.status,
+        viewConfig: lens.viewConfig,
+        alertConfig: lens.alertConfig,
+        scopeFragments: lens.scopeFragments,
+        resolvedQueries: lens.resolvedQueries,
+        lastResolved: lens.lastResolved,
+      });
+      setLens(updated);
+      // Refresh related UI panels best-effort.
+      try {
+        const [assemblyData, jobsData] = await Promise.all([
+          api.getHorizonLensAssemblyStatus(lensId).catch(() => null),
+          api.listHorizonScoutingJobs(lensId, { limit: 50 }).catch(() => ({ jobs: [], total: 0 })),
+        ]);
+        setAssemblyStatus(assemblyData);
+        setScoutingJobs(jobsData.jobs || []);
+      } catch {
+        // ignore
+      }
+    },
+    [lensId, lens]
+  );
+
   if (!isOpen) return null;
 
   // Determine title: use lens name if available, otherwise use project name or default
@@ -247,6 +278,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 scoutingJobs={scoutingJobs}
                 loadingJobs={loadingJobs}
                 onRefreshJobs={loadScoutingJobs}
+            onUpdateScope={updateLensScope}
               />
             )}
             {viewMode === 'cockpit' && lens && (

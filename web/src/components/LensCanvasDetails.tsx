@@ -6,6 +6,7 @@ export interface LensCanvasDetailsProps {
   scoutingJobs: any[];
   loadingJobs: boolean;
   onRefreshJobs: () => void;
+  onUpdateScope?: (nextScope: string[]) => Promise<void>;
 }
 
 export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
@@ -14,7 +15,80 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
   scoutingJobs,
   loadingJobs,
   onRefreshJobs,
+  onUpdateScope,
 }) => {
+  const [newScopePath, setNewScopePath] = React.useState('');
+  const [savingScope, setSavingScope] = React.useState(false);
+  const [scopeError, setScopeError] = React.useState<string | null>(null);
+
+  const scope: string[] = Array.isArray(lens?.scope) ? lens.scope : [];
+
+  const dedupe = (arr: string[]) => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const v of arr) {
+      const s = (v || '').trim();
+      if (!s) continue;
+      if (seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+    return out;
+  };
+
+  const isValidScopeEntry = (v: string) => {
+    const s = (v || '').trim();
+    if (!s) return false;
+    // Allow canonical paths and query addresses.
+    if (s.startsWith('/query/')) return true;
+    return s.startsWith('/');
+  };
+
+  const handleAddScope = async () => {
+    if (!onUpdateScope) return;
+    setScopeError(null);
+    const value = newScopePath.trim();
+    if (!isValidScopeEntry(value)) {
+      setScopeError('Enter a canonical path (starts with "/") or a query address (starts with "/query/").');
+      return;
+    }
+    const next = dedupe([...scope, value]);
+    if (next.length === scope.length) {
+      setNewScopePath('');
+      return;
+    }
+    setSavingScope(true);
+    try {
+      await onUpdateScope(next);
+      setNewScopePath('');
+    } catch (e: any) {
+      setScopeError(e?.response?.data?.error || e?.message || 'Failed to update scope');
+    } finally {
+      setSavingScope(false);
+    }
+  };
+
+  const handleRemoveScope = async (path: string) => {
+    if (!onUpdateScope) return;
+    setScopeError(null);
+    const p = (path || '').trim();
+    if (!p) return;
+    if (!window.confirm(`Remove scope entry?\n\n${p}`)) return;
+    const next = scope.filter((x) => (x || '').trim() !== p);
+    if (next.length === 0) {
+      setScopeError('Scope must contain at least one entry.');
+      return;
+    }
+    setSavingScope(true);
+    try {
+      await onUpdateScope(next);
+    } catch (e: any) {
+      setScopeError(e?.response?.data?.error || e?.message || 'Failed to update scope');
+    } finally {
+      setSavingScope(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Lens Info Section */}
@@ -59,21 +133,83 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
       {/* Scope Section */}
       <div>
         <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-heading)' }}>
-          Scope ({lens.scope?.length || 0})
+          Scope ({scope.length || 0})
         </h3>
-        {lens.scope && lens.scope.length > 0 ? (
+
+        {/* Edit controls */}
+        <div className="flex items-center gap-2 mb-2">
+          <input
+            value={newScopePath}
+            onChange={(e) => setNewScopePath(e.target.value)}
+            placeholder='Add path (e.g., "/loc/ae/na/na" or "/query/sector:/Technology/**")'
+            className="text-xs px-2 py-1.5 rounded flex-1"
+            style={{
+              backgroundColor: 'var(--white-05)',
+              color: 'var(--text-heading)',
+              border: '1px solid var(--white-10)',
+              fontFamily: 'monospace',
+              opacity: savingScope ? 0.7 : 1,
+            }}
+            disabled={!onUpdateScope || savingScope}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleAddScope();
+              }
+            }}
+          />
+          <button
+            onClick={handleAddScope}
+            disabled={!onUpdateScope || savingScope || !newScopePath.trim()}
+            className="text-xs px-2 py-1.5 rounded transition-colors"
+            style={{
+              backgroundColor: 'var(--white-10)',
+              color: 'var(--text-heading)',
+              opacity: !onUpdateScope || savingScope || !newScopePath.trim() ? 0.5 : 1,
+            }}
+          >
+            {savingScope ? 'Saving…' : 'Add'}
+          </button>
+        </div>
+        {scopeError && (
+          <div className="text-xs mb-2" style={{ color: '#f87171' }}>
+            {scopeError}
+          </div>
+        )}
+
+        {scope.length > 0 ? (
           <div className="space-y-1">
-            {lens.scope.map((path: string, index: number) => (
+            {scope.map((path: string, index: number) => (
               <div
-                key={index}
-                className="px-2 py-1.5 rounded text-xs"
+                key={`${path}-${index}`}
+                className="px-2 py-1.5 rounded text-xs flex items-center justify-between gap-2"
                 style={{
                   backgroundColor: 'var(--white-05)',
-                  color: 'var(--text-heading)',
-                  fontFamily: 'monospace',
                 }}
               >
-                {path}
+                <span
+                  className="truncate"
+                  style={{
+                    color: 'var(--text-heading)',
+                    fontFamily: 'monospace',
+                  }}
+                  title={path}
+                >
+                  {path}
+                </span>
+                <button
+                  onClick={() => handleRemoveScope(path)}
+                  disabled={!onUpdateScope || savingScope}
+                  className="text-[10px] px-2 py-1 rounded"
+                  style={{
+                    backgroundColor: 'var(--white-10)',
+                    color: 'var(--text-secondary-strong)',
+                    opacity: !onUpdateScope || savingScope ? 0.5 : 1,
+                  }}
+                  title="Remove"
+                >
+                  Remove
+                </button>
               </div>
             ))}
           </div>

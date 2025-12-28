@@ -1703,6 +1703,45 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async updateHorizonLens(
+    lensId: string,
+    data: {
+      id?: string;
+      tenantId: string;
+      projectId: string;
+      name: string;
+      scope: string[];
+      viewConfig?: Record<string, any>;
+      alertConfig?: Record<string, any>;
+      status: string;
+      scopeFragments?: Record<string, string>;
+      resolvedQueries?: Record<string, string[]>;
+      lastResolved?: string;
+    }
+  ): Promise<{
+    id: string;
+    tenantId: string;
+    projectId: string;
+    name: string;
+    scope: string[];
+    viewConfig?: Record<string, any>;
+    alertConfig?: Record<string, any>;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    scopeFragments?: Record<string, string>;
+    resolvedQueries?: Record<string, string[]>;
+    lastResolved?: string;
+  }> {
+    try {
+      const response = await this.client.put(`/api/horizon/lenses/${lensId}`, data);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] updateHorizonLens error:`, error);
+      throw error;
+    }
+  }
+
   async getHorizonLensAssemblyStatus(lensId: string): Promise<{
     status: string;
     phase: string;
