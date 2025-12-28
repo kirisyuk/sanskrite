@@ -159,8 +159,108 @@ func main() {
 			"INFLUENCES",
 			"DEPENDS_ON",
 			"SUBSIDIARY_OF",
+			"TRANSFORMS_INTO",
 		},
 		AllowedMetricUnits: []string{"usd", "eur", "rub", "units", "units_per_day", "days", "hours", "ratio", "index_point", "code"},
+
+		// Product taxonomy
+		AllowedProductCategories: []string{"raw", "component", "finished", "service"},
+		AllowedProductTypes: []string{
+			"mineral",
+			"agricultural",
+			"chemical",
+			"electronic",
+			"mechanical",
+			"energy",
+		},
+		AllowedProductStages: []string{
+			"extraction",
+			"refining",
+			"processing",
+			"manufacturing",
+			"assembly",
+		},
+		ProductStageOrder: []string{
+			"extraction",
+			"refining",
+			"processing",
+			"manufacturing",
+			"assembly",
+		},
+		KnownProducts: map[string]models.ProductSpecData{
+			"lithium-ore": {
+				Category: "raw",
+				Type:     "mineral",
+				Stage:    "extraction",
+			},
+			"lithium-carbonate": {
+				Category: "raw",
+				Type:     "chemical",
+				Stage:    "refining",
+			},
+			"lithium-hydroxide": {
+				Category: "raw",
+				Type:     "chemical",
+				Stage:    "refining",
+			},
+			"cobalt-ore": {
+				Category: "raw",
+				Type:     "mineral",
+				Stage:    "extraction",
+			},
+			"nickel-ore": {
+				Category: "raw",
+				Type:     "mineral",
+				Stage:    "extraction",
+			},
+			"cathode-material": {
+				Category: "component",
+				Type:     "electronic",
+				Stage:    "processing",
+			},
+			"battery-cell": {
+				Category: "component",
+				Type:     "electronic",
+				Stage:    "manufacturing",
+			},
+			"semiconductor-wafer": {
+				Category: "component",
+				Type:     "electronic",
+				Stage:    "manufacturing",
+			},
+			"ev-battery-cell": {
+				Category: "component",
+				Type:     "electronic",
+				Stage:    "manufacturing",
+			},
+			"electric-vehicle": {
+				Category: "finished",
+				Type:     "mechanical",
+				Stage:    "assembly",
+			},
+		},
+		ProductSynonyms: map[string]string{
+			"li2co3":                    "lithium-carbonate",
+			"lithium carbonate":         "lithium-carbonate",
+			"battery grade lithium":     "lithium-carbonate",
+			"lithium hydroxide":        "lithium-hydroxide",
+			"lioh":                      "lithium-hydroxide",
+			"lithium ore":               "lithium-ore",
+			"spodumene":                 "lithium-ore",
+			"cobalt ore":                "cobalt-ore",
+			"nickel ore":                "nickel-ore",
+			"ncm":                       "cathode-material",
+			"nca":                       "cathode-material",
+			"cathode":                   "cathode-material",
+			"battery cell":              "battery-cell",
+			"ev battery":                "ev-battery-cell",
+			"electric vehicle battery":  "ev-battery-cell",
+			"wafer":                     "semiconductor-wafer",
+			"silicon wafer":             "semiconductor-wafer",
+			"ev":                        "electric-vehicle",
+			"electric car":              "electric-vehicle",
+			"electric vehicle":          "electric-vehicle",
+		},
 	}
 
 	if err := taxRepo.Upsert(ctx, tax); err != nil {

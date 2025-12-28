@@ -178,9 +178,9 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 		focusBlock += "\n"
 	}
 
-	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided Horizon Fragment using your search capabilities.
+	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided fragment using your search capabilities.
 
-CURRENT HORIZON FRAGMENT DATA:
+CURRENT FRAGMENT DATA:
 %s
 
 %s
@@ -189,7 +189,7 @@ CRITICAL MISSING INFORMATION (QUESTIONS TO ANSWER):
 
 TASK: Use your search tools to find answers to the missing information questions.
 Return a JSON object with two fields:
-1. "fragment": A JSON object containing ONLY the new or updated fields for the HorizonFragment that you found (e.g., "state", "homeLocation").
+1. "fragment": A JSON object containing ONLY the new or updated fields for the fragment that you found (e.g., "state", "homeLocation").
 2. "relations": An array of DiscoveredRelation objects if you found new dependencies (suppliers, competitors, etc.).
 
 Name Normalization Rules:
@@ -264,7 +264,7 @@ CANONICAL PATH RULES:
 - ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Ensure the "fragment" JSON adheres to the HorizonFragment schema for the fields you are updating.
+Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
 Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), focusBlock, questions)
 }
 

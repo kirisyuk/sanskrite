@@ -331,9 +331,9 @@ func (a *MetricsAgent) buildMetricsPrompt(fragment *models.HorizonFragment, sour
 		}
 	}
 
-	return fmt.Sprintf(`You are a metrics scoring agent for Horizon.
+return fmt.Sprintf(`You are a metrics scoring agent for a risk analysis system.
 
-You MUST output standardized RISK METRICS for the entity as HorizonFragment.state.
+You MUST output standardized RISK METRICS for the entity as fragment.state.
 
 INPUT FRAGMENT (JSON):
 %s

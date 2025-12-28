@@ -269,11 +269,76 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 			}
 		}
 
-		// Extract key properties (limit to 20 most important)
+		// Extract key properties
+		// Priority properties (always extracted): P231, P274, P31, P279, P452, P366, P10565, P186
+		priorityProps := map[string]bool{
+			"P231":  true, // CAS Registry Number
+			"P274":  true, // Chemical formula
+			"P31":   true, // Instance of
+			"P279":  true, // Subclass of
+			"P452":  true, // Industry
+			"P366":  true, // Has use
+			"P10565": true, // Is produced from
+			"P186":  true, // Material used
+		}
+
 		properties := make(map[string]string)
 		propertiesRaw := make(map[string]interface{})
 		propCount := 0
+		
+		// First pass: extract priority properties (all values for multi-value props)
 		for propID, claims := range entity.Claims {
+			if !priorityProps[propID] {
+				continue
+			}
+			if len(claims) == 0 {
+				continue
+			}
+			
+			// For multi-value properties (P31, P279, P366, P10565, P186), collect all values
+			if propID == "P31" || propID == "P279" || propID == "P366" || propID == "P10565" || propID == "P186" {
+				var values []string
+				var rawValues []interface{}
+				for _, claim := range claims {
+					if claim.Mainsnak.Datavalue.Value != nil {
+						value := claim.Mainsnak.Datavalue.Value
+						if entityID := c.extractEntityIDFromValue(value); entityID != "" {
+							values = append(values, entityID)
+							rawValues = append(rawValues, entityID)
+						} else {
+							valueStr := fmt.Sprintf("%v", value)
+							values = append(values, valueStr)
+							rawValues = append(rawValues, value)
+						}
+					}
+				}
+				if len(values) > 0 {
+					properties[propID] = values[0] // First value for backward compatibility
+					propertiesRaw[propID] = rawValues // All values for product extractor
+				}
+			} else {
+				// Single-value properties: take first claim
+				claim := claims[0]
+				if claim.Mainsnak.Datavalue.Value != nil {
+					value := claim.Mainsnak.Datavalue.Value
+					if entityID := c.extractEntityIDFromValue(value); entityID != "" {
+						properties[propID] = entityID
+						propertiesRaw[propID] = entityID
+					} else {
+						valueStr := fmt.Sprintf("%v", value)
+						properties[propID] = valueStr
+						propertiesRaw[propID] = value
+					}
+				}
+			}
+			propCount++
+		}
+
+		// Second pass: extract other properties (limit to 20 total)
+		for propID, claims := range entity.Claims {
+			if priorityProps[propID] {
+				continue // Already extracted
+			}
 			if propCount >= 20 {
 				break
 			}

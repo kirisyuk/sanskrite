@@ -1,9 +1,13 @@
 package taxonomy
 
 import (
+	"regexp"
 	"strings"
 	"sync"
 )
+
+var reProductNonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
+var reProductMultiDash = regexp.MustCompile(`-+`)
 
 // RuntimeTaxonomy is loaded from Firestore and used as a single source of truth.
 // Keep it small and operational: only what we must validate/normalize at runtime.
@@ -23,6 +27,14 @@ type RuntimeTaxonomy struct {
 	AllowedSignalKinds map[string]struct{}        // "risk", "opportunity", "trend", "direction"
 	SignalTypes        map[string]SignalTypeSpec  // "risk:supply_disruption" -> spec
 	SignalTypeSynonyms map[string]string         // alias -> canonical type
+
+	// Product taxonomy for canonicalization
+	AllowedProductCategories map[string]struct{}     // "raw", "component", "finished", "service"
+	AllowedProductTypes      map[string]struct{}     // "mineral", "agricultural", "chemical", "electronic", etc.
+	AllowedProductStages     map[string]struct{}     // "extraction", "refining", "processing", "manufacturing", "assembly"
+	ProductStageOrder        []string                // Ordered list for algorithmic upstream/downstream propagation
+	KnownProducts            map[string]ProductSpec // "lithium-carbonate" -> spec
+	ProductSynonyms          map[string]string       // "Li2CO3" -> "lithium-carbonate", "battery grade lithium" -> "lithium-carbonate"
 }
 
 // SignalTypeSpec defines a signal type specification.
@@ -100,7 +112,7 @@ func NormalizeRelationType(in string) string {
 	}
 	// Fallback allow-list for local runs when runtime taxonomy isn't installed.
 	switch s {
-	case "SUPPLIES_TO", "LOCATED_IN", "OWNS", "PRODUCES", "OPERATES_IN", "REGULATES", "COMPETES_WITH", "INFLUENCES", "DEPENDS_ON", "SUBSIDIARY_OF":
+	case "SUPPLIES_TO", "LOCATED_IN", "OWNS", "PRODUCES", "OPERATES_IN", "REGULATES", "COMPETES_WITH", "INFLUENCES", "DEPENDS_ON", "SUBSIDIARY_OF", "TRANSFORMS_INTO":
 		return s
 	default:
 		return "INFLUENCES"
@@ -154,5 +166,100 @@ func GetSignalTypeSpec(signalType string) *SignalTypeSpec {
 		}
 	}
 	return nil
+}
+
+// ProductSpec defines a product specification.
+type ProductSpec struct {
+	Category string `json:"category"` // "raw", "component", "finished", "service"
+	Type     string `json:"type"`     // "mineral", "agricultural", "chemical", "electronic", etc.
+	Stage    string `json:"stage"`    // "extraction", "refining", "processing", "manufacturing", "assembly"
+}
+
+// GetProductSpec returns the specification for a product slug.
+func GetProductSpec(productSlug string) *ProductSpec {
+	if t := getRuntimeTaxonomy(); t != nil && t.KnownProducts != nil {
+		if spec, ok := t.KnownProducts[productSlug]; ok {
+			return &spec
+		}
+	}
+	return nil
+}
+
+// NormalizeProductName normalizes a product name to canonical slug using synonyms.
+func NormalizeProductName(name string) string {
+	raw := strings.ToLower(strings.TrimSpace(name))
+	if raw == "" {
+		return ""
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.ProductSynonyms != nil {
+		// Try exact (lowercased) first (supports keys like "li2co3", "lithium carbonate").
+		if canonical, ok := t.ProductSynonyms[raw]; ok && strings.TrimSpace(canonical) != "" {
+			return normalizeProductSlug(canonical)
+		}
+		// Then try slugified key (supports keys like "lithium-carbonate").
+		slugKey := normalizeProductSlug(raw)
+		if canonical, ok := t.ProductSynonyms[slugKey]; ok && strings.TrimSpace(canonical) != "" {
+			return normalizeProductSlug(canonical)
+		}
+	}
+	return normalizeProductSlug(raw)
+}
+
+// IsValidProductCategory checks if a category is valid.
+func IsValidProductCategory(category string) bool {
+	if category == "" {
+		return false
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedProductCategories != nil {
+		if _, ok := t.AllowedProductCategories[strings.ToLower(category)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidProductType checks if a type is valid.
+func IsValidProductType(productType string) bool {
+	if productType == "" {
+		return false
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedProductTypes != nil {
+		if _, ok := t.AllowedProductTypes[strings.ToLower(productType)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidProductStage checks if a stage is valid.
+func IsValidProductStage(stage string) bool {
+	if stage == "" {
+		return false
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedProductStages != nil {
+		if _, ok := t.AllowedProductStages[strings.ToLower(stage)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// GetProductStageOrder returns the ordered list of product stages for propagation.
+func GetProductStageOrder() []string {
+	if t := getRuntimeTaxonomy(); t != nil && t.ProductStageOrder != nil {
+		return t.ProductStageOrder
+	}
+	return []string{"extraction", "refining", "processing", "manufacturing", "assembly"}
+}
+
+func normalizeProductSlug(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	s = reProductNonSlugChars.ReplaceAllString(s, "-")
+	s = reProductMultiDash.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	return s
 }
 

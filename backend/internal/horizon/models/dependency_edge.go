@@ -35,9 +35,13 @@ const (
 	DependencyTypeRegulates    DependencyType = "REGULATES"
 	DependencyTypeCompetesWith DependencyType = "COMPETES_WITH"
 	DependencyTypeDependsOn    DependencyType = "DEPENDS_ON"
-	// DependencyTypeInfluences is used for abstract “wave dimensions” like /sphere/... or /loc/...
+	// DependencyTypeInfluences is used for abstract "wave dimensions" like /sphere/... or /loc/...
 	// where the source node represents a domain and the target is a concrete fragment.
 	DependencyTypeInfluences DependencyType = "INFLUENCES"
+	// DependencyTypeTransformsInto represents value chain transformation: Product X transforms into Product Y.
+	// Used for generic value chain relationships (e.g., lithium-ore → lithium-carbonate → cathode-material → battery-cell).
+	// Source: upstream product (earlier stage), Target: downstream product (later stage).
+	DependencyTypeTransformsInto DependencyType = "TRANSFORMS_INTO"
 )
 
 // EdgeProperties свойства ребра зависимости

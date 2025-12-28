@@ -76,19 +76,16 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		out = append(out, "/fac/"+slug)
 		return out
 	case models.FragmentTypeProduct:
-		// Candidate nested: take first word as org token, remainder as product label.
-		out := make([]string, 0, 2)
-		if parts := strings.Fields(short); len(parts) >= 2 {
-			orgTok := strings.TrimSpace(parts[0])
-			rest := strings.TrimSpace(strings.TrimPrefix(short, parts[0]))
-			orgSlug := slugify(orgTok)
-			prodSlug := slugify(rest)
-			if orgSlug != "" && prodSlug != "" {
-				out = append(out, "/product/"+orgSlug+"/"+prodSlug)
-			}
+		// Use ProductCanonicalizer to generate hierarchical paths
+		// Note: preferredCanonicalPaths is called without context, so we use Background
+		// Full canonicalization with context happens in resolveCanonicalPath
+		canonicalizer := NewProductCanonicalizer()
+		result, err := canonicalizer.CanonicalizeProduct(context.Background(), short)
+		if err == nil && result != nil && result.CanonicalPath != "" {
+			return []string{result.CanonicalPath}
 		}
-		out = append(out, "/product/"+slug)
-		return out
+		// Final fallback: flat structure
+		return []string{"/product/" + slug}
 	case models.FragmentTypeProgram:
 		// Preferred: /program/{jurisdiction}/{slug} when jurisdiction can be inferred; fallback: /program/{slug}
 		// We avoid guessing jurisdiction aggressively; LLM/inputs may provide it explicitly.
@@ -238,6 +235,31 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 				}
 			}
 			return norm, nil
+		}
+	}
+
+	// PRODUCT special-case: use ProductCanonicalizer for hierarchical canonicalization
+	if relType == models.FragmentTypeProduct {
+		productName := strings.TrimSpace(rel.TargetShortName)
+		if productName == "" {
+			productName = strings.TrimSpace(rel.TargetLegalName)
+		}
+		if productName == "" {
+			productName = rel.TargetName
+		}
+		if productName != "" {
+			canonicalizer := NewProductCanonicalizer()
+			result, err := canonicalizer.CanonicalizeProduct(ctx, productName)
+			if err == nil && result != nil && result.CanonicalPath != "" {
+				// Check if this canonical path already exists
+				if e.fragmentsRepo != nil {
+					if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, result.CanonicalPath); err == nil && f != nil && f.ID != "" {
+						return result.CanonicalPath, nil
+					}
+				}
+				// Use canonicalized path
+				return result.CanonicalPath, nil
+			}
 		}
 	}
 
@@ -439,12 +461,13 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			
 			// Don't block execution - only log warnings/penalties
 			// ValidationPolicy "reject" is treated as warning, not blocker
-			if decision.Action == "reject" {
+			switch decision.Action {
+			case "reject":
 				reason, _ := decision.Params["reason"].(string)
 				fmt.Printf("%s WARNING: ValidationPolicy would reject LLM output (non-blocking): %s (canonicalPath=%s)\n", 
 					logPrefix, reason, out.CanonicalPath)
 				// Continue - let hardcoded validation handle critical cases
-			} else if decision.Action == "penalty" {
+			case "penalty":
 				penalty, _ := decision.Params["penalty"].(float64)
 				reason, _ := decision.Params["reason"].(string)
 				fmt.Printf("%s PENALTY from ValidationPolicy: %.2f, reason: %s\n", logPrefix, penalty, reason)
@@ -496,7 +519,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 
 func buildCanonicalizationPrompt(rel agents.DiscoveredRelation) string {
 	// Strict schema (embedded) as requested.
-	return fmt.Sprintf(`You are a canonicalization agent for Horizon.
+	return fmt.Sprintf(`You are a canonicalization agent for a risk analysis system.
 
 INPUT (JSON):
 {
@@ -524,9 +547,17 @@ RULES:
 - Use these namespaces:
   - ORGANIZATION: /org/{lowercase-slug}
   - PERSON: /person/{lowercase-slug}
-  - PRODUCT:
-    - Prefer /product/{orgSlug}/{productSlug} when org can be inferred from name (e.g., "Google Gemini" -> /product/google/gemini)
-    - Otherwise use /product/{productSlug}
+  - PRODUCT: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
+    - category: "raw" | "component" | "finished" | "service"
+    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy"
+    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly"
+    - slug: lowercase-slug derived from product name
+    - Examples:
+      - "Lithium Ore" -> /product/raw/mineral/extraction/lithium-ore
+      - "Lithium Carbonate" -> /product/raw/chemical/refining/lithium-carbonate
+      - "Battery Cell" -> /product/component/electronic/manufacturing/battery-cell
+      - "Electric Vehicle" -> /product/finished/mechanical/assembly/electric-vehicle
+    - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
   - PROGRAM:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known (e.g., "Kazakhstan Alem.ai" -> /program/kazakhstan/alem-ai)
     - Otherwise use /program/{programSlug}

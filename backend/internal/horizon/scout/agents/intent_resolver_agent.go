@@ -157,7 +157,7 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 }
 
 func (a *IntentResolverAgent) buildPrompt(query string) string {
-	return fmt.Sprintf(`You are an intent resolver for Horizon. You MUST convert a user query into a reusable, taxonomy-aligned intent.
+	return fmt.Sprintf(`You are an intent resolver for a risk analysis system. You MUST convert a user query into a reusable, taxonomy-aligned intent.
 
 USER QUERY:
 %s
@@ -169,7 +169,7 @@ OUTPUT JSON SCHEMA:
   "keywords": ["string (non-canonical tokens)"],
   "anchors": [
     {
-      "canonicalPath": "string (canonical path like /org/tesla, /loc/saudi-arabia)",
+      "canonicalPath": "string (canonicalPath, must match the taxonomy rules below)",
       "type": "ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET",
       "confidence": 0.0,
       "reason": "short reason"
@@ -179,20 +179,49 @@ OUTPUT JSON SCHEMA:
 
 RULES:
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
-- canonicalPath MUST be a valid Horizon canonical path with allowed namespaces:
+- canonicalPath MUST be a valid canonical path with allowed namespaces:
   /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event
 - ALL path segments MUST be lowercase slugs (use hyphens instead of spaces):
-  - CORRECT: /loc/saudi-arabia, /loc/uae, /org/saudi-aramco
-  - WRONG: /loc/Saudi Arabia, /loc/UAE (uppercase/spaces not allowed)
-- For countries/regions use /loc/{country-slug}:
-  - /loc/saudi-arabia (not /loc/Saudi Arabia)
-  - /loc/uae (not /loc/UAE or /loc/United Arab Emirates)
-  - /loc/usa, /loc/china, /loc/germany, etc.
+  - CORRECT: /org/saudi-aramco, /fac/aramco/ras-tanura-refinery, /loc/ae/na/na, /product/raw/chemical/refining/lithium-carbonate
+  - WRONG: /loc/UAE, /org/Tesla Inc, /product/Lithium Carbonate
+
+- The anchor type MUST match the canonicalPath namespace:
+  - ORGANIZATION -> /org/...
+  - FACILITY     -> /fac/...
+  - GEO_REGION   -> /loc/...
+  - PERSON       -> /person/...
+  - PRODUCT      -> /product/...
+  - PROGRAM      -> /program/...
+  - MARKET       -> /market/...
+  - EVENT        -> /event/...
+
+- GEO_REGION canonicalPath MUST be strict: /loc/{countryAlpha2}/{admin1}/{city}
+  - countryAlpha2: ISO3166-1 alpha2 lowercase (e.g., ae, sa, us)
+  - use "na" for unknown admin1/city
+  - country-only locations MUST be /loc/{cc}/na/na
+    - Saudi Arabia -> /loc/sa/na/na
+    - United Arab Emirates -> /loc/ae/na/na
+
+- PRODUCT canonicalPath MUST be strict hierarchical taxonomy:
+  - /product/{category}/{type}/{stage}/{slug}
+  - category: raw|component|finished|service
+  - type: mineral|agricultural|chemical|electronic|mechanical|energy (best-effort)
+  - stage: extraction|refining|processing|manufacturing|assembly (best-effort)
+  - If you truly cannot classify, use fallback: /product/{slug}
+
+- FACILITY canonicalPath:
+  - prefer /fac/{orgSlug}/{facilitySlug} when the owning org is known and stable
+  - otherwise use /fac/{facilitySlug}
+
+- ORGANIZATION canonicalPath:
+  - /org/{slug} (do not include legal suffixes like Inc/LLC in the path if possible)
+
+- PROGRAM/MARKET/EVENT/PERSON canonicalPath:
+  - /program/{slug}, /market/{slug}, /event/{slug}, /person/{slug}
+
 - Prefer STABLE anchors:
-  - companies: /org/{slug} (e.g., /org/saudi-aramco, /org/adnoc)
-  - products: /product/{orgSlug}/{productSlug} when org is known
-  - facilities: /fac/{orgSlug}/{facilitySlug} when org is known
-  - countries/regions: /loc/{country-slug} (e.g., /loc/saudi-arabia, /loc/uae)
+  - choose country canonical paths for country scope, not adjective/alias forms
+  - choose products/materials at the right level (raw vs component vs finished) when possible
 - Provide 1-3 anchors (anchor = what the Lens should attach to).
 - Provide 1-3 spherePaths.
 - Return ONLY JSON. No markdown. No commentary.`,

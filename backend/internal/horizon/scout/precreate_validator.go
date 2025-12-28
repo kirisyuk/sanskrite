@@ -23,14 +23,16 @@ var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
 type PreCreateValidator struct {
 	geoBuilder      *GeoHierarchyBuilder
 	orgDedup        *OrgDeduplicator
+	productDedup    *ProductDeduplicator
 	validationPolicy *policy.PolicyExecutor // Optional: unified validation policy
 }
 
 // NewPreCreateValidator creates a new pre-create validator.
-func NewPreCreateValidator(geoBuilder *GeoHierarchyBuilder, orgDedup *OrgDeduplicator) *PreCreateValidator {
+func NewPreCreateValidator(geoBuilder *GeoHierarchyBuilder, orgDedup *OrgDeduplicator, productDedup *ProductDeduplicator) *PreCreateValidator {
 	return &PreCreateValidator{
 		geoBuilder: geoBuilder,
 		orgDedup:   orgDedup,
+		productDedup: productDedup,
 	}
 }
 
@@ -186,6 +188,8 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 					if isEmpty || labelMatchesCountry || labelIsSlug {
 						result.Warnings = append(result.Warnings,
 							fmt.Sprintf("non-canonical GEO path %q → %q", fragment.CanonicalPath, canonicalPath))
+						// Normalize the fragment path in-place so creation uses the strict /loc/{cc}/na/na form.
+						fragment.CanonicalPath = canonicalPath
 						// Try to find existing fragment at canonical path and deduplicate
 						if v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil {
 							existing, err := v.geoBuilder.fragmentsRepo.GetByCanonicalPath(context.Background(), canonicalPath)
@@ -231,7 +235,21 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	}
 
 	// ==========================================================================
-	// Policy 6: Required fields validation
+	// Policy 6: Product deduplication
+	// ==========================================================================
+	// Check if this product already exists (by Wikidata ID, CAS number, or chemical formula).
+	if fragment.Type == models.FragmentTypeProduct && v.productDedup != nil {
+		existing, err := v.productDedup.DeduplicateProduct(ctx, fragment)
+		if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
+			result.ReplacementFrag = existing
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("found existing product %q (%s) - using instead of creating new",
+					existing.CanonicalPath, existing.ID))
+		}
+	}
+
+	// ==========================================================================
+	// Policy 7: Required fields validation
 	// ==========================================================================
 	if strings.TrimSpace(fragment.CanonicalPath) == "" {
 		result.BlockReason = "canonical path is required"

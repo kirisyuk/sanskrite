@@ -108,7 +108,7 @@ func (a *IntentDecomposerAgent) buildPrompt(targetCanonicalPath string, focus st
 		ctxBlock += "\n"
 	}
 
-	return fmt.Sprintf(`You are an intent decomposition agent for Horizon.
+	return fmt.Sprintf(`You are an intent decomposition agent for a risk analysis system.
 
 GOAL:
 Given a TARGET entity and intent context, propose a SMALL, reusable set of candidate relations (hypotheses) that describe the relevant structure.

@@ -35,10 +35,10 @@ func NewCanonicalPathResolver(
 
 // ResolveResult contains the result of canonical path resolution.
 type ResolveResult struct {
-	CanonicalPath      string                    // Final canonicalized and deduplicated path
-	ExistingFragment   *models.HorizonFragment   // Non-nil if an existing fragment was found (deduplication)
-	NormalizationSteps []string                  // Log of normalization steps applied
-	Confidence         float64                   // Confidence in the resolution (0.0-1.0)
+	CanonicalPath      string                  // Final canonicalized and deduplicated path
+	ExistingFragment   *models.HorizonFragment // Non-nil if an existing fragment was found (deduplication)
+	NormalizationSteps []string                // Log of normalization steps applied
+	Confidence         float64                 // Confidence in the resolution (0.0-1.0)
 }
 
 // Resolve resolves a canonical path by:
@@ -55,7 +55,7 @@ func (r *CanonicalPathResolver) Resolve(
 	fragmentType models.FragmentType,
 ) (*ResolveResult, error) {
 	logPrefix := "[CanonicalPathResolver]"
-	
+
 	if r == nil {
 		return &ResolveResult{
 			CanonicalPath: strings.TrimSpace(inputPath),
@@ -95,6 +95,17 @@ func (r *CanonicalPathResolver) Resolve(
 		} else if err != nil {
 			log.Printf("%s WARNING: CanonizationPolicy failed: %v, using original path", logPrefix, err)
 			result.Confidence *= 0.9 // Slight penalty for policy failure
+		}
+	}
+
+	// Step 1.5: Strict GEO normalization for country-only paths.
+	// Lens/intent often provides /loc/{slug} (e.g., /loc/uae, /loc/saudi-arabia), but Horizon canonical geo is
+	// /loc/{countryAlpha2}/na/na for country-only locations.
+	if fragmentType == models.FragmentTypeGeoRegion {
+		if norm := normalizeGeoCountryAliasPath(result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
+			result.NormalizationSteps = append(result.NormalizationSteps,
+				fmt.Sprintf("geo_country_alias: %s -> %s", result.CanonicalPath, norm))
+			result.CanonicalPath = norm
 		}
 	}
 
@@ -159,6 +170,53 @@ func (r *CanonicalPathResolver) Resolve(
 	return result, nil
 }
 
+// normalizeGeoCountryAliasPath converts non-strict geo country paths into strict /loc/{cc}/na/na.
+// Examples:
+// - /loc/uae -> /loc/ae/na/na
+// - /loc/saudi-arabia -> /loc/sa/na/na
+// - /loc/ae -> /loc/ae/na/na
+// Returns "" if no safe normalization is possible.
+func normalizeGeoCountryAliasPath(path string) string {
+	p := strings.TrimSpace(path)
+	if !strings.HasPrefix(p, "/loc/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	// loc/{country}/{admin1}/{city} is already strict
+	if len(parts) == 4 && parts[0] == "loc" {
+		return p
+	}
+	// loc/{slug} country-only alias
+	if len(parts) != 2 || parts[0] != "loc" {
+		return ""
+	}
+	slug := strings.TrimSpace(parts[1])
+	if slug == "" {
+		return ""
+	}
+
+	// If it's already an ISO alpha2, normalize to /na/na.
+	if len(slug) == 2 && reCountryAlpha2.MatchString(strings.ToLower(slug)) {
+		return "/loc/" + strings.ToLower(slug) + "/na/na"
+	}
+
+	// Try mapping common country names/aliases.
+	countrySlug := strings.ReplaceAll(slug, "-", " ")
+	countrySlug = strings.ReplaceAll(countrySlug, "_", " ")
+	countrySlug = strings.ToLower(strings.TrimSpace(countrySlug))
+	if countrySlug == "" {
+		return ""
+	}
+	// Safety: only normalize known country names (avoid Georgia, etc.).
+	if !IsKnownCountryName(countrySlug) {
+		return ""
+	}
+	if canon := GetCountryCanonicalPath(countrySlug); canon != "" {
+		return canon
+	}
+	return ""
+}
+
 // ResolveBatch resolves multiple canonical paths in batch.
 // Returns a map from input path to ResolveResult.
 func (r *CanonicalPathResolver) ResolveBatch(
@@ -167,7 +225,7 @@ func (r *CanonicalPathResolver) ResolveBatch(
 	fragmentType models.FragmentType,
 ) (map[string]*ResolveResult, error) {
 	results := make(map[string]*ResolveResult, len(inputPaths))
-	
+
 	for _, path := range inputPaths {
 		resolved, err := r.Resolve(ctx, path, fragmentType)
 		if err != nil {
@@ -181,7 +239,7 @@ func (r *CanonicalPathResolver) ResolveBatch(
 		}
 		results[path] = resolved
 	}
-	
+
 	return results, nil
 }
 
@@ -194,7 +252,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	metadata map[string]string, // e.g., {"shortName": "Tesla", "legalName": "Tesla Inc.", "wikidataId": "Q478214"}
 ) (*ResolveResult, error) {
 	logPrefix := "[CanonicalPathResolver]"
-	
+
 	if r == nil {
 		return &ResolveResult{
 			CanonicalPath: strings.TrimSpace(inputPath),
@@ -285,4 +343,3 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 
 	return result, nil
 }
-

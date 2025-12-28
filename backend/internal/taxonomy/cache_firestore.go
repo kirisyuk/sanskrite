@@ -163,6 +163,73 @@ func (c *FirestoreRuntimeTaxonomyCache) Get(ctx context.Context) (*RuntimeTaxono
 		}
 	}
 
+	// Load product taxonomy
+	if len(t.AllowedProductCategories) > 0 {
+		rt.AllowedProductCategories = map[string]struct{}{}
+		for _, cat := range t.AllowedProductCategories {
+			cat = strings.ToLower(strings.TrimSpace(cat))
+			if cat == "" {
+				continue
+			}
+			rt.AllowedProductCategories[cat] = struct{}{}
+		}
+	}
+	if len(t.AllowedProductTypes) > 0 {
+		rt.AllowedProductTypes = map[string]struct{}{}
+		for _, pt := range t.AllowedProductTypes {
+			pt = strings.ToLower(strings.TrimSpace(pt))
+			if pt == "" {
+				continue
+			}
+			rt.AllowedProductTypes[pt] = struct{}{}
+		}
+	}
+	if len(t.AllowedProductStages) > 0 {
+		rt.AllowedProductStages = map[string]struct{}{}
+		for _, stage := range t.AllowedProductStages {
+			stage = strings.ToLower(strings.TrimSpace(stage))
+			if stage == "" {
+				continue
+			}
+			rt.AllowedProductStages[stage] = struct{}{}
+		}
+	}
+	if len(t.ProductStageOrder) > 0 {
+		rt.ProductStageOrder = make([]string, 0, len(t.ProductStageOrder))
+		for _, stage := range t.ProductStageOrder {
+			stage = strings.ToLower(strings.TrimSpace(stage))
+			if stage == "" {
+				continue
+			}
+			rt.ProductStageOrder = append(rt.ProductStageOrder, stage)
+		}
+	}
+	if len(t.KnownProducts) > 0 {
+		rt.KnownProducts = map[string]ProductSpec{}
+		for k, v := range t.KnownProducts {
+			k = strings.ToLower(strings.TrimSpace(k))
+			if k == "" {
+				continue
+			}
+			rt.KnownProducts[k] = ProductSpec{
+				Category: strings.ToLower(strings.TrimSpace(v.Category)),
+				Type:     strings.ToLower(strings.TrimSpace(v.Type)),
+				Stage:    strings.ToLower(strings.TrimSpace(v.Stage)),
+			}
+		}
+	}
+	if len(t.ProductSynonyms) > 0 {
+		rt.ProductSynonyms = map[string]string{}
+		for k, v := range t.ProductSynonyms {
+			k = strings.ToLower(strings.TrimSpace(k))
+			v = strings.ToLower(strings.TrimSpace(v))
+			if k == "" || v == "" {
+				continue
+			}
+			rt.ProductSynonyms[k] = v
+		}
+	}
+
 	c.cached = rt
 	c.loadedAt = now
 	return rt, nil

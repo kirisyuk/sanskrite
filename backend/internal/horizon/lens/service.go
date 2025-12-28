@@ -408,7 +408,27 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				p := strings.TrimSpace(j.TargetCanonicalPath)
 				// Normalize job path so we dedupe even if older jobs were created under alias paths.
 				if s.canonicalPathResolver != nil && p != "" {
-					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, models.FragmentTypeOrganization); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+					// Best-effort: infer fragment type from path prefix.
+					ft := models.FragmentTypeOrganization
+					switch {
+					case strings.HasPrefix(p, "/product/"):
+						ft = models.FragmentTypeProduct
+					case strings.HasPrefix(p, "/program/"):
+						ft = models.FragmentTypeProgram
+					case strings.HasPrefix(p, "/market/"):
+						ft = models.FragmentTypeMarket
+					case strings.HasPrefix(p, "/fac/"):
+						ft = models.FragmentTypeFacility
+					case strings.HasPrefix(p, "/loc/") || strings.HasPrefix(p, "/region/"):
+						ft = models.FragmentTypeGeoRegion
+					case strings.HasPrefix(p, "/event/"):
+						ft = models.FragmentTypeEvent
+					case strings.HasPrefix(p, "/person/"):
+						ft = models.FragmentTypePerson
+					case strings.HasPrefix(p, "/org/"):
+						ft = models.FragmentTypeOrganization
+					}
+					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						p = resolved.CanonicalPath
 					}
 				}
@@ -427,6 +447,10 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		"lensId":      lensID,
 		"activeJobsN": len(activeScoutJobs),
 	})
+
+	// Track scope rewrites so we can persist canonical scope back into the lens document.
+	// This prevents UI/graph from being stuck on alias paths like /loc/uae.
+	scopeRewrites := map[string]string{} // inputPath -> canonicalPath
 
 	for _, inputPath := range staticPaths {
 		// EARLY CANONICALIZATION AND DEDUPLICATION: Resolve canonical path before any processing
@@ -460,6 +484,9 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			resolved, err := s.canonicalPathResolver.Resolve(ctx, inputPath, fragmentType)
 			if err == nil && resolved != nil {
 				canonicalPath = resolved.CanonicalPath
+				if strings.TrimSpace(inputPath) != "" && strings.TrimSpace(canonicalPath) != "" && strings.TrimSpace(inputPath) != strings.TrimSpace(canonicalPath) {
+					scopeRewrites[strings.TrimSpace(inputPath)] = strings.TrimSpace(canonicalPath)
+				}
 				if resolved.ExistingFragment != nil {
 					fragment = resolved.ExistingFragment
 					isCacheHit = true
@@ -676,6 +703,39 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"confidence":      1.0,
 				"hint":            "cached_verified_skip_scout",
 			})
+		}
+	}
+
+	// Persist canonicalized scope back into the lens (best-effort).
+	if len(scopeRewrites) > 0 {
+		changed := false
+		for i, entry := range lens.Scope {
+			e := strings.TrimSpace(entry)
+			if e == "" {
+				continue
+			}
+			if repl, ok := scopeRewrites[e]; ok && strings.TrimSpace(repl) != "" && repl != e {
+				lens.Scope[i] = repl
+				changed = true
+			}
+		}
+		if changed {
+			// Keep scope stable: de-dup after rewrites.
+			seen := map[string]struct{}{}
+			out := make([]string, 0, len(lens.Scope))
+			for _, entry := range lens.Scope {
+				entry = strings.TrimSpace(entry)
+				if entry == "" {
+					continue
+				}
+				if _, ok := seen[entry]; ok {
+					continue
+				}
+				seen[entry] = struct{}{}
+				out = append(out, entry)
+			}
+			lens.Scope = out
+			_ = s.lensesRepo.Update(ctx, lens)
 		}
 	}
 
@@ -956,7 +1016,27 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				p := strings.TrimSpace(j.TargetCanonicalPath)
 				// Normalize job path so we dedupe even if older jobs were created under alias paths.
 				if s.canonicalPathResolver != nil && p != "" {
-					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, models.FragmentTypeOrganization); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+						// Best-effort: infer fragment type from path prefix.
+						ft := models.FragmentTypeOrganization
+						switch {
+						case strings.HasPrefix(p, "/product/"):
+							ft = models.FragmentTypeProduct
+						case strings.HasPrefix(p, "/program/"):
+							ft = models.FragmentTypeProgram
+						case strings.HasPrefix(p, "/market/"):
+							ft = models.FragmentTypeMarket
+						case strings.HasPrefix(p, "/fac/"):
+							ft = models.FragmentTypeFacility
+						case strings.HasPrefix(p, "/loc/") || strings.HasPrefix(p, "/region/"):
+							ft = models.FragmentTypeGeoRegion
+						case strings.HasPrefix(p, "/event/"):
+							ft = models.FragmentTypeEvent
+						case strings.HasPrefix(p, "/person/"):
+							ft = models.FragmentTypePerson
+						case strings.HasPrefix(p, "/org/"):
+							ft = models.FragmentTypeOrganization
+						}
+						if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						p = resolved.CanonicalPath
 					}
 				}

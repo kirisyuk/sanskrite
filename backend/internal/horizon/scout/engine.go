@@ -289,9 +289,74 @@ type ScoutEngine struct {
 	orgDeduplicator     *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
 	preCreateValidator  *PreCreateValidator               // Validates fragments before creation
 	orgHierarchyBuilder *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
+	productDeduplicator *ProductDeduplicator             // Deduplicates products by Wikidata/CAS/formula
+	productHierarchyBuilder *ProductHierarchyBuilder     // Auto-creates product value chain hierarchy
 	validationPolicy    *policy.PolicyExecutor            // Optional: unified validation policy for edges
 	canonizationPolicy  *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
 	canonicalPathResolver *CanonicalPathResolver          // Unified canonicalization and deduplication service
+}
+
+// bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
+// This helps the UI/graph loader, which relies on lens.Scope, not on transient job state.
+func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, lensID, fromPath, toPath string) {
+	if e == nil || e.lensesRepo == nil {
+		return
+	}
+	lensID = strings.TrimSpace(lensID)
+	tenantID = strings.TrimSpace(tenantID)
+	fromPath = strings.TrimSpace(fromPath)
+	toPath = strings.TrimSpace(toPath)
+	if lensID == "" || fromPath == "" || toPath == "" || fromPath == toPath {
+		return
+	}
+	lens, err := e.lensesRepo.Get(ctx, lensID)
+	if err != nil || lens == nil {
+		return
+	}
+	// Tenant safety: never cross-write.
+	if tenantID != "" && strings.TrimSpace(lens.TenantID) != "" && strings.TrimSpace(lens.TenantID) != tenantID {
+		return
+	}
+
+	changed := false
+	for i, s := range lens.Scope {
+		if strings.TrimSpace(s) == fromPath {
+			lens.Scope[i] = toPath
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+
+	// Best-effort: keep cache consistent.
+	if lens.ScopeFragments != nil {
+		if fid, ok := lens.ScopeFragments[fromPath]; ok {
+			delete(lens.ScopeFragments, fromPath)
+			// Only set if not already present.
+			if _, ok2 := lens.ScopeFragments[toPath]; !ok2 && strings.TrimSpace(fid) != "" {
+				lens.ScopeFragments[toPath] = fid
+			}
+		}
+	}
+
+	// De-dupe scope after rewrite.
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(lens.Scope))
+	for _, s := range lens.Scope {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	lens.Scope = out
+
+	_ = e.lensesRepo.Update(ctx, lens)
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
@@ -373,6 +438,8 @@ func NewScoutEngine(
 	geoBuilder := NewGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
 	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
 	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
+	productDedup := NewProductDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
+	productHierarchy := NewProductHierarchyBuilder(fragmentsRepo, edgesRepo, nil) // WikidataClient set via WithWikidataClient
 
 	engine := &ScoutEngine{
 		planner:             planner,
@@ -395,17 +462,35 @@ func NewScoutEngine(
 		geoHierarchyBuilder: geoBuilder,
 		orgDeduplicator:     orgDedup,
 		orgHierarchyBuilder: orgHierarchy,
+		productDeduplicator: productDedup,
+		productHierarchyBuilder: productHierarchy,
 	}
-	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup)
+	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup)
 	return engine
 }
 
-// WithWikidataClient sets the Wikidata client for organization deduplication
+// WithWikidataClient sets the Wikidata client for organization and product deduplication
 func (e *ScoutEngine) WithWikidataClient(client coreontology.WikidataClientInterface) *ScoutEngine {
 	if e.orgDeduplicator != nil {
 		e.orgDeduplicator.wikidataClient = client
 	} else {
 		e.orgDeduplicator = NewOrgDeduplicator(e.fragmentsRepo, client)
+	}
+	if e.productDeduplicator != nil {
+		e.productDeduplicator.wikidataClient = client
+		if e.productDeduplicator.extractor != nil {
+			e.productDeduplicator.extractor.wikidataClient = client
+		}
+	} else {
+		e.productDeduplicator = NewProductDeduplicator(e.fragmentsRepo, client)
+	}
+	if e.productHierarchyBuilder != nil {
+		e.productHierarchyBuilder.wikidataClient = client
+		if e.productHierarchyBuilder.extractor != nil {
+			e.productHierarchyBuilder.extractor.wikidataClient = client
+		}
+	} else {
+		e.productHierarchyBuilder = NewProductHierarchyBuilder(e.fragmentsRepo, e.edgesRepo, client)
 	}
 	// Also update canonicalPathResolver if it exists
 	if e.canonicalPathResolver != nil && e.canonicalPathResolver.orgDeduplicator != nil {
@@ -734,6 +819,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 				job.State["targetCanonicalPath"] = effectiveCanonicalPath
 				_ = e.scoutingJobsRepo.Update(ctx, job)
+				// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldPath, effectiveCanonicalPath)
 			}
 		} else {
 			// Fallback to original path if resolution fails
@@ -1501,6 +1588,8 @@ SKIP_RESEARCH:
 			job.State["aliasCanonicalPath"] = old
 		}
 		_ = e.scoutingJobsRepo.Update(ctx, job)
+		// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 		trace.Log(ctx, "scout_persist", "scout.retarget.done", map[string]any{
 			"tenantId":           strings.TrimSpace(job.TenantID),
 			"projectId":          strings.TrimSpace(job.ProjectID),
@@ -1597,6 +1686,25 @@ SKIP_RESEARCH:
 				for _, w := range preValidation.Warnings {
 					fmt.Printf("[ScoutEngine] Pre-create warning: %s\n", w)
 				}
+				// If pre-create validation normalized the canonicalPath (e.g., /loc/uae -> /loc/ae/na/na),
+				// retarget the job so all subsequent steps operate on the canonical path.
+				if strings.TrimSpace(extractedFragment.CanonicalPath) != "" && extractedFragment.CanonicalPath != effectiveCanonicalPath {
+					old := effectiveCanonicalPath
+					effectiveCanonicalPath = strings.TrimSpace(extractedFragment.CanonicalPath)
+					job.TargetCanonicalPath = effectiveCanonicalPath
+					if job.State == nil {
+						job.State = map[string]interface{}{}
+					}
+					job.State["targetCanonicalPath"] = effectiveCanonicalPath
+					if _, ok := job.State["aliasCanonicalPath"]; !ok && strings.TrimSpace(old) != "" {
+						job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
+					}
+					fmt.Printf("[ScoutEngine] Retargeting job %s to normalized canonicalPath: %s -> %s\n",
+						strings.TrimSpace(job.ID), strings.TrimSpace(old), effectiveCanonicalPath)
+					_ = e.scoutingJobsRepo.Update(ctx, job)
+					// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+					e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
+				}
 				// Only block on critical issues (empty path/type, /discovered/ paths)
 				// Warnings don't block creation - they're logged for post-factum fixes
 				if !preValidation.IsValid && preValidation.BlockReason != "" {
@@ -1633,6 +1741,8 @@ SKIP_RESEARCH:
 								job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
 							}
 							_ = e.scoutingJobsRepo.Update(ctx, job)
+							// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+							e.bestEffortRewriteLensScope(ctx, tenantID, lensID, strings.TrimSpace(old), effectiveCanonicalPath)
 						}
 					}
 				}
@@ -1661,6 +1771,13 @@ SKIP_RESEARCH:
 			if extractedFragment.Type == models.FragmentTypeOrganization && e.orgHierarchyBuilder != nil {
 				if err := e.orgHierarchyBuilder.EnsureOrgHierarchy(ctx, fragmentID, extractedFragment, "scout_job", job.ID); err != nil {
 					fmt.Printf("[ScoutEngine] Warning: failed to build org hierarchy for %s: %v\n", extractedFragment.CanonicalPath, err)
+				}
+			}
+
+			// Auto-create product hierarchy for PRODUCT fragments (build value chain from Wikidata)
+			if extractedFragment.Type == models.FragmentTypeProduct && e.productHierarchyBuilder != nil {
+				if err := e.productHierarchyBuilder.EnsureProductHierarchy(ctx, fragmentID, extractedFragment, "scout_job", job.ID); err != nil {
+					fmt.Printf("[ScoutEngine] Warning: failed to build product hierarchy for %s: %v\n", extractedFragment.CanonicalPath, err)
 				}
 			}
 		}

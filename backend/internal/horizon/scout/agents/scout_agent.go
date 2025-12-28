@@ -231,7 +231,7 @@ CONTENT TO ANALYZE:
 TASK: Extract all relevant information about this entity and return it as a JSON object with two main fields: "fragment" and "relations".
 
 1. "fragment" Field (Object):
-   Must match the HorizonFragment schema:
+   Must match the fragment schema:
    - canonicalPath: Must match the target canonical path
    - entityPath: Must match the provided entity path
    - sectorPath: Must match the provided sector path

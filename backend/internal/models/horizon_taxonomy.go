@@ -30,6 +30,21 @@ type HorizonTaxonomy struct {
 
 	// Optional: metric vocabulary and constraints (kept as data, used by prompts/validators as needed).
 	AllowedMetricUnits []string `json:"allowedMetricUnits,omitempty" firestore:"allowedMetricUnits,omitempty"`
+
+	// Product taxonomy for canonicalization (/product/{category}/{type}/{stage}/{slug})
+	AllowedProductCategories []string                      `json:"allowedProductCategories,omitempty" firestore:"allowedProductCategories,omitempty"` // "raw", "component", "finished", "service"
+	AllowedProductTypes      []string                      `json:"allowedProductTypes,omitempty" firestore:"allowedProductTypes,omitempty"`         // "mineral", "agricultural", "chemical", "electronic", etc.
+	AllowedProductStages     []string                      `json:"allowedProductStages,omitempty" firestore:"allowedProductStages,omitempty"`         // "extraction", "refining", "processing", "manufacturing", "assembly"
+	ProductStageOrder        []string                      `json:"productStageOrder,omitempty" firestore:"productStageOrder,omitempty"`             // Ordered list for algorithmic propagation
+	KnownProducts            map[string]ProductSpecData    `json:"knownProducts,omitempty" firestore:"knownProducts,omitempty"`                      // "lithium-carbonate" -> spec
+	ProductSynonyms          map[string]string             `json:"productSynonyms,omitempty" firestore:"productSynonyms,omitempty"`                // "Li2CO3" -> "lithium-carbonate", "battery grade lithium" -> "lithium-carbonate"
+}
+
+// ProductSpecData is the Firestore representation of ProductSpec.
+type ProductSpecData struct {
+	Category string `json:"category" firestore:"category"` // "raw", "component", "finished", "service"
+	Type     string `json:"type" firestore:"type"`           // "mineral", "agricultural", "chemical", "electronic", etc.
+	Stage    string `json:"stage" firestore:"stage"`         // "extraction", "refining", "processing", "manufacturing", "assembly"
 }
 
 // SignalTypeSpecData is the Firestore representation of SignalTypeSpec.

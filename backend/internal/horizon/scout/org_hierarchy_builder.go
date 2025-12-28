@@ -161,7 +161,8 @@ func (b *OrgHierarchyBuilder) generateOrgPath(name string) string {
 }
 
 // ensureParentOrg finds or creates the parent organization fragment.
-func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, provenanceMethod, sourceID string) (string, error) {
+func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, _ string, _ string) (string, error) {
+	// provenanceMethod and sourceID are unused but kept for API consistency
 	// Try to find existing
 	existing, err := b.fragmentsRepo.GetByCanonicalPath(ctx, path)
 	if err == nil && existing != nil && existing.ID != "" {
