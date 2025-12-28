@@ -56,10 +56,12 @@ const INCREMENTAL_LAYOUT_OPTIONS: LayoutOptions = {
 // Приоритет типов связей для сортировки (меньше = важнее = левее)
 const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'COMPETES_WITH': 1, 'CONFLICTS_WITH': 1, 'OPPOSES': 1,
+  'LOCATED_IN': 1, // LOCATED_IN имеет высокий приоритет в группе supply-chain
   'INFLUENCES': 2, 'AFFECTS': 2, 'REGULATES': 2, 'IMPACTS': 2,
-  'OWNS': 3, 'MANAGES': 3, 'CONTROLS': 3, 'PARENT_OF': 3, 'SUBSIDIARY_OF': 3,
+  'OWNS': 2, // OWNS имеет высокий приоритет в группе customers
+  'MANAGES': 3, 'CONTROLS': 3, 'PARENT_OF': 3, 'SUBSIDIARY_OF': 3,
   'PARTNERS_WITH': 4, 'COOPERATES_WITH': 4, 'SUPPLIES_TO': 4, 'SUPPORTS': 4,
-  'LOCATED_IN': 5, 'OPERATES_IN': 5, 'BASED_IN': 5, 'HEADQUARTERED_IN': 5,
+  'OPERATES_IN': 5, 'BASED_IN': 5, 'HEADQUARTERED_IN': 5,
   'DEPENDS_ON': 6, 'REQUIRES': 6, 'USES': 6, 'NEEDS': 6,
 };
 const DEFAULT_EDGE_PRIORITY = 7;
@@ -302,8 +304,10 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'CONSUMES':
       return 'supply-chain';  // we consume something = upstream
     
-    // Ownership: outgoing = we own them (downstream), incoming = they own us (upstream)
+    // Ownership: OWNS всегда в customers группе (downstream), даже если incoming
+    // Это дает приоритет для размещения дочерних компаний в нижней группе
     case 'OWNS':
+      return 'customers';  // OWNS всегда в customers, независимо от направления
     case 'MANAGES':
     case 'CONTROLS':
     case 'PARENT_OF':
@@ -325,8 +329,11 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'SIMILAR_TO':
       return 'market';
     
-    // Context — geography, regulation, influence
+    // LOCATED_IN имеет приоритет для размещения в supply-chain группе (верхняя)
+    // только если связь направлена НА центральную ноду (incoming)
     case 'LOCATED_IN':
+      return isOutgoing ? 'context' : 'supply-chain';  // incoming = нода находится в объекте сверху -> supply-chain
+    // Context — geography, regulation, influence (остальные географические связи)
     case 'OPERATES_IN':
     case 'BASED_IN':
     case 'HEADQUARTERED_IN':
