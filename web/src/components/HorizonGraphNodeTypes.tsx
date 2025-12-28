@@ -689,21 +689,20 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         outlineOffset: isSelected ? 2 : undefined,
       }}
     >
-      {/* Source handle снизу (для исходящих связей - от кнопки +) */}
+      {/* Top handles: 2 handles для верхней группы (supply-chain) */}
       <Handle
-        id="source-bottom"
+        id="source-top"
         type="source"
-        position={Position.Bottom}
+        position={Position.Top}
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
           border: `2px solid ${bgColor}`,
-          bottom: '0px',
+          top: '-5px',
+          left: '40%',
         }}
       />
-      
-      {/* Target handle сверху (для входящих связей) */}
       <Handle
         id="target-top"
         type="target"
@@ -713,11 +712,40 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           width: '10px',
           height: '10px',
           border: `2px solid ${bgColor}`,
-          top: '0px',
+          top: '-5px',
+          right: '40%',
         }}
       />
       
-      {/* Left handles for Market Position group */}
+      {/* Bottom handles: 2 handles для нижней группы (customers) */}
+      <Handle
+        id="source-bottom"
+        type="source"
+        position={Position.Bottom}
+        style={{
+          background: accentColor,
+          width: '10px',
+          height: '10px',
+          border: `2px solid ${bgColor}`,
+          bottom: '-5px',
+          left: '40%',
+        }}
+      />
+      <Handle
+        id="target-bottom"
+        type="target"
+        position={Position.Bottom}
+        style={{
+          background: accentColor,
+          width: '10px',
+          height: '10px',
+          border: `2px solid ${bgColor}`,
+          bottom: '-5px',
+          right: '40%',
+        }}
+      />
+      
+      {/* Left handles: 2 handles для левой группы (market) */}
       <Handle
         id="source-left"
         type="source"
@@ -727,6 +755,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           width: '10px',
           height: '10px',
           border: `2px solid ${bgColor}`,
+          left: '-5px',
+          top: '40%',
         }}
       />
       <Handle
@@ -743,7 +773,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         }}
       />
       
-      {/* Right handles for Operating Context group */}
+      {/* Right handles: 2 handles для правой группы (context) */}
       <Handle
         id="source-right"
         type="source"
@@ -753,6 +783,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           width: '10px',
           height: '10px',
           border: `2px solid ${bgColor}`,
+          right: '-5px',
+          top: '40%',
         }}
       />
       <Handle

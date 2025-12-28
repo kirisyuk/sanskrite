@@ -66,7 +66,7 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
 };
 const DEFAULT_EDGE_PRIORITY = 7;
 
-const getEdgePriority = (edgeType: string | undefined): number => {
+export const getEdgePriority = (edgeType: string | undefined): number => {
   const type = (edgeType || '').toUpperCase();
   return EDGE_TYPE_PRIORITY[type] ?? DEFAULT_EDGE_PRIORITY;
 };
@@ -304,10 +304,10 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'CONSUMES':
       return 'supply-chain';  // we consume something = upstream
     
-    // Ownership: OWNS всегда в customers группе (downstream), даже если incoming
-    // Это дает приоритет для размещения дочерних компаний в нижней группе
+    // Ownership: OWNS направленная на центральную ноду (incoming) идет в верхнюю группу (supply-chain)
+    // OWNS от центральной ноды (outgoing) идет в нижнюю группу (customers)
     case 'OWNS':
-      return 'customers';  // OWNS всегда в customers, независимо от направления
+      return isOutgoing ? 'customers' : 'supply-chain';  // incoming (на центральную ноду) -> сверху, outgoing (от центральной ноды) -> снизу
     case 'MANAGES':
     case 'CONTROLS':
     case 'PARENT_OF':

@@ -73,6 +73,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
   const [showMiniMap, setShowMiniMap] = React.useState(false);
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
+  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'side-by-side'>('freeform');
+  const [showLayoutDropdown, setShowLayoutDropdown] = React.useState(false);
 
   // When graph grows large and user didn't override perf mode, auto-disable heavy visuals once.
   React.useEffect(() => {
@@ -213,11 +215,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
    * For vertical groups (top/bottom): always bottom → top
    * For horizontal groups (left/right): depends on who is source in the edge data
    * 
-   * Visual layout:
-   * - Supply Chain (top): child above parent, edge bottom → top
-   * - Customers (bottom): child below parent, edge bottom → top  
-   * - Market (left): child left of parent, edge left ↔ right
-   * - Context (right): child right of parent, edge right ↔ left
+   * Правила привязки edges к сторонам центральной ноды:
+   * - Левая группа (market): из левой грани центральной ноды в правую грань ноды в группе
+   * - Правая группа (context): из правой грани центральной ноды в левую грань ноды в группе
+   * - Нижняя группа (customers): из нижней грани центральной ноды в верхнюю грань ноды в группе
+   * - Верхняя группа (supply-chain): из верхней грани центральной ноды в нижнюю грань ноды в группе
+   * 
+   * Направление связи определяет, какой handle использовать (source или target).
+   * Эти правила применяются только для связей внутри одного grid.
    */
   const getEdgeHandles = useCallback((edgeType: string | undefined, isOutgoing: boolean): { sourceHandle: string; targetHandle: string } => {
     const sg = getSemanticGroup(edgeType, isOutgoing);
@@ -225,14 +230,33 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     
     switch (position) {
       case 'top':
-        // Supply chain: vertical, always bottom → top
-        return { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+        // Верхняя группа (supply-chain): из верхней грани центральной ноды в нижнюю грань ноды в группе
+        if (isOutgoing) {
+          // edge: parent(source) → child(target)
+          // source node = parent → use top handle
+          // target node = child → use bottom handle
+          return { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+        } else {
+          // edge: child(source) → parent(target)
+          // source node = child → use bottom handle (towards parent on top)
+          // target node = parent → use top handle (from child on bottom)
+          return { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+        }
       case 'bottom':
-        // Customers: vertical, always bottom → top
-        return { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+        // Нижняя группа (customers): из нижней грани центральной ноды в верхнюю грань ноды в группе
+        if (isOutgoing) {
+          // edge: parent(source) → child(target)
+          // source node = parent → use bottom handle
+          // target node = child → use top handle
+          return { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+        } else {
+          // edge: child(source) → parent(target)
+          // source node = child → use top handle (towards parent on bottom)
+          // target node = parent → use bottom handle (from child on top)
+          return { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+        }
       case 'left':
-        // Market: child is to the left of parent
-        // Visual: parent.left → child.right
+        // Левая группа (market): из левой грани центральной ноды в правую грань ноды в группе
         if (isOutgoing) {
           // edge: parent(source) → child(target)
           // source node = parent → use left handle
@@ -240,13 +264,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           return { sourceHandle: 'source-left', targetHandle: 'target-right' };
         } else {
           // edge: child(source) → parent(target)
-          // source node = child → use right handle (towards parent on right)
-          // target node = parent → use left handle (from child on left)
+          // source node = child → use right handle (towards parent on left)
+          // target node = parent → use left handle (from child on right)
           return { sourceHandle: 'source-right', targetHandle: 'target-left' };
         }
       case 'right':
-        // Context: child is to the right of parent
-        // Visual: parent.right → child.left
+        // Правая группа (context): из правой грани центральной ноды в левую грань ноды в группе
         if (isOutgoing) {
           // edge: parent(source) → child(target)
           // source node = parent → use right handle
@@ -254,8 +277,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           return { sourceHandle: 'source-right', targetHandle: 'target-left' };
         } else {
           // edge: child(source) → parent(target)
-          // source node = child → use left handle (towards parent on left)
-          // target node = parent → use right handle (from child on right)
+          // source node = child → use left handle (towards parent on right)
+          // target node = parent → use right handle (from child on left)
           return { sourceHandle: 'source-left', targetHandle: 'target-right' };
         }
       default:
@@ -1004,6 +1027,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       const fragmentEdgeType = new Map<string, string>();
       const fragmentDirection = new Map<string, 'incoming' | 'outgoing'>();
       
+      const updateEdgeInfo = (neighborId: string, edgeType: string, direction: 'incoming' | 'outgoing') => {
+        const existingType = fragmentEdgeType.get(neighborId);
+        if (!existingType) {
+          fragmentEdgeType.set(neighborId, edgeType);
+          fragmentDirection.set(neighborId, direction);
+        } else {
+          // Если уже есть связь, проверяем приоритет. 
+          // Меньшее число = более высокий приоритет (важнее).
+          const existingPriority = getEdgePriority(existingType);
+          const newPriority = getEdgePriority(edgeType);
+          if (newPriority < existingPriority) {
+            fragmentEdgeType.set(neighborId, edgeType);
+            fragmentDirection.set(neighborId, direction);
+          }
+        }
+      };
+
       for (const e of depEdges) {
         const s = String(e?.sourceFragmentId || '').trim();
         const t = String(e?.targetFragmentId || '').trim();
@@ -1011,15 +1051,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         
         // Если родитель — source, то ребёнок — target (outgoing: родитель → ребёнок)
         if (s === fragmentId && t) {
-          fragmentEdgeType.set(t, edgeType);
-          fragmentDirection.set(t, 'outgoing'); // Ребёнок получает связь ОТ родителя
+          updateEdgeInfo(t, edgeType, 'outgoing');
         }
         // Если родитель — target, то ребёнок — source (incoming: ребёнок → родитель)
         if (t === fragmentId && s) {
-          if (!fragmentEdgeType.has(s)) {
-            fragmentEdgeType.set(s, edgeType);
-          }
-          fragmentDirection.set(s, 'incoming'); // Ребёнок направлен К родителю
+          updateEdgeInfo(s, edgeType, 'incoming');
         }
       }
 
@@ -1030,16 +1066,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const edgeType = e.data?.edgeType || e.type || '';
         
         if (s === fragmentId && t) {
-          if (!fragmentEdgeType.has(t)) {
-             fragmentEdgeType.set(t, edgeType);
-             fragmentDirection.set(t, 'outgoing');
-          }
+          updateEdgeInfo(t, edgeType, 'outgoing');
         }
         if (t === fragmentId && s) {
-          if (!fragmentEdgeType.has(s)) {
-             fragmentEdgeType.set(s, edgeType);
-             fragmentDirection.set(s, 'incoming');
-          }
+          updateEdgeInfo(s, edgeType, 'incoming');
         }
       }
 
@@ -1151,10 +1181,104 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const targetId = fragmentToNodeIdMap.get(t);
         if (!sourceId || !targetId) continue;
 
-        // Determine handles based on semantic group
-        // isOutgoing = true if the expanded node (fragmentId) is the source
-        const isOutgoing = s === fragmentId;
-        const handles = getEdgeHandles(edgeType, isOutgoing);
+        // Проверяем, находятся ли обе ноды в одном grid
+        // Ноды в одном grid, если:
+        // 1. Одна из нод является раскрываемой нодой (fragmentId)
+        // 2. Обе ноды имеют одинаковый parentFragmentId или rootFragmentId
+        const sourceNode = currentNodes.find(n => (n.data as any)?.fragmentId === s) || newNodes.find(n => n.id === s);
+        const targetNode = currentNodes.find(n => (n.data as any)?.fragmentId === t) || newNodes.find(n => n.id === t);
+        
+        const sourceParentId = sourceNode ? (sourceNode.data as any)?.parentFragmentId : null;
+        const targetParentId = targetNode ? (targetNode.data as any)?.parentFragmentId : null;
+        const sourceRootId = sourceNode ? (sourceNode.data as any)?.rootFragmentId : null;
+        const targetRootId = targetNode ? (targetNode.data as any)?.rootFragmentId : null;
+        
+        // Helper to get group position for a node
+        const getNodePosition = (nodeId: string): 'top' | 'bottom' | 'left' | 'right' | 'center' | undefined => {
+          if (nodeId === fragmentId) return 'center';
+          
+          const node = currentNodes.find(n => (n.data as any)?.fragmentId === nodeId) || 
+                       newNodes.find(n => n.id === nodeId);
+          
+          if (!node) return undefined;
+          
+          const d = node.data as any;
+          // Check if node belongs to the current expansion parent
+          if (d?.parentFragmentId !== fragmentId && d?.rootFragmentId !== fragmentId && nodeId !== fragmentId) {
+             return undefined; 
+          }
+
+          // Calculate position based on how node is attached to parent
+          const sg = getSemanticGroup(d.edgeTypeFromParent, d.directionFromParent !== 'incoming');
+          return SEMANTIC_GROUP_POSITION[sg];
+        };
+
+        const sourcePos = getNodePosition(s);
+        const targetPos = getNodePosition(t);
+        
+        // Determine layout position for routing
+        let layoutPos: 'top' | 'bottom' | 'left' | 'right' | 'default' = 'default';
+        
+        if (sourcePos === 'center' && targetPos) {
+            layoutPos = targetPos;
+        } else if (targetPos === 'center' && sourcePos) {
+            layoutPos = sourcePos;
+        } else if (sourcePos && targetPos && sourcePos === targetPos) {
+            layoutPos = sourcePos;
+        } else if (sourcePos && !targetPos) {
+            layoutPos = sourcePos; 
+        } else if (targetPos && !sourcePos) {
+            layoutPos = targetPos;
+        }
+
+        let handles;
+        if (layoutPos === 'default') {
+             // Fallback to standard check for other same-grid cases or default behavior
+             const isSameGrid = 
+               s === fragmentId || t === fragmentId || 
+               (sourceParentId && sourceParentId === targetParentId) || 
+               (sourceRootId && sourceRootId === targetRootId) || 
+               (sourceParentId === t || targetParentId === s);
+             
+             if (isSameGrid) {
+                 const isOutgoing = s === fragmentId;
+                 handles = getEdgeHandles(edgeType, isOutgoing);
+             } else {
+                 handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+             }
+        } else {
+             // Use layoutPos to determine handles
+             // Is outgoing? 
+             // If source is center -> outgoing
+             // If target is center -> incoming
+             // If both in group -> assume flow direction s->t (treat as outgoing)
+             const isFlowOut = sourcePos === 'center' || (sourcePos && targetPos && sourcePos === targetPos);
+             
+             switch (layoutPos) {
+                case 'top':
+                    handles = isFlowOut 
+                        ? { sourceHandle: 'source-top', targetHandle: 'target-bottom' }
+                        : { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+                    break;
+                case 'bottom':
+                    handles = isFlowOut 
+                        ? { sourceHandle: 'source-bottom', targetHandle: 'target-top' }
+                        : { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+                    break;
+                case 'left':
+                    handles = isFlowOut 
+                        ? { sourceHandle: 'source-left', targetHandle: 'target-right' }
+                        : { sourceHandle: 'source-right', targetHandle: 'target-left' };
+                    break;
+                case 'right':
+                    handles = isFlowOut 
+                        ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
+                        : { sourceHandle: 'source-left', targetHandle: 'target-right' };
+                    break;
+                default:
+                    handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+             }
+        }
 
         const baseStyle = getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality);
         newEdges.push({
@@ -1886,11 +2010,119 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     Zap: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
     Map: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>,
     Grid: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
+    Layout: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>,
+    ChevronDown: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
   };
+
+  // Layout dropdown component
+  const LayoutDropdown = React.useMemo(() => {
+    const layoutOptions: Array<{ value: 'freeform' | 'side-by-side'; label: string }> = [
+      { value: 'freeform', label: 'Freeform' },
+      { value: 'side-by-side', label: 'Side by side' },
+    ];
+
+    return (
+      <div style={{ position: 'relative', display: 'inline-block' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
+          <button
+            type="button"
+            onClick={() => setShowLayoutDropdown((v) => !v)}
+            style={{
+              background: showLayoutDropdown ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '6px 8px',
+              cursor: 'pointer',
+              color: 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.2s ease',
+            }}
+            title="Layout Mode"
+          >
+            {Icons.Layout}
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+              {layoutOptions.find(opt => opt.value === layoutMode)?.label || 'Freeform'}
+            </span>
+            {Icons.ChevronDown}
+          </button>
+          <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
+        </div>
+        
+        {showLayoutDropdown && (
+          <>
+            <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 999,
+              }}
+              onClick={() => setShowLayoutDropdown(false)}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                marginTop: '4px',
+                background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+                border: `1px solid var(--border-subtle)`,
+                borderRadius: '8px',
+                boxShadow: theme === 'dark' ? '0 4px 12px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.1)',
+                zIndex: 1000,
+                minWidth: '140px',
+                overflow: 'hidden',
+              }}
+            >
+              {layoutOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setLayoutMode(option.value);
+                    setShowLayoutDropdown(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    background: layoutMode === option.value ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
+                    border: 'none',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    color: layoutMode === option.value ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontSize: '12px',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (layoutMode !== option.value) {
+                      e.currentTarget.style.background = theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (layoutMode !== option.value) {
+                      e.currentTarget.style.background = 'transparent';
+                    }
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }, [showLayoutDropdown, layoutMode, theme]);
 
   const toolbarContent = (
     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
       <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load Graph" icon={Icons.Refresh} />
+      {LayoutDropdown}
       <IconButton onClick={handleArrange} disabled={arranging || nodes.length === 0} title="Arrange Graph" icon={Icons.Magic} />
       <IconButton onClick={handleDownload} disabled={nodes.length === 0 && edges.length === 0} title="Download Graph" icon={Icons.Download} />
       

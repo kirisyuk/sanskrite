@@ -222,9 +222,12 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         const dst = typeof data?.targetFragmentId === 'string' ? data.targetFragmentId : '';
         const srcName = src ? getEntityName(src) : 'Unknown';
         const dstName = dst ? getEntityName(dst) : 'Unknown';
-        text = `Connection: ${srcName} → ${dstName}`;
+        const edgeType = typeof data?.type === 'string' ? data.type : 'Connection';
+        // Format edge type: "SUPPLIES_TO" -> "Supplies To"
+        const formattedType = edgeType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        text = `Link ${formattedType} created: ${srcName} → ${dstName}`;
         humanReadable = {
-          title: 'Connection Created',
+          title: `Link ${formattedType} created`,
           description: `${srcName} → ${dstName}`,
         };
       } else if (type.startsWith('horizon.propagation.')) {

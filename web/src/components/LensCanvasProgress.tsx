@@ -215,8 +215,14 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
               let hasLowConfidence = false;
 
               if (isEdge) {
+                // Use the title from humanReadable if available (already formatted as "Link <type> created")
+                // Otherwise format it ourselves
                 const type = ev.data?.type || 'Connection';
-                title = `${formatEdgeType(type)} Created`;
+                if (ev.humanReadable?.title) {
+                  title = ev.humanReadable.title;
+                } else {
+                  title = `Link ${formatEdgeType(type)} created`;
+                }
                 
                 const s = ev.data?.qualifiers?.sourceCanonicalPath || ev.data?.sourceFragmentId;
                 const t = ev.data?.qualifiers?.targetCanonicalPath || ev.data?.targetFragmentId;
@@ -277,7 +283,26 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
                       <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 13, lineHeight: '20px' }}>
-                        {title}
+                        {isEdge ? (
+                          // Show edge notification as a chip
+                          <span 
+                            style={{ 
+                              display: 'inline-block', 
+                              fontSize: 12, 
+                              padding: '4px 10px', 
+                              borderRadius: 6, 
+                              background: 'var(--bg-elevated)', 
+                              border: '1px solid var(--border-subtle)',
+                              color: 'var(--text-heading)', 
+                              fontWeight: 500,
+                              fontFamily: 'monospace',
+                            }}
+                          >
+                            {title}
+                          </span>
+                        ) : (
+                          title
+                        )}
                         {hasLowConfidence && (
                           <span 
                             style={{ 
