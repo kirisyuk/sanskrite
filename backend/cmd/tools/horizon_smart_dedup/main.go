@@ -728,15 +728,24 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 			score += 100
 		}
 
-		// Prefer proper /loc/{country}/{admin1}/{city} format (+50)
+		// Prefer proper /loc/{cc}/{admin1}/{city} format where {cc} is ISO alpha-2
+		// This is the canonical form; /loc/geo/..., /loc/country/..., etc. are legacy
 		if strings.HasPrefix(f.CanonicalPath, "/loc/") {
 			parts := strings.Split(strings.Trim(f.CanonicalPath, "/"), "/")
-			if len(parts) >= 4 {
-				score += 50 // Full hierarchy
-			} else if len(parts) >= 3 {
-				score += 30 // Country + something
-			} else {
-				score += 10 // Just /loc/
+			if len(parts) >= 2 {
+				// Check if second part is ISO alpha-2 country code (2 lowercase letters)
+				isISO2 := len(parts[1]) == 2 && parts[1] >= "aa" && parts[1] <= "zz"
+				if isISO2 && len(parts) == 4 {
+					score += 100 // Canonical /loc/{cc}/{admin1}/{city} format — highest priority!
+				} else if isISO2 && len(parts) >= 3 {
+					score += 80 // /loc/{cc}/{admin1}
+				} else if isISO2 {
+					score += 60 // /loc/{cc}
+				} else if len(parts) >= 4 {
+					score += 30 // Legacy /loc/geo/country/usa etc.
+				} else {
+					score += 10 // Other /loc/ paths
+				}
 			}
 		}
 
