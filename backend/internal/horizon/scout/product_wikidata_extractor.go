@@ -11,8 +11,8 @@ import (
 // ProductWikidataData contains extracted Wikidata data for a product.
 type ProductWikidataData struct {
 	QID             string   // Wikidata Q-ID (e.g., "Q409857")
-	Label            string   // English label
-	Description      string   // English description
+	Label           string   // English label
+	Description     string   // English description
 	CASNumber       string   // P231 - CAS Registry Number
 	ChemicalFormula string   // P274 - Chemical formula
 	InstanceOf      []string // P31 - Instance of (for entityPath)
@@ -21,6 +21,7 @@ type ProductWikidataData struct {
 	Uses            []string // P366 - Has use (applications)
 	ProducedFrom    []string // P10565 - Is produced from (upstream)
 	MaterialUsed    []string // P186 - Material used (upstream)
+	Manufacturers   []string // P176 - Manufacturer (organizations that produce this product)
 }
 
 // ProductWikidataExtractor extracts product-specific data from Wikidata.
@@ -99,6 +100,11 @@ func (e *ProductWikidataExtractor) ExtractProductData(ctx context.Context, qID s
 		// P186 - Material used (upstream, can be multiple)
 		if materialUsed, ok := e.extractEntityListProperty(props, "P186"); ok {
 			result.MaterialUsed = materialUsed
+		}
+
+		// P176 - Manufacturer (organizations that produce this product)
+		if manufacturers, ok := e.extractEntityListProperty(props, "P176"); ok {
+			result.Manufacturers = manufacturers
 		}
 	}
 

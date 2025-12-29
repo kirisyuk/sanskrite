@@ -34,21 +34,20 @@ import (
 
 // ProductHierarchyBuilder auto-creates product value chain hierarchy from Wikidata.
 type ProductHierarchyBuilder struct {
-	fragmentsRepo  *repo.HorizonFragmentsRepository
-	edgesRepo      *repo.DependencyEdgesRepository
-	wikidataClient coreontology.WikidataClientInterface
-	deduplicator   *ProductDeduplicator
-	extractor      *ProductWikidataExtractor
-	canonicalizer  *ProductCanonicalizer
-	// sessionCache caches Wikidata data and fragments within a single EnsureProductHierarchy call
-	// to avoid duplicate requests for the same Q-ID
-	sessionCache *productHierarchyCache
+	fragmentsRepo   *repo.HorizonFragmentsRepository
+	edgesRepo       *repo.DependencyEdgesRepository
+	wikidataClient  coreontology.WikidataClientInterface
+	deduplicator    *ProductDeduplicator
+	extractor       *ProductWikidataExtractor
+	canonicalizer   *ProductCanonicalizer
+	orgDeduplicator *OrgDeduplicator // For manufacturer/producer deduplication
 }
 
 // productHierarchyCache caches Wikidata data and fragments during hierarchy building.
 type productHierarchyCache struct {
 	productData map[string]*ProductWikidataData    // Q-ID -> extracted data
 	fragments   map[string]*models.HorizonFragment // Q-ID -> fragment (existing or newly created)
+	orgs        map[string]*models.HorizonFragment // Q-ID -> organization fragment (producers)
 }
 
 // NewProductHierarchyBuilder creates a new product hierarchy builder.
@@ -58,12 +57,13 @@ func NewProductHierarchyBuilder(
 	wikidataClient coreontology.WikidataClientInterface,
 ) *ProductHierarchyBuilder {
 	return &ProductHierarchyBuilder{
-		fragmentsRepo:  fragmentsRepo,
-		edgesRepo:      edgesRepo,
-		wikidataClient: wikidataClient,
-		deduplicator:   NewProductDeduplicator(fragmentsRepo, wikidataClient),
-		extractor:      NewProductWikidataExtractor(wikidataClient),
-		canonicalizer:  NewProductCanonicalizer(),
+		fragmentsRepo:   fragmentsRepo,
+		edgesRepo:       edgesRepo,
+		wikidataClient:  wikidataClient,
+		deduplicator:    NewProductDeduplicator(fragmentsRepo, wikidataClient),
+		extractor:       NewProductWikidataExtractor(wikidataClient),
+		canonicalizer:   NewProductCanonicalizer(),
+		orgDeduplicator: NewOrgDeduplicator(fragmentsRepo, wikidataClient),
 	}
 }
 
@@ -107,46 +107,62 @@ func (b *ProductHierarchyBuilder) EnsureProductHierarchy(
 	}
 
 	if wikidataID == "" {
+		// Key skip reason: we can't enrich from Wikidata without a Q-ID.
+		// Keep this log minimal; include job/source for traceability.
+		fmt.Printf("[ProductHierarchyBuilder] Skip Wikidata enrichment: no wikidataId (product=%s source=%s)\n",
+			strings.TrimSpace(fragment.CanonicalPath), strings.TrimSpace(sourceID))
 		return nil // No Wikidata data, skip hierarchy building
 	}
 
-	// Initialize session cache for this hierarchy build
-	b.sessionCache = &productHierarchyCache{
+	// Per-call cache (do NOT store on the builder; builder can be used concurrently across scout jobs).
+	cache := &productHierarchyCache{
 		productData: make(map[string]*ProductWikidataData),
 		fragments:   make(map[string]*models.HorizonFragment),
+		orgs:        make(map[string]*models.HorizonFragment),
 	}
 
 	// Extract product data from Wikidata (with caching)
-	productData, err := b.getProductDataCached(ctx, wikidataID)
+	productData, err := b.getProductDataCached(ctx, wikidataID, cache)
 	if err != nil || productData == nil {
+		fmt.Printf("[ProductHierarchyBuilder] Skip Wikidata enrichment: failed to fetch product data (qID=%s product=%s source=%s err=%v)\n",
+			strings.TrimSpace(wikidataID), strings.TrimSpace(fragment.CanonicalPath), strings.TrimSpace(sourceID), err)
 		return nil // Best effort
 	}
 
 	// Fill entityPath/sectorPath from Wikidata
+	beforeWid := strings.TrimSpace(fragment.Identifiers["wikidataId"])
+	beforeEntity := strings.TrimSpace(fragment.EntityPath)
+	beforeSector := strings.TrimSpace(fragment.SectorPath)
 	b.fillTaxonomyFromWikidata(ctx, fragment, productData)
+	afterWid := strings.TrimSpace(fragment.Identifiers["wikidataId"])
+	afterEntity := strings.TrimSpace(fragment.EntityPath)
+	afterSector := strings.TrimSpace(fragment.SectorPath)
 
 	// Persist any best-effort enrichment on the root fragment (wikidataId, entityPath, sectorPath).
 	// This is important because this hook runs after Create().
-	if b.fragmentsRepo != nil {
+	if b.fragmentsRepo != nil && (beforeWid != afterWid || beforeEntity != afterEntity || beforeSector != afterSector) {
 		_ = b.fragmentsRepo.Update(ctx, fragment)
 	}
 
 	// Build upstream hierarchy (3 levels)
 	visitedUp := map[string]struct{}{}
-	if err := b.buildUpstreamHierarchy(ctx, fragmentID, fragment, productData, 3, provenanceMethod, sourceID, visitedUp); err != nil {
+	if err := b.buildUpstreamHierarchy(ctx, fragmentID, fragment, productData, 3, provenanceMethod, sourceID, visitedUp, cache); err != nil {
 		// Log but don't fail
 		fmt.Printf("[ProductHierarchyBuilder] Failed to build upstream hierarchy: %v\n", err)
 	}
 
 	// Build downstream hierarchy (3 levels)
 	visitedDown := map[string]struct{}{}
-	if err := b.buildDownstreamHierarchy(ctx, fragmentID, fragment, productData, 3, provenanceMethod, sourceID, visitedDown); err != nil {
+	if err := b.buildDownstreamHierarchy(ctx, fragmentID, fragment, productData, 3, provenanceMethod, sourceID, visitedDown, cache); err != nil {
 		// Log but don't fail
 		fmt.Printf("[ProductHierarchyBuilder] Failed to build downstream hierarchy: %v\n", err)
 	}
 
-	// Clear session cache after hierarchy build completes
-	b.sessionCache = nil
+	// Build producer relationships from Wikidata P176 (manufacturer)
+	if err := b.buildProducers(ctx, fragmentID, fragment, productData, provenanceMethod, sourceID, cache); err != nil {
+		// Log but don't fail
+		fmt.Printf("[ProductHierarchyBuilder] Failed to build producers: %v\n", err)
+	}
 
 	return nil
 }
@@ -231,6 +247,7 @@ func (b *ProductHierarchyBuilder) buildUpstreamHierarchy(
 	provenanceMethod string,
 	sourceID string,
 	visited map[string]struct{},
+	cache *productHierarchyCache,
 ) error {
 	if depth <= 0 {
 		return nil
@@ -259,7 +276,7 @@ func (b *ProductHierarchyBuilder) buildUpstreamHierarchy(
 
 	// For each upstream product, create fragment and edge
 	for qID := range upstreamQIDs {
-		upstreamFragment, err := b.ensureProductFromWikidata(ctx, qID, provenanceMethod, sourceID)
+		upstreamFragment, err := b.ensureProductFromWikidata(ctx, qID, provenanceMethod, sourceID, cache)
 		if err != nil || upstreamFragment == nil {
 			continue // Best effort
 		}
@@ -272,9 +289,9 @@ func (b *ProductHierarchyBuilder) buildUpstreamHierarchy(
 		// Recursively build upstream for this product (depth-1)
 		if depth > 1 {
 			// Get upstream product data (with caching)
-			upstreamData, err := b.getProductDataCached(ctx, qID)
+			upstreamData, err := b.getProductDataCached(ctx, qID, cache)
 			if err == nil && upstreamData != nil {
-				_ = b.buildUpstreamHierarchy(ctx, upstreamFragment.ID, upstreamFragment, upstreamData, depth-1, provenanceMethod, sourceID, visited)
+				_ = b.buildUpstreamHierarchy(ctx, upstreamFragment.ID, upstreamFragment, upstreamData, depth-1, provenanceMethod, sourceID, visited, cache)
 			}
 		}
 	}
@@ -293,6 +310,7 @@ func (b *ProductHierarchyBuilder) buildDownstreamHierarchy(
 	provenanceMethod string,
 	sourceID string,
 	visited map[string]struct{},
+	cache *productHierarchyCache,
 ) error {
 	if depth <= 0 {
 		return nil
@@ -328,7 +346,7 @@ func (b *ProductHierarchyBuilder) buildDownstreamHierarchy(
 			continue
 		}
 
-		childFragment, err := b.ensureProductFromWikidata(ctx, childQID, provenanceMethod, sourceID)
+		childFragment, err := b.ensureProductFromWikidata(ctx, childQID, provenanceMethod, sourceID, cache)
 		if err != nil || childFragment == nil {
 			continue
 		}
@@ -340,9 +358,9 @@ func (b *ProductHierarchyBuilder) buildDownstreamHierarchy(
 
 		if depth > 1 {
 			// Get downstream product data (with caching)
-			childData, err := b.getProductDataCached(ctx, childQID)
+			childData, err := b.getProductDataCached(ctx, childQID, cache)
 			if err == nil && childData != nil {
-				_ = b.buildDownstreamHierarchy(ctx, childFragment.ID, childFragment, childData, depth-1, provenanceMethod, sourceID, visited)
+				_ = b.buildDownstreamHierarchy(ctx, childFragment.ID, childFragment, childData, depth-1, provenanceMethod, sourceID, visited, cache)
 			}
 		}
 	}
@@ -351,14 +369,14 @@ func (b *ProductHierarchyBuilder) buildDownstreamHierarchy(
 }
 
 // getProductDataCached gets product data from Wikidata with session-level caching.
-func (b *ProductHierarchyBuilder) getProductDataCached(ctx context.Context, qID string) (*ProductWikidataData, error) {
+func (b *ProductHierarchyBuilder) getProductDataCached(ctx context.Context, qID string, cache *productHierarchyCache) (*ProductWikidataData, error) {
 	if qID == "" {
 		return nil, fmt.Errorf("qID is required")
 	}
 
 	// Check session cache first
-	if b.sessionCache != nil {
-		if cached, ok := b.sessionCache.productData[qID]; ok {
+	if cache != nil {
+		if cached, ok := cache.productData[qID]; ok {
 			return cached, nil
 		}
 	}
@@ -370,8 +388,8 @@ func (b *ProductHierarchyBuilder) getProductDataCached(ctx context.Context, qID 
 	}
 
 	// Cache for this session
-	if b.sessionCache != nil {
-		b.sessionCache.productData[qID] = productData
+	if cache != nil {
+		cache.productData[qID] = productData
 	}
 
 	return productData, nil
@@ -384,14 +402,16 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 	qID string,
 	_ string, // provenanceMethod - unused but kept for API consistency
 	_ string, // sourceID - unused but kept for API consistency
+	cache *productHierarchyCache,
 ) (*models.HorizonFragment, error) {
 	if qID == "" {
 		return nil, fmt.Errorf("qID is required")
 	}
 
 	// Check session cache first (for fragments created in this session)
-	if b.sessionCache != nil {
-		if cached, ok := b.sessionCache.fragments[qID]; ok {
+	if cache != nil {
+		if cached, ok := cache.fragments[qID]; ok {
+			fmt.Printf("[ProductHierarchyBuilder] Reusing session-cached product from Wikidata: qID=%s id=%s canonicalPath=%s\n", qID, cached.ID, cached.CanonicalPath)
 			return cached, nil
 		}
 	}
@@ -401,9 +421,10 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 	if err == nil && len(existing) > 0 {
 		for _, frag := range existing {
 			if frag.Type == models.FragmentTypeProduct {
+				fmt.Printf("[ProductHierarchyBuilder] Reusing existing product by wikidataId: qID=%s id=%s canonicalPath=%s\n", qID, frag.ID, frag.CanonicalPath)
 				// Cache for this session
-				if b.sessionCache != nil {
-					b.sessionCache.fragments[qID] = frag
+				if cache != nil {
+					cache.fragments[qID] = frag
 				}
 				return frag, nil
 			}
@@ -411,7 +432,7 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 	}
 
 	// Extract product data from Wikidata (with caching)
-	productData, err := b.getProductDataCached(ctx, qID)
+	productData, err := b.getProductDataCached(ctx, qID, cache)
 	if err != nil || productData == nil {
 		return nil, fmt.Errorf("failed to extract product data: %w", err)
 	}
@@ -485,6 +506,8 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 	// Deduplicate before creating
 	deduplicated, err := b.deduplicator.DeduplicateProduct(ctx, f)
 	if err == nil && deduplicated != nil && deduplicated.ID != "" && deduplicated.ID != f.ID {
+		fmt.Printf("[ProductHierarchyBuilder] Deduplicated product from Wikidata: qID=%s candidateCP=%s -> existing id=%s canonicalPath=%s\n",
+			qID, f.CanonicalPath, deduplicated.ID, deduplicated.CanonicalPath)
 		return deduplicated, nil
 	}
 
@@ -494,10 +517,12 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 		return nil, err
 	}
 	f.ID = id
+	fmt.Printf("[ProductHierarchyBuilder] Created product fragment from Wikidata: qID=%s id=%s canonicalPath=%s label=%q\n",
+		qID, f.ID, f.CanonicalPath, productData.Label)
 
 	// Cache for this session
-	if b.sessionCache != nil {
-		b.sessionCache.fragments[qID] = f
+	if cache != nil {
+		cache.fragments[qID] = f
 	}
 
 	return f, nil
@@ -552,6 +577,25 @@ func (b *ProductHierarchyBuilder) ensureTransformsIntoEdge(
 	}
 
 	_, err = b.edgesRepo.Create(ctx, edge)
+	if err == nil {
+		// Best-effort: enrich logs with canonical paths (avoid affecting pipeline on lookup failure).
+		srcCP := ""
+		dstCP := ""
+		if b.fragmentsRepo != nil {
+			if sf, ferr := b.fragmentsRepo.Get(ctx, sourceID); ferr == nil && sf != nil {
+				srcCP = sf.CanonicalPath
+			}
+			if tf, ferr := b.fragmentsRepo.Get(ctx, targetID); ferr == nil && tf != nil {
+				dstCP = tf.CanonicalPath
+			}
+		}
+		if srcCP != "" || dstCP != "" {
+			fmt.Printf("[ProductHierarchyBuilder] Created TRANSFORMS_INTO (wikidata) edge: %s -> %s (sourceID=%s targetID=%s)\n",
+				srcCP, dstCP, sourceID, targetID)
+		} else {
+			fmt.Printf("[ProductHierarchyBuilder] Created TRANSFORMS_INTO (wikidata) edge: sourceID=%s targetID=%s\n", sourceID, targetID)
+		}
+	}
 	return err
 }
 
@@ -637,4 +681,255 @@ LIMIT %d
 	}
 
 	return out, nil
+}
+
+// =============================================================================
+// PRODUCER RELATIONSHIPS (P176 - Manufacturer)
+// =============================================================================
+
+// buildProducers creates PRODUCES edges from manufacturers to the product.
+// Uses Wikidata P176 (manufacturer) to find organizations that produce this product.
+func (b *ProductHierarchyBuilder) buildProducers(
+	ctx context.Context,
+	productFragmentID string,
+	productFragment *models.HorizonFragment,
+	productData *ProductWikidataData,
+	provenanceMethod string,
+	sourceID string,
+	cache *productHierarchyCache,
+) error {
+	if productData == nil || len(productData.Manufacturers) == 0 {
+		return nil
+	}
+
+	for _, manufacturerQID := range productData.Manufacturers {
+		manufacturerQID = strings.TrimSpace(manufacturerQID)
+		if manufacturerQID == "" || !strings.HasPrefix(manufacturerQID, "Q") {
+			continue
+		}
+
+		// Create or find the manufacturer organization
+		orgFragment, err := b.ensureProducerFromWikidata(ctx, manufacturerQID, provenanceMethod, sourceID, cache)
+		if err != nil || orgFragment == nil {
+			fmt.Printf("[ProductHierarchyBuilder] Warning: failed to ensure producer %s: %v\n", manufacturerQID, err)
+			continue
+		}
+
+		// Create PRODUCES edge: Organization -> Product
+		if err := b.ensureProducesEdge(ctx, orgFragment.ID, productFragmentID, provenanceMethod, sourceID); err != nil {
+			fmt.Printf("[ProductHierarchyBuilder] Warning: failed to create PRODUCES edge %s -> %s: %v\n",
+				orgFragment.CanonicalPath, productFragment.CanonicalPath, err)
+			continue
+		}
+	}
+
+	return nil
+}
+
+// ensureProducerFromWikidata ensures an organization fragment exists for a Wikidata Q-ID (manufacturer).
+// Returns existing fragment or creates new one. Uses session cache to avoid duplicate requests.
+func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
+	ctx context.Context,
+	qID string,
+	provenanceMethod string,
+	sourceID string,
+	cache *productHierarchyCache,
+) (*models.HorizonFragment, error) {
+	if qID == "" {
+		return nil, fmt.Errorf("qID is required")
+	}
+
+	// Check session cache first (for orgs created in this session)
+	if cache != nil {
+		if cached, ok := cache.orgs[qID]; ok {
+			fmt.Printf("[ProductHierarchyBuilder] Producer re-use (session cache): qID=%s path=%s\n", qID, cached.CanonicalPath)
+			return cached, nil
+		}
+	}
+
+	// Check if org already exists in database by wikidataId
+	existing, err := b.fragmentsRepo.FindByIdentifier(ctx, "wikidataId", qID)
+	if err == nil && len(existing) > 0 {
+		for _, frag := range existing {
+			if frag.Type == models.FragmentTypeOrganization {
+				fmt.Printf("[ProductHierarchyBuilder] Producer re-use (DB): qID=%s path=%s id=%s\n", qID, frag.CanonicalPath, frag.ID)
+				// Cache for this session
+				if cache != nil {
+					cache.orgs[qID] = frag
+				}
+				return frag, nil
+			}
+		}
+	}
+
+	// Extract organization data from Wikidata
+	if b.wikidataClient == nil {
+		return nil, fmt.Errorf("wikidata client not configured")
+	}
+
+	entityData, err := b.wikidataClient.GetEntityData(ctx, qID)
+	if err != nil || entityData == nil {
+		return nil, fmt.Errorf("failed to get entity data for %s: %w", qID, err)
+	}
+
+	label := strings.TrimSpace(entityData.Label)
+	if label == "" {
+		return nil, fmt.Errorf("entity %s has no label", qID)
+	}
+
+	// Build canonical path for organization
+	slug := Slugify(label)
+	canonicalPath := "/org/" + slug
+
+	// Create fragment
+	now := time.Now().UTC()
+	f := &models.HorizonFragment{
+		TenantID:      "global",
+		Version:       1,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		CreatedBy:     "system",
+		UpdatedBy:     "system",
+		CanonicalPath: canonicalPath,
+		Type:          models.FragmentTypeOrganization,
+		Labels: map[string]string{
+			"en": label,
+		},
+		Identifiers: map[string]string{
+			"shortName":  label,
+			"wikidataId": qID,
+		},
+		Description: strings.TrimSpace(entityData.Description),
+		Status:      string(models.FragmentStatusActive),
+		State:       map[string]models.MetricValue{},
+		Governance: models.Governance{
+			Owner:  "SYSTEM",
+			Status: string(models.FragmentStatusActive),
+		},
+		Metadata: models.FragmentMetadata{
+			CreatedAt:       now,
+			LastUpdatedAt:   now,
+			EpistemicStatus: models.EpistemicStatusLowConfidence,
+		},
+		KBRefs: []models.KBReference{
+			{
+				KB:         "Wikidata",
+				ExternalID: qID,
+				Confidence: 1.0,
+			},
+		},
+		Provenance: models.Provenance{
+			Method: strings.TrimSpace(provenanceMethod),
+			SourceIDs: func() []string {
+				if strings.TrimSpace(sourceID) == "" {
+					return nil
+				}
+				return []string{strings.TrimSpace(sourceID)}
+			}(),
+		},
+	}
+
+	// Deduplicate before creating
+	if b.orgDeduplicator != nil {
+		deduplicated, err := b.orgDeduplicator.DeduplicateOrg(ctx, f)
+		if err == nil && deduplicated != nil && deduplicated.ID != "" && deduplicated.ID != f.ID {
+			fmt.Printf("[ProductHierarchyBuilder] Producer dedup hit: qID=%s -> existing id=%s path=%s\n",
+				qID, deduplicated.ID, deduplicated.CanonicalPath)
+			// Cache for this session
+			if cache != nil {
+				cache.orgs[qID] = deduplicated
+			}
+			return deduplicated, nil
+		}
+	}
+
+	// Create fragment
+	id, err := b.fragmentsRepo.Create(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	f.ID = id
+
+	fmt.Printf("[ProductHierarchyBuilder] Created producer from Wikidata: qID=%s id=%s path=%s label=%s\n",
+		qID, id, f.CanonicalPath, label)
+
+	// Cache for this session
+	if cache != nil {
+		cache.orgs[qID] = f
+	}
+
+	return f, nil
+}
+
+// ensureProducesEdge creates a PRODUCES edge from organization to product if it doesn't exist.
+func (b *ProductHierarchyBuilder) ensureProducesEdge(
+	ctx context.Context,
+	orgID, productID, provenanceMethod, sourceIDParam string,
+) error {
+	if orgID == "" || productID == "" || orgID == productID {
+		return fmt.Errorf("invalid edge endpoints")
+	}
+
+	// Check if edge already exists
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", orgID, productID, models.DependencyTypeProduces)
+	if err == nil {
+		return nil // Already exists
+	}
+	if !errors.Is(err, repo.ErrEdgeNotFound) {
+		return err
+	}
+
+	// Create PRODUCES edge: Organization -> Product
+	edge := &models.DependencyEdge{
+		TenantID:         "global",
+		SourceFragmentID: orgID,
+		TargetFragmentID: productID,
+		Type:             models.DependencyTypeProduces,
+		Properties: models.EdgeProperties{
+			Criticality:   0.7,
+			Amplification: 1.0,
+			LatencyHours:  24,
+		},
+		Qualifiers: map[string]interface{}{
+			"reason":   "product.hierarchy.wikidata.manufacturer",
+			"inferred": true,
+		},
+		Provenance: models.Provenance{
+			Method: strings.TrimSpace(provenanceMethod),
+			SourceIDs: func() []string {
+				if strings.TrimSpace(sourceIDParam) == "" {
+					return nil
+				}
+				return []string{strings.TrimSpace(sourceIDParam)}
+			}(),
+		},
+		Metadata: models.EdgeMetadata{
+			CreatedAt:     time.Now().UTC(),
+			LastUpdatedAt: time.Now().UTC(),
+		},
+	}
+
+	id, err := b.edgesRepo.Create(ctx, edge)
+	if err != nil {
+		return err
+	}
+
+	// Log edge creation
+	// Best-effort: resolve canonical paths for logging
+	var orgPath, productPath string
+	if org, err := b.fragmentsRepo.Get(ctx, orgID); err == nil && org != nil {
+		orgPath = org.CanonicalPath
+	}
+	if prod, err := b.fragmentsRepo.Get(ctx, productID); err == nil && prod != nil {
+		productPath = prod.CanonicalPath
+	}
+	if orgPath != "" && productPath != "" {
+		fmt.Printf("[ProductHierarchyBuilder] Created PRODUCES (wikidata.manufacturer): %s -> %s (edge=%s)\n",
+			orgPath, productPath, id)
+	} else {
+		fmt.Printf("[ProductHierarchyBuilder] Created PRODUCES (wikidata.manufacturer): %s -> %s (edge=%s)\n",
+			orgID, productID, id)
+	}
+
+	return nil
 }

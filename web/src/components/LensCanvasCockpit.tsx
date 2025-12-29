@@ -1262,7 +1262,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           }
         }
       };
-
+      
       for (const e of depEdges) {
         const s = String(e?.sourceFragmentId || '').trim();
         const t = String(e?.targetFragmentId || '').trim();
@@ -1447,16 +1447,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         // Determine layout position for routing
         let layoutPos: 'top' | 'bottom' | 'left' | 'right' | 'default' = 'default';
         
+        // Helper to convert 'center' to 'default'
+        const normalizePos = (pos: 'center' | 'left' | 'right' | 'top' | 'bottom' | undefined): 'top' | 'bottom' | 'left' | 'right' | 'default' => {
+            if (pos === 'center' || !pos) return 'default';
+            return pos;
+        };
+        
         if (sourcePos === 'center' && targetPos) {
-            layoutPos = targetPos;
+            layoutPos = normalizePos(targetPos);
         } else if (targetPos === 'center' && sourcePos) {
-            layoutPos = sourcePos;
+            layoutPos = normalizePos(sourcePos);
         } else if (sourcePos && targetPos && sourcePos === targetPos) {
-            layoutPos = sourcePos;
+            layoutPos = normalizePos(sourcePos);
         } else if (sourcePos && !targetPos) {
-            layoutPos = sourcePos; 
+            layoutPos = normalizePos(sourcePos); 
         } else if (targetPos && !sourcePos) {
-            layoutPos = targetPos;
+            layoutPos = normalizePos(targetPos);
         }
 
         // Выбор handles для edges зависит от режима раскладки
@@ -1587,7 +1593,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const baseStyle = getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality);
         // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
         const edgeRenderType = 'default';
-        
+
         newEdges.push({
           id: edgeId,
           source: sourceId,
@@ -1736,16 +1742,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         // Freeform layout: используем текущую логику с группами и grid
         layoutedNodes = await layoutExpansionWithGroups(
           updatedCurrentNodes,
-          newNodes,
-          fragmentId,
-          {
-            nodeWidth: ELK_NODE_WIDTH,
-            nodeHeight: ELK_NODE_HEIGHT,
-            nodeSpacing: ELK_NODE_SPACING,
-            layerSpacing: ELK_LAYER_SPACING,
-            maxChildRows: ELK_MAX_CHILD_ROWS,
-          },
-        );
+        newNodes,
+        fragmentId,
+        {
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        },
+      );
       } else if (isLinearLayout) {
         // Linear layout is GLOBAL:
         // after any expansion we re-layout the whole visible graph so that:
@@ -2115,22 +2121,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       if (isFreeformLayout) {
         // Freeform layout: используем текущую логику с ELK и группами
         arrangedFragments = await layoutFullGraph(fragmentNodes, edges, {
-          direction: 'DOWN',
-          nodeWidth: ELK_NODE_WIDTH,
-          nodeHeight: ELK_NODE_HEIGHT,
-          nodeSpacing: ELK_NODE_SPACING,
-          layerSpacing: ELK_LAYER_SPACING,
-          maxChildRows: ELK_MAX_CHILD_ROWS,
-        });
+        direction: 'DOWN',
+        nodeWidth: ELK_NODE_WIDTH,
+        nodeHeight: ELK_NODE_HEIGHT,
+        nodeSpacing: ELK_NODE_SPACING,
+        layerSpacing: ELK_LAYER_SPACING,
+        maxChildRows: ELK_MAX_CHILD_ROWS,
+      });
 
-        // Сохраняем onLoadRelated callback для каждой ноды
+      // Сохраняем onLoadRelated callback для каждой ноды
         const finalFragments = arrangedFragments.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            onLoadRelated: handleLoadRelatedFragments,
-          },
-        }));
+        ...node,
+        data: {
+          ...node.data,
+          onLoadRelated: handleLoadRelatedFragments,
+        },
+      }));
 
         // Пересобираем группы (freeform использует группировку)
         withGroups = rebuildGroupContainers(finalFragments, {
@@ -2591,7 +2597,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       onClick={onClick}
       disabled={disabled}
       title={title}
-      style={{
+        style={{
         background: active ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
         border: 'none',
         borderRadius: '6px',
@@ -2599,8 +2605,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         cursor: disabled ? 'not-allowed' : 'pointer',
         color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
         opacity: disabled ? 0.4 : 1,
-        display: 'flex',
-        alignItems: 'center',
+          display: 'flex',
+          alignItems: 'center',
         justifyContent: 'center',
         transition: 'all 0.2s ease',
       }}
@@ -2631,13 +2637,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       <div style={{ position: 'relative', display: 'inline-block' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
           <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
-          <button
-            type="button"
+        <button
+          type="button"
             onClick={() => setShowLayoutDropdown((v) => !v)}
-            style={{
+          style={{
               background: showLayoutDropdown ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
-              border: 'none',
-              borderRadius: '6px',
+            border: 'none',
+            borderRadius: '6px',
               padding: '6px 8px',
               cursor: 'pointer',
               color: 'var(--text-secondary)',
@@ -2653,14 +2659,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               {layoutOptions.find(opt => opt.value === layoutMode)?.label || 'Freeform'}
             </span>
             {Icons.ChevronDown}
-          </button>
+        </button>
           <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
         </div>
         
         {showLayoutDropdown && (
           <>
             <div
-              style={{
+          style={{
                 position: 'fixed',
                 top: 0,
                 left: 0,
@@ -2686,14 +2692,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               }}
             >
               {layoutOptions.map((option) => (
-                <button
+        <button
                   key={option.value}
-                  type="button"
+          type="button"
                   onClick={() => {
                     setLayoutMode(option.value);
                     setShowLayoutDropdown(false);
                   }}
-                  style={{
+          style={{
                     width: '100%',
                     padding: '8px 12px',
                     background: layoutMode === option.value ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
@@ -2701,7 +2707,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                     textAlign: 'left',
                     cursor: 'pointer',
                     color: layoutMode === option.value ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    fontSize: '12px',
+            fontSize: '12px',
                     transition: 'all 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
@@ -2716,7 +2722,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                   }}
                 >
                   {option.label}
-                </button>
+        </button>
               ))}
             </div>
           </>
@@ -2738,17 +2744,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       <IconButton onClick={() => setShowMiniMap((v) => !v)} active={showMiniMap} title={`MiniMap: ${showMiniMap ? 'On' : 'Off'}`} icon={Icons.Map} />
       <IconButton onClick={() => setShowBackgroundGrid((v) => !v)} active={showBackgroundGrid} title={`Background Grid: ${showBackgroundGrid ? 'On' : 'Off'}`} icon={Icons.Grid} />
       
-      {error && (
+        {error && (
         <div style={{ fontSize: '11px', color: '#EF4444', marginLeft: '8px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={error}>
-          {error}
-        </div>
-      )}
-      {(nodes.length > 0 || edges.length > 0) && (
+            {error}
+          </div>
+        )}
+        {(nodes.length > 0 || edges.length > 0) && (
         <div style={{ fontSize: '10px', color: 'var(--text-secondary-strong)', marginLeft: '8px', fontFamily: 'monospace' }}>
           {nodes.length}n/{edges.length}e
-        </div>
-      )}
-    </div>
+          </div>
+        )}
+      </div>
   );
 
   return (
@@ -2830,18 +2836,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             }}
           />
           {showMiniMap && (
-            <MiniMap
-              style={{
-                background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-                border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-                borderRadius: '8px',
-              }}
-              nodeColor={(node) => {
-                const data = node.data as HorizonNodeData;
-                return data.critical ? '#EF4444' : '#3B82F6';
-              }}
-              maskColor={theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)'}
-            />
+          <MiniMap
+            style={{
+              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+              border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
+              borderRadius: '8px',
+            }}
+            nodeColor={(node) => {
+              const data = node.data as HorizonNodeData;
+              return data.critical ? '#EF4444' : '#3B82F6';
+            }}
+            maskColor={theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)'}
+          />
           )}
         </ReactFlow>
 

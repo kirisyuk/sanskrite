@@ -263,37 +263,37 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 
 // ScoutEngine основной движок Scout для сбора и верификации данных
 type ScoutEngine struct {
-	planner             *ScoutPlanner
-	executor            *SourceExecutor
-	scoutAgent          *agents.ScoutAgent
-	criticAgent         *agents.CriticAgent
-	resolverAgent       *agents.ResolverAgent
-	researchAgent       *agents.ResearchAgent // New
-	frameBuilder        *FrameBuilder
-	workflow            *ScoutWorkflow
-	fragmentsRepo       *repo.HorizonFragmentsRepository
-	framesRepo          *repo.FramesRepository
-	edgesRepo           *repo.DependencyEdgesRepository
-	scoutingJobsRepo    *repo.ScoutingJobsRepository
-	lensesRepo          *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
-	realtime            *realtime.Publisher
-	taxonomyClassifier  *TaxonomyClassifier
-	aiExecutor          *ai.AITaskExecutor
-	spendLedger         *repo.HorizonSpendLedger
-	budgetPolicy        BudgetPolicy
-	propagationTrigger  func(ctx context.Context, fragmentID string) error
-	signalSynthesizer   *signals.Synthesizer              // Optional: for signal synthesis from facts
-	factsRepo           *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
-	factEmitter         *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
-	geoHierarchyBuilder *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
-	orgDeduplicator     *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
-	preCreateValidator  *PreCreateValidator               // Validates fragments before creation
-	orgHierarchyBuilder *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
-	productDeduplicator *ProductDeduplicator             // Deduplicates products by Wikidata/CAS/formula
-	productHierarchyBuilder *ProductHierarchyBuilder     // Auto-creates product value chain hierarchy
-	validationPolicy    *policy.PolicyExecutor            // Optional: unified validation policy for edges
-	canonizationPolicy  *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
-	canonicalPathResolver *CanonicalPathResolver          // Unified canonicalization and deduplication service
+	planner                 *ScoutPlanner
+	executor                *SourceExecutor
+	scoutAgent              *agents.ScoutAgent
+	criticAgent             *agents.CriticAgent
+	resolverAgent           *agents.ResolverAgent
+	researchAgent           *agents.ResearchAgent // New
+	frameBuilder            *FrameBuilder
+	workflow                *ScoutWorkflow
+	fragmentsRepo           *repo.HorizonFragmentsRepository
+	framesRepo              *repo.FramesRepository
+	edgesRepo               *repo.DependencyEdgesRepository
+	scoutingJobsRepo        *repo.ScoutingJobsRepository
+	lensesRepo              *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
+	realtime                *realtime.Publisher
+	taxonomyClassifier      *TaxonomyClassifier
+	aiExecutor              *ai.AITaskExecutor
+	spendLedger             *repo.HorizonSpendLedger
+	budgetPolicy            BudgetPolicy
+	propagationTrigger      func(ctx context.Context, fragmentID string) error
+	signalSynthesizer       *signals.Synthesizer              // Optional: for signal synthesis from facts
+	factsRepo               *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
+	factEmitter             *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
+	geoHierarchyBuilder     *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
+	orgDeduplicator         *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
+	preCreateValidator      *PreCreateValidator               // Validates fragments before creation
+	orgHierarchyBuilder     *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
+	productDeduplicator     *ProductDeduplicator              // Deduplicates products by Wikidata/CAS/formula
+	productHierarchyBuilder *ProductHierarchyBuilder          // Auto-creates product value chain hierarchy
+	validationPolicy        *policy.PolicyExecutor            // Optional: unified validation policy for edges
+	canonizationPolicy      *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
+	canonicalPathResolver   *CanonicalPathResolver            // Unified canonicalization and deduplication service
 }
 
 // bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
@@ -438,31 +438,31 @@ func NewScoutEngine(
 	geoBuilder := NewGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
 	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
 	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
-	productDedup := NewProductDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
+	productDedup := NewProductDeduplicator(fragmentsRepo, nil)                    // WikidataClient set via WithWikidataClient
 	productHierarchy := NewProductHierarchyBuilder(fragmentsRepo, edgesRepo, nil) // WikidataClient set via WithWikidataClient
 
 	engine := &ScoutEngine{
-		planner:             planner,
-		executor:            executor,
-		scoutAgent:          scoutAgent,
-		criticAgent:         criticAgent,
-		resolverAgent:       resolverAgent,
-		researchAgent:       researchAgent,
-		frameBuilder:        frameBuilder,
-		workflow:            workflow,
-		fragmentsRepo:       fragmentsRepo,
-		framesRepo:          framesRepo,
-		edgesRepo:           edgesRepo,
-		scoutingJobsRepo:    scoutingJobsRepo,
-		realtime:            realtime,
-		taxonomyClassifier:  NewTaxonomyClassifier(aiExecutor),
-		aiExecutor:          aiExecutor,
-		spendLedger:         nil,
-		budgetPolicy:        BudgetPolicyFromEnv(),
-		geoHierarchyBuilder: geoBuilder,
-		orgDeduplicator:     orgDedup,
-		orgHierarchyBuilder: orgHierarchy,
-		productDeduplicator: productDedup,
+		planner:                 planner,
+		executor:                executor,
+		scoutAgent:              scoutAgent,
+		criticAgent:             criticAgent,
+		resolverAgent:           resolverAgent,
+		researchAgent:           researchAgent,
+		frameBuilder:            frameBuilder,
+		workflow:                workflow,
+		fragmentsRepo:           fragmentsRepo,
+		framesRepo:              framesRepo,
+		edgesRepo:               edgesRepo,
+		scoutingJobsRepo:        scoutingJobsRepo,
+		realtime:                realtime,
+		taxonomyClassifier:      NewTaxonomyClassifier(aiExecutor),
+		aiExecutor:              aiExecutor,
+		spendLedger:             nil,
+		budgetPolicy:            BudgetPolicyFromEnv(),
+		geoHierarchyBuilder:     geoBuilder,
+		orgDeduplicator:         orgDedup,
+		orgHierarchyBuilder:     orgHierarchy,
+		productDeduplicator:     productDedup,
 		productHierarchyBuilder: productHierarchy,
 	}
 	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup)
@@ -488,6 +488,10 @@ func (e *ScoutEngine) WithWikidataClient(client coreontology.WikidataClientInter
 		e.productHierarchyBuilder.wikidataClient = client
 		if e.productHierarchyBuilder.extractor != nil {
 			e.productHierarchyBuilder.extractor.wikidataClient = client
+		}
+		// Keep producer/org dedup in sync as well (used for Wikidata manufacturer enrichment).
+		if e.productHierarchyBuilder.orgDeduplicator != nil {
+			e.productHierarchyBuilder.orgDeduplicator.wikidataClient = client
 		}
 	} else {
 		e.productHierarchyBuilder = NewProductHierarchyBuilder(e.fragmentsRepo, e.edgesRepo, client)
@@ -612,13 +616,13 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		return fmt.Errorf("job is nil")
 	}
 	trace.Log(ctx, "scout_exec", "scout.job.start", map[string]any{
-		"tenantId":           strings.TrimSpace(job.TenantID),
-		"projectId":          strings.TrimSpace(job.ProjectID),
-		"lensId":             strings.TrimSpace(job.LensID),
-		"jobId":              strings.TrimSpace(job.ID),
+		"tenantId":            strings.TrimSpace(job.TenantID),
+		"projectId":           strings.TrimSpace(job.ProjectID),
+		"lensId":              strings.TrimSpace(job.LensID),
+		"jobId":               strings.TrimSpace(job.ID),
 		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-		"status":             strings.TrimSpace(string(job.Status)),
-		"currentState":       string(job.CurrentState),
+		"status":              strings.TrimSpace(string(job.Status)),
+		"currentState":        string(job.CurrentState),
 		"sourceIdsN":          len(job.SourceIDs),
 	})
 
@@ -629,13 +633,13 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		job.Status == coreModels.AgentJobStatusCompleted ||
 		job.Status == coreModels.AgentJobStatusFailed {
 		trace.Log(ctx, "scout_exec", "scout.job.idempotent_skip", map[string]any{
-			"tenantId":           strings.TrimSpace(job.TenantID),
-			"projectId":          strings.TrimSpace(job.ProjectID),
-			"lensId":             strings.TrimSpace(job.LensID),
-			"jobId":              strings.TrimSpace(job.ID),
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(job.LensID),
+			"jobId":               strings.TrimSpace(job.ID),
 			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-			"status":             strings.TrimSpace(string(job.Status)),
-			"currentState":       string(job.CurrentState),
+			"status":              strings.TrimSpace(string(job.Status)),
+			"currentState":        string(job.CurrentState),
 		})
 		fmt.Printf("[ScoutEngine] Job %s already terminal (CurrentState=%s, Status=%s). Skipping (idempotent).\n",
 			job.ID, job.CurrentState, job.Status)
@@ -690,22 +694,22 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			job.State["canonicalPathAttempts"] = attempts
 			_ = e.scoutingJobsRepo.Update(ctx, job) // best-effort
 			trace.Log(ctx, "scout_exec", "scout.job.circuit_breaker.tick", map[string]any{
-				"tenantId":           strings.TrimSpace(job.TenantID),
-				"projectId":          strings.TrimSpace(job.ProjectID),
-				"lensId":             strings.TrimSpace(job.LensID),
-				"jobId":              strings.TrimSpace(job.ID),
-				"canonicalPath":      cp,
-				"attempts":           attempts[cp],
+				"tenantId":      strings.TrimSpace(job.TenantID),
+				"projectId":     strings.TrimSpace(job.ProjectID),
+				"lensId":        strings.TrimSpace(job.LensID),
+				"jobId":         strings.TrimSpace(job.ID),
+				"canonicalPath": cp,
+				"attempts":      attempts[cp],
 			})
 
 			if attempts[cp] >= 5 {
 				trace.Log(ctx, "scout_exec", "scout.job.circuit_breaker.trip", map[string]any{
-					"tenantId":           strings.TrimSpace(job.TenantID),
-					"projectId":          strings.TrimSpace(job.ProjectID),
-					"lensId":             strings.TrimSpace(job.LensID),
-					"jobId":              strings.TrimSpace(job.ID),
-					"canonicalPath":      cp,
-					"attempts":           attempts[cp],
+					"tenantId":      strings.TrimSpace(job.TenantID),
+					"projectId":     strings.TrimSpace(job.ProjectID),
+					"lensId":        strings.TrimSpace(job.LensID),
+					"jobId":         strings.TrimSpace(job.ID),
+					"canonicalPath": cp,
+					"attempts":      attempts[cp],
 				})
 				fmt.Printf("[ScoutEngine] Circuit breaker tripped: job=%s canonicalPath=%s attempts=%d. Hard-stopping.\n",
 					strings.TrimSpace(job.ID), cp, attempts[cp])
@@ -760,7 +764,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		"lensId":              strings.TrimSpace(lensID),
 		"jobId":               strings.TrimSpace(job.ID),
 		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-		"cascadeRootJobId":     cascadeID,
+		"cascadeRootJobId":    cascadeID,
 	})
 
 	// EARLY CANONICALIZATION AND DEDUPLICATION: Resolve canonical path before any processing
@@ -793,22 +797,22 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		if err == nil && resolved != nil {
 			resolvedPath = resolved
 			effectiveCanonicalPath = resolved.CanonicalPath
-			
+
 			// If path was changed (canonicalized or deduplicated), update job
 			if effectiveCanonicalPath != strings.TrimSpace(job.TargetCanonicalPath) {
 				oldPath := strings.TrimSpace(job.TargetCanonicalPath)
 				fmt.Printf("[ScoutEngine] Early canonicalization/dedup: %s -> %s\n", oldPath, effectiveCanonicalPath)
 				trace.Log(ctx, "scout_exec", "scout.early_canonicalization", map[string]any{
-					"tenantId":          strings.TrimSpace(job.TenantID),
-					"projectId":         strings.TrimSpace(job.ProjectID),
-					"lensId":            strings.TrimSpace(lensID),
-					"jobId":             strings.TrimSpace(job.ID),
-					"fromCanonicalPath": oldPath,
-					"toCanonicalPath":   effectiveCanonicalPath,
-					"foundExisting":     resolved.ExistingFragment != nil,
+					"tenantId":           strings.TrimSpace(job.TenantID),
+					"projectId":          strings.TrimSpace(job.ProjectID),
+					"lensId":             strings.TrimSpace(lensID),
+					"jobId":              strings.TrimSpace(job.ID),
+					"fromCanonicalPath":  oldPath,
+					"toCanonicalPath":    effectiveCanonicalPath,
+					"foundExisting":      resolved.ExistingFragment != nil,
 					"normalizationSteps": resolved.NormalizationSteps,
 				})
-				
+
 				// Update job with canonicalized path
 				job.TargetCanonicalPath = effectiveCanonicalPath
 				if job.State == nil {
@@ -835,7 +839,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
 	var sinceFacts *time.Time
 	var existingFragment *models.HorizonFragment
-	
+
 	// If resolver found an existing fragment, use it directly
 	if resolvedPath != nil && resolvedPath.ExistingFragment != nil {
 		existingFragment = resolvedPath.ExistingFragment
@@ -845,7 +849,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			existingFragment = existing
 		}
 	}
-	
+
 	if existingFragment != nil {
 		freshnessThreshold := 1 * time.Hour // Для теста. В проде может быть конфигурируемо.
 		isFresh := !existingFragment.Metadata.LastVerifiedAt.IsZero() && time.Since(existingFragment.Metadata.LastVerifiedAt) < freshnessThreshold
@@ -1190,16 +1194,16 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		allDocumentIDs = append(allDocumentIDs, result.DocumentIDs...)
 	}
 	trace.Log(ctx, "scout_exec", "scout.execution.done", map[string]any{
-		"tenantId":            strings.TrimSpace(job.TenantID),
-		"projectId":           strings.TrimSpace(job.ProjectID),
-		"lensId":              strings.TrimSpace(lensID),
-		"jobId":               strings.TrimSpace(job.ID),
-		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-		"aggregatedContentLen": len(aggregatedContent),
+		"tenantId":              strings.TrimSpace(job.TenantID),
+		"projectId":             strings.TrimSpace(job.ProjectID),
+		"lensId":                strings.TrimSpace(lensID),
+		"jobId":                 strings.TrimSpace(job.ID),
+		"targetCanonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
+		"aggregatedContentLen":  len(aggregatedContent),
 		"aggregatedContentSha1": trace.HashText(aggregatedContent),
-		"sourceResultsN":       len(sourceResults),
-		"sourceIdsN":           len(allSourceIDs),
-		"documentIdsN":         len(allDocumentIDs),
+		"sourceResultsN":        len(sourceResults),
+		"sourceIdsN":            len(allSourceIDs),
+		"documentIdsN":          len(allDocumentIDs),
 	})
 
 	var scoutResult *agents.ScoutResult
@@ -1424,11 +1428,11 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			// Обновляем LastVerifiedAt
 			extractedFragment.Metadata.LastVerifiedAt = time.Now()
 			trace.Log(ctx, "scout_research", "scout.research.ok", map[string]any{
-				"tenantId":            strings.TrimSpace(job.TenantID),
-				"projectId":           strings.TrimSpace(job.ProjectID),
-				"lensId":              strings.TrimSpace(lensID),
-				"jobId":               strings.TrimSpace(job.ID),
-				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"tenantId":                    strings.TrimSpace(job.TenantID),
+				"projectId":                   strings.TrimSpace(job.ProjectID),
+				"lensId":                      strings.TrimSpace(lensID),
+				"jobId":                       strings.TrimSpace(job.ID),
+				"targetCanonicalPath":         strings.TrimSpace(job.TargetCanonicalPath),
 				"fragmentCanonicalPathBefore": oldCP,
 				"fragmentCanonicalPathAfter":  newCP,
 				"newRelationsN":               len(newRelations),
@@ -1567,13 +1571,13 @@ SKIP_RESEARCH:
 	if effectiveCanonicalPath != "" && strings.TrimSpace(job.TargetCanonicalPath) != effectiveCanonicalPath {
 		old := strings.TrimSpace(job.TargetCanonicalPath)
 		trace.Log(ctx, "scout_persist", "scout.retarget.start", map[string]any{
-			"tenantId":           strings.TrimSpace(job.TenantID),
-			"projectId":          strings.TrimSpace(job.ProjectID),
-			"lensId":             strings.TrimSpace(lensID),
-			"jobId":              strings.TrimSpace(job.ID),
-			"fromCanonicalPath":  old,
-			"toCanonicalPath":    effectiveCanonicalPath,
-			"hint":               "using_canonicalPath_from_research_or_dedup",
+			"tenantId":          strings.TrimSpace(job.TenantID),
+			"projectId":         strings.TrimSpace(job.ProjectID),
+			"lensId":            strings.TrimSpace(lensID),
+			"jobId":             strings.TrimSpace(job.ID),
+			"fromCanonicalPath": old,
+			"toCanonicalPath":   effectiveCanonicalPath,
+			"hint":              "using_canonicalPath_from_research_or_dedup",
 		})
 		fmt.Printf("[ScoutEngine] Retargeting job %s: %s -> %s (using canonicalPath from research/dedup)\n",
 			strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
@@ -1591,10 +1595,10 @@ SKIP_RESEARCH:
 		// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
 		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 		trace.Log(ctx, "scout_persist", "scout.retarget.done", map[string]any{
-			"tenantId":           strings.TrimSpace(job.TenantID),
-			"projectId":          strings.TrimSpace(job.ProjectID),
-			"lensId":             strings.TrimSpace(lensID),
-			"jobId":              strings.TrimSpace(job.ID),
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(lensID),
+			"jobId":               strings.TrimSpace(job.ID),
 			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
 		})
 	}
@@ -1604,12 +1608,12 @@ SKIP_RESEARCH:
 		return fmt.Errorf("failed to transition to VERIFIED: %w", err)
 	}
 	trace.Log(ctx, "scout_persist", "scout.persist.start", map[string]any{
-		"tenantId":            strings.TrimSpace(job.TenantID),
-		"projectId":           strings.TrimSpace(job.ProjectID),
-		"lensId":              strings.TrimSpace(lensID),
-		"jobId":               strings.TrimSpace(job.ID),
+		"tenantId":               strings.TrimSpace(job.TenantID),
+		"projectId":              strings.TrimSpace(job.ProjectID),
+		"lensId":                 strings.TrimSpace(lensID),
+		"jobId":                  strings.TrimSpace(job.ID),
 		"effectiveCanonicalPath": effectiveCanonicalPath,
-		"confidence":           validationResult.Confidence,
+		"confidence":             validationResult.Confidence,
 		"relationsN": func() int {
 			if scoutResult == nil {
 				return 0
@@ -1757,29 +1761,6 @@ SKIP_RESEARCH:
 			}
 			extractedFragment.ID = fragmentID
 			existingFragment = extractedFragment
-
-			// Auto-create geo hierarchy for GEO_REGION fragments
-			if extractedFragment.Type == models.FragmentTypeGeoRegion && e.geoHierarchyBuilder != nil {
-				if strings.HasPrefix(extractedFragment.CanonicalPath, "/loc/") {
-					if err := e.geoHierarchyBuilder.EnsureAndLinkGeoHierarchy(ctx, fragmentID, extractedFragment.CanonicalPath, "scout_job", job.ID); err != nil {
-						fmt.Printf("[ScoutEngine] Warning: failed to build geo hierarchy for %s: %v\n", extractedFragment.CanonicalPath, err)
-					}
-				}
-			}
-
-			// Auto-create org hierarchy for ORGANIZATION fragments (infer parent from name)
-			if extractedFragment.Type == models.FragmentTypeOrganization && e.orgHierarchyBuilder != nil {
-				if err := e.orgHierarchyBuilder.EnsureOrgHierarchy(ctx, fragmentID, extractedFragment, "scout_job", job.ID); err != nil {
-					fmt.Printf("[ScoutEngine] Warning: failed to build org hierarchy for %s: %v\n", extractedFragment.CanonicalPath, err)
-				}
-			}
-
-			// Auto-create product hierarchy for PRODUCT fragments (build value chain from Wikidata)
-			if extractedFragment.Type == models.FragmentTypeProduct && e.productHierarchyBuilder != nil {
-				if err := e.productHierarchyBuilder.EnsureProductHierarchy(ctx, fragmentID, extractedFragment, "scout_job", job.ID); err != nil {
-					fmt.Printf("[ScoutEngine] Warning: failed to build product hierarchy for %s: %v\n", extractedFragment.CanonicalPath, err)
-				}
-			}
 		}
 	} else {
 		// Обновляем существующий фрагмент
@@ -1796,6 +1777,12 @@ SKIP_RESEARCH:
 			return fmt.Errorf("failed to update fragment: %w", err)
 		}
 		fragmentID = existingFragment.ID
+	}
+
+	// Auto-enrich fragment with external hierarchy (Wikidata/Geo/Org)
+	// This runs on both create and update to ensure best-effort enrichment even for existing fragments.
+	if existingFragment != nil {
+		e.enrichFragmentHierarchy(ctx, existingFragment, job.ID)
 	}
 
 	// Emit minimal ontology facts from Scout's LLM output/state (best-effort).
@@ -1827,10 +1814,10 @@ SKIP_RESEARCH:
 		"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
 		"confidence":      validationResult.Confidence,
 	})
-	
+
 	// Check if all scout jobs for this lens are completed and publish final assembly.ready event
 	e.checkAndPublishAssemblyCompletion(ctx, tenantID, projectID, lensID)
-	
+
 	e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 		"tenantId":      tenantID,
 		"projectId":     projectID,
@@ -2452,8 +2439,8 @@ func (e *ScoutEngine) checkAndPublishAssemblyCompletion(ctx context.Context, ten
 					lens.ViewConfig = make(map[string]interface{})
 				}
 				lens.ViewConfig["assemblyStatus"] = map[string]interface{}{
-					"phase":     "ready",
-					"progress":  progress,
+					"phase":       "ready",
+					"progress":    progress,
 					"completedAt": time.Now().UTC().Format(time.RFC3339Nano),
 					"counters": map[string]interface{}{
 						"jobsTotal":  totalJobs,
@@ -2481,5 +2468,36 @@ func (e *ScoutEngine) checkAndPublishAssemblyCompletion(ctx context.Context, ten
 				"jobsPending": pendingJobs,
 			},
 		})
+	}
+}
+
+// enrichFragmentHierarchy best-effort builds external hierarchies (Geo, Org, Product/Wikidata) for a fragment.
+// It is safe to call on existing fragments (idempotent / non-destructive).
+func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *models.HorizonFragment, jobID string) {
+	if fragment == nil || fragment.ID == "" {
+		return
+	}
+
+	// Auto-create geo hierarchy for GEO_REGION fragments
+	if fragment.Type == models.FragmentTypeGeoRegion && e.geoHierarchyBuilder != nil {
+		if strings.HasPrefix(fragment.CanonicalPath, "/loc/") {
+			if err := e.geoHierarchyBuilder.EnsureAndLinkGeoHierarchy(ctx, fragment.ID, fragment.CanonicalPath, "scout_job", jobID); err != nil {
+				fmt.Printf("[ScoutEngine] Warning: failed to build geo hierarchy for %s: %v\n", fragment.CanonicalPath, err)
+			}
+		}
+	}
+
+	// Auto-create org hierarchy for ORGANIZATION fragments (infer parent from name)
+	if fragment.Type == models.FragmentTypeOrganization && e.orgHierarchyBuilder != nil {
+		if err := e.orgHierarchyBuilder.EnsureOrgHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
+			fmt.Printf("[ScoutEngine] Warning: failed to build org hierarchy for %s: %v\n", fragment.CanonicalPath, err)
+		}
+	}
+
+	// Auto-create product hierarchy for PRODUCT fragments (build value chain from Wikidata)
+	if fragment.Type == models.FragmentTypeProduct && e.productHierarchyBuilder != nil {
+		if err := e.productHierarchyBuilder.EnsureProductHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
+			fmt.Printf("[ScoutEngine] Warning: failed to build product hierarchy for %s: %v\n", fragment.CanonicalPath, err)
+		}
 	}
 }

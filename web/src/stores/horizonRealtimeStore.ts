@@ -224,7 +224,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         const dstName = dst ? getEntityName(dst) : 'Unknown';
         const edgeType = typeof data?.type === 'string' ? data.type : 'Connection';
         // Format edge type: "SUPPLIES_TO" -> "Supplies To"
-        const formattedType = edgeType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        const formattedType = edgeType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase());
         text = formattedType;
         humanReadable = {
           title: `Link ${formattedType} created`,
