@@ -225,3 +225,4 @@ Extract value chain relationships from text:
 3. Нужна ли валидация LLM-extracted связей перед созданием edges?
 4. Как обрабатывать циклы в value chain? (например, recycling)
 
+

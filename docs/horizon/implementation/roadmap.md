@@ -287,6 +287,62 @@ type PolicyDecision struct {
 - Можно ответить на "Top supply disruption risks for Tesla battery logistics" из структурированных данных.
 - Propagation policies и synthesis rules управляются через Firestore без редеплоя.
 
+### F) Supply Chain Paths & Influence Links (после стабилизации)
+
+**Цель**: моделировать конкретные цепочки поставок ("кто поставляет что кому") и политические/экономические влияния между акторами.
+
+**Детальная архитектура**: см. [supply-chain-influence-model.md](../architecture/supply-chain-influence-model.md)
+
+**Базовый слой оверлеев (materialized views)**: см. [materialized-artifacts.md](../architecture/materialized-artifacts.md)
+
+**Проблема**: текущий граф имеет абстрактный продуктовый слой (`TRANSFORMS_INTO`) и связи org→product (`PRODUCES`/`CONSUMES`), но нет способа выразить "VW покупает батареи именно у CATL, которые сделаны из лития именно от Albemarle".
+
+**Ключевые концепции**:
+
+- **SupplyLink** — атомарная единица supply chain: `(Supplier, Product, Customer)`
+  - Минимальный путь: `/org или /fac` → `/product` → `/org или /fac`
+  - Минимум для стыковки: `/product` → `/org` → `*`
+  - Tenant-specific (не global) — "по внутренним данным, мы знаем, что покупаем у CATL"
+  
+- **Influence Link** — политическое/экономическое влияние с qualifier `via`
+  - Один объект (газ) может быть и товаром (SupplyLink), и рычагом влияния (InfluenceLink)
+  - Петли допустимы (взаимозависимость: Russia→gas→Germany, Germany→€€€→Russia)
+
+**TODO**:
+
+- **Phase 0: MaterializedArtifact (базовый тип для слоёв/оверлеев)**
+  - [ ] Ввести `MaterializedArtifact` (или `MaterializedFragment`) как отдельную коллекцию/тип (tenant/global)
+  - [ ] Enum `MaterializedKind`, первый kind: `SUPPLY_CHAIN_PATH`
+  - [ ] Payload v1: упорядоченный массив узлов пути + опциональные “ребра” (supply-link / ontology transitions)
+  - [ ] Ссылки на метрики/observations + evidence refs (ontology_facts) без смешивания ответственности
+
+- **Phase 1: SupplyLink (высокий приоритет)**
+  - [ ] Добавить `FragmentTypeSupplyLink`
+  - [ ] Добавить поля `SupplierRef`, `CustomerRef`, `ProductRef` в HorizonFragment
+  - [ ] Валидация: SupplyLink должен иметь `tenantId != "global"`
+  - [ ] API endpoint для создания SupplyLink
+  - [ ] Интеграция с Scout для автоматического обнаружения
+
+- **Phase 2: Path Building**
+  - [ ] Функция `BuildSupplyPath(customer, maxDepth)` с confidence propagation
+  - [ ] API endpoint для получения upstream/downstream paths
+  - [ ] Кэширование построенных путей
+
+- **Phase 3: Influence Links**
+  - [ ] Стандартизация qualifiers (`via`, `mechanism`, `direction`, `reversible`, `conditionality`)
+  - [ ] Поддержка `via` qualifier в ValidationPolicy
+  - [ ] API для запроса influence paths
+
+- **Phase 4: HIL Integration**
+  - [ ] Draft SupplyLink workflow (LLM inference → HIL verification)
+  - [ ] UI для подтверждения/корректировки
+  - [ ] Confidence upgrade при верификации
+
+**Критерии приемки**:
+- Можно построить путь "BMW ← CATL ← Albemarle" из tenant-specific SupplyLinks
+- Confidence propagation работает через цепочку
+- Influence edges с `via` qualifier валидируются и визуализируются
+
 ## Этап 1: Модели данных и репозитории
 
 **Цель**: Создание базовых моделей данных и репозиториев для работы с Firestore
@@ -581,4 +637,5 @@ type PolicyDecision struct {
 
 - [Технические решения](technical-decisions.md)
 - [Архитектурный обзор](../architecture/overview.md)
+- [Supply Chain & Influence Model](../architecture/supply-chain-influence-model.md)
 
