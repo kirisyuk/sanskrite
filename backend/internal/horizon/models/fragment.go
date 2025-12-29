@@ -88,10 +88,80 @@ func (f *HorizonFragment) Validate() error {
 	if f.State == nil {
 		f.State = make(map[string]MetricValue)
 	}
+	// Best-effort: keep Wikidata linkage consistent across both KBRefs and Identifiers.
+	// This enables reliable dedup/search (e.g., FindByIdentifier("wikidataId", "...")) even for legacy fragments
+	// that may have stored Wikidata only in kbRefs.
+	f.ensureWikidataMirroring()
 	// Best-effort: ensure indexPaths is always present for new/updated fragments.
 	// This keeps expand/graph filtering deterministic without requiring backfills.
 	f.IndexPaths = BuildIndexPaths(f, nil)
 	return nil
+}
+
+// ensureWikidataMirroring best-effort keeps Wikidata external ID mirrored in both:
+// - KBRefs (KB="Wikidata", ExternalID="Q...")
+// - Identifiers["wikidataId"] ("Q...")
+//
+// This function is intentionally conservative:
+// - If a Wikidata KBRef exists, it is treated as the source of truth.
+// - If only identifiers contain a Wikidata ID, we add a KBRef.
+// - If both exist but differ, we overwrite Identifiers["wikidataId"] to match KBRefs.
+func (f *HorizonFragment) ensureWikidataMirroring() {
+	if f == nil {
+		return
+	}
+
+	// 1) Read from KBRefs first (source of truth if present).
+	kbWid := ""
+	kbIdx := -1
+	for i, ref := range f.KBRefs {
+		if strings.EqualFold(strings.TrimSpace(ref.KB), "Wikidata") {
+			kbWid = strings.TrimSpace(ref.ExternalID)
+			kbIdx = i
+			break
+		}
+	}
+
+	// 2) Read from Identifiers if present.
+	idWid := ""
+	if f.Identifiers != nil {
+		if v := strings.TrimSpace(f.Identifiers["wikidataId"]); v != "" {
+			idWid = v
+		} else if v := strings.TrimSpace(f.Identifiers["wikidata"]); v != "" {
+			// Legacy key support.
+			idWid = v
+		}
+	}
+
+	// Choose authoritative ID.
+	wid := kbWid
+	if wid == "" {
+		wid = idWid
+	}
+	if wid == "" {
+		return
+	}
+
+	// Ensure identifiers map exists and contains wikidataId.
+	if f.Identifiers == nil {
+		f.Identifiers = make(map[string]string)
+	}
+	f.Identifiers["wikidataId"] = wid
+
+	// Ensure KBRefs contains Wikidata ref.
+	if kbIdx >= 0 {
+		// Normalize casing and ensure ExternalID is set (don't downgrade confidence).
+		f.KBRefs[kbIdx].KB = "Wikidata"
+		if strings.TrimSpace(f.KBRefs[kbIdx].ExternalID) == "" {
+			f.KBRefs[kbIdx].ExternalID = wid
+		}
+		return
+	}
+	f.KBRefs = append(f.KBRefs, KBReference{
+		KB:         "Wikidata",
+		ExternalID: wid,
+		Confidence: 1.0,
+	})
 }
 
 // GenerateVectorText генерирует vectorText для семантического поиска

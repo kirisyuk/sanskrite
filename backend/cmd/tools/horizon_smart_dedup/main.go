@@ -135,6 +135,7 @@ func main() {
 	labelENIndex := make(map[string][]*models.HorizonFragment)         // type:label_en -> fragments (Tier 2)
 	normalizedLegalIndex := make(map[string][]*models.HorizonFragment) // type:normalized_legal -> fragments
 	geoCityIndex := make(map[string][]*models.HorizonFragment)         // city_name -> geo fragments
+	productNameIndex := make(map[string][]*models.HorizonFragment)     // product_name -> product fragments
 
 	for _, f := range fragments {
 		// Index by Wikidata ID
@@ -176,6 +177,14 @@ func main() {
 				geoCityIndex[cityName] = append(geoCityIndex[cityName], f)
 			}
 		}
+
+		// Index PRODUCT by last part of path (e.g., /product/raw/mineral/extraction/lithium → "lithium")
+		if f.Type == models.FragmentTypeProduct {
+			productName := extractProductNameFromPath(f.CanonicalPath)
+			if productName != "" {
+				productNameIndex[productName] = append(productNameIndex[productName], f)
+			}
+		}
 	}
 
 	// Index GEO_REGION by canonical path (for org-as-country matching)
@@ -193,6 +202,7 @@ func main() {
 	log.Printf("✓ Normalized legal index: %d unique keys", len(normalizedLegalIndex))
 	log.Printf("✓ GEO city index: %d unique cities", len(geoCityIndex))
 	log.Printf("✓ GEO by path index: %d unique paths", len(geoByPath))
+	log.Printf("✓ PRODUCT name index: %d unique names", len(productNameIndex))
 
 	// Build fragment type cache for edge direction fixing (Step 6)
 	fragmentTypes := make(map[string]models.FragmentType)
@@ -494,6 +504,34 @@ func main() {
 	}
 	log.Printf("  Found %d geoCity-based clusters", geoCityClusters)
 
+	// Priority 7: PRODUCT name matches (last part of path)
+	// This catches /product/lithium vs /product/raw/mineral/extraction/lithium
+	productNameClusters := 0
+	for productName, frags := range productNameIndex {
+		if len(frags) > 1 {
+			var unprocessed []*models.HorizonFragment
+			for _, f := range frags {
+				if !processedFragmentIDs[f.ID] {
+					unprocessed = append(unprocessed, f)
+				}
+			}
+			if len(unprocessed) > 1 {
+				cluster := &DuplicateCluster{
+					MatchType:  "productName",
+					MatchValue: productName,
+					Fragments:  unprocessed,
+				}
+				cluster.CanonicalID = selectCanonical(unprocessed)
+				clusters = append(clusters, cluster)
+				for _, f := range unprocessed {
+					processedFragmentIDs[f.ID] = true
+				}
+				productNameClusters++
+			}
+		}
+	}
+	log.Printf("  Found %d productName-based clusters", productNameClusters)
+
 	stats.ClustersFound = len(clusters)
 	log.Printf("✓ Total duplicate clusters: %d", len(clusters))
 
@@ -781,6 +819,21 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 			}
 		}
 
+		// For PRODUCT: prefer longer/more specific paths (taxonomy paths)
+		// e.g., /product/raw/mineral/extraction/lithium > /product/lithium
+		if strings.HasPrefix(f.CanonicalPath, "/product/") {
+			parts := strings.Split(strings.Trim(f.CanonicalPath, "/"), "/")
+			if len(parts) >= 5 {
+				score += 100 // Full taxonomy path like /product/raw/mineral/extraction/lithium
+			} else if len(parts) >= 4 {
+				score += 80 // 4-part path
+			} else if len(parts) >= 3 {
+				score += 50 // 3-part path
+			} else {
+				score += 10 // Simple /product/name
+			}
+		}
+
 		// Prefer verified status (+30)
 		if f.Metadata.EpistemicStatus == models.EpistemicStatusVerified {
 			score += 30
@@ -837,50 +890,112 @@ func extractCountryCodeFromPath(path string) string {
 }
 
 // filterGeoByCountry filters GEO_REGION fragments to only include those with same country.
-// If fragments have different ISO country codes in their canonical paths, they are NOT duplicates.
+// If fragments have different country codes in their canonical paths, they are NOT duplicates.
 // Example: /loc/us/de/dover and /loc/gb/england/dover are different cities, not duplicates.
 func filterGeoByCountry(fragments []*models.HorizonFragment) []*models.HorizonFragment {
 	if len(fragments) <= 1 {
 		return fragments
 	}
 
-	// Group by country code
+	// Group by normalized country code (handles both ISO2 and ISO3)
 	byCountry := make(map[string][]*models.HorizonFragment)
-	noCountry := make([]*models.HorizonFragment, 0) // Fragments without canonical country code
 
 	for _, f := range fragments {
-		cc := extractCountryCodeFromPath(f.CanonicalPath)
+		cc := extractNormalizedCountryCode(f.CanonicalPath)
 		if cc != "" {
 			byCountry[cc] = append(byCountry[cc], f)
 		} else {
-			noCountry = append(noCountry, f)
+			// Unknown country — put in separate bucket to avoid false positives
+			byCountry["_unknown_"+f.ID] = append(byCountry["_unknown_"+f.ID], f)
 		}
 	}
 
-	// If all have the same country (or no country), return all
-	if len(byCountry) <= 1 {
+	// If all have the same country, return all
+	if len(byCountry) == 1 {
 		return fragments
 	}
 
 	// Multiple countries detected — this is likely false positive!
-	// Only return the largest group + fragments without country code
+	// Only return the largest group (excluding unknowns)
 	var largest []*models.HorizonFragment
-	for _, group := range byCountry {
+	for cc, group := range byCountry {
+		if strings.HasPrefix(cc, "_unknown_") {
+			continue // Skip unknown fragments
+		}
 		if len(group) > len(largest) {
 			largest = group
 		}
 	}
 
-	// Add non-country fragments (legacy paths) to the largest group
-	// They might be duplicates of the canonical ones
-	result := append(largest, noCountry...)
+	// If no canonical groups found, return empty (all unknowns — can't determine duplicates safely)
+	if len(largest) == 0 {
+		return nil
+	}
 
 	if *verbose && len(byCountry) > 1 {
 		log.Printf("    GEO country filter: split %d fragments across %d countries, keeping %d",
-			len(fragments), len(byCountry), len(result))
+			len(fragments), len(byCountry), len(largest))
 	}
 
-	return result
+	return largest
+}
+
+// extractNormalizedCountryCode extracts and normalizes country code from GEO path.
+// Handles both ISO2 (/loc/us/...) and ISO3 (/loc/usa/...) formats.
+func extractNormalizedCountryCode(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "loc" {
+		return ""
+	}
+
+	cc := strings.ToLower(parts[1])
+	if cc == "na" || cc == "" {
+		return ""
+	}
+
+	// ISO2 code (2 letters)
+	if len(cc) == 2 && cc >= "aa" && cc <= "zz" {
+		return cc
+	}
+
+	// ISO3 code — convert to ISO2
+	if iso2 := iso3ToIso2(cc); iso2 != "" {
+		return iso2
+	}
+
+	// Other patterns (e.g., "city", "geo", "country") — check if next part is country
+	if len(parts) >= 3 {
+		next := strings.ToLower(parts[2])
+		if len(next) == 2 && next >= "aa" && next <= "zz" {
+			return next
+		}
+		if iso2 := iso3ToIso2(next); iso2 != "" {
+			return iso2
+		}
+	}
+
+	return ""
+}
+
+// iso3ToIso2 converts ISO 3166-1 alpha-3 to alpha-2 codes
+var iso3ToIso2Map = map[string]string{
+	"usa": "us", "gbr": "gb", "deu": "de", "fra": "fr", "jpn": "jp",
+	"chn": "cn", "ind": "in", "bra": "br", "rus": "ru", "aus": "au",
+	"can": "ca", "mex": "mx", "ita": "it", "esp": "es", "kor": "kr",
+	"nld": "nl", "tur": "tr", "sau": "sa", "are": "ae", "isr": "il",
+	"che": "ch", "swe": "se", "nor": "no", "dnk": "dk", "fin": "fi",
+	"pol": "pl", "aut": "at", "bel": "be", "grc": "gr", "prt": "pt",
+	"irl": "ie", "nzl": "nz", "sgp": "sg", "hkg": "hk", "twn": "tw",
+	"mys": "my", "idn": "id", "tha": "th", "vnm": "vn", "phl": "ph",
+	"arg": "ar", "chl": "cl", "col": "co", "per": "pe", "ven": "ve",
+	"zaf": "za", "egy": "eg", "nga": "ng", "ken": "ke", "mar": "ma",
+	"pak": "pk", "bgd": "bd", "ukr": "ua", "kaz": "kz", "irn": "ir",
+	"irq": "iq", "kwt": "kw", "qat": "qa", "omn": "om", "bhr": "bh",
+	"jor": "jo", "lbn": "lb", "syr": "sy", "yem": "ye", "afg": "af",
+}
+
+func iso3ToIso2(iso3 string) string {
+	return iso3ToIso2Map[strings.ToLower(iso3)]
 }
 
 // fixGeoPath adds /loc/ prefix to geo paths that don't have it
@@ -1195,6 +1310,31 @@ func extractCityFromPath(path string) string {
 	}
 
 	return ""
+}
+
+// extractProductNameFromPath extracts product name from canonical path.
+// Examples:
+//   /product/lithium → "lithium"
+//   /product/raw/mineral/extraction/lithium → "lithium"
+//   /product/electronics/semiconductor/gpu → "gpu"
+func extractProductNameFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/product/") {
+		return ""
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+
+	// Get last part as product name
+	lastPart := strings.ToLower(parts[len(parts)-1])
+	if lastPart == "" || lastPart == "product" {
+		return ""
+	}
+
+	return lastPart
 }
 
 // EdgeDirectionRule defines valid source and target types for an edge type
