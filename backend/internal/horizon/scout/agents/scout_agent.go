@@ -285,9 +285,17 @@ CANONICAL PATH RULES:
 - Prefer existing stable namespaces:
   - Organizations: /org/{lowercase-slug}
   - People: /person/{lowercase-slug}
-  - Products:
-    - Prefer /product/{orgSlug}/{productSlug} when org is known (e.g., "Google Gemini" -> /product/google/gemini)
-    - Otherwise /product/{productSlug}
+  - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
+    - category: "raw" | "component" | "finished" | "service"
+    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy"
+    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly"
+    - slug: lowercase-slug derived from product name
+    - Examples:
+      - "Lithium Ore" -> /product/raw/mineral/extraction/lithium-ore
+      - "Lithium Carbonate" -> /product/raw/chemical/refining/lithium-carbonate
+      - "Battery Cell" -> /product/component/electronic/manufacturing/battery-cell
+      - "Electric Vehicle" -> /product/finished/mechanical/assembly/electric-vehicle
+    - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
   - Programs:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
     - Otherwise /program/{programSlug}

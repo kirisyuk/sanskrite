@@ -18,8 +18,10 @@ import { api } from '../lib/api';
 import {
   layoutExpansionWithGroups,
   layoutFullGraph,
+  layoutLinearFullGraph,
   rebuildGroupContainers,
   getSemanticGroup,
+  getLinearSection,
   SEMANTIC_GROUP_POSITION,
   createEmptyGrid,
   setGridCell,
@@ -73,8 +75,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
   const [showMiniMap, setShowMiniMap] = React.useState(false);
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
-  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'side-by-side'>('freeform');
+  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear'>('freeform');
   const [showLayoutDropdown, setShowLayoutDropdown] = React.useState(false);
+
+  // Layout mode helpers - определяют, какую логику раскладки использовать
+  const isFreeformLayout = layoutMode === 'freeform';
+  const isLinearLayout = layoutMode === 'linear';
+
+  // Prevent mode-switch relayout loops
+  const lastAppliedLayoutModeRef = React.useRef<'freeform' | 'linear' | null>(null);
 
   // When graph grows large and user didn't override perf mode, auto-disable heavy visuals once.
   React.useEffect(() => {
@@ -286,6 +295,168 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     }
   }, []);
 
+  /**
+   * Recalculate edge handles for Linear layout.
+   * - Bottom groups (bottom-left, bottom-right): group nodes use top handles, central uses bottom
+   * - Top groups (top-left, top-right): group nodes use bottom handles, central uses top
+   */
+  const recalculateLinearHandles = useCallback((
+    edgeList: Edge[],
+    nodeList: Node<HorizonNodeData>[]
+  ): Edge[] => {
+    // Build lookup maps
+    const nodeMap = new Map<string, Node<HorizonNodeData>>();
+    
+    for (const n of nodeList) {
+      const d = n.data as any;
+      if (d?.isGroup) continue;
+      nodeMap.set(n.id, n);
+      // Also map by fragmentId if available
+      if (d?.fragmentId) {
+        nodeMap.set(d.fragmentId, n);
+      }
+    }
+    
+    return edgeList.map((e) => {
+      const sourceNode = nodeMap.get(e.source);
+      const targetNode = nodeMap.get(e.target);
+      
+      if (!sourceNode || !targetNode) {
+        return e;
+      }
+      
+      const sourceData = sourceNode.data as any;
+      const targetData = targetNode.data as any;
+      const sourceIsCentral = sourceData?.depth === 0;
+      const targetIsCentral = targetData?.depth === 0;
+      
+      // Default handles
+      let handles = { sourceHandle: e.sourceHandle || 'source-bottom', targetHandle: e.targetHandle || 'target-top' };
+      
+      if (sourceIsCentral && !targetIsCentral) {
+        // central → group node
+        const targetEdgeType = targetData?.edgeTypeFromParent || (e.data as any)?.edgeType || '';
+        const targetDirection = targetData?.directionFromParent;
+        const targetIsOutgoing = targetDirection !== 'incoming';
+        const section = getLinearSection(targetEdgeType, targetIsOutgoing);
+        
+        if (section === 'bottom-left' || section === 'bottom-right') {
+          // Bottom group: central uses bottom handle, group node uses top
+          handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+        } else {
+          // Top group: central uses top handle, group node uses bottom
+          handles = { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+        }
+        // no-op: avoid noisy logs in production
+      } else if (targetIsCentral && !sourceIsCentral) {
+        // group node → central
+        const sourceEdgeType = sourceData?.edgeTypeFromParent || (e.data as any)?.edgeType || '';
+        const sourceDirection = sourceData?.directionFromParent;
+        const sourceIsOutgoing = sourceDirection !== 'incoming';
+        const section = getLinearSection(sourceEdgeType, sourceIsOutgoing);
+        
+        if (section === 'bottom-left' || section === 'bottom-right') {
+          // Bottom group: group node uses top handle, central uses bottom
+          handles = { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+        } else {
+          // Top group: group node uses bottom handle, central uses top
+          handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+        }
+        // no-op: avoid noisy logs in production
+      }
+      
+      return { ...e, ...handles };
+    });
+  }, []);
+
+  /**
+   * Recalculate edge handles for Freeform layout.
+   * Based on semantic group position (top/bottom/left/right) relative to central node.
+   */
+  const recalculateFreeformHandles = useCallback((
+    edgeList: Edge[],
+    nodeList: Node<HorizonNodeData>[]
+  ): Edge[] => {
+    // Build lookup maps
+    const nodeMap = new Map<string, Node<HorizonNodeData>>();
+    
+    for (const n of nodeList) {
+      const d = n.data as any;
+      if (d?.isGroup) continue;
+      nodeMap.set(n.id, n);
+      if (d?.fragmentId) {
+        nodeMap.set(d.fragmentId, n);
+      }
+    }
+    
+    return edgeList.map((e) => {
+      const sourceNode = nodeMap.get(e.source);
+      const targetNode = nodeMap.get(e.target);
+      
+      if (!sourceNode || !targetNode) {
+        return e;
+      }
+      
+      const sourceData = sourceNode.data as any;
+      const targetData = targetNode.data as any;
+      const sourceIsCentral = sourceData?.depth === 0;
+      const targetIsCentral = targetData?.depth === 0;
+      
+      // Default handles
+      let handles = { sourceHandle: e.sourceHandle || 'source-bottom', targetHandle: e.targetHandle || 'target-top' };
+      
+      // Determine group position based on semantic group
+      const getGroupPosition = (data: any): 'top' | 'bottom' | 'left' | 'right' | null => {
+        if (!data?.edgeTypeFromParent) return null;
+        const isOutgoing = data?.directionFromParent !== 'incoming';
+        const sg = getSemanticGroup(data.edgeTypeFromParent, isOutgoing);
+        return SEMANTIC_GROUP_POSITION[sg];
+      };
+      
+      if (sourceIsCentral && !targetIsCentral) {
+        // central → group node
+        const position = getGroupPosition(targetData);
+        if (position) {
+          switch (position) {
+            case 'top':
+              handles = { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+              break;
+            case 'bottom':
+              handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+              break;
+            case 'left':
+              handles = { sourceHandle: 'source-left', targetHandle: 'target-right' };
+              break;
+            case 'right':
+              handles = { sourceHandle: 'source-right', targetHandle: 'target-left' };
+              break;
+          }
+        }
+      } else if (targetIsCentral && !sourceIsCentral) {
+        // group node → central
+        const position = getGroupPosition(sourceData);
+        if (position) {
+          switch (position) {
+            case 'top':
+              handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+              break;
+            case 'bottom':
+              handles = { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+              break;
+            case 'left':
+              handles = { sourceHandle: 'source-right', targetHandle: 'target-left' };
+              break;
+            case 'right':
+              handles = { sourceHandle: 'source-left', targetHandle: 'target-right' };
+              break;
+          }
+        }
+      }
+      
+      return { ...e, ...handles };
+    });
+  }, []);
+
   // ELK layout options
   const ELK_NODE_WIDTH = 180;
   // Layout height includes the "+" button protruding half outside the visual card:
@@ -436,11 +607,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
         if (sourceId && targetId) {
           const baseStyle = getEdgeStyle(item.edgeType, item.criticality);
+          // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
+          const edgeRenderType = 'default';
           graphEdges.push({
             id: item.id,
             source: sourceId,
             target: targetId,
-            type: 'default',
+            type: edgeRenderType,
             label: item.edgeType || item.subkind,
             // Increase hit-area for clicking thin edges (compatible with ReactFlow v11 types)
             interactionWidth: 18,
@@ -486,7 +659,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       // Reset expansion/grid bookkeeping for a fresh load.
       expandedNodesRef.current = new Set();
       rootNodeIdRef.current = null;
-      setGridState(createEmptyGrid());
+      // Grid is a Freeform-only concept
+      if (isFreeformLayout) {
+        setGridState(createEmptyGrid());
+      }
 
       // 1. Удаляем существующие LensItems (идемпотентно)
       if (lensItems.length > 0) {
@@ -581,6 +757,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           seenEdgeKeys.add(key);
 
           const baseStyle = getEdgeStyle(edge.type || edge.edgeType, edge.properties?.criticality);
+          // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
+          const edgeTypeForDisplay = 'default';
+          
           graphEdges.push({
             // Make ids stable and unique even if backend returns duplicates or lacks id.
             // Use backend edge.id if present; otherwise key.
@@ -589,7 +768,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             target: targetId,
             sourceHandle: 'source-bottom', // Исходящие связи снизу (от кнопки +)
             targetHandle: 'target-top', // Входящие связи сверху
-            type: 'default',
+            type: edgeTypeForDisplay,
             // label hidden by default, shown on hover via displayEdges
             // Increase hit-area for clicking thin edges (compatible with ReactFlow v11 types)
             interactionWidth: 18,
@@ -626,16 +805,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       setEdges(graphEdges);
       setLoading(false);
 
-      // Initialize grid cells for all central nodes (depth=0) so second-order expansions
-      // can place new centers relative to the correct parent, not (0,0).
-      try {
-        const roots = layoutedNodes
-          .filter((n) => !(n.data as any)?.isGroup)
-          .filter((n) => typeof (n.data as any)?.depth === 'number' && (n.data as any).depth === 0)
-          .sort((a, b) => (a.position?.x || 0) - (b.position?.x || 0));
+        // Initialize grid cells for all central nodes (depth=0) so second-order expansions
+        // can place new centers relative to the correct parent, not (0,0).
+        // Это используется только в freeform режиме
+        if (isFreeformLayout) {
+          try {
+            const roots = layoutedNodes
+              .filter((n) => !(n.data as any)?.isGroup)
+              .filter((n) => typeof (n.data as any)?.depth === 'number' && (n.data as any).depth === 0)
+              .sort((a, b) => (a.position?.x || 0) - (b.position?.x || 0));
 
-        const rootId = roots[0]?.id || null;
-        rootNodeIdRef.current = rootId;
+            const rootId = roots[0]?.id || null;
+            rootNodeIdRef.current = rootId;
 
         let g = createEmptyGrid();
         if (rootId) g.rootNodeId = rootId;
@@ -646,16 +827,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         }
         setGridState(g);
 
-        if (import.meta.env.DEV) {
-          console.log('[Cockpit] Grid initialized from root nodes:', {
-            roots: roots.map((r) => r.id),
-            rootNodeId: g.rootNodeId,
-            cellCount: g.cells.size,
-          });
+            if (import.meta.env.DEV) {
+              console.log('[Cockpit] Grid initialized from root nodes:', {
+                roots: roots.map((r) => r.id),
+                rootNodeId: g.rootNodeId,
+                cellCount: g.cells.size,
+              });
+            }
+          } catch (e) {
+            console.warn('[Cockpit] Failed to init grid from roots', e);
+          }
         }
-      } catch (e) {
-        console.warn('[Cockpit] Failed to init grid from roots', e);
-      }
+        // В linear режиме grid не используется (TODO)
 
       // Fit view after a short delay
       setTimeout(() => {
@@ -878,9 +1061,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     const isNodeInGroup = !!(sourceSnapshot as any).parentId && !(sourceSnapshot.data as any)?.isGroup;
     // If expanding a node extracted from a group, it becomes a new local root.
     const sourceRootIdRaw = norm(sourceSnapshot?.data?.rootFragmentId || sourceSnapshot?.data?.fragmentId || sourceSnapshot?.id);
-    const sourceRootId = isNodeInGroup ? fragmentId : sourceRootIdRaw;
+    // In Linear mode, any expanded node becomes a new central node (depth=0) in the middle row.
+    const sourceRootId = isLinearLayout ? fragmentId : (isNodeInGroup ? fragmentId : sourceRootIdRaw);
     const sourceDepthRaw = typeof sourceSnapshot?.data?.depth === 'number' ? sourceSnapshot.data.depth : 0;
-    const sourceDepth = isNodeInGroup ? 0 : sourceDepthRaw;
+    const sourceDepth = isLinearLayout ? 0 : (isNodeInGroup ? 0 : sourceDepthRaw);
 
     // Grid management: determine if this is root expansion or second-order expansion
     // Use refs for synchronous checks (gridState may be stale)
@@ -1027,19 +1211,54 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       const fragmentEdgeType = new Map<string, string>();
       const fragmentDirection = new Map<string, 'incoming' | 'outgoing'>();
       
+      // debug logs removed
+      
       const updateEdgeInfo = (neighborId: string, edgeType: string, direction: 'incoming' | 'outgoing') => {
         const existingType = fragmentEdgeType.get(neighborId);
+        const existingDir = fragmentDirection.get(neighborId);
+        
+        // Helper to check if edge type is an "incoming dependency" type
+        // These types, when incoming to central node, mean "they depend on us" → should go to BOTTOM row
+        const isIncomingDependencyType = (t: string) => {
+          const upper = (t || '').toUpperCase().trim();
+          return upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES';
+        };
+        
         if (!existingType) {
+          // debug logs removed
           fragmentEdgeType.set(neighborId, edgeType);
           fragmentDirection.set(neighborId, direction);
         } else {
+          // === LINEAR LAYOUT SPECIAL LOGIC ===
+          // In Linear mode, incoming dependency edges (neighbor DEPENDS_ON central) MUST determine placement.
+          // These nodes should ALWAYS go to BOTTOM row, regardless of other edges they might have.
+          if (layoutMode === 'linear') {
+            // 1. If EXISTING is an incoming dependency, NEVER override it
+            if (existingDir === 'incoming' && isIncomingDependencyType(existingType)) {
+              // debug logs removed
+              return;
+            }
+            
+            // 2. If NEW is an incoming dependency, it ALWAYS wins
+            if (direction === 'incoming' && isIncomingDependencyType(edgeType)) {
+              // debug logs removed
+              fragmentEdgeType.set(neighborId, edgeType);
+              fragmentDirection.set(neighborId, direction);
+              return;
+            }
+          }
+          
+          // === DEFAULT PRIORITY LOGIC ===
           // Если уже есть связь, проверяем приоритет. 
           // Меньшее число = более высокий приоритет (важнее).
           const existingPriority = getEdgePriority(existingType);
           const newPriority = getEdgePriority(edgeType);
           if (newPriority < existingPriority) {
+            // debug logs removed
             fragmentEdgeType.set(neighborId, edgeType);
             fragmentDirection.set(neighborId, direction);
+          } else {
+            // debug logs removed
           }
         }
       };
@@ -1049,12 +1268,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const t = String(e?.targetFragmentId || '').trim();
         const edgeType = e?.type || e?.edgeType || '';
         
-        // Если родитель — source, то ребёнок — target (outgoing: родитель → ребёнок)
+        // Если центральная нода — source, то ребро: central → neighbor (для neighbor = outgoing)
         if (s === fragmentId && t) {
+          // debug logs removed
           updateEdgeInfo(t, edgeType, 'outgoing');
         }
-        // Если родитель — target, то ребёнок — source (incoming: ребёнок → родитель)
+        // Если центральная нода — target, то ребро: neighbor → central (для neighbor = incoming) 
         if (t === fragmentId && s) {
+          // debug logs removed
           updateEdgeInfo(s, edgeType, 'incoming');
         }
       }
@@ -1071,6 +1292,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         if (t === fragmentId && s) {
           updateEdgeInfo(s, edgeType, 'incoming');
         }
+      }
+
+      // Log final edge info for all neighbors
+      if (layoutMode === 'linear') {
+        // debug logs removed
       }
 
       // Сортируем фрагменты по приоритету типа связи (важные — левее)
@@ -1108,6 +1334,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const fid = String(fragment.id).trim();
         const edgeTypeFromParent = fragmentEdgeType.get(fid) || '';
         const directionFromParent = fragmentDirection.get(fid) || 'outgoing';
+        // В freeform режиме используется группировка (parentFragmentId, edgeTypeFromParent, directionFromParent)
+        // В linear режиме это не используется (TODO)
         return {
           id: fid,
           type: 'horizonFragment' as const,
@@ -1116,10 +1344,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             id: fid,
             lensItemId: '',
             fragmentId: fid,
-            parentFragmentId: fragmentId,
+            parentFragmentId: fragmentId, // Используется в freeform для группировки
             rootFragmentId: sourceRootId,
-            edgeTypeFromParent, // Тип связи с родителем для сортировки
-            directionFromParent, // 'incoming' (сверху) или 'outgoing' (снизу)
+            edgeTypeFromParent, // Тип связи с родителем для сортировки (freeform)
+            directionFromParent, // 'incoming' (сверху) или 'outgoing' (снизу) (freeform)
             depth: childDepth,
             canonicalPath: fragment.canonicalPath,
             indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
@@ -1231,63 +1459,142 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             layoutPos = targetPos;
         }
 
+        // Выбор handles для edges зависит от режима раскладки
+        // В freeform режиме используем логику с группами и позициями
+        // В linear режиме будет другая логика (TODO)
         let handles;
-        if (layoutPos === 'default') {
-             // Fallback to standard check for other same-grid cases or default behavior
-             const isSameGrid = 
-               s === fragmentId || t === fragmentId || 
-               (sourceParentId && sourceParentId === targetParentId) || 
-               (sourceRootId && sourceRootId === targetRootId) || 
-               (sourceParentId === t || targetParentId === s);
-             
-             if (isSameGrid) {
-                 const isOutgoing = s === fragmentId;
-                 handles = getEdgeHandles(edgeType, isOutgoing);
-             } else {
-                 handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
-             }
+        
+        if (isFreeformLayout) {
+          // Freeform layout: используем текущую логику с группами и позициями
+          if (layoutPos === 'default') {
+               // Fallback to standard check for other same-grid cases or default behavior
+               const isSameGrid = 
+                 s === fragmentId || t === fragmentId || 
+                 (sourceParentId && sourceParentId === targetParentId) || 
+                 (sourceRootId && sourceRootId === targetRootId) || 
+                 (sourceParentId === t || targetParentId === s);
+               
+               if (isSameGrid) {
+                   const isOutgoing = s === fragmentId;
+                   handles = getEdgeHandles(edgeType, isOutgoing);
+               } else {
+                   handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+               }
+          } else {
+               // Use layoutPos to determine handles (freeform группировка)
+               // Is outgoing? 
+               // If source is center -> outgoing
+               // If target is center -> incoming
+               // If both in group -> assume flow direction s->t (treat as outgoing)
+               const isFlowOut = sourcePos === 'center' || (sourcePos && targetPos && sourcePos === targetPos);
+               
+               switch (layoutPos) {
+                  case 'top':
+                      handles = isFlowOut 
+                          ? { sourceHandle: 'source-top', targetHandle: 'target-bottom' }
+                          : { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+                      break;
+                  case 'bottom':
+                      handles = isFlowOut 
+                          ? { sourceHandle: 'source-bottom', targetHandle: 'target-top' }
+                          : { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+                      break;
+                  case 'left':
+                      handles = isFlowOut 
+                          ? { sourceHandle: 'source-left', targetHandle: 'target-right' }
+                          : { sourceHandle: 'source-right', targetHandle: 'target-left' };
+                      break;
+                  case 'right':
+                      handles = isFlowOut 
+                          ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
+                          : { sourceHandle: 'source-left', targetHandle: 'target-right' };
+                      break;
+                  default:
+                      handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+               }
+          }
+        } else if (isLinearLayout) {
+          // Linear layout: специальная логика для нижних групп
+          // Проверяем, находятся ли ноды в одном grid
+          const isSameGrid = 
+            s === fragmentId || t === fragmentId || 
+            (sourceParentId && sourceParentId === targetParentId) || 
+            (sourceRootId && sourceRootId === targetRootId) || 
+            (sourceParentId === t || targetParentId === s);
+          
+          if (isSameGrid) {
+            // Определяем, является ли одна из нод центральной (depth=0)
+            const sourceDepth = sourceNode ? (sourceNode.data as any)?.depth : undefined;
+            const targetDepth = targetNode ? (targetNode.data as any)?.depth : undefined;
+            const sourceIsCentral = sourceDepth === 0 || s === fragmentId;
+            const targetIsCentral = targetDepth === 0 || t === fragmentId;
+            
+            // Определяем Linear section для нецентральной ноды
+            let bottomNodeSection: 'bottom-left' | 'bottom-right' | null = null;
+            let bottomNodeId: string | null = null;
+            let isOutgoingFromCentral: boolean | null = null;
+            
+            if (sourceIsCentral && !targetIsCentral && targetNode) {
+              // source = центральная, target = в группе
+              const targetData = targetNode.data as any;
+              const targetEdgeType = targetData?.edgeTypeFromParent || edgeType || '';
+              const targetDirection = targetData?.directionFromParent;
+              const targetIsOutgoing = targetDirection !== 'incoming';
+              const section = getLinearSection(targetEdgeType, targetIsOutgoing);
+              if (section === 'bottom-left' || section === 'bottom-right') {
+                bottomNodeSection = section;
+                bottomNodeId = t;
+                isOutgoingFromCentral = true; // central → bottom node
+              }
+            } else if (targetIsCentral && !sourceIsCentral && sourceNode) {
+              // target = центральная, source = в группе
+              const sourceData = sourceNode.data as any;
+              const sourceEdgeType = sourceData?.edgeTypeFromParent || edgeType || '';
+              const sourceDirection = sourceData?.directionFromParent;
+              const sourceIsOutgoing = sourceDirection !== 'incoming';
+              const section = getLinearSection(sourceEdgeType, sourceIsOutgoing);
+              if (section === 'bottom-left' || section === 'bottom-right') {
+                bottomNodeSection = section;
+                bottomNodeId = s;
+                isOutgoingFromCentral = false; // bottom node → central
+              }
+            }
+            
+            // Если одна нода в нижней группе, а другая центральная - применяем правило
+            if (bottomNodeSection && (sourceIsCentral || targetIsCentral)) {
+              // Нижняя нода использует верхние handles, центральная - нижние
+              if (isOutgoingFromCentral) {
+                // central(source) → bottom(target)
+                handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+              } else {
+                // bottom(source) → central(target)
+                handles = { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+              }
+            } else {
+              // Fallback: используем стандартную логику для других случаев внутри grid
+              const isOutgoing = s === fragmentId;
+              handles = getEdgeHandles(edgeType, isOutgoing);
+            }
+          } else {
+            // Ноды в разных grid - используем стандартные handles
+            handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
+          }
         } else {
-             // Use layoutPos to determine handles
-             // Is outgoing? 
-             // If source is center -> outgoing
-             // If target is center -> incoming
-             // If both in group -> assume flow direction s->t (treat as outgoing)
-             const isFlowOut = sourcePos === 'center' || (sourcePos && targetPos && sourcePos === targetPos);
-             
-             switch (layoutPos) {
-                case 'top':
-                    handles = isFlowOut 
-                        ? { sourceHandle: 'source-top', targetHandle: 'target-bottom' }
-                        : { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
-                    break;
-                case 'bottom':
-                    handles = isFlowOut 
-                        ? { sourceHandle: 'source-bottom', targetHandle: 'target-top' }
-                        : { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
-                    break;
-                case 'left':
-                    handles = isFlowOut 
-                        ? { sourceHandle: 'source-left', targetHandle: 'target-right' }
-                        : { sourceHandle: 'source-right', targetHandle: 'target-left' };
-                    break;
-                case 'right':
-                    handles = isFlowOut 
-                        ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
-                        : { sourceHandle: 'source-left', targetHandle: 'target-right' };
-                    break;
-                default:
-                    handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
-             }
+          // Fallback: используем freeform
+          handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
         }
 
         const baseStyle = getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality);
+        // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
+        const edgeRenderType = 'default';
+        
         newEdges.push({
           id: edgeId,
           source: sourceId,
           target: targetId,
           sourceHandle: handles.sourceHandle,
           targetHandle: handles.targetHandle,
-          type: 'default',
+          type: edgeRenderType,
           // label hidden by default, shown on hover via displayEdges
           interactionWidth: 18,
           markerEnd: { type: MarkerType.ArrowClosed },
@@ -1304,10 +1611,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         });
       }
 
-      // If expanding a node that's in a group, extract it from the group first
-      // This node becomes a "local root" of its own subgraph
+      // If expanding any node, it becomes a local root.
+      // - Freeform: extract-from-group + grid reposition
+      // - Linear: always promote to depth=0 (global linear centers)
       let preprocessedNodes = currentNodes;
-      if (isNodeInGroup && nodeSemanticGroup) {
+      if (isNodeInGroup && nodeSemanticGroup && isFreeformLayout) {
         console.log('[Cockpit] Extracting node from group:', fragmentId, 'semantic group:', nodeSemanticGroup);
 
         // Find the parent node (the one that expanded and created the group containing this node)
@@ -1327,9 +1635,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             (newData as any).rootFragmentId = fragmentId;
             (newData as any).depth = 0;
 
-            // Calculate new position based on grid
-            const cellPos = findCellForExpandedNode(gridState, expandingNodeParentId || '', nodeSemanticGroup);
-            const canvasPos = gridToCanvasPosition(cellPos.row, cellPos.col);
+            // Calculate new position based on grid (freeform layout only)
+            // В freeform режиме используем grid для позиционирования
+            let canvasPos = n.position;
+            let cellPos: { row: number; col: number } | null = null;
+            if (isFreeformLayout) {
+              cellPos = findCellForExpandedNode(gridState, expandingNodeParentId || '', nodeSemanticGroup);
+              canvasPos = gridToCanvasPosition(cellPos.row, cellPos.col);
+            }
+            // В linear режиме позиционирование будет другим (TODO)
 
             console.log('[Cockpit] Repositioning extracted node to grid cell:', cellPos, 'canvas:', canvasPos);
 
@@ -1345,8 +1659,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         });
       }
 
-      // Update existing related nodes to include parentFragmentId so they get grouped
+      // Linear mode: promote clicked node to central row (depth=0) even if it wasn't in a group container.
+      // This is required so that when expanding any node, it exits its group and becomes a central node.
+      if (isLinearLayout) {
+        preprocessedNodes = preprocessedNodes.map((n) => {
+          const nodeFragmentId = norm(n.data?.fragmentId || n.id);
+          if (nodeFragmentId !== fragmentId) return n;
+          const newData = { ...n.data } as any;
+          delete newData.parentFragmentId;
+          delete newData.edgeTypeFromParent;
+          delete newData.directionFromParent;
+          newData.rootFragmentId = fragmentId;
+          newData.depth = 0;
+          return {
+            ...n,
+            parentId: undefined,
+            extent: undefined,
+            data: newData,
+          };
+        });
+      }
+
+      // Update existing related nodes to include parentFragmentId so they get grouped (freeform layout)
       // This handles cases like: Tesla and BYD both on graph, expanding Tesla should group BYD
+          // В freeform режиме используется группировка, в linear - нет (TODO)
       const updatedCurrentNodes = preprocessedNodes.map((n) => {
         const nodeFragmentId = norm(n.data?.fragmentId || n.id);
 
@@ -1366,10 +1702,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         
         if (nodeDepth !== 0 && nodeRoot && nodeRoot !== sourceRootId) return n;
 
+        // В freeform режиме добавляем информацию для группировки
+        // В linear режиме группировка не используется (TODO)
+        if (!isFreeformLayout) {
+          return n; // В linear режиме не группируем
+        }
+        
         const edgeTypeFromParent = fragmentEdgeType.get(nodeFragmentId) || '';
         const directionFromParent = fragmentDirection.get(nodeFragmentId) || 'outgoing';
 
-        console.log('[Cockpit] Updating existing node for grouping:', nodeFragmentId, { edgeTypeFromParent, directionFromParent });
+        console.log('[Cockpit] Updating existing node for grouping (freeform):', nodeFragmentId, { edgeTypeFromParent, directionFromParent });
 
         return {
           ...n,
@@ -1383,20 +1725,81 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         };
       });
 
-      // Применяем ELK layout для позиционирования новых узлов относительно родителя
-      console.log('[Cockpit] Applying ELK layout for new nodes:', newNodes.length, 'existing related:', existingRelatedIds.size);
-      const layoutedNodes = await layoutExpansionWithGroups(
-        updatedCurrentNodes,
-        newNodes,
-        fragmentId,
-        {
+      // Применяем layout для позиционирования новых узлов относительно родителя
+      // Логика зависит от режима раскладки (freeform или linear)
+      console.log('[Cockpit] Applying layout for new nodes:', newNodes.length, 'existing related:', existingRelatedIds.size, 'layout mode:', layoutMode);
+      
+      let layoutedNodes: Node<HorizonNodeData>[];
+      let linearEdgesAfterLayout: Edge[] | null = null;
+      
+      if (isFreeformLayout) {
+        // Freeform layout: используем текущую логику с группами и grid
+        layoutedNodes = await layoutExpansionWithGroups(
+          updatedCurrentNodes,
+          newNodes,
+          fragmentId,
+          {
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+            nodeSpacing: ELK_NODE_SPACING,
+            layerSpacing: ELK_LAYER_SPACING,
+            maxChildRows: ELK_MAX_CHILD_ROWS,
+          },
+        );
+      } else if (isLinearLayout) {
+        // Linear layout is GLOBAL:
+        // after any expansion we re-layout the whole visible graph so that:
+        // - expanded node becomes depth=0 and moves to central row
+        // - no per-node sub-groups are created; children go into existing global sections
+        // - central row is centered relative to full graph width
+        const mergedEdges: Edge[] = (() => {
+          const out: Edge[] = [];
+          const seen = new Set<string>();
+          for (const e of [...currentEdges, ...newEdges]) {
+            if (!e) continue;
+            const id = String((e as any).id || '');
+            if (id) {
+              if (seen.has(id)) continue;
+              seen.add(id);
+              out.push(e);
+              continue;
+            }
+            const t = String((e as any).data?.edgeType || (e as any).label || (e as any).type || 'UNKNOWN');
+            const k = `${(e as any).source}::${(e as any).target}::${t}`;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push({ ...(e as any), id: `edge-${k}` });
+          }
+          return out;
+        })();
+
+        const fragmentNodes = [...updatedCurrentNodes, ...newNodes].filter((n) => !(n?.data as any)?.isGroup);
+        layoutedNodes = await layoutLinearFullGraph(fragmentNodes as any, mergedEdges as any, {
+          direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
           nodeSpacing: ELK_NODE_SPACING,
           layerSpacing: ELK_LAYER_SPACING,
           maxChildRows: ELK_MAX_CHILD_ROWS,
-        },
-      );
+        });
+
+        // Apply Linear handle rules using the freshly updated node data (edgeTypeFromParent/directionFromParent)
+        linearEdgesAfterLayout = recalculateLinearHandles(mergedEdges, layoutedNodes);
+      } else {
+        // Fallback: используем freeform
+        layoutedNodes = await layoutExpansionWithGroups(
+          updatedCurrentNodes,
+          newNodes,
+          fragmentId,
+          {
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+            nodeSpacing: ELK_NODE_SPACING,
+            layerSpacing: ELK_LAYER_SPACING,
+            maxChildRows: ELK_MAX_CHILD_ROWS,
+          },
+        );
+      }
 
       // Снимаем флаг загрузки с раскрытого узла и добавляем callbacks
       const finalNodes = layoutedNodes.map((n) => {
@@ -1417,77 +1820,83 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       // Обновляем состояние
       setNodes(finalNodes);
-      setEdges((prev) => {
-        const out: any[] = [];
-        const seen = new Set<string>();
-        for (const e of [...prev, ...newEdges]) {
-          if (!e) continue;
-          const id = String((e as any).id || '');
-          if (id) {
-            if (seen.has(id)) continue;
-            seen.add(id);
-            out.push(e);
-            continue;
+      if (isLinearLayout && linearEdgesAfterLayout) {
+        setEdges(linearEdgesAfterLayout as any);
+      } else {
+        setEdges((prev) => {
+          const out: any[] = [];
+          const seen = new Set<string>();
+          for (const e of [...prev, ...newEdges]) {
+            if (!e) continue;
+            const id = String((e as any).id || '');
+            if (id) {
+              if (seen.has(id)) continue;
+              seen.add(id);
+              out.push(e);
+              continue;
+            }
+            // Fallback: source/target/type-based key
+            const t = String((e as any).data?.edgeType || (e as any).label || (e as any).type || 'UNKNOWN');
+            const k = `${(e as any).source}::${(e as any).target}::${t}`;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push({ ...(e as any), id: `edge-${k}` });
           }
-          // Fallback: source/target/type-based key
-          const t = String((e as any).data?.edgeType || (e as any).label || (e as any).type || 'UNKNOWN');
-          const k = `${(e as any).source}::${(e as any).target}::${t}`;
-          if (seen.has(k)) continue;
-          seen.add(k);
-          out.push({ ...(e as any), id: `edge-${k}` });
-        }
-        return out;
-      });
+          return out;
+        });
+      }
 
       // Update refs SYNCHRONOUSLY before state (refs are immediate, state is async)
       // This ensures subsequent expansions see the correct values
-      expandedNodesRef.current.add(fragmentId);
-      if (rootNodeIdRef.current === null) {
-        rootNodeIdRef.current = fragmentId;
-        console.log('[Cockpit] Refs: set root node:', fragmentId);
-      }
-      console.log('[Cockpit] Refs: marked as expanded:', fragmentId, 'expandedNodes:', Array.from(expandedNodesRef.current));
-
-      // Update grid state: add expanded node to the grid
-      setGridState((prevGrid) => {
-        let newGrid = { ...prevGrid };
-
-        // If this is the first expansion, set root node at (0, 0)
-        if (prevGrid.rootNodeId === null) {
-          newGrid.rootNodeId = fragmentId;
-          newGrid = setGridCell(newGrid, {
-            row: 0,
-            col: 0,
-            type: 'node',
-            nodeId: fragmentId,
-          });
-          console.log('[Cockpit] Grid: set root node at (0, 0):', fragmentId);
-        } else if (isNodeInGroup && nodeSemanticGroup) {
-          // Node was extracted from a group, add it to its new cell
-          const expandingNodeParentId = (sourceSnapshot.data as any)?.parentFragmentId;
-          const cellPos = findCellForExpandedNode(prevGrid, expandingNodeParentId || '', nodeSemanticGroup);
-          newGrid = setGridCell(newGrid, {
-            row: cellPos.row,
-            col: cellPos.col,
-            type: 'node',
-            nodeId: fragmentId,
-          });
-          console.log('[Cockpit] Grid: added extracted node at cell:', cellPos, fragmentId);
+      if (isFreeformLayout) {
+        expandedNodesRef.current.add(fragmentId);
+        if (rootNodeIdRef.current === null) {
+          rootNodeIdRef.current = fragmentId;
+          console.log('[Cockpit] Refs: set root node:', fragmentId);
         }
+        console.log('[Cockpit] Refs: marked as expanded:', fragmentId, 'expandedNodes:', Array.from(expandedNodesRef.current));
 
-        // Mark this node as expanded
-        const newExpandedNodes = new Set(prevGrid.expandedNodes);
-        newExpandedNodes.add(fragmentId);
-        newGrid.expandedNodes = newExpandedNodes;
+        // Update grid state: add expanded node to the grid (freeform only)
+        setGridState((prevGrid) => {
+          let newGrid = { ...prevGrid };
 
-        console.log('[Cockpit] Grid state updated:', {
-          rootNodeId: newGrid.rootNodeId,
-          expandedNodes: Array.from(newGrid.expandedNodes),
-          cellCount: newGrid.cells.size,
+          // If this is the first expansion, set root node at (0, 0)
+          if (prevGrid.rootNodeId === null) {
+            newGrid.rootNodeId = fragmentId;
+            newGrid = setGridCell(newGrid, {
+              row: 0,
+              col: 0,
+              type: 'node',
+              nodeId: fragmentId,
+            });
+            console.log('[Cockpit] Grid: set root node at (0, 0):', fragmentId);
+          } else if (isNodeInGroup && nodeSemanticGroup) {
+            // Node was extracted from a group, add it to its new cell
+            const expandingNodeParentId = (sourceSnapshot.data as any)?.parentFragmentId;
+            const cellPos = findCellForExpandedNode(prevGrid, expandingNodeParentId || '', nodeSemanticGroup);
+            newGrid = setGridCell(newGrid, {
+              row: cellPos.row,
+              col: cellPos.col,
+              type: 'node',
+              nodeId: fragmentId,
+            });
+            console.log('[Cockpit] Grid: added extracted node at cell:', cellPos, fragmentId);
+          }
+
+          // Mark this node as expanded
+          const newExpandedNodes = new Set(prevGrid.expandedNodes);
+          newExpandedNodes.add(fragmentId);
+          newGrid.expandedNodes = newExpandedNodes;
+
+          console.log('[Cockpit] Grid state updated:', {
+            rootNodeId: newGrid.rootNodeId,
+            expandedNodes: Array.from(newGrid.expandedNodes),
+            cellCount: newGrid.cells.size,
+          });
+
+          return newGrid;
         });
-
-        return newGrid;
-      });
+      }
 
       // Подгоняем вид к родителю и новым узлам
       const newNodeIds = newNodes.map((n) => n.id);
@@ -1695,32 +2104,92 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     setError(null);
 
     try {
-      console.log('[Cockpit] Arranging', nodes.length, 'nodes and', edges.length, 'edges');
+      console.log('[Cockpit] Arranging', nodes.length, 'nodes and', edges.length, 'edges', 'layout mode:', layoutMode);
 
-      // Применяем полный layout только к фрагментам (UI-группы пересоберём отдельно)
+      // Применяем layout в зависимости от режима раскладки
       const fragmentNodes = nodes.filter((n) => !(n.data as any)?.isGroup);
-      const arrangedFragments = await layoutFullGraph(fragmentNodes, edges, {
-        direction: 'DOWN',
-        nodeWidth: ELK_NODE_WIDTH,
-        nodeHeight: ELK_NODE_HEIGHT,
-        nodeSpacing: ELK_NODE_SPACING,
-        layerSpacing: ELK_LAYER_SPACING,
-        maxChildRows: ELK_MAX_CHILD_ROWS,
-      });
+      
+      let arrangedFragments: Node<HorizonNodeData>[];
+      let withGroups: Node<HorizonNodeData>[];
+      
+      if (isFreeformLayout) {
+        // Freeform layout: используем текущую логику с ELK и группами
+        arrangedFragments = await layoutFullGraph(fragmentNodes, edges, {
+          direction: 'DOWN',
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        });
 
-      // Сохраняем onLoadRelated callback для каждой ноды
-      const finalFragments = arrangedFragments.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          onLoadRelated: handleLoadRelatedFragments,
-        },
-      }));
+        // Сохраняем onLoadRelated callback для каждой ноды
+        const finalFragments = arrangedFragments.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            onLoadRelated: handleLoadRelatedFragments,
+          },
+        }));
 
-      const withGroups = rebuildGroupContainers(finalFragments, {
-        nodeWidth: ELK_NODE_WIDTH,
-        nodeHeight: ELK_NODE_HEIGHT,
-      });
+        // Пересобираем группы (freeform использует группировку)
+        withGroups = rebuildGroupContainers(finalFragments, {
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+        });
+        
+        // Recalculate edge handles for Freeform layout
+        const updatedEdges = recalculateFreeformHandles(edges, withGroups);
+        setEdges(updatedEdges);
+      } else if (isLinearLayout) {
+        // Linear layout: 3-row layout с 4 секциями
+        arrangedFragments = await layoutLinearFullGraph(fragmentNodes, edges, {
+          direction: 'DOWN',
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        });
+
+        const finalFragments = arrangedFragments.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            onLoadRelated: handleLoadRelatedFragments,
+          },
+        }));
+
+        // Linear layout уже создает группы внутри layoutLinearFullGraph
+        withGroups = finalFragments;
+        
+        // Recalculate edge handles for Linear layout
+        const updatedEdges = recalculateLinearHandles(edges, finalFragments);
+        setEdges(updatedEdges);
+      } else {
+        // Fallback: используем freeform
+        arrangedFragments = await layoutFullGraph(fragmentNodes, edges, {
+          direction: 'DOWN',
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        });
+
+        const finalFragments = arrangedFragments.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            onLoadRelated: handleLoadRelatedFragments,
+          },
+        }));
+
+        withGroups = rebuildGroupContainers(finalFragments, {
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+        });
+      }
       // Add onGroupPageChange callback to group nodes
       const withCallbacks = withGroups.map((node) => {
         if ((node.data as any)?.isGroup) {
@@ -1747,7 +2216,110 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     } finally {
       setArranging(false);
     }
-  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes]);
+  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout]);
+
+  // When switching layout mode, re-layout the currently visible graph.
+  React.useEffect(() => {
+    if (!nodes || nodes.length === 0) return;
+    if (arranging) return;
+    if (lastAppliedLayoutModeRef.current === layoutMode) return;
+
+    const doRelayout = async () => {
+      try {
+        lastAppliedLayoutModeRef.current = layoutMode;
+
+        // Always compute layout on fragment nodes (never on group nodes).
+        const current = (reactFlowInstanceRef.current as any)?.getNodes?.() || nodes;
+        const fragmentNodes: Node<HorizonNodeData>[] = (current as any[]).filter((n) => !(n?.data as any)?.isGroup);
+
+        // Edge render style by mode (linear => curved)
+        const edgeRenderType = 'default';
+        let nextEdges: Edge[] = (edges || []).map((e: any) => ({ ...e, type: edgeRenderType }));
+
+        let nextNodes: Node<HorizonNodeData>[];
+        if (isLinearLayout) {
+          // Linear layout builds its own section containers.
+          const laidOut = await layoutLinearFullGraph(fragmentNodes, nextEdges, {
+            direction: 'DOWN',
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+            nodeSpacing: ELK_NODE_SPACING,
+            layerSpacing: ELK_LAYER_SPACING,
+            maxChildRows: ELK_MAX_CHILD_ROWS,
+          });
+          nextNodes = laidOut as any;
+          
+          // Recalculate edge handles for Linear layout based on node positions
+          nextEdges = recalculateLinearHandles(nextEdges, nextNodes);
+        } else {
+          // Freeform layout: run ELK on fragments then rebuild semantic-group containers.
+          const arrangedFragments = await layoutFullGraph(fragmentNodes, nextEdges, {
+            direction: 'DOWN',
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+            nodeSpacing: ELK_NODE_SPACING,
+            layerSpacing: ELK_LAYER_SPACING,
+            maxChildRows: ELK_MAX_CHILD_ROWS,
+          });
+
+          const withCallbacks = arrangedFragments.map((node) => ({
+            ...node,
+            data: { ...(node.data as any), onLoadRelated: handleLoadRelatedFragments },
+          }));
+
+          const withGroups = rebuildGroupContainers(withCallbacks, {
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+          });
+          nextNodes = withGroups as any;
+          
+          // Recalculate edge handles for Freeform layout based on semantic groups
+          nextEdges = recalculateFreeformHandles(nextEdges, nextNodes);
+
+          // Freeform-only: reset grid bookkeeping based on current root nodes.
+          try {
+            const roots = withCallbacks
+              .filter((n) => !(n.data as any)?.isGroup)
+              .filter((n) => typeof (n.data as any)?.depth === 'number' && (n.data as any).depth === 0)
+              .sort((a, b) => (a.position?.x || 0) - (b.position?.x || 0));
+
+            const rootId = roots[0]?.id || null;
+            rootNodeIdRef.current = rootId;
+            expandedNodesRef.current = new Set(); // keep conservative; will be rebuilt by future expansions
+
+            let g = createEmptyGrid();
+            if (rootId) g.rootNodeId = rootId;
+            for (let i = 0; i < roots.length; i++) {
+              const rid = String(roots[i].id || '').trim();
+              if (!rid) continue;
+              g = setGridCell(g, { row: 0, col: i, type: 'node', nodeId: rid });
+            }
+            setGridState(g);
+          } catch (e) {
+            console.warn('[Cockpit] Failed to re-init freeform grid after layout mode switch', e);
+          }
+        }
+
+        // Add onGroupPageChange callback to groups (both modes)
+        const finalNodes = (nextNodes as any[]).map((n) => {
+          if ((n.data as any)?.isGroup) {
+            return { ...n, data: { ...n.data, onGroupPageChange: handleGroupPageChange } };
+          }
+          // Ensure onLoadRelated is present on fragment nodes
+          return { ...n, data: { ...n.data, onLoadRelated: handleLoadRelatedFragments } };
+        });
+
+        setEdges(nextEdges as any);
+        setNodes(finalNodes as any);
+      } catch (e: any) {
+        console.warn('[Cockpit] Failed to relayout after layout mode switch', e);
+      }
+    };
+
+    // Fire and forget (no blocking render)
+    void doRelayout();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutMode]);
 
   // Функция для скачивания всех видимых Lens Items в JSON
   const handleDownload = useCallback(() => {
@@ -1953,18 +2525,52 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     if (!hasChildren) return;
 
     try {
-      const relayouted = await layoutExpansionWithGroups(
-        currentNodes,
-        [],
-        node.id,
-        {
+      // Пересборка групп после перетаскивания (freeform layout)
+      let relayouted: Node<HorizonNodeData>[];
+      
+      if (isFreeformLayout) {
+        // Freeform layout: используем текущую логику с группами
+        relayouted = await layoutExpansionWithGroups(
+          currentNodes,
+          [],
+          node.id,
+          {
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+            nodeSpacing: ELK_NODE_SPACING,
+            layerSpacing: ELK_LAYER_SPACING,
+            maxChildRows: ELK_MAX_CHILD_ROWS,
+          },
+        );
+      } else if (isLinearLayout) {
+        // Linear layout is global: re-layout the whole visible graph
+        const currentEdgesForDrag: Edge[] = inst?.getEdges?.() || edges;
+        const fragmentNodes = currentNodes.filter((n) => !(n.data as any)?.isGroup);
+        relayouted = await layoutLinearFullGraph(fragmentNodes, currentEdgesForDrag, {
+          direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
           nodeSpacing: ELK_NODE_SPACING,
           layerSpacing: ELK_LAYER_SPACING,
           maxChildRows: ELK_MAX_CHILD_ROWS,
-        },
-      );
+        });
+        // Keep edges consistent with linear handle rules
+        setEdges(recalculateLinearHandles(currentEdgesForDrag, relayouted) as any);
+      } else {
+        // Fallback: используем freeform
+        relayouted = await layoutExpansionWithGroups(
+          currentNodes,
+          [],
+          node.id,
+          {
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+            nodeSpacing: ELK_NODE_SPACING,
+            layerSpacing: ELK_LAYER_SPACING,
+            maxChildRows: ELK_MAX_CHILD_ROWS,
+          },
+        );
+      }
       // Add onGroupPageChange callback to groups
       const withCallbacks = relayouted.map((n) => {
         if ((n.data as any)?.isGroup) {
@@ -2016,9 +2622,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
   // Layout dropdown component
   const LayoutDropdown = React.useMemo(() => {
-    const layoutOptions: Array<{ value: 'freeform' | 'side-by-side'; label: string }> = [
+    const layoutOptions: Array<{ value: 'freeform' | 'linear'; label: string }> = [
       { value: 'freeform', label: 'Freeform' },
-      { value: 'side-by-side', label: 'Side by side' },
+      { value: 'linear', label: 'Linear' },
     ];
 
     return (

@@ -584,6 +584,23 @@ const resources = {
             tagline: 'hatl.one — cognitive environment that turns discussions into actions.',
           },
         },
+        horizon: {
+          groups: {
+            semantic: {
+              'supply-chain': 'Supply Chain',
+              'customers': 'Customers & Outputs',
+              'market': 'Market Position',
+              'context': 'Operating Context',
+            },
+            linear: {
+              'top-left': 'Suppliers and Materials',
+              'top-right': 'Regulators and Context',
+              'bottom-left': 'Products and Ownership',
+              'bottom-right': 'Market and Partners',
+              'center': 'Central Nodes',
+            },
+          },
+        },
       },
       account: {
         tabs: {
@@ -1311,6 +1328,23 @@ const resources = {
             tagline: 'hatl.one — когнитивная среда, превращающая дискуссии в действия.',
           },
         },
+        horizon: {
+          groups: {
+            semantic: {
+              'supply-chain': 'Цепочка поставок',
+              'customers': 'Клиенты и результаты',
+              'market': 'Позиция на рынке',
+              'context': 'Операционный контекст',
+            },
+            linear: {
+              'top-left': 'Поставщики и материалы',
+              'top-right': 'Регуляторы и контекст',
+              'bottom-left': 'Продукты и владение',
+              'bottom-right': 'Рынок и партнеры',
+              'center': 'Центральные ноды',
+            },
+          },
+        },
       },
       account: {
         tabs: {
@@ -1982,6 +2016,23 @@ const resources = {
             ],
           },
         },
+        horizon: {
+          groups: {
+            semantic: {
+              'supply-chain': 'Lieferkette',
+              'customers': 'Kunden & Ergebnisse',
+              'market': 'Marktposition',
+              'context': 'Betriebskontext',
+            },
+            linear: {
+              'top-left': 'Lieferanten und Materialien',
+              'top-right': 'Regulierungsbehörden und Kontext',
+              'bottom-left': 'Produkte und Eigentum',
+              'bottom-right': 'Markt und Partner',
+              'center': 'Zentrale Knoten',
+            },
+          },
+        },
       },
     },
   },
@@ -2500,6 +2551,23 @@ const resources = {
             ],
           },
         },
+        horizon: {
+          groups: {
+            semantic: {
+              'supply-chain': 'Cadena de suministro',
+              'customers': 'Clientes y resultados',
+              'market': 'Posición de mercado',
+              'context': 'Contexto operativo',
+            },
+            linear: {
+              'top-left': 'Proveedores y materiales',
+              'top-right': 'Reguladores y contexto',
+              'bottom-left': 'Productos y propiedad',
+              'bottom-right': 'Mercado y socios',
+              'center': 'Nodos centrales',
+            },
+          },
+        },
       },
     },
   },
@@ -3001,6 +3069,23 @@ const resources = {
           agent: 'агент',
           footer: {
             tagline: 'hatl.one — талқылауларды іс-әрекеттерге айналдыратын когнитивті орта.',
+          },
+        },
+        horizon: {
+          groups: {
+            semantic: {
+              'supply-chain': 'Жеткізу тізбегі',
+              'customers': 'Клиенттер және нәтижелер',
+              'market': 'Нарықтағы позиция',
+              'context': 'Операциялық контекст',
+            },
+            linear: {
+              'top-left': 'Жеткізушілер және материалдар',
+              'top-right': 'Регуляторлар және контекст',
+              'bottom-left': 'Өнімдер және меншік',
+              'bottom-right': 'Нарық және серіктестер',
+              'center': 'Орталық түйіндер',
+            },
           },
         },
         perspectives: {

@@ -1,7 +1,8 @@
 import React from 'react';
 import { NodeTypes, Handle, Position, NodeProps } from 'reactflow';
+import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
-import { SemanticGroup, SEMANTIC_GROUP_LABELS } from '../lib/elkLayout';
+import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
 
 // Типы нод для Horizon графа (на основе LensItem)
 export interface HorizonNodeData {
@@ -32,6 +33,8 @@ export interface HorizonNodeData {
   groupDirection?: 'incoming' | 'outgoing' | 'both';  // Legacy, derived from semantic group
   groupEdgeType?: string;  // Legacy, first edge type
   groupCount?: number;
+  /** Optional override for group title (used by Linear layout section containers) */
+  groupTitle?: string;
   // Pagination for groups
   groupCurrentPage?: number;  // Current page (0-indexed)
   groupTotalPages?: number;   // Total number of pages
@@ -415,9 +418,11 @@ const formatEdgeTypes = (edgeTypes: string[] | undefined): string => {
 
 const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected, id }) => {
   const { theme } = React.useContext(ThemeContext);
+  const { t } = useTranslation();
 
   // Use semantic group if available, fall back to edge type
-  const semanticGroup = data.groupSemanticGroup;
+  const semanticGroup = data.groupSemanticGroup as SemanticGroup | undefined;
+  const linearSection = (data as any).groupLinearSection as LinearSection | undefined;
   const edgeTypes = data.groupEdgeTypes || (data.groupEdgeType ? [data.groupEdgeType] : []);
 
   // Pagination data
@@ -450,8 +455,33 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
   const ring = selected ? (theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.20)') : undefined;
 
-  // Title: semantic group label or edge type
-  const title = semanticGroup ? SEMANTIC_GROUP_LABELS[semanticGroup] : normalizeEdgeType(data.groupEdgeType);
+  const semanticFallback: Record<SemanticGroup, string> = {
+    'supply-chain': 'Supply Chain',
+    'customers': 'Customers & Outputs',
+    'market': 'Market Position',
+    'context': 'Operating Context',
+  };
+
+  const linearFallback: Record<LinearSection, string> = {
+    'top-left': 'Suppliers and Materials',
+    'top-right': 'Regulators and Context',
+    'bottom-left': 'Products and Ownership',
+    'bottom-right': 'Market and Partners',
+    'center': 'Central Nodes',
+  };
+
+  // Title priority:
+  // 1) explicit override (rare; legacy)
+  // 2) linear section id (translated via i18n)
+  // 3) semantic group (translated via i18n)
+  // 4) edge type fallback
+  const title =
+    data.groupTitle ||
+    (linearSection
+      ? t(`horizon.groups.linear.${linearSection}`, { defaultValue: linearFallback[linearSection] })
+      : semanticGroup
+        ? t(`horizon.groups.semantic.${semanticGroup}`, { defaultValue: semanticFallback[semanticGroup] })
+        : normalizeEdgeType(data.groupEdgeType));
   // Subtitle: edge types in this group
   const subtitle = formatEdgeTypes(edgeTypes);
 

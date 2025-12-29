@@ -109,6 +109,16 @@ func (r *CanonicalPathResolver) Resolve(
 		}
 	}
 
+	// Step 1.6: Best-effort PRODUCT normalization for flat /product/{slug} paths into hierarchical taxonomy.
+	// We only attempt to "upgrade" flat product paths; if we cannot confidently classify, we keep the original path.
+	if fragmentType == models.FragmentTypeProduct {
+		if norm := normalizeFlatProductPath(ctx, result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
+			result.NormalizationSteps = append(result.NormalizationSteps,
+				fmt.Sprintf("product_taxonomy: %s -> %s", result.CanonicalPath, norm))
+			result.CanonicalPath = norm
+		}
+	}
+
 	// Step 2: Check for existing fragment by canonical path
 	if r.fragmentsRepo != nil {
 		existing, err := r.fragmentsRepo.GetByCanonicalPath(ctx, result.CanonicalPath)
@@ -168,6 +178,41 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	return result, nil
+}
+
+// normalizeFlatProductPath upgrades a flat product canonical path (/product/{slug}) to a hierarchical taxonomy path
+// when classification is possible. Returns "" if no safe normalization is possible.
+func normalizeFlatProductPath(ctx context.Context, path string) string {
+	p := strings.TrimSpace(path)
+	if !strings.HasPrefix(p, "/product/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	// Only normalize flat structure: product/{slug}
+	if len(parts) != 2 || parts[0] != "product" {
+		return ""
+	}
+	slug := strings.TrimSpace(parts[1])
+	if slug == "" {
+		return ""
+	}
+
+	// Use a human-ish label as input to canonicalizer (helps pattern matching).
+	// Note: canonicalizer will slugify + apply runtime taxonomy synonyms anyway.
+	name := strings.ReplaceAll(slug, "-", " ")
+	name = strings.ReplaceAll(name, "_", " ")
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = slug
+	}
+
+	c := NewProductCanonicalizer()
+	out, err := c.CanonicalizeProduct(ctx, name)
+	if err != nil || out == nil || strings.TrimSpace(out.CanonicalPath) == "" {
+		return ""
+	}
+	// If canonicalizer couldn't classify, it will typically return the same flat path.
+	return strings.TrimSpace(out.CanonicalPath)
 }
 
 // normalizeGeoCountryAliasPath converts non-strict geo country paths into strict /loc/{cc}/na/na.

@@ -79,19 +79,141 @@ const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().tri
  */
 export type SemanticGroup = 'supply-chain' | 'customers' | 'market' | 'context';
 
-export const SEMANTIC_GROUP_LABELS: Record<SemanticGroup, string> = {
-  'supply-chain': 'Supply Chain',
-  'customers': 'Customers & Outputs',
-  'market': 'Market Position',
-  'context': 'Operating Context',
-};
-
 export const SEMANTIC_GROUP_POSITION: Record<SemanticGroup, 'top' | 'bottom' | 'left' | 'right'> = {
   'supply-chain': 'top',    // upstream — сверху
   'customers': 'bottom',     // downstream — снизу
   'market': 'left',          // peers — слева
   'context': 'right',        // context — справа
 };
+
+/**
+ * Linear layout sections for 3-row layout (35%-30%-35%).
+ * Divides the canvas into 4 sections: top-left, top-right, bottom-left, bottom-right.
+ */
+export type LinearSection = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
+
+/**
+ * Maps edge type + direction to linear layout section.
+ * Used for linear layout mode (3-row layout with 4 sections).
+ * 
+ * CRITICAL: Direction is relative to central node:
+ * - isOutgoing = true: edge FROM central node TO neighbor → neighbor goes to BOTTOM row
+ * - isOutgoing = false: edge FROM neighbor TO central node → neighbor goes to TOP row
+ * 
+ * Then, within top/bottom, left/right is determined by edge type semantics.
+ */
+export function getLinearSection(edgeType: string | undefined, isOutgoing: boolean): LinearSection {
+  const type = normalizeEdgeType(edgeType);
+  
+  // === EXCEPTIONS: Types where "they X us" means we are important to them (downstream) ===
+  // These go to BOTTOM row even when incoming (reverse of normal logic)
+  // CRITICAL: DEPENDS_ON incoming (from group node TO central node with depth 0) → bottom
+  // Direction: if edge goes FROM neighbor TO central node, isOutgoing = false (incoming)
+  // - DEPENDS_ON incoming (!isOutgoing): they depend on us → we are important to them → downstream → bottom
+  // - REQUIRES incoming: they require us → we are important to them → downstream → bottom
+  // - NEEDS incoming: they need us → we are important to them → downstream → bottom
+  // - USES incoming: they use us → we are important to them → downstream → bottom
+  // - CONSUMES incoming: they consume us → we are important to them → downstream → bottom
+  
+  // Check exceptions FIRST (before any other logic) - MUST be first check
+  if (type === 'DEPENDS_ON' && !isOutgoing) {
+    // incoming: edge FROM neighbor TO central node
+    // they depend on us → we are important to them → downstream → bottom-right
+    return 'bottom-right';
+  }
+  if (
+    (type === 'REQUIRES' && !isOutgoing) ||      // incoming = they require us → bottom
+    (type === 'NEEDS' && !isOutgoing) ||         // incoming = they need us → bottom
+    (type === 'USES' && !isOutgoing) ||          // incoming = they use us → bottom
+    (type === 'CONSUMES' && !isOutgoing)         // incoming = they consume us → bottom
+  ) {
+    // These go to bottom-left (Products & Ownership) as they indicate dependency on us
+    return 'bottom-left';
+  }
+  
+  // === TOP ROW (incoming: neighbors that affect/influence the central node) ===
+  
+  // Top-left: Suppliers & Materials (upstream dependencies coming TO central node)
+  if (
+    (type === 'SUPPLIES_TO' && !isOutgoing) || // incoming = they supply to us
+    (type === 'DEPENDS_ON' && isOutgoing) ||   // outgoing = we depend on them → upstream → top
+    (type === 'CONSUMES' && isOutgoing) ||      // outgoing = we consume them → upstream → top
+    (type === 'REQUIRES' && isOutgoing) ||      // outgoing = we require them → upstream → top
+    (type === 'USES' && isOutgoing) ||          // outgoing = we use them → upstream → top
+    (type === 'NEEDS' && isOutgoing)            // outgoing = we need them → upstream → top
+  ) {
+    return 'top-left';
+  }
+  
+  // Top-right: Regulation & Context (external factors affecting central node)
+  if (
+    (type === 'REGULATES' && !isOutgoing) ||   // incoming = they regulate us
+    (type === 'LOCATED_IN' && !isOutgoing) ||  // incoming = node is located in object above
+    (type === 'OPERATES_IN' && !isOutgoing) ||
+    (type === 'BASED_IN' && !isOutgoing) ||
+    (type === 'HEADQUARTERED_IN' && !isOutgoing) ||
+    (type === 'INFLUENCES' && !isOutgoing) ||  // incoming = they influence us → top
+    (type === 'AFFECTS' && !isOutgoing) ||      // incoming = they affect us → top
+    (type === 'IMPACTS' && !isOutgoing)         // incoming = they impact us → top
+  ) {
+    return 'top-right';
+  }
+  
+  // === BOTTOM ROW (outgoing: neighbors that central node affects/influences) ===
+  
+  // Bottom-left: Products & Ownership (downstream from central node)
+  if (
+    (type === 'PRODUCES' && isOutgoing) ||
+    (type === 'OWNS' && isOutgoing) ||          // outgoing = we own them
+    (type === 'MANAGES' && isOutgoing) ||
+    (type === 'CONTROLS' && isOutgoing) ||
+    (type === 'PARENT_OF' && isOutgoing) ||
+    (type === 'SUPPLIES_TO' && isOutgoing) ||   // outgoing = we supply to them
+    (type === 'CONSUMES' && isOutgoing) ||
+    (type === 'REQUIRES' && isOutgoing) ||
+    (type === 'USES' && isOutgoing) ||
+    (type === 'NEEDS' && isOutgoing)
+  ) {
+    return 'bottom-left';
+  }
+  
+  // Bottom-right: Market & Partners + Context (where central node influences/operates)
+  if (
+    (type === 'PARTNERS_WITH' && isOutgoing) ||
+    (type === 'COOPERATES_WITH' && isOutgoing) ||
+    (type === 'COMPETES_WITH' && isOutgoing) ||
+    (type === 'CONFLICTS_WITH' && isOutgoing) ||
+    (type === 'OPPOSES' && isOutgoing) ||
+    (type === 'RELATED_TO' && isOutgoing) ||
+    (type === 'SIMILAR_TO' && isOutgoing) ||
+    (type === 'INFLUENCES' && isOutgoing) ||   // outgoing = we influence them → bottom
+    (type === 'AFFECTS' && isOutgoing) ||       // outgoing = we affect them → bottom
+    (type === 'IMPACTS' && isOutgoing) ||       // outgoing = we impact them → bottom
+    (type === 'REGULATES' && isOutgoing) ||     // outgoing = we regulate them → bottom
+    (type === 'OPERATES_IN' && isOutgoing) ||
+    (type === 'BASED_IN' && isOutgoing) ||
+    (type === 'HEADQUARTERED_IN' && isOutgoing) ||
+    (type === 'LOCATED_IN' && isOutgoing)
+  ) {
+    return 'bottom-right';
+  }
+  
+  // Fallback: symmetric/peer relationships default to bottom-right if outgoing, top-right if incoming
+  if (
+    type === 'PARTNERS_WITH' ||
+    type === 'COOPERATES_WITH' ||
+    type === 'COMPETES_WITH' ||
+    type === 'CONFLICTS_WITH' ||
+    type === 'OPPOSES' ||
+    type === 'RELATED_TO' ||
+    type === 'SIMILAR_TO'
+  ) {
+    return isOutgoing ? 'bottom-right' : 'top-right';
+  }
+  
+  // Default: based on direction (outgoing → bottom, incoming → top)
+  return isOutgoing ? 'bottom-left' : 'top-left';
+}
 
 /**
  * Grid-based layout system for hierarchical node expansion.
@@ -1496,5 +1618,351 @@ async function layoutWithHierarchy<T = any>(
     console.warn('[ELK] Node not positioned:', node.id);
     return { ...node, position: { x: 0, y: 0 } };
   });
+}
+
+/**
+ * Linear layout for expansion: 3-row layout (35%-30%-35%) with 4 sections.
+ * - Top row: upstream dependencies (left: suppliers, right: regulation)
+ * - Middle row: central nodes (horizontal)
+ * - Bottom row: downstream dependencies (left: products/ownership, right: market/partners)
+ */
+export async function layoutLinearExpansion<T = any>(
+  existingNodes: Node<T>[],
+  newNodes: Node<T>[],
+  parentNodeId: string,
+  edges: Edge[],  // Added: edges to recalculate correct edgeType/direction
+  options: LayoutOptions_Custom = {},
+): Promise<Node<T>[]> {
+  const {
+    nodeWidth = DEFAULT_NODE_WIDTH,
+    nodeHeight = DEFAULT_NODE_HEIGHT,
+    nodeSpacing = 60,
+    layerSpacing = 150, // Used as vertical gap between rows
+  } = options;
+
+  // Linear layout is global:
+  // - Central nodes are all nodes with depth=0.
+  // - Related nodes are those directly connected to ANY central node (computed from edges).
+  const all = [...existingNodes, ...newNodes];
+  const centralNodes: Node<T>[] = [];
+  const centralNodeIds = new Set<string>();
+
+  for (const node of all) {
+    const d = node.data as any;
+    if (d?.isGroup) continue;
+    const depth = typeof d?.depth === 'number' ? d.depth : 0;
+    if (depth === 0) {
+      centralNodes.push(node);
+      centralNodeIds.add(node.id);
+      continue;
+    }
+  }
+
+  // === RECALCULATE edgeType/direction from edges for Linear layout ===
+  // This is critical because data loaded in Freeform mode may have wrong priorities
+  // For Linear: incoming dependency types (DEPENDS_ON, etc.) MUST win over other types
+  const nodeEdgeInfo = new Map<string, { edgeType: string; direction: 'incoming' | 'outgoing' }>();
+  
+  const isIncomingDependencyType = (t: string) => {
+    const upper = (t || '').toUpperCase().trim();
+    return upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES';
+  };
+
+  // NOTE: do not log in production; keep layout pure
+  for (const edge of edges) {
+    const source = edge.source;
+    const target = edge.target;
+    const edgeType = (edge.data as any)?.edgeType || edge.type || '';
+    
+    // Only process edges that connect to a central node
+    const sourceIsCentral = centralNodeIds.has(source);
+    const targetIsCentral = centralNodeIds.has(target);
+    
+    if (!sourceIsCentral && !targetIsCentral) continue;
+    
+    // Determine neighbor and direction
+    let neighborId: string;
+    let direction: 'incoming' | 'outgoing';
+    
+    if (sourceIsCentral && !targetIsCentral) {
+      // central → neighbor: for neighbor this is "outgoing" (central influences them)
+      neighborId = target;
+      direction = 'outgoing';
+    } else if (targetIsCentral && !sourceIsCentral) {
+      // neighbor → central: for neighbor this is "incoming" (they influence central)
+      neighborId = source;
+      direction = 'incoming';
+    } else {
+      // Both central or neither - skip
+      continue;
+    }
+    
+    const existing = nodeEdgeInfo.get(neighborId);
+    
+    if (!existing) {
+      nodeEdgeInfo.set(neighborId, { edgeType, direction });
+    } else {
+      // LINEAR OVERRIDE: incoming dependency types ALWAYS win
+      // 1. If existing is incoming dependency - keep it
+      if (existing.direction === 'incoming' && isIncomingDependencyType(existing.edgeType)) {
+        continue;
+      }
+      // 2. If new is incoming dependency - it wins
+      if (direction === 'incoming' && isIncomingDependencyType(edgeType)) {
+        nodeEdgeInfo.set(neighborId, { edgeType, direction });
+        continue;
+      }
+      // 3. Otherwise use priority
+      const existingPriority = getEdgePriority(existing.edgeType);
+      const newPriority = getEdgePriority(edgeType);
+      if (newPriority < existingPriority) {
+        nodeEdgeInfo.set(neighborId, { edgeType, direction });
+      }
+    }
+  }
+  // ...
+
+  // Related nodes are those connected to any central node, plus any nodes that already have
+  // edgeTypeFromParent/parentFragmentId (to keep older data stable).
+  const relatedNodes: Node<T>[] = [];
+  for (const node of all) {
+    const d = node.data as any;
+    if (d?.isGroup) continue;
+    const depth = typeof d?.depth === 'number' ? d.depth : 0;
+    if (depth === 0) continue;
+    if (nodeEdgeInfo.has(node.id) || d?.parentFragmentId || d?.edgeTypeFromParent) {
+      relatedNodes.push(node);
+    }
+  }
+
+  // Group related nodes by linear section
+  type SectionData = {
+    section: LinearSection;
+    edgeTypes: Set<string>;
+    nodes: Node<T>[];
+  };
+
+  const sectionsMap = new Map<LinearSection, SectionData>();
+  // Initialize map to ensure consistent iteration order if needed, though we access by key
+  ['top-left', 'top-right', 'bottom-left', 'bottom-right'].forEach(k => {
+    sectionsMap.set(k as LinearSection, { section: k as LinearSection, edgeTypes: new Set(), nodes: [] });
+  });
+
+  // Group related nodes into sections
+  for (const node of relatedNodes) {
+    const nodeData = node.data as any;
+    
+    // Use recalculated edge info if available, otherwise fall back to node data
+    const recalculated = nodeEdgeInfo.get(node.id);
+    const edgeType = recalculated?.edgeType || nodeData?.edgeTypeFromParent || '';
+    const directionFromParent = recalculated?.direction || nodeData?.directionFromParent || 'unknown';
+    const isOutgoing = directionFromParent !== 'incoming';
+    const section = getLinearSection(edgeType, isOutgoing);
+
+    // Update node data with recalculated values (critical for handle calculation!)
+    const updatedNode: Node<T> = {
+      ...node,
+      data: {
+        ...node.data,
+        edgeTypeFromParent: edgeType,
+        directionFromParent: directionFromParent,
+      } as T,
+    };
+
+    const sectionData = sectionsMap.get(section);
+    if (sectionData) {
+      if (edgeType) sectionData.edgeTypes.add(edgeType);
+      sectionData.nodes.push(updatedNode);
+    }
+  }
+
+  const positionedNodes: Node<T>[] = [];
+  const groupNodes: Node<T>[] = [];
+
+  // --- 1. Layout Central Row ---
+  // Stable order: by existing X (if any), then by id
+  const sortedCentral = [...centralNodes].sort((a, b) => {
+    const ax = a.position?.x ?? 0;
+    const bx = b.position?.x ?? 0;
+    if (ax !== bx) return ax - bx;
+    return String(a.id).localeCompare(String(b.id));
+  });
+
+  const centerSpacing = nodeWidth + nodeSpacing;
+  const totalCenterWidth = sortedCentral.length * nodeWidth + (sortedCentral.length - 1) * nodeSpacing;
+  
+  // Define layout origin (0,0) as the center of the central row
+  // We will position everything relative to this origin.
+  // Central nodes Y = 0.
+  const centralRowY = 0;
+  let currentCenterX = -totalCenterWidth / 2;
+
+  for (const node of sortedCentral) {
+    positionedNodes.push({
+      ...node,
+      position: { x: currentCenterX, y: centralRowY },
+    });
+    currentCenterX += centerSpacing;
+  }
+
+  // --- 2. Calculate Section Dimensions & Positions ---
+  // We place sections relative to the central row.
+  // Top row Y = -(verticalGap + maxTopGroupHeight)
+  // Bottom row Y = nodeHeight + verticalGap
+  // Left column X (right edge) = -horizontalGap/2
+  // Right column X (left edge) = horizontalGap/2
+  
+  const verticalGap = Math.max(layerSpacing, 200);
+  const horizontalGap = 100; // Gap between left and right columns
+
+  // Helper to calculate group dimensions without placing
+  const calculateGroupDims = (nodesCount: number) => {
+    if (nodesCount === 0) return { w: 0, h: 0, rows: 0, nodesPerRow: 0, hasPagination: false };
+    
+    const totalPages = Math.ceil(nodesCount / GROUP_PAGE_SIZE);
+    const hasPagination = totalPages > 1;
+    const childGapX = Math.max(48, Math.floor(60 * 1.05));
+    const childGapY = Math.max(48, Math.floor(60 * 1.05));
+
+    let nodesPerRow: number;
+    let rows: number;
+    if (hasPagination) {
+      nodesPerRow = GROUP_MAX_COLS;
+      rows = GROUP_MAX_ROWS;
+    } else {
+      nodesPerRow = Math.min(nodesCount, GROUP_MAX_COLS);
+      rows = Math.ceil(nodesCount / nodesPerRow);
+    }
+
+    const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * childGapX;
+    const innerH = rows * nodeHeight + Math.max(0, rows - 1) * childGapY;
+    const w = innerW + GROUP_PADDING_X * 2;
+    const h = innerH + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM + (hasPagination ? GROUP_PAGINATION_HEIGHT : 0);
+    
+    return { w, h, rows, nodesPerRow, hasPagination, childGapX, childGapY };
+  };
+
+  const topLeftData = sectionsMap.get('top-left')!;
+  const topRightData = sectionsMap.get('top-right')!;
+  const bottomLeftData = sectionsMap.get('bottom-left')!;
+  const bottomRightData = sectionsMap.get('bottom-right')!;
+
+  const tlDims = calculateGroupDims(topLeftData.nodes.length);
+  const trDims = calculateGroupDims(topRightData.nodes.length);
+  const blDims = calculateGroupDims(bottomLeftData.nodes.length);
+  const brDims = calculateGroupDims(bottomRightData.nodes.length);
+
+  // Center the central row relative to the FULL graph width:
+  // balance left/right columns by shifting their gaps from the center.
+  const maxLeftW = Math.max(tlDims.w || 0, blDims.w || 0);
+  const maxRightW = Math.max(trDims.w || 0, brDims.w || 0);
+  const baseGap = horizontalGap / 2;
+  const delta = (maxLeftW - maxRightW) / 2;
+  const MIN_GAP = 80;
+  const leftGap = Math.max(MIN_GAP, baseGap - delta);
+  const rightGap = Math.max(MIN_GAP, baseGap + delta);
+
+  // Calculate Y positions
+  // Top row Y is determined by the tallest top group to align their bottoms (or align their tops? Usually align bottoms to be closer to center)
+  // Let's align groups closest to the central row.
+  // Top groups: bottom edge at -verticalGap. Y = -verticalGap - h.
+  // Bottom groups: top edge at nodeHeight + verticalGap. Y = nodeHeight + verticalGap.
+  
+  // Calculate X positions
+  // Left groups: right edge at -horizontalGap/2. X = -horizontalGap/2 - w.
+  // Right groups: left edge at horizontalGap/2. X = horizontalGap/2.
+
+  const placeSection = (section: LinearSection, data: SectionData, dims: any, x: number, y: number) => {
+    if (data.nodes.length === 0) return;
+
+    // Map to semantic group for group creation (approximate mapping)
+    let semanticGroup: SemanticGroup = 'supply-chain';
+    if (section === 'top-left' || section === 'top-right') {
+      semanticGroup = 'supply-chain';
+    } else if (section === 'bottom-left' || section === 'bottom-right') {
+      semanticGroup = 'customers';
+    }
+
+    const groupId = `linear-group-${section}`;
+    const groupNode = makeGroupParentNode({
+      id: groupId,
+      position: { x, y },
+      parentId: '__linear__',
+      semanticGroup,
+      edgeTypes: Array.from(data.edgeTypes),
+      count: data.nodes.length,
+      containerWidth: dims.w,
+      containerHeight: dims.h,
+      nodeWidth,
+      nodeHeight,
+      allChildIds: data.nodes.map((n) => n.id),
+      currentPage: 0,
+    });
+    // Store section id; UI will translate via i18n (react-i18next)
+    (groupNode.data as any).groupLinearSection = section;
+    groupNodes.push(groupNode);
+
+    // Layout children inside group
+    const padTop = GROUP_HEADER_HEIGHT;
+    for (let idx = 0; idx < data.nodes.length; idx++) {
+      const child = data.nodes[idx];
+      const isVisible = !dims.hasPagination || idx < GROUP_PAGE_SIZE;
+      const pageIdx = idx; 
+      const rowIdx = Math.floor(pageIdx / dims.nodesPerRow);
+      const colIdx = pageIdx % dims.nodesPerRow;
+      const cx = GROUP_PADDING_X + colIdx * (nodeWidth + dims.childGapX);
+      const cy = padTop + rowIdx * (nodeHeight + dims.childGapY);
+
+      const positioned = attachChildToGroup(child, groupId, { x: cx, y: cy });
+      positionedNodes.push({ ...positioned, hidden: !isVisible });
+    }
+  };
+
+  // --- 3. Place Groups ---
+  
+  // Top Row
+  if (topLeftData.nodes.length > 0) {
+    const x = -leftGap - tlDims.w;
+    const y = -verticalGap - tlDims.h; // Align bottom to gap
+    placeSection('top-left', topLeftData, tlDims, x, y);
+  }
+  if (topRightData.nodes.length > 0) {
+    const x = rightGap;
+    const y = -verticalGap - trDims.h; // Align bottom to gap
+    placeSection('top-right', topRightData, trDims, x, y);
+  }
+
+  // Bottom Row
+  const bottomRowY = nodeHeight + verticalGap;
+  if (bottomLeftData.nodes.length > 0) {
+    const x = -leftGap - blDims.w;
+    const y = bottomRowY; // Align top to gap
+    placeSection('bottom-left', bottomLeftData, blDims, x, y);
+  }
+  if (bottomRightData.nodes.length > 0) {
+    const x = rightGap;
+    const y = bottomRowY; // Align top to gap
+    placeSection('bottom-right', bottomRightData, brDims, x, y);
+  }
+
+  // Keep existing nodes that weren't repositioned
+  const repositionedIds = new Set([...positionedNodes, ...groupNodes].map((n) => n.id));
+  // IMPORTANT: drop previous freeform group nodes when switching to linear
+  const passthrough = existingNodes.filter((n) => !repositionedIds.has(n.id) && !((n.data as any)?.isGroup));
+
+  return [...passthrough, ...positionedNodes, ...groupNodes];
+}
+
+/**
+ * Linear layout for full graph: same 3-row structure applied to entire graph
+ */
+export async function layoutLinearFullGraph<T = any>(
+  nodes: Node<T>[],
+  edges: Edge[],
+  options: LayoutOptions_Custom = {},
+): Promise<Node<T>[]> {
+  // Linear full-graph layout: apply the same global 3-row logic across ALL nodes.
+  // Central nodes are those with depth=0; related nodes are depth>0.
+  return layoutLinearExpansion(nodes, [], '__linear__', edges, options);
 }
 
