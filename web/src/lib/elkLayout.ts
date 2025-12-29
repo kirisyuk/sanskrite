@@ -104,6 +104,13 @@ export type LinearSection = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-r
  */
 export function getLinearSection(edgeType: string | undefined, isOutgoing: boolean): LinearSection {
   const type = normalizeEdgeType(edgeType);
+
+  // Competes-with is a symmetric "peer" relation, but in Linear mode we always place it
+  // into the upper-right group to avoid splitting the same relation between top/bottom
+  // depending on edge direction.
+  if (type === 'COMPETES_WITH') {
+    return 'top-right';
+  }
   
   // === EXCEPTIONS: Types where "they X us" means we are important to them (downstream) ===
   // These go to BOTTOM row even when incoming (reverse of normal logic)
