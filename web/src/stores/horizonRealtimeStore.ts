@@ -227,7 +227,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         const formattedType = edgeType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase());
         text = formattedType;
         humanReadable = {
-          title: `Link ${formattedType} created`,
+          title: formattedType, // Just the type, UI will render "Link <chip> created"
           description: `${srcName} → ${dstName}`,
         };
       } else if (type.startsWith('horizon.propagation.')) {

@@ -198,3 +198,4 @@ if err == nil && len(existingJobs) > 0 {
 5. **Низкий:** Дедупликация scouting jobs
 
 
+

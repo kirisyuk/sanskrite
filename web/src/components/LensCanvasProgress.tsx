@@ -214,15 +214,14 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
               let entityPath = ev.data?.canonicalPath || ev.data?.targetCanonicalPath || '';
               let hasLowConfidence = false;
 
+              // For edges, we'll render "Link <chip>Type</chip> created" separately
+              // Store the edge type for chip rendering
+              let edgeTypeForChip = '';
               if (isEdge) {
-                // Use the title from humanReadable if available (already formatted as "Link <type> created")
-                // Otherwise format it ourselves
                 const type = ev.data?.type || 'Connection';
-                if (ev.humanReadable?.title) {
-                  title = ev.humanReadable.title;
-                } else {
-                  title = `Link ${formatEdgeType(type)} created`;
-                }
+                // Use humanReadable.title if available (already formatted), otherwise format ourselves
+                edgeTypeForChip = ev.humanReadable?.title || formatEdgeType(type);
+                title = ''; // We'll render custom layout for edges
                 
                 const s = ev.data?.qualifiers?.sourceCanonicalPath || ev.data?.sourceFragmentId;
                 const t = ev.data?.qualifiers?.targetCanonicalPath || ev.data?.targetFragmentId;
@@ -284,22 +283,26 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
                       <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 13, lineHeight: '20px' }}>
                         {isEdge ? (
-                          // Show edge notification as a chip
-                          <span 
-                            style={{ 
-                              display: 'inline-block', 
-                              fontSize: 12, 
-                              padding: '4px 10px', 
-                              borderRadius: 6, 
-                              background: 'var(--bg-elevated)', 
-                              border: '1px solid var(--border-subtle)',
-                              color: 'var(--text-heading)', 
-                              fontWeight: 500,
-                              fontFamily: 'monospace',
-                            }}
-                          >
-                            {title}
-                          </span>
+                          // Show "Link <chip>Type</chip> created" format
+                          <>
+                            <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>Link </span>
+                            <span 
+                              style={{ 
+                                display: 'inline-block', 
+                                fontSize: 11, 
+                                padding: '2px 8px', 
+                                borderRadius: 4, 
+                                background: 'var(--accent-primary-10, rgba(99, 102, 241, 0.1))', 
+                                border: '1px solid var(--accent-primary-20, rgba(99, 102, 241, 0.2))',
+                                color: 'var(--accent-primary, #6366f1)', 
+                                fontWeight: 600,
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                              {edgeTypeForChip}
+                            </span>
+                            <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}> created</span>
+                          </>
                         ) : (
                           title
                         )}

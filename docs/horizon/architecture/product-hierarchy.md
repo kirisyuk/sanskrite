@@ -226,3 +226,4 @@ Extract value chain relationships from text:
 4. Как обрабатывать циклы в value chain? (например, recycling)
 
 
+
