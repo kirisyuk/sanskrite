@@ -14,6 +14,11 @@
 **Цель**: сделать текущую систему предсказуемой в проде (без “скрытых” несоответствий данных/доков, без ручной магии).
 
 **TODO**:
+- **Срочные задачи**
+  - Вынести метрики из фрагментов в оверлей
+  - [x] Реализовать подгрузку материалов вручную из фрагмента-продукта через wikidata - срочно
+    - POST `/api/horizon/fragments/{id}/expand-materials` — синхронный вызов, возвращает статистику
+  - Добавить клиентов организации в скаутинг, вызываемый вручную - тоже срочно
 - **Vertex AI Search для Horizon fragments**
   - Завершить overwrite re-export всех фрагментов в GCS в финальном формате Discovery Engine.
   - Перезапустить backfill (батчи) и убедиться, что поиск по fragments возвращает результаты.
@@ -311,26 +316,29 @@ type PolicyDecision struct {
 **TODO**:
 
 - **Phase 0: MaterializedArtifact (базовый тип для слоёв/оверлеев)**
-  - [ ] Ввести `MaterializedArtifact` (или `MaterializedFragment`) как отдельную коллекцию/тип (tenant/global)
-  - [ ] Enum `MaterializedKind`, первый kind: `SUPPLY_CHAIN_PATH`
-  - [ ] Payload v1: упорядоченный массив узлов пути + опциональные “ребра” (supply-link / ontology transitions)
-  - [ ] Ссылки на метрики/observations + evidence refs (ontology_facts) без смешивания ответственности
+  - [x] Ввести `MaterializedArtifact` как отдельную коллекцию/тип (tenant/global)
+  - [x] Enum `MaterializedKind`, первый kind: `SUPPLY_CHAIN_PATH`
+  - [x] Payload v1: упорядоченный массив узлов пути + опциональные "ребра" (supply-link / ontology transitions)
+  - [x] Ссылки на метрики/observations + evidence refs (ontology_facts) без смешивания ответственности
 
 - **Phase 1: SupplyLink (высокий приоритет)**
-  - [ ] Добавить `FragmentTypeSupplyLink`
-  - [ ] Добавить поля `SupplierRef`, `CustomerRef`, `ProductRef` в HorizonFragment
-  - [ ] Валидация: SupplyLink должен иметь `tenantId != "global"`
+  - [x] Добавить `FragmentTypeSupplyLink`
+  - [x] Добавить поля `SupplierRef`, `CustomerRef`, `ProductRef` в HorizonFragment
+  - [x] Валидация: SupplyLink требует `tenantId` (может быть tenant или "global" как assumption-layer)
   - [ ] API endpoint для создания SupplyLink
   - [ ] Интеграция с Scout для автоматического обнаружения
 
 - **Phase 2: Path Building**
-  - [ ] Функция `BuildSupplyPath(customer, maxDepth)` с confidence propagation
+  - [x] Функция `BuildUpstreamPath(customer, opts)` с confidence propagation
+  - [x] Tenant-first, global-fallback precedence на уровне сегмента
+  - [x] Интеграция с MaterializedArtifact для сохранения путей
   - [ ] API endpoint для получения upstream/downstream paths
   - [ ] Кэширование построенных путей
 
 - **Phase 3: Influence Links**
-  - [ ] Стандартизация qualifiers (`via`, `mechanism`, `direction`, `reversible`, `conditionality`)
-  - [ ] Поддержка `via` qualifier в ValidationPolicy
+  - [x] Стандартизация qualifiers (`via`, `mechanism`, `direction`, `reversible`, `conditionality`, `strength`)
+  - [x] Поддержка influence qualifiers в ValidationPolicy
+  - [x] Helper functions для ExtractInfluenceQualifiers, SetInfluenceQualifiers, ValidateInfluenceQualifiers
   - [ ] API для запроса influence paths
 
 - **Phase 4: HIL Integration**

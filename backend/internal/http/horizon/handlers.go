@@ -252,6 +252,11 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if strings.HasSuffix(r.URL.Path, "/expand-materials") {
+		h.ExpandProductMaterials(w, r)
+		return
+	}
+
 	// Если нет подпути, это операции с самим Fragment
 	switch r.Method {
 	case http.MethodGet:

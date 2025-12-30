@@ -184,6 +184,8 @@ func normalizeFragmentTypeHardcoded(s string) models.FragmentType {
 		return models.FragmentTypeEvent
 	case string(models.FragmentTypePerson), "HUMAN", "INDIVIDUAL":
 		return models.FragmentTypePerson
+	case string(models.FragmentTypeSupplyLink), "SUPPLYLINK":
+		return models.FragmentTypeSupplyLink
 	default:
 		return ""
 	}

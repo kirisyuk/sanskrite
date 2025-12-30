@@ -81,5 +81,16 @@ func (e *DependencyEdge) Validate() error {
 	if e.Properties.Amplification < 0 {
 		return fmt.Errorf("properties.amplification must be non-negative")
 	}
+
+	// Validate influence qualifiers if this is an INFLUENCES edge
+	if e.Type == DependencyTypeInfluences {
+		qualifiers, err := ExtractInfluenceQualifiers(e)
+		if err == nil && qualifiers != nil {
+			if err := ValidateInfluenceQualifiers(qualifiers); err != nil {
+				return fmt.Errorf("invalid influence qualifiers: %w", err)
+			}
+		}
+	}
+
 	return nil
 }

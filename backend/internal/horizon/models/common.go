@@ -73,6 +73,7 @@ const (
 	FragmentTypeProgram      FragmentType = "PROGRAM"
 	FragmentTypeMarket       FragmentType = "MARKET"
 	FragmentTypePerson       FragmentType = "PERSON"
+	FragmentTypeSupplyLink   FragmentType = "SUPPLY_LINK" // Tenant-specific supply chain link
 )
 
 // EpistemicStatus статус эпистемической достоверности

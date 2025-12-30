@@ -734,6 +734,70 @@ func (r *HorizonFragmentsRepository) SearchByVectorText(ctx context.Context, que
 	return nil, fmt.Errorf("vector search not yet implemented, requires Firestore vector index")
 }
 
+// ListByTypeAndTenant lists fragments by type and tenant ID.
+func (r *HorizonFragmentsRepository) ListByTypeAndTenant(
+	ctx context.Context,
+	tenantID string,
+	fragType models.FragmentType,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000 // Firestore limit
+	}
+
+	q := r.col.Where("tenantId", "==", tenantID).Where("type", "==", string(fragType)).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	fragments := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		fragments = append(fragments, &fragment)
+	}
+
+	return fragments, nil
+}
+
+// FindSupplyLinksByCustomer finds SupplyLink fragments where customerRef matches.
+// This is a client-side filter because Firestore doesn't efficiently support queries on optional fields.
+func (r *HorizonFragmentsRepository) FindSupplyLinksByCustomer(
+	ctx context.Context,
+	customerRef string,
+	tenantID string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	// Get all SupplyLinks for the tenant
+	allSupplyLinks, err := r.ListByTypeAndTenant(ctx, tenantID, models.FragmentTypeSupplyLink, limit*2)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter client-side where CustomerRef matches
+	var matches []*models.HorizonFragment
+	for _, link := range allSupplyLinks {
+		if link.CustomerRef != nil && *link.CustomerRef == customerRef {
+			matches = append(matches, link)
+			if len(matches) >= limit {
+				break
+			}
+		}
+	}
+
+	return matches, nil
+}
+
 // Delete удаляет HorizonFragment, его файл из GCS и триггерит синхронизацию с Vertex AI Search
 func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) error {
 	if id == "" {

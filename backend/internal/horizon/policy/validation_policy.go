@@ -348,6 +348,24 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		}
 	}
 
+	// Policy 3: Validate influence qualifiers for INFLUENCES edges
+	if input.Edge != nil && input.Edge.Type == horizonmodels.DependencyTypeInfluences {
+		qualifiers, err := horizonmodels.ExtractInfluenceQualifiers(input.Edge)
+		if err == nil && qualifiers != nil {
+			if err := horizonmodels.ValidateInfluenceQualifiers(qualifiers); err != nil {
+				reason := fmt.Sprintf("invalid influence qualifiers: %v", err)
+				log.Printf("%s REJECT: %s", logPrefix, reason)
+				return PolicyDecision{
+					Action:       "reject",
+					Params:       map[string]interface{}{"reason": reason},
+					DecisionPath: "rule:hardcoded:invalid_influence_qualifiers",
+					Confidence:   1.0,
+				}, nil
+			}
+			log.Printf("%s Influence qualifiers validation passed", logPrefix)
+		}
+	}
+
 	// Check DB rules
 	rules, err := p.rulesRepo.GetRules(ctx)
 	if err != nil {
@@ -537,6 +555,23 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		},
 		Description: "Dependent entity depends on dependency",
 	},
+	horizonmodels.DependencyTypeInfluences: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeGeoRegion,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeProgram,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeGeoRegion,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeProgram,
+		},
+		Description: "Source entity influences target entity (political/economic influence)",
+	},
 }
 
 func containsFragmentType(types []horizonmodels.FragmentType, t horizonmodels.FragmentType) bool {
@@ -561,6 +596,8 @@ func (p *ValidationPolicy) expectedPathPrefix(fragType horizonmodels.FragmentTyp
 		return "/product/"
 	case horizonmodels.FragmentTypePerson:
 		return "/person/"
+	case horizonmodels.FragmentTypeSupplyLink:
+		return "/supply-link/" // Tenant-specific, format: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}
 	default:
 		return ""
 	}

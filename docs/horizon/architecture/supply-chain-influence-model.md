@@ -451,22 +451,24 @@ const (
 ## План реализации
 
 ### Phase 1: SupplyLink (High Priority)
-- [ ] Добавить `FragmentTypeSupplyLink`
-- [ ] Добавить поля `SupplierRef`, `CustomerRef`, `ProductRef` в HorizonFragment
-- [ ] Валидация: SupplyLink должен иметь tenant != "global"
-- [ ] Валидация: ProductRef обязателен
+- [x] Добавить `FragmentTypeSupplyLink`
+- [x] Добавить поля `SupplierRef`, `CustomerRef`, `ProductRef` в HorizonFragment
+- [x] Валидация: SupplyLink требует `tenantId` (может быть tenant или "global" как assumption-layer)
+- [x] Валидация: ProductRef обязателен
 - [ ] API endpoint для создания SupplyLink
 - [ ] Интеграция с Scout для автоматического обнаружения
 
 ### Phase 2: Path Building
-- [ ] Функция `BuildSupplyPath(customer, maxDepth)` 
-- [ ] Confidence propagation через цепочку
+- [x] Функция `BuildUpstreamPath(customer, opts)` с confidence propagation
+- [x] Tenant-first, global-fallback precedence на уровне сегмента
+- [x] Интеграция с MaterializedArtifact для сохранения путей
 - [ ] Кэширование построенных путей
 - [ ] API endpoint для получения upstream/downstream paths
 
 ### Phase 3: Influence Links
-- [ ] Стандартизация qualifiers для INFLUENCES/LEVERAGES edges
-- [ ] Поддержка `via` qualifier в ValidationPolicy
+- [x] Стандартизация qualifiers для INFLUENCES edges (`via`, `mechanism`, `direction`, `reversible`, `conditionality`, `strength`)
+- [x] Поддержка influence qualifiers в ValidationPolicy
+- [x] Helper functions: ExtractInfluenceQualifiers, SetInfluenceQualifiers, ValidateInfluenceQualifiers
 - [ ] API для запроса influence paths
 - [ ] Визуализация в UI
 

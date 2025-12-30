@@ -11,6 +11,7 @@ import (
 
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
@@ -343,6 +344,99 @@ func (h *HorizonHandlers) RefreshFragment(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(response)
+}
+
+// ExpandProductMaterials expands upstream and downstream materials for a product fragment.
+// POST /api/horizon/fragments/{id}/expand-materials
+// Body (optional): {"upstreamDepth": 3, "downstreamDepth": 3, "includeProducers": true}
+// Response: {"productId": "...", "upstreamCount": N, "downstreamCount": N, "producersCount": N, "duration": "..."}
+func (h *HorizonHandlers) ExpandProductMaterials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract fragment ID from path: /api/horizon/fragments/{id}/expand-materials
+	fragmentIDOrPath := extractIDFromPath(r, "/api/horizon/fragments/")
+	fragmentIDOrPath = strings.TrimSuffix(fragmentIDOrPath, "/expand-materials")
+	if fragmentIDOrPath == "" {
+		http.Error(w, "Fragment ID or canonical path required", http.StatusBadRequest)
+		return
+	}
+
+	// Get Scout Engine
+	scoutEngine := h.service.Scout()
+	if scoutEngine == nil {
+		http.Error(w, "Scout Engine not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Parse optional request body for options
+	var reqBody struct {
+		UpstreamDepth    int  `json:"upstreamDepth"`
+		DownstreamDepth  int  `json:"downstreamDepth"`
+		IncludeProducers *bool `json:"includeProducers"`
+	}
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			// Ignore parse errors, use defaults
+			_ = err
+		}
+	}
+
+	// Build options
+	opts := scout.ExpandProductMaterialsOptions{
+		UpstreamDepth:    3,
+		DownstreamDepth:  3,
+		IncludeProducers: true,
+	}
+	if reqBody.UpstreamDepth > 0 {
+		opts.UpstreamDepth = reqBody.UpstreamDepth
+	}
+	if reqBody.DownstreamDepth > 0 {
+		opts.DownstreamDepth = reqBody.DownstreamDepth
+	}
+	if reqBody.IncludeProducers != nil {
+		opts.IncludeProducers = *reqBody.IncludeProducers
+	}
+
+	// Create a context with timeout for the synchronous operation
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+
+	// Call the expand method
+	result, err := scoutEngine.ExpandProductMaterials(ctx, fragmentIDOrPath, opts)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to expand materials: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Build response
+	response := map[string]interface{}{
+		"productId":       result.ProductID,
+		"productPath":     result.ProductPath,
+		"upstreamCount":   result.UpstreamCount,
+		"downstreamCount": result.DownstreamCount,
+		"producersCount":  result.ProducersCount,
+		"edgesCount":      result.EdgesCount,
+		"duration":        result.Duration.String(),
+		"status":          "completed",
+	}
+	if result.WikidataID != "" {
+		response["wikidataId"] = result.WikidataID
+	}
+	if len(result.Errors) > 0 {
+		response["warnings"] = result.Errors
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 

@@ -106,15 +106,16 @@ func (n *TypeNormalizer) checkPathTypeMismatch(fragment *models.HorizonFragment)
 
 	// Map of path prefixes to expected types
 	pathTypeMap := map[string]models.FragmentType{
-		"/loc/":     models.FragmentTypeGeoRegion,
-		"/geo/":     models.FragmentTypeGeoRegion,
-		"/org/":     models.FragmentTypeOrganization,
-		"/fac/":     models.FragmentTypeFacility,
-		"/product/": models.FragmentTypeProduct,
-		"/program/": models.FragmentTypeProgram,
-		"/market/":  models.FragmentTypeMarket,
-		"/event/":   models.FragmentTypeEvent,
-		"/person/":  models.FragmentTypePerson,
+		"/loc/":         models.FragmentTypeGeoRegion,
+		"/geo/":         models.FragmentTypeGeoRegion,
+		"/org/":         models.FragmentTypeOrganization,
+		"/fac/":         models.FragmentTypeFacility,
+		"/product/":     models.FragmentTypeProduct,
+		"/program/":     models.FragmentTypeProgram,
+		"/market/":      models.FragmentTypeMarket,
+		"/event/":      models.FragmentTypeEvent,
+		"/person/":      models.FragmentTypePerson,
+		"/supply-link/": models.FragmentTypeSupplyLink,
 	}
 
 	for prefix, expectedType := range pathTypeMap {

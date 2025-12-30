@@ -10,7 +10,9 @@ import (
 type HorizonFragment struct {
 	// BaseOntologyFields (общие с Entity)
 	ID          string            `json:"id" firestore:"id"`
-	TenantID    string            `json:"tenantId" firestore:"tenantId"` // Всегда "global"
+	// TenantID is usually "global" for world-graph fragments.
+	// Exception: SUPPLY_LINK fragments can be tenant-scoped or "global" (assumption layer).
+	TenantID    string            `json:"tenantId" firestore:"tenantId"`
 	Version     int               `json:"version" firestore:"version"`
 	CreatedAt   time.Time         `json:"createdAt" firestore:"createdAt"`
 	UpdatedAt   time.Time         `json:"updatedAt" firestore:"updatedAt"`
@@ -55,6 +57,14 @@ type HorizonFragment struct {
 	// Метаданные и управление
 	Metadata   FragmentMetadata `json:"metadata" firestore:"metadata"`
 	Governance Governance       `json:"governance" firestore:"governance"`
+
+	// Supply Link specific fields (when Type == FragmentTypeSupplyLink)
+	// These fields are only used for SUPPLY_LINK fragments (tenant-specific)
+	SupplierRef         *string `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`         // /org/... or /fac/... (nil = natural resource)
+	CustomerRef         *string `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`         // /org/... or /fac/... (nil = end consumer)
+	ProductRef          *string `json:"productRef,omitempty" firestore:"productRef,omitempty"`            // /product/... (required for SUPPLY_LINK)
+	SupplierFacilityRef *string `json:"supplierFacilityRef,omitempty" firestore:"supplierFacilityRef,omitempty"` // /fac/... (optional)
+	CustomerFacilityRef *string `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)
 }
 
 // FragmentMetadata метаданные жизненного цикла
@@ -73,14 +83,37 @@ type FragmentMetadata struct {
 
 // Validate проверяет валидность HorizonFragment
 func (f *HorizonFragment) Validate() error {
-	if f.CanonicalPath == "" {
-		return fmt.Errorf("canonicalPath is required")
-	}
-	if f.TenantID != "global" && f.TenantID != "" {
-		return fmt.Errorf("tenantId must be 'global' or empty for HorizonFragment")
-	}
 	if f.Type == "" {
 		return fmt.Errorf("type is required")
+	}
+	
+	// SupplyLink fragments can be tenant-scoped OR global-scoped (assumption layer).
+	// All other fragments must be global.
+	if f.Type == FragmentTypeSupplyLink {
+		if f.TenantID == "" {
+			return fmt.Errorf("tenantId must be set for SUPPLY_LINK fragments")
+		}
+		// Validate SupplyLink-specific fields using detailed validation
+		if err := ValidateSupplyLinkFields(f); err != nil {
+			return err
+		}
+		// Auto-generate canonicalPath if not set
+		if f.CanonicalPath == "" {
+			canonicalPath, err := BuildSupplyLinkCanonicalPath(f.TenantID, f.SupplierRef, f.ProductRef, f.CustomerRef)
+			if err != nil {
+				return fmt.Errorf("failed to generate canonicalPath for SUPPLY_LINK: %w", err)
+			}
+			f.CanonicalPath = canonicalPath
+		}
+	} else {
+		// Non-SupplyLink fragments must be global
+		if f.TenantID != "global" && f.TenantID != "" {
+			return fmt.Errorf("tenantId must be 'global' or empty for HorizonFragment (except SUPPLY_LINK)")
+		}
+		// Non-SupplyLink fragments require canonicalPath
+		if f.CanonicalPath == "" {
+			return fmt.Errorf("canonicalPath is required")
+		}
 	}
 	if f.Governance.Owner != "SYSTEM" {
 		return fmt.Errorf("governance.owner must be 'SYSTEM'")
