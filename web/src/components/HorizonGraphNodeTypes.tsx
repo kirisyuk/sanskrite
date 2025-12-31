@@ -142,6 +142,123 @@ const getNodeColors = (type: string | undefined, theme: 'light' | 'dark'): {
   };
 };
 
+const hexToRgba = (hex: string, alpha: number) => {
+  const h = String(hex || '').trim();
+  if (!h.startsWith('#')) return `rgba(0,0,0,${alpha})`;
+  const v = h.slice(1);
+  if (v.length !== 6) return `rgba(0,0,0,${alpha})`;
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return `rgba(0,0,0,${alpha})`;
+  const a = Math.max(0, Math.min(1, alpha));
+  return `rgba(${r},${g},${b},${a})`;
+};
+
+export type HorizonNodeVisualQuality = 'max' | 'balanced' | 'minimal';
+
+export const setHorizonNodeVisualQuality = (q: HorizonNodeVisualQuality) => {
+  if (typeof document === 'undefined') return;
+  const next = q === 'max' ? 'max' : q === 'minimal' ? 'minimal' : 'balanced';
+  document.documentElement.dataset.hznNodeVisuals = next;
+  ensureHorizonNode2026Styles();
+};
+
+const getHorizonNodeVisualQuality = (): HorizonNodeVisualQuality => {
+  if (typeof document === 'undefined') return 'balanced';
+  const raw = String(document.documentElement.dataset.hznNodeVisuals || '').trim();
+  if (raw === 'max' || raw === 'minimal') return raw;
+  return 'balanced';
+};
+
+const ensureHorizonNode2026Styles = () => {
+  if (typeof document === 'undefined') return;
+  // Default to balanced if unset
+  if (!document.documentElement.dataset.hznNodeVisuals) {
+    document.documentElement.dataset.hznNodeVisuals = 'balanced';
+  }
+  const id = 'horizon-node-2026-styles';
+  let style = document.getElementById(id) as HTMLStyleElement | null;
+  if (!style) {
+    style = document.createElement('style');
+    style.id = id;
+    document.head.appendChild(style);
+  }
+  // Always refresh content so HMR / incremental builds don't leave stale CSS around.
+  style.textContent = `
+    .hzn-node-2026 {
+      position: relative;
+      overflow: hidden;
+      border-radius: 14px;
+      background: var(--hzn-surface);
+      border: 1px solid var(--hzn-border);
+      box-shadow: var(--hzn-shadow);
+      transition: box-shadow 140ms ease, border-color 140ms ease, opacity 140ms ease;
+    }
+    :root[data-hzn-node-visuals="minimal"] .hzn-node-2026 {
+      box-shadow: none !important;
+      transition: opacity 120ms ease;
+    }
+    :root[data-hzn-node-visuals="minimal"] .hzn-node-2026::before,
+    :root[data-hzn-node-visuals="minimal"] .hzn-node-2026::after {
+      display: none !important;
+    }
+    :root[data-hzn-node-visuals="minimal"] .hzn-node-2026 .hzn-metrics {
+      display: none !important;
+    }
+
+    /* Max: a bit richer (still lightweight — no blur, no transforms). */
+    :root[data-hzn-node-visuals="max"] .hzn-node-2026::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      background:
+        radial-gradient(140px 80px at 18% 6%, var(--hzn-accent-soft) 0%, rgba(0,0,0,0) 70%),
+        linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.00) 50%);
+      opacity: 0.9;
+    }
+    :root[data-hzn-node-visuals="max"] .hzn-node-2026::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 2px;
+      pointer-events: none;
+      background: linear-gradient(90deg, var(--hzn-accent) 0%, rgba(0,0,0,0) 60%);
+      opacity: 0.9;
+    }
+    .hzn-node-2026.is-selected {
+      box-shadow: 0 0 0 2px var(--hzn-accent-ring), 0 10px 28px rgba(0,0,0,0.18);
+      border-color: var(--hzn-accent-ring);
+    }
+    .hzn-node-2026 .hzn-handle {
+      opacity: 0;
+      transition: opacity 120ms ease;
+      pointer-events: none;
+    }
+    .hzn-node-2026:hover .hzn-handle {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .hzn-node-2026.is-selected .hzn-handle {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .hzn-node-2026 .hzn-plus {
+      transition: transform 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
+      transform-origin: 50% 50%;
+    }
+    .hzn-node-2026:hover .hzn-plus,
+    .hzn-node-2026.is-selected .hzn-plus {
+      transform: none; /* keep stable position */
+      box-shadow: 0 10px 22px rgba(0,0,0,0.18);
+    }
+  `;
+};
+
 // SVG иконки для разных типов
 const NodeIcon: React.FC<{ type: string | undefined; color: string; size?: number }> = ({ type, color, size = 16 }) => {
   const normalizedType = (type || '').toUpperCase().replace(/\s+/g, '_');
@@ -672,6 +789,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
 
 // Базовый узел для Horizon фрагмента
 const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected }) => {
+  ensureHorizonNode2026Styles();
   const { theme } = React.useContext(ThemeContext);
   const colors = getNodeColors(data.type, theme);
   
@@ -684,13 +802,17 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isSelected = Boolean(selected);
   const canCollapse = Boolean(data.fragmentId && data.onCollapse && isExpanded && !data.isLoadingRelated);
   
-  // Цвета с учётом состояния
-  const bgColor = colors.bg;
-  const borderColor = isCritical ? '#EF4444' : colors.border;
-  const borderWidth = isCritical ? 3 : 2;
-  const textColor = colors.text;
+  // 2026 visual style: neutral surface with tinted accent (less "dashboardy", more product-like)
   const accentColor = isCritical ? '#EF4444' : colors.accent;
-  const selectedRing = theme === 'dark' ? 'rgba(255,255,255,0.30)' : 'rgba(15,23,42,0.18)';
+  const textColor = theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.88)';
+  const mutedTextColor = theme === 'dark' ? 'rgba(255,255,255,0.62)' : 'rgba(15,23,42,0.56)';
+  const surfaceBg = theme === 'dark' ? 'rgba(17,24,39,0.90)' : 'rgba(255,255,255,0.96)';
+  const surfaceBorder = theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)';
+  const accentSoft = hexToRgba(accentColor, theme === 'dark' ? 0.22 : 0.16);
+  const accentRing = hexToRgba(accentColor, theme === 'dark' ? 0.55 : 0.34);
+  const shadowBase = theme === 'dark' ? '0 8px 22px rgba(0,0,0,0.30)' : '0 8px 22px rgba(0,0,0,0.10)';
+  const criticalRing = hexToRgba('#EF4444', theme === 'dark' ? 0.55 : 0.35);
+  const q = getHorizonNodeVisualQuality();
 
   const displayLabel = data.label || data.canonicalPath?.split('/').pop() || 'Fragment';
   const displayType = data.type || 'Unknown';
@@ -706,26 +828,25 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
 
   return (
     <div
+      className={`hzn-node-2026 ${isSelected ? 'is-selected' : ''}`}
       style={{
-        background: bgColor,
-        border: `${borderWidth}px solid ${borderColor}`,
-        borderRadius: '10px',
+        // CSS variables for 2026 styles
+        ['--hzn-surface' as any]: surfaceBg,
+        ['--hzn-border' as any]: surfaceBorder,
+        ['--hzn-accent' as any]: accentColor,
+        ['--hzn-accent-soft' as any]: accentSoft,
+        ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,
+        ['--hzn-shadow' as any]: isCritical
+          ? `0 0 0 2px ${criticalRing}, ${shadowBase}`
+          : (q === 'max' ? `${shadowBase}, 0 18px 60px rgba(0,0,0,0.18)` : shadowBase),
         // Reserve room at the bottom so the "+" button never overlaps metrics
         padding: isCollapsed ? '8px 12px 32px' : '10px 14px 40px',
         width: `${NODE_WIDTH_PX}px`,
         height: `${NODE_CARD_HEIGHT_PX}px`,
         boxSizing: 'border-box',
-        boxShadow: isCritical
-          ? `0 0 0 2px rgba(239, 68, 68, 0.3), 0 4px 12px rgba(239, 68, 68, 0.2)`
-          : theme === 'dark' 
-            ? `0 4px 12px rgba(0, 0, 0, 0.4)`
-            : `0 4px 12px rgba(0, 0, 0, 0.1)`,
         position: 'relative',
         opacity: isCollapsed ? 0.7 : 1,
-        transition: 'all 0.2s ease',
-        // Selection highlight: use an outer ring (doesn't change layout/size)
-        outline: isSelected ? `3px solid ${selectedRing}` : undefined,
-        outlineOffset: isSelected ? 2 : undefined,
+        cursor: 'default',
       }}
     >
       {/* Top handles: 2 handles для верхней группы (supply-chain) */}
@@ -733,11 +854,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         id="source-top"
         type="source"
         position={Position.Top}
+        className="hzn-handle"
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
-          border: `2px solid ${bgColor}`,
+          border: `2px solid ${surfaceBg}`,
           top: '-5px',
           left: '40%',
         }}
@@ -746,11 +868,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         id="target-top"
         type="target"
         position={Position.Top}
+        className="hzn-handle"
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
-          border: `2px solid ${bgColor}`,
+          border: `2px solid ${surfaceBg}`,
           top: '-5px',
           right: '40%',
         }}
@@ -761,11 +884,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         id="source-bottom"
         type="source"
         position={Position.Bottom}
+        className="hzn-handle"
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
-          border: `2px solid ${bgColor}`,
+          border: `2px solid ${surfaceBg}`,
           bottom: '-5px',
           left: '40%',
         }}
@@ -774,11 +898,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         id="target-bottom"
         type="target"
         position={Position.Bottom}
+        className="hzn-handle"
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
-          border: `2px solid ${bgColor}`,
+          border: `2px solid ${surfaceBg}`,
           bottom: '-5px',
           right: '40%',
         }}
@@ -789,11 +914,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         id="source-left"
         type="source"
         position={Position.Left}
+        className="hzn-handle"
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
-          border: `2px solid ${bgColor}`,
+          border: `2px solid ${surfaceBg}`,
           left: '-5px',
           top: '40%',
         }}
@@ -802,11 +928,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         id="target-left"
         type="target"
         position={Position.Left}
+        className="hzn-handle"
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
-          border: `2px solid ${bgColor}`,
+          border: `2px solid ${surfaceBg}`,
           left: '-5px',
           top: '60%',
         }}
@@ -817,11 +944,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         id="source-right"
         type="source"
         position={Position.Right}
+        className="hzn-handle"
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
-          border: `2px solid ${bgColor}`,
+          border: `2px solid ${surfaceBg}`,
           right: '-5px',
           top: '40%',
         }}
@@ -830,11 +958,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         id="target-right"
         type="target"
         position={Position.Right}
+        className="hzn-handle"
         style={{
           background: accentColor,
           width: '10px',
           height: '10px',
-          border: `2px solid ${bgColor}`,
+          border: `2px solid ${surfaceBg}`,
           right: '-5px',
           top: '60%',
         }}
@@ -846,10 +975,11 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           style={{
             padding: '4px',
             borderRadius: '6px',
-            background: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+            background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
           }}
         >
           <NodeIcon type={data.type} color={accentColor} size={18} />
@@ -858,8 +988,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
-              fontSize: '13px',
-              fontWeight: 600,
+              fontSize: 13,
+              fontWeight: 700,
               color: textColor,
               lineHeight: 1.3,
               overflow: 'hidden',
@@ -875,10 +1005,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           {!isCollapsed && (
             <div
               style={{
-                fontSize: '10px',
-                color: accentColor,
+                fontSize: 10,
+                color: mutedTextColor,
                 marginTop: '2px',
-                fontWeight: 500,
+                fontWeight: 650,
                 textTransform: 'uppercase',
                 letterSpacing: '0.5px',
               }}
@@ -952,10 +1082,11 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       {/* Метрики (если не collapsed) */}
       {!isCollapsed && data.state && Object.keys(data.state).length > 0 && (
         <div
+          className="hzn-metrics"
           style={{
             marginTop: '8px',
             paddingTop: '8px',
-            borderTop: `1px solid ${theme === 'dark' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)'}`,
+            borderTop: `1px solid ${theme === 'dark' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(15, 23, 42, 0.10)'}`,
             fontSize: '11px',
           }}
         >
@@ -977,7 +1108,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               >
                 <span 
                   style={{ 
-                    color: theme === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
+                    color: mutedTextColor,
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -1004,6 +1135,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                       borderRadius: '50%',
                       background: metricColor,
                       flexShrink: 0,
+                      boxShadow: `0 0 0 2px ${theme === 'dark' ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.75)'}`,
                     }}
                     title={value >= 0.7 ? 'Good' : value >= 0.4 ? 'Medium' : 'Low'}
                   />
@@ -1044,12 +1176,13 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               }
             }}
             disabled={data.isLoadingRelated || data.isScopeScouting}
+            className="hzn-plus"
             style={{
               width: `${PLUS_BUTTON_SIZE_PX}px`,
               height: `${PLUS_BUTTON_SIZE_PX}px`,
               borderRadius: '50%',
               border: `2px solid ${accentColor}`,
-              background: bgColor,
+              background: surfaceBg,
               color: accentColor,
               display: 'flex',
               alignItems: 'center',
@@ -1059,9 +1192,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               fontWeight: 'bold',
               lineHeight: 1,
               padding: 0,
-              boxShadow: theme === 'dark' 
-                ? `0 2px 8px rgba(0, 0, 0, 0.4)`
-                : `0 2px 8px rgba(0, 0, 0, 0.15)`,
+              boxShadow: theme === 'dark' ? '0 8px 22px rgba(0,0,0,0.35)' : '0 8px 22px rgba(0,0,0,0.14)',
               opacity: (data.isLoadingRelated || data.isScopeScouting) ? 0.6 : 1,
               transition: 'all 0.2s ease',
             }}

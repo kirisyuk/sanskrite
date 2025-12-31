@@ -15,7 +15,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { ThemeContext } from './ThemeProvider';
-import { HORIZON_NODE_TYPES } from './HorizonGraphNodeTypes';
+import { HORIZON_NODE_TYPES, setHorizonNodeVisualQuality, type HorizonNodeVisualQuality } from './HorizonGraphNodeTypes';
 import { api } from '../lib/api';
 import {
   layoutExpansionWithGroups,
@@ -248,6 +248,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
   const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear'>('freeform');
   const [showLayoutDropdown, setShowLayoutDropdown] = React.useState(false);
+
+  // Visual settings (toolbar modal)
+  type VisualPreset = 'max' | 'balanced' | 'minimal' | 'custom';
+  const [visualSettingsOpen, setVisualSettingsOpen] = React.useState(false);
+  const [visualPreset, setVisualPreset] = React.useState<VisualPreset>('balanced');
+  const [nodeVisualQuality, setNodeVisualQuality] = React.useState<HorizonNodeVisualQuality>(() => {
+    try {
+      const raw = localStorage.getItem('horizon.nodeVisualQuality');
+      return raw === 'max' || raw === 'minimal' ? raw : 'balanced';
+    } catch {
+      return 'balanced';
+    }
+  });
+  React.useEffect(() => {
+    setHorizonNodeVisualQuality(nodeVisualQuality);
+    try {
+      localStorage.setItem('horizon.nodeVisualQuality', nodeVisualQuality);
+    } catch {
+      // ignore
+    }
+  }, [nodeVisualQuality]);
 
   // Add-node UI (toolbar)
   type HorizonSearchEntity = {
@@ -3892,6 +3913,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const Icons = {
     Refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" /></svg>,
     Search: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>,
+    Sliders: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>,
     Plus: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>,
     X: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="M6 6l12 12" /></svg>,
     Magic: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M9 3v4"/><path d="M3 7h4"/><path d="M3 3h4"/></svg>,
@@ -4039,9 +4061,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       
       <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
       
-      <IconButton onClick={() => setForcePerfMode((v) => (v === null ? !isLargeGraph : !v))} active={perfMode} title={`Performance Mode: ${perfMode ? 'On' : 'Off'}`} icon={Icons.Zap} />
-      <IconButton onClick={() => setShowMiniMap((v) => !v)} active={showMiniMap} title={`MiniMap: ${showMiniMap ? 'On' : 'Off'}`} icon={Icons.Map} />
-      <IconButton onClick={() => setShowBackgroundGrid((v) => !v)} active={showBackgroundGrid} title={`Background Grid: ${showBackgroundGrid ? 'On' : 'Off'}`} icon={Icons.Grid} />
+      <IconButton onClick={() => setVisualSettingsOpen(true)} title="Visual settings" icon={Icons.Sliders} />
       
         {error && (
         <div style={{ fontSize: '11px', color: '#EF4444', marginLeft: '8px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={error}>
@@ -4127,6 +4147,34 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     </div>
   );
 
+  const applyVisualPreset = React.useCallback((preset: VisualPreset) => {
+    setVisualPreset(preset);
+    if (preset === 'max') {
+      setForcePerfMode(false);
+      setShowMiniMap(true);
+      setShowBackgroundGrid(true);
+      setHoverHighlightMode('ownership');
+      setNodeVisualQuality('max');
+      return;
+    }
+    if (preset === 'minimal') {
+      setForcePerfMode(true);
+      setShowMiniMap(false);
+      setShowBackgroundGrid(false);
+      setHoverHighlightMode('off');
+      setNodeVisualQuality('minimal');
+      return;
+    }
+    // balanced
+    setForcePerfMode(null);
+    setShowMiniMap(false);
+    setShowBackgroundGrid(false);
+    setHoverHighlightMode('ownership');
+    setNodeVisualQuality('balanced');
+  }, []);
+
+  const markCustom = React.useCallback(() => setVisualPreset('custom'), []);
+
   const handleNodeMouseEnter = React.useCallback(
     (_: any, node: Node<HorizonNodeData>) => {
       if (perfMode) return;
@@ -4176,6 +4224,33 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     scheduleHoverCommit();
   }, [perfMode, scheduleHoverCommit]);
 
+  // 2026 UX: double-click node toggles expand/collapse (shortcut).
+  // Important: stop propagation so ReactFlow's zoom-on-double-click (pane) doesn't hijack it.
+  const handleNodeDoubleClick = React.useCallback((event: any, node: Node<HorizonNodeData>) => {
+    try {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+    } catch {
+      // ignore
+    }
+    if (!node?.id) return;
+    const d: any = node?.data;
+    if (d?.isGroup) return;
+    if (d?.isLoadingRelated || d?.isScopeScouting) return;
+
+    const fid = String(d?.fragmentId || node.id || '').trim();
+    if (!fid) return;
+
+    // Toggle collapse if already expanded; otherwise expand.
+    if (d?.expanded && d?.onCollapse) {
+      d.onCollapse(fid);
+      return;
+    }
+    if (d?.onLoadRelated) {
+      d.onLoadRelated(fid);
+    }
+  }, []);
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: '600px' }}>
       {/* Toolbar via Portal if container provided, otherwise inline fallback */}
@@ -4195,6 +4270,226 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         </div>
       )}
 
+      {/* Visual settings modal */}
+      {visualSettingsOpen && ReactDOM.createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setVisualSettingsOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9500,
+            background: 'rgba(0,0,0,0.35)',
+            backdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 520,
+              maxWidth: 'min(520px, calc(100vw - 32px))',
+              borderRadius: 16,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-elevated)',
+              boxShadow: '0 18px 60px rgba(0,0,0,0.35)',
+              padding: 14,
+              color: 'var(--text-heading)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 800 }}>Visual settings</div>
+              <button
+                type="button"
+                onClick={() => setVisualSettingsOpen(false)}
+                className="sidebar-icon-btn"
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  cursor: 'pointer',
+                }}
+                title="Close"
+              >
+                {Icons.X}
+              </button>
+            </div>
+
+            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', lineHeight: 1.4, marginBottom: 10 }}>
+              Presets control the biggest performance levers. You can fine‑tune below.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              {([
+                { key: 'max', label: 'Max', hint: 'Heaviest' },
+                { key: 'balanced', label: 'Balanced', hint: 'Recommended' },
+                { key: 'minimal', label: 'Minimal', hint: 'Fastest' },
+              ] as const).map((p) => {
+                const active = visualPreset === p.key;
+                return (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => applyVisualPreset(p.key)}
+                    style={{
+                      flex: 1,
+                      padding: '10px 10px',
+                      borderRadius: 14,
+                      border: '1px solid var(--border-subtle)',
+                      background: active ? 'var(--white-10)' : 'transparent',
+                      color: 'var(--text-heading)',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 800 }}>{p.label}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>{p.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* Perf mode */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>Performance mode</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    Biggest impact: reduces per-hover edge work and disables expensive highlights on large graphs.
+                  </div>
+                </div>
+                <select
+                  value={forcePerfMode === null ? 'auto' : forcePerfMode ? 'on' : 'off'}
+                  onChange={(e) => {
+                    markCustom();
+                    const v = e.target.value;
+                    setForcePerfMode(v === 'auto' ? null : v === 'on');
+                  }}
+                  style={{
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-base)',
+                    color: 'var(--text-heading)',
+                    borderRadius: 10,
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+
+              {/* Node visuals */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>Node visuals</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    Medium impact: shadows/overlays and extra node chrome.
+                  </div>
+                </div>
+                <select
+                  value={nodeVisualQuality}
+                  onChange={(e) => {
+                    markCustom();
+                    const v = e.target.value as HorizonNodeVisualQuality;
+                    setNodeVisualQuality(v === 'max' || v === 'minimal' ? v : 'balanced');
+                  }}
+                  style={{
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-base)',
+                    color: 'var(--text-heading)',
+                    borderRadius: 10,
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <option value="max">Max</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="minimal">Minimal</option>
+                </select>
+              </div>
+
+              {/* MiniMap */}
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>MiniMap</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Low–medium impact depending on graph size.</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={showMiniMap}
+                  onChange={(e) => {
+                    markCustom();
+                    setShowMiniMap(e.target.checked);
+                  }}
+                />
+              </label>
+
+              {/* Background grid */}
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>Background grid</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Low impact.</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={showBackgroundGrid}
+                  onChange={(e) => {
+                    markCustom();
+                    setShowBackgroundGrid(e.target.checked);
+                  }}
+                />
+              </label>
+
+              {/* Hover highlight */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>Hover highlight</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    High impact on dense graphs (computes relation clusters + restyles many edges).
+                  </div>
+                </div>
+                <select
+                  value={hoverHighlightMode}
+                  onChange={(e) => {
+                    markCustom();
+                    setHoverHighlightMode(e.target.value as any);
+                  }}
+                  disabled={perfMode}
+                  style={{
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-base)',
+                    color: 'var(--text-heading)',
+                    borderRadius: 10,
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    cursor: perfMode ? 'not-allowed' : 'pointer',
+                    opacity: perfMode ? 0.5 : 1,
+                  }}
+                >
+                  <option value="off">Off</option>
+                  <option value="ownership">Ownership</option>
+                  <option value="production">Production</option>
+                  <option value="supplies">Supplies</option>
+                  <option value="competition">Competition</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
       {/* Graph */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', width: '100%' }}>
         {HoverHighlightControl}
@@ -4204,6 +4499,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={handleNodeClick}
+            onNodeDoubleClick={handleNodeDoubleClick}
             onEdgeClick={handleEdgeClick}
             onPaneClick={handlePaneClick}
             onNodeDragStop={handleNodeDragStop}
