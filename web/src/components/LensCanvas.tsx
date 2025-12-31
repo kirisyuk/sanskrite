@@ -10,6 +10,7 @@ import { api } from '../lib/api';
 import { LensCanvasDetails } from './LensCanvasDetails';
 import { LensCanvasCockpit } from './LensCanvasCockpit';
 import { LensCanvasProgress } from './LensCanvasProgress';
+import { HorizonRealtimeCallouts } from './HorizonRealtimeCallouts';
 import { HorizonDrawers, HorizonPanelType } from './HorizonDrawers';
 import { HorizonPanelButtons } from './HorizonPanelButtons';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
@@ -149,6 +150,54 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     [lensId, lens]
   );
 
+  const handleScopeScout = React.useCallback(
+    async (input: { fragmentId: string; canonicalPath?: string; maxRecursionDepth?: number }) => {
+      if (!lensId) return;
+
+      const correlationId = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
+        ? (globalThis.crypto as any).randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const sessionId = (window as any).__horizonSessionId || correlationId;
+      (window as any).__horizonSessionId = sessionId;
+
+      const res = await api.scopeScoutHorizonLensNode(
+        lensId,
+        {
+          fragmentId: input.fragmentId,
+          canonicalPath: input.canonicalPath,
+          maxRecursionDepth: typeof input.maxRecursionDepth === 'number' ? input.maxRecursionDepth : 1,
+        },
+        { correlationId, sessionId }
+      );
+
+      // Keep local lens snapshot in sync so Details/Scope reflects the change immediately.
+      if (res?.lens) {
+        setLens(res.lens);
+      } else {
+        // Fallback: refetch lens best-effort
+        try {
+          const next = await api.getHorizonLens(lensId);
+          setLens(next);
+        } catch {
+          // ignore
+        }
+      }
+
+      // Refresh related UI panels best-effort.
+      try {
+        const [assemblyData, jobsData] = await Promise.all([
+          api.getHorizonLensAssemblyStatus(lensId).catch(() => null),
+          api.listHorizonScoutingJobs(lensId, { limit: 50 }).catch(() => ({ jobs: [], total: 0 })),
+        ]);
+        setAssemblyStatus(assemblyData);
+        setScoutingJobs(jobsData.jobs || []);
+      } catch {
+        // ignore
+      }
+    },
+    [lensId]
+  );
+
   if (!isOpen) return null;
 
   // Determine title: use lens name if available, otherwise use project name or default
@@ -163,7 +212,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
       title={getTitle()}
       onClose={onClose}
     >
-      <div className="flex flex-col h-full">
+      <div className="flex flex-col h-full" style={{ position: 'relative' }}>
+        <HorizonRealtimeCallouts enabled={viewMode !== 'progress'} lensId={lensId} projectId={projectId} />
         {/* View mode switcher and Toolbar */}
         <div className="mb-4 flex-shrink-0 flex items-center justify-between gap-4">
           <div 
@@ -297,6 +347,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                     lensId={lensId} 
                     projectId={lens.projectId}
                     toolbarContainer={toolbarContainer}
+                    onScopeScout={handleScopeScout}
                     onNodeSelect={(nodeId, nodeData) => {
                       if (import.meta.env.DEV) console.log('[LensCanvas] onNodeSelect', { nodeId, hasNodeData: !!nodeData });
                       setSelectedNodeId(nodeId);

@@ -101,6 +101,18 @@ func NormalizeRelationType(in string) string {
 	switch s {
 	case "SUBSIDIARY_OF", "OWNED_BY":
 		return "SUBSIDIARY_OF"
+	case "CONTROLLED_BY":
+		return "CONTROLS"
+	case "MANAGED_BY":
+		return "MANAGES"
+	case "EMPLOYS", "WORKS_FOR":
+		return "EMPLOYED_BY"
+	case "FOUNDER_OF":
+		return "FOUNDED"
+	case "BOARD_MEMBER", "BOARD_MEMBER_AT":
+		return "BOARD_MEMBER_OF"
+	case "INVESTED_IN":
+		return "INVESTS_IN"
 	case "DEPENDS":
 		return "DEPENDS_ON"
 	}
@@ -112,7 +124,8 @@ func NormalizeRelationType(in string) string {
 	}
 	// Fallback allow-list for local runs when runtime taxonomy isn't installed.
 	switch s {
-	case "SUPPLIES_TO", "LOCATED_IN", "OWNS", "PRODUCES", "OPERATES_IN", "REGULATES", "COMPETES_WITH", "INFLUENCES", "DEPENDS_ON", "SUBSIDIARY_OF", "TRANSFORMS_INTO":
+	case "SUPPLIES_TO", "LOCATED_IN", "OWNS", "SUBSIDIARY_OF", "PRODUCES", "CONSUMES", "OPERATES_IN", "REGULATES", "COMPETES_WITH", "INFLUENCES", "DEPENDS_ON", "TRANSFORMS_INTO",
+		"MANAGES", "CONTROLS", "EMPLOYED_BY", "BOARD_MEMBER_OF", "FOUNDED", "INVESTS_IN", "PARTNERS_WITH":
 		return s
 	default:
 		return "INFLUENCES"

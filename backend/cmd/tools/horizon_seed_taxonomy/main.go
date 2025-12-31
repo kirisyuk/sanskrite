@@ -153,6 +153,7 @@ func main() {
 			"LOCATED_IN",
 			"OWNS",
 			"PRODUCES",
+			"CONSUMES",
 			"OPERATES_IN",
 			"REGULATES",
 			"COMPETES_WITH",
@@ -160,6 +161,14 @@ func main() {
 			"DEPENDS_ON",
 			"SUBSIDIARY_OF",
 			"TRANSFORMS_INTO",
+			// Governance / org-person
+			"MANAGES",
+			"CONTROLS",
+			"EMPLOYED_BY",
+			"BOARD_MEMBER_OF",
+			"FOUNDED",
+			"INVESTS_IN",
+			"PARTNERS_WITH",
 		},
 		AllowedMetricUnits: []string{"usd", "eur", "rub", "units", "units_per_day", "days", "hours", "ratio", "index_point", "code"},
 

@@ -504,6 +504,73 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		},
 		Description: "Owner owns asset/subsidiary",
 	},
+	horizonmodels.DependencyTypeControls: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+		},
+		Description: "Controller controls entity (non-equity or indirect control)",
+	},
+	horizonmodels.DependencyTypeManages: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeProgram,
+		},
+		Description: "Manager manages entity (formal authority, not ownership)",
+	},
+	horizonmodels.DependencyTypeEmployedBy: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		Description:      "Person is employed by organization",
+	},
+	horizonmodels.DependencyTypeBoardMemberOf: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		Description:      "Person is board member of organization",
+	},
+	horizonmodels.DependencyTypeFounded: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypePerson,
+			horizonmodels.FragmentTypeOrganization,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeProgram,
+		},
+		Description: "Founder founded organization/program",
+	},
+	horizonmodels.DependencyTypeInvestsIn: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeProgram,
+			horizonmodels.FragmentTypeProduct,
+		},
+		Description: "Investor invests in investee",
+	},
+	horizonmodels.DependencyTypePartnersWith: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+		},
+		Description: "Partners collaborate (symmetric)",
+	},
 	horizonmodels.DependencyTypeProduces: {
 		ValidSourceTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeOrganization,

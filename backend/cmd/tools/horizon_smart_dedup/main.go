@@ -38,6 +38,7 @@ var (
 	verbose         = flag.Bool("verbose", false, "Verbose logging")
 	typeFilter      = flag.String("type", "", "Filter by fragment type (GEO_REGION, ORGANIZATION, FACILITY, etc.)")
 	skipVertexSync  = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
+	enableProductAlias = flag.Bool("enable-product-alias", false, "Enable PRODUCT alias clustering (model/SKU heuristic). Default OFF: better duplicates than false-positive merges.")
 )
 
 // DuplicateCluster represents a group of fragments that are duplicates of each other
@@ -136,6 +137,7 @@ func main() {
 	normalizedLegalIndex := make(map[string][]*models.HorizonFragment) // type:normalized_legal -> fragments
 	geoCityIndex := make(map[string][]*models.HorizonFragment)         // city_name -> geo fragments
 	productNameIndex := make(map[string][]*models.HorizonFragment)     // product_name -> product fragments
+	productAliasIndex := make(map[string][]*models.HorizonFragment)    // product_alias_key -> product fragments (label/short/legal + legacy slug aliases)
 
 	for _, f := range fragments {
 		// Index by Wikidata ID
@@ -178,11 +180,45 @@ func main() {
 			}
 		}
 
-		// Index PRODUCT by last part of path (e.g., /product/raw/mineral/extraction/lithium → "lithium")
+		// Index PRODUCT by canonical slug (SAFE):
+		// - Flat canonical: /product/{slug}
+		// - Taxonomy canonical: /product/{category}/{type}/{stage}/{slug}
+		//
+		// IMPORTANT: Do NOT include legacy org-nested paths (/product/{org}/{slug})
+		// and do NOT use merged_paths here. Both cause massive false-positive merges like:
+		//   "crm": /product/zoho/crm vs unrelated products that happened to have merged_paths containing "/product/.../crm".
 		if f.Type == models.FragmentTypeProduct {
-			productName := extractProductNameFromPath(f.CanonicalPath)
-			if productName != "" {
-				productNameIndex[productName] = append(productNameIndex[productName], f)
+			if slug := extractCanonicalProductSlugForDedup(f.CanonicalPath); slug != "" {
+				productNameIndex[slug] = append(productNameIndex[slug], f)
+			}
+
+			// Additional PRODUCT alias index:
+			// - labels.en / identifiers.shortName / identifiers.legalName
+			// - plus unslugified last segment of canonicalPath
+			// This catches cases like:
+			//   label: "M1 Abrams" vs other.shortName: "M1 Abrams"
+			// even if canonicalPath slugs differ (/product/m1-abrams vs /product/general-dynamics/abrams-tank).
+			aliasSet := map[string]struct{}{}
+			addAlias := func(s string) {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					return
+				}
+				k := normalizeProductAliasKey(s)
+				if k == "" {
+					return
+				}
+				aliasSet[k] = struct{}{}
+			}
+			addAlias(f.Labels["en"])
+			addAlias(f.Identifiers["shortName"])
+			addAlias(f.Identifiers["legalName"])
+			// Also index last slug as a name-ish alias (unslugify).
+			if pn := extractProductNameFromPath(f.CanonicalPath); pn != "" {
+				addAlias(strings.ReplaceAll(pn, "-", " "))
+			}
+			for k := range aliasSet {
+				productAliasIndex[k] = append(productAliasIndex[k], f)
 			}
 		}
 	}
@@ -203,6 +239,7 @@ func main() {
 	log.Printf("✓ GEO city index: %d unique cities", len(geoCityIndex))
 	log.Printf("✓ GEO by path index: %d unique paths", len(geoByPath))
 	log.Printf("✓ PRODUCT name index: %d unique names", len(productNameIndex))
+	log.Printf("✓ PRODUCT alias index: %d unique aliases", len(productAliasIndex))
 
 	// Build fragment type cache for edge direction fixing (Step 6)
 	fragmentTypes := make(map[string]models.FragmentType)
@@ -532,6 +569,45 @@ func main() {
 	}
 	log.Printf("  Found %d productName-based clusters", productNameClusters)
 
+	// Priority 8: PRODUCT alias matches (label/short/legal + slug aliases) for "model-like" products.
+	// DEFAULT OFF: better duplicates than false-positive merges.
+	// Enable explicitly with --enable-product-alias.
+	productAliasClusters := 0
+	if *enableProductAlias {
+		// SAFETY: Only apply to aliases that contain digits and at least two tokens (e.g., "m1 abrams", "f 16").
+		// This avoids false positives for generic names like "abrams" or "tank".
+		for aliasKey, frags := range productAliasIndex {
+			if len(frags) <= 1 {
+				continue
+			}
+			if !isSpecificProductAliasKey(aliasKey) {
+				continue
+			}
+			var unprocessed []*models.HorizonFragment
+			for _, f := range frags {
+				if !processedFragmentIDs[f.ID] {
+					unprocessed = append(unprocessed, f)
+				}
+			}
+			if len(unprocessed) > 1 {
+				cluster := &DuplicateCluster{
+					MatchType:  "productAlias",
+					MatchValue: aliasKey,
+					Fragments:  unprocessed,
+				}
+				cluster.CanonicalID = selectCanonical(unprocessed)
+				clusters = append(clusters, cluster)
+				for _, f := range unprocessed {
+					processedFragmentIDs[f.ID] = true
+				}
+				productAliasClusters++
+			}
+		}
+		log.Printf("  Found %d productAlias-based clusters", productAliasClusters)
+	} else {
+		log.Printf("  Found %d productAlias-based clusters (disabled; use --enable-product-alias)", productAliasClusters)
+	}
+
 	stats.ClustersFound = len(clusters)
 	log.Printf("✓ Total duplicate clusters: %d", len(clusters))
 
@@ -642,9 +718,33 @@ func main() {
 		}
 	}
 
-	// Step 5: Deduplicate edges globally
-	log.Printf("\n=== Step 5: Deduplicating edges ===")
+	// Step 5: Fix edge directions (reverse edges that point in wrong direction)
+	// IMPORTANT: This can create duplicates; we run symmetric normalization + dedup afterwards.
+	log.Printf("\n=== Step 5: Fixing edge directions ===")
 	if *apply {
+		fixed, err := fixEdgeDirections(ctx, db, edgesRepo, fragmentTypes, *tenantID)
+		if err != nil {
+			log.Printf("ERROR: edge direction fix failed: %v", err)
+		} else {
+			stats.EdgesDirectionFixed = fixed
+			log.Printf("✓ Fixed/normalized direction of %d edges", fixed)
+		}
+	} else {
+		log.Printf("[DRY-RUN] Would fix edge directions")
+	}
+
+	// Step 6: Normalize symmetric edges + deduplicate edges globally.
+	// - Symmetric types can exist as A->B and B->A; normalize to canonical ordering to prevent future dupes.
+	// - Direction fixing can create duplicates; dedup must run AFTER.
+	log.Printf("\n=== Step 6: Normalizing & deduplicating edges ===")
+	if *apply {
+		normed, err := normalizeSymmetricEdges(ctx, db, edgesRepo, *tenantID)
+		if err != nil {
+			log.Printf("ERROR: symmetric edge normalization failed: %v", err)
+		} else if *verbose && normed > 0 {
+			log.Printf("✓ Normalized %d symmetric edges", normed)
+		}
+
 		deduped, err := deduplicateEdges(ctx, db, edgesRepo, *tenantID)
 		if err != nil {
 			log.Printf("ERROR: edge deduplication failed: %v", err)
@@ -653,21 +753,7 @@ func main() {
 			log.Printf("✓ Deduplicated %d edges", deduped)
 		}
 	} else {
-		log.Printf("[DRY-RUN] Would deduplicate edges after merge")
-	}
-
-	// Step 6: Fix edge directions (reverse edges that point in wrong direction)
-	log.Printf("\n=== Step 6: Fixing edge directions ===")
-	if *apply {
-		fixed, err := fixEdgeDirections(ctx, db, edgesRepo, fragmentTypes, *tenantID)
-		if err != nil {
-			log.Printf("ERROR: edge direction fix failed: %v", err)
-		} else {
-			stats.EdgesDirectionFixed = fixed
-			log.Printf("✓ Fixed direction of %d edges", fixed)
-		}
-	} else {
-		log.Printf("[DRY-RUN] Would fix edge directions")
+		log.Printf("[DRY-RUN] Would normalize symmetric edges and deduplicate edges after merge")
 	}
 
 	// Print summary
@@ -820,17 +906,25 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 		}
 
 		// For PRODUCT: prefer longer/more specific paths (taxonomy paths)
-		// e.g., /product/raw/mineral/extraction/lithium > /product/lithium
+		// Prefer taxonomy paths, and de-prioritize legacy org-nested paths (/product/{org}/{slug})
+		// which are not part of current product taxonomy.
 		if strings.HasPrefix(f.CanonicalPath, "/product/") {
 			parts := strings.Split(strings.Trim(f.CanonicalPath, "/"), "/")
-			if len(parts) >= 5 {
-				score += 100 // Full taxonomy path like /product/raw/mineral/extraction/lithium
-			} else if len(parts) >= 4 {
-				score += 80 // 4-part path
-			} else if len(parts) >= 3 {
-				score += 50 // 3-part path
-			} else {
-				score += 10 // Simple /product/name
+			switch len(parts) {
+			case 5:
+				score += 100 // Canonical taxonomy: /product/{category}/{type}/{stage}/{slug}
+			case 4:
+				score += 80 // Older/partial taxonomy (still more structured than flat)
+			case 2:
+				score += 60 // Flat fallback: /product/{slug}
+			case 3:
+				score += 30 // Legacy org-nested: /product/{org}/{slug} (deprioritize)
+			default:
+				if len(parts) > 5 {
+					score += 70 // Uncommon deeper paths; treat as structured but not canonical
+				} else {
+					score += 10
+				}
 			}
 		}
 
@@ -1112,8 +1206,11 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 			edge.ID = d.Ref.ID
 		}
 
+		// Normalize symmetric edges so A->B and B->A are treated as the same key.
+		ns, nt, _, _ := scout.NormalizeSymmetricEdge(newID, edge.TargetFragmentID, edge.Type)
+
 		// Check if this would become a self-loop
-		if edge.TargetFragmentID == newID {
+		if scout.IsSelfLoop(ns, nt) {
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
 			}
@@ -1121,7 +1218,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		}
 
 		// Check if edge already exists
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, newID, edge.TargetFragmentID, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, ns, nt, edge.Type)
 		if err == nil && existing != nil {
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
@@ -1130,7 +1227,8 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		}
 
 		// Reassign
-		edge.SourceFragmentID = newID
+		edge.SourceFragmentID = ns
+		edge.TargetFragmentID = nt
 		if err := edgesRepo.Update(ctx, &edge); err == nil {
 			reassigned++
 		}
@@ -1151,8 +1249,11 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 			edge.ID = d.Ref.ID
 		}
 
+		// Normalize symmetric edges so A->B and B->A are treated as the same key.
+		ns, nt, _, _ := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, newID, edge.Type)
+
 		// Check if this would become a self-loop
-		if edge.SourceFragmentID == newID {
+		if scout.IsSelfLoop(ns, nt) {
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
 			}
@@ -1160,7 +1261,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		}
 
 		// Check if edge already exists
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, edge.SourceFragmentID, newID, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, ns, nt, edge.Type)
 		if err == nil && existing != nil {
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
@@ -1169,7 +1270,8 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		}
 
 		// Reassign
-		edge.TargetFragmentID = newID
+		edge.SourceFragmentID = ns
+		edge.TargetFragmentID = nt
 		if err := edgesRepo.Update(ctx, &edge); err == nil {
 			reassigned++
 		}
@@ -1178,52 +1280,145 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 	return reassigned, deleted, nil
 }
 
-// deduplicateEdges removes duplicate edges (same source+target+type)
+// deduplicateEdges removes duplicate edges.
+// IMPORTANT: uses symmetric-aware EdgeKey so symmetric relations are deduplicated
+// even if stored as A->B and B->A.
 func deduplicateEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, tenantID string) (int, error) {
-	q := db.Collection("horizon_dependency_edges").Where("tenantId", "==", tenantID)
-	iter := q.Documents(ctx)
-	defer iter.Stop()
+	// Streamed dedup (no need to store all edges).
+	// Keep the earliest-created edge for each EdgeKey; delete the rest.
+	const pageSize = 500
+	bestByKey := make(map[string]*models.DependencyEdge) // key -> best edge
+	toDelete := make([]string, 0, 1024)
 
-	// Group edges by (source, target, type)
-	groups := make(map[string][]*models.DependencyEdge)
+	var lastDoc *firestore.DocumentSnapshot
 	for {
-		doc, err := iter.Next()
-		if err == iterator.Done {
-			break
+		q := db.Collection("horizon_dependency_edges").Where("tenantId", "==", tenantID).Limit(pageSize)
+		if lastDoc != nil {
+			q = q.StartAfter(lastDoc)
 		}
+		docs, err := getDocsWithRetry(ctx, q, 3)
 		if err != nil {
 			return 0, err
 		}
-
-		var edge models.DependencyEdge
-		if err := doc.DataTo(&edge); err != nil {
-			continue
-		}
-		if strings.TrimSpace(edge.ID) == "" {
-			edge.ID = doc.Ref.ID
+		if len(docs) == 0 {
+			break
 		}
 
-		key := fmt.Sprintf("%s|%s|%s", edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
-		groups[key] = append(groups[key], &edge)
-	}
+		for _, doc := range docs {
+			var edge models.DependencyEdge
+			if err := doc.DataTo(&edge); err != nil {
+				continue
+			}
+			if strings.TrimSpace(edge.ID) == "" {
+				edge.ID = doc.Ref.ID
+			}
+			if strings.TrimSpace(edge.ID) == "" {
+				continue
+			}
 
-	// Delete duplicates (keep first by CreatedAt)
-	deleted := 0
-	for _, group := range groups {
-		if len(group) <= 1 {
-			continue
-		}
-		sort.Slice(group, func(i, j int) bool {
-			return group[i].Metadata.CreatedAt.Before(group[j].Metadata.CreatedAt)
-		})
-		for i := 1; i < len(group); i++ {
-			if err := edgesRepo.Delete(ctx, group[i].ID); err == nil {
-				deleted++
+			key := scout.EdgeKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+			if key == "" {
+				continue
+			}
+
+			best := bestByKey[key]
+			if best == nil {
+				// First seen
+				cpy := edge
+				bestByKey[key] = &cpy
+				continue
+			}
+
+			// Keep earliest by CreatedAt (fallback to LastUpdatedAt when CreatedAt is zero).
+			bestAt := best.Metadata.CreatedAt
+			if bestAt.IsZero() {
+				bestAt = best.Metadata.LastUpdatedAt
+			}
+			curAt := edge.Metadata.CreatedAt
+			if curAt.IsZero() {
+				curAt = edge.Metadata.LastUpdatedAt
+			}
+
+			if !curAt.IsZero() && (bestAt.IsZero() || curAt.Before(bestAt)) {
+				// Current is better (older) → delete previous best, keep current
+				toDelete = append(toDelete, best.ID)
+				cpy := edge
+				bestByKey[key] = &cpy
+			} else {
+				// Current is duplicate → delete current
+				toDelete = append(toDelete, edge.ID)
 			}
 		}
+
+		lastDoc = docs[len(docs)-1]
+		if len(docs) < pageSize {
+			break
+		}
 	}
 
+	deleted := 0
+	for _, id := range toDelete {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		if err := edgesRepo.Delete(ctx, id); err == nil {
+			deleted++
+		}
+	}
 	return deleted, nil
+}
+
+// normalizeSymmetricEdges rewrites edges for symmetric types into canonical orientation
+// (lexicographically smaller fragment ID as source) to prevent future duplication.
+func normalizeSymmetricEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, tenantID string) (int, error) {
+	const pageSize = 500
+	updated := 0
+	totalChecked := 0
+	var lastDoc *firestore.DocumentSnapshot
+
+	for {
+		q := db.Collection("horizon_dependency_edges").Where("tenantId", "==", tenantID).Limit(pageSize)
+		if lastDoc != nil {
+			q = q.StartAfter(lastDoc)
+		}
+		docs, err := getDocsWithRetry(ctx, q, 3)
+		if err != nil {
+			return updated, err
+		}
+		if len(docs) == 0 {
+			break
+		}
+
+		for _, doc := range docs {
+			var edge models.DependencyEdge
+			if err := doc.DataTo(&edge); err != nil {
+				continue
+			}
+			if strings.TrimSpace(edge.ID) == "" {
+				edge.ID = doc.Ref.ID
+			}
+			ns, nt, _, swapped := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+			if !swapped {
+				continue
+			}
+			edge.SourceFragmentID = ns
+			edge.TargetFragmentID = nt
+			if err := edgesRepo.Update(ctx, &edge); err == nil {
+				updated++
+			}
+		}
+
+		totalChecked += len(docs)
+		if totalChecked%5000 == 0 && *verbose {
+			log.Printf("  Symmetric normalization progress: checked=%d updated=%d", totalChecked, updated)
+		}
+
+		lastDoc = docs[len(docs)-1]
+		if len(docs) < pageSize {
+			break
+		}
+	}
+	return updated, nil
 }
 
 func getEnvDefault(key, defaultValue string) string {
@@ -1337,114 +1532,121 @@ func extractProductNameFromPath(path string) string {
 	return lastPart
 }
 
-// EdgeDirectionRule defines valid source and target types for an edge type
-type EdgeDirectionRule struct {
-	ValidSourceTypes []models.FragmentType
-	ValidTargetTypes []models.FragmentType
+// extractCanonicalProductSlugForDedup returns the product slug ONLY for canonical product namespaces:
+// - /product/{slug}
+// - /product/{category}/{type}/{stage}/{slug}
+//
+// Returns "" for legacy org-nested paths like /product/{org}/{slug} to avoid false-positive merges.
+func extractCanonicalProductSlugForDedup(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/product/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "product" {
+		return ""
+	}
+	if len(parts) == 2 {
+		return strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	if len(parts) == 5 {
+		return strings.ToLower(strings.TrimSpace(parts[4]))
+	}
+	return ""
 }
 
-// edgeDirectionRules defines which fragment types are allowed as source/target for each edge type
-var edgeDirectionRules = map[models.DependencyType]EdgeDirectionRule{
-	// REGULATES: Only Organization (regulator) can regulate others
-	// Facility cannot be a source
-	models.DependencyTypeRegulates: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeGeoRegion,
-		},
-	},
-	// OWNS: Organization or Person owns something
-	// Facility and Product cannot own
-	models.DependencyTypeOwns: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization, models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-		},
-	},
-	// PRODUCES: Organization or Facility produces Product
-	// Product, GeoRegion, Person cannot produce
-	models.DependencyTypeProduces: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization, models.FragmentTypeFacility},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
-	},
-	// LOCATED_IN: Entity is located in GeoRegion
-	// GeoRegion can be located in parent GeoRegion
-	models.DependencyTypeLocatedIn: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeFacility,
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeGeoRegion,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion},
-	},
-	// OPERATES_IN: Organization operates in GeoRegion or Facility
-	models.DependencyTypeOperatesIn: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion, models.FragmentTypeFacility},
-	},
-	// SUPPLIES_TO: Organization/Facility supplies to Organization/Facility
-	// Product and GeoRegion cannot supply
-	models.DependencyTypeSuppliesTo: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization, models.FragmentTypeFacility},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization, models.FragmentTypeFacility},
-	},
+// normalizeProductAliasKey normalizes product name aliases for dedupe matching.
+// - lowercases
+// - removes punctuation (keeps letters/digits/spaces)
+// - collapses whitespace
+//
+// Example:
+//   "F-16 Fighting Falcon" -> "f 16 fighting falcon"
+//   "M1 Abrams" -> "m1 abrams"
+func normalizeProductAliasKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(name))
+	prevSpace := false
+	var prevClass string // "letter" | "digit" | "other" | ""
+	for _, r := range name {
+		isLetter := (r >= 'a' && r <= 'z') || (r >= 'а' && r <= 'я') // latin + basic cyrillic
+		isDigit := r >= '0' && r <= '9'
+		if isLetter || isDigit {
+			curClass := "letter"
+			if isDigit {
+				curClass = "digit"
+			}
+			// Split letter<->digit boundaries to unify "F16" and "F-16" into "f 16".
+			if (prevClass == "letter" && curClass == "digit") || (prevClass == "digit" && curClass == "letter") {
+				if !prevSpace {
+					b.WriteByte(' ')
+				}
+				prevSpace = true
+			}
+			b.WriteRune(r)
+			prevSpace = false
+			prevClass = curClass
+			continue
+		}
+		// treat everything else as separator
+		if !prevSpace {
+			b.WriteByte(' ')
+			prevSpace = true
+		}
+		prevClass = "other"
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	return strings.TrimSpace(out)
 }
 
-// shouldReverseEdge checks if an edge has wrong direction and should be reversed
-func shouldReverseEdge(edgeType models.DependencyType, sourceType, targetType models.FragmentType) bool {
-	rule, exists := edgeDirectionRules[edgeType]
-	if !exists {
-		return false // No rule, don't reverse
+func getDocsWithRetry(ctx context.Context, q firestore.Query, attempts int) ([]*firestore.DocumentSnapshot, error) {
+	if attempts < 1 {
+		attempts = 1
 	}
-
-	sourceValid := false
-	for _, t := range rule.ValidSourceTypes {
-		if t == sourceType {
-			sourceValid = true
-			break
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		docs, err := q.Documents(ctx).GetAll()
+		if err == nil {
+			return docs, nil
 		}
+		lastErr = err
+		// Simple backoff; Firestore may return Unavailable/timeout on large scans.
+		time.Sleep(time.Duration(300*(i+1)) * time.Millisecond)
 	}
+	return nil, lastErr
+}
 
-	targetValid := false
-	for _, t := range rule.ValidTargetTypes {
-		if t == targetType {
-			targetValid = true
-			break
-		}
+// isSpecificProductAliasKey is a safety gate for PRODUCT alias deduplication:
+// require at least one digit and at least 2 tokens, and at least one letter.
+func isSpecificProductAliasKey(aliasKey string) bool {
+	aliasKey = normalizeProductAliasKey(aliasKey)
+	if aliasKey == "" {
+		return false
 	}
-
-	// If current direction is wrong, check if reversed would be valid
-	if !sourceValid || !targetValid {
-		// Check if reversed direction is valid
-		reversedSourceValid := false
-		for _, t := range rule.ValidSourceTypes {
-			if t == targetType {
-				reversedSourceValid = true
-				break
-			}
+	if len(aliasKey) < 5 {
+		return false
+	}
+	hasDigit := false
+	hasLetter := false
+	for _, r := range aliasKey {
+		if r >= '0' && r <= '9' {
+			hasDigit = true
 		}
-
-		reversedTargetValid := false
-		for _, t := range rule.ValidTargetTypes {
-			if t == sourceType {
-				reversedTargetValid = true
-				break
-			}
-		}
-
-		// Only reverse if the reversed direction is valid
-		if reversedSourceValid && reversedTargetValid {
-			return true
+		if (r >= 'a' && r <= 'z') || (r >= 'а' && r <= 'я') {
+			hasLetter = true
 		}
 	}
-
-	return false
+	if !hasDigit || !hasLetter {
+		return false
+	}
+	if len(strings.Fields(aliasKey)) < 2 {
+		return false
+	}
+	return true
 }
 
 // fixEdgeDirections reverses edges that point in the wrong direction
@@ -1491,7 +1693,21 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 				continue // Skip if we can't determine types (orphaned edge or deleted fragment)
 			}
 
-			if shouldReverseEdge(edge.Type, sourceType, targetType) {
+			// Canonical representation: SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary).
+			if edge.Type == models.DependencyTypeSubsidiaryOf {
+				oldSource := edge.SourceFragmentID // subsidiary
+				edge.SourceFragmentID = edge.TargetFragmentID // parent
+				edge.TargetFragmentID = oldSource
+				edge.Type = models.DependencyTypeOwns
+				if err := edgesRepo.Update(ctx, &edge); err != nil {
+					log.Printf("  ERROR: failed to normalize SUBSIDIARY_OF edge %s: %v", edge.ID, err)
+					continue
+				}
+				fixed++
+				continue
+			}
+
+			if scout.ShouldReverseEdge(edge.Type, sourceType, targetType) {
 				// Reverse the edge
 				oldSource := edge.SourceFragmentID
 				edge.SourceFragmentID = edge.TargetFragmentID

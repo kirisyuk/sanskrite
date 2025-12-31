@@ -208,12 +208,31 @@ Choose relationType to match this direction:
 - OPERATES_IN: source operates in target (source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY).
 - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
 - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
+  CRITICAL: NEVER output OWNS where targetType=PERSON.
+  If THIS FRAGMENT is owned/controlled by a person or parent org, use SUBSIDIARY_OF with the owner as target (it will be normalized to OWNS).
+  Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
+  Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
+- SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
+- CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
+- MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
+- EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
+- BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
+- FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
+- INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
+- PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
 - COMPETES_WITH / INFLUENCES: as labeled.
 
 EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
 - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
 - OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT
+- CONTROLS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY
+- MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
+- EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
+- BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION
+- FOUNDED: source MUST be PERSON or ORGANIZATION, target MUST be ORGANIZATION/PROGRAM
+- INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
+- PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
 - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
 - LOCATED_IN: target MUST be GEO_REGION
 - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
@@ -226,7 +245,7 @@ DiscoveredRelation Schema:
   "targetLegalName": "string",
   "targetShortName": "string",
   "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON",
-  "relationType": "SUPPLIES_TO" | "LOCATED_IN" | "OWNS" | "PRODUCES" | "OPERATES_IN" | "REGULATES" | "COMPETES_WITH" | "INFLUENCES" | "DEPENDS_ON" | "SUBSIDIARY_OF",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "COMPETES_WITH" | "INFLUENCES",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED"

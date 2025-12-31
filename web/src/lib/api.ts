@@ -1742,6 +1742,46 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  /**
+   * Horizon - Add node to lens scope + run additional scouting (depth=1 by default)
+   * POST /api/horizon/lenses/{lensId}/scope-scout
+   */
+  async scopeScoutHorizonLensNode(
+    lensId: string,
+    input: { fragmentId?: string; canonicalPath?: string; maxRecursionDepth?: number },
+    options?: { correlationId?: string; sessionId?: string }
+  ): Promise<{
+    jobId: string;
+    scopeAdded: boolean;
+    targetCanonicalPath: string;
+    lens?: {
+      id: string;
+      tenantId: string;
+      projectId: string;
+      name: string;
+      scope: string[];
+      viewConfig?: Record<string, any>;
+      alertConfig?: Record<string, any>;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+      scopeFragments?: Record<string, string>;
+      resolvedQueries?: Record<string, string[]>;
+      lastResolved?: string;
+    };
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/scope-scout`, input, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] scopeScoutHorizonLensNode error:`, error);
+      throw error;
+    }
+  }
+
   async getHorizonLensAssemblyStatus(lensId: string): Promise<{
     status: string;
     phase: string;

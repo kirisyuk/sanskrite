@@ -267,12 +267,12 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 
 			if !usedExistingDuplicate {
-				id, err := e.fragmentsRepo.Create(ctx, newFragment)
-				if err != nil {
-					fmt.Printf("Failed to create discovered fragment %s: %v\n", targetPath, err)
-					continue
-				}
-				targetID = id
+			id, err := e.fragmentsRepo.Create(ctx, newFragment)
+			if err != nil {
+				fmt.Printf("Failed to create discovered fragment %s: %v\n", targetPath, err)
+				continue
+			}
+			targetID = id
 				targetFragment = newFragment
 				targetFragment.ID = id
 			}
@@ -346,13 +346,13 @@ func (e *ScoutEngine) processRelationsInternal(
 				} else if currentDepth >= 1 && effectiveCap > 6 {
 					effectiveCap = 6
 				}
-			if effectiveCap == 0 || scheduledCount >= effectiveCap {
-				// skip recursive expansion
-			} else if _, ok := scheduledChildren[targetPath]; ok {
-				// already scheduled from another relation in the same job
-			} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
-				// relation type / confidence not eligible for recursion
-			} else {
+				if effectiveCap == 0 || scheduledCount >= effectiveCap {
+					// skip recursive expansion
+				} else if _, ok := scheduledChildren[targetPath]; ok {
+					// already scheduled from another relation in the same job
+				} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
+					// relation type / confidence not eligible for recursion
+				} else {
 				// Check if we should skip creating scouting job
 				shouldSkipJob := false
 
@@ -718,6 +718,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			// Canonical representation: OWNS from parent -> subsidiary.
 			edgeType = models.DependencyTypeOwns
 			edgeSourceID, edgeTargetID = targetID, sourceFragment.ID
+			directionChanged = true
 		}
 
 		// Policy: self-loop prevention (reject).
@@ -732,6 +733,30 @@ func (e *ScoutEngine) processRelationsInternal(
 			directionChanged = true
 		}
 
+		// Resolve *actual* endpoint types for validation (must match edgeSourceID/edgeTargetID after swaps).
+		// Rely on local fragments when possible to avoid extra Firestore reads.
+		resolveTypeByID := func(id string) models.FragmentType {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				return ""
+			}
+			if sourceFragment != nil && strings.TrimSpace(sourceFragment.ID) == id {
+				return sourceFragment.Type
+			}
+			if targetFragment != nil && strings.TrimSpace(targetFragment.ID) == id {
+				return targetFragment.Type
+			}
+			// Fallback: best-effort fetch (rare; only when endpoints differ from source/target fragments).
+			if e.fragmentsRepo != nil {
+				if f, ferr := e.fragmentsRepo.Get(ctx, id); ferr == nil && f != nil {
+					return f.Type
+				}
+			}
+			return ""
+		}
+		srcTypeActual := resolveTypeByID(edgeSourceID)
+		dstTypeActual := resolveTypeByID(edgeTargetID)
+
 		// Policy: direction validation and reversal (enforced for known edge types).
 		// Use unified ValidationPolicy if available, otherwise fallback to hardcoded rules
 		if e.validationPolicy != nil && sourceFragment != nil {
@@ -744,11 +769,13 @@ func (e *ScoutEngine) processRelationsInternal(
 					"validationKind":   "edge",
 					"sourceFragmentID": edgeSourceID,
 					"targetFragmentID": edgeTargetID,
-					"sourceType":       string(sourceFragment.Type),
-					"targetType":       string(targetType),
+					"sourceType":       string(srcTypeActual),
+					"targetType":       string(dstTypeActual),
 					"relationType":     string(edgeType),
 				},
-				Fragment: sourceFragment,
+				// IMPORTANT: do not pass Fragment here, or ValidationPolicy will overwrite sourceType from it,
+				// which can be incorrect after edge normalization swaps.
+				Fragment: nil,
 			})
 
 			if err != nil {
@@ -784,7 +811,16 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 		} else if sourceFragment != nil {
 			// Fallback to hardcoded validation
-			if valid, shouldReverse, rule := ValidateEdgeDirection(edgeType, sourceFragment.Type, targetType); !valid {
+			// Use actual endpoint types (post-normalization).
+			st := srcTypeActual
+			tt := dstTypeActual
+			if st == "" {
+				st = sourceFragment.Type
+			}
+			if tt == "" {
+				tt = targetType
+			}
+			if valid, shouldReverse, rule := ValidateEdgeDirection(edgeType, st, tt); !valid {
 				if shouldReverse {
 					edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
 					directionChanged = true
@@ -849,6 +885,8 @@ func (e *ScoutEngine) processRelationsInternal(
 		if directionChanged {
 			edge.Qualifiers["normalizedDirection"] = true
 			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
+			edge.Qualifiers["normalizedSourceFragmentId"] = edge.SourceFragmentID
+			edge.Qualifiers["normalizedTargetFragmentId"] = edge.TargetFragmentID
 		}
 
 		// Используем Create, предполагая что репо обработает дубликаты или мы просто создаем новые
@@ -901,6 +939,7 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 	isOrg := func(t models.FragmentType) bool { return t == models.FragmentTypeOrganization }
 	isFac := func(t models.FragmentType) bool { return t == models.FragmentTypeFacility }
 	isProd := func(t models.FragmentType) bool { return t == models.FragmentTypeProduct }
+	isPerson := func(t models.FragmentType) bool { return t == models.FragmentTypePerson }
 
 	changed := false
 
@@ -930,8 +969,15 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 			changed = true
 		}
 	case models.DependencyTypeOwns:
-		// If it's clearly inverted, swap (e.g., FAC owns ORG).
-		if !isOrg(srcType) && isOrg(targetType) && !isGeo(srcType) {
+		// Ownership is never "X OWNS a person" in our graph semantics.
+		// If target is a PERSON and source is an ORG, assume inversion and swap.
+		if isOrg(srcType) && isPerson(targetType) {
+			sourceID, targetID = targetID, sourceID
+			changed = true
+			break
+		}
+		// If it's clearly inverted, swap (e.g., FAC owns ORG / PRODUCT owns ORG).
+		if !isOrg(srcType) && !isPerson(srcType) && (isOrg(targetType) || isPerson(targetType)) && !isGeo(srcType) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}

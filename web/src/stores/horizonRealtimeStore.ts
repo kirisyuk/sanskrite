@@ -220,15 +220,13 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         icon = 'edge';
         const src = typeof data?.sourceFragmentId === 'string' ? data.sourceFragmentId : '';
         const dst = typeof data?.targetFragmentId === 'string' ? data.targetFragmentId : '';
-        const srcName = src ? getEntityName(src) : 'Unknown';
-        const dstName = dst ? getEntityName(dst) : 'Unknown';
         const edgeType = typeof data?.type === 'string' ? data.type : 'Connection';
         // Format edge type: "SUPPLIES_TO" -> "Supplies To"
         const formattedType = edgeType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase());
         text = formattedType;
         humanReadable = {
           title: formattedType, // Just the type, UI will render "Link <chip> created"
-          description: `${srcName} → ${dstName}`,
+          description: src && dst ? `${src} → ${dst}` : 'Connection details', // Full canonical paths
         };
       } else if (type.startsWith('horizon.propagation.')) {
         icon = 'propagation';

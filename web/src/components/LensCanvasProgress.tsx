@@ -223,16 +223,13 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                 edgeTypeForChip = ev.humanReadable?.title || formatEdgeType(type);
                 title = ''; // We'll render custom layout for edges
                 
-                const s = ev.data?.qualifiers?.sourceCanonicalPath || ev.data?.sourceFragmentId;
-                const t = ev.data?.qualifiers?.targetCanonicalPath || ev.data?.targetFragmentId;
-                // Beautify paths (last segment)
-                const cleanS = s?.includes('/') ? s.split('/').pop() : s;
-                const cleanT = t?.includes('/') ? t.split('/').pop() : t;
+                const s = ev.data?.qualifiers?.sourceCanonicalPath || ev.data?.sourceFragmentId || '';
+                const t = ev.data?.qualifiers?.targetCanonicalPath || ev.data?.targetFragmentId || '';
                 
-                if (cleanS && cleanT) {
-                   description = `${cleanS} → ${cleanT}`;
+                if (s && t) {
+                   description = `${s} → ${t}`;
                 } else {
-                   description = s && t ? `${s} → ${t}` : 'Connection details';
+                   description = 'Connection details';
                 }
                 entityPath = ''; // Don't show path for edge, description covers it
               } else {

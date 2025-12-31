@@ -189,6 +189,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "recalculate":
 			h.RecalculateLens(w, r)
 			return
+		case "scope-scout":
+			h.ScopeScoutLensNode(w, r)
+			return
 		default:
 			http.Error(w, "Unknown subpath", http.StatusNotFound)
 			return

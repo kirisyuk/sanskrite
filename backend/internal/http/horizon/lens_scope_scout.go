@@ -1,0 +1,184 @@
+package horizon
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+)
+
+type scopeScoutLensNodeRequest struct {
+	FragmentID        string `json:"fragmentId"`
+	CanonicalPath     string `json:"canonicalPath"`
+	MaxRecursionDepth *int   `json:"maxRecursionDepth"`
+}
+
+type scopeScoutLensNodeResponse struct {
+	JobID      string      `json:"jobId"`
+	ScopeAdded bool        `json:"scopeAdded"`
+	Target     string      `json:"targetCanonicalPath"`
+	Lens       *models.Lens `json:"lens,omitempty"`
+}
+
+// ScopeScoutLensNode:
+// - adds a node to lens.Scope (if missing)
+// - creates (or reuses active) scouting job for that node with maxRecursionDepth=1 by default
+//
+// POST /api/horizon/lenses/{lensId}/scope-scout
+func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo, err := requireAuth(r)
+	if err != nil || authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	lensID := extractIDFromPath(r, "/api/horizon/lenses/")
+	if strings.TrimSpace(lensID) == "" {
+		http.Error(w, "lensId required in path", http.StatusBadRequest)
+		return
+	}
+
+	var body scopeScoutLensNodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	maxDepth := 1
+	if body.MaxRecursionDepth != nil && *body.MaxRecursionDepth >= 0 && *body.MaxRecursionDepth <= 3 {
+		maxDepth = *body.MaxRecursionDepth
+	}
+
+	// Correlation/session IDs (optional, but recommended for realtime UX)
+	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+	if correlationID == "" {
+		correlationID = strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
+	}
+	if correlationID == "" {
+		correlationID = uuid.NewString()
+	}
+	sessionID := strings.TrimSpace(r.Header.Get("X-Session-Id"))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(r.Header.Get("X-Session-ID"))
+	}
+
+	// Load lens (for auth + project context)
+	lens, lerr := h.service.Lens().GetLens(r.Context(), lensID)
+	if lerr != nil || lens == nil {
+		http.Error(w, "Lens not found", http.StatusNotFound)
+		return
+	}
+	if lens.TenantID != authInfo.TenantID {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Resolve canonical path:
+	// Prefer fragmentId → fragment.canonicalPath (avoids alias issues).
+	targetCanonicalPath := strings.TrimSpace(body.CanonicalPath)
+	if fid := strings.TrimSpace(body.FragmentID); fid != "" && h.service.Fragments() != nil {
+		if frag, ferr := h.service.Fragments().Get(r.Context(), fid); ferr == nil && frag != nil {
+			if cp := strings.TrimSpace(frag.CanonicalPath); cp != "" {
+				targetCanonicalPath = cp
+			}
+		}
+	}
+	if targetCanonicalPath == "" {
+		http.Error(w, "canonicalPath or fragmentId required", http.StatusBadRequest)
+		return
+	}
+
+	// Attach realtime ctx (best-effort)
+	ctx := rtctx.With(r.Context(), rtctx.Context{
+		TenantID:      authInfo.TenantID,
+		ProjectID:     lens.ProjectID,
+		LensID:        lens.ID,
+		CorrelationID: correlationID,
+		SessionID:     sessionID,
+	})
+
+	// Ensure scope contains this canonical path
+	scopeAdded := false
+	{
+		seen := map[string]struct{}{}
+		for _, p := range lens.Scope {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			seen[p] = struct{}{}
+		}
+		if _, ok := seen[targetCanonicalPath]; !ok {
+			lens.Scope = append(lens.Scope, targetCanonicalPath)
+			scopeAdded = true
+		}
+	}
+
+	// Create scouting job (depth=1 by default) — best-effort and idempotent on active jobs.
+	jobID := ""
+	if h.service.ScoutingJobs() != nil {
+		now := time.Now().UTC()
+		state := map[string]interface{}{
+			"targetCanonicalPath": targetCanonicalPath,
+			"lensId":              lens.ID,
+			"currentState":        string(models.ScoutingJobStatePending),
+			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+			"recursionDepth":      0.0,
+			"maxRecursionDepth":   float64(maxDepth),
+			"trigger":             "ui.graph.scope_scout",
+			"correlationId":       correlationID,
+		}
+		if sessionID != "" {
+			state["sessionId"] = sessionID
+		}
+		scoutingJob := &models.ScoutingJob{
+			AgentJob: agentmodels.AgentJob{
+				TenantID:  lens.TenantID,
+				ProjectID: lens.ProjectID,
+				Status:    agentmodels.AgentJobStatusPending,
+				AgentID:   "scout",
+				CreatedAt: now,
+				UpdatedAt: now,
+				State:     state,
+			},
+			LensID:              lens.ID,
+			TargetCanonicalPath: targetCanonicalPath,
+			ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
+			BillingContext: models.BillingContext{
+				ChargeModel: string(models.ChargeModelBounty),
+				ProjectID:   lens.ProjectID,
+			},
+			CurrentState: models.ScoutingJobStatePending,
+		}
+		if id, cerr := h.service.ScoutingJobs().Create(ctx, scoutingJob); cerr == nil && strings.TrimSpace(id) != "" {
+			jobID = strings.TrimSpace(id)
+		}
+	}
+
+	// Persist updated scope (and manage subscriptions) best-effort.
+	// If scope didn't change, we still return success (idempotent).
+	if scopeAdded {
+		_ = h.service.Lens().UpdateLens(ctx, lens)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Correlation-Id", correlationID)
+	json.NewEncoder(w).Encode(scopeScoutLensNodeResponse{
+		JobID:      jobID,
+		ScopeAdded: scopeAdded,
+		Target:     targetCanonicalPath,
+		Lens:       lens,
+	})
+}
+
+

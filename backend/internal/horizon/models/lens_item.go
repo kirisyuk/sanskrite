@@ -127,12 +127,23 @@ func (li *LensItem) Validate() error {
 			string(DependencyTypeSuppliesTo):   true,
 			string(DependencyTypeLocatedIn):    true,
 			string(DependencyTypeOwns):         true,
+			string(DependencyTypeSubsidiaryOf): true,
 			string(DependencyTypeProduces):     true,
+			string(DependencyTypeConsumes):     true,
 			string(DependencyTypeOperatesIn):   true,
 			string(DependencyTypeRegulates):    true,
 			string(DependencyTypeCompetesWith): true,
 			string(DependencyTypeDependsOn):    true,
 			string(DependencyTypeInfluences):   true,
+			string(DependencyTypeTransformsInto): true,
+			// Governance / org-person
+			string(DependencyTypeManages):       true,
+			string(DependencyTypeControls):      true,
+			string(DependencyTypeEmployedBy):    true,
+			string(DependencyTypeBoardMemberOf): true,
+			string(DependencyTypeFounded):       true,
+			string(DependencyTypeInvestsIn):     true,
+			string(DependencyTypePartnersWith):  true,
 		}
 		if !validEdgeTypes[*li.Subkind] {
 			return fmt.Errorf("invalid subkind for edge: %s", *li.Subkind)

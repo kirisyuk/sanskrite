@@ -27,6 +27,10 @@ const (
 	DependencyTypeSuppliesTo   DependencyType = "SUPPLIES_TO"
 	DependencyTypeLocatedIn    DependencyType = "LOCATED_IN"
 	DependencyTypeOwns         DependencyType = "OWNS"
+	// DependencyTypeSubsidiaryOf captures "X is owned/controlled by Y" (inverse of OWNS).
+	// NOTE: In scouting pipeline, SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary),
+	// but we keep this type for taxonomy/prompt compatibility.
+	DependencyTypeSubsidiaryOf DependencyType = "SUBSIDIARY_OF"
 	DependencyTypeProduces     DependencyType = "PRODUCES"
 	// DependencyTypeConsumes captures "X consumes/uses product Y".
 	// v1 usage: hypothesis-driven Product IO materialization (PRODUCT-only).
@@ -42,6 +46,22 @@ const (
 	// Used for generic value chain relationships (e.g., lithium-ore → lithium-carbonate → cathode-material → battery-cell).
 	// Source: upstream product (earlier stage), Target: downstream product (later stage).
 	DependencyTypeTransformsInto DependencyType = "TRANSFORMS_INTO"
+
+	// --- Governance / control / org-person relationships ---
+	// MANAGES: formal management relationship (CEO, director, operator) — not necessarily ownership.
+	DependencyTypeManages DependencyType = "MANAGES"
+	// CONTROLS: control without necessarily direct equity ownership (voting control, state control, contractual control).
+	DependencyTypeControls DependencyType = "CONTROLS"
+	// EMPLOYED_BY: employment relationship (person is employed by an organization).
+	DependencyTypeEmployedBy DependencyType = "EMPLOYED_BY"
+	// BOARD_MEMBER_OF: person is a board member of an organization.
+	DependencyTypeBoardMemberOf DependencyType = "BOARD_MEMBER_OF"
+	// FOUNDED: founder relationship (person or org founded an org/program).
+	DependencyTypeFounded DependencyType = "FOUNDED"
+	// INVESTS_IN: investment relationship (org/person invests in org/project/program/product).
+	DependencyTypeInvestsIn DependencyType = "INVESTS_IN"
+	// PARTNERS_WITH: symmetric partnership relationship (peer collaboration).
+	DependencyTypePartnersWith DependencyType = "PARTNERS_WITH"
 )
 
 // EdgeProperties свойства ребра зависимости

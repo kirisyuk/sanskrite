@@ -55,11 +55,14 @@ const INCREMENTAL_LAYOUT_OPTIONS: LayoutOptions = {
 
 // Приоритет типов связей для сортировки (меньше = важнее = левее)
 const EDGE_TYPE_PRIORITY: Record<string, number> = {
+  // PRODUCES should dominate for grouping/placement: "outputs" relation is more informative than ownership/peer ties.
+  // Keep it strictly smaller than any other known type so it always wins when choosing a single "main" relation.
+  'PRODUCES': 0,
   'COMPETES_WITH': 1, 'CONFLICTS_WITH': 1, 'OPPOSES': 1,
   'LOCATED_IN': 1, // LOCATED_IN имеет высокий приоритет в группе supply-chain
   'INFLUENCES': 2, 'AFFECTS': 2, 'REGULATES': 2, 'IMPACTS': 2,
   'OWNS': 2, // OWNS имеет высокий приоритет в группе customers
-  'MANAGES': 3, 'CONTROLS': 3, 'PARENT_OF': 3, 'SUBSIDIARY_OF': 3,
+  'MANAGES': 3, 'CONTROLS': 3, 'INVESTS_IN': 3, 'EMPLOYED_BY': 3, 'BOARD_MEMBER_OF': 3, 'FOUNDED': 3, 'PARENT_OF': 3, 'SUBSIDIARY_OF': 3,
   'PARTNERS_WITH': 4, 'COOPERATES_WITH': 4, 'SUPPLIES_TO': 4, 'SUPPORTS': 4,
   'OPERATES_IN': 5, 'BASED_IN': 5, 'HEADQUARTERED_IN': 5,
   'DEPENDS_ON': 6, 'REQUIRES': 6, 'USES': 6, 'NEEDS': 6,
@@ -112,6 +115,12 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     return 'top-right';
   }
   
+  // Ownership: if the neighbor OWNS the central node (incoming), treat it as upstream/structural → top-left.
+  // (Outgoing OWNS stays in bottom-left via the normal rule below.)
+  if (type === 'OWNS' && !isOutgoing) {
+    return 'top-left';
+  }
+  
   // === EXCEPTIONS: Types where "they X us" means we are important to them (downstream) ===
   // These go to BOTTOM row even when incoming (reverse of normal logic)
   // CRITICAL: DEPENDS_ON incoming (from group node TO central node with depth 0) → bottom
@@ -147,7 +156,8 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     (type === 'CONSUMES' && isOutgoing) ||      // outgoing = we consume them → upstream → top
     (type === 'REQUIRES' && isOutgoing) ||      // outgoing = we require them → upstream → top
     (type === 'USES' && isOutgoing) ||          // outgoing = we use them → upstream → top
-    (type === 'NEEDS' && isOutgoing)            // outgoing = we need them → upstream → top
+    (type === 'NEEDS' && isOutgoing) ||         // outgoing = we need them → upstream → top
+    (type === 'INVESTS_IN' && !isOutgoing)      // incoming = they invest in us → structural upstream
   ) {
     return 'top-left';
   }
@@ -161,7 +171,10 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     (type === 'HEADQUARTERED_IN' && !isOutgoing) ||
     (type === 'INFLUENCES' && !isOutgoing) ||  // incoming = they influence us → top
     (type === 'AFFECTS' && !isOutgoing) ||      // incoming = they affect us → top
-    (type === 'IMPACTS' && !isOutgoing)         // incoming = they impact us → top
+    (type === 'IMPACTS' && !isOutgoing) ||      // incoming = they impact us → top
+    (type === 'EMPLOYED_BY' && !isOutgoing) ||
+    (type === 'BOARD_MEMBER_OF' && !isOutgoing) ||
+    (type === 'FOUNDED' && !isOutgoing)
   ) {
     return 'top-right';
   }
@@ -174,6 +187,7 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     (type === 'OWNS' && isOutgoing) ||          // outgoing = we own them
     (type === 'MANAGES' && isOutgoing) ||
     (type === 'CONTROLS' && isOutgoing) ||
+    (type === 'INVESTS_IN' && isOutgoing) ||
     (type === 'PARENT_OF' && isOutgoing) ||
     (type === 'SUPPLIES_TO' && isOutgoing) ||   // outgoing = we supply to them
     (type === 'CONSUMES' && isOutgoing) ||
@@ -200,7 +214,10 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     (type === 'OPERATES_IN' && isOutgoing) ||
     (type === 'BASED_IN' && isOutgoing) ||
     (type === 'HEADQUARTERED_IN' && isOutgoing) ||
-    (type === 'LOCATED_IN' && isOutgoing)
+    (type === 'LOCATED_IN' && isOutgoing) ||
+    (type === 'EMPLOYED_BY' && isOutgoing) ||
+    (type === 'BOARD_MEMBER_OF' && isOutgoing) ||
+    (type === 'FOUNDED' && isOutgoing)
   ) {
     return 'bottom-right';
   }
@@ -439,6 +456,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
       return isOutgoing ? 'customers' : 'supply-chain';  // incoming (на центральную ноду) -> сверху, outgoing (от центральной ноды) -> снизу
     case 'MANAGES':
     case 'CONTROLS':
+    case 'INVESTS_IN':
     case 'PARENT_OF':
       return isOutgoing ? 'customers' : 'supply-chain';
     case 'SUBSIDIARY_OF':
@@ -469,6 +487,10 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
       return 'context';
     case 'REGULATES':
       return 'context';  // regulator = context for the entity
+    case 'EMPLOYED_BY':
+    case 'BOARD_MEMBER_OF':
+    case 'FOUNDED':
+      return 'context';
     case 'INFLUENCES':
     case 'AFFECTS':
     case 'IMPACTS':
@@ -555,6 +577,12 @@ function makeGroupParentNode<T = any>(params: {
   const baseH = typeof containerHeight === 'number' && Number.isFinite(containerHeight) ? containerHeight : Math.max(120, nodeHeight + 60);
   const h = hasPagination ? baseH + GROUP_PAGINATION_HEIGHT : baseH;
 
+  // Exclude fragment-specific fields from exemplarData to avoid confusing groups with fragments
+  const safeExemplarData = exemplarData ? (() => {
+    const { fragmentId, id, lensItemId, ...rest } = exemplarData as any;
+    return rest;
+  })() : {};
+
   return {
     id,
     type: 'horizonGroup' as any,
@@ -567,7 +595,7 @@ function makeGroupParentNode<T = any>(params: {
     // Explicit size so we preserve padding and collision detection is correct.
     style: { width: w, height: h, zIndex: 0 } as any,
     data: {
-      ...(exemplarData || {}),
+      ...safeExemplarData,
       isGroup: true,
       groupParentId: parentId,
       groupSemanticGroup: semanticGroup,
@@ -595,8 +623,8 @@ function attachChildToGroup<T = any>(
   return {
     ...child,
     parentId: groupId,
-    // ReactFlow legacy prop still supported, but we should use parentId
-    // parentNode: groupId,
+    // ReactFlow uses `parentNode` for nested nodes; keep both for compatibility.
+    parentNode: groupId as any,
     extent: 'parent' as any,
     zIndex: 1,
     position: relPos,
@@ -1674,6 +1702,23 @@ export async function layoutLinearExpansion<T = any>(
     const upper = (t || '').toUpperCase().trim();
     return upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES';
   };
+  
+  // Structural relationships (ownership/org hierarchy) should dominate over peer/market ties
+  // when picking a single "main" relation for Linear section placement.
+  const isOwnershipType = (t: string) => {
+    const upper = (t || '').toUpperCase().trim();
+    return (
+      // Treat PRODUCES as part of "Products & Ownership" bucket for linear placement dominance.
+      // This prevents OWNS from blocking PRODUCES when both relations exist for the same neighbor.
+      upper === 'PRODUCES' ||
+      upper === 'OWNS' ||
+      upper === 'SUBSIDIARY_OF' ||
+      upper === 'MANAGES' ||
+      upper === 'CONTROLS' ||
+      upper === 'INVESTS_IN' ||
+      upper === 'PARENT_OF'
+    );
+  };
 
   // NOTE: do not log in production; keep layout pure
   for (const edge of edges) {
@@ -1716,6 +1761,14 @@ export async function layoutLinearExpansion<T = any>(
       }
       // 2. If new is incoming dependency - it wins
       if (direction === 'incoming' && isIncomingDependencyType(edgeType)) {
+        nodeEdgeInfo.set(neighborId, { edgeType, direction });
+        continue;
+      }
+      // 2.5. Ownership beats peer/market types for section placement (unless dependency override applied above)
+      if (isOwnershipType(existing.edgeType) && !isOwnershipType(edgeType)) {
+        continue;
+      }
+      if (!isOwnershipType(existing.edgeType) && isOwnershipType(edgeType)) {
         nodeEdgeInfo.set(neighborId, { edgeType, direction });
         continue;
       }

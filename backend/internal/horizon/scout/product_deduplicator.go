@@ -2,12 +2,22 @@ package scout
 
 import (
 	"context"
+	"os"
 	"strings"
+	"unicode"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
+
+func isProductModelAliasDedupEnabled() bool {
+	// Default OFF: better to keep duplicates than merge unrelated products on heuristic.
+	// Enable explicitly when you want aggressive model/SKU alias dedup:
+	//   HORIZON_ENABLE_PRODUCT_MODEL_ALIAS_DEDUP=true
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("HORIZON_ENABLE_PRODUCT_MODEL_ALIAS_DEDUP")))
+	return v == "1" || v == "true" || v == "yes" || v == "y" || v == "on"
+}
 
 // =============================================================================
 // PRODUCT DEDUPLICATION POLICY
@@ -114,6 +124,33 @@ func (d *ProductDeduplicator) DeduplicateProduct(ctx context.Context, fragment *
 		}
 	}
 
+	// Strategy 4b: Exact alias match for "model-like" products (contains digits).
+	// This is a safe heuristic for defense/tech model designations and similar SKUs:
+	// - "M1 Abrams" vs "M1 Abrams Main Battle Tank"
+	// - "F-16 Fighting Falcon" vs "F16 Fighting Falcon"
+	//
+	// We intentionally do NOT apply this broadly to generic names without digits to avoid false merges.
+	if isProductModelAliasDedupEnabled() {
+		for _, name := range candidateProductAliasNames(fragment) {
+			if !isSpecificModelAlias(name) {
+				continue
+			}
+			for _, v := range modelAliasVariants(name) {
+				// Try matching against existing label[en]
+				if existing, err := d.findByLabelExact(ctx, v); err == nil && existing != nil && existing.ID != fragment.ID {
+					return existing, nil
+				}
+				// Try matching against existing identifiers.shortName / legalName
+				if existing, err := d.findByIdentifierExact(ctx, "shortName", v); err == nil && existing != nil && existing.ID != fragment.ID {
+					return existing, nil
+				}
+				if existing, err := d.findByIdentifierExact(ctx, "legalName", v); err == nil && existing != nil && existing.ID != fragment.ID {
+					return existing, nil
+				}
+			}
+		}
+	}
+
 	// Strategy 5: Try to resolve Wikidata ID via API if we have a client
 	if d.wikidataClient != nil && wikidataID == "" {
 		resolvedID := d.resolveWikidataID(ctx, fragment)
@@ -211,6 +248,170 @@ func (d *ProductDeduplicator) findByExactNameAndTaxonomy(ctx context.Context, na
 	}
 
 	return nil, nil
+}
+
+func (d *ProductDeduplicator) findByLabelExact(ctx context.Context, name string) (*models.HorizonFragment, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || d == nil || d.fragmentsRepo == nil {
+		return nil, nil
+	}
+	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", name, models.FragmentTypeProduct)
+	if err == nil && len(existing) > 0 {
+		for _, frag := range existing {
+			if frag != nil && frag.Type == models.FragmentTypeProduct {
+				return frag, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (d *ProductDeduplicator) findByIdentifierExact(ctx context.Context, key, value string) (*models.HorizonFragment, error) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" || d == nil || d.fragmentsRepo == nil {
+		return nil, nil
+	}
+	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, key, value)
+	if err == nil && len(existing) > 0 {
+		for _, frag := range existing {
+			if frag != nil && frag.Type == models.FragmentTypeProduct {
+				return frag, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func candidateProductAliasNames(fragment *models.HorizonFragment) []string {
+	if fragment == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+	}
+	add(fragment.Labels["en"])
+	add(fragment.Identifiers["shortName"])
+	add(fragment.Identifiers["legalName"])
+	// Some product fragments may store the name only in labels without identifiers.
+	return keysToSortedSlice(seen)
+}
+
+func keysToSortedSlice(m map[string]struct{}) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	// Deterministic ordering for stability (useful in tests/logging)
+	// We avoid importing sort at file scope; use simple insertion sort due to small size.
+	for i := 1; i < len(out); i++ {
+		j := i
+		for j > 0 && out[j-1] > out[j] {
+			out[j-1], out[j] = out[j], out[j-1]
+			j--
+		}
+	}
+	return out
+}
+
+func isSpecificModelAlias(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	// Must contain at least one digit.
+	hasDigit := false
+	hasLetter := false
+	for _, r := range name {
+		if unicode.IsDigit(r) {
+			hasDigit = true
+		}
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+	}
+	if !hasDigit || !hasLetter {
+		return false
+	}
+	// Require at least two tokens to avoid merging generic codes like "M1".
+	if len(strings.Fields(name)) < 2 {
+		// Allow "F16" style single-token model aliases when they contain both letter+digit.
+		// We'll generate variants for matching (e.g., "F16" -> "F-16" / "F 16") later.
+		if hasDigit && hasLetter {
+			return true
+		}
+		return false
+	}
+	return true
+}
+
+func modelAliasVariants(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+	}
+	add(name)
+	add(insertSpaceBetweenLetterDigit(name))
+	add(insertHyphenBetweenLetterDigit(name))
+	return keysToSortedSlice(seen)
+}
+
+func insertSpaceBetweenLetterDigit(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	var prev rune
+	hasPrev := false
+	for _, r := range s {
+		if hasPrev {
+			if (unicode.IsLetter(prev) && unicode.IsDigit(r)) || (unicode.IsDigit(prev) && unicode.IsLetter(r)) {
+				b.WriteRune(' ')
+			}
+		}
+		b.WriteRune(r)
+		prev = r
+		hasPrev = true
+	}
+	return b.String()
+}
+
+func insertHyphenBetweenLetterDigit(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	var prev rune
+	hasPrev := false
+	for _, r := range s {
+		if hasPrev {
+			if unicode.IsLetter(prev) && unicode.IsDigit(r) {
+				b.WriteRune('-')
+			}
+		}
+		b.WriteRune(r)
+		prev = r
+		hasPrev = true
+	}
+	return b.String()
 }
 
 // resolveWikidataID attempts to find a Wikidata ID for the product using the API.

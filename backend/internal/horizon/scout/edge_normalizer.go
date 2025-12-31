@@ -23,8 +23,7 @@ import (
 // For these types, we normalize source/target to ensure consistent representation.
 var SymmetricEdgeTypes = map[models.DependencyType]bool{
 	models.DependencyTypeCompetesWith: true, // "A competes with B" = "B competes with A"
-	// Note: PARTNERS_WITH is not yet defined in DependencyType enum.
-	// Add more symmetric types as they are defined in the schema.
+	models.DependencyTypePartnersWith: true, // "A partners with B" = "B partners with A"
 }
 
 // NormalizeSymmetricEdge ensures consistent source/target ordering for symmetric edges.
@@ -83,6 +82,87 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeProduct,
 		},
 		Description: "Owner owns asset/subsidiary",
+	},
+
+	// CONTROLS: Control flows from controller to controlled entity.
+	models.DependencyTypeControls: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypePerson,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		Description: "Controller controls entity (non-equity or indirect control)",
+	},
+
+	// MANAGES: Formal management relationship (CEO, director, operator).
+	models.DependencyTypeManages: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypePerson,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProgram,
+		},
+		Description: "Manager manages entity (formal authority, not ownership)",
+	},
+
+	// EMPLOYED_BY: Employment relationship (person employed by org).
+	models.DependencyTypeEmployedBy: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Person is employed by organization",
+	},
+
+	// BOARD_MEMBER_OF: Person is a board member of organization.
+	models.DependencyTypeBoardMemberOf: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Person is board member of organization",
+	},
+
+	// FOUNDED: Founder relationship.
+	models.DependencyTypeFounded: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypePerson,
+			models.FragmentTypeOrganization,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeProgram,
+		},
+		Description: "Founder founded organization/program",
+	},
+
+	// INVESTS_IN: Investment relationship.
+	models.DependencyTypeInvestsIn: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypePerson,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeProgram,
+			models.FragmentTypeProduct,
+		},
+		Description: "Investor invests in investee",
+	},
+
+	// PARTNERS_WITH: Symmetric partnership between organizations/facilities.
+	models.DependencyTypePartnersWith: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		Description: "Partners collaborate (symmetric)",
 	},
 
 	// PRODUCES: Production flows from producer to product.

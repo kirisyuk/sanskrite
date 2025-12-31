@@ -125,6 +125,18 @@ Choose relationType to match this direction:
 - SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
 - LOCATED_IN / OPERATES_IN: source located/operates in GEO target.
 - OWNS: source owns target.
+  CRITICAL: NEVER output OWNS where targetType=PERSON.
+  If TARGET is owned/controlled by a person or parent org, use SUBSIDIARY_OF with the owner as target (it will be normalized to OWNS).
+  Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
+  Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
+- SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
+- CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
+- MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
+- EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
+- BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
+- FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
+- INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
+- PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 - PRODUCES: source produces target (target is a product).
 - REGULATES: source regulates target (source is typically a government/agency org).
 - COMPETES_WITH / INFLUENCES: as labeled.
@@ -138,7 +150,7 @@ Return ONLY JSON with this schema:
       "targetLegalName": "string",
       "targetShortName": "string",
       "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON",
-      "relationType": "SUPPLIES_TO" | "LOCATED_IN" | "OWNS" | "PRODUCES" | "OPERATES_IN" | "REGULATES" | "COMPETES_WITH" | "INFLUENCES" | "DEPENDS_ON" | "SUBSIDIARY_OF",
+      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "COMPETES_WITH" | "INFLUENCES",
       "reason": "string",
       "confidence": 0.0,
       "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
@@ -153,7 +165,13 @@ RULES:
 - Use stable canonical paths:
   - Organizations: /org/{slug}
   - Facilities: /fac/{orgSlug}/{slug} when possible (prefer nested over flat /fac/{slug})
-  - Products: /product/{orgSlug}/{slug} when org known
+  - People: /person/{slug}
+  - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
+    - category: "raw" | "component" | "finished" | "service"
+    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy"
+    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly"
+    - slug: lowercase-slug derived from product name
+    - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
   - GEO regions/locations: MUST be /loc/{country}/{admin1}/{city}
     - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (e.g., us, de, ru, kz, jp)
     - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown

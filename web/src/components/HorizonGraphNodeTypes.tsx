@@ -24,7 +24,12 @@ export interface HorizonNodeData {
   collapsed?: boolean;
   critical?: boolean;
   onLoadRelated?: (fragmentId: string) => void; // Функция для загрузки связанных элементов
+  onCollapse?: (fragmentId: string) => void; // Функция для сворачивания (undo expand)
   isLoadingRelated?: boolean; // Флаг загрузки связанных элементов
+  loadRelatedAttempted?: boolean; // UI: user tried loading related nodes at least once
+  onScopeScout?: (fragmentId: string, canonicalPath?: string) => void; // Add to scope + run scouting depth=1
+  isScopeScouting?: boolean; // UI: scope-scout request in-flight
+  scopeScoutDone?: boolean; // UI: scope-scout already launched (show "+" again)
   // Group/container nodes (UI-only, not persisted)
   isGroup?: boolean;
   groupParentId?: string;
@@ -673,7 +678,11 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isCritical = data.critical;
   const isCollapsed = data.collapsed;
   const isExpanded = data.expanded;
+  // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
+  // but the user should still be able to run scouting from it.
+  const canScopeScout = Boolean((isExpanded || data.loadRelatedAttempted) && data.onScopeScout && !data.scopeScoutDone);
   const isSelected = Boolean(selected);
+  const canCollapse = Boolean(data.fragmentId && data.onCollapse && isExpanded && !data.isLoadingRelated);
   
   // Цвета с учётом состояния
   const bgColor = colors.bg;
@@ -879,21 +888,65 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           )}
         </div>
         
-        {/* Индикатор критичности */}
-        {isCritical && (
-          <div
-            style={{
-              width: '10px',
-              height: '10px',
-              borderRadius: '50%',
-              background: '#EF4444',
-              flexShrink: 0,
-              boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)',
-              animation: 'horizon-pulse 2s infinite',
-            }}
-            title="Critical"
-          />
-        )}
+        {/* Right-side actions / indicators */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          {canCollapse && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (data.fragmentId && data.onCollapse) {
+                  data.onCollapse(data.fragmentId);
+                }
+              }}
+              aria-label="Collapse"
+              title="Collapse"
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 8,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                color: theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+              }}
+            >
+              {/* Chevron-up icon (collapse) */}
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M18 15l-6-6-6 6" />
+              </svg>
+            </button>
+          )}
+
+          {/* Индикатор критичности */}
+          {isCritical && (
+            <div
+              style={{
+                width: '10px',
+                height: '10px',
+                borderRadius: '50%',
+                background: '#EF4444',
+                flexShrink: 0,
+                boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)',
+                animation: 'horizon-pulse 2s infinite',
+              }}
+              title="Critical"
+            />
+          )}
+        </div>
       </div>
 
       {/* Метрики (если не collapsed) */}
@@ -961,7 +1014,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         </div>
       )}
 
-      {/* Кнопка "+" для загрузки связанных элементов */}
+      {/* Кнопка для расширения ( + ) и доп. Research (🔎) */}
       {data.fragmentId && data.onLoadRelated && (
         <div
           style={{
@@ -977,11 +1030,20 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (data.fragmentId && data.onLoadRelated) {
+              if (!data.fragmentId) return;
+              if (data.isLoadingRelated || data.isScopeScouting) return;
+
+              // After the node has been expanded, the same button becomes "additional research" (scope+scout depth=1)
+              if (canScopeScout && data.onScopeScout) {
+                data.onScopeScout(data.fragmentId, data.canonicalPath);
+                return;
+              }
+
+              if (data.onLoadRelated) {
                 data.onLoadRelated(data.fragmentId);
               }
             }}
-            disabled={data.isLoadingRelated}
+            disabled={data.isLoadingRelated || data.isScopeScouting}
             style={{
               width: `${PLUS_BUTTON_SIZE_PX}px`,
               height: `${PLUS_BUTTON_SIZE_PX}px`,
@@ -992,7 +1054,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              cursor: data.isLoadingRelated ? 'wait' : 'pointer',
+              cursor: (data.isLoadingRelated || data.isScopeScouting) ? 'wait' : 'pointer',
               fontSize: '16px',
               fontWeight: 'bold',
               lineHeight: 1,
@@ -1000,13 +1062,28 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               boxShadow: theme === 'dark' 
                 ? `0 2px 8px rgba(0, 0, 0, 0.4)`
                 : `0 2px 8px rgba(0, 0, 0, 0.15)`,
-              opacity: data.isLoadingRelated ? 0.6 : 1,
+              opacity: (data.isLoadingRelated || data.isScopeScouting) ? 0.6 : 1,
               transition: 'all 0.2s ease',
             }}
-            title="Load related fragments"
+            title={canScopeScout ? 'Research (add to scope + scout)' : 'Load related fragments'}
           >
-            {data.isLoadingRelated ? (
+            {(data.isLoadingRelated || data.isScopeScouting) ? (
               <span style={{ fontSize: '12px' }}>⏳</span>
+            ) : canScopeScout ? (
+              // Research icon (magnifier)
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <path d="M21 21l-4.3-4.3" />
+              </svg>
             ) : '+'}
           </button>
         </div>
