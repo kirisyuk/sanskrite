@@ -132,6 +132,10 @@ export interface LensCanvasCockpitProps {
 
 export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, projectId, toolbarContainer, onNodeSelect, onEdgeSelect, onScopeScout }) => {
   const { theme } = React.useContext(ThemeContext);
+  const DEV = import.meta.env.DEV;
+  const dbg = React.useCallback((...args: any[]) => {
+    if (DEV) console.log(...args);
+  }, [DEV]);
   // Guard: ReactFlow can sometimes fire onPaneClick after node/edge click (sometimes twice).
   // We ignore pane clicks for a short window after selecting to avoid clearing selection immediately.
   const ignorePaneClicksUntilRef = React.useRef<number>(0);
@@ -139,6 +143,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+  // Keep latest canonical nodes/edges in refs for async handlers.
+  // IMPORTANT: do NOT use ReactFlow instance `getNodes/getEdges` as a source of truth for persistence,
+  // because it reflects rendered nodes/edges (e.g. hover-derived opacity) and can "leak" transient styles into state.
+  const nodesStateRef = React.useRef<Node<HorizonNodeData>[]>([]);
+  const edgesStateRef = React.useRef<Edge[]>([]);
+  React.useEffect(() => {
+    nodesStateRef.current = nodes as any;
+  }, [nodes]);
+  React.useEffect(() => {
+    edgesStateRef.current = edges as any;
+  }, [edges]);
   
   const [loading, setLoading] = React.useState(false);
   const [arranging, setArranging] = React.useState(false);
@@ -157,8 +173,65 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
   const [gridState, setGridState] = React.useState<GridState>(createEmptyGrid());
 
+  // Hover updates can fire very frequently; coalesce to 1 update per frame to avoid re-render storms.
+  const hoverRafRef = React.useRef<number | null>(null);
+  const pendingHoverRef = React.useRef<{
+    hoveredGroupId: string | null;
+    hoveredNodeId: string | null;
+    hoveredEdgeId: string | null;
+  }>({ hoveredGroupId: null, hoveredNodeId: null, hoveredEdgeId: null });
+
+  const scheduleHoverCommit = React.useCallback(() => {
+    if (hoverRafRef.current !== null) return;
+    hoverRafRef.current = window.requestAnimationFrame(() => {
+      hoverRafRef.current = null;
+      const next = pendingHoverRef.current;
+      const batched = (ReactDOM as any)?.unstable_batchedUpdates;
+      if (typeof batched === 'function') {
+        batched(() => {
+          setHoveredGroupId(next.hoveredGroupId);
+          setHoveredNodeId(next.hoveredNodeId);
+          setHoveredEdgeId(next.hoveredEdgeId);
+        });
+      } else {
+        setHoveredGroupId(next.hoveredGroupId);
+        setHoveredNodeId(next.hoveredNodeId);
+        setHoveredEdgeId(next.hoveredEdgeId);
+      }
+    });
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverRafRef.current !== null) {
+        window.cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+    };
+  }, []);
+
   type HoverHighlightMode = 'off' | 'ownership' | 'production' | 'supplies' | 'competition';
   const [hoverHighlightMode, setHoverHighlightMode] = React.useState<HoverHighlightMode>('ownership');
+
+  // Safety: if hover highlight is disabled, ensure no stale opacity stays on nodes (can happen if a rendered snapshot
+  // was persisted earlier by mistake).
+  React.useEffect(() => {
+    if (hoverHighlightMode !== 'off') return;
+    setNodes((prev) => {
+      let changed = false;
+      const next = (prev as any[]).map((n) => {
+        const s: any = (n as any)?.style;
+        if (!s || typeof s !== 'object' || !('opacity' in s)) return n;
+        const { opacity: _opacity, ...rest } = s;
+        changed = true;
+        const out: any = { ...(n as any) };
+        if (Object.keys(rest).length > 0) out.style = rest;
+        else delete out.style;
+        return out;
+      });
+      return changed ? (next as any) : prev;
+    });
+  }, [hoverHighlightMode, setNodes]);
 
   // Performance controls (large graphs)
   // Defaults: enable features on small graphs, auto-disable on large graphs (but allow manual override).
@@ -175,6 +248,32 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
   const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear'>('freeform');
   const [showLayoutDropdown, setShowLayoutDropdown] = React.useState(false);
+
+  // Add-node UI (toolbar)
+  type HorizonSearchEntity = {
+    id: string;
+    canonicalPath: string;
+    name: string;
+    type: string;
+    description?: string;
+    location?: string;
+    sector?: string;
+  };
+  const [addNodeOpen, setAddNodeOpen] = React.useState(false);
+  const [addNodeQuery, setAddNodeQuery] = React.useState('');
+  const [addNodeResults, setAddNodeResults] = React.useState<HorizonSearchEntity[]>([]);
+  const [addNodeLoading, setAddNodeLoading] = React.useState(false);
+  const [addNodeError, setAddNodeError] = React.useState<string | null>(null);
+  const [addNodeActiveIndex, setAddNodeActiveIndex] = React.useState(0);
+  const addNodeInputRef = React.useRef<HTMLInputElement | null>(null);
+  const addNodeCacheRef = React.useRef<Map<string, HorizonSearchEntity[]>>(new Map());
+  const addNodeAbortRef = React.useRef<AbortController | null>(null);
+
+  // Lens scope preview (empty state)
+  const [lensName, setLensName] = React.useState<string | null>(null);
+  const [lensScopePaths, setLensScopePaths] = React.useState<string[]>([]);
+  const [scopePreview, setScopePreview] = React.useState<Array<{ canonicalPath: string; name?: string; type?: string }>>([]);
+  const [scopePreviewLoading, setScopePreviewLoading] = React.useState(false);
 
   // Layout mode helpers - определяют, какую логику раскладки использовать
   const isFreeformLayout = layoutMode === 'freeform';
@@ -195,9 +294,169 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   // If perf mode is enabled, clear hover states that are used only for expensive styling.
   React.useEffect(() => {
     if (!perfMode) return;
+    pendingHoverRef.current = { hoveredGroupId: null, hoveredNodeId: null, hoveredEdgeId: null };
     setHoveredGroupId(null);
     setHoveredNodeId(null);
+    setHoveredEdgeId(null);
   }, [perfMode]);
+
+  // Add-node: focus input when opened
+  React.useEffect(() => {
+    if (!addNodeOpen) return;
+    const t = window.setTimeout(() => addNodeInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, [addNodeOpen]);
+
+  // Lens scope preview: load lens metadata (name + scope canonical paths)
+  React.useEffect(() => {
+    if (!lensId) {
+      setLensName(null);
+      setLensScopePaths([]);
+      setScopePreview([]);
+      setScopePreviewLoading(false);
+      return;
+    }
+
+    let alive = true;
+    (async () => {
+      try {
+        const lens = await api.getHorizonLens(lensId);
+        if (!alive) return;
+        setLensName(typeof lens?.name === 'string' ? lens.name : null);
+        const scope = Array.isArray(lens?.scope) ? lens.scope : [];
+        const cleaned = scope
+          .map((s: any) => String(s || '').trim())
+          .filter(Boolean);
+        setLensScopePaths(cleaned);
+      } catch (e) {
+        if (!alive) return;
+        // Best-effort: keep empty scope preview if we can't load lens metadata
+        setLensName(null);
+        setLensScopePaths([]);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [lensId]);
+
+  // Lens scope preview: resolve canonical paths to (name/type) best-effort
+  React.useEffect(() => {
+    const paths = lensScopePaths;
+    if (!lensId || paths.length === 0) {
+      setScopePreview([]);
+      setScopePreviewLoading(false);
+      return;
+    }
+
+    // Initial placeholders (fast)
+    setScopePreview(
+      paths.map((p) => ({
+        canonicalPath: p,
+        name: p.split('/').filter(Boolean).slice(-1)[0] || p,
+      })),
+    );
+
+    let alive = true;
+    setScopePreviewLoading(true);
+
+    (async () => {
+      const limited = paths.slice(0, 24);
+      const results = await Promise.all(
+        limited.map(async (p) => {
+          try {
+            const f = await api.getHorizonFragmentByPath(p);
+            const name =
+              String(f?.labels?.en || f?.label || '').trim() ||
+              String(f?.canonicalPath || '').trim().split('/').filter(Boolean).slice(-1)[0] ||
+              p.split('/').filter(Boolean).slice(-1)[0] ||
+              p;
+            const type = typeof f?.type === 'string' ? f.type : undefined;
+            return { canonicalPath: p, name, type };
+          } catch {
+            return { canonicalPath: p };
+          }
+        }),
+      );
+
+      if (!alive) return;
+      const byPath = new Map(results.map((r) => [r.canonicalPath, r]));
+      setScopePreview((prev) =>
+        prev.map((it) => {
+          const upd = byPath.get(it.canonicalPath);
+          return upd ? { ...it, ...upd } : it;
+        }),
+      );
+      setScopePreviewLoading(false);
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [lensId, lensScopePaths]);
+
+  // Add-node: search/prefetch entities by partial name (existing but previously unused API).
+  React.useEffect(() => {
+    if (!addNodeOpen) return;
+    const q = addNodeQuery.trim();
+    if (q.length < 2) {
+      addNodeAbortRef.current?.abort();
+      addNodeAbortRef.current = null;
+      setAddNodeResults([]);
+      setAddNodeLoading(false);
+      setAddNodeError(null);
+      setAddNodeActiveIndex(0);
+      return;
+    }
+
+    const cached = addNodeCacheRef.current.get(q);
+    if (cached) {
+      setAddNodeResults(cached);
+      setAddNodeLoading(false);
+      setAddNodeError(null);
+      setAddNodeActiveIndex(0);
+      return;
+    }
+
+    const handle = window.setTimeout(async () => {
+      try {
+        addNodeAbortRef.current?.abort();
+        const ac = new AbortController();
+        addNodeAbortRef.current = ac;
+        setAddNodeLoading(true);
+        setAddNodeError(null);
+
+        const res = await api.searchHorizonEntities(q, 10, ac.signal);
+        const entities = Array.isArray(res?.entities) ? (res.entities as any[]) : [];
+        const next: HorizonSearchEntity[] = entities
+          .filter(Boolean)
+          .map((e: any) => ({
+            id: String(e.id || '').trim(),
+            canonicalPath: String(e.canonicalPath || '').trim(),
+            name: String(e.name || '').trim(),
+            type: String(e.type || '').trim(),
+            description: typeof e.description === 'string' ? e.description : undefined,
+            location: typeof e.location === 'string' ? e.location : undefined,
+            sector: typeof e.sector === 'string' ? e.sector : undefined,
+          }))
+          .filter((e) => e.canonicalPath && e.name);
+
+        addNodeCacheRef.current.set(q, next);
+        setAddNodeResults(next);
+        setAddNodeActiveIndex(0);
+      } catch (err: any) {
+        // Ignore aborts
+        if (err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') return;
+        console.warn('[Cockpit] add-node search failed', err);
+        setAddNodeError(err?.message || 'Search failed');
+      } finally {
+        setAddNodeLoading(false);
+      }
+    }, 180);
+
+    return () => window.clearTimeout(handle);
+  }, [addNodeOpen, addNodeQuery]);
 
   // Refs for synchronous tracking of expanded nodes (avoids stale state issues)
   const expandedNodesRef = React.useRef<Set<string>>(new Set());
@@ -221,7 +480,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     const fid = String(fragmentId || '').trim();
     let label: string | undefined;
     try {
-      const currentNodes: Node<HorizonNodeData>[] = (reactFlowInstanceRef.current as any)?.getNodes?.() || [];
+      const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
       const n = currentNodes.find((x) => String((x.data as any)?.fragmentId || x.id || '').trim() === fid);
       const d: any = n?.data;
       label = (d?.label as string) || (d?.canonicalPath as string) || undefined;
@@ -655,7 +914,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         
         // Преобразуем LensItems в ноды и рёбра
         const { nodes: loadedNodes, edges: loadedEdges } = convertLensItemsToGraph(items);
-        console.log('[Cockpit] Initial load converted:', { nodes: loadedNodes.length, edges: loadedEdges.length });
+        dbg('[Cockpit] Initial load converted:', { nodes: loadedNodes.length, edges: loadedEdges.length });
         setNodes(loadedNodes);
         setEdges(loadedEdges);
         
@@ -672,7 +931,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     };
 
     loadLensItems();
-  }, [lensId, setNodes, setEdges]);
+  }, [lensId, setNodes, setEdges, dbg]);
 
   // Преобразование LensItems в ReactFlow ноды и рёбра
   const convertLensItemsToGraph = useCallback((items: LensItem[] | null | undefined) => {
@@ -680,8 +939,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     if (!Array.isArray(items)) {
       console.warn('[Cockpit] convertLensItemsToGraph received non-array, defaulting to []:', items);
     }
-    console.log('[Cockpit] convertLensItemsToGraph called with items:', safeItems.length);
-    console.log('[Cockpit] Sample items:', safeItems.slice(0, 3).map(item => ({ 
+    dbg('[Cockpit] convertLensItemsToGraph called with items:', safeItems.length);
+    dbg('[Cockpit] Sample items:', safeItems.slice(0, 3).map(item => ({ 
       id: item.id, 
       kind: item.kind, 
       fragmentId: item.fragmentId,
@@ -706,18 +965,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       
       if (!isExplicitNode && !isLikelyNode && kind) {
         // Only log if kind exists but isn't 'node'
-        console.log('[Cockpit] Item is not a node:', { id: item.id, kind, hasFragmentId });
+        dbg('[Cockpit] Item is not a node:', { id: item.id, kind, hasFragmentId });
       }
       
       return isExplicitNode || isLikelyNode;
     });
-    console.log('[Cockpit] Filtered node items:', nodeItems.length, 'out of', safeItems.length);
-    console.log('[Cockpit] Node items details:', nodeItems.map(item => ({
-      id: item.id,
-      fragmentId: item.fragmentId,
-      kind: item.kind,
-      hasPosition: !!item.position
-    })));
+    dbg('[Cockpit] Filtered node items:', nodeItems.length, 'out of', safeItems.length);
+    dbg(
+      '[Cockpit] Node items sample:',
+      nodeItems.slice(0, 25).map(item => ({
+        id: item.id,
+        fragmentId: item.fragmentId,
+        kind: item.kind,
+        hasPosition: !!item.position
+      }))
+    );
     
     nodeItems.forEach(item => {
         const fragmentId = item.fragmentId ? norm(item.fragmentId) : '';
@@ -806,13 +1068,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       });
 
       if (skippedEdges.length > 0) {
-        console.log(
+        dbg(
           `[Cockpit] ${skippedEdges.length} edges skipped (endpoints not loaded). Use + to load related fragments.`,
         );
       }
-      console.log('[Cockpit] Converted to graph:', { nodes: graphNodes.length, edges: graphEdges.length });
+      dbg('[Cockpit] Converted to graph:', { nodes: graphNodes.length, edges: graphEdges.length });
     return { nodes: graphNodes, edges: graphEdges };
-  }, [norm]);
+  }, [norm, dbg]);
 
   // Загрузка графа из Cockpit API и сохранение в LensItems
   const handleLoadGraph = useCallback(async () => {
@@ -835,25 +1097,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       // 1. Удаляем существующие LensItems (идемпотентно)
       if (lensItems.length > 0) {
-        console.log('[Cockpit] Clearing existing lens items...', lensItems.length);
+        dbg('[Cockpit] Clearing existing lens items...', lensItems.length);
         // Удаляем в фоне, не ждём завершения
         Promise.all(
           lensItems.map(item => api.deleteLensItem(lensId, item.id).catch(err => {
             console.warn('[Cockpit] Failed to delete lens item', item.id, err);
           }))
         ).then(() => {
-          console.log('[Cockpit] Cleared existing lens items');
+          dbg('[Cockpit] Cleared existing lens items');
         });
       }
 
       // 2. Загружаем граф из Cockpit API
-      console.log('[Cockpit] Loading graph from cockpit API...');
+      dbg('[Cockpit] Loading graph from cockpit API...');
       const cockpitData = await api.getHorizonLensCockpit(lensId);
       
       const fragments = cockpitData.graph.nodes || [];
       const edges = cockpitData.graph.edges || [];
 
-      console.log('[Cockpit] Loaded graph:', { fragments: fragments.length, edges: edges.length });
+      dbg('[Cockpit] Loaded graph:', { fragments: fragments.length, edges: edges.length });
 
       // 3. Сразу преобразуем в ReactFlow узлы и рёбра для отображения
       const graphNodes: Node<HorizonNodeData>[] = [];
@@ -961,7 +1223,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       });
 
       // 4. Применяем ELK layout и отображаем граф
-      console.log('[Cockpit] Applying ELK layout to nodes:', graphNodes.length);
+      dbg('[Cockpit] Applying ELK layout to nodes:', graphNodes.length);
       const layoutedNodes = await layoutFullGraph(graphNodes, graphEdges, {
         direction: 'DOWN',
         nodeWidth: ELK_NODE_WIDTH,
@@ -971,7 +1233,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         maxChildRows: ELK_MAX_CHILD_ROWS,
       });
 
-      console.log('[Cockpit] Setting nodes and edges:', { nodes: layoutedNodes.length, edges: graphEdges.length });
+      dbg('[Cockpit] Setting nodes and edges:', { nodes: layoutedNodes.length, edges: graphEdges.length });
       // Reset collapse bookkeeping for a fresh graph
       baseNodeIdsRef.current = new Set(layoutedNodes.filter((n) => !(n.data as any)?.isGroup).map((n) => n.id));
       baseEdgeIdsRef.current = new Set(graphEdges.map((e) => e.id));
@@ -1010,13 +1272,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         }
         setGridState(g);
 
-            if (import.meta.env.DEV) {
-              console.log('[Cockpit] Grid initialized from root nodes:', {
-                roots: roots.map((r) => r.id),
-                rootNodeId: g.rootNodeId,
-                cellCount: g.cells.size,
-              });
-            }
+            dbg('[Cockpit] Grid initialized from root nodes:', {
+              roots: roots.map((r) => r.id),
+              rootNodeId: g.rootNodeId,
+              cellCount: g.cells.size,
+            });
           } catch (e) {
             console.warn('[Cockpit] Failed to init grid from roots', e);
           }
@@ -1031,9 +1291,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       }, 100);
 
       // 5. Сохраняем LensItems асинхронно в фоне и обновляем ID
-      console.log('[Cockpit] Saving lens items in background...', { nodes: fragments.length, edges: edges.length });
+      dbg('[Cockpit] Saving lens items in background...', { nodes: fragments.length, edges: edges.length });
       
       // Создаём LensItems для сохранения
+      const posByFragmentId = new Map<string, { x: number; y: number }>();
+      for (const n of layoutedNodes) {
+        const id = norm(n.id);
+        if (id && n.position) posByFragmentId.set(id, n.position);
+      }
       const nodeItems: Partial<LensItem>[] = fragments.map((fragment: any, index: number) => {
         const stateMetrics: Record<string, number> = {};
         if (fragment.state) {
@@ -1055,26 +1320,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           type: fragment.type,
           state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
           status: fragment.status,
-          position: layoutedNodes[index]?.position,
+          position: posByFragmentId.get(norm(fragment.id)),
           critical: false,
           expanded: false,
           collapsed: false,
         };
       });
 
-      const edgeItems: Partial<LensItem>[] = edges.map((edge: any) => {
-        const sourceFragment = fragments.find((f: any) => f.id === edge.sourceFragmentId || f.id === edge.source);
-        const targetFragment = fragments.find((f: any) => f.id === edge.targetFragmentId || f.id === edge.target);
-        
+      // Persist edges in the same order as we render them (graphEdges) to keep response↔edge mapping stable.
+      const edgeItems: Partial<LensItem>[] = graphEdges.map((e: any) => {
+        const edgeType = String(e?.data?.edgeType || e?.label || e?.data?.subkind || '').trim() || 'DEPENDS_ON';
         return {
           kind: 'edge' as const,
-          subkind: edge.type || 'DEPENDS_ON',
-          sourceFragmentId: norm(sourceFragment?.id || edge.sourceFragmentId || edge.source),
-          targetFragmentId: norm(targetFragment?.id || edge.targetFragmentId || edge.target),
-          edgeType: edge.type,
-          criticality: edge.properties?.criticality,
-          amplification: edge.properties?.amplification,
-          latencyHours: edge.properties?.latencyHours,
+          subkind: edgeType,
+          sourceFragmentId: norm(e.source),
+          targetFragmentId: norm(e.target),
+          edgeType: edgeType as any,
+          criticality: e?.data?.criticality,
+          amplification: e?.data?.amplification,
+          latencyHours: e?.data?.latencyHours,
           direction: 'forward' as const,
         };
       });
@@ -1085,14 +1349,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         ...edgeItems.map(item => api.createLensItem(lensId, item)),
       ])
         .then((responses) => {
-          console.log('[Cockpit] Saved lens items:', responses.length);
+          dbg('[Cockpit] Saved lens items:', responses.length);
           
           // Обновляем lensItems с полученными ID
           const createdItems: LensItem[] = [];
+          const nodeLensItemIdByFragmentId = new Map<string, string>();
+          const edgeLensItemIdByLocalEdgeId = new Map<string, string>();
           
           responses.slice(0, nodeItems.length).forEach((response, index) => {
             const itemData = nodeItems[index];
-            const node = layoutedNodes[index];
+            const fragmentId = String(itemData.fragmentId || '').trim();
+            if (fragmentId) nodeLensItemIdByFragmentId.set(fragmentId, response.id);
             createdItems.push({
               id: response.id,
               tenantId: '',
@@ -1109,20 +1376,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               expanded: itemData.expanded,
               collapsed: itemData.collapsed,
               critical: itemData.critical,
-              position: node?.position,
+              position: fragmentId ? posByFragmentId.get(fragmentId) : undefined,
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             });
-            
-            // Обновляем lensItemId в узле
-            if (node) {
-              node.data.lensItemId = response.id;
-            }
           });
           
-          responses.slice(nodeItems.length).forEach((response, index) => {
+          responses.slice(nodeItems.length, nodeItems.length + edgeItems.length).forEach((response, index) => {
             const itemData = edgeItems[index];
-            const edge = graphEdges[index];
+            const localEdgeId = String((graphEdges[index] as any)?.id || '').trim();
+            if (localEdgeId) edgeLensItemIdByLocalEdgeId.set(localEdgeId, response.id);
             createdItems.push({
               id: response.id,
               tenantId: '',
@@ -1140,17 +1403,31 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             });
-            
-            // Обновляем lensItemId в ребре
-            if (edge && edge.data) {
-              edge.data.lensItemId = response.id;
-            }
           });
           
           // Обновляем состояние с полученными ID
           setLensItems(createdItems);
-          setNodes([...layoutedNodes]); // Триггерим обновление
-          setEdges([...graphEdges]); // Триггерим обновление
+          // Avoid a full graph refresh: only patch lensItemId fields (keeps positions and avoids jank).
+          setNodes((prev) =>
+            prev.map((n) => {
+              const d: any = n?.data;
+              if (d?.isGroup) return n;
+              const fid = norm(d?.fragmentId || n.id);
+              const nextId = fid ? nodeLensItemIdByFragmentId.get(fid) : undefined;
+              if (!nextId || d?.lensItemId === nextId) return n;
+              return { ...n, data: { ...d, lensItemId: nextId } } as any;
+            }),
+          );
+          setEdges((prev) =>
+            prev.map((e) => {
+              const eid = String((e as any)?.id || '').trim();
+              const nextId = eid ? edgeLensItemIdByLocalEdgeId.get(eid) : undefined;
+              if (!nextId) return e;
+              const d: any = (e as any)?.data || {};
+              if (d.lensItemId === nextId) return e;
+              return { ...(e as any), data: { ...d, lensItemId: nextId } } as any;
+            }),
+          );
         })
         .catch((err) => {
           console.error('[Cockpit] Failed to create lens items', err);
@@ -1234,10 +1511,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     const record = expansionsRef.current.get(fragmentId);
     if (!record) return;
 
-    // Use instance snapshots to avoid stale state issues.
-    const inst: any = reactFlowInstanceRef.current;
-    const currentNodes: Node<HorizonNodeData>[] = inst?.getNodes?.() || [];
-    const currentEdges: Edge[] = inst?.getEdges?.() || [];
+    // Use latest canonical state snapshots to avoid leaking transient (hover-derived) styles from rendered nodes.
+    const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
+    const currentEdges: Edge[] = edgesStateRef.current || [];
 
     const decCount = (m: Map<string, number>, key: string) => {
       const prev = m.get(key) || 0;
@@ -1443,7 +1719,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
     // Снапшотим исходную ноду СРАЗУ (до await), чтобы второй порядок не ломался.
     // IMPORTANT: exclude group nodes from search - they may have fragmentId from exemplarData
-    const rfNodes: Node<HorizonNodeData>[] = (reactFlowInstanceRef.current as any)?.getNodes?.() || [];
+    const rfNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
     const sourceSnapshot = rfNodes.find(
       (n) => (n?.id === fragmentId || n?.data?.fragmentId === fragmentId) && !(n?.data as any)?.isGroup
     ) || null;
@@ -1473,7 +1749,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         )
       : null;
 
-    console.log('[Cockpit] Expansion context:', {
+    dbg('[Cockpit] Expansion context:', {
       fragmentId,
       isFirstExpansion,
       isNodeInGroup,
@@ -1498,7 +1774,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
     try {
       const dependencies = await api.getFragmentDependencies(fragmentId, { direction: 'both' });
-      console.log('[Cockpit] Loaded dependencies for fragment:', fragmentId, dependencies);
+      dbg('[Cockpit] Loaded dependencies for fragment:', fragmentId, dependencies);
 
       const depEdges: any[] = Array.isArray(dependencies?.edges) ? dependencies.edges : [];
       if (depEdges.length === 0) {
@@ -1527,17 +1803,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         }),
       );
       const relatedFragments = (await Promise.all(fragmentPromises)).filter((f) => f !== null) as any[];
-      console.log('[Cockpit] Loaded related fragments:', relatedFragments.length);
+      dbg('[Cockpit] Loaded related fragments:', relatedFragments.length);
 
       // Получаем актуальное состояние узлов
-      const currentNodes: Node<HorizonNodeData>[] = (reactFlowInstanceRef.current as any)?.getNodes?.() || [];
-      const currentEdges: Edge[] = (reactFlowInstanceRef.current as any)?.getEdges?.() || [];
-      const existingNodeIds = new Set(currentNodes.map((n) => n.id));
+      const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
+      const currentEdges: Edge[] = edgesStateRef.current || [];
+      const existingNodeIds = new Set(currentNodes.map((n) => norm(n.id)));
       const fragmentToNodeIdMap = new Map<string, string>();
+      const nodeById = new Map<string, Node<HorizonNodeData>>();
+      const nodeByFragmentId = new Map<string, Node<HorizonNodeData>>();
 
       for (const n of currentNodes) {
         const fid = n.data?.fragmentId ? norm(n.data.fragmentId) : '';
         const nid = norm(n.id);
+        if (nid) nodeById.set(nid, n);
+        if (fid) nodeByFragmentId.set(fid, n);
         if (fid) fragmentToNodeIdMap.set(fid, nid);
       }
 
@@ -1557,12 +1837,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         if (fid && existingNodeIds.has(fid) && fid !== fragmentId) {
           // Don't group the root node - it's the center of the entire graph
           if (fid === rootNodeIdRef.current) {
-            console.log('[Cockpit] Skipping root node from grouping:', fid);
+            dbg('[Cockpit] Skipping root node from grouping:', fid);
             continue;
           }
           // Don't group nodes that have been expanded (they are centers of their own subgraphs)
           if (expandedNodesRef.current.has(fid)) {
-            console.log('[Cockpit] Skipping already expanded node from grouping:', fid);
+            dbg('[Cockpit] Skipping already expanded node from grouping:', fid);
             continue;
           }
           
@@ -1580,7 +1860,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
          if (norm(e.source) === fragmentId && !expandedNodesRef.current.has(norm(e.target))) {
              // Outgoing edge from current node to existing target
              const tId = norm(e.target);
-             const targetNode = currentNodes.find(n => norm(n.id) === tId || norm(n.data?.fragmentId) === tId);
+             const targetNode = nodeById.get(tId) || nodeByFragmentId.get(tId);
              if (targetNode && !targetNode.data?.parentFragmentId) {
                  existingRelatedIds.add(tId);
                  // We will need edge type later, adding to depEdges-like structure would be complex here,
@@ -1590,7 +1870,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
          if (norm(e.target) === fragmentId && !expandedNodesRef.current.has(norm(e.source))) {
              // Incoming edge from existing source to current node
              const sId = norm(e.source);
-             const sourceNode = currentNodes.find(n => norm(n.id) === sId || norm(n.data?.fragmentId) === sId);
+             const sourceNode = nodeById.get(sId) || nodeByFragmentId.get(sId);
              if (sourceNode && !sourceNode.data?.parentFragmentId) {
                  existingRelatedIds.add(sId);
              }
@@ -1598,7 +1878,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       }
 
       if (newFragmentsUnsorted.length === 0 && existingRelatedIds.size === 0) {
-        console.log('[Cockpit] No new or existing related fragments to process');
+        dbg('[Cockpit] No new or existing related fragments to process');
         setNodes((prev) =>
           prev.map((n) =>
             n.id === fragmentId || n.data.fragmentId === fragmentId
@@ -1713,7 +1993,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         return aPriority - bPriority;
       });
 
-      console.log('[Cockpit] Sorted fragments by edge priority:', 
+      dbg('[Cockpit] Sorted fragments by edge priority:', 
         newFragments.slice(0, 5).map(f => ({
           id: norm(f?.id || ''),
           edgeType: fragmentEdgeType.get(norm(f?.id || '')),
@@ -1770,7 +2050,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       // Добавляем новые фрагменты в маппинг
       for (const n of newNodes) {
-        fragmentToNodeIdMap.set(n.id, n.id);
+        const nid = norm(n.id);
+        const fid = norm((n.data as any)?.fragmentId || n.id);
+        if (nid) nodeById.set(nid, n);
+        if (fid) nodeByFragmentId.set(fid, n);
+        if (fid) fragmentToNodeIdMap.set(fid, nid || fid);
       }
 
       // Создаём новые рёбра
@@ -1818,8 +2102,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         // Ноды в одном grid, если:
         // 1. Одна из нод является раскрываемой нодой (fragmentId)
         // 2. Обе ноды имеют одинаковый parentFragmentId или rootFragmentId
-        const sourceNode = currentNodes.find(n => (n.data as any)?.fragmentId === s) || newNodes.find(n => n.id === s);
-        const targetNode = currentNodes.find(n => (n.data as any)?.fragmentId === t) || newNodes.find(n => n.id === t);
+        const sourceNode = nodeByFragmentId.get(s) || nodeById.get(s);
+        const targetNode = nodeByFragmentId.get(t) || nodeById.get(t);
         
         const sourceParentId = sourceNode ? (sourceNode.data as any)?.parentFragmentId : null;
         const targetParentId = targetNode ? (targetNode.data as any)?.parentFragmentId : null;
@@ -1830,8 +2114,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const getNodePosition = (nodeId: string): 'top' | 'bottom' | 'left' | 'right' | 'center' | undefined => {
           if (nodeId === fragmentId) return 'center';
           
-          const node = currentNodes.find(n => (n.data as any)?.fragmentId === nodeId) || 
-                       newNodes.find(n => n.id === nodeId);
+          const node = nodeByFragmentId.get(nodeId) || nodeById.get(nodeId);
           
           if (!node) return undefined;
           
@@ -2039,7 +2322,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           prevExtent: (n as any).extent,
         };
       })();
-      console.log('[Cockpit] Freeform extraction check:', {
+      dbg('[Cockpit] Freeform extraction check:', {
         isNodeInGroup,
         nodeSemanticGroup,
         isFreeformLayout,
@@ -2047,7 +2330,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       });
 
       if (isNodeInGroup && nodeSemanticGroup && isFreeformLayout) {
-        console.log('[Cockpit] Extracting node from group:', fragmentId, 'semantic group:', nodeSemanticGroup);
+        dbg('[Cockpit] Extracting node from group:', fragmentId, 'semantic group:', nodeSemanticGroup);
 
         // Find the parent node (the one that expanded and created the group containing this node)
         const expandingNodeParentId = (sourceSnapshot.data as any)?.parentFragmentId;
@@ -2076,7 +2359,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             }
             // В linear режиме позиционирование будет другим (TODO)
 
-            console.log('[Cockpit] Repositioning extracted node to grid cell:', cellPos, 'canvas:', canvasPos);
+            dbg('[Cockpit] Repositioning extracted node to grid cell:', cellPos, 'canvas:', canvasPos);
 
             const extracted = {
               ...n,
@@ -2086,7 +2369,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               position: canvasPos,
               data: newData,
             };
-            console.log('[Cockpit] Extracted node result:', {
+            dbg('[Cockpit] Extracted node result:', {
               id: extracted.id,
               parentId: (extracted as any).parentId,
               parentNode: (extracted as any).parentNode,
@@ -2154,7 +2437,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const edgeTypeFromParent = fragmentEdgeType.get(nodeFragmentId) || '';
         const directionFromParent = fragmentDirection.get(nodeFragmentId) || 'outgoing';
 
-        console.log('[Cockpit] Updating existing node for grouping (freeform):', nodeFragmentId, { edgeTypeFromParent, directionFromParent });
+        dbg('[Cockpit] Updating existing node for grouping (freeform):', nodeFragmentId, { edgeTypeFromParent, directionFromParent });
 
         const updated = {
           ...n,
@@ -2171,7 +2454,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       // Применяем layout для позиционирования новых узлов относительно родителя
       // Логика зависит от режима раскладки (freeform или linear)
-      console.log('[Cockpit] Applying layout for new nodes:', newNodes.length, 'existing related:', existingRelatedIds.size, 'layout mode:', layoutMode);
+      dbg('[Cockpit] Applying layout for new nodes:', newNodes.length, 'existing related:', existingRelatedIds.size, 'layout mode:', layoutMode);
       
       let layoutedNodes: Node<HorizonNodeData>[];
       let linearEdgesAfterLayout: Edge[] | null = null;
@@ -2250,7 +2533,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         (n) => (norm(n.data?.fragmentId || n.id) === fragmentId) && !(n.data as any)?.isGroup
       );
       if (expandedNodeAfterLayout) {
-        console.log('[Cockpit] Expanded node AFTER layout:', {
+        dbg('[Cockpit] Expanded node AFTER layout:', {
           id: expandedNodeAfterLayout.id,
           parentId: (expandedNodeAfterLayout as any).parentId,
           parentNode: (expandedNodeAfterLayout as any).parentNode,
@@ -2402,9 +2685,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         expandedNodesRef.current.add(fragmentId);
         if (rootNodeIdRef.current === null) {
           rootNodeIdRef.current = fragmentId;
-          console.log('[Cockpit] Refs: set root node:', fragmentId);
+          dbg('[Cockpit] Refs: set root node:', fragmentId);
         }
-        console.log('[Cockpit] Refs: marked as expanded:', fragmentId, 'expandedNodes:', Array.from(expandedNodesRef.current));
+        dbg('[Cockpit] Refs: marked as expanded:', fragmentId, 'expandedNodes:', Array.from(expandedNodesRef.current));
 
         // Update grid state: add expanded node to the grid (freeform only)
         setGridState((prevGrid) => {
@@ -2419,7 +2702,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               type: 'node',
               nodeId: fragmentId,
             });
-            console.log('[Cockpit] Grid: set root node at (0, 0):', fragmentId);
+            dbg('[Cockpit] Grid: set root node at (0, 0):', fragmentId);
           } else if (isNodeInGroup && nodeSemanticGroup) {
             // Node was extracted from a group, add it to its new cell
             const expandingNodeParentId = (sourceSnapshot.data as any)?.parentFragmentId;
@@ -2430,7 +2713,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               type: 'node',
               nodeId: fragmentId,
             });
-            console.log('[Cockpit] Grid: added extracted node at cell:', cellPos, fragmentId);
+            dbg('[Cockpit] Grid: added extracted node at cell:', cellPos, fragmentId);
           }
 
           // Mark this node as expanded
@@ -2438,7 +2721,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           newExpandedNodes.add(fragmentId);
           newGrid.expandedNodes = newExpandedNodes;
 
-          console.log('[Cockpit] Grid state updated:', {
+          dbg('[Cockpit] Grid state updated:', {
             rootNodeId: newGrid.rootNodeId,
             expandedNodes: Array.from(newGrid.expandedNodes),
             cellCount: newGrid.cells.size,
@@ -2589,23 +2872,44 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     return { nodeIds: visited, edgeIds: usedEdgeIds };
   }, [perfMode, hoverHighlightMode, hoveredNodeId, nodes, edges]);
 
+  // Pagination: hide children on non-active pages; never render edges connected to hidden nodes.
+  const hiddenNodeIds = React.useMemo(() => {
+    const out = new Set<string>();
+    for (const n of nodes) {
+      if ((n as any).hidden) out.add(n.id);
+    }
+    return out;
+  }, [nodes]);
+
+  const visibleEdges = React.useMemo(() => {
+    if (hiddenNodeIds.size === 0) return edges;
+    return edges.filter((e) => !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target));
+  }, [edges, hiddenNodeIds]);
+
+  // Base edge presentation (labels hidden, dimmed) - computed only when the underlying edge set changes.
+  // This avoids O(E) object cloning on every hover state update when nothing is hovered/selected.
+  const baseVisibleEdges = React.useMemo(() => {
+    const DIM_OPACITY = 0.22;
+    if (perfMode) return visibleEdges;
+    return visibleEdges.map((e) => {
+      const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
+      return {
+        ...e,
+        label: undefined,
+        style: { ...baseStyle, opacity: DIM_OPACITY },
+      };
+    });
+  }, [visibleEdges, perfMode]);
+
   // Derive edges styles for hover highlighting (do not mutate base edges)
   // Labels are hidden by default to reduce visual noise, shown only on hover
   const displayEdges = React.useMemo(() => {
     const DIM_OPACITY = 0.22;
     const FADE_OPACITY = 0.12;
 
-    // Collect hidden node IDs (for pagination filtering)
-        const hiddenNodeIds = new Set(nodes.filter((n) => (n as any).hidden).map((n) => n.id));
-
-    // Filter out edges connected to hidden nodes
-    const visibleEdges = edges.filter((e) =>
-      !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target)
-    );
-
     // Perf mode: do not derive per-edge styles/labels (avoids O(E) object cloning on hover),
     // just return filtered edges.
-    if (perfMode) return visibleEdges;
+    if (perfMode) return baseVisibleEdges;
 
     const baseStyled = (e: Edge) => {
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
@@ -2625,7 +2929,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
     // Edge hover: show only this edge's label
     if (hoveredEdgeId) {
-      return visibleEdges.map((e) => {
+      return baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isHovered = e.id === hoveredEdgeId;
         if (isHovered) {
@@ -2645,7 +2949,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       const groupNode = nodes.find((n) => n.id === hoveredGroupId);
       const gd: any = groupNode?.data;
       if (!groupNode || !gd?.isGroup) {
-        return visibleEdges.map((e) => {
+        return baseVisibleEdges.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
         });
@@ -2667,7 +2971,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           .map((n) => n.id),
       );
       if (!groupParentId || childIds.size === 0) {
-        return visibleEdges.map((e) => {
+        return baseVisibleEdges.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
         });
@@ -2693,7 +2997,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         return e.target === groupParentId && childIds.has(e.source);
       };
 
-      return visibleEdges.map((e) => {
+      return baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         if (isGroupEdge(e)) {
           const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
@@ -2710,7 +3014,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     // Hover highlight mode: highlight selected relation cluster and fade everything else.
     if (hoverHighlight && hoveredNodeId) {
       const hiEdgeIds = hoverHighlight.edgeIds;
-      return visibleEdges.map((e) => {
+      return baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const eid = String((e as any)?.id || '').trim();
         const isHiEdge = eid && hiEdgeIds.has(eid);
@@ -2729,7 +3033,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     // Node hover: highlight incident edges and show their labels
     if (hoveredNodeId) {
       const nodeId = hoveredNodeId;
-      return visibleEdges.map((e) => {
+      return baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
@@ -2747,7 +3051,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     // Selected node (when not hovering): highlight incident edges, show labels
     if (selectedNodeId) {
       const nodeId = selectedNodeId;
-      return visibleEdges.map((e) => {
+      return baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
@@ -2763,11 +3067,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     }
 
     // Default: dim all edges, hide labels
-    return visibleEdges.map((e) => {
-      const { baseStyle } = baseStyled(e);
-      return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
-    });
-  }, [edges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight]);
+    return baseVisibleEdges;
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight]);
 
   const displayNodes = React.useMemo(() => {
     if (perfMode) return nodes;
@@ -2816,7 +3117,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     setError(null);
 
     try {
-      console.log('[Cockpit] Arranging', nodes.length, 'nodes and', edges.length, 'edges', 'layout mode:', layoutMode);
+      dbg('[Cockpit] Arranging', nodes.length, 'nodes and', edges.length, 'edges', 'layout mode:', layoutMode);
 
       // Применяем layout в зависимости от режима раскладки
       const fragmentNodes = nodes.filter((n) => !(n.data as any)?.isGroup);
@@ -2927,7 +3228,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         }
       }, 100);
 
-      console.log('[Cockpit] Arrange completed');
+      dbg('[Cockpit] Arrange completed');
     } catch (err: any) {
       console.error('[Cockpit] Arrange failed:', err);
       setError(err.message || 'Failed to arrange graph');
@@ -2947,8 +3248,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         lastAppliedLayoutModeRef.current = layoutMode;
 
         // Always compute layout on fragment nodes (never on group nodes).
-        const current = (reactFlowInstanceRef.current as any)?.getNodes?.() || nodes;
-        const fragmentNodes: Node<HorizonNodeData>[] = (current as any[]).filter((n) => !(n?.data as any)?.isGroup);
+        const current = (nodesStateRef.current || nodes) as any[];
+        const fragmentNodes: Node<HorizonNodeData>[] = current.filter((n) => !(n?.data as any)?.isGroup);
 
         // Edge render style by mode (linear => curved)
         const edgeRenderType = 'default';
@@ -3121,12 +3422,243 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
 
-      console.log('[Cockpit] Downloaded', lensItems.length, 'lens items');
+      dbg('[Cockpit] Downloaded', lensItems.length, 'lens items');
     } catch (err: any) {
       console.error('[Cockpit] Download failed:', err);
       setError(err.message || 'Failed to download graph data');
     }
   }, [nodes, edges, lensId, projectId]);
+
+  const closeAddNode = React.useCallback(() => {
+    addNodeAbortRef.current?.abort();
+    addNodeAbortRef.current = null;
+    setAddNodeOpen(false);
+    setAddNodeQuery('');
+    setAddNodeResults([]);
+    setAddNodeLoading(false);
+    setAddNodeError(null);
+    setAddNodeActiveIndex(0);
+  }, []);
+
+  const extractStateMetrics = React.useCallback((raw: any): Record<string, number> | undefined => {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (typeof v === 'number') {
+        out[k] = v;
+        continue;
+      }
+      if (v && typeof v === 'object' && 'value' in (v as any)) {
+        const vv: any = (v as any).value;
+        if (typeof vv === 'number') out[k] = vv;
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }, []);
+
+  const computeNewRootPosition = React.useCallback(
+    (fragmentId: string) => {
+      // Prefer grid placement in freeform mode (keeps multi-root row aligned)
+      if (isFreeformLayout && gridState.cells.size > 0) {
+        let maxCol = -1;
+        for (const [, cell] of gridState.cells) {
+          if (cell.type !== 'node') continue;
+          if (cell.row !== 0) continue;
+          maxCol = Math.max(maxCol, cell.col);
+        }
+        const nextCol = maxCol + 1;
+        return { position: gridToCanvasPosition(0, nextCol), row: 0, col: nextCol, nodeId: fragmentId };
+      }
+
+      // Fallback: place to the right of the right-most depth=0 fragment node.
+      const roots = nodes.filter((n) => !(n.data as any)?.isGroup).filter((n) => (n.data as any)?.depth === 0);
+      const maxX = roots.reduce((acc, n) => Math.max(acc, Number(n.position?.x ?? 0)), 0);
+      const pos = { x: maxX + ELK_NODE_WIDTH + 220, y: 0 };
+      return { position: pos, row: null as any, col: null as any, nodeId: fragmentId };
+    },
+    [isFreeformLayout, gridState.cells, nodes, ELK_NODE_WIDTH],
+  );
+
+  const addNodeToLens = React.useCallback(
+    async (entity: HorizonSearchEntity) => {
+      if (!lensId) return;
+      const canonicalPath = String(entity?.canonicalPath || '').trim();
+      if (!canonicalPath) return;
+
+      // Resolve to fragment (we need fragmentId/type/labels/state)
+      let fragment: any;
+      try {
+        fragment = await api.getHorizonFragmentByPath(canonicalPath);
+      } catch (e) {
+        console.warn('[Cockpit] Failed to resolve fragment by path', canonicalPath, e);
+        setAddNodeError('Failed to load fragment');
+        return;
+      }
+
+      const fragmentId = norm(fragment?.id || '');
+      if (!fragmentId) {
+        setAddNodeError('Fragment not found');
+        return;
+      }
+
+      // If already on canvas, just focus it.
+      const existing = nodes.find((n) => norm((n.data as any)?.fragmentId || n.id) === fragmentId);
+      if (existing) {
+        try {
+          const inst: any = reactFlowInstanceRef.current;
+          inst?.fitView?.({ nodes: [existing], padding: 0.25, duration: 350 });
+        } catch {}
+        closeAddNode();
+        return;
+      }
+
+      const label =
+        String(fragment?.labels?.en || fragment?.label || entity?.name || '').trim() ||
+        canonicalPath.split('/').pop() ||
+        fragmentId;
+      const type = String(fragment?.type || entity?.type || '').trim() || undefined;
+      const state = extractStateMetrics(fragment?.state);
+
+      const placement = computeNewRootPosition(fragmentId);
+      const position = placement.position;
+
+      // Persist lens item first (so node has stable lensItemId)
+      let createdId = '';
+      try {
+        const res = await api.createLensItem(lensId, {
+          kind: 'node',
+          subkind: 'fragment',
+          fragmentId,
+          canonicalPath,
+          label,
+          type,
+          state,
+          status: fragment?.status,
+          expanded: false,
+          collapsed: false,
+          critical: false,
+          position,
+        });
+        createdId = String(res?.id || '').trim();
+      } catch (e) {
+        console.warn('[Cockpit] Failed to create lens item for node', e);
+        setAddNodeError('Failed to add node to lens');
+        return;
+      }
+
+      // Update local lensItems list (best-effort, used for download/export)
+      setLensItems((prev) => [
+        ...prev,
+        {
+          id: createdId || `node-${fragmentId}`,
+          tenantId: '',
+          projectId: projectId || '',
+          lensId,
+          kind: 'node',
+          subkind: 'fragment',
+          fragmentId,
+          canonicalPath,
+          label,
+          type,
+          state,
+          status: fragment?.status,
+          expanded: false,
+          collapsed: false,
+          critical: false,
+          position,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as any,
+      ]);
+
+      // Add node to canvas (depth=0 root)
+      const newNode: Node<HorizonNodeData> = {
+        id: fragmentId,
+        type: 'horizonFragment',
+        position,
+        data: {
+          id: fragmentId,
+          lensItemId: createdId,
+          fragmentId,
+          canonicalPath,
+          label,
+          type,
+          state,
+          status: fragment?.status,
+          expanded: false,
+          collapsed: false,
+          critical: false,
+          parentFragmentId: undefined,
+          rootFragmentId: fragmentId,
+          depth: 0,
+          onLoadRelated: invokeLoadRelated,
+          onCollapse: invokeCollapse,
+          onScopeScout: invokeScopeScout,
+        },
+      } as any;
+      setNodes((prev) => [
+        ...prev,
+        newNode as any,
+      ]);
+
+      // Update freeform grid bookkeeping (keeps multi-root placement stable)
+      if (isFreeformLayout) {
+        // If the grid wasn't initialized (e.g. graph loaded from LensItems without ELK),
+        // rebuild a minimal row0 grid from current depth=0 nodes for predictable future expansions.
+        if (gridState.cells.size === 0) {
+          const rootCandidates = [...nodes, newNode]
+            .filter((n) => !(n.data as any)?.isGroup)
+            .filter((n) => (n.data as any)?.depth === 0)
+            .sort((a, b) => (a.position?.x ?? 0) - (b.position?.x ?? 0));
+          let g = createEmptyGrid();
+          const rootId = rootCandidates[0]?.id || null;
+          g.rootNodeId = rootId;
+          for (let i = 0; i < rootCandidates.length; i++) {
+            const rid = String(rootCandidates[i]?.id || '').trim();
+            if (!rid) continue;
+            g = setGridCell(g, { row: 0, col: i, type: 'node', nodeId: rid });
+          }
+          setGridState(g);
+        } else {
+          setGridState((prevGrid) => {
+            let maxCol = -1;
+            for (const [, cell] of prevGrid.cells) {
+              if (cell.type === 'node' && cell.row === 0) maxCol = Math.max(maxCol, cell.col);
+            }
+            const col = maxCol + 1;
+            let g = prevGrid;
+            if (!g.rootNodeId) g = { ...g, rootNodeId: fragmentId };
+            g = setGridCell(g, { row: 0, col, type: 'node', nodeId: fragmentId });
+            return g;
+          });
+        }
+      }
+
+      // Fit view to the new node
+      try {
+        const inst: any = reactFlowInstanceRef.current;
+        const n = inst?.getNode?.(fragmentId);
+        if (n) inst?.fitView?.({ nodes: [n], padding: 0.25, duration: 350 });
+      } catch {}
+
+      closeAddNode();
+    },
+    [
+      lensId,
+      nodes,
+      projectId,
+      setLensItems,
+      setNodes,
+      isFreeformLayout,
+      setGridState,
+      closeAddNode,
+      extractStateMetrics,
+      computeNewRootPosition,
+      invokeLoadRelated,
+      invokeCollapse,
+      invokeScopeScout,
+    ],
+  );
 
   const bgColor = theme === 'dark' ? 'var(--bg-primary)' : 'var(--bg-primary)';
   const bgPatternColor = theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)';
@@ -3237,10 +3769,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     // Only re-layout when a fragment (not a group container) is moved and it has expanded children
     if (!node?.id || d?.isGroup) return;
 
-    const inst: any = reactFlowInstanceRef.current;
-    const currentNodes: Node<HorizonNodeData>[] = inst?.getNodes?.() || nodes;
+    const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || nodes;
     const hasChildren = currentNodes.some((n) => !((n.data as any)?.isGroup) && (n.data as any)?.parentFragmentId === node.id);
     if (!hasChildren) return;
+
+    // Linear layout is global and expensive. Dragging in Linear mode should stay snappy:
+    // we do NOT auto-relayout on drag-stop; user can press Arrange when they want a reflow.
+    if (isLinearLayout) return;
 
     try {
       // Пересборка групп после перетаскивания (freeform layout)
@@ -3260,20 +3795,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             maxChildRows: ELK_MAX_CHILD_ROWS,
           },
         );
-      } else if (isLinearLayout) {
-        // Linear layout is global: re-layout the whole visible graph
-        const currentEdgesForDrag: Edge[] = inst?.getEdges?.() || edges;
-        const fragmentNodes = currentNodes.filter((n) => !(n.data as any)?.isGroup);
-        relayouted = await layoutLinearFullGraph(fragmentNodes, currentEdgesForDrag, {
-          direction: 'DOWN',
-          nodeWidth: ELK_NODE_WIDTH,
-          nodeHeight: ELK_NODE_HEIGHT,
-          nodeSpacing: ELK_NODE_SPACING,
-          layerSpacing: ELK_LAYER_SPACING,
-          maxChildRows: ELK_MAX_CHILD_ROWS,
-        });
-        // Keep edges consistent with linear handle rules
-        setEdges(recalculateLinearHandles(currentEdgesForDrag, relayouted) as any);
       } else {
         // Fallback: используем freeform
         relayouted = await layoutExpansionWithGroups(
@@ -3365,6 +3886,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
   const Icons = {
     Refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" /></svg>,
+    Search: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>,
+    Plus: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>,
+    X: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="M6 6l12 12" /></svg>,
     Magic: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M9 3v4"/><path d="M3 7h4"/><path d="M3 3h4"/></svg>,
     Download: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
     Zap: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
@@ -3482,6 +4006,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const toolbarContent = (
     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
       <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load Graph" icon={Icons.Refresh} />
+      <IconButton
+        onClick={() => {
+          if (!lensId) return;
+          setAddNodeOpen((v) => {
+            const next = !v;
+            if (next) {
+              setAddNodeQuery('');
+              setAddNodeResults([]);
+              setAddNodeError(null);
+              setAddNodeActiveIndex(0);
+            }
+            return next;
+          });
+        }}
+        disabled={!lensId}
+        active={addNodeOpen}
+        title={addNodeOpen ? 'Close add-node' : 'Add node'}
+        icon={Icons.Plus}
+      />
+
+      {/* Add-node input (inline in toolbar) */}
+
       {LayoutDropdown}
       <IconButton onClick={handleArrange} disabled={arranging || nodes.length === 0} title="Arrange Graph" icon={Icons.Magic} />
       <IconButton onClick={handleDownload} disabled={nodes.length === 0 && edges.length === 0} title="Download Graph" icon={Icons.Download} />
@@ -3576,6 +4122,55 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     </div>
   );
 
+  const handleNodeMouseEnter = React.useCallback(
+    (_: any, node: Node<HorizonNodeData>) => {
+      if (perfMode) return;
+      const d: any = node?.data;
+      if (d?.isGroup) {
+        pendingHoverRef.current.hoveredGroupId = node.id;
+        pendingHoverRef.current.hoveredNodeId = null;
+      } else {
+        pendingHoverRef.current.hoveredNodeId = node.id;
+        pendingHoverRef.current.hoveredGroupId = null;
+      }
+      scheduleHoverCommit();
+    },
+    [perfMode, scheduleHoverCommit],
+  );
+
+  const handleNodeMouseLeave = React.useCallback(
+    (_: any, node: Node<HorizonNodeData>) => {
+      if (perfMode) return;
+      const d: any = node?.data;
+      if (d?.isGroup) {
+        if (pendingHoverRef.current.hoveredGroupId === node.id) {
+          pendingHoverRef.current.hoveredGroupId = null;
+        }
+      } else {
+        if (pendingHoverRef.current.hoveredNodeId === node.id) {
+          pendingHoverRef.current.hoveredNodeId = null;
+        }
+      }
+      scheduleHoverCommit();
+    },
+    [perfMode, scheduleHoverCommit],
+  );
+
+  const handleEdgeMouseEnter = React.useCallback(
+    (_: any, edge: Edge) => {
+      if (perfMode) return;
+      pendingHoverRef.current.hoveredEdgeId = edge.id;
+      scheduleHoverCommit();
+    },
+    [perfMode, scheduleHoverCommit],
+  );
+
+  const handleEdgeMouseLeave = React.useCallback(() => {
+    if (perfMode) return;
+    pendingHoverRef.current.hoveredEdgeId = null;
+    scheduleHoverCommit();
+  }, [perfMode, scheduleHoverCommit]);
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: '600px' }}>
       {/* Toolbar via Portal if container provided, otherwise inline fallback */}
@@ -3607,31 +4202,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             onEdgeClick={handleEdgeClick}
             onPaneClick={handlePaneClick}
             onNodeDragStop={handleNodeDragStop}
-            onNodeMouseEnter={(_, node) => {
-              if (perfMode) return;
-              const d: any = node?.data;
-              if (d?.isGroup) {
-                setHoveredGroupId(node.id);
-                setHoveredNodeId(null);
-              } else {
-                setHoveredNodeId(node.id);
-                setHoveredGroupId(null);
-              }
-            }}
-            onNodeMouseLeave={(_, node) => {
-              if (perfMode) return;
-              const d: any = node?.data;
-              if (d?.isGroup) setHoveredGroupId(null);
-              else setHoveredNodeId(null);
-            }}
-            onEdgeMouseEnter={(_, edge) => {
-              if (perfMode) return;
-              setHoveredEdgeId(edge.id);
-            }}
-            onEdgeMouseLeave={() => {
-              if (perfMode) return;
-              setHoveredEdgeId(null);
-            }}
+            onNodeMouseEnter={handleNodeMouseEnter}
+            onNodeMouseLeave={handleNodeMouseLeave}
+            onEdgeMouseEnter={handleEdgeMouseEnter}
+            onEdgeMouseLeave={handleEdgeMouseLeave}
             nodeTypes={HORIZON_NODE_TYPES}
             edgeTypes={CUSTOM_EDGE_TYPES}
             onInit={(instance) => {
@@ -3702,20 +4276,374 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              pointerEvents: 'none',
+              pointerEvents: 'auto',
+              padding: 16,
             }}
           >
-            <div className="text-center">
-              <div className="text-sm mb-2" style={{ color: 'var(--text-heading)' }}>
-                No graph data
-              </div>
-              <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
-                Click \"Load Graph\" to load graph from lens
+            <div
+              style={{
+                width: 420,
+                maxWidth: 'calc(100vw - 32px)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                textAlign: 'center',
+              }}
+            >
+              {(lensName || (scopePreview && scopePreview.length > 0)) ? (
+                <>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-heading)', marginBottom: 4 }}>
+                    {lensName || 'Graph Scope'}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 24 }}>
+                     {scopePreview.length} object{scopePreview.length !== 1 ? 's' : ''} of focus
+                  </div>
+
+                  <div
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                      borderRadius: 12,
+                      padding: '8px 0',
+                      marginBottom: 24,
+                    }}
+                  >
+                    {scopePreviewLoading ? (
+                      <div style={{ padding: '12px', fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center' }}>
+                        Resolving scope...
+                      </div>
+                    ) : scopePreview.length === 0 ? (
+                      <div style={{ padding: '12px', fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center' }}>
+                        No objects configured
+                      </div>
+                    ) : (
+                      <>
+                        {scopePreview.slice(0, 5).map((it) => (
+                          <div
+                            key={it.canonicalPath}
+                            style={{
+                              padding: '8px 16px',
+                              display: 'flex',
+                              alignItems: 'baseline',
+                              gap: 10,
+                              borderBottom: '1px solid transparent',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: '50%',
+                                background: 'var(--accent-primary, #3B82F6)',
+                                flexShrink: 0,
+                                marginTop: 6,
+                              }}
+                            />
+                            <div
+                              style={{
+                                flex: 1,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                fontSize: 13,
+                                fontWeight: 600,
+                                color: 'var(--text-heading)',
+                              }}
+                              title={it.name || it.canonicalPath}
+                            >
+                              {it.name || it.canonicalPath}
+                            </div>
+                            {it.type && (
+                              <div
+                                style={{
+                                  fontSize: 10,
+                                  color: 'var(--text-secondary-strong)',
+                                  textTransform: 'uppercase',
+                                  fontWeight: 600,
+                                  flexShrink: 0,
+                                  opacity: 0.7,
+                                }}
+                              >
+                                {it.type}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        {scopePreview.length > 5 && (
+                          <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                            ...and {scopePreview.length - 5} more
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 24 }}>
+                  Ready to load graph
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void handleLoadGraph()}
+                disabled={!lensId || loading}
+                style={{
+                  height: 40,
+                  padding: '0 24px',
+                  borderRadius: 20,
+                  background: 'var(--accent-primary, #3B82F6)',
+                  color: '#fff',
+                  border: 'none',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: (!lensId || loading) ? 'not-allowed' : 'pointer',
+                  opacity: (!lensId || loading) ? 0.7 : 1,
+                  boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+                  transition: 'all 0.2s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                  Load Graph
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Loading Overlay */}
+        {loading && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: theme === 'dark' ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.4)',
+              backdropFilter: 'blur(3px)',
+              zIndex: 50,
+              pointerEvents: 'all', // Block interactions while loading
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '16px 24px',
+                borderRadius: 16,
+                background: theme === 'dark' ? 'var(--bg-elevated)' : 'white',
+                boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              <style>{`
+                @keyframes horizon-pulse-dot {
+                  0%, 100% { transform: scale(0.6); opacity: 0.4; }
+                  50% { transform: scale(1); opacity: 1; }
+                }
+              `}</style>
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    background: 'var(--accent-primary, #3B82F6)',
+                    animation: `horizon-pulse-dot 1.2s infinite ease-in-out`,
+                    animationDelay: `${i * 0.2}s`,
+                  }}
+                />
+              ))}
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-heading)' }}>
+                Building graph...
               </div>
             </div>
           </div>
         )}
+
       </div>
+
+      {/* Add Node Command Palette Overlay */}
+      {addNodeOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            paddingTop: '15vh',
+            background: theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
+            backdropFilter: 'blur(4px)',
+          }}
+          onClick={() => closeAddNode()}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 520,
+              maxWidth: '90vw',
+              display: 'flex',
+              flexDirection: 'column',
+              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 16,
+              boxShadow: theme === 'dark' ? '0 20px 60px rgba(0,0,0,0.6)' : '0 20px 60px rgba(0,0,0,0.2)',
+              overflow: 'hidden',
+              animation: 'horizon-command-pop 0.15s ease-out',
+            }}
+          >
+            <style>{`
+              @keyframes horizon-command-pop {
+                from { opacity: 0; transform: scale(0.96) translateY(10px); }
+                to { opacity: 1; transform: scale(1) translateY(0); }
+              }
+            `}</style>
+
+            <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div style={{ marginRight: 12, color: 'var(--text-secondary-strong)', display: 'flex' }}>
+                {Icons.Search}
+              </div>
+              <input
+                ref={addNodeInputRef}
+                value={addNodeQuery}
+                onChange={(e) => {
+                  setAddNodeQuery(e.target.value);
+                  setAddNodeActiveIndex(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeAddNode();
+                    return;
+                  }
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setAddNodeActiveIndex((i) => Math.min(i + 1, Math.max(0, addNodeResults.length - 1)));
+                    return;
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setAddNodeActiveIndex((i) => Math.max(0, i - 1));
+                    return;
+                  }
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const picked = addNodeResults[addNodeActiveIndex];
+                    if (picked) void addNodeToLens(picked);
+                    return;
+                  }
+                }}
+                placeholder="Type to search fragments…"
+                autoComplete="off"
+                spellCheck={false}
+                style={{
+                  flex: 1,
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-heading)',
+                  fontSize: 16,
+                  fontWeight: 500,
+                }}
+              />
+              {addNodeLoading && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>Loading…</div>
+              )}
+            </div>
+
+            <div style={{ maxHeight: 400, overflowY: 'auto', padding: '6px 0' }}>
+              {!addNodeLoading && !addNodeError && addNodeQuery.trim().length < 2 && (
+                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
+                  Type a name or path to find fragments
+                </div>
+              )}
+
+              {!addNodeLoading && !addNodeError && addNodeQuery.trim().length >= 2 && addNodeResults.length === 0 && (
+                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
+                  No fragments found for "{addNodeQuery}"
+                </div>
+              )}
+
+              {addNodeError && (
+                <div style={{ padding: '16px', textAlign: 'center', color: '#EF4444', fontSize: 13 }}>
+                  {addNodeError}
+                </div>
+              )}
+
+              {addNodeResults.map((r, idx) => {
+                const isActive = idx === addNodeActiveIndex;
+                return (
+                  <button
+                    key={`${r.canonicalPath}-${idx}`}
+                    type="button"
+                    onClick={() => void addNodeToLens(r)}
+                    onMouseEnter={() => setAddNodeActiveIndex(idx)}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '10px 16px',
+                      border: 'none',
+                      borderLeft: `3px solid ${isActive ? 'var(--accent-primary, #3B82F6)' : 'transparent'}`,
+                      background: isActive ? (theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : 'transparent',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 2,
+                      transition: 'background 0.1s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.name}
+                      </div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary-strong)', textTransform: 'uppercase', opacity: 0.8, flexShrink: 0 }}>
+                        {r.type}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'monospace', opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.canonicalPath}
+                    </div>
+                    {r.description && (
+                      <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.description}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            
+            <div
+              style={{
+                padding: '8px 12px',
+                borderTop: '1px solid var(--border-subtle)',
+                background: theme === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 12,
+                fontSize: 11,
+                color: 'var(--text-secondary-strong)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>↵</kbd>
+                <span>to select</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>esc</kbd>
+                <span>to close</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Scope-scout confirm modal (portal) */}
       {scopeScoutModal && ReactDOM.createPortal(

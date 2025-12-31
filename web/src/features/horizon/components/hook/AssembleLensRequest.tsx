@@ -104,26 +104,32 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     position: 'relative',
   };
 
-  const inputStyle: React.CSSProperties = {
-    width: '100%',
-    // extra right padding for the "send" arrow button and settings button
-    padding: '1.5rem 3.75rem 1.5rem 1.25rem',
-    fontSize: '1.25rem',
-    backgroundColor: 'transparent', // Transparent since container has bg
-    border: 'none', // No border since container has border
-    borderRadius: '12px',
-    outline: 'none',
-    color: 'var(--text-heading)',
-  };
-
   const containerStyleForInput: React.CSSProperties = {
     width: '100%',
     maxWidth: '960px',
-    borderRadius: '12px',
+    borderRadius: '16px',
     overflow: 'hidden',
-    transition: 'all 0.2s ease',
-    backgroundColor: theme === 'dark' ? 'var(--bg-input, #1A1A1A)' : 'var(--bg-input, #FFFFFF)',
-    boxShadow: theme === 'light' ? '0 4px 16px rgba(0,0,0,0.12)' : 'none',
+    transition: 'all 0.3s ease',
+    background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+    border: '1px solid var(--border-subtle)',
+    boxShadow: pinnedBottom 
+      ? (theme === 'dark' ? '0 -4px 20px rgba(0,0,0,0.2)' : '0 -4px 20px rgba(0,0,0,0.05)')
+      : (theme === 'dark' ? '0 20px 60px rgba(0,0,0,0.4)' : '0 20px 60px rgba(0,0,0,0.15)'),
+    display: 'flex',
+    alignItems: 'center',
+    position: 'relative',
+  };
+
+  const inputStyle: React.CSSProperties = {
+    flex: 1,
+    width: '100%',
+    padding: '16px 16px 16px 12px',
+    fontSize: '16px',
+    fontWeight: 500,
+    backgroundColor: 'transparent',
+    border: 'none',
+    outline: 'none',
+    color: 'var(--text-heading)',
   };
 
   const sendBtnDisabled = disabled || !inputValue.trim();
@@ -131,10 +137,14 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   return (
     <div style={containerStyle}>
       <div style={inputContainerStyle}>
-        <div 
-          className="rounded-xl overflow-hidden unfold-request-gradient-border relative"
-          style={containerStyleForInput}
-        >
+        <div style={containerStyleForInput}>
+          {/* Left Icon */}
+          <div style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', color: 'var(--text-secondary-strong)' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
+            </svg>
+          </div>
+
           <input
             ref={inputRef}
             type="text"
@@ -151,63 +161,62 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
             }}
           />
 
-          {/* Settings button (gear icon) */}
-          <button
-            type="button"
-            aria-label="Settings"
-            className="flex items-center justify-center rounded-full"
-            onClick={() => setShowSettings(true)}
-            style={{
-              position: 'absolute',
-              right: 54,
-              top: 30,
-              width: '32px',
-              height: '32px',
-              backgroundColor: 'transparent',
-            }}
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </button>
+          {/* Right Actions */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 12 }}>
+            {/* Settings button */}
+            <button
+              type="button"
+              aria-label="Settings"
+              onClick={() => setShowSettings(true)}
+              style={{
+                width: 32,
+                height: 32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 8,
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                border: 'none',
+                cursor: 'pointer',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--white-10)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+              </svg>
+            </button>
 
-          {/* Send arrow (same look/placement as UnfoldRequest) */}
-          <button
-            type="button"
-            aria-label="Start"
-            className="flex items-center justify-center rounded-full"
-            onClick={handleAssemble}
-            disabled={sendBtnDisabled}
-            style={{
-              position: 'absolute',
-              right: 14,
-              top: 30,
-              width: '32px',
-              height: '32px',
-              backgroundColor: 'transparent',
-              opacity: sendBtnDisabled ? 0.6 : 1,
-              cursor: sendBtnDisabled ? 'not-allowed' : 'pointer',
-            }}
-            onMouseEnter={(e) => {
-              if (sendBtnDisabled) return;
-              const svg = e.currentTarget.querySelector('svg path');
-              if (svg) {
-                (svg as SVGPathElement).style.fill = theme === 'light' ? '#FFB366' : '#FF9538';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (sendBtnDisabled) return;
-              const svg = e.currentTarget.querySelector('svg path');
-              if (svg) {
-                (svg as SVGPathElement).style.fill = theme === 'dark' ? '#FF9538' : '#FFB366';
-              }
-            }}
-          >
-            <svg className="w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M8 5v14l11-7z" style={{ fill: theme === 'dark' ? '#FF9538' : '#FFB366' }} />
-            </svg>
-          </button>
+            {/* Send arrow */}
+            <button
+              type="button"
+              aria-label="Start"
+              onClick={handleAssemble}
+              disabled={sendBtnDisabled}
+              style={{
+                width: 32,
+                height: 32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 8,
+                background: sendBtnDisabled ? 'transparent' : 'var(--accent-primary)',
+                color: sendBtnDisabled ? 'var(--text-disabled)' : '#ffffff',
+                border: 'none',
+                cursor: sendBtnDisabled ? 'not-allowed' : 'pointer',
+                transition: 'all 0.2s',
+                opacity: sendBtnDisabled ? 0.5 : 1,
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12h14" />
+                <path d="m12 5 7 7-7 7" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 

@@ -12,6 +12,10 @@ import ELK, { ElkNode, ElkExtendedEdge, LayoutOptions } from 'elkjs/lib/elk.bund
 import type { Node, Edge } from 'reactflow';
 
 const elk = new ELK();
+const __DEV__ = import.meta.env.DEV;
+const elkDebug = (...args: any[]) => {
+  if (__DEV__) console.log(...args);
+};
 
 // Default node dimensions (should match your HorizonFragmentNode)
 const DEFAULT_NODE_WIDTH = 180;
@@ -885,7 +889,7 @@ export async function layoutNewNodesAroundParent<T = any>(
     }
   }
   
-  console.log('[ELK] Nodes by direction:', { incoming: incomingNodes.length, outgoing: outgoingNodes.length });
+  elkDebug('[ELK] Nodes by direction:', { incoming: incomingNodes.length, outgoing: outgoingNodes.length });
   
   const parentX = parentNode.position.x;
   const parentY = parentNode.position.y;
@@ -1427,11 +1431,11 @@ export async function layoutFullGraph<T = any>(
   edges: Edge[],
   options: LayoutOptions_Custom = {},
 ): Promise<Node<T>[]> {
-  console.log('[ELK] layoutFullGraph called with', nodes.length, 'nodes and', edges.length, 'edges');
+  elkDebug('[ELK] layoutFullGraph called with', nodes.length, 'nodes and', edges.length, 'edges');
   
   // Use hierarchical layout that groups nodes by their expansion parent
   const result = await layoutWithHierarchy(nodes, edges, options);
-  console.log('[ELK] layoutFullGraph completed');
+  elkDebug('[ELK] layoutFullGraph completed');
   return result;
 }
 
@@ -1498,7 +1502,7 @@ async function layoutWithHierarchy<T = any>(
     childrenMap.set(parentId, children);
   }
 
-  console.log('[ELK] Hierarchy:', {
+  elkDebug('[ELK] Hierarchy:', {
     roots: rootNodes.length,
     parentsWithChildren: childrenMap.size,
     totalNodes: nodes.length,
