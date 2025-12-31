@@ -274,6 +274,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [lensScopePaths, setLensScopePaths] = React.useState<string[]>([]);
   const [scopePreview, setScopePreview] = React.useState<Array<{ canonicalPath: string; name?: string; type?: string }>>([]);
   const [scopePreviewLoading, setScopePreviewLoading] = React.useState(false);
+  const [lensMetaLoading, setLensMetaLoading] = React.useState(false);
 
   // Layout mode helpers - определяют, какую логику раскладки использовать
   const isFreeformLayout = layoutMode === 'freeform';
@@ -314,12 +315,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       setLensScopePaths([]);
       setScopePreview([]);
       setScopePreviewLoading(false);
+      setLensMetaLoading(false);
       return;
     }
 
     let alive = true;
     (async () => {
       try {
+        setLensMetaLoading(true);
         const lens = await api.getHorizonLens(lensId);
         if (!alive) return;
         setLensName(typeof lens?.name === 'string' ? lens.name : null);
@@ -333,6 +336,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         // Best-effort: keep empty scope preview if we can't load lens metadata
         setLensName(null);
         setLensScopePaths([]);
+      } finally {
+        if (alive) setLensMetaLoading(false);
       }
     })();
 
@@ -4290,7 +4295,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                 textAlign: 'center',
               }}
             >
-              {(lensName || (scopePreview && scopePreview.length > 0)) ? (
+              {!lensId || !lensMetaLoading ? (
                 <>
                   <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-heading)', marginBottom: 4 }}>
                     {lensName || 'Graph Scope'}
@@ -4380,8 +4385,94 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                   </div>
                 </>
               ) : (
-                <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 24 }}>
-                  Ready to load graph
+                <div style={{ width: '100%', marginBottom: 24 }}>
+                  <style>{`
+                    @keyframes horizon-skeleton-shimmer {
+                      0% { background-position: -400px 0; }
+                      100% { background-position: 400px 0; }
+                    }
+                    .horizon-skeleton {
+                      background: linear-gradient(
+                        90deg,
+                        rgba(255,255,255,0.06) 0%,
+                        rgba(255,255,255,0.10) 40%,
+                        rgba(255,255,255,0.06) 80%
+                      );
+                      background-size: 800px 100%;
+                      animation: horizon-skeleton-shimmer 1.2s infinite linear;
+                    }
+                    .horizon-skeleton.light {
+                      background: linear-gradient(
+                        90deg,
+                        rgba(0,0,0,0.04) 0%,
+                        rgba(0,0,0,0.08) 40%,
+                        rgba(0,0,0,0.04) 80%
+                      );
+                      background-size: 800px 100%;
+                      animation: horizon-skeleton-shimmer 1.2s infinite linear;
+                    }
+                  `}</style>
+
+                  <div
+                    className={`horizon-skeleton ${theme === 'dark' ? '' : 'light'}`}
+                    style={{
+                      height: 18,
+                      width: '60%',
+                      borderRadius: 10,
+                      margin: '0 auto 10px auto',
+                    }}
+                  />
+                  <div
+                    className={`horizon-skeleton ${theme === 'dark' ? '' : 'light'}`}
+                    style={{
+                      height: 12,
+                      width: '45%',
+                      borderRadius: 10,
+                      margin: '0 auto 18px auto',
+                      opacity: 0.9,
+                    }}
+                  />
+
+                  <div
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                      borderRadius: 12,
+                      padding: '10px 0',
+                    }}
+                  >
+                    {[0, 1, 2, 3, 4].map((i) => (
+                      <div
+                        key={i}
+                        style={{
+                          padding: '8px 16px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                        }}
+                      >
+                        <div
+                          className={`horizon-skeleton ${theme === 'dark' ? '' : 'light'}`}
+                          style={{ width: 8, height: 8, borderRadius: 999, flexShrink: 0, opacity: 0.9 }}
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            className={`horizon-skeleton ${theme === 'dark' ? '' : 'light'}`}
+                            style={{ height: 12, borderRadius: 10, width: `${70 - i * 6}%` }}
+                          />
+                        </div>
+                        <div
+                          className={`horizon-skeleton ${theme === 'dark' ? '' : 'light'}`}
+                          style={{ height: 10, borderRadius: 999, width: 60, opacity: 0.7 }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center' }}>
+                    Loading lens scope…
+                  </div>
                 </div>
               )}
 

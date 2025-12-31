@@ -390,7 +390,7 @@ const HorizonPage: React.FC = () => {
               isOpen={true}
               lensId={selectedLensId}
               projectId={currentProject.id}
-              initialViewMode="progress"
+              initialViewMode={selectedLensId ? 'cockpit' : 'progress'}
               showInputInProgress={true}
               onAssemble={handleAssembleLens}
               isCreatingLens={isCreatingLens}

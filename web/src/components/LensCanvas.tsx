@@ -64,12 +64,34 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     setViewMode(initialViewMode);
   }, [initialViewMode]);
 
-  // If lens is not loaded and user tries to switch to details/cockpit, switch back to progress
+  // Default UX: when a lens is selected, show Cockpit by default.
+  // When no lens is selected, fall back to Progress.
+  const prevLensIdRef = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (!lens && (viewMode === 'details' || viewMode === 'cockpit')) {
+    const prev = prevLensIdRef.current;
+    if (prev === lensId) return;
+    prevLensIdRef.current = lensId;
+
+    // Reset selection state between lenses for cleaner UX
+    setPanelType(null);
+    setSelectedNodeId(null);
+    setSelectedNodeData(null);
+    setSelectedEdgeId(null);
+    setSelectedEdgeData(null);
+
+    if (!lensId) {
+      setViewMode('progress');
+    } else {
+      setViewMode('cockpit');
+    }
+  }, [lensId]);
+
+  // If no lens is selected and user tries to switch to details/cockpit, switch back to progress
+  React.useEffect(() => {
+    if (!lensId && !lens && (viewMode === 'details' || viewMode === 'cockpit')) {
       setViewMode('progress');
     }
-  }, [lens, viewMode]);
+  }, [lensId, lens, viewMode]);
 
   // Load lens data when lensId changes
   React.useEffect(() => {
@@ -299,12 +321,57 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
           }}
         >
           {loading ? (
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-pulse text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
-              Loading lens...
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 24,
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '16px 20px',
+                  borderRadius: 16,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-elevated)',
+                  boxShadow: '0 12px 40px rgba(0,0,0,0.18)',
+                  minWidth: 220,
+                }}
+              >
+                <style>{`
+                  @keyframes horizon-dot-bounce {
+                    0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+                    40% { transform: translateY(-6px); opacity: 1; }
+                  }
+                `}</style>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {[0, 1, 2].map((i) => (
+                    <div
+                      key={i}
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background: 'var(--accent-primary, #3B82F6)',
+                        animation: 'horizon-dot-bounce 1.1s infinite ease-in-out',
+                        animationDelay: `${i * 0.14}s`,
+                      }}
+                    />
+                  ))}
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 650, color: 'var(--text-secondary-strong)' }}>
+                  Loading lens…
+                </div>
+              </div>
             </div>
-          </div>
-        ) : error ? (
+          ) : error ? (
           <div className="flex items-center justify-center py-8">
             <div className="text-xs text-center" style={{ color: '#f87171' }}>
               {error}
@@ -400,9 +467,54 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               </div>
             )}
             {viewMode !== 'progress' && !lens && (
-              <div className="flex items-center justify-center py-8">
-                <div className="animate-pulse text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
-                  Loading lens...
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 24,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '16px 20px',
+                    borderRadius: 16,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-elevated)',
+                    boxShadow: '0 12px 40px rgba(0,0,0,0.18)',
+                    minWidth: 220,
+                  }}
+                >
+                  <style>{`
+                    @keyframes horizon-dot-bounce {
+                      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+                      40% { transform: translateY(-6px); opacity: 1; }
+                    }
+                  `}</style>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {[0, 1, 2].map((i) => (
+                      <div
+                        key={i}
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 999,
+                          background: 'var(--accent-primary, #3B82F6)',
+                          animation: 'horizon-dot-bounce 1.1s infinite ease-in-out',
+                          animationDelay: `${i * 0.14}s`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 650, color: 'var(--text-secondary-strong)' }}>
+                    Loading lens…
+                  </div>
                 </div>
               </div>
             )}

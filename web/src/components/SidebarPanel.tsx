@@ -41,6 +41,8 @@ interface SidebarPanelProps {
   onNewLens?: () => void; // Optional: callback for creating new lens
 }
 
+type SidebarDensity = 'comfortable' | 'compact';
+
 // Helper functions moved outside component to avoid recreation
 const getDaysSinceLastInteraction = (project: Project): number => {
   const now = new Date();
@@ -63,6 +65,8 @@ const formatTimeAgo = (days: number): string => {
     return `${months}m`;
   }
 };
+
+const safeLower = (v: unknown) => String(v ?? '').toLowerCase().trim();
 
 // Memoized project row component moved outside to prevent unnecessary re-renders and recreation
 const ProjectRow = React.memo<{
@@ -406,6 +410,19 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 }) => {
   const { t } = useTranslation();
   const location = useLocation();
+
+  const isHorizonPage = location.pathname === '/horizon';
+  const isHorizonMode = currentMode === 'horizon' || isHorizonPage;
+  const isPagesMode = currentMode === 'pages';
+  const isScenariosMode = currentMode === 'scenarios';
+  const isModernSidebarMode = !isPagesMode && !isScenariosMode; // modernize Horizon + discovery (default/chat)
+  const isMac = React.useMemo(() => {
+    try {
+      return /mac/i.test((navigator as any)?.platform || '');
+    } catch {
+      return false;
+    }
+  }, []);
   
   // PERFORMANCE: Subscribe to projects array directly, but use shallow comparison
   // We need to track displayName changes for renamed projects
@@ -419,7 +436,6 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   // Filter projects by type based on current route
   // On /horizon page, show only horizon projects; otherwise show all except horizon
   const filteredProjects = React.useMemo(() => {
-    const isHorizonPage = location.pathname === '/horizon';
     return projects.filter((p) => {
       if (isHorizonPage) {
         return p.projectType === 'horizon';
@@ -427,7 +443,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       // On other pages, exclude horizon projects (they belong to /horizon page)
       return p.projectType !== 'horizon';
     });
-  }, [projects, location.pathname]);
+  }, [projects, isHorizonPage]);
   
   // Memoize projects array with a stable reference to prevent unnecessary re-renders
   // Create a signature string that includes displayName and projectType to detect changes
@@ -438,6 +454,163 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   
   // Memoized projects array - will update when signature changes
   const memoizedProjects = React.useMemo(() => filteredProjects, [projectsSignature]);
+
+  // Sidebar preferences (pins + density) stored locally
+  const [sidebarDensity, setSidebarDensity] = React.useState<SidebarDensity>(() => {
+    try {
+      const raw = localStorage.getItem('ui.sidebar.density');
+      return raw === 'compact' ? 'compact' : 'comfortable';
+    } catch {
+      return 'comfortable';
+    }
+  });
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('ui.sidebar.density', sidebarDensity);
+    } catch {
+      // ignore
+    }
+  }, [sidebarDensity]);
+
+  const [pinnedProjectIds, setPinnedProjectIds] = React.useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('ui.sidebar.pinnedProjects');
+      const ids = raw ? (JSON.parse(raw) as unknown) : [];
+      const arr = Array.isArray(ids) ? ids : [];
+      return new Set(arr.map((x) => String(x || '').trim()).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  });
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('ui.sidebar.pinnedProjects', JSON.stringify(Array.from(pinnedProjectIds)));
+    } catch {
+      // ignore
+    }
+  }, [pinnedProjectIds]);
+
+  const togglePinProject = React.useCallback((projectId: string) => {
+    const pid = String(projectId || '').trim();
+    if (!pid) return;
+    setPinnedProjectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(pid)) next.delete(pid);
+      else next.add(pid);
+      return next;
+    });
+  }, []);
+
+  // Modern: projects list (pinned + recent)
+  const sortedProjects = React.useMemo(() => {
+    const list = [...memoizedProjects];
+    const ts = (p: Project) => {
+      const t = p.lastInteractionAt || p.createdAt;
+      const n = new Date(t).getTime();
+      return Number.isFinite(n) ? n : 0;
+    };
+    list.sort((a, b) => ts(b) - ts(a));
+    return list;
+  }, [memoizedProjects]);
+
+  const pinnedProjects = React.useMemo(() => {
+    if (pinnedProjectIds.size === 0) return [];
+    return sortedProjects.filter((p) => pinnedProjectIds.has(p.id));
+  }, [sortedProjects, pinnedProjectIds]);
+
+  const recentProjects = React.useMemo(() => {
+    if (pinnedProjectIds.size === 0) return sortedProjects;
+    return sortedProjects.filter((p) => !pinnedProjectIds.has(p.id));
+  }, [sortedProjects, pinnedProjectIds]);
+
+  // Modern navigation: primary tab inside sidebar (projects vs nested entities)
+  const [sidebarMainTab, setSidebarMainTab] = React.useState<'projects' | 'details'>(() => {
+    try {
+      const raw = localStorage.getItem('ui.sidebar.mainTab');
+      return raw === 'details' ? 'details' : 'projects';
+    } catch {
+      return 'projects';
+    }
+  });
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('ui.sidebar.mainTab', sidebarMainTab);
+    } catch {
+      // ignore
+    }
+  }, [sidebarMainTab]);
+
+  React.useEffect(() => {
+    // If a project is selected, default to details view (lenses/jobs) since that's the primary workspace.
+    if (!isModernSidebarMode) return;
+    if (currentProject?.id && currentProject.id !== 'local-unfold') {
+      setSidebarMainTab('details');
+    } else {
+      setSidebarMainTab('projects');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject?.id, isModernSidebarMode]);
+
+  const hasSelectedProject = Boolean(currentProject?.id && currentProject.id !== 'local-unfold');
+  const isDetailsView = sidebarMainTab === 'details' && hasSelectedProject;
+  const isProjectsView = !isDetailsView;
+
+  // Projects list virtualization (only for long lists)
+  const projectsListRef = React.useRef<HTMLDivElement | null>(null);
+  const projectsScrollRafRef = React.useRef<number | null>(null);
+  const [projectsScrollTop, setProjectsScrollTop] = React.useState(0);
+  const [projectsViewportH, setProjectsViewportH] = React.useState(360);
+
+  React.useEffect(() => {
+    const el = projectsListRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      setProjectsViewportH(el.clientHeight || 360);
+    };
+
+    measure();
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(el);
+
+    return () => ro.disconnect();
+  }, []);
+
+  const onProjectsScroll = React.useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (projectsScrollRafRef.current !== null) return;
+    projectsScrollRafRef.current = window.requestAnimationFrame(() => {
+      projectsScrollRafRef.current = null;
+      setProjectsScrollTop(el.scrollTop || 0);
+    });
+  }, []);
+
+  const projectRowH = sidebarDensity === 'compact' ? 30 : 36;
+  const shouldVirtualizeProjects = recentProjects.length >= 80;
+  const virtualProjects = React.useMemo(() => {
+    if (!shouldVirtualizeProjects) {
+      return {
+        padTop: 0,
+        padBottom: 0,
+        slice: recentProjects,
+        totalH: recentProjects.length * projectRowH,
+      };
+    }
+    const overscan = 10;
+    const start = Math.max(0, Math.floor(projectsScrollTop / projectRowH) - overscan);
+    const visible = Math.ceil(projectsViewportH / projectRowH) + overscan * 2;
+    const end = Math.min(recentProjects.length, start + visible);
+    const padTop = start * projectRowH;
+    const padBottom = Math.max(0, (recentProjects.length - end) * projectRowH);
+    return {
+      padTop,
+      padBottom,
+      slice: recentProjects.slice(start, end),
+      totalH: recentProjects.length * projectRowH,
+      start,
+      end,
+    };
+  }, [shouldVirtualizeProjects, recentProjects, projectsScrollTop, projectsViewportH, projectRowH]);
   
   // Agent jobs state
   const [agentJobs, setAgentJobs] = React.useState<any[]>([]);
@@ -557,6 +730,191 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     );
   }, [deletingProjectIds, currentProject, editingProjectId, editingProjectName, editingInputRef, onCloseAllModals, setCurrentProject, isMobile, onClose, onStartEditingProject, onDeleteChat, onRenameChat, onEditingProjectIdChange, onEditingProjectNameChange, currentMode, onNewLens]);
 
+  // Modern row renderer (projects) - larger, calmer visual style
+  const renderModernProjectRow = React.useCallback((project: Project) => {
+    const isDeleting = deletingProjectIds.has(project.id);
+    const isSelected = currentProject?.id === project.id;
+    const isEditing = editingProjectId === project.id;
+    const daysAgo = getDaysSinceLastInteraction(project);
+    const timeAgoLabel = daysAgo > 0 ? formatTimeAgo(daysAgo) : null;
+    const typeLabel = String(project.projectType || '').trim();
+    const typePill = typeLabel ? typeLabel.toUpperCase() : undefined;
+    const rowClass = `sidebar-row has-actions ${sidebarDensity === 'compact' ? 'compact' : ''} ${isSelected ? 'is-selected' : ''}`;
+
+    return (
+      <div
+        key={project.id}
+        className={rowClass}
+        style={{ opacity: isDeleting ? 0.6 : 1, cursor: isDeleting ? 'default' : 'pointer' }}
+        onClick={() => {
+          if (isDeleting) return;
+          if (isEditing) return;
+          // If clicking the already selected project, just switch to details (lenses/jobs).
+          // This fixes the "Back -> click same project does nothing" UX, since currentProject.id doesn't change.
+          if (isSelected) {
+            setSidebarMainTab('details');
+            return;
+          }
+          onCloseAllModals?.();
+          setCurrentProject(project);
+          // Immediately switch to details view; don't wait for currentProject.id effect.
+          setSidebarMainTab('details');
+          if (isMobile) onClose();
+        }}
+        title={project.displayName}
+      >
+        <div
+          style={{
+            width: 18,
+            height: 18,
+            borderRadius: 6,
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--white-06)',
+            color: 'var(--text-secondary-strong)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 10,
+            fontWeight: 800,
+            flexShrink: 0,
+          }}
+          title={typePill}
+        >
+          {(typePill || 'P').slice(0, 1)}
+        </div>
+
+        {isEditing ? (
+          <input
+            ref={editingInputRef}
+            type="text"
+            value={editingProjectName}
+            onChange={(e) => onEditingProjectNameChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                onRenameChat(project.id, editingProjectName);
+              } else if (e.key === 'Escape') {
+                onEditingProjectIdChange(null);
+                onEditingProjectNameChange('');
+              }
+            }}
+            onBlur={() => {
+              onRenameChat(project.id, editingProjectName);
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: 'transparent',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 10,
+              padding: '6px 10px',
+              color: 'var(--text-heading)',
+              outline: 'none',
+              fontSize: 12,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <div className="sidebar-row-title" style={{ textDecoration: isDeleting ? 'line-through' : 'none' }}>
+            {project.displayName || 'Untitled Project'}
+          </div>
+        )}
+
+        {timeAgoLabel && !isEditing && (
+          <div className="sidebar-row-subtitle sidebar-timepill" title="Last active">
+            {timeAgoLabel}
+          </div>
+        )}
+
+        {!isEditing && !isDeleting && (
+          <div className="sidebar-row-actions">
+            <button
+              type="button"
+              className="sidebar-icon-btn"
+              title={pinnedProjectIds.has(project.id) ? 'Unpin' : 'Pin'}
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePinProject(project.id);
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 17v5" />
+                <path d="M9 3h6l1 7-2 2v5H10v-5L8 10l1-7Z" />
+              </svg>
+            </button>
+            {isHorizonMode && project.projectType === 'horizon' && onNewLens && (
+              <button
+                type="button"
+                className="sidebar-icon-btn"
+                title="Create new lens"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isSelected) setCurrentProject(project);
+                  onNewLens();
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 5v14" /><path d="M5 12h14" />
+                </svg>
+              </button>
+            )}
+            <button
+              type="button"
+              className="sidebar-icon-btn"
+              title={isHorizonMode ? 'Rename project' : t('unfold.sections.renameChat')}
+              onClick={(e) => {
+                e.stopPropagation();
+                onStartEditingProject(project.id, project.displayName);
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="sidebar-icon-btn"
+              title={isHorizonMode ? 'Delete project' : t('unfold.sections.deleteChat')}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteChat(project.id, project.displayName);
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M8 6V4h8v2" />
+                <path d="M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+              </svg>
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }, [
+    deletingProjectIds,
+    currentProject?.id,
+    editingProjectId,
+    editingProjectName,
+    editingInputRef,
+    sidebarDensity,
+    onCloseAllModals,
+    setCurrentProject,
+    isMobile,
+    onClose,
+    onEditingProjectIdChange,
+    onEditingProjectNameChange,
+    onDeleteChat,
+    onRenameChat,
+    onStartEditingProject,
+    pinnedProjectIds,
+    togglePinProject,
+    isHorizonMode,
+    onNewLens,
+    t,
+  ]);
+
   // Load agent jobs for the current project (only on project selection, updates via WebSocket)
   React.useEffect(() => {
     // Immediately clear agent jobs when project changes (synchronously)
@@ -640,6 +998,146 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       setLensesLoading(false);
     }
   }, [currentProject?.id, currentMode, lensesProjectId]);
+
+  // Command palette (sidebar)
+  type PaletteItem =
+    | { kind: 'project'; id: string; title: string; subtitle?: string; project: Project }
+    | { kind: 'lens'; id: string; title: string; subtitle?: string; lensId: string }
+    | { kind: 'job'; id: string; title: string; subtitle?: string; taskId: string };
+
+  const [paletteOpen, setPaletteOpen] = React.useState(false);
+  const [paletteQuery, setPaletteQuery] = React.useState('');
+  const [paletteActiveIndex, setPaletteActiveIndex] = React.useState(0);
+  const paletteInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const openPalette = React.useCallback(() => {
+    setPaletteOpen(true);
+    setPaletteQuery('');
+    setPaletteActiveIndex(0);
+    window.setTimeout(() => paletteInputRef.current?.focus(), 0);
+  }, []);
+
+  const closePalette = React.useCallback(() => {
+    setPaletteOpen(false);
+    setPaletteQuery('');
+    setPaletteActiveIndex(0);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      closePalette();
+    }
+  }, [isOpen, closePalette]);
+
+  // Global hotkey: Ctrl/Cmd + K
+  React.useEffect(() => {
+    if (!isModernSidebarMode) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isK = (e.key || '').toLowerCase() === 'k';
+      if (!isK) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      if (paletteOpen) closePalette();
+      else openPalette();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isModernSidebarMode, paletteOpen, openPalette, closePalette]);
+
+  const paletteItems = React.useMemo(() => {
+    if (!isModernSidebarMode) return [] as PaletteItem[];
+    const q = safeLower(paletteQuery);
+
+    const match = (hay: string) => {
+      if (!q) return true;
+      return safeLower(hay).includes(q);
+    };
+
+    const out: PaletteItem[] = [];
+
+    // Projects (pinned first, then recent)
+    const allProjects = [...pinnedProjects, ...recentProjects];
+    for (const p of allProjects) {
+      const title = p.displayName || 'Untitled Project';
+      if (!match(`${title} ${p.id}`)) continue;
+      out.push({
+        kind: 'project',
+        id: `project:${p.id}`,
+        title,
+        subtitle: p.projectType ? String(p.projectType).toUpperCase() : undefined,
+        project: p,
+      });
+    }
+
+    // Horizon: lenses for current project (already loaded)
+    if (isHorizonMode && currentProject?.id && lensesProjectId === currentProject.id) {
+      for (const l of lenses) {
+        const title = l.name || 'Untitled Lens';
+        if (!match(`${title} ${l.id}`)) continue;
+        out.push({
+          kind: 'lens',
+          id: `lens:${l.id}`,
+          title,
+          subtitle: 'Lens',
+          lensId: l.id,
+        });
+      }
+    }
+
+    // Discovery: jobs for current project (already loaded)
+    if (!isHorizonMode && currentProject?.id && agentJobsProjectId === currentProject.id) {
+      for (const j of agentJobs) {
+        const title = j.title || j.userQuery || 'Untitled Job';
+        const taskId = j.taskId || j.id;
+        if (!match(`${title} ${taskId}`)) continue;
+        out.push({
+          kind: 'job',
+          id: `job:${taskId}`,
+          title,
+          subtitle: 'Job',
+          taskId,
+        });
+      }
+    }
+
+    return out.slice(0, 80);
+  }, [
+    isModernSidebarMode,
+    paletteQuery,
+    pinnedProjects,
+    recentProjects,
+    isHorizonMode,
+    currentProject?.id,
+    lensesProjectId,
+    lenses,
+    agentJobsProjectId,
+    agentJobs,
+  ]);
+
+  const runPaletteSelection = React.useCallback(
+    (item: PaletteItem) => {
+      if (item.kind === 'project') {
+        onCloseAllModals?.();
+        setCurrentProject(item.project);
+        if (isMobile) onClose();
+        closePalette();
+        return;
+      }
+      if (item.kind === 'lens') {
+        if (onSelectLens) onSelectLens(item.lensId);
+        if (isMobile) onClose();
+        closePalette();
+        return;
+      }
+      if (item.kind === 'job') {
+        onSelectJob?.(item.taskId);
+        if (isMobile) onClose();
+        closePalette();
+        return;
+      }
+    },
+    [closePalette, isMobile, onClose, onCloseAllModals, onSelectJob, onSelectLens, setCurrentProject],
+  );
 
   // Load lenses for the current project in horizon mode
   React.useEffect(() => {
@@ -1304,6 +1802,117 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 
   return (
     <>
+      <style>{`
+        .sidebar-modern .sidebar-section-title {
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--text-tertiary-weak);
+        }
+        .sidebar-modern .sidebar-row {
+          position: relative;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          border-radius: 10px;
+          padding: 8px 10px;
+          cursor: pointer;
+          transition: background 120ms ease, color 120ms ease;
+          outline: none;
+        }
+        .sidebar-modern .sidebar-row.compact {
+          padding: 6px 10px;
+        }
+        .sidebar-modern .sidebar-row:hover {
+          background: var(--white-10);
+        }
+        .sidebar-modern .sidebar-row.is-selected {
+          background: var(--white-10);
+        }
+        .sidebar-modern .sidebar-row .sidebar-row-title {
+          min-width: 0;
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: var(--text-heading);
+          font-size: 12px;
+          font-weight: 600;
+        }
+        .sidebar-modern .sidebar-row.has-actions:hover .sidebar-row-title,
+        .sidebar-modern .sidebar-row.has-actions:focus-within .sidebar-row-title {
+          padding-right: 160px; /* make room for actions overlay */
+        }
+        .sidebar-modern .sidebar-row .sidebar-row-subtitle {
+          font-size: 10px;
+          color: var(--text-tertiary-weak);
+          padding: 2px 6px;
+          border-radius: 999px;
+          border: 1px solid var(--border-subtle);
+          background: var(--white-05);
+          flex-shrink: 0;
+        }
+        .sidebar-modern .sidebar-row .sidebar-timepill {
+          transition: opacity 120ms ease;
+        }
+        .sidebar-modern .sidebar-row.has-actions:hover .sidebar-timepill,
+        .sidebar-modern .sidebar-row.has-actions:focus-within .sidebar-timepill {
+          opacity: 0;
+          pointer-events: none;
+        }
+        .sidebar-modern .sidebar-row .sidebar-row-actions {
+          position: absolute;
+          right: 8px;
+          top: 50%;
+          transform: translateY(-50%);
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 120ms ease;
+        }
+        .sidebar-modern .sidebar-row:hover .sidebar-row-actions,
+        .sidebar-modern .sidebar-row:focus-within .sidebar-row-actions {
+          opacity: 1;
+          pointer-events: auto;
+        }
+        .sidebar-modern .sidebar-icon-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 30px;
+          height: 30px;
+          border-radius: 10px;
+          border: 1px solid transparent;
+          background: transparent;
+          color: var(--text-secondary-strong);
+          transition: background 120ms ease, border 120ms ease;
+          cursor: pointer;
+        }
+        .sidebar-modern .sidebar-icon-btn:hover {
+          background: var(--white-10);
+          border-color: var(--border-subtle);
+        }
+        .sidebar-modern .sidebar-pill {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 10px 12px;
+          border-radius: 14px;
+          border: 1px solid var(--border-subtle);
+          background: var(--white-06);
+          color: var(--text-secondary-strong);
+          cursor: pointer;
+          transition: background 120ms ease;
+        }
+        .sidebar-modern .sidebar-pill:hover {
+          background: var(--white-10);
+        }
+      `}</style>
+
       {/* Mobile overlay backdrop */}
       {isMobile && (
         <div
@@ -1320,9 +1929,10 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         />
       )}
       <div
-        className="flex-shrink-0 rounded-xl mr-4 overflow-hidden relative sidebar-panel"
+        className={`flex-shrink-0 rounded-xl mr-4 overflow-hidden relative sidebar-panel ${isModernSidebarMode ? 'sidebar-modern' : ''}`}
         style={{
-          backgroundColor: 'var(--bg-input)',
+          backgroundColor: isModernSidebarMode ? 'var(--bg-elevated)' : 'var(--bg-input)',
+          border: isMobile ? undefined : '1px solid var(--border-subtle)',
           width: '320px',
           minWidth: '260px',
           maxWidth: '420px',
@@ -1440,36 +2050,79 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               {t('unfold.sections.navigation')}
             </h3>
             )}
-            <button
-              onClick={onClose}
-              className="p-2 rounded-lg transition-colors"
-              style={{
-                backgroundColor: 'var(--white-10)',
-                color: 'var(--text-secondary-strong)',
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--white-20)';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                  'var(--white-10)';
-              }}
-            >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+            {isModernSidebarMode ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  type="button"
+                  className="sidebar-icon-btn"
+                  title="Search (Ctrl/Cmd+K)"
+                  onClick={() => openPalette()}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-icon-btn"
+                  title={sidebarDensity === 'compact' ? 'Comfortable density' : 'Compact density'}
+                  onClick={() => setSidebarDensity((d) => (d === 'compact' ? 'comfortable' : 'compact'))}
+                >
+                  {sidebarDensity === 'compact' ? (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 6h16" /><path d="M4 12h16" /><path d="M4 18h16" />
+                    </svg>
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 6h16" /><path d="M4 12h10" /><path d="M4 18h16" />
+                    </svg>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-icon-btn"
+                  onClick={onClose}
+                  title="Close"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6 6 18" />
+                    <path d="M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={onClose}
+                className="p-2 rounded-lg transition-colors"
+                style={{
+                  backgroundColor: 'var(--white-10)',
+                  color: 'var(--text-secondary-strong)',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                    'var(--white-20)';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                    'var(--white-10)';
+                }}
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 19l-7-7 7-7"
-                />
-              </svg>
-            </button>
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M15 19l-7-7 7-7"
+                  />
+                </svg>
+              </button>
+            )}
           </div>
 
           {/* New Chat action or Project name in Pages/Scenarios mode */}
@@ -1492,119 +2145,196 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               </div>
             ) : (
               <>
-              <button
-                type="button"
-                aria-label={currentMode === 'horizon' ? 'New Project' : t('unfold.sections.newChat')}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
-                style={{
-                  backgroundColor: 'transparent',
-                  color: 'var(--text-heading)',
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                    'var(--white-10)';
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                    'transparent';
-                }}
-                onClick={() => {
-                  // Close all modals (workspace, admin, settings, account) when creating new chat/project
-                  onCloseAllModals?.();
-                  onResetChat();
-                  if (isMobile) {
-                    onClose();
-                  }
-                }}
-              >
-                <svg
-                  className="w-4 h-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                >
-                  <rect
-                    x="3.5"
-                    y="3.5"
-                    width="17"
-                    height="17"
-                    rx="3"
-                    strokeWidth={2}
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeWidth={2}
-                    d="M12 8v8M8 12h8"
-                  />
-                </svg>
-                <span
-                  className="text-13 font-medium"
-                  style={{ color: 'var(--text-heading)' }}
-                >
-                  {currentMode === 'horizon' ? 'New Project' : t('unfold.sections.newChat')}
-                  </span>
-                </button>
-                {onShowWorkspace && (
-                  <button
-                    type="button"
-                    aria-label={t('unfold.sections.workspace')}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
-                    style={{
-                      backgroundColor: 'transparent',
-                      color: 'var(--text-heading)',
-                    }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                        'var(--white-10)';
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                        'transparent';
-                    }}
-                    onClick={() => {
-                      if (onShowWorkspace) {
-                        onShowWorkspace();
-                      }
-                      if (isMobile) {
-                        onClose();
-                      }
-                    }}
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                {isModernSidebarMode ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <button
+                      type="button"
+                      className="sidebar-pill"
+                      onClick={() => openPalette()}
+                      title="Search (Ctrl/Cmd+K)"
                     >
-                      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                      <polyline points="9 22 9 12 15 12 15 22" />
-                    </svg>
-                    <span
-                      className="text-13 font-medium"
-                      style={{ color: 'var(--text-heading)' }}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary-strong)', flexShrink: 0 }}>
+                          <circle cx="11" cy="11" r="8" />
+                          <path d="m21 21-4.3-4.3" />
+                        </svg>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          Search projects{isHorizonMode ? ' & lenses' : ' & jobs'}…
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <kbd style={{ fontSize: 10, padding: '2px 6px', borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-secondary-strong)' }}>
+                          {isMac ? '⌘K' : 'Ctrl K'}
+                        </kbd>
+                      </div>
+                    </button>
+
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onCloseAllModals?.();
+                          onResetChat();
+                          if (isMobile) onClose();
+                        }}
+                        style={{
+                          flex: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 10,
+                          height: 38,
+                          borderRadius: 14,
+                          border: '1px solid var(--border-subtle)',
+                          background: 'var(--accent-primary)',
+                          color: '#fff',
+                          fontWeight: 650,
+                          fontSize: 12,
+                        }}
+                        title={isHorizonMode ? 'New Project' : t('unfold.sections.newChat')}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 5v14" /><path d="M5 12h14" />
+                        </svg>
+                        {isHorizonMode ? 'New Project' : t('unfold.sections.newChat')}
+                      </button>
+                      {onShowWorkspace && (
+                        <button
+                          type="button"
+                          className="sidebar-icon-btn"
+                          onClick={() => {
+                            onShowWorkspace?.();
+                            if (isMobile) onClose();
+                          }}
+                          title={t('unfold.sections.workspace')}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                            <path d="M9 22V12h6v10" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ height: 1, background: 'var(--border-subtle)', marginTop: 4 }} />
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      aria-label={currentMode === 'horizon' ? 'New Project' : t('unfold.sections.newChat')}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
+                      style={{
+                        backgroundColor: 'transparent',
+                        color: 'var(--text-heading)',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                          'var(--white-10)';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                          'transparent';
+                      }}
+                      onClick={() => {
+                        // Close all modals (workspace, admin, settings, account) when creating new chat/project
+                        onCloseAllModals?.();
+                        onResetChat();
+                        if (isMobile) {
+                          onClose();
+                        }
+                      }}
                     >
-                      {t('unfold.sections.workspace')}
-                </span>
-              </button>
+                      <svg
+                        className="w-4 h-4"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                      >
+                        <rect
+                          x="3.5"
+                          y="3.5"
+                          width="17"
+                          height="17"
+                          rx="3"
+                          strokeWidth={2}
+                        />
+                        <path
+                          strokeLinecap="round"
+                          strokeWidth={2}
+                          d="M12 8v8M8 12h8"
+                        />
+                      </svg>
+                      <span
+                        className="text-13 font-medium"
+                        style={{ color: 'var(--text-heading)' }}
+                      >
+                        {currentMode === 'horizon' ? 'New Project' : t('unfold.sections.newChat')}
+                      </span>
+                    </button>
+                    {onShowWorkspace && (
+                      <button
+                        type="button"
+                        aria-label={t('unfold.sections.workspace')}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                        style={{
+                          backgroundColor: 'transparent',
+                          color: 'var(--text-heading)',
+                        }}
+                        onMouseEnter={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                            'var(--white-10)';
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                            'transparent';
+                        }}
+                        onClick={() => {
+                          if (onShowWorkspace) {
+                            onShowWorkspace();
+                          }
+                          if (isMobile) {
+                            onClose();
+                          }
+                        }}
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                          <polyline points="9 22 9 12 15 12 15 22" />
+                        </svg>
+                        <span
+                          className="text-13 font-medium"
+                          style={{ color: 'var(--text-heading)' }}
+                        >
+                          {t('unfold.sections.workspace')}
+                        </span>
+                      </button>
+                    )}
+                    {/* Divider */}
+                    <div
+                      className="mt-3 mb-3"
+                      style={{
+                        height: '1px',
+                        backgroundColor: 'var(--white-10)',
+                      }}
+                    />
+                  </>
                 )}
-                {/* Divider */}
-                <div
-                  className="mt-3 mb-3"
-                  style={{
-                    height: '1px',
-                    backgroundColor: 'var(--white-10)',
-                  }}
-                />
               </>
             )}
           </div>
 
           {/* Scrollable Chats section */}
           <div
-            className="mb-4 flex-1 min-h-0 overflow-y-auto"
+            className={`mb-4 flex-1 min-h-0 ${isModernSidebarMode ? 'overflow-hidden' : 'overflow-y-auto'}`}
             style={{ scrollbarGutter: 'stable' }}
           >
             {showPages ? (
@@ -1967,27 +2697,197 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
               </>
             ) : (
               <>
-                <div
-                  className="text-[11px] uppercase tracking-wide mb-2"
-                  style={{ color: 'var(--text-heading)' }}
-                >
-                  {currentMode === 'horizon' ? 'Projects' : t('unfold.sections.chats')}
-                </div>
+                {isModernSidebarMode ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+                    <div
+                      ref={projectsListRef}
+                      onScroll={isProjectsView ? onProjectsScroll : undefined}
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflow: 'auto',
+                        paddingRight: 4,
+                        overflowX: 'hidden',
+                      }}
+                    >
+                      {isProjectsView ? (
+                        <>
+                          <div className="sidebar-section-title" style={{ marginBottom: 10 }}>
+                            {isHorizonMode ? 'Projects' : t('unfold.sections.chats')}
+                          </div>
+                          {projectsLoading && memoizedProjects.length === 0 ? (
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                              {isHorizonMode ? 'Loading projects…' : t('unfold.sections.loadingChats')}
+                            </div>
+                          ) : memoizedProjects.length === 0 ? (
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                              {isHorizonMode ? 'No projects yet' : t('unfold.sections.noChatsYet')}
+                            </div>
+                          ) : (
+                            <>
+                              {pinnedProjects.length > 0 && (
+                                <div style={{ marginBottom: 14 }}>
+                                  <div className="sidebar-section-title" style={{ marginBottom: 8 }}>
+                                    Pinned
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    {/* pinned rows already rendered above */}
+                                    {pinnedProjects.map((project) => renderModernProjectRow(project))}
+                                  </div>
+                                </div>
+                              )}
+                              <div style={{ marginBottom: 10 }}>
+                                <div className="sidebar-section-title" style={{ marginBottom: 8 }}>
+                                  {pinnedProjects.length > 0 ? 'Recent' : 'All'}
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  {shouldVirtualizeProjects && virtualProjects.padTop > 0 && <div style={{ height: virtualProjects.padTop }} />}
+                                  {virtualProjects.slice.map((project) => renderModernProjectRow(project))}
+                                  {shouldVirtualizeProjects && virtualProjects.padBottom > 0 && <div style={{ height: virtualProjects.padBottom }} />}
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                              <button
+                                type="button"
+                                className="sidebar-icon-btn"
+                                title="Back to projects"
+                                onClick={() => setSidebarMainTab('projects')}
+                              >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M15 18l-6-6 6-6" />
+                                </svg>
+                              </button>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {currentProject?.displayName || 'Untitled Project'}
+                                </div>
+                                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                  {isHorizonMode ? 'Horizon' : 'Discovery'}
+                                </div>
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <button type="button" className="sidebar-icon-btn" title="Switch project (Ctrl/Cmd+K)" onClick={() => openPalette()}>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                  <circle cx="11" cy="11" r="8" />
+                                  <path d="m21 21-4.3-4.3" />
+                                </svg>
+                              </button>
+                              {isHorizonMode && onNewLens && (
+                                <button type="button" className="sidebar-icon-btn" title="New lens" onClick={() => onNewLens()}>
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M12 5v14" /><path d="M5 12h14" />
+                                  </svg>
+                                </button>
+                              )}
+                            </div>
+                          </div>
 
-                {projectsLoading && memoizedProjects.length === 0 ? (
-                  <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
-                    {currentMode === 'horizon' ? 'Loading projects...' : t('unfold.sections.loadingChats')}
-                  </div>
-                ) : memoizedProjects.length === 0 ? (
-                  <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
-                    {currentMode === 'horizon' ? 'No projects yet' : t('unfold.sections.noChatsYet')}
+                          {isHorizonMode ? (
+                            <>
+                              <div className="sidebar-section-title" style={{ marginBottom: 8 }}>
+                                Lenses
+                              </div>
+                              {lensesLoading ? (
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>Loading lenses…</div>
+                              ) : lenses.length === 0 ? (
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>No lenses yet</div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  {lenses.map((lens) => {
+                                    const isSelected = selectedLensId === lens.id;
+                                    return (
+                                      <div
+                                        key={lens.id}
+                                        className={`sidebar-row ${sidebarDensity === 'compact' ? 'compact' : ''} ${isSelected ? 'is-selected' : ''}`}
+                                        onClick={() => {
+                                          onSelectLens?.(isSelected ? null : lens.id);
+                                          if (isMobile) onClose();
+                                        }}
+                                        title={lens.name}
+                                      >
+                                        <div
+                                          style={{
+                                            width: 18,
+                                            height: 18,
+                                            borderRadius: 6,
+                                            border: '1px solid var(--border-subtle)',
+                                            background: 'var(--white-06)',
+                                            color: 'var(--text-secondary-strong)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            fontSize: 10,
+                                            fontWeight: 800,
+                                            flexShrink: 0,
+                                          }}
+                                          title="Lens"
+                                        >
+                                          L
+                                        </div>
+                                        <div className="sidebar-row-title" style={{ fontWeight: 650 }}>
+                                          {lens.name || 'Untitled Lens'}
+                                        </div>
+                                        <div className="sidebar-row-subtitle" title="Status">
+                                          {String(lens.status || '').toUpperCase() || 'LENS'}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <div className="sidebar-section-title" style={{ marginBottom: 8 }}>
+                                Jobs
+                              </div>
+                              {agentJobsLoading ? (
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>Loading jobs…</div>
+                              ) : agentJobs.length === 0 ? (
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>No jobs yet</div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  {agentJobs.map((job) => renderAgentJobRow(job))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {renderProjectGroup(groupedProjects.today, t('unfold.sections.today', 'Today'))}
-                    {renderProjectGroup(groupedProjects.yesterday, t('unfold.sections.yesterday', 'Yesterday'))}
-                    {renderProjectGroup(groupedProjects.later, t('unfold.sections.later', 'Later'))}
-                  </div>
+                  <>
+                    <div
+                      className="text-[11px] uppercase tracking-wide mb-2"
+                      style={{ color: 'var(--text-heading)' }}
+                    >
+                      {currentMode === 'horizon' ? 'Projects' : t('unfold.sections.chats')}
+                    </div>
+
+                    {projectsLoading && memoizedProjects.length === 0 ? (
+                      <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
+                        {currentMode === 'horizon' ? 'Loading projects...' : t('unfold.sections.loadingChats')}
+                      </div>
+                    ) : memoizedProjects.length === 0 ? (
+                      <div className="text-xs" style={{ color: 'var(--text-secondary-strong)' }}>
+                        {currentMode === 'horizon' ? 'No projects yet' : t('unfold.sections.noChatsYet')}
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {renderProjectGroup(groupedProjects.today, t('unfold.sections.today', 'Today'))}
+                        {renderProjectGroup(groupedProjects.yesterday, t('unfold.sections.yesterday', 'Yesterday'))}
+                        {renderProjectGroup(groupedProjects.later, t('unfold.sections.later', 'Later'))}
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -2116,6 +3016,197 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Command palette (projects / lenses / jobs) */}
+      {paletteOpen && isModernSidebarMode && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => closePalette()}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            paddingTop: '14vh',
+            background: 'rgba(0,0,0,0.35)',
+            backdropFilter: 'blur(6px)',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 680,
+              maxWidth: 'min(680px, calc(100vw - 28px))',
+              borderRadius: 18,
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+              boxShadow: '0 20px 70px rgba(0,0,0,0.45)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '14px 16px',
+                borderBottom: '1px solid var(--border-subtle)',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary-strong)' }}>
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.3-4.3" />
+              </svg>
+              <input
+                ref={paletteInputRef}
+                value={paletteQuery}
+                onChange={(e) => {
+                  setPaletteQuery(e.target.value);
+                  setPaletteActiveIndex(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closePalette();
+                    return;
+                  }
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setPaletteActiveIndex((i) => Math.min((paletteItems.length || 1) - 1, i + 1));
+                    return;
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setPaletteActiveIndex((i) => Math.max(0, i - 1));
+                    return;
+                  }
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const picked = paletteItems[paletteActiveIndex];
+                    if (picked) runPaletteSelection(picked);
+                    return;
+                  }
+                }}
+                placeholder={isHorizonMode ? 'Search projects and lenses…' : 'Search chats and jobs…'}
+                autoComplete="off"
+                spellCheck={false}
+                style={{
+                  flex: 1,
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-heading)',
+                  fontSize: 16,
+                  fontWeight: 600,
+                  minWidth: 0,
+                }}
+              />
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                <kbd style={{ fontSize: 10, padding: '2px 6px', borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-secondary-strong)' }}>
+                  {isMac ? '⌘K' : 'Ctrl K'}
+                </kbd>
+                <kbd style={{ fontSize: 10, padding: '2px 6px', borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-secondary-strong)' }}>
+                  esc
+                </kbd>
+              </div>
+            </div>
+
+            <div style={{ maxHeight: 'min(520px, 60vh)', overflow: 'auto', padding: '8px 0' }}>
+              {paletteItems.length === 0 ? (
+                <div style={{ padding: '26px 16px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
+                  No results.
+                </div>
+              ) : (
+                (() => {
+                  let lastKind: string | null = null;
+                  return paletteItems.map((item, idx) => {
+                    const kind = item.kind;
+                    const showHeader = kind !== lastKind;
+                    lastKind = kind;
+                    const isActive = idx === paletteActiveIndex;
+                    const sectionLabel = kind === 'project' ? 'Projects' : kind === 'lens' ? 'Lenses' : 'Jobs';
+
+                    return (
+                      <React.Fragment key={item.id}>
+                        {showHeader && (
+                          <div
+                            style={{
+                              padding: '10px 16px 6px 16px',
+                              fontSize: 11,
+                              letterSpacing: '0.08em',
+                              textTransform: 'uppercase',
+                              color: 'var(--text-tertiary-weak)',
+                            }}
+                          >
+                            {sectionLabel}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => runPaletteSelection(item)}
+                          onMouseEnter={() => setPaletteActiveIndex(idx)}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            padding: '10px 16px',
+                            border: 'none',
+                            background: isActive ? 'var(--white-10)' : 'transparent',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'baseline',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            borderLeft: `3px solid ${isActive ? 'var(--accent-primary)' : 'transparent'}`,
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {item.title}
+                            </div>
+                            {item.subtitle && (
+                              <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {item.subtitle}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary-weak)', flexShrink: 0 }}>
+                            {kind === 'project' ? '↵ Select' : '↵ Open'}
+                          </div>
+                        </button>
+                      </React.Fragment>
+                    );
+                  });
+                })()
+              )}
+            </div>
+
+            <div
+              style={{
+                padding: '10px 12px',
+                borderTop: '1px solid var(--border-subtle)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                color: 'var(--text-secondary-strong)',
+                fontSize: 11,
+              }}
+            >
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <span><strong>↑</strong>/<strong>↓</strong> to navigate</span>
+                <span><strong>Enter</strong> to select</span>
+              </div>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <span><strong>Esc</strong> to close</span>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* New Scenario Modal */}
       {showNewScenarioModal && createPortal(
