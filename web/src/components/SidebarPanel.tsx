@@ -622,15 +622,33 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   // Horizon lenses state
   const [lenses, setLenses] = React.useState<Array<{
     id: string;
+    tenantId?: string;
+    projectId?: string;
     name: string;
     status: string;
     scope: string[];
+    createdAt?: string;
     updatedAt: string;
     viewConfig?: Record<string, any>;
+    alertConfig?: Record<string, any>;
+    scopeFragments?: Record<string, string>;
+    resolvedQueries?: Record<string, string[]>;
+    lastResolved?: string;
   }>>([]);
   const [lensesLoading, setLensesLoading] = React.useState(false);
+  const [deletingLensIds, setDeletingLensIds] = React.useState<Set<string>>(new Set());
+  const [editingLensId, setEditingLensId] = React.useState<string | null>(null);
+  const [editingLensName, setEditingLensName] = React.useState('');
+  const editingLensInputRef = React.useRef<HTMLInputElement | null>(null);
   // Track which project the lenses belong to
   const [lensesProjectId, setLensesProjectId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (editingLensId && editingLensInputRef.current) {
+      editingLensInputRef.current.focus();
+      editingLensInputRef.current.select();
+    }
+  }, [editingLensId]);
 
   // Group projects by date (Today, Yesterday, Later)
   const groupedProjects = React.useMemo(() => {
@@ -962,6 +980,9 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     if (currentMode !== 'horizon') {
       setLenses([]);
       setLensesProjectId(null);
+      setEditingLensId(null);
+      setEditingLensName('');
+      setDeletingLensIds(new Set());
       return;
     }
 
@@ -969,6 +990,9 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     if (!currentProject?.id || currentProject.id === 'local-unfold') {
       setLenses([]);
       setLensesProjectId(null);
+      setEditingLensId(null);
+      setEditingLensName('');
+      setDeletingLensIds(new Set());
       return;
     }
 
@@ -976,6 +1000,9 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     if (lensesProjectId !== currentProject.id) {
       setLenses([]);
       setLensesProjectId(null);
+      setEditingLensId(null);
+      setEditingLensName('');
+      setDeletingLensIds(new Set());
     }
 
     const projectIdForLoading = currentProject.id;
@@ -998,6 +1025,87 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       setLensesLoading(false);
     }
   }, [currentProject?.id, currentMode, lensesProjectId]);
+
+  const startEditingLens = React.useCallback((lens: any) => {
+    const id = String(lens?.id || '').trim();
+    if (!id) return;
+    setEditingLensId(id);
+    setEditingLensName(String(lens?.name || '').trim());
+    window.setTimeout(() => editingLensInputRef.current?.focus(), 0);
+  }, []);
+
+  const cancelEditingLens = React.useCallback(() => {
+    setEditingLensId(null);
+    setEditingLensName('');
+  }, []);
+
+  const renameLens = React.useCallback(async (lens: any, nextNameRaw: string) => {
+    const id = String(lens?.id || '').trim();
+    if (!id) return;
+    const nextName = String(nextNameRaw || '').trim();
+    const prevName = String(lens?.name || '').trim();
+    if (!nextName || nextName === prevName) {
+      cancelEditingLens();
+      return;
+    }
+    try {
+      // Optimistic update
+      setLenses((prev) => prev.map((l) => (l.id === id ? { ...l, name: nextName } : l)));
+      let tenantId = String(lens?.tenantId || '').trim();
+      let projectId = String(lens?.projectId || '').trim();
+      let fullLens: any = lens;
+      if (!tenantId || !projectId) {
+        fullLens = await api.getHorizonLens(id);
+        tenantId = String(fullLens?.tenantId || '').trim();
+        projectId = String(fullLens?.projectId || '').trim();
+      }
+      await api.updateHorizonLens(id, {
+        tenantId,
+        projectId,
+        name: nextName,
+        scope: Array.isArray(fullLens?.scope) ? fullLens.scope : [],
+        viewConfig: fullLens?.viewConfig,
+        alertConfig: fullLens?.alertConfig,
+        status: String(fullLens?.status || 'ACTIVE'),
+        scopeFragments: fullLens?.scopeFragments,
+        resolvedQueries: fullLens?.resolvedQueries,
+        lastResolved: fullLens?.lastResolved,
+      });
+    } catch (e) {
+      // Best-effort: revert
+      setLenses((prev) => prev.map((l) => (l.id === id ? { ...l, name: prevName } : l)));
+    } finally {
+      cancelEditingLens();
+    }
+  }, [cancelEditingLens]);
+
+  const deleteLens = React.useCallback(async (lens: any) => {
+    const id = String(lens?.id || '').trim();
+    if (!id) return;
+    const name = String(lens?.name || 'Untitled Lens');
+    if (!window.confirm(`Delete lens "${name}"?`)) return;
+
+    setDeletingLensIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    try {
+      await api.deleteHorizonLens(id);
+      setLenses((prev) => prev.filter((l) => l.id !== id));
+      if (selectedLensId === id) {
+        onSelectLens?.(null);
+      }
+    } catch {
+      // ignore (keep lens)
+    } finally {
+      setDeletingLensIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }, [onSelectLens, selectedLensId]);
 
   // Command palette (sidebar)
   type PaletteItem =
@@ -1843,6 +1951,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         .sidebar-modern .sidebar-row.has-actions:focus-within .sidebar-row-title {
           padding-right: 160px; /* make room for actions overlay */
         }
+        /* Lens rows have fewer actions than projects; reserve less space on hover. */
+        .sidebar-modern .sidebar-row.lens-row.has-actions:hover .sidebar-row-title,
+        .sidebar-modern .sidebar-row.lens-row.has-actions:focus-within .sidebar-row-title {
+          padding-right: 96px;
+        }
         .sidebar-modern .sidebar-row .sidebar-row-subtitle {
           font-size: 10px;
           color: var(--text-tertiary-weak);
@@ -2174,7 +2287,13 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                         type="button"
                         onClick={() => {
                           onCloseAllModals?.();
-                          onResetChat();
+                          // Horizon best-practice: when inside a project (details view), primary CTA is New Lens.
+                          // When browsing projects, primary CTA is New Project.
+                          if (isHorizonMode && isDetailsView && onNewLens) {
+                            onNewLens();
+                          } else {
+                            onResetChat();
+                          }
                           if (isMobile) onClose();
                         }}
                         style={{
@@ -2191,12 +2310,16 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                           fontWeight: 650,
                           fontSize: 12,
                         }}
-                        title={isHorizonMode ? 'New Project' : t('unfold.sections.newChat')}
+                        title={
+                          isHorizonMode
+                            ? (isDetailsView ? 'Create New Lens' : 'New Project')
+                            : t('unfold.sections.newChat')
+                        }
                       >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M12 5v14" /><path d="M5 12h14" />
                         </svg>
-                        {isHorizonMode ? 'New Project' : t('unfold.sections.newChat')}
+                        {isHorizonMode ? (isDetailsView ? 'New Lens' : 'New Project') : t('unfold.sections.newChat')}
                       </button>
                       {onShowWorkspace && (
                         <button
@@ -2222,7 +2345,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   <>
                     <button
                       type="button"
-                      aria-label={currentMode === 'horizon' ? 'New Project' : t('unfold.sections.newChat')}
+                      aria-label={
+                        currentMode === 'horizon'
+                          ? (isDetailsView ? 'New Lens' : 'New Project')
+                          : t('unfold.sections.newChat')
+                      }
                       className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors mb-1"
                       style={{
                         backgroundColor: 'transparent',
@@ -2239,7 +2366,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                       onClick={() => {
                         // Close all modals (workspace, admin, settings, account) when creating new chat/project
                         onCloseAllModals?.();
-                        onResetChat();
+                        if (currentMode === 'horizon' && isDetailsView && onNewLens) {
+                          onNewLens();
+                        } else {
+                          onResetChat();
+                        }
                         if (isMobile) {
                           onClose();
                         }
@@ -2269,7 +2400,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                         className="text-13 font-medium"
                         style={{ color: 'var(--text-heading)' }}
                       >
-                        {currentMode === 'horizon' ? 'New Project' : t('unfold.sections.newChat')}
+                        {currentMode === 'horizon' ? (isDetailsView ? 'New Lens' : 'New Project') : t('unfold.sections.newChat')}
                       </span>
                     </button>
                     {onShowWorkspace && (
@@ -2802,41 +2933,99 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                   {lenses.map((lens) => {
                                     const isSelected = selectedLensId === lens.id;
+                                    const isDeleting = deletingLensIds.has(lens.id);
+                                    const isEditing = editingLensId === lens.id;
+                                    const statusU = String(lens.status || '').toUpperCase();
+                                    const statusShort = statusU === 'ACTIVE' ? 'A' : (statusU || 'LENS');
                                     return (
                                       <div
                                         key={lens.id}
-                                        className={`sidebar-row ${sidebarDensity === 'compact' ? 'compact' : ''} ${isSelected ? 'is-selected' : ''}`}
+                                        className={`sidebar-row lens-row has-actions ${sidebarDensity === 'compact' ? 'compact' : ''} ${isSelected ? 'is-selected' : ''}`}
+                                        style={{ opacity: isDeleting ? 0.6 : 1, cursor: isDeleting ? 'default' : 'pointer' }}
                                         onClick={() => {
+                                          if (isDeleting) return;
+                                          if (isEditing) return;
                                           onSelectLens?.(isSelected ? null : lens.id);
                                           if (isMobile) onClose();
                                         }}
                                         title={lens.name}
                                       >
-                                        <div
-                                          style={{
-                                            width: 18,
-                                            height: 18,
-                                            borderRadius: 6,
-                                            border: '1px solid var(--border-subtle)',
-                                            background: 'var(--white-06)',
-                                            color: 'var(--text-secondary-strong)',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            fontSize: 10,
-                                            fontWeight: 800,
-                                            flexShrink: 0,
-                                          }}
-                                          title="Lens"
-                                        >
-                                          L
-                                        </div>
-                                        <div className="sidebar-row-title" style={{ fontWeight: 650 }}>
-                                          {lens.name || 'Untitled Lens'}
-                                        </div>
-                                        <div className="sidebar-row-subtitle" title="Status">
-                                          {String(lens.status || '').toUpperCase() || 'LENS'}
-                                        </div>
+                                        {isEditing ? (
+                                          <input
+                                            ref={editingLensInputRef}
+                                            type="text"
+                                            value={editingLensName}
+                                            onChange={(e) => setEditingLensName(e.target.value)}
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Enter') {
+                                                void renameLens(lens, editingLensName);
+                                              } else if (e.key === 'Escape') {
+                                                cancelEditingLens();
+                                              }
+                                            }}
+                                            onBlur={() => {
+                                              void renameLens(lens, editingLensName);
+                                            }}
+                                            style={{
+                                              flex: 1,
+                                              minWidth: 0,
+                                              background: 'transparent',
+                                              border: '1px solid var(--border-subtle)',
+                                              borderRadius: 10,
+                                              padding: '6px 10px',
+                                              color: 'var(--text-heading)',
+                                              outline: 'none',
+                                              fontSize: 12,
+                                            }}
+                                            onClick={(e) => e.stopPropagation()}
+                                          />
+                                        ) : (
+                                          <div className="sidebar-row-title" style={{ fontWeight: 650, textDecoration: isDeleting ? 'line-through' : 'none' }}>
+                                            {lens.name || 'Untitled Lens'}
+                                          </div>
+                                        )}
+
+                                        {!isEditing && (
+                                          <div className="sidebar-row-subtitle" title="Status">
+                                            {statusShort}
+                                          </div>
+                                        )}
+
+                                        {!isEditing && !isDeleting && (
+                                          <div className="sidebar-row-actions">
+                                            <button
+                                              type="button"
+                                              className="sidebar-icon-btn"
+                                              title="Edit lens name"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                startEditingLens(lens);
+                                              }}
+                                            >
+                                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M12 20h9" />
+                                                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" />
+                                              </svg>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="sidebar-icon-btn"
+                                              title="Delete lens"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                void deleteLens(lens);
+                                              }}
+                                            >
+                                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M3 6h18" />
+                                                <path d="M8 6V4h8v2" />
+                                                <path d="M19 6l-1 14H6L5 6" />
+                                                <path d="M10 11v6" />
+                                                <path d="M14 11v6" />
+                                              </svg>
+                                            </button>
+                                          </div>
+                                        )}
                                       </div>
                                     );
                                   })}

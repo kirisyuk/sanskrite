@@ -51,7 +51,7 @@ export const HorizonPanelButtons: React.FC<HorizonPanelButtonsProps> = ({
         width: '48px',
         minWidth: '48px',
         flexShrink: 0,
-        paddingTop: '76px',
+        paddingTop: '12px',
       }}
     >
       {/* Object Inspector button - "i" icon - always visible */}

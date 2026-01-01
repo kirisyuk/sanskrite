@@ -6,6 +6,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 // HorizonHandlers содержит все HTTP handlers для Horizon API
@@ -13,6 +14,7 @@ type HorizonHandlers struct {
 	service        *horizon.HorizonService
 	lensItemsHandler *LensItemsHandler
 	genAIHandler   *httputil.GenAIHandler
+	docsRepo       *corerepo.DocumentsRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -34,6 +36,12 @@ func (h *HorizonHandlers) WithGenAIHandler(handler *httputil.GenAIHandler) *Hori
 	return h
 }
 
+// WithDocumentsRepo wires the generic DocumentsRepository (rag_documents) for Horizon-side helpers.
+func (h *HorizonHandlers) WithDocumentsRepo(docs *corerepo.DocumentsRepository) *HorizonHandlers {
+	h.docsRepo = docs
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -52,6 +60,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 
 	// Rollup & Explain endpoints (Signals & Semantic Propagation)
 	mux.Handle("/api/horizon/rollup/", authMiddleware(http.HandlerFunc(h.HandleRollupRoutes)))
+
+	// AI explanations (cached markdown explanations for nodes/edges)
+	mux.Handle("/api/horizon/ai-explanations/", authMiddleware(http.HandlerFunc(h.HandleAIExplanationsRoutes)))
 
 	// DependencyEdge endpoints
 	mux.Handle("/api/horizon/edges", authMiddleware(http.HandlerFunc(h.CreateEdge)))

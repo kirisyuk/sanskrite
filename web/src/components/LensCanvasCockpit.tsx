@@ -12,11 +12,16 @@ import ReactFlow, {
   MarkerType,
   EdgeProps,
   EdgeTypes,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { ThemeContext } from './ThemeProvider';
 import { HORIZON_NODE_TYPES, setHorizonNodeVisualQuality, type HorizonNodeVisualQuality } from './HorizonGraphNodeTypes';
 import { api } from '../lib/api';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   layoutExpansionWithGroups,
   layoutFullGraph,
@@ -116,26 +121,341 @@ const ArcTopEdge: React.FC<EdgeProps> = ({
   );
 };
 
+type EdgeExplainAnchor = { left: number; top: number; right: number; bottom: number; width: number; height: number };
+
+type EdgeExplainOpenArgs = {
+  edgeId: string;
+  edgeType?: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  anchor: EdgeExplainAnchor;
+};
+
+const ExplainEdgeLabel: React.FC<{
+  labelX: number;
+  labelY: number;
+  caption: string;
+  theme: 'light' | 'dark';
+  onExplain?: (args: EdgeExplainOpenArgs) => void;
+  edgeId: string;
+  edgeType?: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+}> = ({ labelX, labelY, caption, theme, onExplain, edgeId, edgeType, sourceNodeId, targetNodeId }) => {
+  const labelText = theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.88)';
+  const labelBg = theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.86)';
+  const labelBorder = theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)';
+
+  return (
+    <EdgeLabelRenderer>
+      <div
+        style={{
+          position: 'absolute',
+          transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+          pointerEvents: 'none',
+          zIndex: 20,
+        }}
+      >
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '4px 8px',
+            borderRadius: 10,
+            background: labelBg,
+            border: `1px solid ${labelBorder}`,
+            color: labelText,
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.2px',
+            boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
+          }}
+        >
+          <span style={{ pointerEvents: 'none' }}>{caption}</span>
+          {typeof onExplain === 'function' && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const el = e.currentTarget as HTMLElement;
+                const r = el.getBoundingClientRect();
+                onExplain({
+                  edgeId,
+                  edgeType,
+                  sourceNodeId,
+                  targetNodeId,
+                  anchor: {
+                    left: r.left,
+                    top: r.top,
+                    right: r.right,
+                    bottom: r.bottom,
+                    width: r.width,
+                    height: r.height,
+                  },
+                });
+              }}
+              title="Explain relationship"
+              aria-label="Explain relationship"
+              style={{
+                pointerEvents: 'auto',
+                width: 18,
+                height: 18,
+                borderRadius: 999,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.22)' : 'rgba(15,23,42,0.18)'}`,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.75)',
+                color: theme === 'dark' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.85)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 11,
+                fontWeight: 900,
+                cursor: 'pointer',
+              }}
+            >
+              i
+            </button>
+          )}
+        </div>
+      </div>
+    </EdgeLabelRenderer>
+  );
+};
+
+// Custom edge with HTML label (caption + explain button) for modern 2026 UX.
+const HznEdge: React.FC<EdgeProps> = ({
+  id,
+  source,
+  target,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style = {},
+  markerEnd,
+  data,
+}) => {
+  const { theme } = React.useContext(ThemeContext);
+  // IMPORTANT: pass source/target positions, otherwise getBezierPath defaults to Bottom/Top and curves can look
+  // like they connect from the wrong side (even if the anchor point is correct).
+  const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+  const d: any = data || {};
+  const showLabel = !!d.showLabel;
+  const caption = String(d.edgeCaption || d.edgeLabel || '').trim();
+  const onExplain = d.onExplain as undefined | ((args: EdgeExplainOpenArgs) => void);
+  const raiseToFront = !!d.raiseToFront;
+
+  return (
+    <>
+      <BaseEdge path={edgePath} style={style} markerEnd={markerEnd} />
+      {/* Wider invisible path for easier selection */}
+      <path d={edgePath} fill="none" strokeWidth={20} stroke="transparent" className="react-flow__edge-interaction" />
+      {/* Front-layer highlight: draw the focused relationship above nodes to avoid caption ambiguity */}
+      {raiseToFront && (
+        <EdgeLabelRenderer>
+          <svg
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
+              overflow: 'visible',
+              pointerEvents: 'none',
+              zIndex: 15,
+            }}
+          >
+            <path
+              d={edgePath}
+              fill="none"
+              stroke={String((style as any)?.stroke || (theme === 'dark' ? 'rgba(255,255,255,0.65)' : 'rgba(15,23,42,0.65)'))}
+              strokeWidth={Math.max(3, Number((style as any)?.strokeWidth || 1.5) + 1.5)}
+              strokeOpacity={0.92}
+            />
+          </svg>
+        </EdgeLabelRenderer>
+      )}
+      {showLabel && caption && (
+        <ExplainEdgeLabel
+          labelX={labelX}
+          labelY={labelY}
+          caption={caption}
+          theme={theme === 'dark' ? 'dark' : 'light'}
+          onExplain={onExplain}
+          edgeId={id}
+          edgeType={String(d.edgeType || '').trim() || undefined}
+          sourceNodeId={String(source)}
+          targetNodeId={String(target)}
+        />
+      )}
+    </>
+  );
+};
+
+// Same as ArcTopEdge, but with HTML label (so we can host the explain button).
+const HznArcTopEdge: React.FC<EdgeProps> = ({
+  id,
+  source,
+  target,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  style = {},
+  markerEnd,
+  data,
+}) => {
+  const { theme } = React.useContext(ThemeContext);
+  const midX = (sourceX + targetX) / 2;
+  const dx = Math.abs(targetX - sourceX);
+  const arcHeight = Math.min(80, Math.max(40, dx * 0.25));
+  const midY = Math.min(sourceY, targetY) - arcHeight;
+  const path = `M ${sourceX} ${sourceY} Q ${midX} ${midY} ${targetX} ${targetY}`;
+  const labelX = midX;
+  const labelY = midY - 8;
+  const d: any = data || {};
+  const showLabel = !!d.showLabel;
+  const caption = String(d.edgeCaption || d.edgeLabel || '').trim();
+  const onExplain = d.onExplain as undefined | ((args: EdgeExplainOpenArgs) => void);
+  const raiseToFront = !!d.raiseToFront;
+
+  return (
+    <>
+      <BaseEdge path={path} style={style} markerEnd={markerEnd} />
+      <path d={path} fill="none" strokeWidth={20} stroke="transparent" className="react-flow__edge-interaction" />
+      {raiseToFront && (
+        <EdgeLabelRenderer>
+          <svg
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
+              overflow: 'visible',
+              pointerEvents: 'none',
+              zIndex: 15,
+            }}
+          >
+            <path
+              d={path}
+              fill="none"
+              stroke={String((style as any)?.stroke || (theme === 'dark' ? 'rgba(255,255,255,0.65)' : 'rgba(15,23,42,0.65)'))}
+              strokeWidth={Math.max(3, Number((style as any)?.strokeWidth || 1.5) + 1.5)}
+              strokeOpacity={0.92}
+            />
+          </svg>
+        </EdgeLabelRenderer>
+      )}
+      {showLabel && caption && (
+        <ExplainEdgeLabel
+          labelX={labelX}
+          labelY={labelY}
+          caption={caption}
+          theme={theme === 'dark' ? 'dark' : 'light'}
+          onExplain={onExplain}
+          edgeId={id}
+          edgeType={String(d.edgeType || '').trim() || undefined}
+          sourceNodeId={String(source)}
+          targetNodeId={String(target)}
+        />
+      )}
+    </>
+  );
+};
+
 // Custom edge types for the graph
 const CUSTOM_EDGE_TYPES: EdgeTypes = {
   arcTop: ArcTopEdge,
+  hzn: HznEdge,
+  hznArcTop: HznArcTopEdge,
 };
 
 export interface LensCanvasCockpitProps {
   lensId: string | null;
   projectId?: string | null;
-  toolbarContainer?: HTMLDivElement | null;
   onNodeSelect?: (nodeId: string | null, nodeData: HorizonNodeData | null) => void;
   onEdgeSelect?: (edgeId: string | null, edgeData: any | null) => void;
   onScopeScout?: (input: { fragmentId: string; canonicalPath?: string; maxRecursionDepth?: number }) => Promise<void>;
+  inspectorActive?: boolean;
+  onToggleInspector?: () => void;
 }
 
-export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, projectId, toolbarContainer, onNodeSelect, onEdgeSelect, onScopeScout }) => {
+export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
+  lensId,
+  projectId,
+  onNodeSelect,
+  onEdgeSelect,
+  onScopeScout,
+  inspectorActive,
+  onToggleInspector,
+}) => {
   const { theme } = React.useContext(ThemeContext);
   const DEV = import.meta.env.DEV;
   const dbg = React.useCallback((...args: any[]) => {
     if (DEV) console.log(...args);
   }, [DEV]);
+
+  const getEdgeStroke = React.useCallback((style: any): string => {
+    const s = style?.stroke;
+    if (typeof s === 'string' && s.trim()) return s.trim();
+    return theme === 'dark' ? 'rgba(226,232,240,0.55)' : 'rgba(71,85,105,0.55)';
+  }, [theme]);
+
+  const getEdgeCaptionShort = React.useCallback((raw: any): string | undefined => {
+    const t = String(raw || '').trim();
+    if (!t) return undefined;
+    const u = t.toUpperCase();
+    const MAP: Record<string, string> = {
+      // Dependency / usage
+      DEPENDS_ON: 'Depends',
+      REQUIRES: 'Requires',
+      NEEDS: 'Needs',
+      USES: 'Uses',
+      CONSUMES: 'Consumes',
+      // Ownership / control
+      OWNS: 'Owns',
+      MANAGES: 'Manages',
+      CONTROLS: 'Controls',
+      INVESTS_IN: 'Invests',
+      PARENT_OF: 'Parent',
+      SUBSIDIARY_OF: 'Subsidiary',
+      EMPLOYED_BY: 'Employed',
+      BOARD_MEMBER_OF: 'Board',
+      FOUNDED: 'Founded',
+      // Cooperation / relationships
+      PARTNERS_WITH: 'Partners',
+      COOPERATES_WITH: 'Cooperates',
+      SUPPORTS: 'Supports',
+      SUPPLIES_TO: 'Supplies',
+      PRODUCES: 'Produces',
+      // Location / context
+      LOCATED_IN: 'Located',
+      OPERATES_IN: 'Operates',
+      BASED_IN: 'Based',
+      HEADQUARTERED_IN: 'HQ',
+      // Competition / conflict
+      COMPETES_WITH: 'Competes',
+      CONFLICTS_WITH: 'Conflicts',
+      OPPOSES: 'Opposes',
+      INFLUENCES: 'Influences',
+      AFFECTS: 'Affects',
+      REGULATES: 'Regulates',
+      IMPACTS: 'Impacts',
+    };
+    if (MAP[u]) return MAP[u];
+    const human = u
+      .replace(/_WITH$/g, '')
+      .replace(/_TO$/g, '')
+      .replace(/_OF$/g, '')
+      .replace(/_/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    return human.length > 18 ? `${human.slice(0, 18)}…` : human;
+  }, []);
   // Guard: ReactFlow can sometimes fire onPaneClick after node/edge click (sometimes twice).
   // We ignore pane clicks for a short window after selecting to avoid clearing selection immediately.
   const ignorePaneClicksUntilRef = React.useRef<number>(0);
@@ -171,6 +491,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
+  const edgeExplainSessionCacheRef = React.useRef<Map<string, { markdown: string; cachedAt: string }>>(new Map());
+  const [edgeExplainPopover, setEdgeExplainPopover] = React.useState<{
+    open: boolean;
+    edgeId: string;
+    edgeType?: string;
+    sourceNodeId: string;
+    targetNodeId: string;
+    anchor: EdgeExplainAnchor;
+    markdown: string | null;
+    cachedAt: string | null;
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
+  const edgeExplainPopoverRef = React.useRef<HTMLDivElement | null>(null);
   const [gridState, setGridState] = React.useState<GridState>(createEmptyGrid());
 
   // Hover updates can fire very frequently; coalesce to 1 update per frame to avoid re-render storms.
@@ -200,6 +534,227 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       }
     });
   }, []);
+
+  const closeEdgeExplainPopover = React.useCallback(() => {
+    setEdgeExplainPopover(null);
+  }, []);
+
+  React.useEffect(() => {
+    if (!edgeExplainPopover?.open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeEdgeExplainPopover();
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = edgeExplainPopoverRef.current;
+      if (!el) return;
+      if (e.target && el.contains(e.target as any)) return;
+      closeEdgeExplainPopover();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [edgeExplainPopover?.open, closeEdgeExplainPopover]);
+
+  const preferredLang = React.useMemo(() => {
+    const preferredLanguage =
+      (typeof navigator !== 'undefined' && (navigator as any)?.language) ? (navigator as any).language : 'en';
+    const short = (String(preferredLanguage || 'en').split('-')[0] || 'en').toLowerCase();
+    return short || 'en';
+  }, []);
+
+  const generateAndPersistEdgeExplanation = React.useCallback(async (args: {
+    edgeId: string;
+    edgeType?: string;
+    sourceNodeId: string;
+    targetNodeId: string;
+    lang: string;
+    force?: boolean;
+  }): Promise<{ markdown: string; cachedAt: string | null }> => {
+    const lang = args.lang || 'en';
+    const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
+    const nodeById = new Map<string, Node<HorizonNodeData>>();
+    for (const n of currentNodes) nodeById.set(n.id, n);
+
+    const sourceNode = nodeById.get(args.sourceNodeId);
+    const targetNode = nodeById.get(args.targetNodeId);
+    const sd: any = sourceNode?.data;
+    const td: any = targetNode?.data;
+    const sourceFragmentId = String(sd?.fragmentId || '').trim();
+    const targetFragmentId = String(td?.fragmentId || '').trim();
+
+    const payload = {
+      preferredLanguage: lang,
+      edge: {
+        id: args.edgeId,
+        edgeType: String(args.edgeType || '').trim() || undefined,
+      },
+      source: {
+        nodeId: args.sourceNodeId,
+        fragmentId: sourceFragmentId || null,
+        label: sd?.label || null,
+        canonicalPath: sd?.canonicalPath || null,
+        type: sd?.type || null,
+      },
+      target: {
+        nodeId: args.targetNodeId,
+        fragmentId: targetFragmentId || null,
+        label: td?.label || null,
+        canonicalPath: td?.canonicalPath || null,
+        type: td?.type || null,
+      },
+    };
+
+    const prompt =
+      `Explain why this graph relationship exists.\n` +
+      `- Output language: ${lang}\n` +
+      `- Use Google Search grounding.\n` +
+      `- Output: Markdown.\n` +
+      `- Keep it concise (3-6 sentences). You may use bullet points.\n` +
+      `- If you are unsure, say so explicitly.\n\n` +
+      `Graph edge context (JSON):\n` +
+      `${JSON.stringify(payload, null, 2)}\n`;
+
+    const resp: any = await api.genaiComplete({
+      prompt,
+      options: {
+        profile: 'fast',
+        modelOverride: 'gemini-3-flash-preview',
+        groundingEnabled: true,
+        temperature: 0.2,
+        maxOutputTokens: 2048,
+        systemInstruction:
+          'You are a careful analyst. Explain the relationship in plain language. Do not invent facts. Prefer grounded statements. Output Markdown.',
+      },
+    });
+
+    const md = String(resp?.content || '').trim();
+    if (!md) throw new Error('Empty response from model');
+
+    // Persist best-effort
+    try {
+      await api.upsertHorizonAIExplanation(
+        'edge',
+        args.edgeId,
+        {
+          markdown: md,
+          language: lang,
+          lensId: lensId || undefined,
+          edgeType: String(args.edgeType || '').trim() || undefined,
+          sourceFragmentId: sourceFragmentId || undefined,
+          targetFragmentId: targetFragmentId || undefined,
+        },
+        { lang },
+      );
+    } catch {
+      // ignore
+    }
+
+    return { markdown: md, cachedAt: new Date().toISOString() };
+  }, [lensId, nodesStateRef, preferredLang]);
+
+  const loadEdgeExplanation = React.useCallback(async (args: {
+    edgeId: string;
+    edgeType?: string;
+    sourceNodeId: string;
+    targetNodeId: string;
+    force?: boolean;
+  }) => {
+    const lang = preferredLang;
+    const cacheKey = `edge:${args.edgeId}:${lang}`;
+
+    // Session cache (prevents repeated LLM calls if backend is temporarily failing).
+    if (!args.force) {
+      const cached = edgeExplainSessionCacheRef.current.get(cacheKey);
+      if (cached && String(cached.markdown || '').trim()) {
+        setEdgeExplainPopover((p) => {
+          if (!p || p.edgeId !== args.edgeId) return p;
+          return { ...p, markdown: cached.markdown, cachedAt: cached.cachedAt, loading: false, error: null };
+        });
+        return;
+      }
+    }
+
+    // Mark loading for this popover (if still open for the same edge).
+    setEdgeExplainPopover((p) => {
+      if (!p || p.edgeId !== args.edgeId) return p;
+      return { ...p, loading: true, error: null };
+    });
+    // 1) Try cache (unless force)
+    if (!args.force) {
+      try {
+        const cached = await api.getHorizonAIExplanation('edge', args.edgeId, { lang });
+        const md = String(cached?.markdown || '').trim();
+        if (md) {
+          edgeExplainSessionCacheRef.current.set(cacheKey, { markdown: md, cachedAt: String(cached.updatedAt || '') || new Date().toISOString() });
+          setEdgeExplainPopover((p) => {
+            if (!p || p.edgeId !== args.edgeId) return p;
+            return { ...p, markdown: md, cachedAt: String(cached.updatedAt || ''), loading: false, error: null };
+          });
+          return;
+        }
+      } catch (err: any) {
+        if (err?.response?.status !== 404) {
+          setEdgeExplainPopover((p) => {
+            if (!p || p.edgeId !== args.edgeId) return p;
+            return { ...p, loading: false, error: err.response?.data?.error || err.message || 'Failed to load explanation' };
+          });
+          return;
+        }
+      }
+    }
+
+    // 2) Generate
+    try {
+      const out = await generateAndPersistEdgeExplanation({
+        edgeId: args.edgeId,
+        edgeType: args.edgeType,
+        sourceNodeId: args.sourceNodeId,
+        targetNodeId: args.targetNodeId,
+        lang,
+        force: args.force,
+      });
+      edgeExplainSessionCacheRef.current.set(cacheKey, { markdown: out.markdown, cachedAt: out.cachedAt || new Date().toISOString() });
+      setEdgeExplainPopover((p) => {
+        if (!p || p.edgeId !== args.edgeId) return p;
+        return { ...p, markdown: out.markdown, cachedAt: out.cachedAt, loading: false, error: null };
+      });
+    } catch (err: any) {
+      setEdgeExplainPopover((p) => {
+        if (!p || p.edgeId !== args.edgeId) return p;
+        return { ...p, loading: false, error: err.message || 'Failed to generate explanation' };
+      });
+    }
+  }, [preferredLang, generateAndPersistEdgeExplanation]);
+
+  const openEdgeExplainPopover = React.useCallback((args: EdgeExplainOpenArgs) => {
+    setEdgeExplainPopover({
+      open: true,
+      edgeId: args.edgeId,
+      edgeType: args.edgeType,
+      sourceNodeId: args.sourceNodeId,
+      targetNodeId: args.targetNodeId,
+      anchor: args.anchor,
+      markdown: null,
+      cachedAt: null,
+      loading: true,
+      error: null,
+    });
+  }, []);
+
+  React.useEffect(() => {
+    if (!edgeExplainPopover?.open) return;
+    // Load after open (cache-first)
+    loadEdgeExplanation({
+      edgeId: edgeExplainPopover.edgeId,
+      edgeType: edgeExplainPopover.edgeType,
+      sourceNodeId: edgeExplainPopover.sourceNodeId,
+      targetNodeId: edgeExplainPopover.targetNodeId,
+      force: false,
+    });
+  }, [edgeExplainPopover?.open, edgeExplainPopover?.edgeId, loadEdgeExplanation, edgeExplainPopover?.edgeType, edgeExplainPopover?.sourceNodeId, edgeExplainPopover?.targetNodeId]);
 
   React.useEffect(() => {
     return () => {
@@ -247,12 +802,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   const [showMiniMap, setShowMiniMap] = React.useState(false);
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
   const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear'>('freeform');
-  const [showLayoutDropdown, setShowLayoutDropdown] = React.useState(false);
+  const [showToolbarMenu, setShowToolbarMenu] = React.useState(false);
+  const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const [showHoverModeMenu, setShowHoverModeMenu] = React.useState(false);
+  const hoverModeMenuRef = React.useRef<HTMLDivElement | null>(null);
 
   // Visual settings (toolbar modal)
   type VisualPreset = 'max' | 'balanced' | 'minimal' | 'custom';
   const [visualSettingsOpen, setVisualSettingsOpen] = React.useState(false);
   const [visualPreset, setVisualPreset] = React.useState<VisualPreset>('balanced');
+  const [showNodeMetrics, setShowNodeMetrics] = React.useState<boolean>(() => {
+    try {
+      return localStorage.getItem('horizon.showNodeMetrics') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [nodeVisualQuality, setNodeVisualQuality] = React.useState<HorizonNodeVisualQuality>(() => {
     try {
       const raw = localStorage.getItem('horizon.nodeVisualQuality');
@@ -269,6 +834,90 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       // ignore
     }
   }, [nodeVisualQuality]);
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('horizon.showNodeMetrics', showNodeMetrics ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [showNodeMetrics]);
+
+  // Apply node-metrics toggle to all existing fragment nodes (cheap O(N), invoked only on toggle).
+  React.useEffect(() => {
+    setNodes((prev) => {
+      if (!prev || prev.length === 0) return prev;
+      let changed = false;
+      const next = (prev as any[]).map((n) => {
+        const d: any = (n as any)?.data;
+        if (!d || d.isGroup) return n;
+        if (d.showMetrics === showNodeMetrics) return n;
+        changed = true;
+        return { ...(n as any), data: { ...d, showMetrics: showNodeMetrics } };
+      });
+      return changed ? (next as any) : prev;
+    });
+  }, [showNodeMetrics, setNodes]);
+
+  // Close visual settings on Escape
+  React.useEffect(() => {
+    if (!visualSettingsOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setVisualSettingsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [visualSettingsOpen]);
+
+  // Toolbar menu (overflow) interactions
+  React.useEffect(() => {
+    if (!showToolbarMenu) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowToolbarMenu(false);
+      }
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = toolbarMenuRef.current;
+      const target = e.target as globalThis.Node | null;
+      if (!el || !target) return;
+      if (el.contains(target)) return;
+      setShowToolbarMenu(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [showToolbarMenu]);
+
+  // Hover mode dropdown interactions
+  React.useEffect(() => {
+    if (!showHoverModeMenu) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowHoverModeMenu(false);
+      }
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = hoverModeMenuRef.current;
+      const target = e.target as globalThis.Node | null;
+      if (!el || !target) return;
+      if (el.contains(target)) return;
+      setShowHoverModeMenu(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [showHoverModeMenu]);
 
   // Add-node UI (toolbar)
   type HorizonSearchEntity = {
@@ -1000,10 +1649,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     dbg(
       '[Cockpit] Node items sample:',
       nodeItems.slice(0, 25).map(item => ({
-        id: item.id,
-        fragmentId: item.fragmentId,
-        kind: item.kind,
-        hasPosition: !!item.position
+      id: item.id,
+      fragmentId: item.fragmentId,
+      kind: item.kind,
+      hasPosition: !!item.position
       }))
     );
     
@@ -1038,6 +1687,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             label: item.label,
             type: item.type,
             state: item.state,
+            showMetrics: showNodeMetrics,
             status: item.status,
             expanded: item.expanded,
             collapsed: item.collapsed,
@@ -1064,6 +1714,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
         if (sourceId && targetId) {
           const baseStyle = getEdgeStyle(item.edgeType, item.criticality);
+          const stroke = getEdgeStroke(baseStyle);
           // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
           const edgeRenderType = 'default';
           graphEdges.push({
@@ -1071,16 +1722,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             source: sourceId,
             target: targetId,
             type: edgeRenderType,
-            label: item.edgeType || item.subkind,
+            // Labels are hidden by default (see displayEdges). Keep unset to avoid noisy/system labels in perfMode.
+            label: undefined,
             // Increase hit-area for clicking thin edges (compatible with ReactFlow v11 types)
             interactionWidth: 18,
             markerEnd: {
               type: MarkerType.ArrowClosed,
+              color: stroke,
             },
             style: baseStyle,
             data: {
               lensItemId: item.id,
               edgeType: item.edgeType,
+              edgeCaption: getEdgeCaptionShort(item.edgeType || item.subkind),
               criticality: item.criticality,
               amplification: item.amplification,
               latencyHours: item.latencyHours,
@@ -1100,7 +1754,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       }
       dbg('[Cockpit] Converted to graph:', { nodes: graphNodes.length, edges: graphEdges.length });
     return { nodes: graphNodes, edges: graphEdges };
-  }, [norm, dbg]);
+  }, [norm, dbg, getEdgeStroke, getEdgeCaptionShort]);
 
   // Загрузка графа из Cockpit API и сохранение в LensItems
   const handleLoadGraph = useCallback(async () => {
@@ -1185,6 +1839,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             label: fragment.labels?.en || fragment.canonicalPath?.split('/').pop() || `Fragment ${index}`,
             type: fragment.type,
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
+            showMetrics: showNodeMetrics,
             status: fragment.status,
             expanded: false,
             collapsed: false,
@@ -1216,6 +1871,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           seenEdgeKeys.add(key);
 
           const baseStyle = getEdgeStyle(edge.type || edge.edgeType, edge.properties?.criticality);
+          const stroke = getEdgeStroke(baseStyle);
           // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
           const edgeTypeForDisplay = 'default';
           
@@ -1233,11 +1889,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             interactionWidth: 18,
             markerEnd: {
               type: MarkerType.ArrowClosed,
+              color: stroke,
             },
             style: baseStyle,
             data: {
               lensItemId: '', // Будет обновлено после сохранения
               edgeType,  // Used for label on hover
+              edgeCaption: getEdgeCaptionShort(edgeType),
               criticality: edge.properties?.criticality,
               amplification: edge.properties?.amplification,
               latencyHours: edge.properties?.latencyHours,
@@ -1299,10 +1957,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         setGridState(g);
 
             dbg('[Cockpit] Grid initialized from root nodes:', {
-              roots: roots.map((r) => r.id),
-              rootNodeId: g.rootNodeId,
-              cellCount: g.cells.size,
-            });
+                roots: roots.map((r) => r.id),
+                rootNodeId: g.rootNodeId,
+                cellCount: g.cells.size,
+              });
           } catch (e) {
             console.warn('[Cockpit] Failed to init grid from roots', e);
           }
@@ -1477,7 +2135,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       const gd = groupNode.data as any;
       const allChildIds: string[] = gd.groupAllChildIds || [];
-      const pageSize = gd.groupPageSize || 12;
+      const pageSize = gd.groupPageSize || 18;
       const totalPages = Math.ceil(allChildIds.length / pageSize);
 
       // Validate new page
@@ -1494,7 +2152,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       const childGapY = Math.max(48, Math.floor(60 * 1.05));
       const padTop = 34; // GROUP_HEADER_HEIGHT
       const padX = 16;   // GROUP_PADDING_X
-      const nodesPerRow = 4; // GROUP_MAX_COLS
+      const nodesPerRow = Number.isFinite(gd.groupMaxCols) ? gd.groupMaxCols : 6; // GROUP_MAX_COLS (6)
+
+      // Fast lookup: childId -> index
+      const indexById = new Map<string, number>();
+      for (let i = 0; i < allChildIds.length; i++) indexById.set(allChildIds[i]!, i);
 
       return prevNodes.map((n) => {
         // Update group's current page
@@ -1507,14 +2169,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
         // Update child visibility and positions
         if ((n as any).parentId === groupId || (n as any).parentNode === groupId) {
-          const childIdx = allChildIds.indexOf(n.id);
+          const childIdx = indexById.get(n.id);
           if (childIdx === -1) return n;
 
           const isVisible = visibleIds.has(n.id);
           // Calculate position relative to current page
-          const pageIdx = childIdx - startIdx;
+          const pageIdx = (childIdx as number) - startIdx;
           const rowIdx = Math.floor(pageIdx / nodesPerRow);
           const colIdx = pageIdx % nodesPerRow;
+          // Horizontal fill: left-to-right rows
           const cx = padX + colIdx * (nodeWidth + childGapX);
           const cy = padTop + rowIdx * (nodeHeight + childGapY);
 
@@ -1923,20 +2586,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       // debug logs removed
       
       const updateEdgeInfo = (neighborId: string, edgeType: string, direction: 'incoming' | 'outgoing') => {
+        const effectiveDirection: 'incoming' | 'outgoing' = direction;
+
         const existingType = fragmentEdgeType.get(neighborId);
         const existingDir = fragmentDirection.get(neighborId);
         
         // Helper to check if edge type is an "incoming dependency" type
-        // These types, when incoming to central node, mean "they depend on us" → should go to BOTTOM row
+        // These types, when incoming to central node, mean "they own/control/supply us" → should go to TOP row
+        // (Previously incorrectly stated BOTTOM row in comments - incoming deps are UPSTREAM)
         const isIncomingDependencyType = (t: string) => {
           const upper = (t || '').toUpperCase().trim();
-          return upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES';
+          return (
+            // Ownership / Control (Strongest)
+            upper === 'OWNS' || upper === 'PARENT_OF' || upper === 'SUBSIDIARY_OF' || upper === 'MANAGES' || upper === 'CONTROLS' ||
+            // Supply / Dependency
+            upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES'
+          );
         };
         
         if (!existingType) {
           // debug logs removed
           fragmentEdgeType.set(neighborId, edgeType);
-          fragmentDirection.set(neighborId, direction);
+          fragmentDirection.set(neighborId, effectiveDirection);
         } else {
           // === LINEAR LAYOUT SPECIAL LOGIC ===
           // In Linear mode, incoming dependency edges (neighbor DEPENDS_ON central) MUST determine placement.
@@ -1949,10 +2620,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             }
             
             // 2. If NEW is an incoming dependency, it ALWAYS wins
-            if (direction === 'incoming' && isIncomingDependencyType(edgeType)) {
+            if (effectiveDirection === 'incoming' && isIncomingDependencyType(edgeType)) {
               // debug logs removed
               fragmentEdgeType.set(neighborId, edgeType);
-              fragmentDirection.set(neighborId, direction);
+              fragmentDirection.set(neighborId, effectiveDirection);
               return;
             }
           }
@@ -1965,7 +2636,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           if (newPriority < existingPriority) {
             // debug logs removed
             fragmentEdgeType.set(neighborId, edgeType);
-            fragmentDirection.set(neighborId, direction);
+            fragmentDirection.set(neighborId, effectiveDirection);
           } else {
             // debug logs removed
           }
@@ -1994,12 +2665,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         const s = norm(e.source);
         const t = norm(e.target);
         const edgeType = e.data?.edgeType || e.type || '';
-        
-        if (s === fragmentId && t) {
-          updateEdgeInfo(t, edgeType, 'outgoing');
+
+        // Normalize node ids -> fragment ids (ReactFlow ids can be lensItemId in some flows)
+        const sNode = nodeById.get(s) || nodeByFragmentId.get(s);
+        const tNode = nodeById.get(t) || nodeByFragmentId.get(t);
+        const sFrag = norm((sNode?.data as any)?.fragmentId || s);
+        const tFrag = norm((tNode?.data as any)?.fragmentId || t);
+
+        if (sFrag === fragmentId && tFrag) {
+          updateEdgeInfo(tFrag, edgeType, 'outgoing');
         }
-        if (t === fragmentId && s) {
-          updateEdgeInfo(s, edgeType, 'incoming');
+        if (tFrag === fragmentId && sFrag) {
+          updateEdgeInfo(sFrag, edgeType, 'incoming');
         }
       }
 
@@ -2063,6 +2740,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             label: fragment.labels?.en || fragment.canonicalPath?.split('/').pop() || 'Fragment',
             type: fragment.type,
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
+            showMetrics: showNodeMetrics,
             status: fragment.status,
             expanded: false,
             collapsed: false,
@@ -2305,6 +2983,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         }
 
         const baseStyle = getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality);
+        const stroke = getEdgeStroke(baseStyle);
         // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
         const edgeRenderType = 'default';
 
@@ -2317,11 +2996,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           type: edgeRenderType,
           // label hidden by default, shown on hover via displayEdges
           interactionWidth: 18,
-          markerEnd: { type: MarkerType.ArrowClosed },
+          markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
           style: baseStyle,
           data: {
             lensItemId: '',
             edgeType: e?.type || e?.edgeType,  // Used for label on hover
+            edgeCaption: getEdgeCaptionShort(e?.type || e?.edgeType),
             criticality: e?.properties?.criticality,
             amplification: e?.properties?.amplification,
             latencyHours: e?.properties?.latencyHours,
@@ -2454,12 +3134,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         
         if (nodeDepth !== 0 && nodeRoot && nodeRoot !== sourceRootId) return n;
 
-        // В freeform режиме добавляем информацию для группировки
-        // В linear режиме группировка не используется (TODO)
-        if (!isFreeformLayout) {
-          return n; // В linear режиме не группируем
-        }
-        
         const edgeTypeFromParent = fragmentEdgeType.get(nodeFragmentId) || '';
         const directionFromParent = fragmentDirection.get(nodeFragmentId) || 'outgoing';
 
@@ -2469,10 +3143,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           ...n,
           data: {
             ...n.data,
-            parentFragmentId: fragmentId,
+            // Freeform uses parentFragmentId for container parenting; Linear uses global section containers,
+            // but still needs edgeType/direction + depth for correct quadrant placement.
+            ...(isFreeformLayout ? { parentFragmentId: fragmentId } : {}),
             edgeTypeFromParent,
             directionFromParent,
+            // Make absorbed nodes non-central so they move into section groups in Linear.
             depth: childDepth,
+            // Keep consistent root marker (Linear treats expanded node as the local root).
+            rootFragmentId: sourceRootId,
           },
         };
         return updated;
@@ -2919,13 +3598,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     if (perfMode) return visibleEdges;
     return visibleEdges.map((e) => {
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
+      const isArcTop = e.type === 'arcTop';
+      const d: any = (e as any)?.data || {};
       return {
         ...e,
+        type: isArcTop ? 'hznArcTop' : 'hzn',
+        data: { ...d, onExplain: openEdgeExplainPopover, showLabel: false },
         label: undefined,
         style: { ...baseStyle, opacity: DIM_OPACITY },
       };
     });
-  }, [visibleEdges, perfMode]);
+  }, [visibleEdges, perfMode, openEdgeExplainPopover]);
 
   // Derive edges styles for hover highlighting (do not mutate base edges)
   // Labels are hidden by default to reduce visual noise, shown only on hover
@@ -2939,23 +3622,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
     const baseStyled = (e: Edge) => {
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
-      const edgeLabel = (e as any)?.data?.edgeType || e.label;
+      const edgeTypeRaw = (e as any)?.data?.edgeType || (e as any)?.data?.subkind || e.label;
+      const edgeLabel =
+        (e as any)?.data?.edgeCaption ||
+        getEdgeCaptionShort(edgeTypeRaw) ||
+        (edgeTypeRaw ? String(edgeTypeRaw) : '');
       return { baseStyle, edgeLabel };
     };
 
     // Helper to create edge with optional label
-    const withLabel = (e: Edge, showLabel: boolean, style: any) => {
+    const withLabel = (e: Edge, showLabel: boolean, style: any, raiseToFront: boolean) => {
       const { edgeLabel } = baseStyled(e);
+      const d: any = (e as any)?.data || {};
       return {
         ...e,
-        label: showLabel ? edgeLabel : undefined,
+        label: undefined,
+        data: { ...d, showLabel, edgeLabel, raiseToFront },
         style,
       };
     };
 
     // Edge hover: show only this edge's label
     if (hoveredEdgeId) {
-      return baseVisibleEdges.map((e) => {
+      const out = baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isHovered = e.id === hoveredEdgeId;
         if (isHovered) {
@@ -2964,10 +3653,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             ...baseStyle,
             opacity: 1,
             strokeWidth: strokeWidth + 1.5,
-          });
+          }, true);
         }
-        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY });
+        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
+      // Keep hovered edge on top within edge layer.
+      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
+      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
+      return [...rest, ...raised];
     }
 
     // Group hover has priority over node hover
@@ -2977,7 +3670,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       if (!groupNode || !gd?.isGroup) {
         return baseVisibleEdges.map((e) => {
           const { baseStyle } = baseStyled(e);
-          return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
+          return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
         });
       }
 
@@ -2999,7 +3692,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       if (!groupParentId || childIds.size === 0) {
         return baseVisibleEdges.map((e) => {
           const { baseStyle } = baseStyled(e);
-          return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
+          return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
         });
       }
 
@@ -3023,7 +3716,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         return e.target === groupParentId && childIds.has(e.source);
       };
 
-      return baseVisibleEdges.map((e) => {
+      const out = baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         if (isGroupEdge(e)) {
           const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
@@ -3031,35 +3724,43 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             ...baseStyle,
             opacity: 1,
             strokeWidth: strokeWidth + 1.5,
-          });
+          }, true);
         }
-        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY });
+        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
+      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
+      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
+      return [...rest, ...raised];
     }
 
     // Hover highlight mode: highlight selected relation cluster and fade everything else.
     if (hoverHighlight && hoveredNodeId) {
       const hiEdgeIds = hoverHighlight.edgeIds;
-      return baseVisibleEdges.map((e) => {
+      const out = baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const eid = String((e as any)?.id || '').trim();
         const isHiEdge = eid && hiEdgeIds.has(eid);
+        // Modern UX: show captions and lift to front only for edges incident to the hovered node.
+        const isIncident = e.source === hoveredNodeId || e.target === hoveredNodeId;
         const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
         if (isHiEdge) {
-          return withLabel(e, true, {
+          return withLabel(e, isIncident, {
             ...baseStyle,
             opacity: 1,
             strokeWidth: Math.max(3, strokeWidth + 1.0),
-          });
+          }, isIncident);
         }
-        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY });
+        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
+      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
+      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
+      return [...rest, ...raised];
     }
 
     // Node hover: highlight incident edges and show their labels
     if (hoveredNodeId) {
       const nodeId = hoveredNodeId;
-      return baseVisibleEdges.map((e) => {
+      const out = baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
@@ -3068,16 +3769,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             ...baseStyle,
             opacity: 1,
             strokeWidth: strokeWidth + 1.0,
-          });
+          }, true);
         }
-        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY });
+        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
+      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
+      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
+      return [...rest, ...raised];
     }
 
     // Selected node (when not hovering): highlight incident edges, show labels
     if (selectedNodeId) {
       const nodeId = selectedNodeId;
-      return baseVisibleEdges.map((e) => {
+      const out = baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
@@ -3086,15 +3790,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
             ...baseStyle,
             opacity: 1,
             strokeWidth: strokeWidth + 0.75,
-          });
+          }, true);
         }
-        return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY });
+        return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
       });
+      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
+      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
+      return [...rest, ...raised];
     }
 
     // Default: dim all edges, hide labels
     return baseVisibleEdges;
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort]);
 
   const displayNodes = React.useMemo(() => {
     if (perfMode) return nodes;
@@ -3131,9 +3838,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     if (!perfMode || !hoveredEdgeId) return null;
     const e = edges.find((x) => x.id === hoveredEdgeId) as any;
     if (!e) return null;
-    const edgeType = String(e?.data?.edgeType || e?.label || e?.data?.subkind || '').trim();
-    return edgeType ? { id: hoveredEdgeId, edgeType } : { id: hoveredEdgeId, edgeType: 'EDGE' };
-  }, [perfMode, hoveredEdgeId, edges]);
+    const edgeTypeRaw = String(e?.data?.edgeType || e?.label || e?.data?.subkind || '').trim();
+    const edgeType = (e?.data?.edgeCaption as string | undefined) || getEdgeCaptionShort(edgeTypeRaw) || edgeTypeRaw;
+    return edgeType ? { id: hoveredEdgeId, edgeType } : { id: hoveredEdgeId, edgeType: 'Edge' };
+  }, [perfMode, hoveredEdgeId, edges, getEdgeCaptionShort]);
 
   // Функция для перераспределения всех видимых нод
   const handleArrange = useCallback(async () => {
@@ -3610,6 +4318,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
           label,
           type,
           state,
+          showMetrics: showNodeMetrics,
           status: fragment?.status,
           expanded: false,
           collapsed: false,
@@ -3914,6 +4623,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     Refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" /></svg>,
     Search: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>,
     Sliders: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>,
+    Dots: <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>,
     Plus: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>,
     X: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="M6 6l12 12" /></svg>,
     Magic: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M9 3v4"/><path d="M3 7h4"/><path d="M3 3h4"/></svg>,
@@ -3923,115 +4633,33 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     Grid: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
     Layout: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>,
     ChevronDown: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
+    Info: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>,
   };
 
-  // Layout dropdown component
-  const LayoutDropdown = React.useMemo(() => {
-    const layoutOptions: Array<{ value: 'freeform' | 'linear'; label: string }> = [
-      { value: 'freeform', label: 'Freeform' },
-      { value: 'linear', label: 'Linear' },
-    ];
+  const hoverModeLabel = React.useCallback((m: HoverHighlightMode): string => {
+    switch (m) {
+      case 'off':
+        return 'Off';
+      case 'ownership':
+        return 'Owns';
+      case 'production':
+        return 'Produces';
+      case 'supplies':
+        return 'Supplies';
+      case 'competition':
+        return 'Competes';
+      default:
+        return 'Hover';
+    }
+  }, []);
 
-    return (
-      <div style={{ position: 'relative', display: 'inline-block' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
-        <button
-          type="button"
-            onClick={() => setShowLayoutDropdown((v) => !v)}
-          style={{
-              background: showLayoutDropdown ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
-            border: 'none',
-            borderRadius: '6px',
-              padding: '6px 8px',
-              cursor: 'pointer',
-              color: 'var(--text-secondary)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              transition: 'all 0.2s ease',
-            }}
-            title="Layout Mode"
-          >
-            {Icons.Layout}
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              {layoutOptions.find(opt => opt.value === layoutMode)?.label || 'Freeform'}
-            </span>
-            {Icons.ChevronDown}
-        </button>
-          <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
-        </div>
-        
-        {showLayoutDropdown && (
-          <>
-            <div
-          style={{
-                position: 'fixed',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                zIndex: 999,
-              }}
-              onClick={() => setShowLayoutDropdown(false)}
-            />
-            <div
-              style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                marginTop: '4px',
-                background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-                border: `1px solid var(--border-subtle)`,
-                borderRadius: '8px',
-                boxShadow: theme === 'dark' ? '0 4px 12px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.1)',
-                zIndex: 1000,
-                minWidth: '140px',
-                overflow: 'hidden',
-              }}
-            >
-              {layoutOptions.map((option) => (
-        <button
-                  key={option.value}
-          type="button"
-                  onClick={() => {
-                    setLayoutMode(option.value);
-                    setShowLayoutDropdown(false);
-                  }}
-          style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    background: layoutMode === option.value ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
-                    border: 'none',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    color: layoutMode === option.value ? 'var(--text-primary)' : 'var(--text-secondary)',
-            fontSize: '12px',
-                    transition: 'all 0.15s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (layoutMode !== option.value) {
-                      e.currentTarget.style.background = theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (layoutMode !== option.value) {
-                      e.currentTarget.style.background = 'transparent';
-                    }
-                  }}
-                >
-                  {option.label}
-        </button>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }, [showLayoutDropdown, layoutMode, theme]);
+  const setHoverMode = React.useCallback((m: HoverHighlightMode) => {
+    setHoverHighlightMode(m);
+    setVisualPreset('custom');
+  }, []);
 
   const toolbarContent = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
       <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load Graph" icon={Icons.Refresh} />
       <IconButton
         onClick={() => {
@@ -4052,99 +4680,211 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
         title={addNodeOpen ? 'Close add-node' : 'Add node'}
         icon={Icons.Plus}
       />
-
-      {/* Add-node input (inline in toolbar) */}
-
-      {LayoutDropdown}
       <IconButton onClick={handleArrange} disabled={arranging || nodes.length === 0} title="Arrange Graph" icon={Icons.Magic} />
-      <IconButton onClick={handleDownload} disabled={nodes.length === 0 && edges.length === 0} title="Download Graph" icon={Icons.Download} />
-      
-      <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)', margin: '0 4px' }} />
-      
+      <IconButton
+        onClick={() => onToggleInspector?.()}
+        disabled={!onToggleInspector}
+        active={Boolean(inspectorActive)}
+        title={inspectorActive ? 'Close inspector' : 'Open inspector'}
+        icon={Icons.Info}
+      />
       <IconButton onClick={() => setVisualSettingsOpen(true)} title="Visual settings" icon={Icons.Sliders} />
-      
-        {error && (
-        <div style={{ fontSize: '11px', color: '#EF4444', marginLeft: '8px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={error}>
-            {error}
-          </div>
-        )}
-        {(nodes.length > 0 || edges.length > 0) && (
-        <div style={{ fontSize: '10px', color: 'var(--text-secondary-strong)', marginLeft: '8px', fontFamily: 'monospace' }}>
-          {nodes.length}n/{edges.length}e
-          </div>
-        )}
-      </div>
-  );
 
-  const HoverHighlightControl = (
-    <div
-      style={{
-        position: 'absolute',
-        top: 12,
-        right: 12,
-        zIndex: 55,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '6px 8px',
-        borderRadius: 12,
-        border: '1px solid var(--border-subtle)',
-        background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)',
-        backdropFilter: 'blur(8px)',
-        boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
-        pointerEvents: 'auto',
-      }}
-      title="Hover highlight mode"
-    >
-      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-        Hover
-      </div>
-      {(
-        [
-          { key: 'ownership', label: 'Ownership' },
-          { key: 'production', label: 'Production' },
-          { key: 'supplies', label: 'Supplies' },
-          { key: 'competition', label: 'Competition' },
-        ] as const
-      ).map((opt) => (
+      {/* Hover highlight mode (quick control) */}
+      <div ref={hoverModeMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <button
-          key={opt.key}
           type="button"
-          disabled={perfMode}
-          onClick={() => setHoverHighlightMode(opt.key)}
+          onClick={() => setShowHoverModeMenu((v) => !v)}
+          title="Hover highlight mode"
           style={{
-            padding: '4px 8px',
-            borderRadius: 999,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+              padding: '6px 8px',
+            borderRadius: 10,
             border: '1px solid var(--border-subtle)',
-            background: hoverHighlightMode === opt.key ? 'var(--white-10)' : 'transparent',
+            background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.40)',
             color: 'var(--text-heading)',
-            fontSize: 11,
-            cursor: perfMode ? 'not-allowed' : 'pointer',
-            opacity: perfMode ? 0.4 : 1,
+              cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 750,
+            lineHeight: 1,
           }}
         >
-          {opt.label}
+          <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 800 }}>Hover:</span>
+          <span>{hoverModeLabel(hoverHighlightMode)}</span>
+          <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.ChevronDown}</span>
         </button>
-      ))}
-      <button
-        type="button"
-        disabled={perfMode}
-        onClick={() => setHoverHighlightMode('off')}
-        style={{
-          padding: '4px 8px',
-          borderRadius: 999,
-          border: '1px solid var(--border-subtle)',
-          background: hoverHighlightMode === 'off' ? 'var(--white-10)' : 'transparent',
-          color: 'var(--text-secondary-strong)',
-          fontSize: 11,
-          cursor: perfMode ? 'not-allowed' : 'pointer',
-          opacity: perfMode ? 0.4 : 1,
-        }}
-        title="Disable hover highlight mode"
-      >
-        Off
-      </button>
-    </div>
+        
+        {showHoverModeMenu && (
+            <div
+          style={{
+              position: 'absolute',
+              top: 'calc(100% + 6px)',
+                right: 0,
+              minWidth: 220,
+              borderRadius: 12,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-elevated)',
+              boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.55)' : '0 14px 40px rgba(0,0,0,0.18)',
+              overflow: 'hidden',
+              zIndex: 1000,
+            }}
+          >
+            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderBottom: '1px solid var(--border-subtle)' }}>
+              Hover highlight
+            </div>
+            {(
+              [
+                { key: 'off', label: 'Off', hint: 'No hover emphasis' },
+                { key: 'ownership', label: 'Owns', hint: 'Transitive ownership chain' },
+                { key: 'production', label: 'Produces', hint: 'Direct producers/outputs' },
+                { key: 'supplies', label: 'Supplies', hint: 'Direct suppliers/inputs' },
+                { key: 'competition', label: 'Competes', hint: 'Direct competition/conflict' },
+              ] as Array<{ key: HoverHighlightMode; label: string; hint: string }>
+            ).map((opt) => {
+              const active = hoverHighlightMode === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => {
+                    setHoverMode(opt.key);
+                    setShowHoverModeMenu(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: 'none',
+                    background: active ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    textAlign: 'left',
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800 }}>
+                      {opt.label}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                      {opt.hint}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                    {active ? '✓' : ''}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div ref={toolbarMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+        <IconButton
+          onClick={() => setShowToolbarMenu((v: boolean) => !v)}
+          active={showToolbarMenu}
+          title="More"
+          icon={Icons.Dots}
+        />
+        {showToolbarMenu && (
+            <div
+              style={{
+                position: 'absolute',
+              top: 'calc(100% + 6px)',
+              right: 0,
+              minWidth: 220,
+              borderRadius: 12,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-elevated)',
+              boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.55)' : '0 14px 40px rgba(0,0,0,0.18)',
+                overflow: 'hidden',
+              zIndex: 1000,
+            }}
+          >
+            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderBottom: '1px solid var(--border-subtle)' }}>
+              Canvas menu
+            </div>
+
+            <div style={{ padding: '8px 12px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-heading)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.Layout}</span>
+                Layout
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(['freeform', 'linear'] as const).map((m) => {
+                  const active = layoutMode === m;
+                  return (
+        <button
+                      key={m}
+          type="button"
+                  onClick={() => {
+                        setLayoutMode(m);
+                        setShowToolbarMenu(false);
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: '8px 10px',
+                        borderRadius: 10,
+                        border: '1px solid var(--border-subtle)',
+                        background: active ? 'var(--white-10)' : 'transparent',
+                        color: 'var(--text-heading)',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        textTransform: 'capitalize',
+                      }}
+                    >
+                      {m}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowToolbarMenu(false);
+                  handleDownload();
+                }}
+                disabled={nodes.length === 0 && edges.length === 0}
+          style={{
+                    width: '100%',
+                  padding: '10px 12px',
+                    border: 'none',
+                  background: 'transparent',
+                  cursor: nodes.length === 0 && edges.length === 0 ? 'not-allowed' : 'pointer',
+                  color: 'var(--text-heading)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  opacity: nodes.length === 0 && edges.length === 0 ? 0.45 : 1,
+                }}
+              >
+                <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.Download}</span>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>Download graph</span>
+              </button>
+            </div>
+
+            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between' }}>
+              <span>{nodes.length} nodes</span>
+              <span>{edges.length} edges</span>
+            </div>
+            {error && (
+              <div style={{ padding: '10px 12px', fontSize: 11, color: '#EF4444', borderTop: '1px solid var(--border-subtle)' }}>
+                {error}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      </div>
   );
 
   const applyVisualPreset = React.useCallback((preset: VisualPreset) => {
@@ -4155,6 +4895,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       setShowBackgroundGrid(true);
       setHoverHighlightMode('ownership');
       setNodeVisualQuality('max');
+      setShowNodeMetrics(false);
       return;
     }
     if (preset === 'minimal') {
@@ -4163,6 +4904,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
       setShowBackgroundGrid(false);
       setHoverHighlightMode('off');
       setNodeVisualQuality('minimal');
+      setShowNodeMetrics(false);
       return;
     }
     // balanced
@@ -4171,6 +4913,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
     setShowBackgroundGrid(false);
     setHoverHighlightMode('ownership');
     setNodeVisualQuality('balanced');
+    setShowNodeMetrics(false);
   }, []);
 
   const markCustom = React.useCallback(() => setVisualPreset('custom'), []);
@@ -4252,23 +4995,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
   }, []);
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: '600px' }}>
-      {/* Toolbar via Portal if container provided, otherwise inline fallback */}
-      {toolbarContainer ? ReactDOM.createPortal(toolbarContent, toolbarContainer) : (
-        <div
-          style={{
-            padding: '8px 12px',
-            borderBottom: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-            flexShrink: 0,
-          }}
-        >
-          {toolbarContent}
-        </div>
-      )}
+    <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
 
       {/* Visual settings modal */}
       {visualSettingsOpen && ReactDOM.createPortal(
@@ -4319,12 +5046,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                 title="Close"
               >
                 {Icons.X}
-              </button>
+        </button>
             </div>
 
             <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', lineHeight: 1.4, marginBottom: 10 }}>
               Presets control the biggest performance levers. You can fine‑tune below.
-            </div>
+      </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               {([
@@ -4419,6 +5146,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                 </select>
               </div>
 
+              {/* Node metrics */}
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>Node metrics</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    High impact. Off by default — shows 2–3 metrics inside nodes.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={showNodeMetrics}
+                  onChange={(e) => {
+                    markCustom();
+                    setShowNodeMetrics(e.target.checked);
+                  }}
+                />
+              </label>
+
               {/* MiniMap */}
               <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <div style={{ minWidth: 0 }}>
@@ -4440,7 +5185,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 700 }}>Background grid</div>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Low impact.</div>
-                </div>
+          </div>
                 <input
                   type="checkbox"
                   checked={showBackgroundGrid}
@@ -4457,8 +5202,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                   <div style={{ fontSize: 12, fontWeight: 700 }}>Hover highlight</div>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                     High impact on dense graphs (computes relation clusters + restyles many edges).
-                  </div>
-                </div>
+          </div>
+      </div>
                 <select
                   value={hoverHighlightMode}
                   onChange={(e) => {
@@ -4492,7 +5237,183 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
 
       {/* Graph */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', width: '100%' }}>
-        {HoverHighlightControl}
+        {/* Canvas toolbar overlay (actions + overflow menu) */}
+    <div
+      style={{
+        position: 'absolute',
+        top: 12,
+        right: 12,
+            zIndex: 80,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 8px',
+        borderRadius: 12,
+        border: '1px solid var(--border-subtle)',
+        background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)',
+        backdropFilter: 'blur(8px)',
+        boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
+        pointerEvents: 'auto',
+      }}
+    >
+          {toolbarContent}
+      </div>
+
+        {/* Edge explanation popover (opened via small button next to edge caption) */}
+        {edgeExplainPopover?.open && (
+          <>
+            {/* Backdrop: dim + blur (keeps the graph context visible but quiet) */}
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 1950,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(15,23,42,0.12)',
+                backdropFilter: 'blur(10px)',
+              }}
+            />
+            <div
+              ref={edgeExplainPopoverRef}
+              style={{
+                position: 'fixed',
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: 560,
+                maxWidth: 'calc(100vw - 24px)',
+                maxHeight: 'calc(100vh - 24px)',
+                zIndex: 2000,
+                borderRadius: 16,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)'}`,
+                background: theme === 'dark' ? 'rgba(10,10,12,0.70)' : 'rgba(255,255,255,0.72)',
+                backdropFilter: 'blur(12px)',
+                boxShadow: theme === 'dark' ? '0 22px 70px rgba(0,0,0,0.60)' : '0 22px 70px rgba(0,0,0,0.18)',
+                overflow: 'hidden',
+              }}
+              onMouseDown={(e) => {
+                // Prevent canvas pan/selection side-effects.
+                e.stopPropagation();
+              }}
+            >
+              {/* Minimal actions (no header section): unobtrusive corner controls */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 10,
+                  right: 10,
+                  zIndex: 2,
+                  display: 'flex',
+                  gap: 8,
+                }}
+              >
+        <button
+          type="button"
+                  disabled={edgeExplainPopover.loading}
+                  onClick={() => {
+                    loadEdgeExplanation({
+                      edgeId: edgeExplainPopover.edgeId,
+                      edgeType: edgeExplainPopover.edgeType,
+                      sourceNodeId: edgeExplainPopover.sourceNodeId,
+                      targetNodeId: edgeExplainPopover.targetNodeId,
+                      force: true,
+                    });
+                  }}
+                  title="Reload"
+                  aria-label="Reload"
+          style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 10,
+                    border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                    background: 'transparent',
+            color: 'var(--text-heading)',
+                    cursor: edgeExplainPopover.loading ? 'not-allowed' : 'pointer',
+                    opacity: edgeExplainPopover.loading ? 0.35 : 0.7,
+                    fontSize: 14,
+                    fontWeight: 900,
+                  }}
+                >
+                  ↻
+        </button>
+      <button
+        type="button"
+                  onClick={closeEdgeExplainPopover}
+                  title="Close"
+                  aria-label="Close"
+        style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 10,
+                    border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                    background: 'transparent',
+                    color: 'var(--text-heading)',
+                    cursor: 'pointer',
+                    opacity: 0.7,
+                    fontSize: 16,
+                    fontWeight: 900,
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+      </button>
+    </div>
+
+              {/* Reserve space for top controls + equal breathing room at the bottom */}
+        <div
+          style={{
+                  paddingTop: 54,
+                  paddingBottom: 54,
+                  paddingLeft: 18,
+                  paddingRight: 18,
+                  maxHeight: 'calc(100vh - 24px)',
+                  overflow: 'auto',
+                }}
+              >
+                {edgeExplainPopover.error && (
+                  <div style={{ fontSize: 12, color: '#f87171' }}>{edgeExplainPopover.error}</div>
+                )}
+                {!edgeExplainPopover.error && edgeExplainPopover.loading && !edgeExplainPopover.markdown && (
+                  <div
+                    style={{
+                      minHeight: 220,
+            display: 'flex',
+            alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <style>{`
+                        @keyframes horizon-pulse-dot {
+                          0%, 100% { transform: scale(0.6); opacity: 0.4; }
+                          50% { transform: scale(1); opacity: 1; }
+                        }
+                      `}</style>
+                      {[0, 1, 2].map((i) => (
+                        <div
+                          key={i}
+                          style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: '50%',
+                            background: 'var(--accent-primary, #3B82F6)',
+                            animation: `horizon-pulse-dot 1.2s infinite ease-in-out`,
+                            animationDelay: `${i * 0.2}s`,
+                          }}
+                        />
+                      ))}
+                    </div>
+        </div>
+                )}
+                {!!edgeExplainPopover.markdown && (
+                  <div style={{ fontSize: 12, color: 'var(--text-heading)', lineHeight: 1.6 }}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{edgeExplainPopover.markdown}</ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
         <ReactFlow
             nodes={displayNodes}
             edges={displayEdges}
@@ -4595,10 +5516,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                 <>
                   <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-heading)', marginBottom: 4 }}>
                     {lensName || 'Graph Scope'}
-                  </div>
+              </div>
                   <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 24 }}>
                      {scopePreview.length} object{scopePreview.length !== 1 ? 's' : ''} of focus
-                  </div>
+              </div>
 
                   <div
                     style={{
@@ -4613,7 +5534,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                     {scopePreviewLoading ? (
                       <div style={{ padding: '12px', fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center' }}>
                         Resolving scope...
-                      </div>
+            </div>
                     ) : scopePreview.length === 0 ? (
                       <div style={{ padding: '12px', fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center' }}>
                         No objects configured
@@ -4667,9 +5588,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({ lensId, pr
                                 }}
                               >
                                 {it.type}
-                              </div>
-                            )}
-                          </div>
+          </div>
+        )}
+      </div>
                         ))}
                         {scopePreview.length > 5 && (
                           <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>

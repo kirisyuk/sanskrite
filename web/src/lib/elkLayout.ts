@@ -12,10 +12,6 @@ import ELK, { ElkNode, ElkExtendedEdge, LayoutOptions } from 'elkjs/lib/elk.bund
 import type { Node, Edge } from 'reactflow';
 
 const elk = new ELK();
-const __DEV__ = import.meta.env.DEV;
-const elkDebug = (...args: any[]) => {
-  if (__DEV__) console.log(...args);
-};
 
 // Default node dimensions (should match your HorizonFragmentNode)
 const DEFAULT_NODE_WIDTH = 180;
@@ -57,21 +53,56 @@ const INCREMENTAL_LAYOUT_OPTIONS: LayoutOptions = {
   'elk.layered.crossingMinimization.semiInteractive': 'true',
 };
 
-// Приоритет типов связей для сортировки (меньше = важнее = левее)
+// Priority of edge types for placement + ordering (lower = more important).
+//
+// This is used in two critical places:
+// - to pick a "canonical" relation when a node has multiple edges to the central node
+//   (determines which group/quadrant it belongs to)
+// - to sort nodes inside a group (important first)
+//
+// Product rule of thumb:
+// - Ownership/control is the strongest signal (e.g. OWNS beats INFLUENCES)
+// - Then: products & dependency (inputs/outputs)
+// - Then: market relations (competition/partnership)
+// - Then: regulation/influence
+// - Then: generic context (geography, location)
 const EDGE_TYPE_PRIORITY: Record<string, number> = {
-  // PRODUCES should dominate for grouping/placement: "outputs" relation is more informative than ownership/peer ties.
-  // Keep it strictly smaller than any other known type so it always wins when choosing a single "main" relation.
-  'PRODUCES': 0,
-  'COMPETES_WITH': 1, 'CONFLICTS_WITH': 1, 'OPPOSES': 1,
-  'LOCATED_IN': 1, // LOCATED_IN имеет высокий приоритет в группе supply-chain
-  'INFLUENCES': 2, 'AFFECTS': 2, 'REGULATES': 2, 'IMPACTS': 2,
-  'OWNS': 2, // OWNS имеет высокий приоритет в группе customers
-  'MANAGES': 3, 'CONTROLS': 3, 'INVESTS_IN': 3, 'EMPLOYED_BY': 3, 'BOARD_MEMBER_OF': 3, 'FOUNDED': 3, 'PARENT_OF': 3, 'SUBSIDIARY_OF': 3,
-  'PARTNERS_WITH': 4, 'COOPERATES_WITH': 4, 'SUPPLIES_TO': 4, 'SUPPORTS': 4,
-  'OPERATES_IN': 5, 'BASED_IN': 5, 'HEADQUARTERED_IN': 5,
-  'DEPENDS_ON': 6, 'REQUIRES': 6, 'USES': 6, 'NEEDS': 6,
+  // 1) Ownership / control (strongest)
+  'OWNS': 1,
+  'PARENT_OF': 1,
+  'SUBSIDIARY_OF': 1,
+  'MANAGES': 1,
+  'CONTROLS': 1,
+
+  // 2) Products & dependency (inputs/outputs)
+  'PRODUCES': 2,
+  'SUPPLIES_TO': 2,
+  'CONSUMES': 2,
+  'DEPENDS_ON': 2,
+  'REQUIRES': 2,
+  'USES': 2,
+  'NEEDS': 2,
+
+  // 3) Market (peers)
+  'COMPETES_WITH': 3,
+  'CONFLICTS_WITH': 3,
+  'OPPOSES': 3,
+  'PARTNERS_WITH': 3,
+  'COOPERATES_WITH': 3,
+
+  // 4) Regulation / influence
+  'REGULATES': 4,
+  'INFLUENCES': 4,
+  'AFFECTS': 4,
+  'IMPACTS': 4,
+
+  // 5) Context / geography (weakest)
+  'LOCATED_IN': 5,
+  'OPERATES_IN': 5,
+  'BASED_IN': 5,
+  'HEADQUARTERED_IN': 5,
 };
-const DEFAULT_EDGE_PRIORITY = 7;
+const DEFAULT_EDGE_PRIORITY = 6;
 
 export const getEdgePriority = (edgeType: string | undefined): number => {
   const type = (edgeType || '').toUpperCase();
@@ -86,162 +117,25 @@ const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().tri
  */
 export type SemanticGroup = 'supply-chain' | 'customers' | 'market' | 'context';
 
+/**
+ * Legacy "linear" layout sections (used by LensCanvasCockpit Linear mode and UI labels).
+ * These are a coarse 2x2 quadrant split plus the central band.
+ */
+export type LinearSection = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
+
+export const SEMANTIC_GROUP_LABELS: Record<SemanticGroup, string> = {
+  'supply-chain': 'Supply Chain',
+  'customers': 'Customers & Outputs',
+  'market': 'Market Position',
+  'context': 'Operating Context',
+};
+
 export const SEMANTIC_GROUP_POSITION: Record<SemanticGroup, 'top' | 'bottom' | 'left' | 'right'> = {
   'supply-chain': 'top',    // upstream — сверху
   'customers': 'bottom',     // downstream — снизу
   'market': 'left',          // peers — слева
   'context': 'right',        // context — справа
 };
-
-/**
- * Linear layout sections for 3-row layout (35%-30%-35%).
- * Divides the canvas into 4 sections: top-left, top-right, bottom-left, bottom-right.
- */
-export type LinearSection = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
-
-/**
- * Maps edge type + direction to linear layout section.
- * Used for linear layout mode (3-row layout with 4 sections).
- * 
- * CRITICAL: Direction is relative to central node:
- * - isOutgoing = true: edge FROM central node TO neighbor → neighbor goes to BOTTOM row
- * - isOutgoing = false: edge FROM neighbor TO central node → neighbor goes to TOP row
- * 
- * Then, within top/bottom, left/right is determined by edge type semantics.
- */
-export function getLinearSection(edgeType: string | undefined, isOutgoing: boolean): LinearSection {
-  const type = normalizeEdgeType(edgeType);
-
-  // Competes-with is a symmetric "peer" relation, but in Linear mode we always place it
-  // into the upper-right group to avoid splitting the same relation between top/bottom
-  // depending on edge direction.
-  if (type === 'COMPETES_WITH') {
-    return 'top-right';
-  }
-  
-  // Ownership: if the neighbor OWNS the central node (incoming), treat it as upstream/structural → top-left.
-  // (Outgoing OWNS stays in bottom-left via the normal rule below.)
-  if (type === 'OWNS' && !isOutgoing) {
-    return 'top-left';
-  }
-  
-  // === EXCEPTIONS: Types where "they X us" means we are important to them (downstream) ===
-  // These go to BOTTOM row even when incoming (reverse of normal logic)
-  // CRITICAL: DEPENDS_ON incoming (from group node TO central node with depth 0) → bottom
-  // Direction: if edge goes FROM neighbor TO central node, isOutgoing = false (incoming)
-  // - DEPENDS_ON incoming (!isOutgoing): they depend on us → we are important to them → downstream → bottom
-  // - REQUIRES incoming: they require us → we are important to them → downstream → bottom
-  // - NEEDS incoming: they need us → we are important to them → downstream → bottom
-  // - USES incoming: they use us → we are important to them → downstream → bottom
-  // - CONSUMES incoming: they consume us → we are important to them → downstream → bottom
-  
-  // Check exceptions FIRST (before any other logic) - MUST be first check
-  if (type === 'DEPENDS_ON' && !isOutgoing) {
-    // incoming: edge FROM neighbor TO central node
-    // they depend on us → we are important to them → downstream → bottom-right
-    return 'bottom-right';
-  }
-  if (
-    (type === 'REQUIRES' && !isOutgoing) ||      // incoming = they require us → bottom
-    (type === 'NEEDS' && !isOutgoing) ||         // incoming = they need us → bottom
-    (type === 'USES' && !isOutgoing) ||          // incoming = they use us → bottom
-    (type === 'CONSUMES' && !isOutgoing)         // incoming = they consume us → bottom
-  ) {
-    // These go to bottom-left (Products & Ownership) as they indicate dependency on us
-    return 'bottom-left';
-  }
-  
-  // === TOP ROW (incoming: neighbors that affect/influence the central node) ===
-  
-  // Top-left: Suppliers & Materials (upstream dependencies coming TO central node)
-  if (
-    (type === 'SUPPLIES_TO' && !isOutgoing) || // incoming = they supply to us
-    (type === 'DEPENDS_ON' && isOutgoing) ||   // outgoing = we depend on them → upstream → top
-    (type === 'CONSUMES' && isOutgoing) ||      // outgoing = we consume them → upstream → top
-    (type === 'REQUIRES' && isOutgoing) ||      // outgoing = we require them → upstream → top
-    (type === 'USES' && isOutgoing) ||          // outgoing = we use them → upstream → top
-    (type === 'NEEDS' && isOutgoing) ||         // outgoing = we need them → upstream → top
-    (type === 'INVESTS_IN' && !isOutgoing)      // incoming = they invest in us → structural upstream
-  ) {
-    return 'top-left';
-  }
-  
-  // Top-right: Regulation & Context (external factors affecting central node)
-  if (
-    (type === 'REGULATES' && !isOutgoing) ||   // incoming = they regulate us
-    (type === 'LOCATED_IN' && !isOutgoing) ||  // incoming = node is located in object above
-    (type === 'OPERATES_IN' && !isOutgoing) ||
-    (type === 'BASED_IN' && !isOutgoing) ||
-    (type === 'HEADQUARTERED_IN' && !isOutgoing) ||
-    (type === 'INFLUENCES' && !isOutgoing) ||  // incoming = they influence us → top
-    (type === 'AFFECTS' && !isOutgoing) ||      // incoming = they affect us → top
-    (type === 'IMPACTS' && !isOutgoing) ||      // incoming = they impact us → top
-    (type === 'EMPLOYED_BY' && !isOutgoing) ||
-    (type === 'BOARD_MEMBER_OF' && !isOutgoing) ||
-    (type === 'FOUNDED' && !isOutgoing)
-  ) {
-    return 'top-right';
-  }
-  
-  // === BOTTOM ROW (outgoing: neighbors that central node affects/influences) ===
-  
-  // Bottom-left: Products & Ownership (downstream from central node)
-  if (
-    (type === 'PRODUCES' && isOutgoing) ||
-    (type === 'OWNS' && isOutgoing) ||          // outgoing = we own them
-    (type === 'MANAGES' && isOutgoing) ||
-    (type === 'CONTROLS' && isOutgoing) ||
-    (type === 'INVESTS_IN' && isOutgoing) ||
-    (type === 'PARENT_OF' && isOutgoing) ||
-    (type === 'SUPPLIES_TO' && isOutgoing) ||   // outgoing = we supply to them
-    (type === 'CONSUMES' && isOutgoing) ||
-    (type === 'REQUIRES' && isOutgoing) ||
-    (type === 'USES' && isOutgoing) ||
-    (type === 'NEEDS' && isOutgoing)
-  ) {
-    return 'bottom-left';
-  }
-  
-  // Bottom-right: Market & Partners + Context (where central node influences/operates)
-  if (
-    (type === 'PARTNERS_WITH' && isOutgoing) ||
-    (type === 'COOPERATES_WITH' && isOutgoing) ||
-    (type === 'COMPETES_WITH' && isOutgoing) ||
-    (type === 'CONFLICTS_WITH' && isOutgoing) ||
-    (type === 'OPPOSES' && isOutgoing) ||
-    (type === 'RELATED_TO' && isOutgoing) ||
-    (type === 'SIMILAR_TO' && isOutgoing) ||
-    (type === 'INFLUENCES' && isOutgoing) ||   // outgoing = we influence them → bottom
-    (type === 'AFFECTS' && isOutgoing) ||       // outgoing = we affect them → bottom
-    (type === 'IMPACTS' && isOutgoing) ||       // outgoing = we impact them → bottom
-    (type === 'REGULATES' && isOutgoing) ||     // outgoing = we regulate them → bottom
-    (type === 'OPERATES_IN' && isOutgoing) ||
-    (type === 'BASED_IN' && isOutgoing) ||
-    (type === 'HEADQUARTERED_IN' && isOutgoing) ||
-    (type === 'LOCATED_IN' && isOutgoing) ||
-    (type === 'EMPLOYED_BY' && isOutgoing) ||
-    (type === 'BOARD_MEMBER_OF' && isOutgoing) ||
-    (type === 'FOUNDED' && isOutgoing)
-  ) {
-    return 'bottom-right';
-  }
-  
-  // Fallback: symmetric/peer relationships default to bottom-right if outgoing, top-right if incoming
-  if (
-    type === 'PARTNERS_WITH' ||
-    type === 'COOPERATES_WITH' ||
-    type === 'COMPETES_WITH' ||
-    type === 'CONFLICTS_WITH' ||
-    type === 'OPPOSES' ||
-    type === 'RELATED_TO' ||
-    type === 'SIMILAR_TO'
-  ) {
-    return isOutgoing ? 'bottom-right' : 'top-right';
-  }
-  
-  // Default: based on direction (outgoing → bottom, incoming → top)
-  return isOutgoing ? 'bottom-left' : 'top-left';
-}
 
 /**
  * Grid-based layout system for hierarchical node expansion.
@@ -460,7 +354,6 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
       return isOutgoing ? 'customers' : 'supply-chain';  // incoming (на центральную ноду) -> сверху, outgoing (от центральной ноды) -> снизу
     case 'MANAGES':
     case 'CONTROLS':
-    case 'INVESTS_IN':
     case 'PARENT_OF':
       return isOutgoing ? 'customers' : 'supply-chain';
     case 'SUBSIDIARY_OF':
@@ -491,10 +384,6 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
       return 'context';
     case 'REGULATES':
       return 'context';  // regulator = context for the entity
-    case 'EMPLOYED_BY':
-    case 'BOARD_MEMBER_OF':
-    case 'FOUNDED':
-      return 'context';
     case 'INFLUENCES':
     case 'AFFECTS':
     case 'IMPACTS':
@@ -504,6 +393,340 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
       // Unknown types: use direction as hint
       return isOutgoing ? 'customers' : 'supply-chain';
   }
+}
+
+/**
+ * Map edge type + direction into one of 4 linear layout quadrants.
+ *
+ * 2026 placement rules (product semantics):
+ * - Vertical (top/bottom): determined by direction relative to the central node:
+ *   - incoming (neighbor -> center) => TOP
+ *   - outgoing (center -> neighbor) => BOTTOM
+ *   - EXCEPT symmetric relations (e.g. competition): direction does not decide vertical placement.
+ * - Horizontal (left/right): determined by meaning:
+ *   - LEFT: ownership + products (inputs/outputs)
+ *   - RIGHT: environment (regulation, competitors, influence in/out, context)
+ */
+export function getLinearSection(edgeType: string | undefined, isOutgoing: boolean): LinearSection {
+  const t = normalizeEdgeType(edgeType);
+
+  // Direction-agnostic relations: direction does NOT define top/bottom.
+  // These are typically "peer" or symmetric relations.
+  const SYMMETRIC = new Set<string>([
+    'COMPETES_WITH',
+    'CONFLICTS_WITH',
+    'OPPOSES',
+    'PARTNERS_WITH',
+    'COOPERATES_WITH',
+    'RELATED_TO',
+    'SIMILAR_TO',
+    'LINKED_TO',
+  ]);
+
+  // LEFT side: ownership + products (both input and output).
+  const LEFT = new Set<string>([
+    // Ownership / control
+    'OWNS',
+    'SUBSIDIARY_OF',
+    'PARENT_OF',
+    'MANAGES',
+    'CONTROLS',
+    // Products / supply / dependencies (inputs+outputs)
+    'PRODUCES',
+    'SUPPLIES_TO',
+    'CONSUMES',
+    'DEPENDS_ON',
+    'REQUIRES',
+    'USES',
+    'NEEDS',
+  ]);
+
+  // RIGHT side: environment (context/regulation/competition/influence).
+  // Anything not explicitly LEFT defaults to RIGHT to keep "unknown" relations in the environment bucket.
+  const RIGHT_EXPLICIT = new Set<string>([
+    // Geography / context
+    'LOCATED_IN',
+    'OPERATES_IN',
+    'BASED_IN',
+    'HEADQUARTERED_IN',
+    // Regulation / policy
+    'REGULATES',
+    // Influence (in/out)
+    'INFLUENCES',
+    'AFFECTS',
+    'IMPACTS',
+  ]);
+
+  const isLeft = LEFT.has(t);
+  // note: we don't need `RIGHT_EXPLICIT` for logic; it's here to document intent.
+  void RIGHT_EXPLICIT;
+
+  // Vertical: top/bottom by direction, except symmetric relations.
+  // Symmetric relations (Competition/Partnership) go to TOP (environment/context).
+  let isBottom = SYMMETRIC.has(t) ? false : Boolean(isOutgoing);
+
+  // Special case: Dependency and Context relations have inverted meaning for direction.
+  // - "A depends on B" (outgoing A->B) means B is a prerequisite/upstream -> TOP.
+  // - "A operates in B" (outgoing A->B) means B is the environment -> TOP.
+  // - "B depends on A" (incoming B->A) means B is dependent/downstream -> BOTTOM.
+  const REVERSE_VERTICAL = new Set<string>([
+    // Dependencies
+    'DEPENDS_ON',
+    'REQUIRES',
+    'NEEDS',
+    'USES',
+    'CONSUMES',
+    // Context / Geography
+    'LOCATED_IN',
+    'OPERATES_IN',
+    'BASED_IN',
+    'HEADQUARTERED_IN',
+  ]);
+
+  if (REVERSE_VERTICAL.has(t)) {
+    // Invert the vertical direction logic for these types.
+    isBottom = !isBottom;
+  }
+
+  if (isBottom) {
+    return isLeft ? 'bottom-left' : 'bottom-right';
+  }
+  return isLeft ? 'top-left' : 'top-right';
+}
+
+/**
+ * Legacy full-graph layout used by "Linear" mode in `LensCanvasCockpit`.
+ *
+ * It positions:
+ * - depth===0 nodes into a centered "central" row
+ * - all other nodes into 4 quadrants around that row (derived from `getLinearSection`)
+ *
+ * In addition to fragment nodes, we also generate non-interactive `horizonGroup` backdrop nodes
+ * (one per section) for modern UX: users can visually parse the 4 quadrants + center band.
+ *
+ * These are NOT parent containers (no `parentId` on children) to avoid ReactFlow parent linkage issues.
+ */
+export async function layoutLinearFullGraph<T = any>(
+  nodes: Node<T>[],
+  _edges: Edge[],
+  options: LayoutOptions_Custom = {},
+): Promise<Node<T>[]> {
+  if (nodes.length === 0) return nodes;
+
+  // IMPORTANT (ReactFlow):
+  // If a node has `parentId`, ReactFlow expects the parent node to be present in the same `nodes` array.
+  // When switching layout modes (freeform -> linear), we often drop group container nodes,
+  // but child nodes may still carry a stale `parentId` (e.g. "group:<parent>:context").
+  // That crashes ReactFlow with: "Parent node ... not found".
+  //
+  // Linear layout in this app is rendered as a flat graph, so we must strip any parent/extent props.
+  const flatNodes: Node<T>[] = nodes.map((n) => {
+    const out: any = { ...n };
+    delete out.parentId;
+    delete out.parentNode;
+    delete out.extent;
+    delete out.expandParent;
+    return out as Node<T>;
+  });
+
+  const {
+    nodeWidth = DEFAULT_NODE_WIDTH,
+    nodeHeight = DEFAULT_NODE_HEIGHT,
+    nodeSpacing = 60,
+    layerSpacing = 150,
+    maxChildRows = MAX_CHILD_ROWS,
+  } = options;
+
+  // Determine central nodes (depth === 0). If none are marked, fall back to "no parent" roots.
+  let centralIds = new Set<string>(
+    flatNodes.filter((n) => (n.data as any)?.depth === 0).map((n) => n.id),
+  );
+  if (centralIds.size === 0) {
+    for (const n of flatNodes) {
+      if (!(n.data as any)?.parentFragmentId) centralIds.add(n.id);
+    }
+  }
+  if (centralIds.size === 0) centralIds = new Set([flatNodes[0]!.id]);
+
+  const central: Node<T>[] = [];
+  const others: Node<T>[] = [];
+  for (const n of flatNodes) {
+    if (centralIds.has(n.id)) central.push(n);
+    else others.push(n);
+  }
+
+  const sections: Record<Exclude<LinearSection, 'center'>, Node<T>[]> = {
+    'top-left': [],
+    'top-right': [],
+    'bottom-left': [],
+    'bottom-right': [],
+  };
+
+  for (const n of others) {
+    const d: any = n.data;
+    const edgeType = d?.edgeTypeFromParent;
+    const isOutgoing = d?.directionFromParent !== 'incoming';
+    const section = getLinearSection(edgeType, isOutgoing);
+    if (section === 'center') {
+      sections['bottom-left'].push(n);
+    } else {
+      sections[section].push(n);
+    }
+  }
+
+  // Layout helpers
+  // UX: keep quadrants closer to the central band than Freeform, so the layout feels cohesive.
+  const bandGapY = Math.max(70, Math.floor(layerSpacing * 0.55));
+  const rowGapY = nodeHeight + Math.max(52, Math.floor(layerSpacing * 0.35));
+  const baseTopY = -(nodeHeight + bandGapY);
+  const baseBottomY = nodeHeight + bandGapY;
+
+  const centralWidth =
+    central.length * nodeWidth + Math.max(0, central.length - 1) * nodeSpacing;
+  const centralStartX = -centralWidth / 2;
+  const centralEndX = centralStartX + centralWidth;
+  const centralCenterX = (centralStartX + centralEndX) / 2;
+
+  const pos = new Map<string, { x: number; y: number }>();
+
+  // Central row
+  central.forEach((n, i) => {
+    pos.set(n.id, { x: centralStartX + i * (nodeWidth + nodeSpacing), y: 0 });
+  });
+
+  // Build real group containers for sections with pagination (max 6x3).
+  // Central nodes stay ungrouped.
+  const HALF_GAP = nodeWidth / 2; // Leave one node width between left and right groups
+
+  const sectionMeta: Array<{
+    section: Exclude<LinearSection, 'center'>;
+    isTop: boolean;
+    isLeft: boolean;
+    semanticGroup: SemanticGroup;
+  }> = [
+    { section: 'top-left', isTop: true, isLeft: true, semanticGroup: 'supply-chain' },
+    { section: 'top-right', isTop: true, isLeft: false, semanticGroup: 'context' },
+    { section: 'bottom-left', isTop: false, isLeft: true, semanticGroup: 'customers' },
+    { section: 'bottom-right', isTop: false, isLeft: false, semanticGroup: 'market' },
+  ];
+
+  const uniqueEdgeTypes = (list: Node<T>[]) => {
+    const s = new Set<string>();
+    for (const n of list) {
+      const t = String((n.data as any)?.edgeTypeFromParent || '').trim();
+      if (t) s.add(normalizeEdgeType(t));
+    }
+    return Array.from(s);
+  };
+
+  const groupDims = (count: number) => {
+    const totalPages = Math.ceil(count / GROUP_PAGE_SIZE);
+    const hasPagination = totalPages > 1;
+
+    let nodesPerRow: number;
+    let rows: number;
+    if (hasPagination) {
+      nodesPerRow = GROUP_MAX_COLS;
+      rows = GROUP_MAX_ROWS;
+    } else {
+      nodesPerRow = Math.min(count, GROUP_MAX_COLS);
+      rows = Math.min(GROUP_MAX_ROWS, Math.ceil(count / Math.max(1, nodesPerRow)));
+    }
+    const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * nodeSpacing;
+    const innerH = rows * nodeHeight + Math.max(0, rows - 1) * Math.max(48, Math.floor(nodeSpacing * 1.05));
+    const w = innerW + GROUP_PADDING_X * 2;
+    const h = innerH + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM + (hasPagination ? GROUP_PAGINATION_HEIGHT : 0);
+    return { w, h, nodesPerRow, rows, totalPages, hasPagination };
+  };
+
+  const groupNodes: Node<T>[] = [];
+  const placed: Node<T>[] = [];
+
+  // Place central nodes (absolute)
+  for (const n of central) {
+    const p = pos.get(n.id);
+    placed.push(p ? ({ ...n, position: p } as any) : n);
+  }
+
+  // Place section groups + children (child positions are relative to group)
+  for (const meta of sectionMeta) {
+    const list = sections[meta.section];
+    if (!list || list.length === 0) continue;
+
+    const dim = groupDims(list.length);
+    const baseY = meta.isTop ? (baseTopY - (dim.h - nodeHeight)) : baseBottomY;
+
+    const x = meta.isLeft
+      ? (centralCenterX - HALF_GAP - dim.w)
+      : (centralCenterX + HALF_GAP);
+    const y = meta.isTop ? baseY : baseY;
+
+    const groupId = `linear:${meta.section}`;
+    const allChildIds = list.map((n) => n.id);
+
+    groupNodes.push({
+      id: groupId,
+      type: 'horizonGroup' as any,
+      position: { x, y },
+      selectable: false,
+      draggable: false,
+      connectable: false,
+      focusable: false,
+      deletable: false,
+      style: { width: dim.w, height: dim.h, zIndex: 0 } as any,
+      data: {
+        isGroup: true,
+        groupIsBackdrop: false,
+        groupInteractive: false,
+        groupSemanticGroup: meta.semanticGroup,
+        groupLinearSection: meta.section,
+        groupCount: list.length,
+        groupEdgeTypes: uniqueEdgeTypes(list),
+        groupAllChildIds: allChildIds,
+        groupCurrentPage: 0,
+        groupTotalPages: dim.totalPages,
+        groupPageSize: GROUP_PAGE_SIZE,
+        groupMaxCols: GROUP_MAX_COLS,
+        groupMaxRows: GROUP_MAX_ROWS,
+      } as any,
+    });
+
+    const childGapX = nodeSpacing;
+    const childGapY = Math.max(48, Math.floor(nodeSpacing * 1.05));
+    const padTop = GROUP_HEADER_HEIGHT;
+
+    const startIdx = 0;
+    const endIdx = Math.min(GROUP_PAGE_SIZE, list.length);
+
+    for (let idx = 0; idx < list.length; idx++) {
+      const child = list[idx]!;
+      const isVisible = idx >= startIdx && idx < endIdx;
+      const pageIdx = idx - startIdx;
+      const rowIdx = Math.floor(pageIdx / dim.nodesPerRow);
+      const colIdx = pageIdx % dim.nodesPerRow;
+      const rtlColIdx = dim.nodesPerRow - 1 - colIdx;
+      const cx = GROUP_PADDING_X + rtlColIdx * (nodeWidth + childGapX);
+      const cy = padTop + rowIdx * (nodeHeight + childGapY);
+
+      placed.push({
+        ...(child as any),
+        parentId: groupId,
+        extent: 'parent' as any,
+        zIndex: 1,
+        position: { x: cx, y: cy },
+        hidden: !isVisible,
+      } as any);
+    }
+  }
+
+  // Include "others" that weren't assigned (safety)
+  const placedIds = new Set<string>(placed.map((n) => n.id));
+  for (const n of others) {
+    if (!placedIds.has(n.id)) placed.push(n);
+  }
+
+  // Group nodes first (behind), then central + children.
+  return [...groupNodes, ...placed];
 }
 
 /**
@@ -527,9 +750,10 @@ const GROUP_GAP_X = 40;
 const GROUP_GAP_Y = 40;
 
 // Pagination constants for groups
-const GROUP_PAGE_SIZE = 12;        // Max items per page (4x3 matrix)
-const GROUP_MAX_COLS = 4;          // Max columns in group
-const GROUP_MAX_ROWS = 3;          // Max rows in group
+// 2025/2026 UX: fill right-to-left, top-to-bottom; up to 6 columns x 3 rows per page.
+const GROUP_MAX_COLS = 6;           // Max columns in group
+const GROUP_MAX_ROWS = 3;           // Max rows in group
+const GROUP_PAGE_SIZE = GROUP_MAX_COLS * GROUP_MAX_ROWS; // Max items per page (6x3 matrix)
 const GROUP_PAGINATION_HEIGHT = 24; // Height for "Page N of M" footer
 
 // Group containers are keyed by (parentId, semanticGroup).
@@ -581,26 +805,23 @@ function makeGroupParentNode<T = any>(params: {
   const baseH = typeof containerHeight === 'number' && Number.isFinite(containerHeight) ? containerHeight : Math.max(120, nodeHeight + 60);
   const h = hasPagination ? baseH + GROUP_PAGINATION_HEIGHT : baseH;
 
-  // Exclude fragment-specific fields from exemplarData to avoid confusing groups with fragments
-  const safeExemplarData = exemplarData ? (() => {
-    const { fragmentId, id, lensItemId, ...rest } = exemplarData as any;
-    return rest;
-  })() : {};
-
   return {
     id,
     type: 'horizonGroup' as any,
     position,
-    selectable: true,
-    draggable: true,
+    // Groups are visual containers; keep them non-interactive so they don't steal clicks from children.
+    selectable: false,
+    draggable: false,
     connectable: false,
     focusable: false,
     deletable: false,
     // Explicit size so we preserve padding and collision detection is correct.
     style: { width: w, height: h, zIndex: 0 } as any,
     data: {
-      ...safeExemplarData,
+      ...(exemplarData || {}),
       isGroup: true,
+      groupInteractive: false,
+      groupIsBackdrop: false,
       groupParentId: parentId,
       groupSemanticGroup: semanticGroup,
       groupEdgeTypes: edgeTypes,
@@ -627,8 +848,8 @@ function attachChildToGroup<T = any>(
   return {
     ...child,
     parentId: groupId,
-    // ReactFlow uses `parentNode` for nested nodes; keep both for compatibility.
-    parentNode: groupId as any,
+    // ReactFlow legacy prop still supported, but we should use parentId
+    // parentNode: groupId,
     extent: 'parent' as any,
     zIndex: 1,
     position: relPos,
@@ -889,7 +1110,7 @@ export async function layoutNewNodesAroundParent<T = any>(
     }
   }
   
-  elkDebug('[ELK] Nodes by direction:', { incoming: incomingNodes.length, outgoing: outgoingNodes.length });
+  console.log('[ELK] Nodes by direction:', { incoming: incomingNodes.length, outgoing: outgoingNodes.length });
   
   const parentX = parentNode.position.x;
   const parentY = parentNode.position.y;
@@ -954,7 +1175,13 @@ export async function layoutExpansionWithGroups<T = any>(
 ): Promise<Node<T>[]> {
   if (newNodes.length === 0) return existingNodes;
 
-  const parentNode = existingNodes.find((n) => n.id === parentNodeId);
+  // `parentNodeId` is the logical fragment id. In some flows ReactFlow `node.id` can be a lensItemId,
+  // while `data.fragmentId` holds the fragment id. Match both to avoid silently skipping group creation.
+  const parentNode = existingNodes.find((n) => {
+    if (n.id === parentNodeId) return true;
+    const fid = String((n.data as any)?.fragmentId || '').trim();
+    return fid === parentNodeId;
+  });
   if (!parentNode) {
     console.warn('[ELK] Parent node not found:', parentNodeId);
     return [...existingNodes, ...newNodes];
@@ -1119,7 +1346,7 @@ export async function layoutExpansionWithGroups<T = any>(
   const childGapY = Math.max(48, Math.floor(nodeSpacing * 1.05));
 
   // Calculate group dimensions based on item count
-  // If pagination needed (>12 items): fixed 4x3 grid
+  // If pagination needed (>GROUP_PAGE_SIZE items): fixed 6x3 grid
   // If no pagination: size matches actual item count
   const groupDims = (count: number) => {
     const totalPages = Math.ceil(count / GROUP_PAGE_SIZE);
@@ -1129,11 +1356,11 @@ export async function layoutExpansionWithGroups<T = any>(
     let rows: number;
 
     if (hasPagination) {
-      // Fixed 4x3 grid for paginated groups
+      // Fixed 6x3 grid for paginated groups
       nodesPerRow = GROUP_MAX_COLS;
       rows = GROUP_MAX_ROWS;
     } else {
-      // Size matches actual item count (max 4 columns)
+      // Size matches actual item count (max 6 columns)
       nodesPerRow = Math.min(count, GROUP_MAX_COLS);
       rows = Math.ceil(count / nodesPerRow);
     }
@@ -1208,7 +1435,7 @@ export async function layoutExpansionWithGroups<T = any>(
     });
     positionedGroupNodes.push(groupNode);
 
-    // Layout children inside group with pagination
+    // Layout children inside group with pagination (right-to-left, top-to-bottom)
     const padTop = GROUP_HEADER_HEIGHT;
     const startIdx = currentPage * GROUP_PAGE_SIZE;
     const endIdx = Math.min(startIdx + GROUP_PAGE_SIZE, g.nodes.length);
@@ -1220,7 +1447,9 @@ export async function layoutExpansionWithGroups<T = any>(
       const pageIdx = idx - startIdx;
       const rowIdx = Math.floor(pageIdx / dim.nodesPerRow);
       const colIdx = pageIdx % dim.nodesPerRow;
-      const cx = GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
+      // Right-to-left fill: col 0 is the RIGHTMOST slot.
+      const rtlColIdx = dim.nodesPerRow - 1 - colIdx;
+      const cx = GROUP_PADDING_X + rtlColIdx * (nodeWidth + childGapX);
       const cy = padTop + rowIdx * (nodeHeight + childGapY);
 
       const positioned = attachChildToGroup(child, groupId, { x: cx, y: cy });
@@ -1232,7 +1461,12 @@ export async function layoutExpansionWithGroups<T = any>(
     }
   }
 
-  return [...fixedNodes, ...positionedGroupNodes, ...positionedChildren];
+  // Ensure group containers render behind fragments (and don't steal clicks).
+  // ReactFlow's DOM order matters; groups must be earlier in the `nodes` array.
+  const out = [...fixedNodes, ...positionedGroupNodes, ...positionedChildren];
+  const groupContainers = out.filter((n) => isGroupNode(n as any));
+  const rest = out.filter((n) => !isGroupNode(n as any));
+  return [...groupContainers, ...rest];
 }
 
 /**
@@ -1317,7 +1551,7 @@ export function rebuildGroupContainers<T = any>(
     const allChildIds = g.kids.map((k) => k.id);
 
     // Calculate size based on item count
-    // If pagination needed: fixed 4x3 grid
+    // If pagination needed: fixed 6x3 grid
     // If no pagination: size matches actual item count
     let nodesPerRow: number;
     let rows: number;
@@ -1397,14 +1631,18 @@ export function rebuildGroupContainers<T = any>(
       }),
     );
 
-    // Layout children with pagination
+    // Layout children with pagination (horizontal-first: left-to-right rows)
     const padTop = GROUP_HEADER_HEIGHT;
     for (let idx = 0; idx < g.kids.length; idx++) {
       const child = g.kids[idx];
       const isVisible = idx >= startIdx && idx < endIdx;
       const pageIdx = idx - startIdx;
+      // Horizontal fill:
+      // row = floor(index / cols)
+      // col = index % cols
       const rowIdx = Math.floor(pageIdx / nodesPerRow);
       const colIdx = pageIdx % nodesPerRow;
+      
       const cx = GROUP_PADDING_X + colIdx * (nodeWidth + childGapX);
       const cy = padTop + rowIdx * (nodeHeight + childGapY);
 
@@ -1419,7 +1657,9 @@ export function rebuildGroupContainers<T = any>(
   // Include fragments that weren't part of any group (roots, etc.)
   const groupedChildIds = new Set(updatedChildren.map((n) => n.id));
   const passthrough = fragments.filter((n) => !groupedChildIds.has(n.id));
-  return [...passthrough, ...updatedChildren, ...groupNodes];
+  // Critical: render group nodes FIRST so they are visually behind and don't block pointer events.
+  // Children/roots should sit above group backgrounds.
+  return [...groupNodes, ...passthrough, ...updatedChildren];
 }
 
 /**
@@ -1431,11 +1671,11 @@ export async function layoutFullGraph<T = any>(
   edges: Edge[],
   options: LayoutOptions_Custom = {},
 ): Promise<Node<T>[]> {
-  elkDebug('[ELK] layoutFullGraph called with', nodes.length, 'nodes and', edges.length, 'edges');
+  console.log('[ELK] layoutFullGraph called with', nodes.length, 'nodes and', edges.length, 'edges');
   
   // Use hierarchical layout that groups nodes by their expansion parent
   const result = await layoutWithHierarchy(nodes, edges, options);
-  elkDebug('[ELK] layoutFullGraph completed');
+  console.log('[ELK] layoutFullGraph completed');
   return result;
 }
 
@@ -1502,7 +1742,7 @@ async function layoutWithHierarchy<T = any>(
     childrenMap.set(parentId, children);
   }
 
-  elkDebug('[ELK] Hierarchy:', {
+  console.log('[ELK] Hierarchy:', {
     roots: rootNodes.length,
     parentsWithChildren: childrenMap.size,
     totalNodes: nodes.length,
@@ -1657,376 +1897,5 @@ async function layoutWithHierarchy<T = any>(
     console.warn('[ELK] Node not positioned:', node.id);
     return { ...node, position: { x: 0, y: 0 } };
   });
-}
-
-/**
- * Linear layout for expansion: 3-row layout (35%-30%-35%) with 4 sections.
- * - Top row: upstream dependencies (left: suppliers, right: regulation)
- * - Middle row: central nodes (horizontal)
- * - Bottom row: downstream dependencies (left: products/ownership, right: market/partners)
- */
-export async function layoutLinearExpansion<T = any>(
-  existingNodes: Node<T>[],
-  newNodes: Node<T>[],
-  parentNodeId: string,
-  edges: Edge[],  // Added: edges to recalculate correct edgeType/direction
-  options: LayoutOptions_Custom = {},
-): Promise<Node<T>[]> {
-  const {
-    nodeWidth = DEFAULT_NODE_WIDTH,
-    nodeHeight = DEFAULT_NODE_HEIGHT,
-    nodeSpacing = 60,
-    layerSpacing = 150, // Used as vertical gap between rows
-  } = options;
-
-  // Linear layout is global:
-  // - Central nodes are all nodes with depth=0.
-  // - Related nodes are those directly connected to ANY central node (computed from edges).
-  const all = [...existingNodes, ...newNodes];
-  const centralNodes: Node<T>[] = [];
-  const centralNodeIds = new Set<string>();
-
-  for (const node of all) {
-    const d = node.data as any;
-    if (d?.isGroup) continue;
-    const depth = typeof d?.depth === 'number' ? d.depth : 0;
-    if (depth === 0) {
-      centralNodes.push(node);
-      centralNodeIds.add(node.id);
-      continue;
-    }
-  }
-
-  // === RECALCULATE edgeType/direction from edges for Linear layout ===
-  // This is critical because data loaded in Freeform mode may have wrong priorities
-  // For Linear: incoming dependency types (DEPENDS_ON, etc.) MUST win over other types
-  const nodeEdgeInfo = new Map<string, { edgeType: string; direction: 'incoming' | 'outgoing' }>();
-  
-  const isIncomingDependencyType = (t: string) => {
-    const upper = (t || '').toUpperCase().trim();
-    return upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES';
-  };
-  
-  // Structural relationships (ownership/org hierarchy) should dominate over peer/market ties
-  // when picking a single "main" relation for Linear section placement.
-  const isOwnershipType = (t: string) => {
-    const upper = (t || '').toUpperCase().trim();
-    return (
-      // Treat PRODUCES as part of "Products & Ownership" bucket for linear placement dominance.
-      // This prevents OWNS from blocking PRODUCES when both relations exist for the same neighbor.
-      upper === 'PRODUCES' ||
-      upper === 'OWNS' ||
-      upper === 'SUBSIDIARY_OF' ||
-      upper === 'MANAGES' ||
-      upper === 'CONTROLS' ||
-      upper === 'INVESTS_IN' ||
-      upper === 'PARENT_OF'
-    );
-  };
-
-  // NOTE: do not log in production; keep layout pure
-  for (const edge of edges) {
-    const source = edge.source;
-    const target = edge.target;
-    const edgeType = (edge.data as any)?.edgeType || edge.type || '';
-    
-    // Only process edges that connect to a central node
-    const sourceIsCentral = centralNodeIds.has(source);
-    const targetIsCentral = centralNodeIds.has(target);
-    
-    if (!sourceIsCentral && !targetIsCentral) continue;
-    
-    // Determine neighbor and direction
-    let neighborId: string;
-    let direction: 'incoming' | 'outgoing';
-    
-    if (sourceIsCentral && !targetIsCentral) {
-      // central → neighbor: for neighbor this is "outgoing" (central influences them)
-      neighborId = target;
-      direction = 'outgoing';
-    } else if (targetIsCentral && !sourceIsCentral) {
-      // neighbor → central: for neighbor this is "incoming" (they influence central)
-      neighborId = source;
-      direction = 'incoming';
-    } else {
-      // Both central or neither - skip
-      continue;
-    }
-    
-    const existing = nodeEdgeInfo.get(neighborId);
-    
-    if (!existing) {
-      nodeEdgeInfo.set(neighborId, { edgeType, direction });
-    } else {
-      // LINEAR OVERRIDE: incoming dependency types ALWAYS win
-      // 1. If existing is incoming dependency - keep it
-      if (existing.direction === 'incoming' && isIncomingDependencyType(existing.edgeType)) {
-        continue;
-      }
-      // 2. If new is incoming dependency - it wins
-      if (direction === 'incoming' && isIncomingDependencyType(edgeType)) {
-        nodeEdgeInfo.set(neighborId, { edgeType, direction });
-        continue;
-      }
-      // 2.5. Ownership beats peer/market types for section placement (unless dependency override applied above)
-      if (isOwnershipType(existing.edgeType) && !isOwnershipType(edgeType)) {
-        continue;
-      }
-      if (!isOwnershipType(existing.edgeType) && isOwnershipType(edgeType)) {
-        nodeEdgeInfo.set(neighborId, { edgeType, direction });
-        continue;
-      }
-      // 3. Otherwise use priority
-      const existingPriority = getEdgePriority(existing.edgeType);
-      const newPriority = getEdgePriority(edgeType);
-      if (newPriority < existingPriority) {
-        nodeEdgeInfo.set(neighborId, { edgeType, direction });
-      }
-    }
-  }
-  // ...
-
-  // Related nodes are those connected to any central node, plus any nodes that already have
-  // edgeTypeFromParent/parentFragmentId (to keep older data stable).
-  const relatedNodes: Node<T>[] = [];
-  for (const node of all) {
-    const d = node.data as any;
-    if (d?.isGroup) continue;
-    const depth = typeof d?.depth === 'number' ? d.depth : 0;
-    if (depth === 0) continue;
-    if (nodeEdgeInfo.has(node.id) || d?.parentFragmentId || d?.edgeTypeFromParent) {
-      relatedNodes.push(node);
-    }
-  }
-
-  // Group related nodes by linear section
-  type SectionData = {
-    section: LinearSection;
-    edgeTypes: Set<string>;
-    nodes: Node<T>[];
-  };
-
-  const sectionsMap = new Map<LinearSection, SectionData>();
-  // Initialize map to ensure consistent iteration order if needed, though we access by key
-  ['top-left', 'top-right', 'bottom-left', 'bottom-right'].forEach(k => {
-    sectionsMap.set(k as LinearSection, { section: k as LinearSection, edgeTypes: new Set(), nodes: [] });
-  });
-
-  // Group related nodes into sections
-  for (const node of relatedNodes) {
-    const nodeData = node.data as any;
-    
-    // Use recalculated edge info if available, otherwise fall back to node data
-    const recalculated = nodeEdgeInfo.get(node.id);
-    const edgeType = recalculated?.edgeType || nodeData?.edgeTypeFromParent || '';
-    const directionFromParent = recalculated?.direction || nodeData?.directionFromParent || 'unknown';
-    const isOutgoing = directionFromParent !== 'incoming';
-    const section = getLinearSection(edgeType, isOutgoing);
-
-    // Update node data with recalculated values (critical for handle calculation!)
-    const updatedNode: Node<T> = {
-      ...node,
-      data: {
-        ...node.data,
-        edgeTypeFromParent: edgeType,
-        directionFromParent: directionFromParent,
-      } as T,
-    };
-
-    const sectionData = sectionsMap.get(section);
-    if (sectionData) {
-      if (edgeType) sectionData.edgeTypes.add(edgeType);
-      sectionData.nodes.push(updatedNode);
-    }
-  }
-
-  const positionedNodes: Node<T>[] = [];
-  const groupNodes: Node<T>[] = [];
-
-  // --- 1. Layout Central Row ---
-  // Stable order: by existing X (if any), then by id
-  const sortedCentral = [...centralNodes].sort((a, b) => {
-    const ax = a.position?.x ?? 0;
-    const bx = b.position?.x ?? 0;
-    if (ax !== bx) return ax - bx;
-    return String(a.id).localeCompare(String(b.id));
-  });
-
-  const centerSpacing = nodeWidth + nodeSpacing;
-  const totalCenterWidth = sortedCentral.length * nodeWidth + (sortedCentral.length - 1) * nodeSpacing;
-  
-  // Define layout origin (0,0) as the center of the central row
-  // We will position everything relative to this origin.
-  // Central nodes Y = 0.
-  const centralRowY = 0;
-  let currentCenterX = -totalCenterWidth / 2;
-
-  for (const node of sortedCentral) {
-    positionedNodes.push({
-      ...node,
-      position: { x: currentCenterX, y: centralRowY },
-    });
-    currentCenterX += centerSpacing;
-  }
-
-  // --- 2. Calculate Section Dimensions & Positions ---
-  // We place sections relative to the central row.
-  // Top row Y = -(verticalGap + maxTopGroupHeight)
-  // Bottom row Y = nodeHeight + verticalGap
-  // Left column X (right edge) = -horizontalGap/2
-  // Right column X (left edge) = horizontalGap/2
-  
-  const verticalGap = Math.max(layerSpacing, 200);
-  const horizontalGap = 100; // Gap between left and right columns
-
-  // Helper to calculate group dimensions without placing
-  const calculateGroupDims = (nodesCount: number) => {
-    if (nodesCount === 0) return { w: 0, h: 0, rows: 0, nodesPerRow: 0, hasPagination: false };
-    
-    const totalPages = Math.ceil(nodesCount / GROUP_PAGE_SIZE);
-    const hasPagination = totalPages > 1;
-    const childGapX = Math.max(48, Math.floor(60 * 1.05));
-    const childGapY = Math.max(48, Math.floor(60 * 1.05));
-
-    let nodesPerRow: number;
-    let rows: number;
-    if (hasPagination) {
-      nodesPerRow = GROUP_MAX_COLS;
-      rows = GROUP_MAX_ROWS;
-    } else {
-      nodesPerRow = Math.min(nodesCount, GROUP_MAX_COLS);
-      rows = Math.ceil(nodesCount / nodesPerRow);
-    }
-
-    const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * childGapX;
-    const innerH = rows * nodeHeight + Math.max(0, rows - 1) * childGapY;
-    const w = innerW + GROUP_PADDING_X * 2;
-    const h = innerH + GROUP_HEADER_HEIGHT + GROUP_PADDING_BOTTOM + (hasPagination ? GROUP_PAGINATION_HEIGHT : 0);
-    
-    return { w, h, rows, nodesPerRow, hasPagination, childGapX, childGapY };
-  };
-
-  const topLeftData = sectionsMap.get('top-left')!;
-  const topRightData = sectionsMap.get('top-right')!;
-  const bottomLeftData = sectionsMap.get('bottom-left')!;
-  const bottomRightData = sectionsMap.get('bottom-right')!;
-
-  const tlDims = calculateGroupDims(topLeftData.nodes.length);
-  const trDims = calculateGroupDims(topRightData.nodes.length);
-  const blDims = calculateGroupDims(bottomLeftData.nodes.length);
-  const brDims = calculateGroupDims(bottomRightData.nodes.length);
-
-  // Center the central row relative to the FULL graph width:
-  // balance left/right columns by shifting their gaps from the center.
-  const maxLeftW = Math.max(tlDims.w || 0, blDims.w || 0);
-  const maxRightW = Math.max(trDims.w || 0, brDims.w || 0);
-  const baseGap = horizontalGap / 2;
-  const delta = (maxLeftW - maxRightW) / 2;
-  const MIN_GAP = 80;
-  const leftGap = Math.max(MIN_GAP, baseGap - delta);
-  const rightGap = Math.max(MIN_GAP, baseGap + delta);
-
-  // Calculate Y positions
-  // Top row Y is determined by the tallest top group to align their bottoms (or align their tops? Usually align bottoms to be closer to center)
-  // Let's align groups closest to the central row.
-  // Top groups: bottom edge at -verticalGap. Y = -verticalGap - h.
-  // Bottom groups: top edge at nodeHeight + verticalGap. Y = nodeHeight + verticalGap.
-  
-  // Calculate X positions
-  // Left groups: right edge at -horizontalGap/2. X = -horizontalGap/2 - w.
-  // Right groups: left edge at horizontalGap/2. X = horizontalGap/2.
-
-  const placeSection = (section: LinearSection, data: SectionData, dims: any, x: number, y: number) => {
-    if (data.nodes.length === 0) return;
-
-    // Map to semantic group for group creation (approximate mapping)
-    let semanticGroup: SemanticGroup = 'supply-chain';
-    if (section === 'top-left' || section === 'top-right') {
-      semanticGroup = 'supply-chain';
-    } else if (section === 'bottom-left' || section === 'bottom-right') {
-      semanticGroup = 'customers';
-    }
-
-    const groupId = `linear-group-${section}`;
-    const groupNode = makeGroupParentNode({
-      id: groupId,
-      position: { x, y },
-      parentId: '__linear__',
-      semanticGroup,
-      edgeTypes: Array.from(data.edgeTypes),
-      count: data.nodes.length,
-      containerWidth: dims.w,
-      containerHeight: dims.h,
-      nodeWidth,
-      nodeHeight,
-      allChildIds: data.nodes.map((n) => n.id),
-      currentPage: 0,
-    });
-    // Store section id; UI will translate via i18n (react-i18next)
-    (groupNode.data as any).groupLinearSection = section;
-    groupNodes.push(groupNode);
-
-    // Layout children inside group
-    const padTop = GROUP_HEADER_HEIGHT;
-    for (let idx = 0; idx < data.nodes.length; idx++) {
-      const child = data.nodes[idx];
-      const isVisible = !dims.hasPagination || idx < GROUP_PAGE_SIZE;
-      const pageIdx = idx; 
-      const rowIdx = Math.floor(pageIdx / dims.nodesPerRow);
-      const colIdx = pageIdx % dims.nodesPerRow;
-      const cx = GROUP_PADDING_X + colIdx * (nodeWidth + dims.childGapX);
-      const cy = padTop + rowIdx * (nodeHeight + dims.childGapY);
-
-      const positioned = attachChildToGroup(child, groupId, { x: cx, y: cy });
-      positionedNodes.push({ ...positioned, hidden: !isVisible });
-    }
-  };
-
-  // --- 3. Place Groups ---
-  
-  // Top Row
-  if (topLeftData.nodes.length > 0) {
-    const x = -leftGap - tlDims.w;
-    const y = -verticalGap - tlDims.h; // Align bottom to gap
-    placeSection('top-left', topLeftData, tlDims, x, y);
-  }
-  if (topRightData.nodes.length > 0) {
-    const x = rightGap;
-    const y = -verticalGap - trDims.h; // Align bottom to gap
-    placeSection('top-right', topRightData, trDims, x, y);
-  }
-
-  // Bottom Row
-  const bottomRowY = nodeHeight + verticalGap;
-  if (bottomLeftData.nodes.length > 0) {
-    const x = -leftGap - blDims.w;
-    const y = bottomRowY; // Align top to gap
-    placeSection('bottom-left', bottomLeftData, blDims, x, y);
-  }
-  if (bottomRightData.nodes.length > 0) {
-    const x = rightGap;
-    const y = bottomRowY; // Align top to gap
-    placeSection('bottom-right', bottomRightData, brDims, x, y);
-  }
-
-  // Keep existing nodes that weren't repositioned
-  const repositionedIds = new Set([...positionedNodes, ...groupNodes].map((n) => n.id));
-  // IMPORTANT: drop previous freeform group nodes when switching to linear
-  const passthrough = existingNodes.filter((n) => !repositionedIds.has(n.id) && !((n.data as any)?.isGroup));
-
-  return [...passthrough, ...positionedNodes, ...groupNodes];
-}
-
-/**
- * Linear layout for full graph: same 3-row structure applied to entire graph
- */
-export async function layoutLinearFullGraph<T = any>(
-  nodes: Node<T>[],
-  edges: Edge[],
-  options: LayoutOptions_Custom = {},
-): Promise<Node<T>[]> {
-  // Linear full-graph layout: apply the same global 3-row logic across ALL nodes.
-  // Central nodes are those with depth=0; related nodes are depth>0.
-  return layoutLinearExpansion(nodes, [], '__linear__', edges, options);
 }
 

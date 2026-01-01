@@ -1742,6 +1742,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async deleteHorizonLens(lensId: string): Promise<{ success: boolean }> {
+    try {
+      await this.client.delete(`/api/horizon/lenses/${lensId}`);
+      return { success: true };
+    } catch (error: any) {
+      console.error(`[API] deleteHorizonLens error:`, error);
+      throw error;
+    }
+  }
+
   /**
    * Horizon - Add node to lens scope + run additional scouting (depth=1 by default)
    * POST /api/horizon/lenses/{lensId}/scope-scout
@@ -2029,6 +2039,48 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       console.error(`[API] getHorizonEdge error:`, error);
       throw error;
     }
+  }
+
+  // --- Horizon AI Explanations (cached markdown) ---
+  async getHorizonAIExplanation(
+    targetType: 'edge' | 'node',
+    targetId: string,
+    options?: { lang?: string }
+  ): Promise<{
+    targetType: 'edge' | 'node';
+    targetId: string;
+    language: string;
+    markdown: string;
+    updatedAt: string;
+    docId: string;
+  }> {
+    const lang = options?.lang || 'en';
+    const response = await this.client.get(`/api/horizon/ai-explanations/${targetType}/${encodeURIComponent(targetId)}`, {
+      params: { lang },
+    });
+    return response.data;
+  }
+
+  async upsertHorizonAIExplanation(
+    targetType: 'edge' | 'node',
+    targetId: string,
+    data: {
+      markdown: string;
+      language?: string;
+      model?: string;
+      lensId?: string;
+      edgeType?: string;
+      sourceFragmentId?: string;
+      targetFragmentId?: string;
+      attrs?: Record<string, any>;
+    },
+    options?: { lang?: string }
+  ): Promise<{ ok: boolean; targetType: string; targetId: string; language: string; docId: string }> {
+    const lang = options?.lang || data.language || 'en';
+    const response = await this.client.put(`/api/horizon/ai-explanations/${targetType}/${encodeURIComponent(targetId)}`, data, {
+      params: { lang },
+    });
+    return response.data;
   }
 
   async createHorizonEdge(edge: {

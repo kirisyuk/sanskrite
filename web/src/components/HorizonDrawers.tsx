@@ -92,10 +92,10 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
           maxHeight: '100%',
           overflow: 'hidden',
           zIndex: isMobile ? 50 : 'auto',
-          backgroundColor: isMobile
-            ? 'var(--bg-sidebar)'
-            : 'transparent',
-          borderLeft: isMobile ? 'none' : '1px solid var(--border-subtle)',
+          // Keep the drawer as a consistent "surface" on desktop too,
+          // otherwise the transparent gutter reads like wasted empty space over the canvas.
+          backgroundColor: 'var(--bg-sidebar)',
+          borderLeft: '1px solid var(--border-subtle)',
           ...(isMobile
             ? {
                 maxWidth: '85vw',

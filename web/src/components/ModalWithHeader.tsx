@@ -11,6 +11,8 @@ export interface ModalWithHeaderProps {
   onClose: () => void;
   children: React.ReactNode;
   className?: string;
+  hideHeader?: boolean;
+  contentPadding?: 'default' | 'none';
 }
 
 export const ModalWithHeader: React.FC<ModalWithHeaderProps> = ({
@@ -18,6 +20,8 @@ export const ModalWithHeader: React.FC<ModalWithHeaderProps> = ({
   onClose,
   children,
   className = '',
+  hideHeader = false,
+  contentPadding = 'default',
 }) => {
   const { t } = useTranslation();
 
@@ -31,50 +35,52 @@ export const ModalWithHeader: React.FC<ModalWithHeaderProps> = ({
       }}
     >
       {/* Fixed header */}
-      <div className="px-6 pt-2 pb-2 flex-shrink-0">
-      <div className="mb-2 flex items-center">
-        <button
-          onClick={onClose}
-          className="p-2 rounded-lg transition-colors"
-          style={{
-            backgroundColor: 'var(--white-10)',
-            color: 'var(--text-heading)',
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-              'var(--white-20)';
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-              'var(--white-10)';
-          }}
-          aria-label={t('unfold.sections.back')}
-        >
-          <svg
-            className="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M15 19l-7-7 7-7"
-            />
-          </svg>
-        </button>
-        <div
-          className="ml-2 text-13"
-          style={{ color: 'var(--text-heading)' }}
-        >
-          {title}
+      {!hideHeader && (
+        <div className="px-6 pt-2 pb-2 flex-shrink-0">
+          <div className="mb-2 flex items-center">
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg transition-colors"
+              style={{
+                backgroundColor: 'var(--white-10)',
+                color: 'var(--text-heading)',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                  'var(--white-20)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                  'var(--white-10)';
+              }}
+              aria-label={t('unfold.sections.back')}
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+            </button>
+            <div
+              className="ml-2 text-13"
+              style={{ color: 'var(--text-heading)' }}
+            >
+              {title}
+            </div>
+          </div>
         </div>
-      </div>
-      </div>
+      )}
       {/* Scrollable content */}
       <div
-        className="flex-1 px-6 pb-2 overflow-y-auto"
+        className={contentPadding === 'none' ? 'flex-1 overflow-y-auto' : 'flex-1 px-6 pb-2 overflow-y-auto'}
         style={{ 
           scrollbarGutter: 'stable',
           minHeight: 0,

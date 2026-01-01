@@ -47,7 +47,7 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 	// Получаем активные ScoutingJob для Lens
 	scoutingJobsRepo := h.service.ScoutingJobs()
 	// Prefer project-scoped listing (more reliable Firestore index).
-	jobs, err := scoutingJobsRepo.ListByProjectAndLens(r.Context(), authInfo.TenantID, lens.ProjectID, lensID, 100)
+	jobs, err := scoutingJobsRepo.ListByProjectAndLens(r.Context(), authInfo.TenantID, lens.ProjectID, lensID, 1000)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -55,10 +55,40 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 
 	var totalJobs int
 	var completedJobs int
+	var failedJobs int
+	var pendingJobs int
+	var runningJobs int
 	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
 		totalJobs++
-		if job.CurrentState == models.ScoutingJobStateVerified {
+		// Prefer AgentJob.Status, fall back to CurrentState (best-effort).
+		switch strings.ToLower(string(job.Status)) {
+		case "completed", "partial":
 			completedJobs++
+			continue
+		case "failed":
+			failedJobs++
+			continue
+		case "pending":
+			pendingJobs++
+			continue
+		case "running":
+			runningJobs++
+			continue
+		}
+		// Fallback: infer from current state machine.
+		switch job.CurrentState {
+		case models.ScoutingJobStateVerified:
+			completedJobs++
+		case models.ScoutingJobStateFailed, models.ScoutingJobStateRejected:
+			failedJobs++
+		case models.ScoutingJobStatePending:
+			pendingJobs++
+		default:
+			// planning/execution/extraction/validation/resolution
+			runningJobs++
 		}
 	}
 
@@ -67,15 +97,28 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 	phase := "ready"
 	progress := 1.0
 
-	if len(jobs) > 0 {
+	if totalJobs > 0 && (pendingJobs > 0 || runningJobs > 0) {
 		status = "scouting"
 		phase = "scouting"
-		if totalJobs > 0 {
-			progress = float64(completedJobs) / float64(totalJobs)
-		}
+	}
+	if totalJobs > 0 {
+		progress = float64(completedJobs+failedJobs) / float64(totalJobs)
+	}
+	// If all jobs are terminal (completed/failed), we are ready.
+	if totalJobs > 0 && pendingJobs == 0 && runningJobs == 0 {
+		status = "ready"
+		phase = "ready"
 	}
 
 	// Формируем ответ согласно документации
+	scoutingPhaseStatus := "completed"
+	if totalJobs > 0 && (pendingJobs > 0 || runningJobs > 0) {
+		scoutingPhaseStatus = "scouting"
+	}
+	readyPhaseStatus := "pending"
+	if phase == "ready" {
+		readyPhaseStatus = "ready"
+	}
 	response := map[string]interface{}{
 		"status":   status,
 		"phase":    phase,
@@ -90,13 +133,13 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 				"nodes":  0, // TODO: Подсчитать узлы из кэша
 			},
 			"scouting": map[string]interface{}{
-				"status":    status,
-				"completed": completedJobs,
+				"status":    scoutingPhaseStatus,
+				"completed": completedJobs + failedJobs,
 				"total":     totalJobs,
 				"logs":      []string{}, // TODO: Получить логи из ScoutingJob
 			},
 			"ready": map[string]interface{}{
-				"status": status,
+				"status": readyPhaseStatus,
 			},
 		},
 		"graph": map[string]interface{}{

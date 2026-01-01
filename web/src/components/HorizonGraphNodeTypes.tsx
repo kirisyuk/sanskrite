@@ -1,5 +1,5 @@
 import React from 'react';
-import { NodeTypes, Handle, Position, NodeProps } from 'reactflow';
+import { NodeTypes, Handle, Position, NodeProps, NodeToolbar } from 'reactflow';
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
@@ -19,6 +19,8 @@ export interface HorizonNodeData {
   label?: string;
   type?: string; // FragmentType
   state?: Record<string, number>; // Метрики
+  /** UI: whether to render metrics inside the node (disabled by default for performance). */
+  showMetrics?: boolean;
   status?: string;
   expanded?: boolean;
   collapsed?: boolean;
@@ -125,7 +127,7 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
 };
 
 // Получить цветовую схему для типа
-const getNodeColors = (type: string | undefined, theme: 'light' | 'dark'): {
+export const getNodeColors = (type: string | undefined, theme: 'light' | 'dark'): {
   bg: string;
   border: string;
   text: string;
@@ -186,6 +188,11 @@ const ensureHorizonNode2026Styles = () => {
   }
   // Always refresh content so HMR / incremental builds don't leave stale CSS around.
   style.textContent = `
+    @keyframes hzn-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
     .hzn-node-2026 {
       position: relative;
       overflow: hidden;
@@ -259,8 +266,14 @@ const ensureHorizonNode2026Styles = () => {
   `;
 };
 
+export const formatHorizonFragmentType = (type: string | undefined): string => {
+  const t = String(type || '').trim();
+  if (!t) return 'Unknown';
+  return t.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
 // SVG иконки для разных типов
-const NodeIcon: React.FC<{ type: string | undefined; color: string; size?: number }> = ({ type, color, size = 16 }) => {
+export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string; size?: number }> = ({ type, color, size = 16 }) => {
   const normalizedType = (type || '').toUpperCase().replace(/\s+/g, '_');
   const style: React.CSSProperties = { width: size, height: size, flexShrink: 0 };
   
@@ -383,7 +396,7 @@ const NodeIcon: React.FC<{ type: string | undefined; color: string; size?: numbe
 };
 
 // Получить цвет для значения метрики (красный=плохо, жёлтый=средне, зелёный=хорошо)
-const getMetricColor = (key: string, value: number): string => {
+export const getMetricColor = (key: string, value: number): string => {
   // Метрики риска/уязвимости — инвертированные (высокое = плохо)
   const isRiskMetric = key.toLowerCase().includes('risk') || 
                        key.toLowerCase().includes('vulnerability') ||
@@ -541,6 +554,10 @@ const formatEdgeTypes = (edgeTypes: string[] | undefined): string => {
 const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected, id }) => {
   const { theme } = React.useContext(ThemeContext);
   const { t } = useTranslation();
+  // Groups are primarily visual containers; they must NOT block clicks on child nodes.
+  // We only treat a group as interactive if explicitly requested (rare).
+  const isBackdrop = Boolean((data as any)?.groupIsBackdrop);
+  const interactive = Boolean((data as any)?.groupInteractive);
 
   // Use semantic group if available, fall back to edge type
   const semanticGroup = data.groupSemanticGroup as SemanticGroup | undefined;
@@ -659,10 +676,12 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         boxShadow:
           (theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)') +
           (ring ? `, 0 0 0 3px ${ring}` : ''),
-        pointerEvents: 'auto',
+        // Groups are real containers in Freeform/Linear pagination modes; they must allow interaction
+        // (pagination buttons). Backdrop-only groups should not intercept clicks.
+        pointerEvents: isBackdrop ? 'none' : 'auto',
         position: 'relative',
         overflow: 'hidden',
-        cursor: 'grab',
+        cursor: interactive ? 'grab' : 'default',
       }}
     >
       {/* Header */}
@@ -796,11 +815,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isCritical = data.critical;
   const isCollapsed = data.collapsed;
   const isExpanded = data.expanded;
+  const isLoadingRelated = Boolean(data.isLoadingRelated);
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
   const canScopeScout = Boolean((isExpanded || data.loadRelatedAttempted) && data.onScopeScout && !data.scopeScoutDone);
   const isSelected = Boolean(selected);
   const canCollapse = Boolean(data.fragmentId && data.onCollapse && isExpanded && !data.isLoadingRelated);
+  const showExpand = Boolean(data.fragmentId && data.onLoadRelated && !isExpanded);
+  const canExpandClick = Boolean(showExpand && !isLoadingRelated);
   
   // 2026 visual style: neutral surface with tinted accent (less "dashboardy", more product-like)
   const accentColor = isCritical ? '#EF4444' : colors.accent;
@@ -815,11 +837,11 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const q = getHorizonNodeVisualQuality();
 
   const displayLabel = data.label || data.canonicalPath?.split('/').pop() || 'Fragment';
+  const titleLineClamp = isCollapsed ? 2 : (data.showMetrics ? 2 : 6);
   const displayType = data.type || 'Unknown';
   // Keep node size consistent with ELK layout defaults used in the canvas (see LensCanvasCockpit)
   const NODE_WIDTH_PX = 180;
   const NODE_CARD_HEIGHT_PX = 148;
-  const PLUS_BUTTON_SIZE_PX = 26;
 
   // Форматирование типа для отображения
   const formatType = (type: string) => {
@@ -827,28 +849,81 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   };
 
   return (
-    <div
-      className={`hzn-node-2026 ${isSelected ? 'is-selected' : ''}`}
-      style={{
-        // CSS variables for 2026 styles
-        ['--hzn-surface' as any]: surfaceBg,
-        ['--hzn-border' as any]: surfaceBorder,
-        ['--hzn-accent' as any]: accentColor,
-        ['--hzn-accent-soft' as any]: accentSoft,
-        ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,
-        ['--hzn-shadow' as any]: isCritical
-          ? `0 0 0 2px ${criticalRing}, ${shadowBase}`
-          : (q === 'max' ? `${shadowBase}, 0 18px 60px rgba(0,0,0,0.18)` : shadowBase),
-        // Reserve room at the bottom so the "+" button never overlaps metrics
-        padding: isCollapsed ? '8px 12px 32px' : '10px 14px 40px',
-        width: `${NODE_WIDTH_PX}px`,
-        height: `${NODE_CARD_HEIGHT_PX}px`,
-        boxSizing: 'border-box',
-        position: 'relative',
-        opacity: isCollapsed ? 0.7 : 1,
-        cursor: 'default',
-      }}
-    >
+    <>
+      {/* Selected-only contextual CTA (no hover): "Scout it" */}
+      {canScopeScout && data.fragmentId && data.onScopeScout && (
+        <NodeToolbar
+          isVisible={isSelected}
+          position={Position.Bottom}
+          offset={12}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!data.fragmentId) return;
+              if (data.isScopeScouting) return;
+              data.onScopeScout?.(data.fragmentId, data.canonicalPath);
+            }}
+            disabled={data.isScopeScouting}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 10px',
+              borderRadius: 12,
+              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
+              background: theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.82)',
+              color: theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.90)',
+              boxShadow: theme === 'dark' ? '0 10px 24px rgba(0,0,0,0.38)' : '0 10px 24px rgba(0,0,0,0.14)',
+              cursor: data.isScopeScouting ? 'wait' : 'pointer',
+              whiteSpace: 'nowrap',
+              pointerEvents: 'auto',
+            }}
+            title="Scout this fragment (add to scope + scout)"
+            aria-label="Scout it"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke={accentColor}
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+            </svg>
+            <span style={{ fontSize: 12, fontWeight: 700 }}>
+              {data.isScopeScouting ? 'Scouting…' : 'Scout it'}
+            </span>
+          </button>
+        </NodeToolbar>
+      )}
+
+      <div
+        className={`hzn-node-2026 ${isSelected ? 'is-selected' : ''}`}
+        style={{
+          // CSS variables for 2026 styles
+          ['--hzn-surface' as any]: surfaceBg,
+          ['--hzn-border' as any]: surfaceBorder,
+          ['--hzn-accent' as any]: accentColor,
+          ['--hzn-accent-soft' as any]: accentSoft,
+          ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,
+          ['--hzn-shadow' as any]: isCritical
+            ? `0 0 0 2px ${criticalRing}, ${shadowBase}`
+            : (q === 'max' ? `${shadowBase}, 0 18px 60px rgba(0,0,0,0.18)` : shadowBase),
+          padding: isCollapsed ? '8px 12px 12px' : '10px 14px 14px',
+          width: `${NODE_WIDTH_PX}px`,
+          height: `${NODE_CARD_HEIGHT_PX}px`,
+          boxSizing: 'border-box',
+          position: 'relative',
+          opacity: isCollapsed ? 0.7 : 1,
+          cursor: 'default',
+        }}
+      >
       {/* Top handles: 2 handles для верхней группы (supply-chain) */}
       <Handle
         id="source-top"
@@ -982,7 +1057,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
           }}
         >
-          <NodeIcon type={data.type} color={accentColor} size={18} />
+          <HorizonNodeIcon type={data.type} color={accentColor} size={18} />
         </div>
         
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -995,7 +1070,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               overflow: 'hidden',
               display: '-webkit-box',
               WebkitBoxOrient: 'vertical' as any,
-              WebkitLineClamp: 2 as any,
+              WebkitLineClamp: titleLineClamp as any,
             }}
             title={displayLabel}
           >
@@ -1016,10 +1091,68 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               {formatType(displayType)}
             </div>
           )}
+
         </div>
         
         {/* Right-side actions / indicators */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          {showExpand && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!canExpandClick) return;
+                if (data.fragmentId && data.onLoadRelated) {
+                  data.onLoadRelated(data.fragmentId);
+                }
+              }}
+              aria-label="Expand"
+              title={isLoadingRelated ? 'Loading related fragments…' : 'Expand (load related fragments)'}
+              disabled={!canExpandClick}
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 8,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                color: theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)',
+                cursor: isLoadingRelated ? 'wait' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                opacity: isLoadingRelated ? 0.7 : 1,
+              }}
+            >
+              {isLoadingRelated ? (
+                <span
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: '50%',
+                    border: `2px solid ${theme === 'dark' ? 'rgba(255,255,255,0.22)' : 'rgba(15,23,42,0.16)'}`,
+                    borderTopColor: accentColor,
+                    boxSizing: 'border-box',
+                    animation: 'hzn-spin 0.9s linear infinite',
+                  }}
+                />
+              ) : (
+                /* Chevron-down icon (expand) */
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              )}
+            </button>
+          )}
           {canCollapse && (
             <button
               type="button"
@@ -1080,7 +1213,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       </div>
 
       {/* Метрики (если не collapsed) */}
-      {!isCollapsed && data.state && Object.keys(data.state).length > 0 && (
+      {!isCollapsed && data.showMetrics && data.state && Object.keys(data.state).length > 0 && (
         <div
           className="hzn-metrics"
           style={{
@@ -1146,82 +1279,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         </div>
       )}
 
-      {/* Кнопка для расширения ( + ) и доп. Research (🔎) */}
-      {data.fragmentId && data.onLoadRelated && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '0px',
-            left: '50%',
-            // Place the CENTER of the circle exactly on the bottom border line of the card.
-            transform: 'translate(-50%, 50%)',
-            zIndex: 20,
-          }}
-        >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (!data.fragmentId) return;
-              if (data.isLoadingRelated || data.isScopeScouting) return;
-
-              // After the node has been expanded, the same button becomes "additional research" (scope+scout depth=1)
-              if (canScopeScout && data.onScopeScout) {
-                data.onScopeScout(data.fragmentId, data.canonicalPath);
-                return;
-              }
-
-              if (data.onLoadRelated) {
-                data.onLoadRelated(data.fragmentId);
-              }
-            }}
-            disabled={data.isLoadingRelated || data.isScopeScouting}
-            className="hzn-plus"
-            style={{
-              width: `${PLUS_BUTTON_SIZE_PX}px`,
-              height: `${PLUS_BUTTON_SIZE_PX}px`,
-              borderRadius: '50%',
-              border: `2px solid ${accentColor}`,
-              background: surfaceBg,
-              color: accentColor,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: (data.isLoadingRelated || data.isScopeScouting) ? 'wait' : 'pointer',
-              fontSize: '16px',
-              fontWeight: 'bold',
-              lineHeight: 1,
-              padding: 0,
-              boxShadow: theme === 'dark' ? '0 8px 22px rgba(0,0,0,0.35)' : '0 8px 22px rgba(0,0,0,0.14)',
-              opacity: (data.isLoadingRelated || data.isScopeScouting) ? 0.6 : 1,
-              transition: 'all 0.2s ease',
-            }}
-            title={canScopeScout ? 'Research (add to scope + scout)' : 'Load related fragments'}
-          >
-            {(data.isLoadingRelated || data.isScopeScouting) ? (
-              <span style={{ fontSize: '12px' }}>⏳</span>
-            ) : canScopeScout ? (
-              // Research icon (magnifier)
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.3-4.3" />
-              </svg>
-            ) : '+'}
-          </button>
-        </div>
-      )}
-
       {/* CSS для анимации пульса */}
     </div>
+    </>
   );
 });
 

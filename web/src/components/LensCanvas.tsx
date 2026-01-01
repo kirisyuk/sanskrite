@@ -12,7 +12,6 @@ import { LensCanvasCockpit } from './LensCanvasCockpit';
 import { LensCanvasProgress } from './LensCanvasProgress';
 import { HorizonRealtimeCallouts } from './HorizonRealtimeCallouts';
 import { HorizonDrawers, HorizonPanelType } from './HorizonDrawers';
-import { HorizonPanelButtons } from './HorizonPanelButtons';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import type { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 
@@ -55,7 +54,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [selectedEdgeData, setSelectedEdgeData] = React.useState<any | null>(null);
   
   // Toolbar container for Cockpit
-  const [toolbarContainer, setToolbarContainer] = React.useState<HTMLDivElement | null>(null);
+  // NOTE: Cockpit toolbar is rendered as an overlay inside the graph canvas.
   
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
 
@@ -233,91 +232,93 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     <ModalWithHeader
       title={getTitle()}
       onClose={onClose}
+      hideHeader={true}
+      contentPadding="none"
     >
       <div className="flex flex-col h-full" style={{ position: 'relative' }}>
         <HorizonRealtimeCallouts enabled={viewMode !== 'progress'} lensId={lensId} projectId={projectId} />
-        {/* View mode switcher and Toolbar */}
-        <div className="mb-4 flex-shrink-0 flex items-center justify-between gap-4">
-          <div 
-            className="inline-flex items-center gap-1 rounded-xl px-2 py-1" 
-            role="tablist" 
-            aria-label="Lens view mode"
-            style={{
-              backgroundColor:
-                theme === 'light'
-                  ? 'rgba(0, 0, 0, 0.02)'
-                  : 'rgba(255, 255, 255, 0.04)',
-            }}
-          >
-            {lens && (
-              <>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={viewMode === 'details'}
-                  aria-controls="lens-details-panel"
-                  onClick={() => setViewMode('details')}
-                  className="px-2 py-1 text-12 rounded"
-                  style={{
-                    background:
-                      viewMode === 'details'
-                        ? 'var(--white-10)'
-                        : 'transparent',
-                    color: 'var(--text-heading)',
-                  }}
-                >
-                  Details
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={viewMode === 'cockpit'}
-                  aria-controls="lens-cockpit-panel"
-                  onClick={() => setViewMode('cockpit')}
-                  className="px-2 py-1 text-12 rounded"
-                  style={{
-                    background:
-                      viewMode === 'cockpit'
-                        ? 'var(--white-10)'
-                        : 'transparent',
-                    color: 'var(--text-heading)',
-                  }}
-                >
-                  Cockpit
-                </button>
-              </>
-            )}
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === 'progress'}
-              aria-controls="lens-progress-panel"
-              onClick={() => setViewMode('progress')}
-              className="px-2 py-1 text-12 rounded"
+        {/* View mode switcher: show as a compact row for non-cockpit views.
+            In Cockpit, we render this as an overlay inside the graph area to maximize canvas height. */}
+        {viewMode !== 'cockpit' && (
+          <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-4">
+            <div
+              className="inline-flex items-center gap-1 rounded-xl px-2 py-1"
+              role="tablist"
+              aria-label="Lens view mode"
               style={{
-                background:
-                  viewMode === 'progress'
-                    ? 'var(--white-10)'
-                    : 'transparent',
-                color: 'var(--text-heading)',
+                backgroundColor:
+                  theme === 'light'
+                    ? 'rgba(0, 0, 0, 0.02)'
+                    : 'rgba(255, 255, 255, 0.04)',
               }}
             >
-              Progress
-            </button>
+              {lens && (
+                <>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={viewMode === 'details'}
+                    aria-controls="lens-details-panel"
+                    onClick={() => setViewMode('details')}
+                    className="px-2 py-1 text-12 rounded"
+                    title="Details"
+                    style={{
+                      background:
+                        viewMode === 'details'
+                          ? 'var(--white-10)'
+                          : 'transparent',
+                      color: 'var(--text-heading)',
+                    }}
+                  >
+                    <span aria-hidden="true">i</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={false}
+                    aria-controls="lens-cockpit-panel"
+                    onClick={() => setViewMode('cockpit')}
+                    className="px-2 py-1 text-12 rounded"
+                    title="Cockpit"
+                    style={{
+                      background: 'transparent',
+                      color: 'var(--text-heading)',
+                    }}
+                  >
+                    <span aria-hidden="true">⧉</span>
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'progress'}
+                aria-controls="lens-progress-panel"
+                onClick={() => setViewMode('progress')}
+                className="px-2 py-1 text-12 rounded"
+                title="Progress"
+                style={{
+                  background:
+                    viewMode === 'progress'
+                      ? 'var(--white-10)'
+                      : 'transparent',
+                  color: 'var(--text-heading)',
+                }}
+              >
+                <span aria-hidden="true">↻</span>
+              </button>
+            </div>
           </div>
-          
-          {/* Toolbar Slot (Portal Target) */}
-          <div ref={setToolbarContainer} className="flex items-center gap-1" />
-        </div>
+        )}
 
         <div 
-          className={(viewMode === 'cockpit' || viewMode === 'progress') ? '' : 'space-y-6 py-2'} 
+          className={(viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? '' : 'space-y-6 py-2'} 
           style={{ 
             display: 'flex', 
             flexDirection: 'column', 
-            flex: (viewMode === 'cockpit' || viewMode === 'progress') ? 1 : 'none',
-            minHeight: (viewMode === 'cockpit' || viewMode === 'progress') ? 0 : 'auto',
-            overflow: (viewMode === 'cockpit' || viewMode === 'progress') ? 'hidden' : 'visible',
+            flex: (viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 1 : 'none',
+            minHeight: (viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 0 : 'auto',
+            overflow: (viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 'hidden' : 'visible',
           }}
         >
           {loading ? (
@@ -404,17 +405,97 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 minHeight: 0, 
                 display: 'flex', 
                 flexDirection: 'row',
-                gap: '16px',
+                gap: '12px',
                 width: '100%', 
                 height: '100%' 
               }}>
                 {/* Graph area - flexible width */}
-                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
+                  {/* Cockpit overlay: view mode switcher (icons) */}
+                  <div
+                    role="tablist"
+                    aria-label="Lens view mode"
+                    style={{
+                      position: 'absolute',
+                      top: 12,
+                      left: 12,
+                      zIndex: 80,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '6px 8px',
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)',
+                      backdropFilter: 'blur(8px)',
+                      boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
+                      pointerEvents: 'auto',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={false}
+                      onClick={() => setViewMode('details')}
+                      title="Details"
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'var(--text-heading)',
+                        borderRadius: 10,
+                        padding: '6px 8px',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      i
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={true}
+                      onClick={() => setViewMode('cockpit')}
+                      title="Cockpit"
+                      style={{
+                        border: 'none',
+                        background: 'var(--white-10)',
+                        color: 'var(--text-heading)',
+                        borderRadius: 10,
+                        padding: '6px 8px',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      ⧉
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={false}
+                      onClick={() => setViewMode('progress')}
+                      title="Progress"
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'var(--text-heading)',
+                        borderRadius: 10,
+                        padding: '6px 8px',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      ↻
+                    </button>
+                  </div>
                   <LensCanvasCockpit 
                     lensId={lensId} 
                     projectId={lens.projectId}
-                    toolbarContainer={toolbarContainer}
                     onScopeScout={handleScopeScout}
+                    inspectorActive={panelType === 'object-inspector'}
+                    onToggleInspector={() => setPanelType(panelType === 'object-inspector' ? null : 'object-inspector')}
                     onNodeSelect={(nodeId, nodeData) => {
                       if (import.meta.env.DEV) console.log('[LensCanvas] onNodeSelect', { nodeId, hasNodeData: !!nodeData });
                       setSelectedNodeId(nodeId);
@@ -422,8 +503,6 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                       // Clear edge selection when node is selected
                       setSelectedEdgeId(null);
                       setSelectedEdgeData(null);
-                      // Auto-open inspector when selecting something (most users expect this)
-                      if (nodeId) setPanelType('object-inspector');
                     }}
                     onEdgeSelect={(edgeId, edgeData) => {
                       if (import.meta.env.DEV) console.log('[LensCanvas] onEdgeSelect', { edgeId, hasEdgeData: !!edgeData, edgeData });
@@ -432,8 +511,6 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                       // Clear node selection when edge is selected
                       setSelectedNodeId(null);
                       setSelectedNodeData(null);
-                      // Auto-open inspector when selecting something (most users expect this)
-                      if (edgeId) setPanelType('object-inspector');
                     }}
                   />
                 </div>
@@ -455,14 +532,6 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                   selectedNodeData={selectedNodeData}
                   selectedEdgeId={selectedEdgeId}
                   selectedEdgeData={selectedEdgeData}
-                />
-
-                {/* Right buttons column - always visible */}
-                <HorizonPanelButtons
-                  panelType={panelType}
-                  onPanelTypeChange={setPanelType}
-                  selectedNodeId={selectedNodeId}
-                  selectedEdgeId={selectedEdgeId}
                 />
               </div>
             )}
