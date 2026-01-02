@@ -835,15 +835,14 @@ export function deriveLevelsTreeMetadata<T = any>(
   const HIERARCHY_TYPES = new Set([
     'OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'MANAGES', 'CONTROLS',
     'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
-    // Dependencies are inverted hierarchy usually (B depends on A -> A is parent/upstream)
-    // So A --DEPENDS_ON--> B means B is parent.
-    // If we traverse OUTGOING DEPENDS_ON: Rank - 1 (upstream)
-    // If we traverse INCOMING DEPENDS_ON: Rank + 1 (downstream)
+    // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
+    'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'
   ]);
   
   const INVERTED_HIERARCHY_TYPES = new Set([
     'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES',
-    'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN' // Context acts like upstream
+    // Context acts like upstream/parent
+    'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'
   ]);
 
   type Adj = { to: string; edgeType: string; dir: 'incoming' | 'outgoing' };
@@ -903,8 +902,9 @@ export function deriveLevelsTreeMetadata<T = any>(
         // If INCOMING (nid -> cur): Nid depends on Cur -> Nid is Child -> Rank + 1
         nextRank = (a.dir === 'outgoing') ? curRank - 1 : curRank + 1;
       } else {
-        // Fallback for unknown types: treat as downstream
-        nextRank = curRank + 1;
+        // Fallback for unknown types:
+        // Assume Outgoing = Downstream (Child), Incoming = Upstream (Parent).
+        nextRank = (a.dir === 'outgoing') ? curRank + 1 : curRank - 1;
       }
       
       visited.add(nid);
