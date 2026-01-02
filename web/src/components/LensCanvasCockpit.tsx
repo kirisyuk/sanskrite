@@ -26,6 +26,8 @@ import {
   layoutExpansionWithGroups,
   layoutFullGraph,
   layoutLinearFullGraph,
+  layoutLevelsFullGraph,
+  deriveLevelsTreeMetadata,
   rebuildGroupContainers,
   getSemanticGroup,
   getLinearSection,
@@ -801,11 +803,81 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const [showMiniMap, setShowMiniMap] = React.useState(false);
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
-  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear'>('freeform');
+  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear' | 'levels'>('freeform');
   const [showToolbarMenu, setShowToolbarMenu] = React.useState(false);
   const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [showHoverModeMenu, setShowHoverModeMenu] = React.useState(false);
   const hoverModeMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Levels (Hierarchical) expansion filter (controls which edge types are fetched on expand).
+  type LevelsExpandMode = 'all' | 'ownership' | 'dependencies' | 'context' | 'market' | 'influence' | 'balanced';
+  const [levelsExpandMode, setLevelsExpandMode] = React.useState<LevelsExpandMode>('ownership');
+  const [showLevelsExpandMenu, setShowLevelsExpandMenu] = React.useState(false);
+  const levelsExpandMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  const levelsExpandLabel = React.useCallback((m: LevelsExpandMode): string => {
+    switch (m) {
+      case 'ownership':
+        return 'Corporate structure';
+      case 'dependencies':
+        return 'Supply chain';
+      case 'context':
+        return 'Operating footprint';
+      case 'market':
+        return 'Competitive landscape';
+      case 'influence':
+        return 'Key stakeholders';
+      case 'balanced':
+        return 'Strategic overview';
+      case 'all':
+      default:
+        return 'Full network';
+    }
+  }, []);
+
+  const levelsExpandEdgeTypes = React.useMemo((): string[] => {
+    const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN'];
+    const DEPENDENCIES = [
+      'SUPPLIES_TO',
+      'PRODUCES',
+      'TRANSFORMS_INTO',
+      'DEPENDS_ON',
+      'REQUIRES',
+      'NEEDS',
+      'USES',
+      'CONSUMES',
+    ];
+    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES'];
+    const MARKET = [
+      'COMPETES_WITH',
+      'CONFLICTS_WITH',
+      'OPPOSES',
+      'PARTNERS_WITH',
+      'COOPERATES_WITH',
+      'RELATED_TO',
+      'SIMILAR_TO',
+      'LINKED_TO',
+    ];
+    const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
+
+    switch (levelsExpandMode) {
+      case 'ownership':
+        return OWNERSHIP;
+      case 'dependencies':
+        return DEPENDENCIES;
+      case 'context':
+        return CONTEXT;
+      case 'market':
+        return MARKET;
+      case 'influence':
+        return INFLUENCE;
+      case 'balanced':
+        return [...OWNERSHIP, ...CONTEXT, ...MARKET];
+      case 'all':
+      default:
+        return [];
+    }
+  }, [levelsExpandMode]);
 
   // Visual settings (toolbar modal)
   type VisualPreset = 'max' | 'balanced' | 'minimal' | 'custom';
@@ -919,6 +991,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   }, [showHoverModeMenu]);
 
+  // Levels expand filter dropdown interactions
+  React.useEffect(() => {
+    if (!showLevelsExpandMenu) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowLevelsExpandMenu(false);
+      }
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = levelsExpandMenuRef.current;
+      const target = e.target as globalThis.Node | null;
+      if (!el || !target) return;
+      if (el.contains(target)) return;
+      setShowLevelsExpandMenu(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [showLevelsExpandMenu]);
+
   // Add-node UI (toolbar)
   type HorizonSearchEntity = {
     id: string;
@@ -949,9 +1045,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Layout mode helpers - определяют, какую логику раскладки использовать
   const isFreeformLayout = layoutMode === 'freeform';
   const isLinearLayout = layoutMode === 'linear';
+  const isLevelsLayout = layoutMode === 'levels';
 
   // Prevent mode-switch relayout loops
-  const lastAppliedLayoutModeRef = React.useRef<'freeform' | 'linear' | null>(null);
+  const lastAppliedLayoutModeRef = React.useRef<'freeform' | 'linear' | 'levels' | null>(null);
 
   // When graph grows large and user didn't override perf mode, auto-disable heavy visuals once.
   React.useEffect(() => {
@@ -2299,6 +2396,51 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       nodesToRemove.add(nid);
     }
 
+    // CASCADE COLLAPSE: 
+    // If a removed node was itself expanded, we must recursively clear its expansion record.
+    // Otherwise, its children become orphans (claims remain > 0, but parent is gone).
+    // We do this by finding all removed nodes that have an entry in expansionsRef,
+    // and effectively "collapsing" them too (clearing their claims).
+    // Since this is recursive, we use a loop to process cascading removals.
+    
+    const processedRemovals = new Set<string>();
+    const pendingRemovals = Array.from(nodesToRemove);
+    
+    while (pendingRemovals.length > 0) {
+      const removingId = pendingRemovals.pop()!;
+      if (processedRemovals.has(removingId)) continue;
+      processedRemovals.add(removingId);
+      
+      // If this removed node was expanded, clear its record and dec counts for ITS children
+      if (expansionsRef.current.has(removingId)) {
+        const childRecord = expansionsRef.current.get(removingId)!;
+        
+        // Remove edges claimed by child
+        for (const eid of childRecord.claimedEdgeIds) {
+          if (baseEdgeIdsRef.current.has(eid)) continue;
+          const cnt = decCount(edgeClaimCountRef.current, eid);
+          if (cnt === 0) edgesToRemove.add(eid);
+        }
+        
+        // Remove nodes claimed by child
+        for (const nid of childRecord.claimedNodeIds) {
+          if (nid === removingId) continue; // already removing
+          if (baseNodeIdsRef.current.has(nid)) continue;
+          const cnt = decCount(nodeClaimCountRef.current, nid);
+          if (cnt === 0) {
+            if (!nodesToRemove.has(nid)) {
+              nodesToRemove.add(nid);
+              pendingRemovals.push(nid);
+            }
+          }
+        }
+        
+        // Cleanup refs
+        expansionsRef.current.delete(removingId);
+        expandedNodesRef.current.delete(removingId);
+      }
+    }
+
     if (nodesToRemove.size > 0) {
       nextNodes = nextNodes.filter((n) => !nodesToRemove.has(n.id));
       // Also drop any edges that now dangle.
@@ -2334,6 +2476,31 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       if (isLinearLayout) {
         const arranged = await layoutLinearFullGraph(fragmentNodes as any, nextEdges as any, {
+          direction: 'DOWN',
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        });
+        const withCallbacks = arranged.map((node) => ({
+          ...node,
+          data: { ...(node.data as any), onLoadRelated: invokeLoadRelated, onCollapse: invokeCollapse, onScopeScout: invokeScopeScout },
+        }));
+        const updatedEdges = recalculateLinearHandles(nextEdges, withCallbacks);
+        setNodes(withCallbacks as any);
+        setEdges(updatedEdges as any);
+        return;
+      }
+      if (isLevelsLayout) {
+        const rootForLevels = selectedNodeId || fragmentNodes[0]?.id || '';
+        const normalized = deriveLevelsTreeMetadata(
+          fragmentNodes as any,
+          nextEdges as any,
+          rootForLevels,
+          levelsExpandEdgeTypes.length > 0 ? levelsExpandEdgeTypes : undefined,
+        );
+        const arranged = await layoutLevelsFullGraph(normalized as any, nextEdges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -2389,6 +2556,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setNodes,
     setEdges,
     isLinearLayout,
+    isLevelsLayout,
     isFreeformLayout,
     setGridState,
     recalculateLinearHandles,
@@ -2462,7 +2630,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     );
 
     try {
-      const dependencies = await api.getFragmentDependencies(fragmentId, { direction: 'both' });
+      const dependencies = await api.getFragmentDependencies(
+        fragmentId,
+        isLevelsLayout
+          ? {
+              direction: 'both',
+              // In Levels mode we can request the backend to pre-filter by edge types (focus filter)
+              ...(levelsExpandEdgeTypes.length > 0 ? { edgeTypes: levelsExpandEdgeTypes } : {}),
+              includeFragments: true,
+              // Default limits for Hierarchical expansion (4 quadrants × 18)
+              maxNeighbors: 72,
+              maxPerType: 18,
+              limit: 500,
+            }
+          : { direction: 'both' }
+      );
       dbg('[Cockpit] Loaded dependencies for fragment:', fragmentId, dependencies);
 
       const depEdges: any[] = Array.isArray(dependencies?.edges) ? dependencies.edges : [];
@@ -2485,13 +2667,37 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         if (e?.targetFragmentId && e.targetFragmentId !== fragmentId) relatedFragmentIds.add(String(e.targetFragmentId).trim());
       }
 
-      const fragmentPromises = Array.from(relatedFragmentIds).map((id) =>
-        api.getHorizonFragment(id).catch((err) => {
-          console.warn('[Cockpit] Failed to load fragment', id, err);
-          return null;
-        }),
-      );
-      const relatedFragments = (await Promise.all(fragmentPromises)).filter((f) => f !== null) as any[];
+      const fragmentsFromDeps = Array.isArray((dependencies as any)?.fragments) ? ((dependencies as any).fragments as any[]) : null;
+      const byId = new Map<string, any>();
+      if (fragmentsFromDeps) {
+        for (const f of fragmentsFromDeps) {
+          const fid = norm(f?.id || '');
+          if (!fid) continue;
+          if (!byId.has(fid)) byId.set(fid, f);
+        }
+      }
+
+      const missingIds: string[] = [];
+      for (const id of relatedFragmentIds) {
+        if (!byId.has(id)) missingIds.push(id);
+      }
+
+      if (missingIds.length > 0) {
+        const fragmentPromises = missingIds.map((id) =>
+          api.getHorizonFragment(id).catch((err) => {
+            console.warn('[Cockpit] Failed to load fragment', id, err);
+            return null;
+          }),
+        );
+        const loaded = (await Promise.all(fragmentPromises)).filter((f) => f !== null) as any[];
+        for (const f of loaded) {
+          const fid = norm(f?.id || '');
+          if (!fid) continue;
+          if (!byId.has(fid)) byId.set(fid, f);
+        }
+      }
+
+      const relatedFragments = Array.from(byId.values());
       dbg('[Cockpit] Loaded related fragments:', relatedFragments.length);
 
       // Получаем актуальное состояние узлов
@@ -2542,28 +2748,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       }
 
-      // Also check existing edges on canvas to catch relations not returned by dependencies API
-      // This ensures visual consistency: if there's an edge, we should group if possible
-      // const currentEdges = (reactFlowInstanceRef.current as any)?.getEdges?.() || []; // Variable already declared above
-      for (const e of currentEdges) {
-         if (norm(e.source) === fragmentId && !expandedNodesRef.current.has(norm(e.target))) {
-             // Outgoing edge from current node to existing target
-             const tId = norm(e.target);
-             const targetNode = nodeById.get(tId) || nodeByFragmentId.get(tId);
-             if (targetNode && !targetNode.data?.parentFragmentId) {
-                 existingRelatedIds.add(tId);
-                 // We will need edge type later, adding to depEdges-like structure would be complex here,
-                 // but we can add to fragmentEdgeType map directly if we move this logic after map init
-             }
-         }
-         if (norm(e.target) === fragmentId && !expandedNodesRef.current.has(norm(e.source))) {
-             // Incoming edge from existing source to current node
-             const sId = norm(e.source);
-             const sourceNode = nodeById.get(sId) || nodeByFragmentId.get(sId);
-             if (sourceNode && !sourceNode.data?.parentFragmentId) {
-                 existingRelatedIds.add(sId);
-             }
-         }
+      // Also check existing edges on canvas to catch relations not returned by dependencies API.
+      // In Levels mode we intentionally keep expansions strict to the backend filter (edgeTypes),
+      // so we skip this "supplemental" path to avoid pulling unrelated nodes into the hierarchy.
+      if (!isLevelsLayout) {
+        // const currentEdges = (reactFlowInstanceRef.current as any)?.getEdges?.() || []; // Variable already declared above
+        for (const e of currentEdges) {
+          if (norm(e.source) === fragmentId && !expandedNodesRef.current.has(norm(e.target))) {
+            // Outgoing edge from current node to existing target
+            const tId = norm(e.target);
+            const targetNode = nodeById.get(tId) || nodeByFragmentId.get(tId);
+            if (targetNode && !targetNode.data?.parentFragmentId) {
+              existingRelatedIds.add(tId);
+            }
+          }
+          if (norm(e.target) === fragmentId && !expandedNodesRef.current.has(norm(e.source))) {
+            // Incoming edge from existing source to current node
+            const sId = norm(e.source);
+            const sourceNode = nodeById.get(sId) || nodeByFragmentId.get(sId);
+            if (sourceNode && !sourceNode.data?.parentFragmentId) {
+              existingRelatedIds.add(sId);
+            }
+          }
+        }
       }
 
       if (newFragmentsUnsorted.length === 0 && existingRelatedIds.size === 0) {
@@ -2612,7 +2819,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           // === LINEAR LAYOUT SPECIAL LOGIC ===
           // In Linear mode, incoming dependency edges (neighbor DEPENDS_ON central) MUST determine placement.
           // These nodes should ALWAYS go to BOTTOM row, regardless of other edges they might have.
-          if (layoutMode === 'linear') {
+          if (layoutMode === 'linear' || layoutMode === 'levels') {
             // 1. If EXISTING is an incoming dependency, NEVER override it
             if (existingDir === 'incoming' && isIncomingDependencyType(existingType)) {
               // debug logs removed
@@ -2660,8 +2867,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       }
 
-      // Also populate edge info from current canvas edges if missing from API deps
-      for (const e of currentEdges) {
+      // Also populate edge info from current canvas edges if missing from API deps.
+      // In Levels mode, keep behavior strict to the backend response.
+      if (!isLevelsLayout) for (const e of currentEdges) {
         const s = norm(e.source);
         const t = norm(e.target);
         const edgeType = e.data?.edgeType || e.type || '';
@@ -2681,7 +2889,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
 
       // Log final edge info for all neighbors
-      if (layoutMode === 'linear') {
+      if (layoutMode === 'linear' || layoutMode === 'levels') {
         // debug logs removed
       }
 
@@ -2911,7 +3119,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                       handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
                }
           }
-        } else if (isLinearLayout) {
+        } else if (isLinearLayout || isLevelsLayout) {
           // Linear layout: специальная логика для нижних групп
           // Проверяем, находятся ли ноды в одном grid
           const isSameGrid = 
@@ -3217,6 +3425,47 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
         // Apply Linear handle rules using the freshly updated node data (edgeTypeFromParent/directionFromParent)
         linearEdgesAfterLayout = recalculateLinearHandles(mergedEdges, layoutedNodes);
+      } else if (isLevelsLayout) {
+        // Levels layout: re-layout the whole visible graph (like Linear) but without group containers.
+        const mergedEdges: Edge[] = (() => {
+          const out: Edge[] = [];
+          const seen = new Set<string>();
+          for (const e of [...currentEdges, ...newEdges]) {
+            if (!e) continue;
+            const id = String((e as any).id || '');
+            if (id) {
+              if (seen.has(id)) continue;
+              seen.add(id);
+              out.push(e);
+              continue;
+            }
+            const t = String((e as any).data?.edgeType || (e as any).label || (e as any).type || 'UNKNOWN');
+            const k = `${(e as any).source}::${(e as any).target}::${t}`;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push({ ...(e as any), id: `edge-${k}` });
+          }
+          return out;
+        })();
+
+        const fragmentNodes = [...updatedCurrentNodes, ...newNodes].filter((n) => !(n?.data as any)?.isGroup);
+        // In Levels mode, build a stable spanning tree from the expanded node as the "focus root".
+        // This prevents "lost layers" when previously-loaded nodes were flat (depth=0 for everything).
+        const normalized = deriveLevelsTreeMetadata(
+          fragmentNodes as any,
+          mergedEdges as any,
+          fragmentId,
+          levelsExpandEdgeTypes.length > 0 ? levelsExpandEdgeTypes : undefined,
+        );
+        layoutedNodes = await layoutLevelsFullGraph(normalized as any, mergedEdges as any, {
+          direction: 'DOWN',
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        });
+        linearEdgesAfterLayout = recalculateLinearHandles(mergedEdges, layoutedNodes);
       } else {
         // Fallback: используем freeform
         layoutedNodes = await layoutExpansionWithGroups(
@@ -3276,7 +3525,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       // Обновляем состояние
       setNodes(finalNodes);
-      if (isLinearLayout && linearEdgesAfterLayout) {
+      if ((isLinearLayout || isLevelsLayout) && linearEdgesAfterLayout) {
         setEdges(linearEdgesAfterLayout as any);
       } else {
         setEdges((prev) => {
@@ -3470,7 +3719,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     loadingFragmentId,
     layoutMode,
     isLinearLayout,
+    isLevelsLayout,
     isFreeformLayout,
+    levelsExpandEdgeTypes,
     gridState,
     setEdges,
     setNodes,
@@ -3917,6 +4168,39 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         // Recalculate edge handles for Linear layout
         const updatedEdges = recalculateLinearHandles(edges, finalFragments);
         setEdges(updatedEdges);
+      } else if (isLevelsLayout) {
+        // Hierarchical / Levels layout: depth-aware quadrants (no container nodes yet)
+        const rootForLevels = selectedNodeId || fragmentNodes[0]?.id || '';
+        const normalized = deriveLevelsTreeMetadata(
+          fragmentNodes as any,
+          edges as any,
+          rootForLevels,
+          levelsExpandEdgeTypes.length > 0 ? levelsExpandEdgeTypes : undefined,
+        );
+        arrangedFragments = await layoutLevelsFullGraph(normalized as any, edges, {
+          direction: 'DOWN',
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        });
+
+        const finalFragments = arrangedFragments.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            onLoadRelated: invokeLoadRelated,
+            onCollapse: invokeCollapse,
+            onScopeScout: invokeScopeScout,
+          },
+        }));
+
+        withGroups = finalFragments;
+
+        // Use linear handle heuristics (top/bottom quadrants) for now.
+        const updatedEdges = recalculateLinearHandles(edges, finalFragments);
+        setEdges(updatedEdges);
       } else {
         // Fallback: используем freeform
         arrangedFragments = await layoutFullGraph(fragmentNodes, edges, {
@@ -3969,7 +4253,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } finally {
       setArranging(false);
     }
-  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout]);
+  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout]);
 
   // When switching layout mode, re-layout the currently visible graph.
   React.useEffect(() => {
@@ -4003,6 +4287,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           nextNodes = laidOut as any;
           
           // Recalculate edge handles for Linear layout based on node positions
+          nextEdges = recalculateLinearHandles(nextEdges, nextNodes);
+        } else if (isLevelsLayout) {
+          const laidOut = await layoutLevelsFullGraph(fragmentNodes, nextEdges, {
+            direction: 'DOWN',
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+            nodeSpacing: ELK_NODE_SPACING,
+            layerSpacing: ELK_LAYER_SPACING,
+            maxChildRows: ELK_MAX_CHILD_ROWS,
+          });
+          nextNodes = laidOut as any;
+
+          // Use linear handle heuristics for top/bottom quadrants.
           nextEdges = recalculateLinearHandles(nextEdges, nextNodes);
         } else {
           // Freeform layout: run ELK on fragments then rebuild semantic-group containers.
@@ -4784,6 +5081,105 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         )}
       </div>
 
+      {/* Levels: expansion filter (what edge types are fetched on expand) */}
+      {isLevelsLayout && (
+        <div ref={levelsExpandMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+          <button
+            type="button"
+            onClick={() => setShowLevelsExpandMenu((v) => !v)}
+            title="Expansion filter (edge types fetched on expand)"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 8px',
+              borderRadius: 10,
+              border: '1px solid var(--border-subtle)',
+              background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.40)',
+              color: 'var(--text-heading)',
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 750,
+              lineHeight: 1,
+            }}
+          >
+            <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 800 }}>Expand:</span>
+            <span>{levelsExpandLabel(levelsExpandMode)}</span>
+            <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.ChevronDown}</span>
+          </button>
+
+          {showLevelsExpandMenu && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                right: 0,
+                minWidth: 240,
+                borderRadius: 12,
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-elevated)',
+                boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.55)' : '0 14px 40px rgba(0,0,0,0.18)',
+                overflow: 'hidden',
+                zIndex: 1000,
+              }}
+            >
+              <div
+                style={{
+                  padding: '10px 12px',
+                  fontSize: 11,
+                  color: 'var(--text-secondary-strong)',
+                  borderBottom: '1px solid var(--border-subtle)',
+                }}
+              >
+                Expansion filter
+              </div>
+              {(
+                [
+                  { key: 'ownership', label: 'Corporate structure', hint: 'Holdings, subsidiaries, and investment portfolio' },
+                  { key: 'dependencies', label: 'Supply chain', hint: 'Upstream suppliers and critical inputs' },
+                  { key: 'context', label: 'Operating footprint', hint: 'Markets, jurisdictions, and regulatory environment' },
+                  { key: 'market', label: 'Competitive landscape', hint: 'Competitors, partners, and market positioning' },
+                  { key: 'influence', label: 'Key stakeholders', hint: 'Decision-makers and influencing entities' },
+                  { key: 'balanced', label: 'Strategic overview', hint: 'Structure, footprint, and competitive position' },
+                  { key: 'all', label: 'Full network', hint: 'Complete relationship map' },
+                ] as Array<{ key: LevelsExpandMode; label: string; hint: string }>
+              ).map((opt) => {
+                const active = levelsExpandMode === opt.key;
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => {
+                      setLevelsExpandMode(opt.key);
+                      setShowLevelsExpandMenu(false);
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: 'none',
+                      background: active ? 'var(--white-10)' : 'transparent',
+                      color: 'var(--text-heading)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800 }}>{opt.label}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{opt.hint}</div>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>{active ? '✓' : ''}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       <div ref={toolbarMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <IconButton
           onClick={() => setShowToolbarMenu((v: boolean) => !v)}
@@ -4816,8 +5212,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 Layout
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                {(['freeform', 'linear'] as const).map((m) => {
+                {(['freeform', 'linear', 'levels'] as const).map((m) => {
                   const active = layoutMode === m;
+                  const label = m === 'levels' ? 'Hierarchical' : (m === 'freeform' ? 'Freeform' : 'Linear');
                   return (
         <button
                       key={m}
@@ -4839,7 +5236,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                         textTransform: 'capitalize',
                       }}
                     >
-                      {m}
+                      {label}
                     </button>
                   );
                 })}

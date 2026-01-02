@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -392,6 +394,20 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	if direction == "" {
 		direction = "both"
 	}
+
+	// Optional semantic filtering (does NOT change default behavior unless provided).
+	// semantic=upstream|downstream|both
+	// - upstream: "influences/determines the center" (owners, prerequisites, context, peers)
+	// - downstream: "determined by the center" (subsidiaries, outputs, influenced targets)
+	semantic := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("semantic")))
+	if semantic == "" {
+		semantic = "both"
+	}
+	if semantic != "both" && semantic != "upstream" && semantic != "downstream" {
+		http.Error(w, "Invalid semantic parameter", http.StatusBadRequest)
+		return
+	}
+
 	// Default behavior: only return dependencies to fragments that already have indexPaths populated.
 	// This keeps UI expansion bounded on partially backfilled datasets.
 	includeUnindexedStr := strings.TrimSpace(r.URL.Query().Get("includeUnindexed"))
@@ -404,19 +420,99 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 		edgeType = &dt
 	}
 
+	// Optional multi-type filter. Supports:
+	// - edgeTypes=OWNS,CONTROLS
+	// - edgeType=OWNS&edgeType=CONTROLS
+	// - edgeType[]=OWNS&edgeType[]=CONTROLS (axios default)
+	edgeTypesRaw := strings.TrimSpace(r.URL.Query().Get("edgeTypes"))
+	var edgeTypes []string
+	if edgeTypesRaw != "" {
+		for _, p := range strings.Split(edgeTypesRaw, ",") {
+			t := strings.TrimSpace(p)
+			if t != "" {
+				edgeTypes = append(edgeTypes, strings.ToUpper(t))
+			}
+		}
+	}
+	if len(edgeTypes) == 0 {
+		if vals, ok := r.URL.Query()["edgeType"]; ok && len(vals) > 0 {
+			for _, v := range vals {
+				t := strings.TrimSpace(v)
+				if t != "" {
+					edgeTypes = append(edgeTypes, strings.ToUpper(t))
+				}
+			}
+		}
+	}
+	if len(edgeTypes) == 0 {
+		if vals, ok := r.URL.Query()["edgeType[]"]; ok && len(vals) > 0 {
+			for _, v := range vals {
+				t := strings.TrimSpace(v)
+				if t != "" {
+					edgeTypes = append(edgeTypes, strings.ToUpper(t))
+				}
+			}
+		}
+	}
+
+	includeFragmentsStr := strings.TrimSpace(r.URL.Query().Get("includeFragments"))
+	includeFragments := includeFragmentsStr == "1" || strings.EqualFold(includeFragmentsStr, "true")
+
+	includeCountsStr := strings.TrimSpace(r.URL.Query().Get("includeCounts"))
+	includeCounts := includeCountsStr == "1" || strings.EqualFold(includeCountsStr, "true")
+
+	// Optional limits (only applied when explicitly provided).
+	// If omitted, behavior stays the same as legacy (no budget trimming).
+	maxNeighbors := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("maxNeighbors")); raw != "" {
+		if v, perr := strconv.Atoi(raw); perr == nil && v > 0 {
+			maxNeighbors = v
+		}
+	}
+	maxEdges := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("maxEdges")); raw != "" {
+		if v, perr := strconv.Atoi(raw); perr == nil && v > 0 {
+			maxEdges = v
+		}
+	}
+	maxPerType := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("maxPerType")); raw != "" {
+		if v, perr := strconv.Atoi(raw); perr == nil && v > 0 {
+			maxPerType = v
+		}
+	}
+
+	limit := 100
+	if limStr := strings.TrimSpace(r.URL.Query().Get("limit")); limStr != "" {
+		if limParsed, perr := strconv.Atoi(limStr); perr == nil && limParsed > 0 {
+			limit = limParsed
+		}
+	}
+	// When using semantic or multi-type filtering, fetch a larger candidate set by default
+	// (unless caller explicitly provided a limit), to reduce bias from store limits.
+	if strings.TrimSpace(r.URL.Query().Get("limit")) == "" && (semantic != "both" || len(edgeTypes) > 0 || maxNeighbors > 0 || maxEdges > 0 || maxPerType > 0) {
+		limit = 500
+	}
+
 	var edges []*models.DependencyEdge
 	var err error
 
 	tenantID := "global" // HorizonFragment всегда глобальные
 
+	// If semantic filtering is used, we need both raw directions to evaluate semantics (because some types invert).
+	// Do not change default behavior when semantic is not specified (semantic defaults to "both").
+	if semantic != "both" && direction != "both" {
+		direction = "both"
+	}
+
 	switch direction {
 	case "outgoing":
-		edges, err = h.service.Edges().ListBySource(r.Context(), tenantID, fragmentID, edgeType, 100)
+		edges, err = h.service.Edges().ListBySource(r.Context(), tenantID, fragmentID, edgeType, limit)
 	case "incoming":
-		edges, err = h.service.Edges().ListByTarget(r.Context(), tenantID, fragmentID, edgeType, 100)
+		edges, err = h.service.Edges().ListByTarget(r.Context(), tenantID, fragmentID, edgeType, limit)
 	case "both":
-		outgoing, err1 := h.service.Edges().ListBySource(r.Context(), tenantID, fragmentID, edgeType, 100)
-		incoming, err2 := h.service.Edges().ListByTarget(r.Context(), tenantID, fragmentID, edgeType, 100)
+		outgoing, err1 := h.service.Edges().ListBySource(r.Context(), tenantID, fragmentID, edgeType, limit)
+		incoming, err2 := h.service.Edges().ListByTarget(r.Context(), tenantID, fragmentID, edgeType, limit)
 		if err1 != nil {
 			err = err1
 		} else if err2 != nil {
@@ -432,6 +528,100 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Apply optional multi-type filter (in-memory), while keeping legacy single-type behavior as-is.
+	if len(edgeTypes) > 0 && len(edges) > 0 {
+		allow := make(map[string]struct{}, len(edgeTypes))
+		for _, t := range edgeTypes {
+			allow[strings.ToUpper(strings.TrimSpace(t))] = struct{}{}
+		}
+		filtered := make([]*models.DependencyEdge, 0, len(edges))
+		for _, e := range edges {
+			if e == nil {
+				continue
+			}
+			et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+			if _, ok := allow[et]; ok {
+				filtered = append(filtered, e)
+			}
+		}
+		edges = filtered
+	}
+
+	// Apply semantic direction filter if requested.
+	// Raw direction is relative to the requested fragmentID:
+	// - outgoing: fragmentID -> neighbor
+	// - incoming: neighbor -> fragmentID
+	if semantic != "both" && len(edges) > 0 {
+		// Types where semantic meaning is reversed relative to raw direction:
+		// - "A depends on B" (A->B) => B is upstream relative to A
+		// - "A operates in B" (A->B) => B is upstream context relative to A
+		reverse := map[string]struct{}{
+			"DEPENDS_ON":      {},
+			"REQUIRES":        {},
+			"NEEDS":           {},
+			"USES":            {},
+			"CONSUMES":        {},
+			"LOCATED_IN":      {},
+			"OPERATES_IN":     {},
+			"BASED_IN":        {},
+			"HEADQUARTERED_IN": {},
+		}
+		// Symmetric relations: always treated as upstream environment by default.
+		symmetric := map[string]struct{}{
+			"COMPETES_WITH":  {},
+			"CONFLICTS_WITH": {},
+			"OPPOSES":        {},
+			"PARTNERS_WITH":  {},
+			"COOPERATES_WITH": {},
+			"RELATED_TO":     {},
+			"SIMILAR_TO":     {},
+			"LINKED_TO":      {},
+		}
+
+		filtered := make([]*models.DependencyEdge, 0, len(edges))
+		for _, e := range edges {
+			if e == nil {
+				continue
+			}
+			et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+
+			rawDir := "" // incoming|outgoing
+			if strings.TrimSpace(e.SourceFragmentID) == fragmentID {
+				rawDir = "outgoing"
+			} else if strings.TrimSpace(e.TargetFragmentID) == fragmentID {
+				rawDir = "incoming"
+			} else {
+				// Shouldn't happen, but keep edge (best-effort).
+				filtered = append(filtered, e)
+				continue
+			}
+
+			sem := "downstream"
+			if _, ok := symmetric[et]; ok {
+				sem = "upstream"
+			} else if _, ok := reverse[et]; ok {
+				// Reverse mapping
+				if rawDir == "outgoing" {
+					sem = "upstream"
+				} else {
+					sem = "downstream"
+				}
+			} else {
+				// Normal mapping
+				if rawDir == "incoming" {
+					sem = "upstream"
+				} else {
+					sem = "downstream"
+				}
+			}
+
+			if sem == semantic {
+				filtered = append(filtered, e)
+			}
+		}
+		edges = filtered
 	}
 
 	// Optional lens-aware filtering:
@@ -457,6 +647,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	// Filter out edges pointing to irrelevant or unindexed neighbor fragments (default), to avoid exploding graphs.
 	// - If filterPaths are provided by lens, keep only neighbors whose indexPaths intersect filterPaths.
 	// - Else, keep only neighbors with non-empty indexPaths.
+	var neighborMap map[string]*models.HorizonFragment
 	if !includeUnindexed && len(edges) > 0 {
 		neighborIDs := make([]string, 0, len(edges))
 		for _, e := range edges {
@@ -483,7 +674,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			}
 		}
 
-		neighborMap, ferr := h.service.Fragments().GetMany(r.Context(), neighborIDs)
+		nm, ferr := h.service.Fragments().GetMany(r.Context(), neighborIDs)
 		if ferr == nil {
 			filtered := make([]*models.DependencyEdge, 0, len(edges))
 			for _, e := range edges {
@@ -501,7 +692,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 					filtered = append(filtered, e)
 					continue
 				}
-				n := neighborMap[neighborID]
+				n := nm[neighborID]
 				if n == nil {
 					continue
 				}
@@ -518,12 +709,244 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 				}
 			}
 			edges = filtered
+			neighborMap = nm
+		}
+	}
+
+	// Apply optional limits (only when explicitly provided).
+	beforeTotal := len(edges)
+	beforeByType := map[string]int{}
+	if includeCounts && beforeTotal > 0 {
+		for _, e := range edges {
+			if e == nil {
+				continue
+			}
+			et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+			if et == "" {
+				et = "OTHER"
+			}
+			beforeByType[et]++
+		}
+	}
+
+	if (maxNeighbors > 0 || maxEdges > 0 || maxPerType > 0) && len(edges) > 0 {
+		// Sort edges by "importance" so budgets keep the most meaningful edges.
+		// Currently: higher criticality first, then newer edges.
+		sort.SliceStable(edges, func(i, j int) bool {
+			ei := edges[i]
+			ej := edges[j]
+			if ei == nil && ej == nil {
+				return false
+			}
+			if ei == nil {
+				return false
+			}
+			if ej == nil {
+				return true
+			}
+			ci := ei.Properties.Criticality
+			cj := ej.Properties.Criticality
+			if ci != cj {
+				return ci > cj
+			}
+			ti := ei.Metadata.LastUpdatedAt
+			tj := ej.Metadata.LastUpdatedAt
+			if !ti.Equal(tj) {
+				return ti.After(tj)
+			}
+			return ei.ID < ej.ID
+		})
+
+		// 1) Neighbor budget (unique neighbors relative to fragmentID)
+		if maxNeighbors > 0 {
+			type nScore struct {
+				id       string
+				score    float64
+				firstIdx int
+			}
+			best := map[string]nScore{}
+			for idx, e := range edges {
+				if e == nil {
+					continue
+				}
+				neighborID := ""
+				if strings.TrimSpace(e.SourceFragmentID) == fragmentID {
+					neighborID = strings.TrimSpace(e.TargetFragmentID)
+				} else if strings.TrimSpace(e.TargetFragmentID) == fragmentID {
+					neighborID = strings.TrimSpace(e.SourceFragmentID)
+				}
+				if neighborID == "" {
+					continue
+				}
+				score := e.Properties.Criticality
+				if cur, ok := best[neighborID]; ok {
+					if score > cur.score {
+						cur.score = score
+						best[neighborID] = cur
+					}
+					continue
+				}
+				best[neighborID] = nScore{id: neighborID, score: score, firstIdx: idx}
+			}
+			neighbors := make([]nScore, 0, len(best))
+			for _, v := range best {
+				neighbors = append(neighbors, v)
+			}
+			sort.SliceStable(neighbors, func(i, j int) bool {
+				if neighbors[i].score != neighbors[j].score {
+					return neighbors[i].score > neighbors[j].score
+				}
+				return neighbors[i].firstIdx < neighbors[j].firstIdx
+			})
+			if len(neighbors) > maxNeighbors {
+				neighbors = neighbors[:maxNeighbors]
+			}
+			allowNeighbor := map[string]struct{}{}
+			for _, n := range neighbors {
+				allowNeighbor[n.id] = struct{}{}
+			}
+			filtered := make([]*models.DependencyEdge, 0, len(edges))
+			for _, e := range edges {
+				if e == nil {
+					continue
+				}
+				neighborID := ""
+				if strings.TrimSpace(e.SourceFragmentID) == fragmentID {
+					neighborID = strings.TrimSpace(e.TargetFragmentID)
+				} else if strings.TrimSpace(e.TargetFragmentID) == fragmentID {
+					neighborID = strings.TrimSpace(e.SourceFragmentID)
+				} else {
+					// keep best-effort
+					filtered = append(filtered, e)
+					continue
+				}
+				if neighborID == "" {
+					continue
+				}
+				if _, ok := allowNeighbor[neighborID]; ok {
+					filtered = append(filtered, e)
+				}
+			}
+			edges = filtered
+		}
+
+		// 2) Per-type edge budget
+		if maxPerType > 0 && len(edges) > 0 {
+			used := map[string]int{}
+			filtered := make([]*models.DependencyEdge, 0, len(edges))
+			for _, e := range edges {
+				if e == nil {
+					continue
+				}
+				et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+				if et == "" {
+					et = "OTHER"
+				}
+				if used[et] >= maxPerType {
+					continue
+				}
+				used[et]++
+				filtered = append(filtered, e)
+			}
+			edges = filtered
+		}
+
+		// 3) Total edge budget
+		if maxEdges > 0 && len(edges) > maxEdges {
+			edges = edges[:maxEdges]
+		}
+	}
+
+	// includeFragments: fetch neighbor fragments (best-effort) for the final edge list.
+	var fragments []interface{}
+	if includeFragments && len(edges) > 0 {
+		uniq := make(map[string]struct{}, len(edges))
+		for _, e := range edges {
+			if e == nil {
+				continue
+			}
+			if strings.TrimSpace(e.SourceFragmentID) == fragmentID {
+				if tid := strings.TrimSpace(e.TargetFragmentID); tid != "" {
+					uniq[tid] = struct{}{}
+				}
+			} else if strings.TrimSpace(e.TargetFragmentID) == fragmentID {
+				if sid := strings.TrimSpace(e.SourceFragmentID); sid != "" {
+					uniq[sid] = struct{}{}
+				}
+			}
+		}
+		ids := make([]string, 0, len(uniq))
+		for id := range uniq {
+			ids = append(ids, id)
+		}
+
+		// Reuse neighborMap from indexPaths filtering when possible; otherwise fetch.
+		if neighborMap == nil {
+			if nm, ferr := h.service.Fragments().GetMany(r.Context(), ids); ferr == nil {
+				neighborMap = nm
+			}
+		}
+		if neighborMap != nil {
+			fragments = make([]interface{}, 0, len(ids))
+			for _, id := range ids {
+				if n := neighborMap[id]; n != nil {
+					fragments = append(fragments, n)
+				}
+			}
+		}
+	}
+
+	// Optional counts payload (only when requested).
+	var counts interface{} = nil
+	if includeCounts {
+		afterTotal := len(edges)
+		afterByType := map[string]int{}
+		for _, e := range edges {
+			if e == nil {
+				continue
+			}
+			et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+			if et == "" {
+				et = "OTHER"
+			}
+			afterByType[et]++
+		}
+		byType := map[string]interface{}{}
+		seenTypes := map[string]struct{}{}
+		for t := range beforeByType {
+			seenTypes[t] = struct{}{}
+		}
+		for t := range afterByType {
+			seenTypes[t] = struct{}{}
+		}
+		for t := range seenTypes {
+			b := beforeByType[t]
+			a := afterByType[t]
+			byType[t] = map[string]interface{}{
+				"before":  b,
+				"returned": a,
+				"hasMore": b > a,
+			}
+		}
+		counts = map[string]interface{}{
+			"total": map[string]interface{}{
+				"before":  beforeTotal,
+				"returned": afterTotal,
+				"hasMore": beforeTotal > afterTotal,
+			},
+			"byType": byType,
 		}
 	}
 
 	response := map[string]interface{}{
 		"edges": edges,
 		"total": len(edges),
+	}
+	if includeFragments {
+		response["fragments"] = fragments
+	}
+	if includeCounts {
+		response["counts"] = counts
 	}
 
 	w.Header().Set("Content-Type", "application/json")

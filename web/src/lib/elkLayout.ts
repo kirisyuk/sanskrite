@@ -495,6 +495,508 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
 }
 
 /**
+ * "Hierarchical / Levels" layout (product-first).
+ *
+ * Similar to Linear in semantics (4 quadrants), but extended by depth:
+ * - depth===0 nodes are placed in the central row
+ * - depth>0 nodes are placed into TOP/BOTTOM bands by quadrant *and* level (=depth)
+ *
+ * NOTE: This layout intentionally DOES NOT create group container nodes yet.
+ * It is a flat layout (no parentId) to keep interaction consistent and to avoid blocking clicks.
+ */
+export async function layoutLevelsFullGraph<T = any>(
+  nodes: Node<T>[],
+  _edges: Edge[],
+  options: LayoutOptions_Custom = {},
+): Promise<Node<T>[]> {
+  if (nodes.length === 0) return nodes;
+
+  // Flat graph: strip parent/extent props to avoid ReactFlow parent linkage issues.
+  const flatNodes: Node<T>[] = nodes.map((n) => {
+    const out: any = { ...n };
+    delete out.parentId;
+    delete out.parentNode;
+    delete out.extent;
+    delete out.expandParent;
+    return out as Node<T>;
+  });
+
+  const {
+    nodeWidth = DEFAULT_NODE_WIDTH,
+    nodeHeight = DEFAULT_NODE_HEIGHT,
+    nodeSpacing = 60,
+    layerSpacing = 150,
+  } = options;
+
+  // Determine central nodes (depth === 0). If none are marked, fall back to "no parent" roots.
+  let centralIds = new Set<string>(
+    flatNodes.filter((n) => (n.data as any)?.depth === 0).map((n) => n.id),
+  );
+  if (centralIds.size === 0) {
+    for (const n of flatNodes) {
+      if (!(n.data as any)?.parentFragmentId) centralIds.add(n.id);
+    }
+  }
+  if (centralIds.size === 0) centralIds = new Set([flatNodes[0]!.id]);
+
+  const central: Node<T>[] = [];
+  const others: Node<T>[] = [];
+  for (const n of flatNodes) {
+    if (centralIds.has(n.id)) central.push(n);
+    else others.push(n);
+  }
+
+  // Stable ordering for central row: keep existing x order if available.
+  const centralSorted = [...central].sort((a, b) => (a.position?.x ?? 0) - (b.position?.x ?? 0));
+  const centralWidth = centralSorted.length * nodeWidth + Math.max(0, centralSorted.length - 1) * nodeSpacing;
+  const centralStartX = -centralWidth / 2;
+
+  const pos = new Map<string, { x: number; y: number }>();
+
+  // Build lookup map for roots by both node id and fragmentId.
+  const rootAnchorById = new Map<string, string>(); // nodeId|fragmentId -> centralNodeId
+  centralSorted.forEach((n, i) => {
+    const x = centralStartX + i * (nodeWidth + nodeSpacing);
+    pos.set(n.id, { x, y: 0 });
+    rootAnchorById.set(String(n.id), n.id);
+    const fid = (n.data as any)?.fragmentId;
+    if (fid) rootAnchorById.set(String(fid), n.id);
+  });
+
+  // Group others by (root, quadrant, level)
+  type GroupKey = string;
+  const groups = new Map<GroupKey, Node<T>[]>();
+
+  const norm = (v: any) => String(v || '').trim();
+  const getRootId = (n: Node<T>) => {
+    const d: any = n.data;
+    const rid = norm(d?.rootFragmentId) || norm(d?.parentFragmentId) || norm(d?.fragmentId) || norm(n.id);
+    return rootAnchorById.get(rid) || centralSorted[0]!.id;
+  };
+
+  // 1. Group nodes by (root, quadrant, level)
+  const maxLevel = new Map<string, number>(); // rootId -> max depth encountered
+
+  for (const n of others) {
+    const d: any = n.data;
+    const edgeType = d?.edgeTypeFromParent;
+    const isOutgoing = d?.directionFromParent !== 'incoming';
+    const section = getLinearSection(edgeType, isOutgoing);
+    const depthRaw = typeof d?.depth === 'number' ? d.depth : 1;
+    const level = Math.max(1, Math.abs(depthRaw));
+    const rootId = getRootId(n);
+    const key = `${rootId}|${section}|${level}`;
+    const arr = groups.get(key) || [];
+    arr.push(n);
+    groups.set(key, arr);
+
+    const prevMax = maxLevel.get(rootId) || 0;
+    if (level > prevMax) maxLevel.set(rootId, level);
+  }
+
+  // 2. Calculate dynamic heights for each level (accumulating offsets from center).
+  // Separate accumulation for TOP (growing upward) and BOTTOM (growing downward).
+  // Map: rootId -> level -> { topY, bottomY } (absolute Y coordinates for this level)
+  const levelOffsets = new Map<string, Map<number, { topY: number; bottomY: number }>>();
+
+  // Initial offset is just outside the central row
+  const INITIAL_OFFSET_Y = Math.floor(layerSpacing / 2) + Math.floor(nodeHeight / 2);
+
+  for (const rootId of centralIds) {
+    // We only care about rootIds that actually have children in `groups`.
+    if (!maxLevel.has(rootId)) continue;
+
+    const offsets = new Map<number, { topY: number; bottomY: number }>();
+    let currentTopY = -INITIAL_OFFSET_Y; // Growing UP (negative Y)
+    let currentBottomY = INITIAL_OFFSET_Y; // Growing DOWN (positive Y)
+
+    const maxL = maxLevel.get(rootId) || 0;
+
+    for (let l = 1; l <= maxL; l++) {
+      // --- TOP BAND (Top-Left + Top-Right) ---
+      // Height needed for this level = max(rows in TL, rows in TR) * rowHeight + spacing
+      const tlKey = `${rootId}|top-left|${l}`;
+      const trKey = `${rootId}|top-right|${l}`;
+      const tlNodes = groups.get(tlKey) || [];
+      const trNodes = groups.get(trKey) || [];
+
+      // Calculate height for this level's Top band
+      let topHeight = 0;
+      if (tlNodes.length > 0 || trNodes.length > 0) {
+        // Calculate rows needed for TL
+        const tlCols = Math.min(6, Math.max(1, tlNodes.length));
+        const tlRows = Math.ceil(tlNodes.length / tlCols);
+        
+        // Calculate rows needed for TR
+        const trCols = Math.min(6, Math.max(1, trNodes.length));
+        const trRows = Math.ceil(trNodes.length / trCols);
+
+        // Max rows determines the band height
+        const maxRows = Math.max(tlRows, trRows);
+        // Base row height (node + internal gap)
+        const rowH = nodeHeight + Math.max(32, Math.floor(layerSpacing * 0.25));
+        
+        // Total height for this level = rows * height
+        topHeight = maxRows * rowH;
+      }
+
+      // If there's content, shift currentTopY UP by this height.
+      // Position anchors will be relative to this band.
+      // We place the level such that its "bottom" touches the previous "top".
+      // currentTopY is the Y coordinate of the *bottom* edge of this new level.
+      // The nodes will be placed between (currentTopY - topHeight) and currentTopY.
+      // Actually, let's track the *anchor* line.
+      // Let's place the first row of this level at `currentTopY - nodeHeight/2`.
+      // And next level will start at `currentTopY - topHeight - layerSpacing`.
+      
+      const thisLevelTopAnchor = currentTopY - Math.floor(nodeHeight / 2) - Math.floor(layerSpacing * 0.5); // extra padding
+      // But we need to account for multi-row growing UPWARDS from the anchor?
+      // Standard Sugiyama puts level N at fixed Y. Here we want level N to be "above" level N-1.
+      
+      // Let's accumulate:
+      // levelTopY = currentTopY - (layerSpacing);  // Start of this level space
+      // BUT we need to fit `topHeight` into it.
+      // If we place nodes starting at `levelTopY - nodeHeight/2` (first row),
+      // subsequent rows (if any) go further UP? Or further DOWN?
+      // Visual hierarchy: Level 1 is closest to Center. Level 2 is further.
+      // So Level 1 Row 0 is at Y=-100. Level 1 Row 1 is at Y=-200 (further away).
+      // Yes, "outward" growth.
+      
+      // Position for Level L (Top):
+      // Starts at `currentTopY - layerSpacing`.
+      // Grows UPWARD by `topHeight`.
+      // New currentTopY = `currentTopY - layerSpacing - topHeight`.
+      
+      const levelTopStart = currentTopY - layerSpacing;
+      // We store the "base" Y for the FIRST row of this level.
+      // Rows will subtract from this Y (move further up).
+      const levelTopBaseY = levelTopStart - Math.floor(nodeHeight / 2);
+      
+      // Update accumulator for next level
+      // If topHeight is 0 (empty level), we still step? No, compact it?
+      // User says "Strict hierarchy". Better to keep empty levels visible? 
+      // Usually better to collapse empty levels if they are truly empty.
+      // But `groups` iteration ensures we only process levels that exist? 
+      // No, we iterate 1..maxL. Some intermediate levels might be empty.
+      // If empty, `topHeight` is 0. 
+      // If empty, we should arguably NOT add layerSpacing.
+      // But to keep alignment across levels (if we had global layers), we might want to.
+      // Here we process per-root, so collapsing empty levels is fine.
+      
+      if (topHeight > 0) {
+        currentTopY = levelTopStart - topHeight;
+      } else {
+        // If the level is empty, we don't accumulate height, BUT we should preserve the logical spacing
+        // if we want strict grid. However, collapsing makes more sense for sparse graphs.
+        // Let's stick to "if empty, ignore".
+        // BUT: if we skip layer N, then layer N+1 will start right where N would have started.
+        // This is fine.
+      }
+
+      // --- BOTTOM BAND (Bottom-Left + Bottom-Right) ---
+      const blKey = `${rootId}|bottom-left|${l}`;
+      const brKey = `${rootId}|bottom-right|${l}`;
+      const blNodes = groups.get(blKey) || [];
+      const brNodes = groups.get(brKey) || [];
+
+      let bottomHeight = 0;
+      if (blNodes.length > 0 || brNodes.length > 0) {
+        const blCols = Math.min(6, Math.max(1, blNodes.length));
+        const blRows = Math.ceil(blNodes.length / blCols);
+        const brCols = Math.min(6, Math.max(1, brNodes.length));
+        const brRows = Math.ceil(brNodes.length / brCols);
+        
+        const maxRows = Math.max(blRows, brRows);
+        const rowH = nodeHeight + Math.max(32, Math.floor(layerSpacing * 0.25));
+        bottomHeight = maxRows * rowH;
+      }
+
+      // Position for Level L (Bottom):
+      // Starts at `currentBottomY + layerSpacing`.
+      // Grows DOWNWARD by `bottomHeight`.
+      const levelBottomStart = currentBottomY + layerSpacing;
+      // We store the "base" Y for the FIRST row of this level.
+      // Rows will ADD to this Y (move further down).
+      const levelBottomBaseY = levelBottomStart + Math.floor(nodeHeight / 2);
+
+      if (bottomHeight > 0) {
+        currentBottomY = levelBottomStart + bottomHeight;
+      }
+
+      offsets.set(l, { topY: levelTopBaseY, bottomY: levelBottomBaseY });
+    }
+    levelOffsets.set(rootId, offsets);
+  }
+
+  const colW = nodeWidth + nodeSpacing;
+  const rowH = nodeHeight + Math.max(32, Math.floor(layerSpacing * 0.25));
+
+  for (const [key, list] of groups.entries()) {
+    const [rootId, section, levelStr] = key.split('|');
+    const level = Math.max(1, parseInt(levelStr || '1', 10) || 1);
+    const anchor = pos.get(rootId) || { x: 0, y: 0 };
+
+    const offsets = levelOffsets.get(rootId);
+    if (!offsets) continue;
+    const levelPos = offsets.get(level);
+    if (!levelPos) continue;
+
+    const isTop = String(section).startsWith('top');
+    const isLeft = String(section).endsWith('left');
+
+    // Use the dynamic Y we calculated
+    const baseY = isTop ? levelPos.topY : levelPos.bottomY;
+    const baseXInner = anchor.x + (isLeft ? -colW : colW);
+
+    const nodesPerRow = Math.min(6, Math.max(1, list.length));
+    
+    for (let idx = 0; idx < list.length; idx++) {
+      const rowIdx = Math.floor(idx / nodesPerRow);
+      const colIdx = idx % nodesPerRow;
+
+      const x = isLeft ? (baseXInner - colIdx * colW) : (baseXInner + colIdx * colW);
+      // Grow OUTWARDS from the base Y:
+      // Top grows UP (negative Y direction)
+      // Bottom grows DOWN (positive Y direction)
+      const y = isTop ? (baseY - rowIdx * rowH) : (baseY + rowIdx * rowH);
+
+      pos.set(list[idx]!.id, { x, y });
+    }
+  }
+
+  return flatNodes.map((n) => {
+    const p = pos.get(n.id);
+    if (!p) return n;
+    return { ...n, position: { x: p.x, y: p.y } };
+  });
+}
+
+/**
+ * Derive stable "Levels" metadata (depth/parent/root + edgeType/direction) for an existing graph.
+ *
+ * Why: nodes loaded from backend are flat (often depth=0 for everything). In Levels mode, that
+ * breaks the notion of "layers". This helper rebuilds a spanning tree from a chosen root so that
+ * `layoutLevelsFullGraph` can place nodes into meaningful layers.
+ *
+ * Notes:
+ * - We purposely keep depth as a non-negative integer "distance from root" (0..N)
+ * - Quadrant placement is still computed later by `layoutLevelsFullGraph` via `getLinearSection`
+ *   using `edgeTypeFromParent` and `directionFromParent`.
+ * - If `allowedEdgeTypes` is provided, only edges of those types participate in the tree.
+ * - NEW: Rank Assignment instead of simple BFS distance.
+ *   - Start at Root = Rank 0.
+ *   - Outgoing child edges (OWNS, etc) -> Rank + 1.
+ *   - Incoming parent edges (OWNS, etc) -> Rank - 1.
+ *   - Peer edges -> Rank same.
+ *   - Final Depth = Rank (offset so min rank is 1? No, offset so Root is 0, parents are -1?
+ *     Wait, `layoutLevelsFullGraph` expects `depth >= 0` and separates `depth=0` as central.
+ *     Actually, `depth` in `layoutLevelsFullGraph` is treated as `level`.
+ *     Level 1 is first layer above/below.
+ *     If we have Rank -1 (parent), it means Level 1 (Top).
+ *     If we have Rank +1 (child), it means Level 1 (Bottom).
+ *     We need to map Rank to Level + Section.
+ */
+export function deriveLevelsTreeMetadata<T = any>(
+  nodes: Node<T>[],
+  edges: Edge[],
+  rootId: string,
+  allowedEdgeTypes?: string[],
+): Node<T>[] {
+  const byId = new Map<string, Node<T>>();
+  for (const n of nodes) byId.set(String(n.id || '').trim(), n);
+
+  const root = String(rootId || '').trim();
+  if (!root || !byId.has(root)) return nodes;
+
+  const allowed =
+    Array.isArray(allowedEdgeTypes) && allowedEdgeTypes.length > 0
+      ? new Set(allowedEdgeTypes.map((t) => normalizeEdgeType(t)))
+      : null;
+
+  const edgeTypeOf = (e: any): string => {
+    return normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
+  };
+
+  // Peer types that keep nodes on the same rank (siblings/partners)
+  const PEER_TYPES = new Set([
+    'COMPETES_WITH',
+    'CONFLICTS_WITH',
+    'OPPOSES',
+    'PARTNERS_WITH',
+    'COOPERATES_WITH',
+    'RELATED_TO',
+    'SIMILAR_TO',
+    'LINKED_TO',
+  ]);
+
+  // Types that imply hierarchy (Parent -> Child)
+  // If we traverse OUTGOING edge of this type: Rank + 1
+  // If we traverse INCOMING edge of this type: Rank - 1
+  const HIERARCHY_TYPES = new Set([
+    'OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'MANAGES', 'CONTROLS',
+    'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
+    // Dependencies are inverted hierarchy usually (B depends on A -> A is parent/upstream)
+    // So A --DEPENDS_ON--> B means B is parent.
+    // If we traverse OUTGOING DEPENDS_ON: Rank - 1 (upstream)
+    // If we traverse INCOMING DEPENDS_ON: Rank + 1 (downstream)
+  ]);
+  
+  const INVERTED_HIERARCHY_TYPES = new Set([
+    'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES',
+    'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN' // Context acts like upstream
+  ]);
+
+  type Adj = { to: string; edgeType: string; dir: 'incoming' | 'outgoing' };
+  const adj = new Map<string, Adj[]>();
+  const add = (from: string, item: Adj) => {
+    const arr = adj.get(from);
+    if (arr) arr.push(item);
+    else adj.set(from, [item]);
+  };
+
+  for (const e of edges as any[]) {
+    const s = String(e?.source || '').trim();
+    const t = String(e?.target || '').trim();
+    if (!s || !t) continue;
+    if (!byId.has(s) || !byId.has(t)) continue;
+    const et = edgeTypeOf(e);
+    if (allowed && !allowed.has(et)) continue;
+
+    // We store edge as is.
+    add(s, { to: t, edgeType: et, dir: 'outgoing' });
+    add(t, { to: s, edgeType: et, dir: 'incoming' });
+  }
+
+  const visited = new Set<string>();
+  const parentMap = new Map<string, { parentId: string; edgeType: string; dir: 'incoming' | 'outgoing' }>();
+  const rankMap = new Map<string, number>();
+
+  // Queue: { id, rank }
+  const q: Array<{ id: string; r: number }> = [{ id: root, r: 0 }];
+  visited.add(root);
+  rankMap.set(root, 0);
+
+  while (q.length > 0) {
+    const cur = q.shift()!;
+    const curId = cur.id;
+    const curRank = cur.r;
+    
+    const next = adj.get(curId) || [];
+    
+    for (const a of next) {
+      const nid = a.to;
+      if (visited.has(nid)) continue;
+      
+      const et = a.edgeType;
+      let nextRank = curRank;
+      
+      if (PEER_TYPES.has(et)) {
+        nextRank = curRank;
+      } else if (HIERARCHY_TYPES.has(et)) {
+        // Normal hierarchy: Source is Parent, Target is Child.
+        // If we traversed OUTGOING (cur -> nid), then Cur is Parent, Nid is Child -> Rank + 1
+        // If we traversed INCOMING (nid -> cur), then Nid is Parent, Cur is Child -> Rank - 1
+        nextRank = (a.dir === 'outgoing') ? curRank + 1 : curRank - 1;
+      } else if (INVERTED_HIERARCHY_TYPES.has(et)) {
+        // Inverted: Source is Child, Target is Parent.
+        // If OUTGOING (cur -> nid): Cur depends on Nid -> Nid is Parent -> Rank - 1
+        // If INCOMING (nid -> cur): Nid depends on Cur -> Nid is Child -> Rank + 1
+        nextRank = (a.dir === 'outgoing') ? curRank - 1 : curRank + 1;
+      } else {
+        // Fallback for unknown types: treat as downstream
+        nextRank = curRank + 1;
+      }
+      
+      visited.add(nid);
+      parentMap.set(nid, { parentId: curId, edgeType: et, dir: a.dir });
+      rankMap.set(nid, nextRank);
+      q.push({ id: nid, r: nextRank });
+    }
+  }
+
+  // Apply derived metadata.
+  // layoutLevelsFullGraph expects `depth` to be positive level index.
+  // But we have signed Ranks (0=Center, -1=Top L1, +1=Bottom L1).
+  // We need to map Rank back to the "Level" and "Section" concepts.
+  // 
+  // Level = abs(Rank).
+  // Section depends on edge type AND sign of rank?
+  // Actually, `getLinearSection` calculates section based on edge type & direction.
+  // BUT `getLinearSection` logic might contradict our Rank logic if edge direction is ambiguous.
+  //
+  // Let's force `depth` to be `abs(rank)`.
+  // And we need to ensure `directionFromParent` + `edgeTypeFromParent` yields the correct quadrant.
+  //
+  // If Rank < 0 (Upstream/Top):
+  // We want `getLinearSection` to return 'top-left' or 'top-right'.
+  // `getLinearSection` returns Top if:
+  // - isBottom is false.
+  // - isBottom is false if `SYMMETRIC` OR (!isOutgoing AND !REVERSE_VERTICAL) OR (isOutgoing AND REVERSE_VERTICAL).
+  //
+  // This is complex to reverse engineer.
+  // Alternatively, we can trust `getLinearSection` if we provide the correct "parent" relationship.
+  // In `parentMap`, we stored the edge used to reach the node.
+  // If we reached it via BFS, that edge defines the relationship.
+  
+  return nodes.map((n) => {
+    const id = String(n.id || '').trim();
+    if (!visited.has(id)) return n;
+    
+    const d: any = (n as any).data || {};
+    const rank = rankMap.get(id) || 0;
+    
+    // Central row
+    if (rank === 0) {
+      return {
+        ...(n as any),
+        data: {
+          ...d,
+          parentFragmentId: undefined,
+          rootFragmentId: root,
+          depth: 0,
+          edgeTypeFromParent: undefined,
+          directionFromParent: undefined,
+        },
+      };
+    }
+
+    const p = parentMap.get(id);
+    // Depth is absolute distance from center
+    const dep = Math.abs(rank);
+    
+    // We keep the edge metadata as is.
+    // `layoutLevelsFullGraph` will use `getLinearSection` to determine quadrant.
+    // Rank < 0 should ideally land in Top quadrants.
+    // Rank > 0 should land in Bottom quadrants.
+    // 
+    // Does `getLinearSection` guarantee this?
+    // It relies on `edgeType` and `isOutgoing`.
+    // If we have `OWNS` (Hierarchy), and Rank is +1 (Child):
+    // We traversed Outgoing `OWNS`. `edgeType`=OWNS, `dir`=outgoing.
+    // `getLinearSection` for OWNS + outgoing -> isBottom=true -> Bottom. CORRECT.
+    //
+    // If we have `OWNS` (Hierarchy), and Rank is -1 (Parent):
+    // We traversed Incoming `OWNS`. `edgeType`=OWNS, `dir`=incoming.
+    // `getLinearSection` for OWNS + incoming -> isBottom=false -> Top. CORRECT.
+    //
+    // It seems `getLinearSection` is consistent with our Rank logic for Hierarchy types.
+    // Peer types (Rank 0) are handled above (return depth=0).
+    
+    return {
+      ...(n as any),
+      data: {
+        ...d,
+        parentFragmentId: p?.parentId,
+        rootFragmentId: root,
+        depth: dep,
+        edgeTypeFromParent: p?.edgeType,
+        directionFromParent: p?.dir,
+      },
+    };
+  });
+}
+
+/**
  * Legacy full-graph layout used by "Linear" mode in `LensCanvasCockpit`.
  *
  * It positions:

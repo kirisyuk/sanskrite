@@ -1923,13 +1923,27 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
 
   async getFragmentDependencies(
     fragmentId: string,
-    options?: { direction?: 'outgoing' | 'incoming' | 'both'; type?: string; includeUnindexed?: boolean }
+    options?: {
+      direction?: 'outgoing' | 'incoming' | 'both';
+      type?: string;
+      includeUnindexed?: boolean;
+      edgeTypes?: string[];
+      semantic?: 'upstream' | 'downstream' | 'both';
+      includeFragments?: boolean;
+      includeCounts?: boolean;
+      maxNeighbors?: number;
+      maxEdges?: number;
+      maxPerType?: number;
+      limit?: number;
+    }
   ): Promise<{
     edges: any[];
     total: number;
+    fragments?: any[];
+    counts?: any;
   }> {
     try {
-      const params: Record<string, string> = {};
+      const params: Record<string, any> = {};
       if (options?.direction) {
         params.direction = options.direction;
       }
@@ -1938,6 +1952,30 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       }
       if (options?.includeUnindexed) {
         params.includeUnindexed = '1';
+      }
+      if (Array.isArray(options?.edgeTypes) && options!.edgeTypes!.length > 0) {
+        params.edgeTypes = options!.edgeTypes!.join(',');
+      }
+      if (options?.semantic) {
+        params.semantic = options.semantic;
+      }
+      if (options?.includeFragments) {
+        params.includeFragments = '1';
+      }
+      if (options?.includeCounts) {
+        params.includeCounts = '1';
+      }
+      if (typeof options?.maxNeighbors === 'number' && Number.isFinite(options.maxNeighbors) && options.maxNeighbors > 0) {
+        params.maxNeighbors = String(Math.floor(options.maxNeighbors));
+      }
+      if (typeof options?.maxEdges === 'number' && Number.isFinite(options.maxEdges) && options.maxEdges > 0) {
+        params.maxEdges = String(Math.floor(options.maxEdges));
+      }
+      if (typeof options?.maxPerType === 'number' && Number.isFinite(options.maxPerType) && options.maxPerType > 0) {
+        params.maxPerType = String(Math.floor(options.maxPerType));
+      }
+      if (typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
+        params.limit = String(Math.floor(options.limit));
       }
       const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/dependencies`, { params });
       return response.data;
