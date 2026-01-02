@@ -48,6 +48,40 @@ type SignalTypeSpec struct {
 var rtMu sync.RWMutex
 var rt *RuntimeTaxonomy
 
+// builtInAllowedRelationTypes is the compiled fallback allow-list for relation types.
+//
+// Rationale:
+// - Runtime taxonomy can drift (e.g., you deploy code with new edge types but forget to reseed Firestore).
+// - We still want to materialize edges using types that the codebase understands, otherwise everything collapses to INFLUENCES.
+// - Runtime taxonomy can still tighten unknown values (anything not in this set remains restricted by AllowedRelationTypes when present).
+var builtInAllowedRelationTypes = map[string]struct{}{
+	"SUPPLIES_TO":      {},
+	"LOCATED_IN":       {},
+	"OWNS":             {},
+	"SUBSIDIARY_OF":    {},
+	"PRODUCES":         {},
+	"CONSUMES":         {},
+	"OPERATES_IN":      {},
+	"REGULATES":        {},
+	"COMPETES_WITH":    {},
+	"INFLUENCES":       {},
+	"DEPENDS_ON":       {},
+	"TRANSFORMS_INTO":  {},
+	// Governance / org-person
+	"MANAGES":          {},
+	"CONTROLS":         {},
+	"EMPLOYED_BY":      {},
+	"BOARD_MEMBER_OF":  {},
+	"FOUNDED":          {},
+	"INVESTS_IN":       {},
+	"PARTNERS_WITH":    {},
+}
+
+func isBuiltInAllowedRelationType(s string) bool {
+	_, ok := builtInAllowedRelationTypes[s]
+	return ok
+}
+
 // SetRuntimeTaxonomy installs the runtime taxonomy (usually loaded from Firestore at startup).
 func SetRuntimeTaxonomy(t *RuntimeTaxonomy) {
 	rtMu.Lock()
@@ -120,16 +154,18 @@ func NormalizeRelationType(in string) string {
 		if _, ok := t.AllowedRelationTypes[s]; ok {
 			return s
 		}
+		// If runtime taxonomy is installed but missing a built-in relation type, prefer the built-in allow-list.
+		// This prevents "new types collapsing to INFLUENCES" due to stale Firestore taxonomy.
+		if isBuiltInAllowedRelationType(s) {
+			return s
+		}
 		return "INFLUENCES"
 	}
 	// Fallback allow-list for local runs when runtime taxonomy isn't installed.
-	switch s {
-	case "SUPPLIES_TO", "LOCATED_IN", "OWNS", "SUBSIDIARY_OF", "PRODUCES", "CONSUMES", "OPERATES_IN", "REGULATES", "COMPETES_WITH", "INFLUENCES", "DEPENDS_ON", "TRANSFORMS_INTO",
-		"MANAGES", "CONTROLS", "EMPLOYED_BY", "BOARD_MEMBER_OF", "FOUNDED", "INVESTS_IN", "PARTNERS_WITH":
+	if isBuiltInAllowedRelationType(s) {
 		return s
-	default:
-		return "INFLUENCES"
 	}
+	return "INFLUENCES"
 }
 
 // NormalizeSignalType returns a stable signal type string.

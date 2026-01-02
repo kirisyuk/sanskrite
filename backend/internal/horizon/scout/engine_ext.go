@@ -185,7 +185,13 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 
 		// Normalize relation type early (runtime taxonomy allowlist) to avoid creating edges with unsupported types.
+		// IMPORTANT: preserve the raw relation type for debugging taxonomy drift / LLM outputs.
+		rawRelationType := strings.TrimSpace(rel.RelationType)
 		rel.RelationType = strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		normalizedRelationType := strings.TrimSpace(rel.RelationType)
+		if rawRelationType != "" && normalizedRelationType != "" && rawRelationType != normalizedRelationType {
+			fmt.Printf("[ScoutEngine] Normalized relationType: %q -> %q\n", rawRelationType, normalizedRelationType)
+		}
 		targetTypeHint := e.normalizeFragmentType(ctx, rel.TargetType)
 		targetType := targetTypeHint
 
@@ -860,7 +866,8 @@ func (e *ScoutEngine) processRelationsInternal(
 			},
 			Qualifiers: map[string]interface{}{
 				"reason":              strings.TrimSpace(rel.Reason),
-				"rawRelationType":     strings.TrimSpace(rel.RelationType),
+				"rawRelationType":     rawRelationType,
+				"normalizedRelationType": normalizedRelationType,
 				"rawConfidence":       rel.Confidence,
 				"targetName":          strings.TrimSpace(rel.TargetName),
 				"targetCanonicalPath": strings.TrimSpace(targetPath),
