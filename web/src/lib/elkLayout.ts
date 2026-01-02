@@ -833,13 +833,17 @@ export function deriveLevelsTreeMetadata<T = any>(
   // If we traverse OUTGOING edge of this type: Rank + 1
   // If we traverse INCOMING edge of this type: Rank - 1
   const HIERARCHY_TYPES = new Set([
-    'OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'MANAGES', 'CONTROLS',
+    // Corporate structure / control
+    'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN',
     'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'
   ]);
   
   const INVERTED_HIERARCHY_TYPES = new Set([
+    // NOTE: SUBSIDIARY_OF is inverse of OWNS (subsidiary -> parent). The backend often normalizes it into OWNS,
+    // but keep this here for robustness when legacy edges leak through.
+    'SUBSIDIARY_OF',
     'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES',
     // Context acts like upstream/parent
     'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'
