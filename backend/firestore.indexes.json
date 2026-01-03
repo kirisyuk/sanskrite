@@ -611,6 +611,26 @@
       "collectionGroup": "horizon_fragments",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "governance.status", "order": "ASCENDING" },
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "labels.en", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "governance.status", "order": "ASCENDING" },
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "canonicalPath", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "type", "order": "ASCENDING" }
       ]

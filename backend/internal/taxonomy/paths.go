@@ -9,6 +9,40 @@ import (
 var reNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
 
+// Basic Cyrillic -> Latin transliteration (best-effort).
+// Rationale: canonical paths are restricted to ASCII slugs (a-z0-9-), but user inputs and KB labels
+// frequently include Cyrillic. Without transliteration, Slugify() would drop those characters and
+// produce empty/invalid slugs (e.g. "/org" instead of "/org/v-kazani-poymut").
+var cyrillicTranslitMap = map[rune]string{
+	'а': "a", 'б': "b", 'в': "v", 'г': "g", 'д': "d", 'е': "e", 'ё': "yo",
+	'ж': "zh", 'з': "z", 'и': "i", 'й': "y", 'к': "k", 'л': "l", 'м': "m",
+	'н': "n", 'о': "o", 'п': "p", 'р': "r", 'с': "s", 'т': "t", 'у': "u",
+	'ф': "f", 'х': "kh", 'ц': "ts", 'ч': "ch", 'ш': "sh", 'щ': "sch",
+	'ъ': "", 'ы': "y", 'ь': "", 'э': "e", 'ю': "yu", 'я': "ya",
+}
+
+func transliterateCyrillicToLatin(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if repl, ok := cyrillicTranslitMap[r]; ok {
+			b.WriteString(repl)
+			continue
+		}
+		// Keep ASCII as-is; everything else will be filtered by Slugify regex.
+		if r <= 0x7f {
+			b.WriteRune(r)
+		} else {
+			// Drop unknown non-ascii runes (keeps behavior deterministic).
+			// NOTE: If we need broader coverage (e.g. Kazakh, Arabic), extend transliteration tables.
+		}
+	}
+	return b.String()
+}
+
 // ValidCanonicalPathNamespace defines allowed namespace prefixes for canonical paths
 var ValidCanonicalPathNamespace = map[string]bool{
 	"org":     true,
@@ -20,6 +54,8 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"loc":     true,
 	"sphere":  true,
 	"event":   true,
+	// Media endpoints (e.g., specific Telegram channels).
+	"media": true,
 }
 
 // ValidateCanonicalPath validates that a canonical path matches the expected format.
@@ -41,6 +77,10 @@ func ValidateCanonicalPath(path string) error {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) == 0 {
 		return fmt.Errorf("canonical path has no segments: %s", path)
+	}
+	// Must have at least namespace + one segment ("/org" is not a valid concrete anchor).
+	if len(parts) < 2 {
+		return fmt.Errorf("canonical path must have at least 2 segments: %s", path)
 	}
 
 	// First segment must be a valid namespace
@@ -80,6 +120,8 @@ func Slugify(s string) string {
 	if s == "" {
 		return ""
 	}
+	// Best-effort transliteration to avoid empty slugs for Cyrillic inputs.
+	s = transliterateCyrillicToLatin(s)
 	s = reNonAlnum.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
 	if s == "" {

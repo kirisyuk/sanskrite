@@ -135,6 +135,7 @@ func main() {
 	legalNameIndex := make(map[string][]*models.HorizonFragment)       // type:legalName -> fragments
 	labelENIndex := make(map[string][]*models.HorizonFragment)         // type:label_en -> fragments (Tier 2)
 	normalizedLegalIndex := make(map[string][]*models.HorizonFragment) // type:normalized_legal -> fragments
+	orgNormalizedNameIndex := make(map[string][]*models.HorizonFragment) // type:normalized(label/legal) -> org fragments (LOW-signal stub rescue)
 	geoCityIndex := make(map[string][]*models.HorizonFragment)         // city_name -> geo fragments
 	productNameIndex := make(map[string][]*models.HorizonFragment)     // product_name -> product fragments
 	productAliasIndex := make(map[string][]*models.HorizonFragment)    // product_alias_key -> product fragments (label/short/legal + legacy slug aliases)
@@ -169,6 +170,24 @@ func main() {
 			if normalized != "" {
 				key := fmt.Sprintf("%s:%s", f.Type, normalized)
 				normalizedLegalIndex[key] = append(normalizedLegalIndex[key], f)
+			}
+		}
+
+		// ORG-only: index normalized label/legal for LOW-signal stub rescue (e.g., "softbank group" → "softbank")
+		// Safety is enforced when creating clusters (must include at least one high-signal org + one low-signal stub).
+		if f.Type == models.FragmentTypeOrganization {
+			labelEN := strings.TrimSpace(f.Labels["en"])
+			legalName := strings.TrimSpace(f.Identifiers["legalName"])
+			seed := legalName
+			if seed == "" {
+				seed = labelEN
+			}
+			if seed != "" {
+				n := normalizeLegalName(seed)
+				if n != "" {
+					key := fmt.Sprintf("%s:%s", f.Type, n)
+					orgNormalizedNameIndex[key] = append(orgNormalizedNameIndex[key], f)
+				}
 			}
 		}
 
@@ -231,13 +250,25 @@ func main() {
 		}
 	}
 
+	// Index by canonicalPath (type-scoped) — useful for alias canonicalPath clustering
+	byCanonicalPath := make(map[string][]*models.HorizonFragment) // type:canonicalPath -> fragments
+	for _, f := range fragments {
+		if strings.TrimSpace(f.CanonicalPath) == "" {
+			continue
+		}
+		k := fmt.Sprintf("%s:%s", f.Type, f.CanonicalPath)
+		byCanonicalPath[k] = append(byCanonicalPath[k], f)
+	}
+
 	log.Printf("✓ Wikidata index: %d unique IDs", len(wikidataIndex))
 	log.Printf("✓ ShortName index: %d unique keys", len(shortNameIndex))
 	log.Printf("✓ LegalName index: %d unique keys", len(legalNameIndex))
 	log.Printf("✓ Label[en] index: %d unique keys", len(labelENIndex))
 	log.Printf("✓ Normalized legal index: %d unique keys", len(normalizedLegalIndex))
+	log.Printf("✓ ORG normalized name index: %d unique keys", len(orgNormalizedNameIndex))
 	log.Printf("✓ GEO city index: %d unique cities", len(geoCityIndex))
 	log.Printf("✓ GEO by path index: %d unique paths", len(geoByPath))
+	log.Printf("✓ CanonicalPath index: %d unique keys", len(byCanonicalPath))
 	log.Printf("✓ PRODUCT name index: %d unique names", len(productNameIndex))
 	log.Printf("✓ PRODUCT alias index: %d unique aliases", len(productAliasIndex))
 
@@ -252,6 +283,12 @@ func main() {
 	log.Printf("\n=== Step 3: Finding duplicate clusters ===")
 	clusters := make([]*DuplicateCluster, 0)
 	processedFragmentIDs := make(map[string]bool)
+	idToFrag := make(map[string]*models.HorizonFragment, len(fragments))
+	for _, f := range fragments {
+		if f != nil && strings.TrimSpace(f.ID) != "" {
+			idToFrag[f.ID] = f
+		}
+	}
 
 	// Priority 0: Organizations that are actually countries (type normalization)
 	// Example: /org/usa with legalName="United States of America" → merge with /loc/us/na/na
@@ -348,6 +385,126 @@ func main() {
 		}
 	}
 	log.Printf("  Found %d non-canonical GEO clusters", nonCanonicalGeoClusters)
+
+	// Priority 0.75: Canonical-path aliases (merged_paths / legacy_org_canonical_path) — same type only
+	// Example: /org/riyadh-air declared as legacy_org_canonical_path by canonical /org/riyadh_air
+	// Example: /org/pif declared as merged_paths by canonical /org/public-investment-fund
+	aliasClusters := 0
+	{
+		uf := newUnionFind()
+		ids := make([]string, 0, len(fragments))
+		for _, f := range fragments {
+			if f == nil {
+				continue
+			}
+			if processedFragmentIDs[f.ID] {
+				continue
+			}
+			if strings.TrimSpace(f.ID) == "" {
+				continue
+			}
+			uf.add(f.ID)
+			ids = append(ids, f.ID)
+		}
+
+		// Union pairs connected by alias canonicalPath references.
+		for _, f := range fragments {
+			if f == nil {
+				continue
+			}
+			if processedFragmentIDs[f.ID] {
+				continue
+			}
+			// Keep this conservative: org-specific alias identifiers are high-signal for ORGs,
+			// but can be noisy for other types (we have separate, safer dedup signals for them).
+			if f.Type != models.FragmentTypeOrganization {
+				continue
+			}
+			for _, alias := range extractAliasCanonicalPathsForDedup(f) {
+				k := fmt.Sprintf("%s:%s", f.Type, alias) // same type only
+				for _, other := range byCanonicalPath[k] {
+					if other == nil || processedFragmentIDs[other.ID] || other.ID == f.ID {
+						continue
+					}
+					uf.union(f.ID, other.ID)
+				}
+			}
+		}
+
+		// Materialize groups into clusters.
+		for _, group := range uf.groups(ids) {
+			if len(group) <= 1 {
+				continue
+			}
+			var frs []*models.HorizonFragment
+			for _, id := range group {
+				if f := idToFrag[id]; f != nil {
+					frs = append(frs, f)
+				}
+			}
+			if len(frs) <= 1 {
+				continue
+			}
+			cluster := &DuplicateCluster{
+				MatchType:  "aliasPath",
+				MatchValue: fmt.Sprintf("%s:%s", frs[0].Type, frs[0].ID),
+				Fragments:  frs,
+			}
+			cluster.CanonicalID = selectCanonical(frs)
+			clusters = append(clusters, cluster)
+			// Mark only duplicates as processed, so the canonical can still absorb
+			// additional duplicates found by other signals later (transitive merges).
+			for _, f := range frs {
+				if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
+					processedFragmentIDs[f.ID] = true
+				}
+			}
+			aliasClusters++
+		}
+	}
+	log.Printf("  Found %d aliasPath-based clusters", aliasClusters)
+
+	// Priority 0.8: Organization path normalization (- vs _) — same type only
+	// Example: /org/riyadh_air vs /org/riyadh-air
+	orgPathNormClusters := 0
+	{
+		orgNorm := make(map[string][]*models.HorizonFragment)
+		for _, f := range fragments {
+			if f == nil {
+				continue
+			}
+			if processedFragmentIDs[f.ID] {
+				continue
+			}
+			if f.Type != models.FragmentTypeOrganization {
+				continue
+			}
+			nk := normalizeOrgCanonicalPathForDedup(f.CanonicalPath)
+			if nk == "" {
+				continue
+			}
+			orgNorm[nk] = append(orgNorm[nk], f)
+		}
+		for key, frs := range orgNorm {
+			if len(frs) <= 1 {
+				continue
+			}
+			cluster := &DuplicateCluster{
+				MatchType:  "orgPathNorm",
+				MatchValue: key,
+				Fragments:  frs,
+			}
+			cluster.CanonicalID = selectCanonical(frs)
+			clusters = append(clusters, cluster)
+			for _, f := range frs {
+				if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
+					processedFragmentIDs[f.ID] = true
+				}
+			}
+			orgPathNormClusters++
+		}
+	}
+	log.Printf("  Found %d orgPathNorm-based clusters", orgPathNormClusters)
 
 	// Priority 1: Wikidata ID matches (highest confidence)
 	for wikidataID, frags := range wikidataIndex {
@@ -509,6 +666,54 @@ func main() {
 		}
 	}
 	log.Printf("  Found %d normalizedLegal-based clusters", normalizedLegalClusters)
+
+	// Priority 5.5: ORG normalized name (label/legal) — LOW-signal stub rescue (guarded)
+	// Example: /org/softbank-group (label="softbank group", no identifiers) should merge into /org/softbank (legalName="SoftBank Group Corp.")
+	orgNormalizedClusters := 0
+	for key, frags := range orgNormalizedNameIndex {
+		if len(frags) <= 1 {
+			continue
+		}
+		var unprocessed []*models.HorizonFragment
+		for _, f := range frags {
+			if f == nil || processedFragmentIDs[f.ID] {
+				continue
+			}
+			unprocessed = append(unprocessed, f)
+		}
+		if len(unprocessed) <= 1 {
+			continue
+		}
+
+		// SAFETY: require at least one "high-signal" org and at least one "low-signal" stub
+		high := 0
+		low := 0
+		for _, f := range unprocessed {
+			if isLowSignalOrgStubForDedup(f) {
+				low++
+			} else {
+				high++
+			}
+		}
+		if high == 0 || low == 0 {
+			continue
+		}
+
+		cluster := &DuplicateCluster{
+			MatchType:  "orgNormalizedName",
+			MatchValue: key,
+			Fragments:  unprocessed,
+		}
+		cluster.CanonicalID = selectCanonical(unprocessed)
+		clusters = append(clusters, cluster)
+		for _, f := range unprocessed {
+			if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
+				processedFragmentIDs[f.ID] = true
+			}
+		}
+		orgNormalizedClusters++
+	}
+	log.Printf("  Found %d orgNormalizedName-based clusters", orgNormalizedClusters)
 
 	// Priority 6: GEO city name matches — MUST have same country
 	geoCityClusters := 0
@@ -830,6 +1035,175 @@ func extractWikidataID(f *models.HorizonFragment) string {
 	return ""
 }
 
+// =============================================================================
+// Alias/path normalization helpers (for safe, universal dedup patterns)
+// =============================================================================
+
+// extractAliasCanonicalPathsForDedup extracts canonicalPath-like aliases from identifiers that
+// are known to store historical/merged canonical paths.
+// We treat these as a SAFE same-type signal only (never cross-type).
+func extractAliasCanonicalPathsForDedup(f *models.HorizonFragment) []string {
+	if f == nil || f.Identifiers == nil {
+		return nil
+	}
+	keys := []string{"merged_paths", "legacy_org_canonical_path", "legacy-org-canonical-path"}
+	seen := map[string]struct{}{}
+	var out []string
+	for _, k := range keys {
+		raw := strings.TrimSpace(f.Identifiers[k])
+		if raw == "" {
+			continue
+		}
+		for _, tok := range splitPathTokens(raw) {
+			if !strings.HasPrefix(tok, "/") {
+				continue
+			}
+			tok = strings.TrimSpace(tok)
+			if tok == "" {
+				continue
+			}
+			if _, ok := seen[tok]; ok {
+				continue
+			}
+			seen[tok] = struct{}{}
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+func splitPathTokens(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		switch r {
+		case ',', ';', '|', '\n', '\r', '\t', ' ':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+// normalizeOrgCanonicalPathForDedup normalizes /org/{slug} by treating '_' and '-' as equivalent.
+// This is used only for grouping candidates; canonical selection is still score-based.
+func normalizeOrgCanonicalPathForDedup(canonicalPath string) string {
+	cp := strings.TrimSpace(canonicalPath)
+	if !strings.HasPrefix(cp, "/org/") {
+		return ""
+	}
+	slug := strings.TrimSpace(strings.TrimPrefix(cp, "/org/"))
+	if slug == "" {
+		return ""
+	}
+	slug = strings.ToLower(slug)
+	slug = strings.ReplaceAll(slug, "_", "-")
+	return "/org/" + slug
+}
+
+// isLowSignalOrgStubForDedup identifies low-quality ORG fragments that commonly appear as duplicates
+// from lightweight extraction (e.g., label-only "softbank group" with empty status).
+// We only use this as a guard for fuzzy-ish normalized-name clustering.
+func isLowSignalOrgStubForDedup(f *models.HorizonFragment) bool {
+	if f == nil || f.Type != models.FragmentTypeOrganization {
+		return false
+	}
+	legalName := strings.TrimSpace(f.Identifiers["legalName"])
+	shortName := strings.TrimSpace(f.Identifiers["shortName"])
+	// If we have strong identifiers, treat as not-a-stub.
+	if legalName != "" || shortName != "" || extractWikidataID(f) != "" {
+		return false
+	}
+	// Lifecycle/quality signals that commonly indicate an auto-generated stub.
+	lifecycleWeak := strings.TrimSpace(f.Status) == "" ||
+		strings.EqualFold(strings.TrimSpace(f.Governance.Status), "DORMANT") ||
+		strings.EqualFold(strings.TrimSpace(f.Governance.Status), "ARCHIVED")
+	if !lifecycleWeak {
+		return false
+	}
+	// Extra weak signal: generic/incorrect taxonomy placement
+	if strings.EqualFold(strings.TrimSpace(f.SectorPath), "/Geography") {
+		return true
+	}
+	// Fallback: label-only + weak lifecycle is already a strong stub pattern.
+	return true
+}
+
+// unionFind is a small DSU helper to merge transitive alias/path links into a single cluster.
+type unionFind struct {
+	parent map[string]string
+	rank   map[string]int
+}
+
+func newUnionFind() *unionFind {
+	return &unionFind{
+		parent: make(map[string]string),
+		rank:   make(map[string]int),
+	}
+}
+
+func (u *unionFind) add(x string) {
+	if x == "" {
+		return
+	}
+	if _, ok := u.parent[x]; ok {
+		return
+	}
+	u.parent[x] = x
+	u.rank[x] = 0
+}
+
+func (u *unionFind) find(x string) string {
+	if x == "" {
+		return ""
+	}
+	p, ok := u.parent[x]
+	if !ok {
+		u.add(x)
+		return x
+	}
+	if p == x {
+		return x
+	}
+	u.parent[x] = u.find(p)
+	return u.parent[x]
+}
+
+func (u *unionFind) union(a, b string) {
+	ra := u.find(a)
+	rb := u.find(b)
+	if ra == "" || rb == "" || ra == rb {
+		return
+	}
+	if u.rank[ra] < u.rank[rb] {
+		u.parent[ra] = rb
+		return
+	}
+	if u.rank[ra] > u.rank[rb] {
+		u.parent[rb] = ra
+		return
+	}
+	u.parent[rb] = ra
+	u.rank[ra]++
+}
+
+func (u *unionFind) groups(ids []string) [][]string {
+	buckets := make(map[string][]string)
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		root := u.find(id)
+		if root == "" {
+			continue
+		}
+		buckets[root] = append(buckets[root], id)
+	}
+	out := make([][]string, 0, len(buckets))
+	for _, g := range buckets {
+		out = append(out, g)
+	}
+	return out
+}
+
 // selectCanonical chooses the best fragment to be the canonical one
 // For GEO_REGION: strongly prefers fragments with /loc/ prefix
 func selectCanonical(fragments []*models.HorizonFragment) string {
@@ -925,6 +1299,36 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 				} else {
 					score += 10
 				}
+			}
+		}
+
+		// For ORGANIZATION: prefer higher-quality canonical nodes over low-signal LLM stubs.
+		if f.Type == models.FragmentTypeOrganization {
+			switch strings.ToUpper(strings.TrimSpace(f.Governance.Status)) {
+			case "ACTIVE":
+				score += 40
+			case "DORMANT":
+				score += 5
+			case "ARCHIVED":
+				score += 0
+			default:
+				score += 2
+			}
+			if f.EntityID != nil && strings.TrimSpace(*f.EntityID) != "" {
+				score += 20
+			}
+			if strings.TrimSpace(f.Identifiers["legalName"]) != "" {
+				score += 10
+			}
+			if strings.TrimSpace(f.Identifiers["shortName"]) != "" {
+				score += 5
+			}
+			// If this fragment declares alias canonical paths, it is more likely the canonical.
+			if strings.TrimSpace(f.Identifiers["merged_paths"]) != "" || strings.TrimSpace(f.Identifiers["legacy_org_canonical_path"]) != "" {
+				score += 8
+			}
+			if strings.TrimSpace(f.Status) == "" {
+				score -= 3
 			}
 		}
 

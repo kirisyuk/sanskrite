@@ -63,6 +63,42 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	}
 
 	// =========================================================================
+	// Tier 0: Canonical-path alias resolution (prevents creating obvious alias duplicates)
+	// =========================================================================
+	// Universal pattern: we sometimes already have a canonical fragment that declares this path as an alias via:
+	// - identifiers.merged_paths
+	// - identifiers.legacy_org_canonical_path
+	//
+	// Examples:
+	// - /org/pif declared as merged_paths by canonical /org/public-investment-fund
+	// - /org/riyadh-air declared as legacy_org_canonical_path by canonical /org/riyadh_air
+	if cp := strings.TrimSpace(fragment.CanonicalPath); cp != "" {
+		// 0a) Reverse lookup: find an existing org that explicitly lists this canonicalPath as an alias.
+		for _, key := range []string{"merged_paths", "legacy_org_canonical_path", "legacy-org-canonical-path"} {
+			cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, key, cp, models.FragmentTypeOrganization)
+			if err == nil && len(cands) > 0 {
+				// If there are multiple candidates (rare), pick the best-quality one.
+				best := chooseBestOrgCandidate(cands)
+				if best != nil && best.ID != "" && best.ID != fragment.ID {
+					return best, nil
+				}
+			}
+		}
+
+		// 0b) Canonical path normalization: treat '-' and '_' variants as equivalent for /org/* slugs.
+		// This catches duplicates created by different slugifiers.
+		for _, alt := range orgCanonicalVariants(cp) {
+			if alt == "" || alt == cp {
+				continue
+			}
+			existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, alt)
+			if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID && existing.Type == models.FragmentTypeOrganization {
+				return existing, nil
+			}
+		}
+	}
+
+	// =========================================================================
 	// Tier 0: Type normalization — is this actually a country?
 	// =========================================================================
 	// Organizations with legalName matching a known country should be treated as GEO_REGION.
@@ -115,6 +151,21 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		}
 	}
 
+	// Strategy 3.5 (guarded): LOW-signal org stub rescue via normalized label
+	// Example: /org/softbank-group label="softbank group" (no legalName/shortName, empty status)
+	// should merge into /org/softbank legalName="SoftBank Group Corp."
+	if labelEN != "" && strings.TrimSpace(fragment.Identifiers["legalName"]) == "" && strings.TrimSpace(fragment.Identifiers["shortName"]) == "" {
+		if isLowSignalOrgStub(fragment) {
+			normalizedLabel := NormalizeLegalName(labelEN)
+			if normalizedLabel != "" {
+				existing, err := d.findByNormalizedLegalName(ctx, normalizedLabel)
+				if err == nil && existing != nil && existing.ID != fragment.ID {
+					return existing, nil
+				}
+			}
+		}
+	}
+
 	// Strategy 4: Match by shortName
 	shortName := strings.TrimSpace(fragment.Identifiers["shortName"])
 	if shortName != "" {
@@ -161,9 +212,9 @@ func (d *OrgDeduplicator) findByWikidataID(ctx context.Context, wikidataID strin
 	}
 
 	// Search by identifier field (returns slice)
-	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, "wikidataId", wikidataID)
+	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "wikidataId", wikidataID, models.FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
-		return existing[0], nil
+		return chooseBestOrgCandidate(existing), nil
 	}
 
 	return nil, nil
@@ -175,9 +226,9 @@ func (d *OrgDeduplicator) findByShortName(ctx context.Context, shortName string)
 		return nil, nil
 	}
 
-	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, "shortName", shortName)
-	if err == nil && len(existing) > 0 && existing[0].Type == models.FragmentTypeOrganization {
-		return existing[0], nil
+	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, models.FragmentTypeOrganization)
+	if err == nil && len(existing) > 0 {
+		return chooseBestOrgCandidate(existing), nil
 	}
 
 	return nil, nil
@@ -189,9 +240,9 @@ func (d *OrgDeduplicator) findByLegalName(ctx context.Context, legalName string)
 		return nil, nil
 	}
 
-	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, "legalName", legalName)
-	if err == nil && len(existing) > 0 && existing[0].Type == models.FragmentTypeOrganization {
-		return existing[0], nil
+	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, models.FragmentTypeOrganization)
+	if err == nil && len(existing) > 0 {
+		return chooseBestOrgCandidate(existing), nil
 	}
 
 	return nil, nil
@@ -221,11 +272,103 @@ func (d *OrgDeduplicator) findByNormalizedLegalName(ctx context.Context, normali
 	// FindByNormalizedLegalName is a specialized search that normalizes before comparison.
 	// If repo doesn't support it, fall back to nil (skip this strategy).
 	existing, err := d.fragmentsRepo.FindByNormalizedLegalName(ctx, normalizedName)
-	if err == nil && len(existing) > 0 && existing[0].Type == models.FragmentTypeOrganization {
-		return existing[0], nil
+	if err == nil && len(existing) > 0 {
+		// FindByNormalizedLegalName is already org-scoped, but we still select best in case of multiple.
+		return chooseBestOrgCandidate(existing), nil
 	}
 
 	return nil, nil
+}
+
+// orgCanonicalVariants returns alternative canonical path variants for org slugs
+// where different slugifiers might use '-' vs '_' (e.g., /org/riyadh-air vs /org/riyadh_air).
+func orgCanonicalVariants(canonicalPath string) []string {
+	cp := strings.TrimSpace(canonicalPath)
+	if !strings.HasPrefix(cp, "/org/") {
+		return []string{cp}
+	}
+	slug := strings.TrimPrefix(cp, "/org/")
+	if slug == "" {
+		return []string{cp}
+	}
+	alt := slug
+	if strings.Contains(alt, "_") {
+		alt = strings.ReplaceAll(alt, "_", "-")
+	} else if strings.Contains(alt, "-") {
+		alt = strings.ReplaceAll(alt, "-", "_")
+	} else {
+		return []string{cp}
+	}
+	return []string{cp, "/org/" + alt}
+}
+
+// chooseBestOrgCandidate picks the "best" org fragment among candidates.
+// Heuristics are intentionally simple and safe:
+// - Prefer ACTIVE governance over DORMANT/empty
+// - Prefer having entityId linkage
+// - Prefer having legalName/shortName identifiers
+// - Prefer older fragments as tie-breaker
+func chooseBestOrgCandidate(cands []*models.HorizonFragment) *models.HorizonFragment {
+	var best *models.HorizonFragment
+	bestScore := -1
+	for _, f := range cands {
+		if f == nil || f.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		score := 0
+		switch strings.ToUpper(strings.TrimSpace(f.Governance.Status)) {
+		case string(models.FragmentStatusActive):
+			score += 50
+		case string(models.FragmentStatusDormant):
+			score += 10
+		case string(models.FragmentStatusArchived):
+			score += 0
+		default:
+			score += 5
+		}
+		if f.EntityID != nil && strings.TrimSpace(*f.EntityID) != "" {
+			score += 25
+		}
+		if strings.TrimSpace(f.Identifiers["legalName"]) != "" {
+			score += 10
+		}
+		if strings.TrimSpace(f.Identifiers["shortName"]) != "" {
+			score += 5
+		}
+		if strings.TrimSpace(f.Identifiers["merged_paths"]) != "" || strings.TrimSpace(f.Identifiers["legacy_org_canonical_path"]) != "" {
+			score += 5
+		}
+		if best == nil || score > bestScore {
+			best = f
+			bestScore = score
+			continue
+		}
+		// Tie-breaker: older CreatedAt (prefer earlier)
+		if score == bestScore && !f.CreatedAt.IsZero() && !best.CreatedAt.IsZero() && f.CreatedAt.Before(best.CreatedAt) {
+			best = f
+		}
+	}
+	return best
+}
+
+func isLowSignalOrgStub(f *models.HorizonFragment) bool {
+	if f == nil || f.Type != models.FragmentTypeOrganization {
+		return false
+	}
+	// Strong identifiers → not a stub.
+	if strings.TrimSpace(f.Identifiers["legalName"]) != "" || strings.TrimSpace(f.Identifiers["shortName"]) != "" || extractWikidataIDFromFragment(f) != "" {
+		return false
+	}
+	// Weak lifecycle signals (common for auto-generated duplicates).
+	if strings.TrimSpace(f.Status) != "" && !strings.EqualFold(strings.TrimSpace(f.Governance.Status), string(models.FragmentStatusDormant)) {
+		return false
+	}
+	// Extra weak signal: generic/incorrect taxonomy placement.
+	if strings.EqualFold(strings.TrimSpace(f.SectorPath), "/Geography") {
+		return true
+	}
+	// Default: label-only + weak lifecycle is sufficient for stub classification.
+	return true
 }
 
 // resolveWikidataID attempts to find a Wikidata ID for the organization using the API.

@@ -264,6 +264,16 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 			fsFragments, fsErr = s.fragmentsRepo.SearchPrefix(ctx, q, limit)
 		}
 	}
+	// Firestore may require a composite index for prefix queries; treat missing-index as best-effort
+	// so UI typeahead doesn't hard-fail with 500.
+	if fsErr != nil {
+		msg := strings.ToLower(strings.TrimSpace(fsErr.Error()))
+		if strings.Contains(msg, "requires an index") || strings.Contains(msg, "failedprecondition") {
+			log.Printf("[SearchFragments] Firestore prefix search missing index (ignored): %v", fsErr)
+			fsErr = nil
+			fsFragments = nil
+		}
+	}
 
 	// If both sources failed / unavailable, return a useful error.
 	if len(vertexFragments) == 0 && len(fsFragments) == 0 {

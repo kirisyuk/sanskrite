@@ -3,6 +3,7 @@ import { NodeTypes, Handle, Position, NodeProps, NodeToolbar } from 'reactflow';
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
+import { humanizeCanonicalPath } from '../lib/uiUtils';
 
 // Типы нод для Horizon графа (на основе LensItem)
 export interface HorizonNodeData {
@@ -111,6 +112,12 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     border: '#EF4444', borderDark: '#F87171',
     text: '#991B1B', textDark: '#FECACA',
     accent: '#EF4444', accentDark: '#F87171',
+  },
+  'MEDIA_CHANNEL': {
+    bg: '#E0E7FF', bgDark: '#1E1B4B',
+    border: '#6366F1', borderDark: '#818CF8',
+    text: '#3730A3', textDark: '#C7D2FE',
+    accent: '#6366F1', accentDark: '#818CF8',
   },
   'RISK': {
     bg: '#FEE2E2', bgDark: '#450A0A',
@@ -289,6 +296,16 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <path d="M9 12v.01" />
           <path d="M9 15v.01" />
           <path d="M9 18v.01" />
+        </svg>
+      );
+    
+    case 'MEDIA_CHANNEL':
+      // Broadcast / megaphone icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 11v2a2 2 0 0 0 2 2h2l7 4V3L7 7H5a2 2 0 0 0-2 2z" />
+          <path d="M16 8.5a4 4 0 0 1 0 7" />
+          <path d="M19 6a8 8 0 0 1 0 12" />
         </svg>
       );
     
@@ -823,6 +840,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const canCollapse = Boolean(data.fragmentId && data.onCollapse && isExpanded && !data.isLoadingRelated);
   const showExpand = Boolean(data.fragmentId && data.onLoadRelated && !isExpanded);
   const canExpandClick = Boolean(showExpand && !isLoadingRelated);
+  const isPinnedToScope = Boolean((data as any)?.pinnedToScope);
+  const canTogglePin = Boolean((data as any)?.onTogglePin && data.canonicalPath);
   
   // 2026 visual style: neutral surface with tinted accent (less "dashboardy", more product-like)
   const accentColor = isCritical ? '#EF4444' : colors.accent;
@@ -836,7 +855,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const criticalRing = hexToRgba('#EF4444', theme === 'dark' ? 0.55 : 0.35);
   const q = getHorizonNodeVisualQuality();
 
-  const displayLabel = data.label || data.canonicalPath?.split('/').pop() || 'Fragment';
+  const displayLabel = data.label || humanizeCanonicalPath(data.canonicalPath) || 'Fragment';
   const titleLineClamp = isCollapsed ? 2 : (data.showMetrics ? 2 : 6);
   const displayType = data.type || 'Unknown';
   // Keep node size consistent with ELK layout defaults used in the canvas (see LensCanvasCockpit)
@@ -1096,6 +1115,80 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         
         {/* Right-side actions / indicators */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          {canTogglePin && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const cb = (data as any)?.onTogglePin as
+                  | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
+                  | undefined;
+                cb?.({ fragmentId: data.fragmentId, canonicalPath: data.canonicalPath, nextPinned: !isPinnedToScope });
+              }}
+              aria-label={isPinnedToScope ? 'Unpin from scope' : 'Pin to scope'}
+              title={isPinnedToScope ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 8,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                color: isPinnedToScope ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)'),
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+              }}
+            >
+              {/* Lucide "pin" (thumbtack) */}
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill={isPinnedToScope ? 'currentColor' : 'none'}
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="12" y1="17" x2="12" y2="22" />
+                <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+              </svg>
+            </button>
+          )}
+
+          {/* Индикатор критичности */}
+          {isCritical && (
+            <div
+              style={{
+                width: '10px',
+                height: '10px',
+                borderRadius: '50%',
+                background: '#EF4444',
+                flexShrink: 0,
+                boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)',
+                animation: 'horizon-pulse 2s infinite',
+              }}
+              title="Critical"
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Expand / collapse moved to bottom-right (less intrusive; more discoverable near content). */}
+      {(showExpand || canCollapse) && (
+        <div
+          style={{
+            position: 'absolute',
+            right: 12,
+            bottom: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            zIndex: 2,
+          }}
+        >
           {showExpand && (
             <button
               type="button"
@@ -1110,17 +1203,17 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               title={isLoadingRelated ? 'Loading related fragments…' : 'Expand (load related fragments)'}
               disabled={!canExpandClick}
               style={{
-                width: 22,
-                height: 22,
-                borderRadius: 8,
+                width: 24,
+                height: 24,
+                borderRadius: 9,
                 border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-                background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
-                color: theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)',
+                background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)',
+                color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
                 cursor: isLoadingRelated ? 'wait' : 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
                 opacity: isLoadingRelated ? 0.7 : 1,
               }}
             >
@@ -1137,7 +1230,6 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                   }}
                 />
               ) : (
-                /* Chevron-down icon (expand) */
                 <svg
                   width="14"
                   height="14"
@@ -1165,20 +1257,19 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               aria-label="Collapse"
               title="Collapse"
               style={{
-                width: 22,
-                height: 22,
-                borderRadius: 8,
+                width: 24,
+                height: 24,
+                borderRadius: 9,
                 border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-                background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
-                color: theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)',
+                background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)',
+                color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
               }}
             >
-              {/* Chevron-up icon (collapse) */}
               <svg
                 width="14"
                 height="14"
@@ -1193,24 +1284,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               </svg>
             </button>
           )}
-
-          {/* Индикатор критичности */}
-          {isCritical && (
-            <div
-              style={{
-                width: '10px',
-                height: '10px',
-                borderRadius: '50%',
-                background: '#EF4444',
-                flexShrink: 0,
-                boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)',
-                animation: 'horizon-pulse 2s infinite',
-              }}
-              title="Critical"
-            />
-          )}
         </div>
-      </div>
+      )}
 
       {/* Метрики (если не collapsed) */}
       {!isCollapsed && data.showMetrics && data.state && Object.keys(data.state).length > 0 && (

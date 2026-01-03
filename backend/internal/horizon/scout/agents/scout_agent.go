@@ -158,10 +158,20 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 		// Fallback name from path
 		parts := strings.Split(targetCanonicalPath, "/")
 		if len(parts) > 0 {
-			name := strings.Title(strings.ReplaceAll(parts[len(parts)-1], "_", " "))
-			scoutResult.Fragment.Labels["en"] = name
-			if scoutResult.Fragment.Identifiers["legalName"] == "" {
-				scoutResult.Fragment.Identifiers["legalName"] = name
+			seg := strings.TrimSpace(parts[len(parts)-1])
+			seg = strings.ReplaceAll(seg, "-", " ")
+			seg = strings.ReplaceAll(seg, "_", " ")
+			seg = strings.TrimSpace(seg)
+			if seg != "" {
+				// Best-effort title casing for readability when segment is slug-like.
+				name := seg
+				if name == strings.ToLower(name) {
+					name = strings.Title(name)
+				}
+				scoutResult.Fragment.Labels["en"] = name
+				if scoutResult.Fragment.Identifiers["legalName"] == "" {
+					scoutResult.Fragment.Identifiers["legalName"] = name
+				}
 			}
 		}
 	}
@@ -174,6 +184,8 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 	if scoutResult.Fragment.Type == "" {
 		// Infer type from canonicalPath (stable namespaces) or default to Organization.
 		switch {
+		case strings.Contains(targetCanonicalPath, "/media/"):
+			scoutResult.Fragment.Type = models.FragmentTypeMediaChannel
 		case strings.Contains(targetCanonicalPath, "/person/"):
 			scoutResult.Fragment.Type = models.FragmentTypePerson
 		case strings.Contains(targetCanonicalPath, "/org/"):
@@ -295,7 +307,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - targetName: Full legal/official name where relevant (e.g., "Tesla, Inc.")
    - targetLegalName: Same as targetName (explicit field)
    - targetShortName: Base name without ownership suffix (e.g., "Tesla")
-   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON"
+   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL"
    - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, COMPETES_WITH, INFLUENCES
    - reason: Brief evidence/reason for this relation
    - confidence: 0.0 to 1.0
@@ -305,6 +317,8 @@ CANONICAL PATH RULES:
 - NEVER use "/discovered/*" (this is not allowed).
 - Prefer existing stable namespaces:
   - Organizations: /org/{lowercase-slug}
+  - Media channels (last-mile endpoints): /media/{platform}/{slug}
+    - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - People: /person/{lowercase-slug}
   - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
     - category: "raw" | "component" | "finished" | "service"

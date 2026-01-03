@@ -244,7 +244,7 @@ DiscoveredRelation Schema:
   "targetName": "string",
   "targetLegalName": "string",
   "targetShortName": "string",
-  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON",
+  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL",
   "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "COMPETES_WITH" | "INFLUENCES",
   "reason": "string",
   "confidence": 0.0,
@@ -255,6 +255,8 @@ CANONICAL PATH RULES:
 - NEVER use "/discovered/*" (not allowed).
 - Prefer stable namespaces:
   - Organizations: /org/{lowercase-slug}
+  - Media channels (last-mile endpoints): /media/{platform}/{slug}
+    - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - People: /person/{lowercase-slug}
   - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
     - category: "raw" | "component" | "finished" | "service"

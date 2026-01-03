@@ -90,6 +90,16 @@ func TestValidateCanonicalPath(t *testing.T) {
 			path:    "/event/launch-2024",
 			wantErr: false,
 		},
+		{
+			name:    "valid media channel path",
+			path:    "/media/telegram/v-kazani-poymut",
+			wantErr: false,
+		},
+		{
+			name:    "namespace-only path is invalid",
+			path:    "/org",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -99,6 +109,16 @@ func TestValidateCanonicalPath(t *testing.T) {
 				t.Errorf("ValidateCanonicalPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestSlugify_TransliterationCyrillic(t *testing.T) {
+	got := Slugify("В казани поймут")
+	// Expected best-effort transliteration + slugging.
+	// Note: exact transliteration scheme is internal; update this test if mapping changes.
+	want := "v-kazani-poymut"
+	if got != want {
+		t.Fatalf("Slugify(cyrillic) = %q, want %q", got, want)
 	}
 }
 

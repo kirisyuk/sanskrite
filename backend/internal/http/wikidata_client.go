@@ -295,8 +295,9 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 				continue
 			}
 			
-			// For multi-value properties (P31, P279, P366, P10565, P186), collect all values
-			if propID == "P31" || propID == "P279" || propID == "P366" || propID == "P10565" || propID == "P186" {
+			// For multi-value properties, collect all values.
+			// IMPORTANT: P452 (industry) is multi-valued for many organizations and is required for industry taxonomy mapping.
+			if propID == "P31" || propID == "P279" || propID == "P366" || propID == "P10565" || propID == "P186" || propID == "P452" || propID == "P176" {
 				var values []string
 				var rawValues []interface{}
 				for _, claim := range claims {

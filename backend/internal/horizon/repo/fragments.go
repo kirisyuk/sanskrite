@@ -344,6 +344,34 @@ func (r *HorizonFragmentsRepository) FindByIdentifier(ctx context.Context, key, 
 	return fragments, nil
 }
 
+// FindByIdentifierAndType finds fragments by a specific identifier key/value and optional fragment type.
+// This is safer than FindByIdentifier for dedup flows, because identifiers like shortName/legalName
+// can collide across different fragment types (e.g., PROGRAM vs ORGANIZATION).
+func (r *HorizonFragmentsRepository) FindByIdentifierAndType(ctx context.Context, key, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+	if key == "" || value == "" {
+		return nil, ErrInvalidDocument
+	}
+	fieldPath := fmt.Sprintf("identifiers.%s", key)
+	q := r.col.Where("tenantId", "==", "global").Where(fieldPath, "==", value)
+	if fragType != "" {
+		q = q.Where("type", "==", string(fragType))
+	}
+	q = q.Limit(10)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	fragments := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		fragments = append(fragments, &fragment)
+	}
+	return fragments, nil
+}
+
 // FindByLabel finds fragments by a specific label language and value, filtered by type.
 // For example: FindByLabel(ctx, "en", "Wingtech Technology Co., Ltd.", "ORGANIZATION")
 func (r *HorizonFragmentsRepository) FindByLabel(ctx context.Context, lang, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {

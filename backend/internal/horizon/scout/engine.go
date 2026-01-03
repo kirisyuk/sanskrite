@@ -791,6 +791,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			fragmentType = models.FragmentTypeOrganization
 		case strings.HasPrefix(job.TargetCanonicalPath, "/person/"):
 			fragmentType = models.FragmentTypePerson
+		case strings.HasPrefix(job.TargetCanonicalPath, "/media/"):
+			fragmentType = models.FragmentTypeMediaChannel
 		}
 
 		resolved, err := e.canonicalPathResolver.Resolve(ctx, job.TargetCanonicalPath, fragmentType)
@@ -1246,6 +1248,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			defaultType = models.FragmentTypeOrganization
 		case strings.HasPrefix(job.TargetCanonicalPath, "/person/"):
 			defaultType = models.FragmentTypePerson
+		case strings.HasPrefix(job.TargetCanonicalPath, "/media/"):
+			defaultType = models.FragmentTypeMediaChannel
 		}
 
 		// Создаем базовый фрагмент

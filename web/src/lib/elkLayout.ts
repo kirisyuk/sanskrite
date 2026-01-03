@@ -73,6 +73,8 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'SUBSIDIARY_OF': 1,
   'MANAGES': 1,
   'CONTROLS': 1,
+  'BOARD_MEMBER_OF': 1,
+  'EXECUTIVE_OF': 1,
 
   // 2) Products & dependency (inputs/outputs)
   'PRODUCES': 2,
@@ -431,6 +433,8 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'PARENT_OF',
     'MANAGES',
     'CONTROLS',
+    'BOARD_MEMBER_OF',
+    'EXECUTIVE_OF',
     // Products / supply / dependencies (inputs+outputs)
     'PRODUCES',
     'SUPPLIES_TO',
@@ -834,7 +838,7 @@ export function deriveLevelsTreeMetadata<T = any>(
   // If we traverse INCOMING edge of this type: Rank - 1
   const HIERARCHY_TYPES = new Set([
     // Corporate structure / control
-    'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN',
+    'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
     'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'

@@ -59,6 +59,31 @@ func (h *HorizonHandlers) ResolveIntent(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Best-effort: if anchors already exist in our graph, fill anchor.name from the stored English label.
+	// This improves linking and makes UI/lens naming more stable without requiring extra LLM grounding.
+	if intent != nil && h.service != nil && h.service.Fragments() != nil && len(intent.Anchors) > 0 {
+		for i := range intent.Anchors {
+			cp := strings.TrimSpace(intent.Anchors[i].CanonicalPath)
+			if cp == "" {
+				continue
+			}
+			frag, ferr := h.service.Fragments().GetByCanonicalPath(r.Context(), cp)
+			if ferr != nil || frag == nil {
+				continue
+			}
+			n := strings.TrimSpace(frag.Labels["en"])
+			if n == "" {
+				n = strings.TrimSpace(frag.Identifiers["shortName"])
+			}
+			if n == "" {
+				n = strings.TrimSpace(frag.Identifiers["legalName"])
+			}
+			if n != "" {
+				intent.Anchors[i].Name = n
+			}
+		}
+	}
 	trace.Log(r.Context(), "intent", "intent.resolve.http.ok", map[string]any{
 		"tenantId":    authInfo.TenantID,
 		"focus":       trace.Trunc(intent.Focus, 140),

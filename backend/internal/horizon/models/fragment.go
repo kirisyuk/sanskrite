@@ -28,6 +28,9 @@ type HorizonFragment struct {
 	Type          FragmentType `json:"type" firestore:"type"`
 	EntityPath    string       `json:"entityPath" firestore:"entityPath"` // /Organization/Corporation/Public
 	SectorPath    string       `json:"sectorPath" firestore:"sectorPath"` // /Technology/Semiconductors/Manufacturing
+	// IndustryPaths are canonical, multi-valued industry classifications (Horizon-first taxonomy).
+	// Format: /industry/{sector}/{group}/{industry}/{subindustry}
+	IndustryPaths []string `json:"industryPaths,omitempty" firestore:"industryPaths,omitempty"`
 
 	// IndexPaths — денормализованные “координаты” фрагмента для детерминированного картографирования/фильтрации.
 	// Собирается из canonicalPath + (sectorPath/entityPath + ancestors) + location + tags + identifiers + (optional spheres).

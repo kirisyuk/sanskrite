@@ -15,6 +15,7 @@ type HorizonHandlers struct {
 	lensItemsHandler *LensItemsHandler
 	genAIHandler   *httputil.GenAIHandler
 	docsRepo       *corerepo.DocumentsRepository
+	usersRepo      *corerepo.UsersRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -39,6 +40,12 @@ func (h *HorizonHandlers) WithGenAIHandler(handler *httputil.GenAIHandler) *Hori
 // WithDocumentsRepo wires the generic DocumentsRepository (rag_documents) for Horizon-side helpers.
 func (h *HorizonHandlers) WithDocumentsRepo(docs *corerepo.DocumentsRepository) *HorizonHandlers {
 	h.docsRepo = docs
+	return h
+}
+
+// WithUsersRepo wires Core UsersRepository for Human-in-the-Loop admin gating.
+func (h *HorizonHandlers) WithUsersRepo(users *corerepo.UsersRepository) *HorizonHandlers {
+	h.usersRepo = users
 	return h
 }
 
@@ -282,9 +289,22 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 
 // HandleEdgeRoutes обрабатывает все запросы к /api/horizon/edges/{id}
 func (h *HorizonHandlers) HandleEdgeRoutes(w http.ResponseWriter, r *http.Request) {
-	edgeID := extractIDFromPath(r, "/api/horizon/edges/")
+	path := strings.TrimPrefix(r.URL.Path, "/api/horizon/edges/")
+	path = strings.Trim(path, "/")
+	if path == "" {
+		http.Error(w, "Edge ID required in path", http.StatusBadRequest)
+		return
+	}
+	parts := strings.Split(path, "/")
+	edgeID := strings.TrimSpace(parts[0])
 	if edgeID == "" {
 		http.Error(w, "Edge ID required in path", http.StatusBadRequest)
+		return
+	}
+
+	// Human-in-the-loop edge curation: POST /api/horizon/edges/{id}/hitl
+	if len(parts) > 1 && strings.EqualFold(strings.TrimSpace(parts[1]), "hitl") {
+		h.HumanInTheLoopEdge(w, r, edgeID)
 		return
 	}
 

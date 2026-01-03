@@ -149,7 +149,7 @@ Return ONLY JSON with this schema:
       "targetName": "string",
       "targetLegalName": "string",
       "targetShortName": "string",
-      "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON",
+      "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL",
       "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "COMPETES_WITH" | "INFLUENCES",
       "reason": "string",
       "confidence": 0.0,
@@ -164,6 +164,8 @@ RULES:
 - confidence MUST be <= 0.65 (hypothesis), use ~0.25..0.55 typically.
 - Use stable canonical paths:
   - Organizations: /org/{slug}
+  - Media channels (last-mile endpoints): /media/{platform}/{slug}
+    - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - Facilities: /fac/{orgSlug}/{slug} when possible (prefer nested over flat /fac/{slug})
   - People: /person/{slug}
   - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}

@@ -73,6 +73,9 @@ const (
 	FragmentTypeProgram      FragmentType = "PROGRAM"
 	FragmentTypeMarket       FragmentType = "MARKET"
 	FragmentTypePerson       FragmentType = "PERSON"
+	// FragmentTypeMediaChannel represents a "last-mile" media endpoint (e.g., a specific public Telegram channel),
+	// not a media holding/company. This helps model narratives and distribution channels separately from owners.
+	FragmentTypeMediaChannel FragmentType = "MEDIA_CHANNEL"
 	FragmentTypeSupplyLink   FragmentType = "SUPPLY_LINK" // Tenant-specific supply chain link
 )
 

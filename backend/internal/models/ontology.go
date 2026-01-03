@@ -98,6 +98,9 @@ type Entity struct {
 	KBRefs        []KBReference          `json:"kbRefs,omitempty" firestore:"kbRefs,omitempty"`
 	Identifiers   map[string]string      `json:"identifiers,omitempty" firestore:"identifiers,omitempty"` // scheme -> value
 	Attributes    map[string]interface{} `json:"attributes,omitempty" firestore:"attributes,omitempty"`   // гибкие свойства
+	// IndustryPaths are canonical, multi-valued industry classifications (Horizon-first taxonomy).
+	// Format: /industry/{sector}/{group}/{industry}/{subindustry}
+	IndustryPaths []string `json:"industryPaths,omitempty" firestore:"industryPaths,omitempty"`
 	ValidFrom     *time.Time             `json:"validFrom,omitempty" firestore:"validFrom,omitempty"`
 	ValidTo       *time.Time             `json:"validTo,omitempty" firestore:"validTo,omitempty"`
 	HomeLocation  *Location              `json:"homeLocation,omitempty" firestore:"homeLocation,omitempty"`

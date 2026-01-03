@@ -279,6 +279,8 @@ func (v *PreCreateValidator) expectedPathPrefix(fragType models.FragmentType) st
 		return "/product/"
 	case models.FragmentTypePerson:
 		return "/person/"
+	case models.FragmentTypeMediaChannel:
+		return "/media/"
 	default:
 		return ""
 	}
@@ -322,6 +324,11 @@ var CanonicalPathPolicies = map[models.FragmentType]CanonicalPathPolicy{
 		Prefix:      "/person/",
 		Example:     "/person/elon-musk",
 		Description: "Person paths use lowercase hyphenated names",
+	},
+	models.FragmentTypeMediaChannel: {
+		Prefix:      "/media/",
+		Example:     "/media/telegram/v-kazani-poymut",
+		Description: "Media channel endpoints (e.g., Telegram) use /media/{platform}/{slug}",
 	},
 }
 

@@ -154,6 +154,8 @@ func (p *CanonizationPolicy) normalizeFragmentType(s string) horizonmodels.Fragm
 		return horizonmodels.FragmentTypeEvent
 	case string(horizonmodels.FragmentTypePerson), "HUMAN", "INDIVIDUAL":
 		return horizonmodels.FragmentTypePerson
+	case string(horizonmodels.FragmentTypeMediaChannel), "MEDIA", "CHANNEL":
+		return horizonmodels.FragmentTypeMediaChannel
 	default:
 		return ""
 	}

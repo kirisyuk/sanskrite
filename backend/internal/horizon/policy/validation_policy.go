@@ -663,6 +663,8 @@ func (p *ValidationPolicy) expectedPathPrefix(fragType horizonmodels.FragmentTyp
 		return "/product/"
 	case horizonmodels.FragmentTypePerson:
 		return "/person/"
+	case horizonmodels.FragmentTypeMediaChannel:
+		return "/media/"
 	case horizonmodels.FragmentTypeSupplyLink:
 		return "/supply-link/" // Tenant-specific, format: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}
 	default:

@@ -120,6 +120,31 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Best-effort: if anchors already exist in our graph, fill anchor.name from the stored English label.
+	// This helps prefer known English names (often Wikidata-backed) over freshly generated/transliterated ones.
+	if intent != nil && h.service != nil && h.service.Fragments() != nil && len(intent.Anchors) > 0 {
+		for i := range intent.Anchors {
+			cp := strings.TrimSpace(intent.Anchors[i].CanonicalPath)
+			if cp == "" {
+				continue
+			}
+			frag, ferr := h.service.Fragments().GetByCanonicalPath(ctx, cp)
+			if ferr != nil || frag == nil {
+				continue
+			}
+			n := strings.TrimSpace(frag.Labels["en"])
+			if n == "" {
+				n = strings.TrimSpace(frag.Identifiers["shortName"])
+			}
+			if n == "" {
+				n = strings.TrimSpace(frag.Identifiers["legalName"])
+			}
+			if n != "" {
+				intent.Anchors[i].Name = n
+			}
+		}
+	}
 	anchorPaths := make([]string, 0, len(intent.Anchors))
 	for _, a := range intent.Anchors {
 		anchorPaths = append(anchorPaths, strings.TrimSpace(a.CanonicalPath))
@@ -159,7 +184,17 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 
 	name := req.Name
 	if name == "" {
-		name = intent.Focus
+		// Prefer an explicit English anchor name when available (more stable than free-form focus).
+		// Fallback to focus otherwise.
+		if intent != nil && len(intent.Anchors) > 0 {
+			if n := strings.TrimSpace(intent.Anchors[0].Name); n != "" {
+				name = n
+			} else {
+				name = intent.Focus
+			}
+		} else {
+			name = intent.Focus
+		}
 	}
 	status := strings.ToUpper(req.Status)
 	if status == "" {

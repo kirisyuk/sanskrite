@@ -237,79 +237,110 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     >
       <div className="flex flex-col h-full" style={{ position: 'relative' }}>
         <HorizonRealtimeCallouts enabled={viewMode !== 'progress'} lensId={lensId} projectId={projectId} />
-        {/* View mode switcher: show as a compact row for non-cockpit views.
-            In Cockpit, we render this as an overlay inside the graph area to maximize canvas height. */}
-        {viewMode !== 'cockpit' && (
-          <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-4">
-            <div
-              className="inline-flex items-center gap-1 rounded-xl px-2 py-1"
-              role="tablist"
-              aria-label="Lens view mode"
-              style={{
-                backgroundColor:
-                  theme === 'light'
-                    ? 'rgba(0, 0, 0, 0.02)'
-                    : 'rgba(255, 255, 255, 0.04)',
-              }}
-            >
-              {lens && (
-                <>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={viewMode === 'details'}
-                    aria-controls="lens-details-panel"
-                    onClick={() => setViewMode('details')}
-                    className="px-2 py-1 text-12 rounded"
-                    title="Details"
-                    style={{
-                      background:
-                        viewMode === 'details'
-                          ? 'var(--white-10)'
-                          : 'transparent',
-                      color: 'var(--text-heading)',
-                    }}
-                  >
-                    <span aria-hidden="true">i</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={false}
-                    aria-controls="lens-cockpit-panel"
-                    onClick={() => setViewMode('cockpit')}
-                    className="px-2 py-1 text-12 rounded"
-                    title="Cockpit"
-                    style={{
-                      background: 'transparent',
-                      color: 'var(--text-heading)',
-                    }}
-                  >
-                    <span aria-hidden="true">⧉</span>
-                  </button>
-                </>
-              )}
+        {/* View mode switcher: render as a consistent overlay (same place & style in all modes). */}
+        <div
+          role="tablist"
+          aria-label="Lens view mode"
+          style={{
+            position: 'absolute',
+            top: 12,
+            left: 12,
+            zIndex: 80,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '6px 8px',
+            borderRadius: 12,
+            border: '1px solid var(--border-subtle)',
+            background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)',
+            backdropFilter: 'blur(8px)',
+            boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
+            pointerEvents: 'auto',
+          }}
+        >
+          {lens && (
+            <>
               <button
                 type="button"
                 role="tab"
-                aria-selected={viewMode === 'progress'}
-                aria-controls="lens-progress-panel"
-                onClick={() => setViewMode('progress')}
-                className="px-2 py-1 text-12 rounded"
-                title="Progress"
+                aria-selected={viewMode === 'details'}
+                aria-controls="lens-details-panel"
+                onClick={() => setViewMode('details')}
+                title="Details"
                 style={{
-                  background:
-                    viewMode === 'progress'
-                      ? 'var(--white-10)'
-                      : 'transparent',
+                  border: 'none',
+                  background: viewMode === 'details' ? 'var(--white-10)' : 'transparent',
                   color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
               >
-                <span aria-hidden="true">↻</span>
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 16v-4" />
+                  <path d="M12 8h.01" />
+                </svg>
               </button>
-            </div>
-          </div>
-        )}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'cockpit'}
+                aria-controls="lens-cockpit-panel"
+                onClick={() => setViewMode('cockpit')}
+                title="Cockpit"
+                style={{
+                  border: 'none',
+                  background: viewMode === 'cockpit' ? 'var(--white-10)' : 'transparent',
+                  color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                  <rect x="3" y="3" width="7" height="7" rx="1.2" />
+                  <rect x="14" y="3" width="7" height="7" rx="1.2" />
+                  <rect x="3" y="14" width="7" height="7" rx="1.2" />
+                  <rect x="14" y="14" width="7" height="7" rx="1.2" />
+                </svg>
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'progress'}
+            aria-controls="lens-progress-panel"
+            onClick={() => setViewMode('progress')}
+            title="Progress"
+            style={{
+              border: 'none',
+              background: viewMode === 'progress' ? 'var(--white-10)' : 'transparent',
+              color: 'var(--text-heading)',
+              borderRadius: 10,
+              padding: '6px 8px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+              <path d="M9 6h12" />
+              <path d="M9 12h12" />
+              <path d="M9 18h12" />
+              <path d="M3.5 6l1.5 1.5L7.5 5" />
+              <path d="M3.5 12l1.5 1.5L7.5 11" />
+            </svg>
+          </button>
+        </div>
 
         <div 
           className={(viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? '' : 'space-y-6 py-2'} 
@@ -411,85 +442,6 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               }}>
                 {/* Graph area - flexible width */}
                 <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-                  {/* Cockpit overlay: view mode switcher (icons) */}
-                  <div
-                    role="tablist"
-                    aria-label="Lens view mode"
-                    style={{
-                      position: 'absolute',
-                      top: 12,
-                      left: 12,
-                      zIndex: 80,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: '6px 8px',
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)',
-                      backdropFilter: 'blur(8px)',
-                      boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
-                      pointerEvents: 'auto',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={false}
-                      onClick={() => setViewMode('details')}
-                      title="Details"
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        color: 'var(--text-heading)',
-                        borderRadius: 10,
-                        padding: '6px 8px',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        fontWeight: 700,
-                      }}
-                    >
-                      i
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={true}
-                      onClick={() => setViewMode('cockpit')}
-                      title="Cockpit"
-                      style={{
-                        border: 'none',
-                        background: 'var(--white-10)',
-                        color: 'var(--text-heading)',
-                        borderRadius: 10,
-                        padding: '6px 8px',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        fontWeight: 700,
-                      }}
-                    >
-                      ⧉
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={false}
-                      onClick={() => setViewMode('progress')}
-                      title="Progress"
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        color: 'var(--text-heading)',
-                        borderRadius: 10,
-                        padding: '6px 8px',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        fontWeight: 700,
-                      }}
-                    >
-                      ↻
-                    </button>
-                  </div>
                   <LensCanvasCockpit 
                     lensId={lensId} 
                     projectId={lens.projectId}

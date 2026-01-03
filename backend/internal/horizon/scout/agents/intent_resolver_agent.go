@@ -18,7 +18,10 @@ type IntentResolution struct {
 	Keywords    []string `json:"keywords"`
 	Anchors     []struct {
 		CanonicalPath string  `json:"canonicalPath"`
-		Type          string  `json:"type"` // ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET (best-effort)
+		Type          string  `json:"type"` // ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL (best-effort)
+		// Name is the preferred English display name for this anchor (NOT a slug, NOT a URL).
+		// If the original name is non-English and no established English name exists, transliteration is acceptable.
+		Name string `json:"name,omitempty"`
 		Confidence    float64 `json:"confidence"`
 		Reason        string  `json:"reason"`
 	} `json:"anchors"`
@@ -111,6 +114,7 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 	nAnchors := make([]struct {
 		CanonicalPath string  `json:"canonicalPath"`
 		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
 		Confidence    float64 `json:"confidence"`
 		Reason        string  `json:"reason"`
 	}, 0, len(out.Anchors))
@@ -140,6 +144,7 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 		}
 		an.Reason = strings.TrimSpace(an.Reason)
 		an.Type = strings.TrimSpace(an.Type)
+		an.Name = strings.TrimSpace(an.Name)
 		nAnchors = append(nAnchors, an)
 		if len(nAnchors) >= 5 {
 			break
@@ -157,9 +162,21 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 }
 
 func (a *IntentResolverAgent) buildPrompt(query string) string {
+	quoted := extractQuotedPhrases(query)
+	quotedBlock := ""
+	if len(quoted) > 0 {
+		quotedBlock = "\n\nQUOTED PHRASES (treat each as a likely standalone entity name):\n"
+		for i, q := range quoted {
+			if i >= 5 {
+				break
+			}
+			quotedBlock += fmt.Sprintf("- %s\n", q)
+		}
+	}
 	return fmt.Sprintf(`You are an intent resolver for a risk analysis system. You MUST convert a user query into a reusable, taxonomy-aligned intent.
 
 USER QUERY:
+%s
 %s
 
 OUTPUT JSON SCHEMA:
@@ -170,7 +187,8 @@ OUTPUT JSON SCHEMA:
   "anchors": [
     {
       "canonicalPath": "string (canonicalPath, must match the taxonomy rules below)",
-      "type": "ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET",
+      "type": "ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL",
+      "name": "string (preferred English display name; NOT a slug; translate to English when possible)",
       "confidence": 0.0,
       "reason": "short reason"
     }
@@ -178,9 +196,15 @@ OUTPUT JSON SCHEMA:
 }
 
 RULES:
+- focus MUST be in English (translate from the user query when needed). Keep it short and reusable.
+- keywords SHOULD be in English when possible (translate), but can include raw tokens like handles.
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
-  /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event
+  /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
+- If the query refers to a media brand/channel (e.g. a Telegram channel), do NOT collapse it to a GEO_REGION just because it contains a city name.
+  - Example: Telegram channel "В казани поймут" should be anchored as a MEDIA_CHANNEL: /media/telegram/{channel-slug}, not as /loc/... for Kazan.
+  - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.
+  - Add keyword "telegram" and consider /sphere/social/information.
 - ALL path segments MUST be lowercase slugs (use hyphens instead of spaces):
   - CORRECT: /org/saudi-aramco, /fac/aramco/ras-tanura-refinery, /loc/ae/na/na, /product/raw/chemical/refining/lithium-carbonate
   - WRONG: /loc/UAE, /org/Tesla Inc, /product/Lithium Carbonate
@@ -191,6 +215,7 @@ RULES:
   - GEO_REGION   -> /loc/...
   - PERSON       -> /person/...
   - PRODUCT      -> /product/...
+  - MEDIA_CHANNEL -> /media/{platform}/{slug}
   - PROGRAM      -> /program/...
   - MARKET       -> /market/...
   - EVENT        -> /event/...
@@ -225,7 +250,69 @@ RULES:
 - Provide 1-3 anchors (anchor = what the Lens should attach to).
 - Provide 1-3 spherePaths.
 - Return ONLY JSON. No markdown. No commentary.`,
-		query)
+		query, quotedBlock)
+}
+
+// extractQuotedPhrases returns a best-effort list of quoted substrings, preserving original casing.
+// Supports: "..." and «...».
+func extractQuotedPhrases(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	out := []string{}
+	seen := map[string]struct{}{}
+
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+
+	// Parse "...".
+	for {
+		i := strings.Index(s, `"`)
+		if i < 0 {
+			break
+		}
+		rest := s[i+1:]
+		j := strings.Index(rest, `"`)
+		if j < 0 {
+			break
+		}
+		add(rest[:j])
+		s = rest[j+1:]
+		if len(out) >= 10 {
+			return out
+		}
+	}
+
+	// Parse «...».
+	s2 := strings.TrimSpace(s)
+	for {
+		i := strings.Index(s2, "«")
+		if i < 0 {
+			break
+		}
+		rest := s2[i+len("«"):]
+		j := strings.Index(rest, "»")
+		if j < 0 {
+			break
+		}
+		add(rest[:j])
+		s2 = rest[j+len("»"):]
+		if len(out) >= 10 {
+			return out
+		}
+	}
+
+	return out
 }
 
 // slugifyCanonicalPath normalizes each segment of a canonical path to handle LLM outputs
@@ -273,7 +360,7 @@ func normalizeCanonicalPathForTools(raw string) string {
 	if s == "" {
 		return s
 	}
-	candidates := []string{"/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/"}
+	candidates := []string{"/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/", "/media/"}
 	for _, c := range candidates {
 		if idx := strings.Index(s, c); idx > 0 {
 			s = s[idx:]

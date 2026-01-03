@@ -109,12 +109,100 @@ func SpherePath(label string) string {
 		return "/sphere/logistics"
 	case "maritime", "shipping", "sea":
 		return "/sphere/logistics/maritime"
+	case "air", "airfreight", "air-freight":
+		return "/sphere/logistics/air"
+	case "rail":
+		return "/sphere/logistics/rail"
+	case "road", "trucking", "truck":
+		return "/sphere/logistics/road"
+	case "port", "ports":
+		return "/sphere/logistics/ports"
 	case "energy", "oil", "gas":
 		return "/sphere/energy"
 	case "finance", "markets", "banking":
 		return "/sphere/finance"
 	case "crypto", "cryptocurrency", "tokenization", "tokenisation":
 		return "/sphere/finance/crypto"
+	case "credit":
+		return "/sphere/finance/credit"
+	case "liquidity":
+		return "/sphere/finance/liquidity"
+	case "fx", "foreign-exchange", "foreign_exchange":
+		return "/sphere/finance/fx"
+	case "insurance":
+		return "/sphere/finance/insurance"
+	case "ops", "operations":
+		return "/sphere/operations"
+	case "procurement":
+		return "/sphere/operations/procurement"
+	case "manufacturing", "production", "factory":
+		return "/sphere/operations/manufacturing"
+	case "quality", "qa", "qc":
+		return "/sphere/operations/quality"
+	case "safety", "hse", "ehs":
+		return "/sphere/operations/safety"
+	case "maintenance", "downtime":
+		return "/sphere/operations/maintenance"
+	case "continuity", "bcp", "business-continuity", "business_continuity":
+		return "/sphere/operations/continuity"
+	case "workforce", "hr", "talent":
+		return "/sphere/workforce"
+	case "labor", "labour", "union":
+		return "/sphere/labor"
+	case "strike", "strikes":
+		return "/sphere/labor/strikes"
+	case "security", "physical-security", "physical_security":
+		return "/sphere/security"
+	case "crime", "theft":
+		return "/sphere/security/crime"
+	case "terror", "terrorism":
+		return "/sphere/security/terrorism"
+	case "legal", "law":
+		return "/sphere/legal"
+	case "litigation", "lawsuit":
+		return "/sphere/legal/litigation"
+	case "ip", "patent", "copyright", "trademark":
+		return "/sphere/legal/ip"
+	case "compliance":
+		return "/sphere/compliance"
+	case "aml", "kyc":
+		return "/sphere/compliance/aml"
+	case "corruption", "bribery", "anti-corruption", "anti_corruption":
+		return "/sphere/compliance/anti-corruption"
+	case "export-controls", "export_controls", "export control", "export controls", "dual-use", "dual use":
+		return "/sphere/policy/export-controls"
+	case "tariff", "customs":
+		return "/sphere/policy/customs"
+	case "tax":
+		return "/sphere/policy/tax"
+	case "license", "licensing":
+		return "/sphere/policy/licensing"
+	case "industrial-policy", "industrial policy":
+		return "/sphere/policy/industrial-policy"
+	case "environment":
+		return "/sphere/environment"
+	case "climate", "carbon", "co2":
+		return "/sphere/environment/climate"
+	case "pollution", "emissions":
+		return "/sphere/environment/pollution"
+	case "esg", "sustainability":
+		return "/sphere/esg"
+	case "governance", "corporate-governance", "corporate governance":
+		return "/sphere/governance"
+	case "health", "public-health", "public health":
+		return "/sphere/health"
+	case "pandemic", "covid":
+		return "/sphere/health/pandemic"
+	case "infrastructure":
+		return "/sphere/infrastructure"
+	case "telecom", "internet":
+		return "/sphere/infrastructure/telecom"
+	case "cloud", "datacenter", "data-center", "data center":
+		return "/sphere/infrastructure/cloud"
+	case "technology", "semiconductors":
+		return "/sphere/technology"
+	case "conflict", "war":
+		return "/sphere/geopolitics/conflict"
 	}
 	// Open-world: /sphere/{slugified label}
 	return JoinPath("sphere", l)

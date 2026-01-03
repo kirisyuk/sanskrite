@@ -28,6 +28,7 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 	canonical := []string{}
 	location := []string{}
 	spheres := []string{}
+	industry := []string{}
 	sector := []string{}
 	entity := []string{}
 	identifiers := []string{}
@@ -43,6 +44,15 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 	sp := strings.TrimSpace(f.SectorPath)
 	if sp != "" {
 		sector = append(sector, prefixedWithAncestors("/sector", sp, 6)...)
+	}
+
+	// Industry paths (canonical) → /industry/... (+ ancestors)
+	for _, ip := range f.IndustryPaths {
+		ip = strings.TrimSpace(ip)
+		if !strings.HasPrefix(ip, "/industry/") {
+			continue
+		}
+		industry = append(industry, withAncestors(ip, 6)...)
 	}
 
 	// Entity path (guide taxonomy) → index prefix /entity/...
@@ -89,6 +99,8 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 			identifiers = append(identifiers, p)
 		} else if strings.HasPrefix(p, "/sector/") {
 			sector = append(sector, p)
+		} else if strings.HasPrefix(p, "/industry/") {
+			industry = append(industry, p)
 		} else if strings.HasPrefix(p, "/entity/") {
 			entity = append(entity, p)
 		} else {
@@ -96,7 +108,7 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 		}
 	}
 
-	return NormalizeIndexPaths(MaxIndexPaths, canonical, location, spheres, sector, entity, identifiers, tags, other)
+	return NormalizeIndexPaths(MaxIndexPaths, canonical, location, spheres, industry, sector, entity, identifiers, tags, other)
 }
 
 // NormalizeIndexPaths deduplicates, normalizes, and caps index paths deterministically.
@@ -189,6 +201,30 @@ func prefixedWithAncestors(prefix, rawPath string, maxDepth int) []string {
 	out := make([]string, 0, len(parts))
 	for i := 1; i <= len(parts); i++ {
 		out = append(out, prefix+"/"+strings.Join(parts[:i], "/"))
+	}
+	return out
+}
+
+// withAncestors expands a canonical path like "/industry/a/b/c" into:
+// ["/industry/a", "/industry/a/b", "/industry/a/b/c"] up to maxDepth segments.
+func withAncestors(path string, maxDepth int) []string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return nil
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return nil
+	}
+	if maxDepth <= 0 {
+		maxDepth = 6
+	}
+	if len(parts) > maxDepth {
+		parts = parts[:maxDepth]
+	}
+	out := make([]string, 0, len(parts))
+	for i := 1; i <= len(parts); i++ {
+		out = append(out, "/"+strings.Join(parts[:i], "/"))
 	}
 	return out
 }

@@ -64,3 +64,25 @@ export function getSxSystemInstructionFull(): string {
   );
 }
 
+/**
+ * Humanize a slug-ish identifier for UI display (best-effort).
+ * Example: "turki-al-saud" -> "turki al saud"
+ */
+export function humanizeSlug(slug?: string): string {
+  const s = String(slug || '').trim();
+  if (!s) return '';
+  return s.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Humanize a canonicalPath for UI display by taking the last segment.
+ * Example: "/org/turki-al-saud" -> "turki al saud"
+ */
+export function humanizeCanonicalPath(path?: string): string {
+  const p = String(path || '').trim();
+  if (!p) return '';
+  const seg = p.split('/').filter(Boolean).pop() || '';
+  const human = humanizeSlug(seg);
+  return human || seg;
+}
+

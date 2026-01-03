@@ -115,6 +115,7 @@ func (n *TypeNormalizer) checkPathTypeMismatch(fragment *models.HorizonFragment)
 		"/market/":      models.FragmentTypeMarket,
 		"/event/":      models.FragmentTypeEvent,
 		"/person/":      models.FragmentTypePerson,
+		"/media/":       models.FragmentTypeMediaChannel,
 		"/supply-link/": models.FragmentTypeSupplyLink,
 	}
 

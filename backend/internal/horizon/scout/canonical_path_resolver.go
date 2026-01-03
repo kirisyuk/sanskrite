@@ -145,11 +145,24 @@ func (r *CanonicalPathResolver) Resolve(
 			parts := strings.Split(strings.Trim(result.CanonicalPath, "/"), "/")
 			if len(parts) >= 2 {
 				slug := parts[1]
-				// Try to infer shortName from slug (reverse slugify)
+				// Try to infer shortName from slug (reverse slugify-ish) to improve dedup hits.
+				// Important: OrgDeduplicator matches shortName exactly (repo FindByIdentifier),
+				// so we want a readable title-cased string, not the raw slug.
+				shortName := strings.ReplaceAll(slug, "-", " ")
+				shortName = strings.ReplaceAll(shortName, "_", " ")
+				shortName = strings.TrimSpace(shortName)
+				if shortName != "" && shortName == strings.ToLower(shortName) {
+					shortName = strings.Title(shortName)
+				}
 				if testFragment.Identifiers == nil {
 					testFragment.Identifiers = make(map[string]string)
 				}
-				testFragment.Identifiers["shortName"] = slug
+				if shortName != "" {
+					testFragment.Identifiers["shortName"] = shortName
+				} else {
+					// Fallback to raw slug if we couldn't humanize it (should be rare).
+					testFragment.Identifiers["shortName"] = slug
+				}
 			}
 		}
 

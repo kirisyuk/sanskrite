@@ -1,10 +1,12 @@
 import React from 'react';
 import { api } from '../lib/api';
+import { auth } from '../lib/firebase';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import { ThemeContext } from './ThemeProvider';
 import { HorizonNodeIcon, getNodeColors, formatHorizonFragmentType, getMetricColor } from './HorizonGraphNodeTypes';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { humanizeCanonicalPath } from '../lib/uiUtils';
 
 interface ObjectInspectorProps {
   nodeId: string | null;
@@ -51,6 +53,92 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   const [productIOLoading, setProductIOLoading] = React.useState(false);
   const [productIOError, setProductIOError] = React.useState<string | null>(null);
   const [productIOResult, setProductIOResult] = React.useState<{ nodes: number; edges: number } | null>(null);
+
+  // Lens-scope pin state (best-effort): derived from lens.scope to avoid stale nodeData snapshots.
+  const [lensScopePinned, setLensScopePinned] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const cp = String(nodeData?.canonicalPath || fragment?.canonicalPath || '').trim();
+      if (!lensId || !cp || edgeId) {
+        if (!cancelled) setLensScopePinned(null);
+        return;
+      }
+      try {
+        const lens = await api.getHorizonLens(lensId);
+        const scope = Array.isArray(lens?.scope) ? lens.scope.map((s: any) => String(s || '').trim()).filter(Boolean) : [];
+        const pinned = scope.includes(cp);
+        if (!cancelled) setLensScopePinned(pinned);
+      } catch {
+        if (!cancelled) setLensScopePinned(null);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [lensId, edgeId, nodeData?.canonicalPath, fragment?.canonicalPath]);
+
+  // --- Human-in-the-Loop (HITL) edge curation UI (admin only) ---
+  const [hitlIsAdmin, setHitlIsAdmin] = React.useState<boolean>(false);
+  const [hitlAdminChecked, setHitlAdminChecked] = React.useState<boolean>(false);
+  const [hitlOpen, setHitlOpen] = React.useState<boolean>(false);
+  const [hitlType, setHitlType] = React.useState<string>('');
+  const [hitlSwap, setHitlSwap] = React.useState<boolean>(false);
+  const [hitlDelete, setHitlDelete] = React.useState<boolean>(false);
+  const [hitlBusy, setHitlBusy] = React.useState<boolean>(false);
+  const [hitlError, setHitlError] = React.useState<string | null>(null);
+
+  // Determine admin role (best-effort).
+  React.useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const u = auth?.currentUser;
+        if (!u?.uid) {
+          if (!cancelled) {
+            setHitlIsAdmin(false);
+            setHitlAdminChecked(true);
+          }
+          return;
+        }
+        const profile: any = await api.getUser(u.uid);
+        const role = String(profile?.role || '').trim().toLowerCase();
+        if (!cancelled) {
+          setHitlIsAdmin(role === 'admin');
+          setHitlAdminChecked(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setHitlIsAdmin(false);
+          setHitlAdminChecked(true);
+        }
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Reset HITL modal state when a new edge is selected
+  React.useEffect(() => {
+    if (!edgeId) {
+      setHitlOpen(false);
+      setHitlError(null);
+      setHitlBusy(false);
+      setHitlSwap(false);
+      setHitlDelete(false);
+      setHitlType('');
+      return;
+    }
+    setHitlError(null);
+    setHitlBusy(false);
+    setHitlSwap(false);
+    setHitlDelete(false);
+    const t = String(edgeData?.edgeType || edge?.type || '').trim();
+    setHitlType(t);
+  }, [edgeId, edgeData, edge]);
 
   const hexToRgba = React.useCallback((hex: string, alpha: number) => {
     const h = String(hex || '').trim();
@@ -470,6 +558,33 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     }
   }, []);
 
+  const safeJSONStringify = React.useCallback((value: any): string => {
+    const seen = new WeakSet<object>();
+    return JSON.stringify(
+      value,
+      (_k, v) => {
+        if (typeof v === 'bigint') return String(v);
+        if (typeof v === 'object' && v !== null) {
+          if (seen.has(v as object)) return '[Circular]';
+          seen.add(v as object);
+        }
+        return v;
+      },
+      2,
+    );
+  }, []);
+
+  const [techCopyState, setTechCopyState] = React.useState<'idle' | 'copying' | 'copied'>('idle');
+  const techCopyTimeoutRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    return () => {
+      if (techCopyTimeoutRef.current !== null) {
+        window.clearTimeout(techCopyTimeoutRef.current);
+        techCopyTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   const humanizeEdgeType = React.useCallback((raw: any): string => {
     const t = String(raw || '').trim();
     if (!t) return 'Edge';
@@ -516,6 +631,141 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       .replace(/\b\w/g, (c) => c.toUpperCase());
     return human.length > 22 ? `${human.slice(0, 22)}…` : human;
   }, []);
+
+  const hitlKnownEdgeTypes = React.useMemo(() => {
+    // Keep this list aligned with backend `internal/horizon/models/dependency_edge.go` plus a few UI-only aliases.
+    const all = [
+      'OWNS',
+      'SUBSIDIARY_OF',
+      'CONTROLS',
+      'MANAGES',
+      'INVESTS_IN',
+      'EMPLOYED_BY',
+      'BOARD_MEMBER_OF',
+      'FOUNDED',
+      'SUPPLIES_TO',
+      'PRODUCES',
+      'CONSUMES',
+      'TRANSFORMS_INTO',
+      'DEPENDS_ON',
+      'REQUIRES',
+      'NEEDS',
+      'USES',
+      'REGULATES',
+      'INFLUENCES',
+      'LOCATED_IN',
+      'OPERATES_IN',
+      'BASED_IN',
+      'HEADQUARTERED_IN',
+      'COMPETES_WITH',
+      'PARTNERS_WITH',
+      'COOPERATES_WITH',
+      'CONFLICTS_WITH',
+      'OPPOSES',
+      'RELATED_TO',
+      'SIMILAR_TO',
+      'LINKED_TO',
+      'AFFECTS',
+      'IMPACTS',
+      'SUPPORTS',
+    ];
+    // De-dupe + stable sort
+    return Array.from(new Set(all)).sort((a, b) => a.localeCompare(b));
+  }, []);
+
+  const hitlValidate = React.useCallback((): { ok: boolean; message?: string } => {
+    // Minimal front-end validation (no fanatism).
+    // We only block obvious mismatches for a few strict rules.
+    if (hitlDelete) return { ok: true };
+    const t = String(hitlType || '').trim().toUpperCase();
+    if (!t) return { ok: false, message: 'Select edge type' };
+    const sType = String(sourceFragment?.type || '').trim().toUpperCase();
+    const tgtType = String(targetFragment?.type || '').trim().toUpperCase();
+    if (!sType || !tgtType) return { ok: true };
+
+    // Apply swap to the displayed orientation
+    const fromType = hitlSwap ? tgtType : sType;
+    const toType = hitlSwap ? sType : tgtType;
+
+    if (t === 'EMPLOYED_BY' || t === 'BOARD_MEMBER_OF') {
+      if (fromType !== 'PERSON') return { ok: false, message: `${t}: From должен быть PERSON` };
+      if (toType !== 'ORGANIZATION') return { ok: false, message: `${t}: To должен быть ORGANIZATION` };
+    }
+    if (t === 'LOCATED_IN') {
+      if (toType !== 'GEO_REGION') return { ok: false, message: 'LOCATED_IN: To должен быть GEO_REGION' };
+    }
+    if (t === 'REGULATES') {
+      if (fromType !== 'ORGANIZATION') return { ok: false, message: 'REGULATES: From должен быть ORGANIZATION' };
+    }
+    return { ok: true };
+  }, [hitlDelete, hitlType, hitlSwap, sourceFragment, targetFragment]);
+
+  const handleHitlApply = React.useCallback(async () => {
+    if (!edgeId) return;
+    setHitlBusy(true);
+    setHitlError(null);
+    try {
+      const v = hitlValidate();
+      if (!v.ok) {
+        setHitlError(v.message || 'Invalid edge edit');
+        return;
+      }
+
+      // Deletion: remove edge + best-effort remove lens item so it disappears from the current lens.
+      if (hitlDelete) {
+        await api.deleteHorizonEdge(edgeId);
+        if (lensId && (edgeData?.lensItemId || edgeId)) {
+          const itemId = String(edgeData?.lensItemId || edgeId).trim();
+          if (itemId) {
+            try {
+              await api.deleteLensItem(lensId, itemId);
+            } catch {
+              // ignore (edge is already gone globally)
+            }
+          }
+        }
+        setHitlOpen(false);
+        return;
+      }
+
+      const desiredType = String(hitlType || '').trim().toUpperCase();
+      const shouldSwap = !!hitlSwap;
+
+      // 1) Update global dependency edge via HITL endpoint (admin-only).
+      await api.humanInTheLoopUpdateHorizonEdge(edgeId, { type: desiredType, swap: shouldSwap });
+
+      // 2) Update current lens item (so graph reflects new type/direction without a full reload).
+      if (lensId) {
+        const itemId = String(edgeData?.lensItemId || edgeId).trim();
+        if (itemId) {
+          const srcId = String(edgeData?.sourceFragmentId || edge?.sourceFragmentId || '').trim();
+          const tgtId = String(edgeData?.targetFragmentId || edge?.targetFragmentId || '').trim();
+          const nextSrc = shouldSwap ? tgtId : srcId;
+          const nextTgt = shouldSwap ? srcId : tgtId;
+          await api.updateLensItem(lensId, itemId, {
+            edgeType: desiredType as any,
+            subkind: desiredType as any,
+            sourceFragmentId: nextSrc || undefined,
+            targetFragmentId: nextTgt || undefined,
+          } as any);
+        }
+      }
+
+      // Refresh inspector edge snapshot (best-effort)
+      try {
+        const refreshed = await api.getHorizonEdge(edgeId);
+        setEdge(refreshed);
+      } catch {
+        // ignore
+      }
+
+      setHitlOpen(false);
+    } catch (err: any) {
+      setHitlError(err?.response?.data?.error || err?.message || 'Failed to apply edge edit');
+    } finally {
+      setHitlBusy(false);
+    }
+  }, [edgeId, lensId, edgeData, edge, hitlDelete, hitlSwap, hitlType, hitlValidate]);
 
   const SectionCard: React.FC<{
     title: string;
@@ -711,10 +961,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     if (fromNode) return fromNode;
     const fromFrag =
       String(fragment?.labels?.en || '').trim() ||
-      String(fragment?.canonicalPath || '').trim().split('/').pop() ||
+      humanizeCanonicalPath(fragment?.canonicalPath) ||
       '';
     if (fromFrag) return fromFrag;
-    const fromPath = String(nodeData?.canonicalPath || '').trim().split('/').pop() || '';
+    const fromPath = humanizeCanonicalPath(nodeData?.canonicalPath) || '';
     return fromPath || 'Node';
   }, [nodeData, fragment]);
 
@@ -823,8 +1073,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                 }}
               >
                 <HorizonNodeIcon type={nodeType} color={nodeAccent} size={18} />
-              </div>
-            )}
+        </div>
+      )}
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 900, color: 'var(--text-heading)', lineHeight: 1.25 }}>
                 {edgeId ? 'Relationship' : nodeDisplayName}
@@ -847,6 +1097,86 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                       </AccentChip>
                     )}
                     {nodeStatus && <Chip>{nodeStatus}</Chip>}
+                    {(() => {
+                      const cp = String(nodeCanonicalPath || '').trim();
+                      const canPin = Boolean(lensId && cp);
+                      const pinned = lensScopePinned === null ? Boolean((nodeData as any)?.pinnedToScope) : lensScopePinned;
+                      if (!canPin) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            // Prefer node-provided callback (keeps graph + scope preview in sync).
+                            const cb = (nodeData as any)?.onTogglePin as
+                              | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
+                              | undefined;
+                            if (cb) {
+                              cb({ fragmentId: nodeData?.fragmentId, canonicalPath: cp, nextPinned: !pinned });
+                              setLensScopePinned(!pinned);
+                              return;
+                            }
+
+                            // Fallback: update lens scope directly.
+                            if (!lensId) return;
+                            setLensScopePinned(!pinned);
+                            try {
+                              const lens = await api.getHorizonLens(lensId);
+                              const current: string[] = Array.isArray(lens?.scope)
+                                ? lens.scope.map((s: any) => String(s || '').trim()).filter(Boolean)
+                                : [];
+                              const has = current.includes(cp);
+                              const next = !pinned ? (has ? current : [...current, cp]) : current.filter((x) => x !== cp);
+                              await api.updateHorizonLens(lensId, {
+                                tenantId: lens.tenantId,
+                                projectId: lens.projectId,
+                                name: lens.name,
+                                scope: next,
+                                viewConfig: lens.viewConfig,
+                                alertConfig: lens.alertConfig,
+                                status: lens.status,
+                                scopeFragments: lens.scopeFragments,
+                                resolvedQueries: lens.resolvedQueries,
+                                lastResolved: lens.lastResolved,
+                              });
+                            } catch {
+                              // Re-sync (best-effort)
+                              try {
+                                const lens = await api.getHorizonLens(lensId);
+                                const scope = Array.isArray(lens?.scope)
+                                  ? lens.scope.map((s: any) => String(s || '').trim()).filter(Boolean)
+                                  : [];
+                                setLensScopePinned(scope.includes(cp));
+                              } catch {
+                                // ignore
+                              }
+                            }
+                          }}
+                          title={pinned ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
+                          aria-label={pinned ? 'Unpin from scope' : 'Pin to scope'}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '4px 8px',
+                            borderRadius: 999,
+                            border: `1px solid ${pinned ? hexToRgba(nodeAccent, theme === 'dark' ? 0.42 : 0.28) : 'var(--border-subtle)'}`,
+                            background: pinned ? hexToRgba(nodeAccent, theme === 'dark' ? 0.18 : 0.12) : 'var(--white-10)',
+                            color: pinned ? 'var(--text-heading)' : 'var(--text-secondary-strong)',
+                            fontSize: 11,
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <span style={{ color: pinned ? nodeAccent : 'var(--text-secondary-strong)', display: 'inline-flex' }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="12" y1="17" x2="12" y2="22" />
+                              <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                            </svg>
+                          </span>
+                          {pinned ? 'Pinned' : 'Pin'}
+                        </button>
+                      );
+                    })()}
                   </>
                 )}
               </div>
@@ -859,23 +1189,23 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           </div>
           {loading && <Chip>Loading…</Chip>}
         </div>
-        {error && (
+      {error && (
           <div
             style={{
               padding: '10px 12px',
               borderRadius: 12,
               backgroundColor: 'rgba(239, 68, 68, 0.10)',
               border: '1px solid rgba(239, 68, 68, 0.25)',
-              color: '#f87171',
+          color: '#f87171',
               fontSize: 12,
               fontWeight: 650,
             }}
           >
-            {error}
-          </div>
-        )}
+          {error}
+        </div>
+      )}
       </div>
-
+      
       {/* Edge */}
       {edgeId && (
         <>
@@ -899,7 +1229,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                     <div style={{ fontWeight: 750 }}>
                       {sourceFragment.labels?.en ||
                         sourceFragment.labels?.[Object.keys(sourceFragment.labels || {})[0]] ||
-                        sourceFragment.canonicalPath?.split('/').pop() ||
+                        humanizeCanonicalPath(sourceFragment.canonicalPath) ||
                         'Unknown'}
                     </div>
                     {sourceFragment?.type && (
@@ -933,7 +1263,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                     <div style={{ fontWeight: 750 }}>
                       {targetFragment.labels?.en ||
                         targetFragment.labels?.[Object.keys(targetFragment.labels || {})[0]] ||
-                        targetFragment.canonicalPath?.split('/').pop() ||
+                        humanizeCanonicalPath(targetFragment.canonicalPath) ||
                         'Unknown'}
                     </div>
                     {targetFragment?.type && (
@@ -961,6 +1291,203 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             />
           </SectionCard>
 
+          {/* Admin-only: Human-in-the-Loop edge curation */}
+          {hitlAdminChecked && hitlIsAdmin && (
+            <div style={{ position: 'sticky', bottom: 12, zIndex: 5, marginTop: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+              <button
+                type="button"
+                  onClick={() => {
+                    setHitlError(null);
+                    setHitlOpen(true);
+                  }}
+                style={{
+                  padding: '8px 10px',
+                    fontSize: 12,
+                    fontWeight: 900,
+                    borderRadius: 12,
+                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                    background: 'rgba(239, 68, 68, 0.10)',
+                    color: theme === 'dark' ? 'rgba(248,113,113,0.95)' : 'rgba(185,28,28,0.95)',
+                    cursor: 'pointer',
+                  }}
+                  title="Admin: correct or delete this edge"
+                >
+                  Wrong edge
+              </button>
+              </div>
+                </div>
+              )}
+
+          {hitlOpen && (
+            <>
+                <div
+                  style={{
+                  position: 'fixed',
+                  inset: 0,
+                  zIndex: 2100,
+                  background: theme === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(15,23,42,0.22)',
+                  backdropFilter: 'blur(10px)',
+                }}
+                onMouseDown={() => {
+                  if (!hitlBusy) setHitlOpen(false);
+                }}
+              />
+              <div
+                style={{
+                  position: 'fixed',
+                  left: '50%',
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: 560,
+                  maxWidth: 'calc(100vw - 24px)',
+                  zIndex: 2150,
+                  borderRadius: 16,
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)'}`,
+                  background: theme === 'dark' ? 'rgba(10,10,12,0.78)' : 'rgba(255,255,255,0.80)',
+                  backdropFilter: 'blur(12px)',
+                  boxShadow: theme === 'dark' ? '0 22px 70px rgba(0,0,0,0.60)' : '0 22px 70px rgba(0,0,0,0.18)',
+                  overflow: 'hidden',
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <div
+                  style={{
+                    padding: '12px 14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    borderBottom: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 900, color: 'var(--text-heading)' }}>Wrong edge</div>
+                  <button
+                    type="button"
+                    disabled={hitlBusy}
+                    onClick={() => setHitlOpen(false)}
+                    style={{
+                      width: 30,
+                      height: 30,
+                      borderRadius: 10,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'transparent',
+                    color: 'var(--text-heading)',
+                      cursor: hitlBusy ? 'not-allowed' : 'pointer',
+                      opacity: hitlBusy ? 0.4 : 0.8,
+                      fontSize: 16,
+                      fontWeight: 900,
+                      lineHeight: 1,
+                    }}
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, alignItems: 'center' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 750 }}>Type</div>
+                    <select
+                      value={String(hitlType || '').trim()}
+                      disabled={hitlBusy || hitlDelete}
+                      onChange={(e) => setHitlType(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 10px',
+                        borderRadius: 12,
+                    border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-elevated)',
+                        color: 'var(--text-heading)',
+                        fontSize: 12,
+                        fontWeight: 750,
+                      }}
+                    >
+                      <option value="">Select…</option>
+                      {hitlKnownEdgeTypes.map((t) => (
+                        <option key={t} value={t}>
+                          {humanizeEdgeType(t)} ({t})
+                        </option>
+                      ))}
+                    </select>
+                </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, alignItems: 'center' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 750 }}>Direction</div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={hitlSwap}
+                        disabled={hitlBusy || hitlDelete}
+                        onChange={(e) => setHitlSwap(e.target.checked)}
+                      />
+                      <span style={{ fontSize: 12, color: 'var(--text-heading)', fontWeight: 750 }}>
+                        Swap From/To
+                </span>
+                    </label>
+              </div>
+
+                  <div style={{ padding: 10, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 800, marginBottom: 6 }}>
+                      Effective
+                </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-heading)', fontWeight: 800, display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {hitlSwap ? (targetFragment?.labels?.en || targetFragment?.canonicalPath?.split('/')?.pop() || (edge?.targetFragmentId || edgeData?.targetFragmentId) || 'Unknown')
+                          : (sourceFragment?.labels?.en || sourceFragment?.canonicalPath?.split('/')?.pop() || (edge?.sourceFragmentId || edgeData?.sourceFragmentId) || 'Unknown')}
+                  </span>
+                      <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 900 }}>→</span>
+                      <span style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {hitlSwap ? (sourceFragment?.labels?.en || sourceFragment?.canonicalPath?.split('/')?.pop() || (edge?.sourceFragmentId || edgeData?.sourceFragmentId) || 'Unknown')
+                          : (targetFragment?.labels?.en || targetFragment?.canonicalPath?.split('/')?.pop() || (edge?.targetFragmentId || edgeData?.targetFragmentId) || 'Unknown')}
+                  </span>
+                </div>
+                </div>
+
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={hitlDelete}
+                        disabled={hitlBusy}
+                        onChange={(e) => setHitlDelete(e.target.checked)}
+                      />
+                      <span style={{ fontSize: 12, fontWeight: 800, color: theme === 'dark' ? 'rgba(248,113,113,0.95)' : 'rgba(185,28,28,0.95)' }}>
+                        Delete this edge
+                  </span>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleHitlApply}
+                      disabled={hitlBusy || !hitlValidate().ok}
+                      style={{
+                        padding: '10px 14px',
+                        fontSize: 12,
+                        fontWeight: 900,
+                        borderRadius: 12,
+                        border: '1px solid var(--border-subtle)',
+                        background: hitlBusy ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
+                        color: 'var(--text-heading)',
+                        cursor: hitlBusy ? 'not-allowed' : 'pointer',
+                        opacity: hitlBusy ? 0.7 : 1,
+                        minWidth: 120,
+                      }}
+                    >
+                      {hitlBusy ? 'Applying…' : 'Apply'}
+                    </button>
+                        </div>
+
+                  {hitlError && (
+                    <div style={{ fontSize: 12, color: '#f87171', fontWeight: 650 }}>
+                      {hitlError}
+                        </div>
+                    )}
+                  </div>
+                </div>
+            </>
+          )}
+
           <Disclosure title="AI explanation" subtitle="Grounded, concise">
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
               <button
@@ -985,9 +1512,9 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               {edgeExplainCachedAt && (
                 <span style={{ fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                   Cached
-                </span>
-              )}
-            </div>
+                  </span>
+                    )}
+                  </div>
             {edgeExplainError && <div style={{ fontSize: 12, color: '#f87171', marginTop: 10 }}>{edgeExplainError}</div>}
             {edgeExplainText && (
               <div
@@ -1003,8 +1530,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                 }}
               >
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{edgeExplainText}</ReactMarkdown>
-              </div>
-            )}
+                </div>
+              )}
           </Disclosure>
 
           {(edgeData?.criticality !== undefined ||
@@ -1012,13 +1539,13 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             edgeData?.latencyHours !== undefined ||
             edge?.properties) && (
             <SectionCard title="Properties">
-              {(edgeData?.criticality !== undefined || edge?.properties?.criticality !== undefined) && (
+                {(edgeData?.criticality !== undefined || edge?.properties?.criticality !== undefined) && (
                 <KV k="Criticality" v={<span style={mono}>{edge?.properties?.criticality ?? edgeData?.criticality}</span>} />
-              )}
-              {(edgeData?.amplification !== undefined || edge?.properties?.amplification !== undefined) && (
+                )}
+                {(edgeData?.amplification !== undefined || edge?.properties?.amplification !== undefined) && (
                 <KV k="Amplification" v={<span style={mono}>{edge?.properties?.amplification ?? edgeData?.amplification}</span>} />
-              )}
-              {(edgeData?.latencyHours !== undefined || edge?.properties?.latencyHours !== undefined) && (
+                )}
+                {(edgeData?.latencyHours !== undefined || edge?.properties?.latencyHours !== undefined) && (
                 <KV k="Latency (h)" v={<span style={mono}>{edge?.properties?.latencyHours ?? edgeData?.latencyHours}</span>} />
               )}
               {edge?.direction && <KV k="Direction" v={<span>{edge.direction}</span>} />}
@@ -1039,7 +1566,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
           {edge?.metadata && (
             <Disclosure title="Metadata" subtitle="Technical details">
-              {edge.metadata.sourceFrameId && (
+                {edge.metadata.sourceFrameId && (
                 <KV k="Source frame" v={<span style={mono}>{edge.metadata.sourceFrameId}</span>} copyText={edge.metadata.sourceFrameId} />
               )}
               {edge.metadata.createdAt && <KV k="Created" v={<span>{new Date(edge.metadata.createdAt).toLocaleString()}</span>} />}
@@ -1069,7 +1596,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           </Disclosure>
         </>
       )}
-
+      
       {/* Node */}
       {nodeId && (
         <>
@@ -1087,43 +1614,43 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           </SectionCard>
 
           <Disclosure title="AI explanation" subtitle="Grounded + structured">
-            <button
-              type="button"
-              onClick={handleExplainNode}
-              disabled={nodeExplainLoading}
-              style={{
-                padding: '8px 10px',
+          <button
+            type="button"
+            onClick={handleExplainNode}
+            disabled={nodeExplainLoading}
+            style={{
+              padding: '8px 10px',
                 fontSize: 12,
                 fontWeight: 800,
                 borderRadius: 12,
-                border: '1px solid var(--border-subtle)',
-                background: nodeExplainLoading ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
-                color: 'var(--text-heading)',
-                cursor: nodeExplainLoading ? 'not-allowed' : 'pointer',
-                opacity: nodeExplainLoading ? 0.7 : 1,
-                width: '100%',
-              }}
-            >
+              border: '1px solid var(--border-subtle)',
+              background: nodeExplainLoading ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
+              color: 'var(--text-heading)',
+              cursor: nodeExplainLoading ? 'not-allowed' : 'pointer',
+              opacity: nodeExplainLoading ? 0.7 : 1,
+              width: '100%',
+            }}
+          >
               {nodeExplainLoading ? 'Explaining…' : 'Explain node + visible relationships'}
-            </button>
+          </button>
             {nodeExplainError && <div style={{ fontSize: 12, color: '#f87171', marginTop: 10 }}>{nodeExplainError}</div>}
-            {nodeExplainText && (
-              <div
-                style={{
+          {nodeExplainText && (
+            <div
+              style={{
                   marginTop: 10,
                   fontSize: 12,
-                  color: 'var(--text-heading)',
+                color: 'var(--text-heading)',
                   lineHeight: 1.5,
-                  whiteSpace: 'pre-wrap',
-                  padding: 10,
+                whiteSpace: 'pre-wrap',
+                padding: 10,
                   borderRadius: 12,
-                  backgroundColor: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-subtle)',
-                }}
-              >
-                {nodeExplainText}
-              </div>
-            )}
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              {nodeExplainText}
+            </div>
+          )}
           </Disclosure>
 
           {nodeData?.state && Object.keys(nodeData.state).length > 0 && (
@@ -1132,7 +1659,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               right={
                 <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                   0–1 and −1…+1
-                </span>
+            </span>
               }
             >
               {(() => {
@@ -1212,14 +1739,14 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
                             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {m.label}
-                            </div>
+          </div>
                             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-secondary-strong)', ...mono }}>
                               {m.scale === 'bipolar' ? (
                                 <>
                                   {m.vBipolar.toFixed(2)}
                                   <span style={{ marginLeft: 6, color: 'var(--text-tertiary-weak)', fontWeight: 700 }}>
                                     {m.pctSigned >= 0 ? `+${m.pctSigned}%` : `${m.pctSigned}%`}
-                                  </span>
+              </span>
                                 </>
                               ) : (
                                 <>
@@ -1227,8 +1754,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                                   <span style={{ marginLeft: 6, color: 'var(--text-tertiary-weak)', fontWeight: 700 }}>{m.pct}%</span>
                                 </>
                               )}
-                            </div>
-                          </div>
+            </div>
+            </div>
                           <div
                             style={{
                               marginTop: 6,
@@ -1279,9 +1806,9 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                               </>
                             ) : (
                               <div style={{ width: `${m.pct}%`, height: '100%', background: m.dot }} />
-                            )}
-                          </div>
-                        </div>
+          )}
+        </div>
+      </div>
                       </div>
                     ))}
                   </div>
@@ -1292,15 +1819,15 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
           {fragment && (
             <Disclosure title="Fragment details" subtitle="Source object metadata">
-              {fragment.labels && Object.keys(fragment.labels).length > 0 && (
+            {fragment.labels && Object.keys(fragment.labels).length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-                  {Object.entries(fragment.labels).map(([lang, label]) => (
+                {Object.entries(fragment.labels).map(([lang, label]) => (
                     <Chip key={lang}>
                       {lang}: {String(label)}
                     </Chip>
-                  ))}
-                </div>
-              )}
+                ))}
+              </div>
+            )}
               {fragment.canonicalPath && <KV k="Canonical path" v={<span style={mono}>{fragment.canonicalPath}</span>} copyText={fragment.canonicalPath} />}
               {fragment.type && <KV k="Fragment type" v={<span>{String(fragment.type)}</span>} />}
               {fragment.identifiers && Object.keys(fragment.identifiers).length > 0 && (
@@ -1310,9 +1837,9 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                     {Object.entries(fragment.identifiers).map(([k, v]) => (
                       <KV key={k} k={k} v={<span style={mono}>{String(v)}</span>} copyText={String(v)} />
                     ))}
-                  </div>
-                </div>
-              )}
+              </div>
+              </div>
+            )}
             </Disclosure>
           )}
 
@@ -1329,137 +1856,214 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                     {entity.kbRefs.map((ref: any, idx: number) => (
                       <KV key={idx} k={String(ref.kb || 'KB')} v={<span style={mono}>{String(ref.externalId || 'N/A')}</span>} />
                     ))}
-                  </div>
-                </div>
+          </div>
+        </div>
               )}
             </Disclosure>
-          )}
+      )}
 
           {(nodeData?.fragmentId || nodeId) && (
             <Disclosure title="Actions" subtitle="Operational / experimental">
               {/* Product IO */}
-              {nodeData?.fragmentId && (
+      {nodeData?.fragmentId && (
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', marginBottom: 8 }}>
-                    Hypothesis: Product IO (v1)
+            Hypothesis: Product IO (v1)
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginBottom: 10, lineHeight: 1.35 }}>
-                    Extract products this object <b>produces</b> and <b>consumes</b>, then materialize them into the global Horizon graph.
+              Extract products this object <b>produces</b> and <b>consumes</b>, then materialize them into the global Horizon graph.
                     <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary-weak)' }}>
-                      v1: PRODUCT-only. Fragment is primary; entity link is enrichment.
-                    </div>
-                  </div>
+                v1: PRODUCT-only. Fragment is primary; entity link is enrichment.
+              </div>
+            </div>
                   {productIOError && <div style={{ fontSize: 12, color: '#f87171', marginBottom: 8 }}>{productIOError}</div>}
-                  {productIOResult && (
+            {productIOResult && (
                     <div style={{ fontSize: 12, color: 'var(--text-heading)', marginBottom: 8 }}>
-                      Materialized: <b>{productIOResult.nodes}</b> nodes, <b>{productIOResult.edges}</b> edges
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleMaterializeProductIO}
-                    disabled={productIOLoading || !lensId}
-                    style={{
-                      padding: '8px 10px',
+                Materialized: <b>{productIOResult.nodes}</b> nodes, <b>{productIOResult.edges}</b> edges
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleMaterializeProductIO}
+              disabled={productIOLoading || !lensId}
+              style={{
+                padding: '8px 10px',
                       fontSize: 12,
                       fontWeight: 800,
                       borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: productIOLoading ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
-                      color: 'var(--text-heading)',
-                      cursor: productIOLoading || !lensId ? 'not-allowed' : 'pointer',
-                      opacity: productIOLoading || !lensId ? 0.7 : 1,
-                      width: '100%',
-                    }}
-                  >
-                    {productIOLoading ? 'Materializing…' : 'Materialize Product IO'}
-                  </button>
-                </div>
-              )}
+                border: '1px solid var(--border-subtle)',
+                background: productIOLoading ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
+                color: 'var(--text-heading)',
+                cursor: productIOLoading || !lensId ? 'not-allowed' : 'pointer',
+                opacity: productIOLoading || !lensId ? 0.7 : 1,
+                width: '100%',
+              }}
+            >
+              {productIOLoading ? 'Materializing…' : 'Materialize Product IO'}
+            </button>
+        </div>
+      )}
 
               {/* Ensure / Enrich */}
-              {nodeId && nodeData && fragment && (
+      {nodeId && nodeData && fragment && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button
+            <button
                     type="button"
-                    onClick={async () => {
-                      if (!fragment.id || ensuring) return;
-                      setEnsuring(true);
-                      setError(null);
-                      try {
+              onClick={async () => {
+                if (!fragment.id || ensuring) return;
+                setEnsuring(true);
+                setError(null);
+                try {
                         await api.ensureFragmentEntity(fragment.id);
-                        const fragmentData = await api.getHorizonFragment(fragment.id);
-                        setFragment(fragmentData);
-                        try {
-                          const entityData = await api.getFragmentEntity(fragment.id);
-                          setEntity(entityData);
+                  const fragmentData = await api.getHorizonFragment(fragment.id);
+                  setFragment(fragmentData);
+                  try {
+                    const entityData = await api.getFragmentEntity(fragment.id);
+                    setEntity(entityData);
                         } catch {
-                          setEntity(null);
-                        }
-                      } catch (err: any) {
-                        console.error('[ObjectInspector] Failed to ensure entity', err);
-                        setError(err.response?.data?.error || err.message || 'Failed to ensure entity');
-                      } finally {
-                        setEnsuring(false);
-                      }
-                    }}
-                    disabled={ensuring || enriching}
-                    style={{
+                    setEntity(null);
+                  }
+                } catch (err: any) {
+                  console.error('[ObjectInspector] Failed to ensure entity', err);
+                  setError(err.response?.data?.error || err.message || 'Failed to ensure entity');
+                } finally {
+                  setEnsuring(false);
+                }
+              }}
+              disabled={ensuring || enriching}
+              style={{
                       padding: '10px 12px',
                       borderRadius: 12,
-                      backgroundColor: ensuring ? 'var(--bg-secondary)' : 'var(--accent-primary)',
-                      color: 'var(--text-on-accent)',
-                      border: 'none',
-                      cursor: ensuring || enriching ? 'not-allowed' : 'pointer',
+                backgroundColor: ensuring ? 'var(--bg-secondary)' : 'var(--accent-primary)',
+                color: 'var(--text-on-accent)',
+                border: 'none',
+                cursor: ensuring || enriching ? 'not-allowed' : 'pointer',
                       fontSize: 12,
                       fontWeight: 850,
-                      opacity: ensuring || enriching ? 0.6 : 1,
-                    }}
-                  >
+                opacity: ensuring || enriching ? 0.6 : 1,
+              }}
+            >
                     {ensuring ? 'Updating…' : 'Ensure entity'}
-                  </button>
-                  {entity && (
-                    <button
+            </button>
+            {entity && (
+              <button
                       type="button"
-                      onClick={async () => {
-                        if (!fragment.id || enriching) return;
-                        setEnriching(true);
-                        setError(null);
-                        try {
-                          await api.enrichFragmentEntity(fragment.id, true);
-                          const entityData = await api.getFragmentEntity(fragment.id);
-                          setEntity(entityData);
-                          const fragmentData = await api.getHorizonFragment(fragment.id);
-                          setFragment(fragmentData);
-                        } catch (err: any) {
-                          console.error('[ObjectInspector] Failed to enrich entity', err);
-                          setError(err.response?.data?.error || err.message || 'Failed to enrich entity');
-                        } finally {
-                          setEnriching(false);
-                        }
-                      }}
-                      disabled={ensuring || enriching}
-                      style={{
+                onClick={async () => {
+                  if (!fragment.id || enriching) return;
+                  setEnriching(true);
+                  setError(null);
+                  try {
+                    await api.enrichFragmentEntity(fragment.id, true);
+                    const entityData = await api.getFragmentEntity(fragment.id);
+                    setEntity(entityData);
+                    const fragmentData = await api.getHorizonFragment(fragment.id);
+                    setFragment(fragmentData);
+                  } catch (err: any) {
+                    console.error('[ObjectInspector] Failed to enrich entity', err);
+                    setError(err.response?.data?.error || err.message || 'Failed to enrich entity');
+                  } finally {
+                    setEnriching(false);
+                  }
+                }}
+                disabled={ensuring || enriching}
+                style={{
                         padding: '10px 12px',
                         borderRadius: 12,
                         backgroundColor: enriching ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
-                        color: 'var(--text-heading)',
-                        border: '1px solid var(--border-subtle)',
-                        cursor: ensuring || enriching ? 'not-allowed' : 'pointer',
+                  color: 'var(--text-heading)',
+                  border: '1px solid var(--border-subtle)',
+                  cursor: ensuring || enriching ? 'not-allowed' : 'pointer',
                         fontSize: 12,
                         fontWeight: 850,
-                        opacity: ensuring || enriching ? 0.6 : 1,
-                      }}
-                    >
+                  opacity: ensuring || enriching ? 0.6 : 1,
+                }}
+              >
                       {enriching ? 'Updating…' : 'Enrich entity'}
-                    </button>
-                  )}
-                </div>
+              </button>
+            )}
+        </div>
               )}
             </Disclosure>
           )}
 
           <Disclosure title="Technical" subtitle="IDs & raw fields">
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (edgeId) return; // Node-only
+                  const fid = String(fragmentIdForNode || '').trim();
+                  setTechCopyState('copying');
+                  try {
+                    // Best-effort: include latest fragment + linked entity (where Wikidata lives in kbRefs).
+                    let frag: any = fragment;
+                    let ent: any = entity;
+                    if (fid) {
+                      try {
+                        frag = await api.getHorizonFragment(fid);
+                      } catch {
+                        // keep existing
+                      }
+                      try {
+                        ent = await api.getFragmentEntity(fid);
+                        setEntity(ent);
+                      } catch {
+                        // keep existing
+                      }
+                    }
+
+                    const wikidataRefs = Array.isArray(ent?.kbRefs)
+                      ? ent.kbRefs.filter((r: any) => String(r?.kb || '').toLowerCase().includes('wikidata'))
+                      : [];
+
+                    const payload = {
+                      kind: 'horizon_fragment_tech_dump',
+                      capturedAt: new Date().toISOString(),
+                      lensId: lensId || null,
+                      node: {
+                        nodeId: nodeId || null,
+                        fragmentId: fid || null,
+                        canonicalPath: String(nodeCanonicalPath || frag?.canonicalPath || '').trim() || null,
+                        type: nodeType || frag?.type || null,
+                        status: nodeStatus || frag?.status || null,
+                      },
+                      fragment: frag || null,
+                      linkedEntity: ent || null,
+                      wikidata: {
+                        refs: wikidataRefs,
+                      },
+                      nodeData: nodeData || null,
+                    };
+
+                    await copyToClipboard(safeJSONStringify(payload));
+                    setTechCopyState('copied');
+                    if (techCopyTimeoutRef.current !== null) window.clearTimeout(techCopyTimeoutRef.current);
+                    techCopyTimeoutRef.current = window.setTimeout(() => {
+                      setTechCopyState('idle');
+                      techCopyTimeoutRef.current = null;
+                    }, 1200);
+                  } catch (e) {
+                    console.warn('[ObjectInspector] tech copy failed', e);
+                    setTechCopyState('idle');
+                  }
+                }}
+                disabled={techCopyState === 'copying' || Boolean(edgeId)}
+                title="Copy all technical data (fragment + linked entity/Wikidata) as JSON"
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--white-10)',
+                  color: 'var(--text-heading)',
+                  cursor: techCopyState === 'copying' || Boolean(edgeId) ? 'not-allowed' : 'pointer',
+                  fontSize: 12,
+                  fontWeight: 850,
+                  opacity: techCopyState === 'copying' || Boolean(edgeId) ? 0.55 : 1,
+                }}
+              >
+                {techCopyState === 'copying' ? 'Copying…' : techCopyState === 'copied' ? 'Copied' : 'Copy JSON'}
+              </button>
+            </div>
             <KV k="Node ID" v={<span style={mono}>{nodeId}</span>} copyText={nodeId} />
             {fragmentIdForNode && <KV k="Fragment ID" v={<span style={mono}>{fragmentIdForNode}</span>} copyText={fragmentIdForNode} />}
             {(nodeData as any)?.lensItemId && (

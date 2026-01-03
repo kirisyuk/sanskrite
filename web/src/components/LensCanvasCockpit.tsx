@@ -22,6 +22,7 @@ import { HORIZON_NODE_TYPES, setHorizonNodeVisualQuality, type HorizonNodeVisual
 import { api } from '../lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { humanizeCanonicalPath } from '../lib/uiUtils';
 import {
   layoutExpansionWithGroups,
   layoutFullGraph,
@@ -767,8 +768,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   }, []);
 
-  type HoverHighlightMode = 'off' | 'ownership' | 'production' | 'supplies' | 'competition';
-  const [hoverHighlightMode, setHoverHighlightMode] = React.useState<HoverHighlightMode>('ownership');
+  type HoverHighlightMode = 'off' | 'control' | 'production' | 'supplies' | 'competition';
+  const [hoverHighlightMode, setHoverHighlightMode] = React.useState<HoverHighlightMode>('control');
 
   // Safety: if hover highlight is disabled, ensure no stale opacity stays on nodes (can happen if a rendered snapshot
   // was persisted earlier by mistake).
@@ -806,6 +807,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear' | 'levels'>('freeform');
   const [showToolbarMenu, setShowToolbarMenu] = React.useState(false);
   const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const [showLayoutMenu, setShowLayoutMenu] = React.useState(false);
+  const layoutMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [showHoverModeMenu, setShowHoverModeMenu] = React.useState(false);
   const hoverModeMenuRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -836,7 +839,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, []);
 
   const levelsExpandEdgeTypes = React.useMemo((): string[] => {
-    const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN'];
+    const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
     const DEPENDENCIES = [
       'SUPPLIES_TO',
       'PRODUCES',
@@ -967,6 +970,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   }, [showToolbarMenu]);
 
+  // Layout dropdown interactions
+  React.useEffect(() => {
+    if (!showLayoutMenu) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowLayoutMenu(false);
+      }
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = layoutMenuRef.current;
+      const target = e.target as globalThis.Node | null;
+      if (!el || !target) return;
+      if (el.contains(target)) return;
+      setShowLayoutMenu(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [showLayoutMenu]);
+
   // Hover mode dropdown interactions
   React.useEffect(() => {
     if (!showHoverModeMenu) return;
@@ -1041,6 +1068,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [scopePreview, setScopePreview] = React.useState<Array<{ canonicalPath: string; name?: string; type?: string }>>([]);
   const [scopePreviewLoading, setScopePreviewLoading] = React.useState(false);
   const [lensMetaLoading, setLensMetaLoading] = React.useState(false);
+  const lensMetaRef = React.useRef<any | null>(null);
 
   // Layout mode helpers - определяют, какую логику раскладки использовать
   const isFreeformLayout = layoutMode === 'freeform';
@@ -1092,6 +1120,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         setLensMetaLoading(true);
         const lens = await api.getHorizonLens(lensId);
         if (!alive) return;
+        lensMetaRef.current = lens || null;
         setLensName(typeof lens?.name === 'string' ? lens.name : null);
         const scope = Array.isArray(lens?.scope) ? lens.scope : [];
         const cleaned = scope
@@ -1101,6 +1130,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       } catch (e) {
         if (!alive) return;
         // Best-effort: keep empty scope preview if we can't load lens metadata
+        lensMetaRef.current = null;
         setLensName(null);
         setLensScopePaths([]);
       } finally {
@@ -1112,6 +1142,81 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       alive = false;
     };
   }, [lensId]);
+
+  const toggleScopePin = React.useCallback(
+    async (args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => {
+      const cp = String(args?.canonicalPath || '').trim();
+      if (!lensId || !cp) return;
+
+      // Optimistic UI update
+      setLensScopePaths((prev) => {
+        const has = prev.includes(cp);
+        if (args.nextPinned) {
+          return has ? prev : [...prev, cp];
+        }
+        return prev.filter((x) => x !== cp);
+      });
+
+      try {
+        const lens = lensMetaRef.current || (await api.getHorizonLens(lensId));
+        if (!lens) return;
+        lensMetaRef.current = lens;
+        const currentScope: string[] = Array.isArray(lens?.scope) ? lens.scope.map((s: any) => String(s || '').trim()).filter(Boolean) : [];
+        const has = currentScope.includes(cp);
+        const nextScope = args.nextPinned ? (has ? currentScope : [...currentScope, cp]) : currentScope.filter((x) => x !== cp);
+
+        const updated = await api.updateHorizonLens(lensId, {
+          tenantId: lens.tenantId,
+          projectId: lens.projectId,
+          name: lens.name,
+          scope: nextScope,
+          viewConfig: lens.viewConfig,
+          alertConfig: lens.alertConfig,
+          status: lens.status,
+          scopeFragments: lens.scopeFragments,
+          resolvedQueries: lens.resolvedQueries,
+          lastResolved: lens.lastResolved,
+        });
+        lensMetaRef.current = updated;
+        const cleaned = (Array.isArray(updated?.scope) ? updated.scope : [])
+          .map((s: any) => String(s || '').trim())
+          .filter(Boolean);
+        setLensScopePaths(cleaned);
+      } catch (e) {
+        // Revert optimistic update on failure (best-effort)
+        try {
+          const lens = await api.getHorizonLens(lensId);
+          lensMetaRef.current = lens || null;
+          const scope = Array.isArray(lens?.scope) ? lens.scope : [];
+          const cleaned = scope.map((s: any) => String(s || '').trim()).filter(Boolean);
+          setLensScopePaths(cleaned);
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [lensId],
+  );
+
+  // Keep nodes in sync with current lens scope (pinned state + callback).
+  React.useEffect(() => {
+    if (!lensId) return;
+    const pinned = new Set(lensScopePaths.map((p) => String(p || '').trim()).filter(Boolean));
+    setNodes((prev) => {
+      if (!prev || prev.length === 0) return prev;
+      let changed = false;
+      const next = (prev as any[]).map((n) => {
+        const d: any = (n as any)?.data;
+        if (!d || d.isGroup) return n;
+        const cp = String(d.canonicalPath || '').trim();
+        const isPinned = cp ? pinned.has(cp) : false;
+        if (d.pinnedToScope === isPinned && d.onTogglePin === toggleScopePin) return n;
+        changed = true;
+        return { ...(n as any), data: { ...d, pinnedToScope: isPinned, onTogglePin: toggleScopePin } };
+      });
+      return changed ? (next as any) : prev;
+    });
+  }, [lensId, lensScopePaths, nodes.length, setNodes, toggleScopePin]);
 
   // Lens scope preview: resolve canonical paths to (name/type) best-effort
   React.useEffect(() => {
@@ -1374,11 +1479,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       };
     }
     
-    // 🔵 Владение/Иерархия — Синий
-    if (['OWNS', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'EMPLOYED_BY', 'BOARD_MEMBER_OF', 'FOUNDED', 'PARENT_OF', 'SUBSIDIARY_OF'].includes(type)) {
+    // 🔵 Equity ownership / corporate structure — Blue (solid)
+    // Treat INVESTS_IN here intentionally (often part of ownership structure in our UX).
+    if (['OWNS', 'INVESTS_IN', 'PARENT_OF', 'SUBSIDIARY_OF'].includes(type)) {
       return {
         stroke: '#3B82F6', // blue-500
         strokeWidth: baseWidth,
+      };
+    }
+
+    // 🟦 Control / management (non-equity) — Indigo (dashed)
+    if (['CONTROLS', 'MANAGES'].includes(type)) {
+      return {
+        stroke: '#6366F1', // indigo-500
+        strokeWidth: Math.max(1.3, baseWidth),
+        strokeDasharray: '6 4',
+      };
+    }
+
+    // 🟦 Governance ties — Indigo (light dotted)
+    if (['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED'].includes(type)) {
+      return {
+        stroke: '#6366F1', // indigo-500
+        strokeWidth: Math.max(1.1, baseWidth * 0.9),
+        strokeDasharray: '2 3',
       };
     }
     
@@ -1687,6 +1811,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         // Преобразуем LensItems в ноды и рёбра
         const { nodes: loadedNodes, edges: loadedEdges } = convertLensItemsToGraph(items);
         dbg('[Cockpit] Initial load converted:', { nodes: loadedNodes.length, edges: loadedEdges.length });
+        // IMPORTANT: do not re-load lens items when scope changes (pin/unpin).
+        // Pin state is injected via a separate effect that reacts to scope + nodes.
         setNodes(loadedNodes);
         setEdges(loadedEdges);
         
@@ -1933,7 +2059,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             depth: 0,
             canonicalPath: fragment.canonicalPath,
             indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
-            label: fragment.labels?.en || fragment.canonicalPath?.split('/').pop() || `Fragment ${index}`,
+            label: fragment.labels?.en || humanizeCanonicalPath(fragment.canonicalPath) || `Fragment ${index}`,
             type: fragment.type,
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
             showMetrics: showNodeMetrics,
@@ -2097,7 +2223,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           subkind: 'fragment',
           fragmentId: norm(fragment.id),
           canonicalPath: fragment.canonicalPath,
-          label: fragment.labels?.en || fragment.canonicalPath?.split('/').pop() || `Fragment ${index}`,
+          label: fragment.labels?.en || humanizeCanonicalPath(fragment.canonicalPath) || `Fragment ${index}`,
           type: fragment.type,
           state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
           status: fragment.status,
@@ -2945,7 +3071,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             depth: childDepth,
             canonicalPath: fragment.canonicalPath,
             indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
-            label: fragment.labels?.en || fragment.canonicalPath?.split('/').pop() || 'Fragment',
+            label: fragment.labels?.en || humanizeCanonicalPath(fragment.canonicalPath) || 'Fragment',
             type: fragment.type,
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
             showMetrics: showNodeMetrics,
@@ -3737,7 +3863,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   onScopeScoutRef.current = openScopeScoutModal;
 
   // Hover highlight: compute a relation-specific cluster for the hovered node.
-  // - ownership: transitive over OWNS/SUBSIDIARY_OF
+  // - control: transitive over corporate control relations (OWNS/SUBSIDIARY_OF/CONTROLS/MANAGES/INVESTS_IN/...)
   // - supplies: direct neighbors via SUPPLIES_TO
   // - production: direct neighbors via PRODUCES
   // - competition: direct neighbors via COMPETES_WITH/CONFLICTS_WITH/OPPOSES
@@ -3765,11 +3891,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (!visibleNodeIds.has(hovered)) return null;
 
     const normalizeType = (t: string) => String(t || '').toUpperCase().trim();
+    // Control highlight uses two semantic buckets:
+    // - "chain" (transitive control propagation): used for traversal up/down
+    //   - equity: OWNS/SUBSIDIARY_OF/INVESTS_IN
+    //   - non-equity control: CONTROLS/MANAGES (same traversal semantics, different rendering)
+    // - "governance overlay": board/employment/founding ties shown inside the cluster (not used to expand it)
+    const CONTROL_CHAIN_TYPES = new Set<string>(['OWNS', 'SUBSIDIARY_OF', 'INVESTS_IN', 'CONTROLS', 'MANAGES']);
+    const CONTROL_GOVERNANCE_TYPES = new Set<string>(['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED']);
     const isEdgeTypeOfMode = (t: string) => {
       const u = normalizeType(t);
       switch (hoverHighlightMode) {
-        case 'ownership':
-          return u === 'OWNS' || u === 'SUBSIDIARY_OF';
+        case 'control':
+          return CONTROL_CHAIN_TYPES.has(u) || CONTROL_GOVERNANCE_TYPES.has(u);
         case 'production':
           return u === 'PRODUCES';
         case 'supplies':
@@ -3782,8 +3915,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
 
     type Adj = { to: string; edgeId: string };
+    type AdjIn = { from: string; edgeId: string };
+    // For most modes we treat the relation as undirected (we only need "neighbors").
     const adj = new Map<string, Adj[]>();
-    const edgeIds = new Set<string>();
+    // For control we want directional semantics:
+    // - down: controller -> controlled (fan-out)
+    // - up: controlled -> controller (chains only)
+    // IMPORTANT: traversal uses ONLY chain types; governance edges are overlaid (not used to expand the cluster).
+    const adjOut = new Map<string, Adj[]>();
+    const adjIn = new Map<string, AdjIn[]>();
+    const governanceEdges: Array<{ id: string; a: string; b: string }> = [];
 
     for (const e of edges) {
       const eid = String((e as any)?.id || '').trim();
@@ -3795,31 +3936,132 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       const edgeType = String((e as any)?.data?.edgeType || (e as any)?.label || (e as any)?.type || '');
       if (!isEdgeTypeOfMode(edgeType)) continue;
+      const u = normalizeType(edgeType);
 
-      edgeIds.add(eid);
+      // Control mode: use directional semantics.
+      if (hoverHighlightMode === 'control') {
+        if (CONTROL_GOVERNANCE_TYPES.has(u)) {
+          governanceEdges.push({ id: eid, a: src, b: dst });
+          continue;
+        }
+        if (!CONTROL_CHAIN_TYPES.has(u)) {
+          continue;
+        }
+
+        // Normalize "control direction" so that from -> to means "from controls to".
+        // SUBSIDIARY_OF is inverse of OWNS: subsidiary -> owner, but control flows owner -> subsidiary.
+        let from = src;
+        let to = dst;
+        if (u === 'SUBSIDIARY_OF') {
+          from = dst;
+          to = src;
+        }
+
+        if (!adjOut.has(from)) adjOut.set(from, []);
+        adjOut.get(from)!.push({ to, edgeId: eid });
+
+        if (!adjIn.has(to)) adjIn.set(to, []);
+        adjIn.get(to)!.push({ from, edgeId: eid });
+        continue;
+      }
+
+      // Other modes: undirected neighbor graph.
       if (!adj.has(src)) adj.set(src, []);
       if (!adj.has(dst)) adj.set(dst, []);
       adj.get(src)!.push({ to: dst, edgeId: eid });
       adj.get(dst)!.push({ to: src, edgeId: eid });
     }
 
-    if (adj.size === 0) return null;
+    if (hoverHighlightMode === 'control') {
+      if (adjOut.size === 0 && adjIn.size === 0) return null;
+    } else {
+      if (adj.size === 0) return null;
+    }
 
-    const visited = new Set<string>();
     const usedEdgeIds = new Set<string>();
-    const maxSteps = hoverHighlightMode === 'ownership' ? 6 : 1;
-    const q: Array<{ id: string; depth: number }> = [{ id: hovered, depth: 0 }];
-    visited.add(hovered);
+    const maxSteps = hoverHighlightMode === 'control' ? 6 : 1;
 
-    while (q.length > 0) {
-      const cur = q.shift()!;
+    // Default: undirected BFS (direct neighbors for most relations).
+    if (hoverHighlightMode !== 'control') {
+      const visited = new Set<string>();
+      const q: Array<{ id: string; depth: number }> = [{ id: hovered, depth: 0 }];
+      visited.add(hovered);
+
+      while (q.length > 0) {
+        const cur = q.shift()!;
+        if (cur.depth >= maxSteps) continue;
+        const next = adj.get(cur.id) || [];
+        for (const a of next) {
+          usedEdgeIds.add(a.edgeId);
+          if (!visited.has(a.to)) {
+            visited.add(a.to);
+            q.push({ id: a.to, depth: cur.depth + 1 });
+          }
+        }
+      }
+
+      if (visited.size <= 1 || usedEdgeIds.size === 0) return null;
+      return { nodeIds: visited, edgeIds: usedEdgeIds };
+    }
+
+    // Control mode: asymmetrical traversal over "chain" edges.
+    // - Down: expand broadly (fan-out) to controlled entities (up to maxSteps).
+    // - Up: expand only along ownership/control chains to ultimate controllers (may branch).
+    const downVisited = new Set<string>([hovered]);
+    const upVisited = new Set<string>([hovered]);
+
+    const qDown: Array<{ id: string; depth: number }> = [{ id: hovered, depth: 0 }];
+    while (qDown.length > 0) {
+      const cur = qDown.shift()!;
       if (cur.depth >= maxSteps) continue;
-      const next = adj.get(cur.id) || [];
+      const next = adjOut.get(cur.id) || [];
       for (const a of next) {
         usedEdgeIds.add(a.edgeId);
-        if (!visited.has(a.to)) {
-          visited.add(a.to);
-          q.push({ id: a.to, depth: cur.depth + 1 });
+        if (!downVisited.has(a.to)) {
+          downVisited.add(a.to);
+          qDown.push({ id: a.to, depth: cur.depth + 1 });
+        }
+      }
+    }
+
+    const qUp: Array<{ id: string; depth: number }> = [{ id: hovered, depth: 0 }];
+    while (qUp.length > 0) {
+      const cur = qUp.shift()!;
+      if (cur.depth >= maxSteps) continue;
+      const next = adjIn.get(cur.id) || [];
+      for (const a of next) {
+        usedEdgeIds.add(a.edgeId);
+        if (!upVisited.has(a.from)) {
+          upVisited.add(a.from);
+          qUp.push({ id: a.from, depth: cur.depth + 1 });
+        }
+      }
+    }
+
+    const visited = new Set<string>();
+    for (const id of downVisited) visited.add(id);
+    for (const id of upVisited) visited.add(id);
+
+    // Overlay governance edges, but do not use them to expand the cluster.
+    // Rule:
+    // - If we found a chain cluster, include governance edges fully inside it.
+    // - If there's no chain at all, still allow 1-hop governance highlight from the hovered node (so "management-only" graphs still work).
+    if (governanceEdges.length > 0) {
+      if (visited.size > 1) {
+        for (const ge of governanceEdges) {
+          if (visited.has(ge.a) && visited.has(ge.b)) {
+            usedEdgeIds.add(ge.id);
+          }
+        }
+      } else {
+        for (const ge of governanceEdges) {
+          if (ge.a === hovered) {
+            visited.add(ge.b);
+            usedEdgeIds.add(ge.id);
+          } else if (ge.b === hovered) {
+            visited.add(ge.a);
+            usedEdgeIds.add(ge.id);
+          }
         }
       }
     }
@@ -3987,6 +4229,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Hover highlight mode: highlight selected relation cluster and fade everything else.
     if (hoverHighlight && hoveredNodeId) {
       const hiEdgeIds = hoverHighlight.edgeIds;
+      const CONTROL_EQUITY_TYPES = new Set<string>(['OWNS', 'SUBSIDIARY_OF', 'INVESTS_IN']);
+      const CONTROL_NON_EQUITY_TYPES = new Set<string>(['CONTROLS', 'MANAGES']);
+      const CONTROL_GOVERNANCE_TYPES = new Set<string>(['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED']);
       const out = baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const eid = String((e as any)?.id || '').trim();
@@ -3995,10 +4240,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const isIncident = e.source === hoveredNodeId || e.target === hoveredNodeId;
         const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
         if (isHiEdge) {
+          const edgeTypeRaw = (e as any)?.data?.edgeType || (e as any)?.data?.subkind || e.label || (e as any)?.type || '';
+          const u = String(edgeTypeRaw || '').toUpperCase().trim();
+          const isGovernance = hoverHighlightMode === 'control' && CONTROL_GOVERNANCE_TYPES.has(u);
+          const isNonEquityChain = hoverHighlightMode === 'control' && CONTROL_NON_EQUITY_TYPES.has(u);
+          const isEquityChain = hoverHighlightMode === 'control' && CONTROL_EQUITY_TYPES.has(u);
+          const dash = isGovernance ? '2 3' : (isNonEquityChain ? '6 4' : undefined);
           return withLabel(e, isIncident, {
             ...baseStyle,
             opacity: 1,
-            strokeWidth: Math.max(3, strokeWidth + 1.0),
+            strokeWidth: isGovernance
+              ? Math.max(2.4, strokeWidth + 0.5)
+              : isNonEquityChain
+                ? Math.max(2.8, strokeWidth + 0.7)
+                : isEquityChain
+                  ? Math.max(3.2, strokeWidth + 1.1)
+                  : Math.max(3, strokeWidth + 1.0),
+            ...(dash ? { strokeDasharray: dash } : {}),
           }, isIncident);
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
@@ -4070,7 +4328,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Keep group nodes visible but muted to reduce noise.
       const opacity = isGroup ? 0.18 : (isOwnedNode || isHovered ? 1 : 0.22);
 
-      // Elevate ownership chain nodes above muted ones.
+      // Elevate highlighted cluster nodes above muted ones.
       const zIndex = isOwnedNode || isHovered ? 20 : (isGroup ? 1 : 5);
 
       return {
@@ -4918,6 +5176,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const Icons = {
     Refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" /></svg>,
+    Load: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /><path d="M12 11v6" /><path d="M9 14l3 3 3-3" /></svg>,
     Search: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>,
     Sliders: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>,
     Dots: <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>,
@@ -4929,16 +5188,45 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     Map: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>,
     Grid: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
     Layout: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>,
+    LayoutFreeform: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="2.4"/><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="19" r="2.4"/><path d="M8.1 11.2 15.8 6.2"/><path d="M8.1 12.8 15.8 17.8"/></svg>,
+    LayoutLinear: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="6" height="16" rx="2"/><rect x="15" y="4" width="6" height="16" rx="2"/><path d="M10.5 12h3"/></svg>,
+    LayoutLevels: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><circle cx="8" cy="7" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="16" cy="17" r="1.6"/></svg>,
     ChevronDown: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
     Info: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>,
   };
+
+  const layoutModeLabel = React.useCallback((m: 'freeform' | 'linear' | 'levels'): string => {
+    switch (m) {
+      case 'freeform':
+        return 'Freeform';
+      case 'linear':
+        return 'Linear';
+      case 'levels':
+        return 'Hierarchical';
+      default:
+        return 'Layout';
+    }
+  }, []);
+
+  const layoutModeIcon = React.useCallback((m: 'freeform' | 'linear' | 'levels') => {
+    switch (m) {
+      case 'freeform':
+        return Icons.LayoutFreeform;
+      case 'linear':
+        return Icons.LayoutLinear;
+      case 'levels':
+        return Icons.LayoutLevels;
+      default:
+        return Icons.Layout;
+    }
+  }, []);
 
   const hoverModeLabel = React.useCallback((m: HoverHighlightMode): string => {
     switch (m) {
       case 'off':
         return 'Off';
-      case 'ownership':
-        return 'Owns';
+      case 'control':
+        return 'Control';
       case 'production':
         return 'Produces';
       case 'supplies':
@@ -4946,7 +5234,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       case 'competition':
         return 'Competes';
       default:
-        return 'Hover';
+        return 'Highlight';
     }
   }, []);
 
@@ -4957,7 +5245,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const toolbarContent = (
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-      <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load Graph" icon={Icons.Refresh} />
+      <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load Graph" icon={Icons.Load} />
       <IconButton
         onClick={() => {
           if (!lensId) return;
@@ -4987,12 +5275,110 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       />
       <IconButton onClick={() => setVisualSettingsOpen(true)} title="Visual settings" icon={Icons.Sliders} />
 
-      {/* Hover highlight mode (quick control) */}
+      {/* Layout mode (quick control) */}
+      <div ref={layoutMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+        <button
+          type="button"
+          onClick={() => {
+            setShowLayoutMenu((v) => !v);
+            setShowHoverModeMenu(false);
+            setShowToolbarMenu(false);
+          }}
+          title={`Layout: ${layoutModeLabel(layoutMode)}`}
+          aria-label="Layout mode"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 8px',
+            borderRadius: 10,
+            border: '1px solid var(--border-subtle)',
+            background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.40)',
+            color: 'var(--text-heading)',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 750,
+            lineHeight: 1,
+          }}
+        >
+          <span style={{ color: 'var(--text-secondary-strong)', display: 'inline-flex' }}>
+            {layoutModeIcon(layoutMode)}
+          </span>
+          <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.ChevronDown}</span>
+        </button>
+
+        {showLayoutMenu && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 6px)',
+              right: 0,
+              minWidth: 220,
+              borderRadius: 12,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-elevated)',
+              boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.55)' : '0 14px 40px rgba(0,0,0,0.18)',
+              overflow: 'hidden',
+              zIndex: 1000,
+            }}
+          >
+            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderBottom: '1px solid var(--border-subtle)' }}>
+              Layout
+            </div>
+            {(
+              [
+                { key: 'freeform', label: 'Freeform' },
+                { key: 'linear', label: 'Linear' },
+                { key: 'levels', label: 'Hierarchical' },
+              ] as Array<{ key: 'freeform' | 'linear' | 'levels'; label: string }>
+            ).map((opt) => {
+              const active = layoutMode === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => {
+                    setLayoutMode(opt.key);
+                    setShowLayoutMenu(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: 'none',
+                    background: active ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    textAlign: 'left',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <span style={{ color: 'var(--text-secondary-strong)', display: 'inline-flex' }}>
+                      {layoutModeIcon(opt.key)}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 800 }}>{opt.label}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>{active ? '✓' : ''}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Highlight mode (quick control) */}
       <div ref={hoverModeMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <button
           type="button"
-          onClick={() => setShowHoverModeMenu((v) => !v)}
-          title="Hover highlight mode"
+          onClick={() => {
+            setShowHoverModeMenu((v) => !v);
+            setShowLayoutMenu(false);
+            setShowToolbarMenu(false);
+          }}
+          title="Highlight mode"
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -5008,7 +5394,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             lineHeight: 1,
           }}
         >
-          <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 800 }}>Hover:</span>
+          <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 800 }}>Highlight:</span>
           <span>{hoverModeLabel(hoverHighlightMode)}</span>
           <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.ChevronDown}</span>
         </button>
@@ -5029,12 +5415,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             }}
           >
             <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderBottom: '1px solid var(--border-subtle)' }}>
-              Hover highlight
+              Highlight
             </div>
             {(
               [
-                { key: 'off', label: 'Off', hint: 'No hover emphasis' },
-                { key: 'ownership', label: 'Owns', hint: 'Transitive ownership chain' },
+                { key: 'off', label: 'Off', hint: 'No emphasis' },
+                { key: 'control', label: 'Control', hint: 'Equity ownership + control chains (dashed) + governance overlay' },
                 { key: 'production', label: 'Produces', hint: 'Direct producers/outputs' },
                 { key: 'supplies', label: 'Supplies', hint: 'Direct suppliers/inputs' },
                 { key: 'competition', label: 'Competes', hint: 'Direct competition/conflict' },
@@ -5086,7 +5472,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         <div ref={levelsExpandMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
           <button
             type="button"
-            onClick={() => setShowLevelsExpandMenu((v) => !v)}
+            onClick={() => {
+              setShowLevelsExpandMenu((v) => !v);
+              setShowLayoutMenu(false);
+              setShowHoverModeMenu(false);
+              setShowToolbarMenu(false);
+            }}
             title="Expansion filter (edge types fetched on expand)"
             style={{
               display: 'inline-flex',
@@ -5206,43 +5597,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               Canvas menu
             </div>
 
-            <div style={{ padding: '8px 12px' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-heading)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.Layout}</span>
-                Layout
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {(['freeform', 'linear', 'levels'] as const).map((m) => {
-                  const active = layoutMode === m;
-                  const label = m === 'levels' ? 'Hierarchical' : (m === 'freeform' ? 'Freeform' : 'Linear');
-                  return (
-        <button
-                      key={m}
-          type="button"
-                  onClick={() => {
-                        setLayoutMode(m);
-                        setShowToolbarMenu(false);
-                      }}
-                      style={{
-                        flex: 1,
-                        padding: '8px 10px',
-                        borderRadius: 10,
-                        border: '1px solid var(--border-subtle)',
-                        background: active ? 'var(--white-10)' : 'transparent',
-                        color: 'var(--text-heading)',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        fontWeight: 700,
-                        textTransform: 'capitalize',
-                      }}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
               <button
                 type="button"
@@ -5290,7 +5644,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setForcePerfMode(false);
       setShowMiniMap(true);
       setShowBackgroundGrid(true);
-      setHoverHighlightMode('ownership');
+      setHoverHighlightMode('control');
       setNodeVisualQuality('max');
       setShowNodeMetrics(false);
       return;
@@ -5308,7 +5662,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setForcePerfMode(null);
     setShowMiniMap(false);
     setShowBackgroundGrid(false);
-    setHoverHighlightMode('ownership');
+    setHoverHighlightMode('control');
     setNodeVisualQuality('balanced');
     setShowNodeMetrics(false);
   }, []);
@@ -5593,10 +5947,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 />
               </label>
 
-              {/* Hover highlight */}
+              {/* Highlight on hover */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700 }}>Hover highlight</div>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>Highlight</div>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                     High impact on dense graphs (computes relation clusters + restyles many edges).
           </div>
@@ -5620,7 +5974,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   }}
                 >
                   <option value="off">Off</option>
-                  <option value="ownership">Ownership</option>
+                  <option value="control">Control</option>
                   <option value="production">Production</option>
                   <option value="supplies">Supplies</option>
                   <option value="competition">Competition</option>
@@ -6112,6 +6466,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   gap: 8,
                 }}
               >
+                  <span aria-hidden="true" style={{ display: 'inline-flex' }}>{Icons.Load}</span>
                   Load Graph
               </button>
             </div>

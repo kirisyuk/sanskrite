@@ -1593,7 +1593,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       focus: string;
       spherePaths: string[];
       keywords: string[];
-      anchors: Array<{ canonicalPath: string; type?: string; confidence?: number; reason?: string }>;
+      anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
     };
   }> {
     try {
@@ -1621,7 +1621,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       focus: string;
       spherePaths: string[];
       keywords: string[];
-      anchors: Array<{ canonicalPath: string; type?: string; confidence?: number; reason?: string }>;
+      anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
     };
     lens: {
       id: string;
@@ -2166,6 +2166,21 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       await this.client.delete(`/api/horizon/edges/${edgeId}`);
     } catch (error: any) {
       console.error(`[API] deleteHorizonEdge error:`, error);
+      throw error;
+    }
+  }
+
+  // --- Human-in-the-Loop (HITL) edge curation ---
+  // Admin-only: POST /api/horizon/edges/{edgeId}/hitl
+  async humanInTheLoopUpdateHorizonEdge(
+    edgeId: string,
+    data: { type?: string; swap?: boolean },
+  ): Promise<any> {
+    try {
+      const response = await this.client.post(`/api/horizon/edges/${edgeId}/hitl`, data || {});
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] humanInTheLoopUpdateHorizonEdge error:`, error);
       throw error;
     }
   }
