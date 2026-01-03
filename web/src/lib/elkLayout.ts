@@ -528,8 +528,8 @@ export async function layoutLevelsFullGraph<T = any>(
   const {
     nodeWidth = DEFAULT_NODE_WIDTH,
     nodeHeight = DEFAULT_NODE_HEIGHT,
-    nodeSpacing = 60,
-    layerSpacing = 150,
+    nodeSpacing = 40, // Compact: reduced from 60
+    layerSpacing = 100, // Compact: reduced from 150
   } = options;
 
   // Determine central nodes (depth === 0). If none are marked, fall back to "no parent" roots.
@@ -598,6 +598,149 @@ export async function layoutLevelsFullGraph<T = any>(
     if (level > prevMax) maxLevel.set(rootId, level);
   }
 
+  // Calculate dynamic width needed for each root tree PER LEVEL (Skyline packing)
+  // We need precise extents to allow "pyramids" to overlap their empty spaces.
+  // Extents are relative to the Root Node's Left Edge (anchor).
+  // LeftExtent: positive distance to the left of anchor.
+  // RightExtent: positive distance to the right of anchor.
+  type TreeContour = Map<string, { left: number; right: number }>; // key: "top:1", "bottom:2" etc
+  const treeContours = new Map<string, TreeContour>();
+  const colW = nodeWidth + nodeSpacing;
+
+  const getLevelKey = (section: string, level: number) => {
+    if (section.startsWith('top')) return `top:${level}`;
+    if (section.startsWith('bottom')) return `bottom:${level}`;
+    return `center:0`;
+  };
+
+  for (const [key, list] of groups.entries()) {
+    const [rootId, section, levelStr] = key.split('|');
+    const level = parseInt(levelStr || '1', 10);
+    const levelKey = getLevelKey(section, level);
+
+    const contour = treeContours.get(rootId) || new Map();
+    if (!treeContours.has(rootId)) treeContours.set(rootId, contour);
+
+    const extents = contour.get(levelKey) || { left: 0, right: 0 };
+    
+    // Calculate extents based on column count
+    const cols = Math.min(6, Math.max(1, list.length));
+    
+    if (section.endsWith('left')) {
+      // Left group grows leftwards from (anchor - colW).
+      // Leftmost edge = anchor - cols * colW.
+      // LeftExtent = cols * colW.
+      extents.left = Math.max(extents.left, cols * colW);
+    } else {
+      // Right group grows rightwards from (anchor + colW).
+      // Rightmost edge = anchor + cols * colW + nodeWidth.
+      // RightExtent = cols * colW + nodeWidth.
+      extents.right = Math.max(extents.right, cols * colW + nodeWidth);
+    }
+    contour.set(levelKey, extents);
+  }
+
+  // Skyline Packing
+  // Keep track of the rightmost edge of the placed trees for each level.
+  const globalSkyline = new Map<string, number>(); // levelKey -> maxX
+  const rootAnchors = new Map<string, number>();
+  
+  // Initial skyline at -Infinity
+  // Note: Level 0 (Center) is special. The root node itself occupies [0, nodeWidth].
+  // So for Level 0, LeftExtent=0, RightExtent=nodeWidth.
+  
+  centralSorted.forEach((n, idx) => {
+    const rootId = n.id;
+    const contour = treeContours.get(rootId) || new Map();
+
+    // Always ensure Level 0 exists in contour
+    if (!contour.has('center:0')) {
+        contour.set('center:0', { left: 0, right: nodeWidth });
+    }
+
+    // Determine minX (anchor) for this tree based on overlap with global skyline
+    let requiredAnchor = idx === 0 ? 0 : -Infinity;
+
+    if (idx > 0) {
+        // Check collision on all levels defined in this tree
+        for (const [lvlKey, extents] of contour.entries()) {
+            const currentSkylineX = globalSkyline.get(lvlKey);
+            // If this level hasn't been used yet by previous trees, we theoretically
+            // don't collide. But to be safe and avoid "floating" overlaps if intermediate 
+            // trees didn't have this level, we should check against "Center" or 0?
+            // Actually, if skyline doesn't have this level, it means no previous tree
+            // extended into this level. We can place it freely relative to others?
+            // Safer to check against the max skyline of "adjacent" levels? 
+            // No, strictly per-level is fine for "levels" layout.
+            
+            const sky = currentSkylineX !== undefined ? currentSkylineX : -Infinity;
+            // Overlap condition: Anchor - LeftExtent > Skyline + Gap
+            // Anchor > Skyline + Gap + LeftExtent
+            
+            // If skyline is -Infinity (empty level), we default to the placement 
+            // determined by Level 0 (Center).
+            // We'll calculate a valid anchor for EACH level and take the MAX.
+            
+            if (currentSkylineX !== undefined) {
+                 // Compact: reduced gap between distinct trees from layerSpacing (100+) to nodeSpacing*1.5 (~60px)
+                 const treeGap = Math.floor(nodeSpacing * 1.5);
+                 requiredAnchor = Math.max(requiredAnchor, sky + treeGap + extents.left);
+            }
+        }
+        
+        // Also check against Level 0 explicitly if not covered loop (it is covered above)
+        // If requiredAnchor is still -Infinity (e.g. unique levels), align with previous root?
+        // We should at least respect the "visual stream". 
+        // Let's enforce that it's at least (PreviousRootAnchor + NodeSpacing + PreviousRootWidth).
+        // But simpler: just enforce Level 0 collision as a baseline.
+        // (Handled by the loop since 'center:0' is in contour).
+    }
+
+    rootAnchors.set(rootId, requiredAnchor);
+    pos.set(rootId, { x: requiredAnchor, y: 0 });
+
+    // Update Global Skyline
+    for (const [lvlKey, extents] of contour.entries()) {
+        const rightEdge = requiredAnchor + extents.right;
+        const currentSky = globalSkyline.get(lvlKey) || -Infinity;
+        globalSkyline.set(lvlKey, Math.max(currentSky, rightEdge));
+    }
+  });
+
+  // Center the whole layout
+  // Find minX and maxX of the placed roots (Level 0)
+  // Or better: minX of skyline vs maxX of skyline across all levels?
+  // Usually we just center the roots visually.
+  const finalMinX = rootAnchors.get(centralSorted[0].id) || 0;
+  const finalMaxX = globalSkyline.get('center:0') || 0; // rough width based on centers
+  
+  // Actually, let's look at the TOTAL extent
+  let minContentX = Infinity;
+  let maxContentX = -Infinity;
+  rootAnchors.forEach((anchor, rid) => {
+     const contour = treeContours.get(rid);
+     if (contour) {
+         for (const ext of contour.values()) {
+             minContentX = Math.min(minContentX, anchor - ext.left);
+             maxContentX = Math.max(maxContentX, anchor + ext.right);
+         }
+     } else {
+         minContentX = Math.min(minContentX, anchor);
+         maxContentX = Math.max(maxContentX, anchor + nodeWidth);
+     }
+  });
+  
+  if (!isFinite(minContentX)) minContentX = 0;
+  if (!isFinite(maxContentX)) maxContentX = 0;
+  
+  const totalW = maxContentX - minContentX;
+  const shiftX = -(minContentX + totalW / 2);
+
+  centralSorted.forEach((n) => {
+    const anchor = rootAnchors.get(n.id) || 0;
+    pos.set(n.id, { x: anchor + shiftX, y: 0 });
+  });
+
   // 2. Calculate dynamic heights for each level (accumulating offsets from center).
   // Separate accumulation for TOP (growing upward) and BOTTOM (growing downward).
   // Map: rootId -> level -> { topY, bottomY } (absolute Y coordinates for this level)
@@ -638,7 +781,8 @@ export async function layoutLevelsFullGraph<T = any>(
         // Max rows determines the band height
         const maxRows = Math.max(tlRows, trRows);
         // Base row height (node + internal gap)
-        const rowH = nodeHeight + Math.max(32, Math.floor(layerSpacing * 0.25));
+        // Compact: reduced vertical gap between rows within a band
+        const rowH = nodeHeight + 40; 
         
         // Total height for this level = rows * height
         topHeight = maxRows * rowH;
@@ -711,7 +855,7 @@ export async function layoutLevelsFullGraph<T = any>(
         const brRows = Math.ceil(brNodes.length / brCols);
         
         const maxRows = Math.max(blRows, brRows);
-        const rowH = nodeHeight + Math.max(32, Math.floor(layerSpacing * 0.25));
+        const rowH = nodeHeight + 40; // Compact
         bottomHeight = maxRows * rowH;
       }
 
@@ -732,7 +876,6 @@ export async function layoutLevelsFullGraph<T = any>(
     levelOffsets.set(rootId, offsets);
   }
 
-  const colW = nodeWidth + nodeSpacing;
   const rowH = nodeHeight + Math.max(32, Math.floor(layerSpacing * 0.25));
 
   for (const [key, list] of groups.entries()) {
@@ -750,6 +893,11 @@ export async function layoutLevelsFullGraph<T = any>(
 
     // Use the dynamic Y we calculated
     const baseY = isTop ? levelPos.topY : levelPos.bottomY;
+    
+    // X calculation:
+    // Left side grows leftwards from (anchor - colW)
+    // Right side grows rightwards from (anchor + colW)
+    // Note: colW includes spacing
     const baseXInner = anchor.x + (isLeft ? -colW : colW);
 
     const nodesPerRow = Math.min(6, Math.max(1, list.length));
@@ -878,10 +1026,54 @@ export function deriveLevelsTreeMetadata<T = any>(
   const parentMap = new Map<string, { parentId: string; edgeType: string; dir: 'incoming' | 'outgoing' }>();
   const rankMap = new Map<string, number>();
 
+  // 1. Find the "Best Visual Root" to anchor the hierarchy.
+  // Instead of blindly using `rootId` (which might be a leaf node deeply nested),
+  // we traverse UP from `rootId` to find the highest-level ancestor present in the current graph.
+  // This ensures the tree is drawn Top-Down relative to the true start, not the current focus.
+  
+  let bestRoot = root;
+  const candidates = new Set<string>([root]);
+  
+  // Simple traversal up to find a node with no incoming hierarchy edges (roots)
+  // Warning: prevent infinite loops if cycles exist
+  const pathVisited = new Set<string>([root]);
+  let curr = root;
+  let climbing = true;
+  
+  while (climbing) {
+    const incomingEdges = adj.get(curr) || [];
+    // Find parent: someone connected via Incoming Hierarchy or Outgoing Inverted
+    const parentEdge = incomingEdges.find(a => {
+        // We are looking for the node that IS the parent of `curr`.
+        // If edge is Hierarchy (OWNS): Parent -> Child. 
+        // We want Parent. So we need `curr` to be target (Incoming).
+        if (HIERARCHY_TYPES.has(a.edgeType) && a.dir === 'incoming') return true;
+        
+        // If edge is Inverted (DEPENDS_ON): Child -> Parent.
+        // We want Parent. So we need `curr` to be source (Outgoing).
+        if (INVERTED_HIERARCHY_TYPES.has(a.edgeType) && a.dir === 'outgoing') return true;
+        
+        return false;
+    });
+
+    if (parentEdge && !pathVisited.has(parentEdge.to)) {
+        curr = parentEdge.to;
+        pathVisited.add(curr);
+        // Update best candidate
+        bestRoot = curr;
+    } else {
+        climbing = false;
+    }
+  }
+
   // Queue: { id, rank }
-  const q: Array<{ id: string; r: number }> = [{ id: root, r: 0 }];
-  visited.add(root);
-  rankMap.set(root, 0);
+  // Start BFS from the Best Root we found.
+  // Note: Rank 0 will be assigned to BestRoot.
+  // The original `rootId` will naturally fall into its correct Rank (e.g. 2 or 3).
+  // This preserves the "Tree" shape regardless of which node is selected.
+  const q: Array<{ id: string; r: number }> = [{ id: bestRoot, r: 0 }];
+  visited.add(bestRoot);
+  rankMap.set(bestRoot, 0);
 
   while (q.length > 0) {
     const cur = q.shift()!;
