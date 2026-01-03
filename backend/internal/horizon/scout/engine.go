@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -279,6 +280,7 @@ type ScoutEngine struct {
 	realtime                *realtime.Publisher
 	taxonomyClassifier      *TaxonomyClassifier
 	aiExecutor              *ai.AITaskExecutor
+	wikidataClient          coreontology.WikidataClientInterface // Optional: shared for enrichment/dedup (no search by default)
 	spendLedger             *repo.HorizonSpendLedger
 	budgetPolicy            BudgetPolicy
 	propagationTrigger      func(ctx context.Context, fragmentID string) error
@@ -471,6 +473,7 @@ func NewScoutEngine(
 
 // WithWikidataClient sets the Wikidata client for organization and product deduplication
 func (e *ScoutEngine) WithWikidataClient(client coreontology.WikidataClientInterface) *ScoutEngine {
+	e.wikidataClient = client
 	if e.orgDeduplicator != nil {
 		e.orgDeduplicator.wikidataClient = client
 	} else {
@@ -499,6 +502,10 @@ func (e *ScoutEngine) WithWikidataClient(client coreontology.WikidataClientInter
 	// Also update canonicalPathResolver if it exists
 	if e.canonicalPathResolver != nil && e.canonicalPathResolver.orgDeduplicator != nil {
 		e.canonicalPathResolver.orgDeduplicator.wikidataClient = client
+	}
+	// Also update PreCreateValidator for conservative enrichment (QID-known only).
+	if e.preCreateValidator != nil {
+		e.preCreateValidator.WithWikidataClient(client)
 	}
 	return e
 }
@@ -1775,6 +1782,16 @@ SKIP_RESEARCH:
 		existingFragment.Metadata.EpistemicStatus = models.EpistemicStatusVerified
 		if validationResult.Confidence < 0.7 {
 			existingFragment.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
+		}
+
+		// IMPORTANT: Re-scout of an existing fragment should also (re)apply conservative Wikidata enrichment
+		// when a QID is already present, so industryPaths and canonical names stay filled.
+		// This is deterministic and does not perform Wikidata search.
+		if e.wikidataClient != nil {
+			_, _ = henrich.EnrichFragmentFromWikidataIfPresent(ctx, e.wikidataClient, existingFragment, henrich.ConservativeWikidataOptions{
+				Force:     false,
+				Overwrite: true,
+			})
 		}
 
 		if err := e.fragmentsRepo.Update(ctx, existingFragment); err != nil {

@@ -17,6 +17,12 @@ type RuntimeTaxonomy struct {
 	AllowedSpherePaths map[string]struct{} // "/sphere/..."
 	SphereSynonyms     map[string]string   // label -> "/sphere/..."
 
+	// Industry taxonomy for canonicalization (Horizon-first, /industry/...).
+	// Used by conservative enrichment paths when a Wikidata QID is already known.
+	AllowedIndustryPaths map[string]struct{} // "/industry/..."
+	IndustrySynonyms     map[string]string   // label -> "/industry/..." (lowercased)
+	IndustryWikidataMap  map[string]string   // "Q..." -> "/industry/..."
+
 	AllowedEventTypes map[string]struct{} // "attack", "sanction", "other", ...
 	EventTypeSynonyms map[string]string   // label -> allowed eventType
 
@@ -93,6 +99,66 @@ func getRuntimeTaxonomy() *RuntimeTaxonomy {
 	rtMu.RLock()
 	defer rtMu.RUnlock()
 	return rt
+}
+
+// GetRuntimeTaxonomy returns the current runtime taxonomy snapshot pointer.
+// Callers must treat it as read-only.
+func GetRuntimeTaxonomy() *RuntimeTaxonomy {
+	return getRuntimeTaxonomy()
+}
+
+// MapIndustryQIDsToPaths maps Wikidata industry Q-IDs (P452) to canonical /industry/... paths
+// using the runtime taxonomy dictionary (IndustryWikidataMap).
+// Unknown Q-IDs are skipped (conservative behavior).
+func MapIndustryQIDsToPaths(qids []string) []string {
+	t := getRuntimeTaxonomy()
+	if t == nil || t.IndustryWikidataMap == nil || len(t.IndustryWikidataMap) == 0 || len(qids) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(qids))
+	for _, q := range qids {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		p, ok := t.IndustryWikidataMap[q]
+		if !ok {
+			continue
+		}
+		p = strings.TrimSpace(p)
+		if !strings.HasPrefix(p, "/industry/") {
+			continue
+		}
+		// Optional allow-list enforcement: if allow-list is present, keep only allowed.
+		// Accept exact match OR when any ancestor is allowed (so allow-list can be sector-level).
+		if t.AllowedIndustryPaths != nil && len(t.AllowedIndustryPaths) > 0 {
+			if _, ok2 := t.AllowedIndustryPaths[p]; !ok2 {
+				// Check ancestors: /industry/a/b/c -> /industry/a/b -> /industry/a -> /industry
+				parts := strings.Split(strings.Trim(p, "/"), "/")
+				allowed := false
+				for i := len(parts); i >= 2; i-- { // keep at least "industry/<x>"
+					anc := "/" + strings.Join(parts[:i], "/")
+					if _, ok3 := t.AllowedIndustryPaths[anc]; ok3 {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					continue
+				}
+			}
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // NormalizeEventType returns a stable eventType string.

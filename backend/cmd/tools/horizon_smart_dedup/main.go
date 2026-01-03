@@ -1257,6 +1257,16 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 		if extractWikidataID(f) != "" {
 			score += 100
 		}
+		// Prefer fragments that already have canonical industryPaths (+60).
+		// This is a strong signal that the fragment was enriched/curated and should be canonical in its duplicate cluster.
+		if len(f.IndustryPaths) > 0 {
+			score += 60
+		}
+		// Extra boost when BOTH Wikidata and industryPaths are present (+40).
+		// This helps pick the most "grounded" canonical when clustering by soft signals.
+		if extractWikidataID(f) != "" && len(f.IndustryPaths) > 0 {
+			score += 40
+		}
 
 		// Prefer proper /loc/{cc}/{admin1}/{city} format where {cc} is ISO alpha-2
 		// This is the canonical form; /loc/geo/..., /loc/country/..., etc. are legacy

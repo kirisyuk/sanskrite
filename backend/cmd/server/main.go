@@ -1206,6 +1206,11 @@ func main() {
 				pub,
 				exec,
 			)
+			// Wire Wikidata into Scout (dedup + conservative enrichment-by-QID inside PreCreateValidator).
+			// IMPORTANT: We do NOT enable fuzzy Wikidata search here; PreCreateValidator only uses GetEntityData when QID is already present.
+			if wikidataClient != nil {
+				scoutEngine.WithWikidataClient(wikidata.NewAdapter(wikidataClient))
+			}
 			// Unified ontology facts emitter: allows Scout to persist minimal OntologyFacts even when sources pipeline is paused.
 			scoutEngine.WithFactEmitter(ontology.NewFactEmitter(ontologyFactsRepo, pub))
 			// Budget enforcement wiring.

@@ -8,17 +8,22 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	hrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	shttp "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var (
@@ -34,6 +39,17 @@ var (
 	taxonomyVersion    = flag.String("taxonomy", "v1", "Horizon taxonomy version to use for industry canonicalization (default: v1)")
 	applyIndustry      = flag.Bool("apply-industry", false, "Apply canonical industryPaths to fragment and linked entity (requires --suggest-wikidata)")
 	industryScoreMin   = flag.Int("industry-score-min", 120, "Minimum suggestedScore required to apply industryPaths (safety threshold)")
+	includeWithWikidata = flag.Bool("include-with-wikidata", false, "Also include fragments that already have a Wikidata ID (useful for sampling P452 industries)")
+	onlyWithWikidata    = flag.Bool("only-with-wikidata", false, "Only include fragments that already have a Wikidata ID (skips missing-wikidata fragments)")
+	expandIndustryDict  = flag.Bool("expand-industry-dict", false, "Build/extend industrySynonyms + industryWikidataMap in horizon_taxonomy based on observed P452 from scanned fragments")
+	applyIndustryDict   = flag.Bool("apply-industry-dict", false, "If set with --expand-industry-dict, upsert merged industrySynonyms/industryWikidataMap back into horizon_taxonomy")
+	industryDictMax     = flag.Int("industry-dict-max", 500, "Max number of new industry QIDs to add into industryWikidataMap per run (safety cap)")
+	applyWikidataRef    = flag.Bool("apply-wikidata-ref", false, "Write Wikidata KBRef (and mirror identifiers.wikidataId) to fragment + linked entity when QID is confident")
+	applyWikidataNames  = flag.Bool("apply-wikidata-names", false, "Overwrite fragment/entity names from Wikidata (label/description, plus official name if present) when QID is confident")
+	wikidataScoreMin    = flag.Int("wikidata-score-min", 120, "Minimum suggestedScore required to apply Wikidata enrichment (safety threshold)")
+	progressEvery       = flag.Int("progress-every", 50, "Print progress logs every N selected rows (0 disables)")
+	progressScannedEvery = flag.Int("progress-scanned-every", 2000, "Print progress logs every N scanned docs even if nothing is selected (0 disables)")
+	heartbeatSec        = flag.Int("heartbeat-sec", 10, "Emit heartbeat logs every N seconds while running (0 disables)")
 	maxCandidates      = flag.Int("max-candidates", 5, "Max Wikidata candidates to consider per fragment (when --suggest-wikidata)")
 	rateLimitMS        = flag.Int("rate-limit-ms", 120, "Delay between Wikidata API calls in milliseconds (when --suggest-wikidata)")
 	format             = flag.String("format", "jsonl", "Output format: jsonl | tsv")
@@ -73,6 +89,14 @@ type Row struct {
 
 	IndustryPaths []string `json:"industryPaths,omitempty"`
 
+	// Wikidata name enrichment preview (what we would apply / did apply)
+	WikidataLabelEN       string `json:"wikidataLabelEn,omitempty"`
+	WikidataDescriptionEN string `json:"wikidataDescriptionEn,omitempty"`
+	WikidataOfficialName  string `json:"wikidataOfficialName,omitempty"`
+	WikidataShortName     string `json:"wikidataShortName,omitempty"`
+
+	AppliedWikidata bool `json:"appliedWikidata,omitempty"`
+
 	Reason string `json:"reason"`
 }
 
@@ -103,6 +127,15 @@ func main() {
 	}
 	if *pageSize > 2000 {
 		*pageSize = 2000 // safety cap; keep Firestore pressure reasonable
+	}
+	if *progressEvery < 0 {
+		*progressEvery = 0
+	}
+	if *progressScannedEvery < 0 {
+		*progressScannedEvery = 0
+	}
+	if *heartbeatSec < 0 {
+		*heartbeatSec = 0
 	}
 
 	ctx := context.Background()
@@ -137,6 +170,12 @@ func main() {
 	tax, taxErr := taxRepo.Get(ctx, strings.TrimSpace(*taxonomyVersion))
 	if taxErr != nil {
 		log.Printf("WARNING: failed to load taxonomy %q: %v (industry canonicalization will be limited)", strings.TrimSpace(*taxonomyVersion), taxErr)
+	}
+
+	// Load runtime taxonomy cache as well (so core enrichment uses the same dictionary as backend).
+	taxonomy.InitRuntimeTaxonomyCacheFromFirestore(db, strings.TrimSpace(*taxonomyVersion), 10*time.Minute)
+	if err := taxonomy.RefreshRuntimeTaxonomy(ctx); err != nil {
+		log.Printf("WARNING: failed to refresh runtime taxonomy: %v", err)
 	}
 
 	var wdClient *shttp.WikidataClient
@@ -185,8 +224,53 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 
 	var out []Row
 	scanned := 0
-	// Repos for applying changes (no GCS/Vertex configured here).
-	fragmentsRepo := coreRepo2HorizonFragmentsRepo(db)
+	// Repos for applying changes.
+	// Use the real HorizonFragmentsRepository so updates are validated, versioned, and indexPaths are rebuilt consistently.
+	fragmentsRepo := hrepo.NewHorizonFragmentsRepository(db)
+	taxRepo := coreRepo.NewHorizonTaxonomyRepository(db)
+
+	// Caches to reduce Wikidata pressure (esp. when scanning 1000+)
+	subjectCache := map[string]*shttp.WikidataEntityData{}
+	industryCache := map[string]*shttp.WikidataEntityData{}
+
+	// Optional: accumulate a dict expansion (qid->path and label->path) from observed P452 industries.
+	dict := newIndustryDictAccumulator(tax)
+
+	// Progress counters (to make long scans feel alive)
+	selected := 0
+	subjectFetches := 0
+	industryItemFetches := 0
+
+	// Heartbeat counters (to show activity even if we're blocked on network).
+	var scannedAtomic int64
+	var selectedAtomic int64
+	var subjectFetchesAtomic int64
+	var industryItemFetchesAtomic int64
+
+	stopHeartbeat := make(chan struct{})
+	if *heartbeatSec > 0 {
+		go func() {
+			t := time.NewTicker(time.Duration(*heartbeatSec) * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-t.C:
+					log.Printf("heartbeat: scanned=%d selected=%d subjectCache=%d industryCache=%d observedIndustryQIDs=%d subjectFetches=%d industryItemFetches=%d",
+						atomic.LoadInt64(&scannedAtomic),
+						atomic.LoadInt64(&selectedAtomic),
+						len(subjectCache),
+						len(industryCache),
+						dict.ObservedQIDs(),
+						atomic.LoadInt64(&subjectFetchesAtomic),
+						atomic.LoadInt64(&industryItemFetchesAtomic),
+					)
+				case <-stopHeartbeat:
+					return
+				}
+			}
+		}()
+	}
+	defer close(stopHeartbeat)
 
 	cursor := strings.TrimSpace(*startAfterDocID)
 	lastSeen := cursor
@@ -209,9 +293,14 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 			}
 			pageCount++
 			scanned++
+			atomic.StoreInt64(&scannedAtomic, int64(scanned))
 			lastSeen = doc.Ref.ID
 			if scanned > *maxScan {
 				break
+			}
+			if *progressScannedEvery > 0 && scanned%*progressScannedEvery == 0 {
+				log.Printf("progress(scan): scanned=%d selected=%d lastDoc=%s subjectCache=%d industryCache=%d observedIndustryQIDs=%d subjectFetches=%d industryItemFetches=%d",
+					scanned, selected, lastSeen, len(subjectCache), len(industryCache), dict.ObservedQIDs(), subjectFetches, industryItemFetches)
 			}
 
 			var f hmodels.HorizonFragment
@@ -225,11 +314,6 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 			fWid := extractFragmentWikidataID(&f)
 			hasFragWid := fWid != ""
 
-			// If fragment already has Wikidata, it's not part of this report.
-			if hasFragWid {
-				continue
-			}
-
 			row := Row{
 				FragmentID:         f.ID,
 				Type:               f.Type,
@@ -240,9 +324,12 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 				GovernanceStatus:   strings.TrimSpace(f.Governance.Status),
 				CreatedAt:          f.CreatedAt,
 				UpdatedAt:          f.UpdatedAt,
-				FragmentWikidataID: fWid,
+				FragmentWikidataID:  fWid,
 				HasFragmentWikidata: hasFragWid,
-				Reason:             "missing fragment wikidata id",
+				Reason:              "missing fragment wikidata id",
+			}
+			if hasFragWid {
+				row.Reason = "has fragment wikidata id (included for sampling)"
 			}
 
 			// Optional: check linked Entity as well.
@@ -271,34 +358,101 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 				}
 			}
 
+			// Filters that depend on entity wikidata must run AFTER entity lookup.
+			hasAnyWid := hasFragWid || row.HasEntityWikidata
+			if *onlyWithWikidata && !hasAnyWid {
+				continue
+			}
+			// If fragment already has Wikidata, it's not part of this report (unless explicitly included for sampling).
+			if hasFragWid && !*includeWithWikidata {
+				continue
+			}
+
 			// Optional: suggest best Wikidata QID for this fragment (dry-run).
 			if wdClient != nil {
-				best, alts, query := suggestWikidataForFragment(ctx, wdClient, &f, *maxCandidates, time.Duration(*rateLimitMS)*time.Millisecond)
-				row.SuggestedQuery = query
-				row.SuggestedAlt = alts
-				if best != nil {
-					row.SuggestedQID = best.QID
-					row.SuggestedLabel = best.Label
-					row.SuggestedDesc = best.Desc
-					row.SuggestedURL = best.URL
-					row.SuggestedType = best.Type
-					row.SuggestedTypeLabel = best.TypeLabel
-					row.SuggestedScore = best.Score
+				// If fragment already has Wikidata and we included it for sampling, don't call search — use the existing QID.
+				if hasFragWid {
+					row.SuggestedQID = strings.TrimSpace(fWid)
+					row.SuggestedQuery = "existing-fragment-wikidata"
+					row.SuggestedScore = 999 // treat as high-confidence for sampling/apply
+				} else if row.HasEntityWikidata && strings.TrimSpace(row.EntityWikidataID) != "" {
+					// If linked entity has Wikidata, prefer it over search.
+					row.SuggestedQID = strings.TrimSpace(row.EntityWikidataID)
+					row.SuggestedQuery = "existing-entity-wikidata"
+					row.SuggestedScore = 999
+				} else {
+					best, alts, query := suggestWikidataForFragment(ctx, wdClient, &f, *maxCandidates, time.Duration(*rateLimitMS)*time.Millisecond)
+					row.SuggestedQuery = query
+					row.SuggestedAlt = alts
+					if best != nil {
+						row.SuggestedQID = best.QID
+						row.SuggestedLabel = best.Label
+						row.SuggestedDesc = best.Desc
+						row.SuggestedURL = best.URL
+						row.SuggestedType = best.Type
+						row.SuggestedTypeLabel = best.TypeLabel
+						row.SuggestedScore = best.Score
+					}
 				}
 
 				// Industry extraction/canonicalization from Wikidata (P452) using taxonomy dictionary.
 				// NOTE/TODO (core): This enrichment should move into backend core pipeline (scout/precreate or entity enrichment),
 				// so new fragments are created with industryPaths automatically.
-				if row.SuggestedQID != "" {
-					ed, err := wdClient.GetEntityData(ctx, row.SuggestedQID)
-					if err == nil && ed != nil {
-						paths := canonicalizeIndustryPathsFromWikidata(ctx, wdClient, ed, tax, time.Duration(*rateLimitMS)*time.Millisecond)
-						row.IndustryPaths = paths
-						// Optionally apply (write) industry paths to fragment and linked entity.
-						if *applyIndustry && row.SuggestedScore >= *industryScoreMin && len(paths) > 0 {
-							applyErr := applyIndustryPaths(ctx, fragmentsRepo, entityRepo, &f, paths)
+				subjectQID := strings.TrimSpace(row.SuggestedQID)
+				if subjectQID == "" && hasFragWid {
+					subjectQID = strings.TrimSpace(fWid)
+				}
+				if subjectQID == "" && row.HasEntityWikidata {
+					subjectQID = strings.TrimSpace(row.EntityWikidataID)
+				}
+				if subjectQID != "" {
+					ed := subjectCache[subjectQID]
+					if ed == nil {
+						if d := time.Duration(*rateLimitMS) * time.Millisecond; d > 0 {
+							time.Sleep(d)
+						}
+						got, err := wdClient.GetEntityData(ctx, subjectQID)
+						if err == nil && got != nil {
+							ed = got
+							subjectCache[subjectQID] = got
+							subjectFetches++
+							atomic.StoreInt64(&subjectFetchesAtomic, int64(subjectFetches))
+						}
+					}
+					if ed != nil {
+						beforeCache := 0
+						if industryCache != nil {
+							beforeCache = len(industryCache)
+						}
+						_, evid := canonicalizeIndustryPathsFromWikidata(ctx, wdClient, ed, tax, industryCache, time.Duration(*rateLimitMS)*time.Millisecond)
+						if industryCache != nil && len(industryCache) > beforeCache {
+							industryItemFetches += (len(industryCache) - beforeCache)
+							atomic.StoreInt64(&industryItemFetchesAtomic, int64(industryItemFetches))
+						}
+						// Preview industryPaths exactly as core would apply them (conservative: QID->path mapping only).
+						row.IndustryPaths = taxonomy.MapIndustryQIDsToPaths(extractWikidataQIDList(ed.PropertiesRaw, "P452"))
+						// Accumulate industry dict candidates from evidence (P452).
+						if dict != nil && len(evid) > 0 {
+							dict.Observe(evid)
+						}
+
+						// Wikidata name enrichment preview (aggressive overwrite is allowed per user: nothing is curated manually).
+						row.WikidataLabelEN = strings.TrimSpace(ed.Label)
+						row.WikidataDescriptionEN = strings.TrimSpace(ed.Description)
+						official, short := extractPreferredWikidataNames(ed)
+						row.WikidataOfficialName = official
+						row.WikidataShortName = short
+
+						// Optionally apply (write) enrichment to fragment + linked entity, mirroring core behavior.
+						doApplyIndustry := *applyIndustry && row.SuggestedScore >= *industryScoreMin
+						doApplyRef := *applyWikidataRef && row.SuggestedScore >= *wikidataScoreMin
+						doApplyNames := *applyWikidataNames && row.SuggestedScore >= *wikidataScoreMin
+						if (doApplyIndustry || doApplyRef || doApplyNames) && ed != nil {
+							applyErr := applyWikidataConservativeToFragmentAndEntity(ctx, fragmentsRepo, entityRepo, &f, ed, doApplyIndustry, doApplyRef, doApplyNames)
 							if applyErr != nil {
-								log.Printf("WARNING: failed to apply industryPaths for %s (%s): %v", f.ID, f.CanonicalPath, applyErr)
+								log.Printf("WARNING: failed to apply wikidata enrichment for %s (%s): %v", f.ID, f.CanonicalPath, applyErr)
+							} else {
+								row.AppliedWikidata = true
 							}
 						}
 					}
@@ -306,6 +460,12 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 			}
 
 			out = append(out, row)
+			selected++
+			atomic.StoreInt64(&selectedAtomic, int64(selected))
+			if *progressEvery > 0 && selected%*progressEvery == 0 {
+				log.Printf("progress: scanned=%d selected=%d lastDoc=%s subjectCache=%d industryCache=%d observedIndustryQIDs=%d subjectFetches=%d industryItemFetches=%d",
+					scanned, selected, lastSeen, len(subjectCache), len(industryCache), dict.ObservedQIDs(), subjectFetches, industryItemFetches)
+			}
 			if len(out) >= *limit {
 				break
 			}
@@ -321,79 +481,205 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 	if lastSeen != "" {
 		log.Printf("resume cursor: start-after=%s", lastSeen)
 	}
+
+	// After scan: optionally merge observed industries into taxonomy doc.
+	if dict != nil && *expandIndustryDict {
+		if tax == nil {
+			log.Printf("WARNING: taxonomy not loaded; cannot expand industry dict")
+		} else {
+			addedQIDs, addedSyn, updatedAllowed := dict.MergeIntoTaxonomy(tax, *industryDictMax)
+			log.Printf("industry-dict: observedQIDs=%d newQIDsAdded=%d newSynonymsAdded=%d newAllowedPathsAdded=%d",
+				dict.ObservedQIDs(), addedQIDs, addedSyn, updatedAllowed)
+			if *applyIndustryDict {
+				if err := taxRepo.Upsert(ctx, tax); err != nil {
+					log.Printf("WARNING: failed to upsert taxonomy: %v", err)
+				} else {
+					log.Printf("industry-dict: taxonomy upserted: version=%s", tax.Version)
+				}
+			}
+		}
+	}
+
 	return out, scanned, nil
 }
 
-// coreRepo2HorizonFragmentsRepo creates a horizon fragments repo without GCS/Vertex side effects.
-// We keep this local to avoid importing backend/internal/horizon/repo as "repo" (name collision).
-func coreRepo2HorizonFragmentsRepo(db *firestore.Client) *horizonFragmentsRepoShim {
-	return &horizonFragmentsRepoShim{db: db}
-}
-
-// horizonFragmentsRepoShim is a minimal updater for horizon_fragments that:
-// - reads the fragment
-// - updates industryPaths
-// - rebuilds indexPaths deterministically via models.BuildIndexPaths (triggered by Validate on Set is not guaranteed)
-// We intentionally do NOT bump fragment.Version here (best-effort, lightweight backfill).
-// TODO (core): move to a proper repo.Update call if we want versioned writes.
-type horizonFragmentsRepoShim struct{ db *firestore.Client }
-
-func (r *horizonFragmentsRepoShim) UpdateIndustryPaths(ctx context.Context, id string, paths []string) error {
-	if r == nil || r.db == nil || strings.TrimSpace(id) == "" {
-		return fmt.Errorf("invalid repo/id")
+func applyWikidataConservativeToFragmentAndEntity(
+	ctx context.Context,
+	fragRepo *hrepo.HorizonFragmentsRepository,
+	entityRepo *coreRepo.EntityRepository,
+	f *hmodels.HorizonFragment,
+	wdData *shttp.WikidataEntityData,
+	applyIndustry bool,
+	applyRef bool,
+	applyNames bool,
+) error {
+	if f == nil || strings.TrimSpace(f.ID) == "" || wdData == nil {
+		return fmt.Errorf("invalid fragment or wikidata data")
 	}
-	docRef := r.db.Collection("horizon_fragments").Doc(id)
-	snap, err := docRef.Get(ctx)
-	if err != nil {
-		return err
-	}
-	var frag hmodels.HorizonFragment
-	if err := snap.DataTo(&frag); err != nil {
-		return err
-	}
-	frag.IndustryPaths = paths
-	frag.IndexPaths = hmodels.BuildIndexPaths(&frag, nil)
-	now := time.Now().UTC()
-	_, err = docRef.Update(ctx, []firestore.Update{
-		{Path: "industryPaths", Value: paths},
-		{Path: "indexPaths", Value: frag.IndexPaths},
-		{Path: "updatedAt", Value: now},
-		{Path: "metadata.lastUpdatedAt", Value: now},
-	})
-	return err
-}
 
-func applyIndustryPaths(ctx context.Context, fragRepo *horizonFragmentsRepoShim, entityRepo *coreRepo.EntityRepository, f *hmodels.HorizonFragment, paths []string) error {
-	// Persist to fragment.
-	if fragRepo != nil && f != nil && strings.TrimSpace(f.ID) != "" {
-		if err := fragRepo.UpdateIndustryPaths(ctx, f.ID, paths); err != nil {
-			return err
+	// 1) Apply to fragment using shared core logic (single source of truth).
+	// Note: If applyRef is requested, ensure identifiers/KBRefs contain Wikidata ID first (core logic expects QID-known).
+	if applyRef {
+		if f.Identifiers == nil {
+			f.Identifiers = map[string]string{}
+		}
+		if strings.TrimSpace(f.Identifiers["wikidataId"]) == "" {
+			f.Identifiers["wikidataId"] = strings.TrimSpace(wdData.ID)
+		}
+		// Also add KBRef (best-effort); Validate() will mirror anyway.
+		has := false
+		for _, r := range f.KBRefs {
+			if strings.EqualFold(strings.TrimSpace(r.KB), "Wikidata") {
+				has = true
+				break
+			}
+		}
+		if !has && strings.TrimSpace(wdData.ID) != "" {
+			f.KBRefs = append(f.KBRefs, hmodels.KBReference{KB: "Wikidata", ExternalID: strings.TrimSpace(wdData.ID), Confidence: 1.0})
 		}
 	}
-	// Persist to linked entity (if configured).
-	if entityRepo != nil && f != nil && f.EntityID != nil && strings.TrimSpace(*f.EntityID) != "" {
+
+	// Apply names/industry deterministically from WD data.
+	opts := henrich.ConservativeWikidataOptions{Force: true, Overwrite: true}
+	if !applyNames {
+		// If names aren't requested, avoid overwriting them. Industry can still be applied.
+		opts.Overwrite = false
+	}
+	_, _ = henrich.EnrichFragmentFromEntityData(f, convertWD(wdData), time.Now().UTC(), opts)
+	if !applyIndustry {
+		// Keep current industryPaths if not requested (core enrichment may have populated them).
+		// Note: we only clear if enrichment changed them; easiest safe behavior is to re-load and restore.
+		// Since applyIndustry=false, we just do not persist IndustryPaths changes.
+		// We'll restore persisted state by reloading before write.
+		cur, err := fragRepo.Get(ctx, strings.TrimSpace(f.ID))
+		if err == nil && cur != nil {
+			f.IndustryPaths = cur.IndustryPaths
+		}
+	}
+	if err := fragRepo.Update(ctx, f); err != nil {
+		return err
+	}
+
+	// 2) Apply to linked entity (best-effort).
+	if entityRepo != nil && f.EntityID != nil && strings.TrimSpace(*f.EntityID) != "" {
 		eid := strings.TrimSpace(*f.EntityID)
 		ent, err := entityRepo.Get(ctx, eid)
 		if err != nil || ent == nil {
 			return err
 		}
-		ent.IndustryPaths = paths
+		if applyRef {
+			// Mirror Wikidata KBRef to entity.
+			upsertEntityKBRef(ent, strings.TrimSpace(wdData.ID))
+		}
+		if applyNames {
+			// Aggressive overwrite (per requirement).
+			if ent.Labels == nil {
+				ent.Labels = map[string]string{}
+			}
+			if s := strings.TrimSpace(wdData.Label); s != "" {
+				ent.Labels["en"] = s
+				ent.CanonicalName = s
+				if len(ent.Aliases) == 0 || ent.Aliases[0] != s {
+					ent.Aliases = append([]string{s}, ent.Aliases...)
+				}
+			}
+			if s := strings.TrimSpace(wdData.Description); s != "" {
+				ent.Description = s
+			}
+			// Prefer official/short names if present in WD properties.
+			off, sh := extractPreferredWikidataNames(wdData)
+			if strings.TrimSpace(off) != "" {
+				if ent.Identifiers == nil {
+					ent.Identifiers = map[string]string{}
+				}
+				ent.Identifiers["legalName"] = strings.TrimSpace(off)
+			}
+			if strings.TrimSpace(sh) != "" {
+				if ent.Identifiers == nil {
+					ent.Identifiers = map[string]string{}
+				}
+				ent.Identifiers["shortName"] = strings.TrimSpace(sh)
+			}
+		}
+		if applyIndustry {
+			// Use fragment's persisted industryPaths as truth (same dictionary as core used).
+			ent.IndustryPaths = f.IndustryPaths
+		}
 		return entityRepo.Upsert(ctx, ent)
 	}
 	return nil
 }
 
-func canonicalizeIndustryPathsFromWikidata(ctx context.Context, wdClient *shttp.WikidataClient, entityData *shttp.WikidataEntityData, tax *coreModels.HorizonTaxonomy, delay time.Duration) []string {
-	if entityData == nil {
+// convertWD adapts http WikidataEntityData to the ontology.WikidataEntityData used by core enrichment.
+func convertWD(ed *shttp.WikidataEntityData) *coreontology.WikidataEntityData {
+	if ed == nil {
 		return nil
+	}
+	return &coreontology.WikidataEntityData{
+		ID:            ed.ID,
+		Label:         ed.Label,
+		Description:   ed.Description,
+		URL:           ed.URL,
+		Properties:    ed.Properties,
+		PropertiesRaw: ed.PropertiesRaw,
+	}
+}
+
+func upsertEntityKBRef(ent *coreModels.Entity, qid string) {
+	if ent == nil {
+		return
+	}
+	qid = strings.TrimSpace(qid)
+	if qid == "" {
+		return
+	}
+	now := time.Now().UTC()
+	// Update existing.
+	for i := range ent.KBRefs {
+		if strings.EqualFold(strings.TrimSpace(ent.KBRefs[i].KB), "Wikidata") {
+			ent.KBRefs[i].KB = "Wikidata"
+			ent.KBRefs[i].ExternalID = qid
+			ent.KBRefs[i].Confidence = 1.0
+			ent.KBRefs[i].LastSync = &now
+			return
+		}
+	}
+	// Append.
+	ent.KBRefs = append(ent.KBRefs, coreModels.KBReference{
+		KB:         "Wikidata",
+		ExternalID: qid,
+		Confidence: 1.0,
+		LastSync:   &now,
+	})
+}
+
+
+type IndustryEvidence struct {
+	IndustryQID   string
+	IndustryLabel string
+	IndustryKey   string
+	IndustryPath  string
+}
+
+func canonicalizeIndustryPathsFromWikidata(
+	ctx context.Context,
+	wdClient *shttp.WikidataClient,
+	entityData *shttp.WikidataEntityData,
+	tax *coreModels.HorizonTaxonomy,
+	industryCache map[string]*shttp.WikidataEntityData,
+	delay time.Duration,
+) ([]string, []IndustryEvidence) {
+	if entityData == nil {
+		return nil, nil
 	}
 	industryQIDs := extractWikidataQIDList(entityData.PropertiesRaw, "P452")
 	if len(industryQIDs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	seen := map[string]struct{}{}
 	var out []string
+	var evid []IndustryEvidence
 
 	for _, qid := range industryQIDs {
 		qid = strings.TrimSpace(qid)
@@ -407,17 +693,31 @@ func canonicalizeIndustryPathsFromWikidata(ctx context.Context, wdClient *shttp.
 					seen[p] = struct{}{}
 					out = append(out, p)
 				}
+				evid = append(evid, IndustryEvidence{IndustryQID: qid, IndustryPath: p})
 				continue
 			}
 		}
 
 		// 2) Label-based mapping via synonyms (requires fetching industry item label)
 		if wdClient != nil {
-			if delay > 0 {
-				time.Sleep(delay)
+			indData := (*shttp.WikidataEntityData)(nil)
+			if industryCache != nil {
+				indData = industryCache[qid]
 			}
-			indData, err := wdClient.GetEntityData(ctx, qid)
-			if err == nil && indData != nil {
+			if indData == nil {
+				if delay > 0 {
+					time.Sleep(delay)
+				}
+				got, err := wdClient.GetEntityData(ctx, qid)
+				if err == nil && got != nil {
+					indData = got
+					if industryCache != nil {
+						industryCache[qid] = got
+					}
+				}
+			}
+
+			if indData != nil {
 				lbl := strings.TrimSpace(indData.Label)
 				key := normalizeIndustryKey(lbl)
 				if tax != nil && tax.IndustrySynonyms != nil {
@@ -426,6 +726,7 @@ func canonicalizeIndustryPathsFromWikidata(ctx context.Context, wdClient *shttp.
 							seen[p] = struct{}{}
 							out = append(out, p)
 						}
+						evid = append(evid, IndustryEvidence{IndustryQID: qid, IndustryLabel: lbl, IndustryKey: key, IndustryPath: p})
 						continue
 					}
 				}
@@ -436,6 +737,7 @@ func canonicalizeIndustryPathsFromWikidata(ctx context.Context, wdClient *shttp.
 						seen[p] = struct{}{}
 						out = append(out, p)
 					}
+					evid = append(evid, IndustryEvidence{IndustryQID: qid, IndustryLabel: lbl, IndustryKey: key, IndustryPath: p})
 				}
 			}
 		}
@@ -443,7 +745,7 @@ func canonicalizeIndustryPathsFromWikidata(ctx context.Context, wdClient *shttp.
 
 	// Stable order
 	sortStrings(out)
-	return out
+	return out, evid
 }
 
 func extractWikidataQIDList(props map[string]interface{}, propID string) []string {
@@ -512,6 +814,382 @@ func sortStrings(a []string) {
 			}
 		}
 	}
+}
+
+type monoText struct {
+	Text string
+	Lang string
+}
+
+func extractPreferredWikidataNames(ed *shttp.WikidataEntityData) (officialName string, shortName string) {
+	if ed == nil {
+		return "", ""
+	}
+	official := extractMonolingualTextList(ed.PropertiesRaw, "P1448")
+	short := extractMonolingualTextList(ed.PropertiesRaw, "P1813")
+
+	officialName = pickPreferredText(official)
+	shortName = pickPreferredText(short)
+	return strings.TrimSpace(officialName), strings.TrimSpace(shortName)
+}
+
+func pickPreferredText(list []monoText) string {
+	if len(list) == 0 {
+		return ""
+	}
+	// Prefer English, then any non-empty.
+	for _, v := range list {
+		if strings.EqualFold(strings.TrimSpace(v.Lang), "en") && strings.TrimSpace(v.Text) != "" {
+			return strings.TrimSpace(v.Text)
+		}
+	}
+	for _, v := range list {
+		if strings.TrimSpace(v.Text) != "" {
+			return strings.TrimSpace(v.Text)
+		}
+	}
+	return ""
+}
+
+func extractMonolingualTextList(props map[string]interface{}, propID string) []monoText {
+	if props == nil {
+		return nil
+	}
+	raw, ok := props[propID]
+	if !ok || raw == nil {
+		return nil
+	}
+	out := []monoText{}
+	add := func(text, lang string) {
+		text = strings.TrimSpace(text)
+		lang = strings.TrimSpace(lang)
+		if text == "" {
+			return
+		}
+		out = append(out, monoText{Text: text, Lang: lang})
+	}
+
+	// Supported shapes:
+	// - []interface{}{ map[string]interface{}{"text": "...", "language": "en"}, ... }
+	// - map[string]interface{}{"text":"...","language":"en"}
+	// - string (fallback)
+	switch v := raw.(type) {
+	case []interface{}:
+		for _, it := range v {
+			switch vv := it.(type) {
+			case map[string]interface{}:
+				t, _ := vv["text"].(string)
+				l, _ := vv["language"].(string)
+				if t == "" {
+					if x, ok := vv["value"].(string); ok {
+						t = x
+					}
+				}
+				add(t, l)
+			case string:
+				add(vv, "")
+			}
+		}
+	case map[string]interface{}:
+		t, _ := v["text"].(string)
+		l, _ := v["language"].(string)
+		if t == "" {
+			if x, ok := v["value"].(string); ok {
+				t = x
+			}
+		}
+		add(t, l)
+	case string:
+		add(v, "")
+	}
+	return out
+}
+
+// NOTE: legacy applyWikidataEnrichment and the shim fragment updater were removed.
+// This tool now applies enrichment via applyWikidataConservativeToFragmentAndEntity,
+// which uses the shared core enrichment logic + HorizonFragmentsRepository.Update (versioned writes).
+
+func ensureFragmentWikidataRef(f *hmodels.HorizonFragment, qid string) {
+	if f == nil {
+		return
+	}
+	qid = strings.TrimSpace(qid)
+	if qid == "" {
+		return
+	}
+	// Mirror into identifiers
+	if f.Identifiers == nil {
+		f.Identifiers = map[string]string{}
+	}
+	f.Identifiers["wikidataId"] = qid
+	// Ensure KBRefs contains Wikidata
+	for i := range f.KBRefs {
+		if strings.EqualFold(strings.TrimSpace(f.KBRefs[i].KB), "Wikidata") {
+			f.KBRefs[i].KB = "Wikidata"
+			if strings.TrimSpace(f.KBRefs[i].ExternalID) == "" {
+				f.KBRefs[i].ExternalID = qid
+			}
+			if f.KBRefs[i].Confidence < 1.0 {
+				f.KBRefs[i].Confidence = 1.0
+			}
+			return
+		}
+	}
+	f.KBRefs = append(f.KBRefs, hmodels.KBReference{KB: "Wikidata", ExternalID: qid, Confidence: 1.0})
+}
+
+func ensureEntityWikidataRef(e *coreModels.Entity, qid string) {
+	if e == nil {
+		return
+	}
+	qid = strings.TrimSpace(qid)
+	if qid == "" {
+		return
+	}
+	for i := range e.KBRefs {
+		if strings.EqualFold(strings.TrimSpace(e.KBRefs[i].KB), "Wikidata") {
+			e.KBRefs[i].KB = "Wikidata"
+			if strings.TrimSpace(e.KBRefs[i].ExternalID) == "" {
+				e.KBRefs[i].ExternalID = qid
+			}
+			if e.KBRefs[i].Confidence < 1.0 {
+				e.KBRefs[i].Confidence = 1.0
+			}
+			return
+		}
+	}
+	now := time.Now().UTC()
+	e.KBRefs = append(e.KBRefs, coreModels.KBReference{KB: "Wikidata", ExternalID: qid, Confidence: 1.0, LastSync: &now})
+}
+
+func appendUnique(list []string, s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return list
+	}
+	for _, x := range list {
+		if strings.EqualFold(strings.TrimSpace(x), s) {
+			return list
+		}
+	}
+	return append(list, s)
+}
+
+// ============================================================================
+// Industry dictionary expansion (taxonomy growth)
+// ============================================================================
+
+type industryDictAccumulator struct {
+	baseTax *coreModels.HorizonTaxonomy
+
+	// Observations
+	qidCount map[string]int
+	qidPath  map[string]string // best-known canonical path for that industry QID
+	keyPath  map[string]string // normalized label -> path (synonym)
+
+	allowedPathSet map[string]struct{}
+}
+
+func newIndustryDictAccumulator(tax *coreModels.HorizonTaxonomy) *industryDictAccumulator {
+	if tax == nil {
+		return &industryDictAccumulator{
+			baseTax:        nil,
+			qidCount:       map[string]int{},
+			qidPath:        map[string]string{},
+			keyPath:        map[string]string{},
+			allowedPathSet: map[string]struct{}{},
+		}
+	}
+	allowed := map[string]struct{}{}
+	for _, p := range tax.AllowedIndustryPaths {
+		p = strings.TrimSpace(p)
+		if strings.HasPrefix(p, "/industry/") {
+			allowed[p] = struct{}{}
+		}
+	}
+	return &industryDictAccumulator{
+		baseTax:         tax,
+		qidCount:        map[string]int{},
+		qidPath:         map[string]string{},
+		keyPath:         map[string]string{},
+		allowedPathSet:  allowed,
+	}
+}
+
+func (d *industryDictAccumulator) Observe(evid []IndustryEvidence) {
+	if d == nil || len(evid) == 0 {
+		return
+	}
+	for _, e := range evid {
+		qid := strings.TrimSpace(e.IndustryQID)
+		path := strings.TrimSpace(e.IndustryPath)
+		key := strings.TrimSpace(e.IndustryKey)
+		if qid == "" || !strings.HasPrefix(qid, "Q") {
+			continue
+		}
+		if !strings.HasPrefix(path, "/industry/") {
+			continue
+		}
+		d.qidCount[qid]++
+		// Keep latest seen path (we don't try to resolve conflicts yet; most should be stable).
+		d.qidPath[qid] = path
+		if key != "" {
+			d.keyPath[key] = path
+		}
+	}
+}
+
+func (d *industryDictAccumulator) ObservedQIDs() int {
+	if d == nil {
+		return 0
+	}
+	return len(d.qidCount)
+}
+
+// MergeIntoTaxonomy mutates the provided taxonomy by extending:
+// - IndustryWikidataMap (QID -> /industry/...)
+// - IndustrySynonyms (normalized label -> /industry/...)
+// - AllowedIndustryPaths (ensure all inserted paths and ancestors exist)
+// Returns counts of newly added entries.
+func (d *industryDictAccumulator) MergeIntoTaxonomy(tax *coreModels.HorizonTaxonomy, maxNewQIDs int) (addedQIDs, addedSynonyms, addedAllowed int) {
+	if d == nil || tax == nil {
+		return 0, 0, 0
+	}
+	if maxNewQIDs <= 0 {
+		maxNewQIDs = 500
+	}
+	if maxNewQIDs > 2000 {
+		maxNewQIDs = 2000
+	}
+
+	if tax.IndustryWikidataMap == nil {
+		tax.IndustryWikidataMap = map[string]string{}
+	}
+	if tax.IndustrySynonyms == nil {
+		tax.IndustrySynonyms = map[string]string{}
+	}
+	if tax.AllowedIndustryPaths == nil {
+		tax.AllowedIndustryPaths = []string{}
+	}
+
+	// Sort QIDs by frequency descending, add top maxNewQIDs that are not present.
+	type qidFreq struct {
+		qid  string
+		freq int
+	}
+	qids := make([]qidFreq, 0, len(d.qidCount))
+	for qid, c := range d.qidCount {
+		qids = append(qids, qidFreq{qid: qid, freq: c})
+	}
+	for i := 0; i < len(qids); i++ {
+		for j := i + 1; j < len(qids); j++ {
+			if qids[j].freq > qids[i].freq {
+				qids[i], qids[j] = qids[j], qids[i]
+			}
+		}
+	}
+
+	for _, item := range qids {
+		if addedQIDs >= maxNewQIDs {
+			break
+		}
+		qid := item.qid
+		if _, exists := tax.IndustryWikidataMap[qid]; exists {
+			continue
+		}
+		path := strings.TrimSpace(d.qidPath[qid])
+		if !strings.HasPrefix(path, "/industry/") {
+			continue
+		}
+		tax.IndustryWikidataMap[qid] = path
+		addedQIDs++
+		addedAllowed += ensureAllowedIndustryPath(tax, path)
+	}
+
+	// Add synonyms (bounded by maxNewQIDs*3 just to prevent huge growth per run).
+	maxNewSyn := maxNewQIDs * 3
+	for key, path := range d.keyPath {
+		if addedSynonyms >= maxNewSyn {
+			break
+		}
+		key = strings.TrimSpace(key)
+		path = strings.TrimSpace(path)
+		if key == "" || !strings.HasPrefix(path, "/industry/") {
+			continue
+		}
+		if _, exists := tax.IndustrySynonyms[key]; exists {
+			continue
+		}
+		tax.IndustrySynonyms[key] = path
+		addedSynonyms++
+		addedAllowed += ensureAllowedIndustryPath(tax, path)
+	}
+
+	// Keep allowlist stable sorted (helps diff stability)
+	if len(tax.AllowedIndustryPaths) > 1 {
+		sortStrings(tax.AllowedIndustryPaths)
+	}
+
+	return addedQIDs, addedSynonyms, addedAllowed
+}
+
+// ensureAllowedIndustryPath adds path and its ancestors to AllowedIndustryPaths.
+// Returns how many new paths were appended.
+func ensureAllowedIndustryPath(tax *coreModels.HorizonTaxonomy, path string) int {
+	if tax == nil {
+		return 0
+	}
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "/industry/") {
+		return 0
+	}
+	// Build ancestors: /industry/a, /industry/a/b, ...
+	anc := industryPathWithAncestors(path, 6)
+	if len(anc) == 0 {
+		return 0
+	}
+	seen := map[string]struct{}{}
+	for _, p := range tax.AllowedIndustryPaths {
+		p = strings.TrimSpace(p)
+		if strings.HasPrefix(p, "/industry/") {
+			seen[p] = struct{}{}
+		}
+	}
+	added := 0
+	for _, p := range anc {
+		if !strings.HasPrefix(p, "/industry/") {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		tax.AllowedIndustryPaths = append(tax.AllowedIndustryPaths, p)
+		added++
+	}
+	return added
+}
+
+func industryPathWithAncestors(path string, maxDepth int) []string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/industry/") {
+		return nil
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return nil
+	}
+	if maxDepth <= 0 {
+		maxDepth = 6
+	}
+	if len(parts) > maxDepth {
+		parts = parts[:maxDepth]
+	}
+	out := make([]string, 0, len(parts))
+	for i := 1; i <= len(parts); i++ {
+		out = append(out, "/"+strings.Join(parts[:i], "/"))
+	}
+	return out
 }
 
 func extractFragmentWikidataID(f *hmodels.HorizonFragment) string {

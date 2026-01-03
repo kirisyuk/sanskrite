@@ -3,12 +3,21 @@ package scout
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
+
+func isOrgWikidataSearchDedupEnabled() bool {
+	// Default OFF: avoid false merges due to fuzzy Wikidata search.
+	// Enable explicitly if you want aggressive org dedup:
+	//   HORIZON_ENABLE_ORG_WIKIDATA_SEARCH_DEDUP=true
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("HORIZON_ENABLE_ORG_WIKIDATA_SEARCH_DEDUP")))
+	return v == "1" || v == "true" || v == "yes" || v == "y" || v == "on"
+}
 
 // =============================================================================
 // ORGANIZATION DEDUPLICATION POLICY
@@ -187,7 +196,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	}
 
 	// Strategy 6: Try to resolve Wikidata ID via API if we have a client
-	if d.wikidataClient != nil && wikidataID == "" {
+	if isOrgWikidataSearchDedupEnabled() && d.wikidataClient != nil && wikidataID == "" {
 		resolvedID := d.resolveWikidataID(ctx, fragment)
 		if resolvedID != "" {
 			existing, err := d.findByWikidataID(ctx, resolvedID)
@@ -328,6 +337,13 @@ func chooseBestOrgCandidate(cands []*models.HorizonFragment) *models.HorizonFrag
 		}
 		if f.EntityID != nil && strings.TrimSpace(*f.EntityID) != "" {
 			score += 25
+		}
+		// Strong signals: prefer fragments with Wikidata ID and industryPaths.
+		if extractWikidataIDFromFragment(f) != "" {
+			score += 100
+		}
+		if len(f.IndustryPaths) > 0 {
+			score += 50
 		}
 		if strings.TrimSpace(f.Identifiers["legalName"]) != "" {
 			score += 10

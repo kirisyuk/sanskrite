@@ -28,6 +28,7 @@ import (
 type OrgHierarchyBuilder struct {
 	fragmentsRepo *repo.HorizonFragmentsRepository
 	edgesRepo     *repo.DependencyEdgesRepository
+	orgDedup      *OrgDeduplicator
 }
 
 // NewOrgHierarchyBuilder creates a new org hierarchy builder.
@@ -35,6 +36,9 @@ func NewOrgHierarchyBuilder(fragmentsRepo *repo.HorizonFragmentsRepository, edge
 	return &OrgHierarchyBuilder{
 		fragmentsRepo: fragmentsRepo,
 		edgesRepo:     edgesRepo,
+		// IMPORTANT: org hierarchy builder can create new ORG fragments (parents) — run them through the same dedup rules.
+		// We keep wikidata client nil here; this is conservative (no fuzzy search) and avoids extra network calls.
+		orgDedup: NewOrgDeduplicator(fragmentsRepo, nil),
 	}
 }
 
@@ -195,6 +199,14 @@ func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, _
 		},
 	}
 	// IndexPaths will be built by fragmentsRepo.Create()
+
+	// Deduplicate before creating (prevents parent-org duplicates like "Apple" being created many times).
+	if b.orgDedup != nil {
+		deduplicated, derr := b.orgDedup.DeduplicateOrg(ctx, f)
+		if derr == nil && deduplicated != nil && deduplicated.ID != "" {
+			return deduplicated.ID, nil
+		}
+	}
 
 	id, err := b.fragmentsRepo.Create(ctx, f)
 	if err != nil {

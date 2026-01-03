@@ -131,6 +131,28 @@ func (s *HorizonService) EnsureEntityForFragmentObject(ctx context.Context, frag
 			Type:          entityType,
 			Aliases:       []string{name},
 			Identifiers:   copyStringMap(frag.Identifiers),
+			IndustryPaths: func() []string {
+				if len(frag.IndustryPaths) == 0 {
+					return nil
+				}
+				out := make([]string, 0, len(frag.IndustryPaths))
+				seen := map[string]struct{}{}
+				for _, p := range frag.IndustryPaths {
+					p = strings.TrimSpace(p)
+					if p == "" {
+						continue
+					}
+					if _, ok := seen[p]; ok {
+						continue
+					}
+					seen[p] = struct{}{}
+					out = append(out, p)
+				}
+				if len(out) == 0 {
+					return nil
+				}
+				return out
+			}(),
 			Attributes: map[string]interface{}{
 				"sourceType":          "horizon_fragment",
 				"sourceFragmentId":    strings.TrimSpace(frag.ID),

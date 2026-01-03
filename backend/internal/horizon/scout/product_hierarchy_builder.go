@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
@@ -828,6 +829,13 @@ func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
 			}(),
 		},
 	}
+
+	// Best-effort: apply the shared conservative Wikidata enrichment logic (QID-known only) to this ORG.
+	// This fills names and industryPaths deterministically and sets KBRefs.LastSync.
+	_, _ = henrich.EnrichFragmentFromEntityData(f, entityData, now, henrich.ConservativeWikidataOptions{
+		Force:     true,
+		Overwrite: true,
+	})
 
 	// Deduplicate before creating
 	if b.orgDeduplicator != nil {

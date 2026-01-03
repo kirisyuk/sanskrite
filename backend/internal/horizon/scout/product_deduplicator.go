@@ -19,6 +19,14 @@ func isProductModelAliasDedupEnabled() bool {
 	return v == "1" || v == "true" || v == "yes" || v == "y" || v == "on"
 }
 
+func isProductWikidataSearchDedupEnabled() bool {
+	// Default OFF: avoid false merges due to fuzzy Wikidata search.
+	// Enable explicitly if you want aggressive product dedup:
+	//   HORIZON_ENABLE_PRODUCT_WIKIDATA_SEARCH_DEDUP=true
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("HORIZON_ENABLE_PRODUCT_WIKIDATA_SEARCH_DEDUP")))
+	return v == "1" || v == "true" || v == "yes" || v == "y" || v == "on"
+}
+
 // =============================================================================
 // PRODUCT DEDUPLICATION POLICY
 // =============================================================================
@@ -152,7 +160,7 @@ func (d *ProductDeduplicator) DeduplicateProduct(ctx context.Context, fragment *
 	}
 
 	// Strategy 5: Try to resolve Wikidata ID via API if we have a client
-	if d.wikidataClient != nil && wikidataID == "" {
+	if isProductWikidataSearchDedupEnabled() && d.wikidataClient != nil && wikidataID == "" {
 		resolvedID := d.resolveWikidataID(ctx, fragment)
 		if resolvedID != "" {
 			existing, err := d.findByWikidataID(ctx, resolvedID)

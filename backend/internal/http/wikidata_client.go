@@ -271,6 +271,7 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 
 		// Extract key properties
 		// Priority properties (always extracted): P231, P274, P31, P279, P452, P366, P10565, P186
+		// Plus: P1448 (official name), P1813 (short name) for name normalization.
 		priorityProps := map[string]bool{
 			"P231":  true, // CAS Registry Number
 			"P274":  true, // Chemical formula
@@ -280,6 +281,8 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 			"P366":  true, // Has use
 			"P10565": true, // Is produced from
 			"P186":  true, // Material used
+			"P1448": true, // Official name
+			"P1813": true, // Short name
 		}
 
 		properties := make(map[string]string)
@@ -297,7 +300,7 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 			
 			// For multi-value properties, collect all values.
 			// IMPORTANT: P452 (industry) is multi-valued for many organizations and is required for industry taxonomy mapping.
-			if propID == "P31" || propID == "P279" || propID == "P366" || propID == "P10565" || propID == "P186" || propID == "P452" || propID == "P176" {
+			if propID == "P31" || propID == "P279" || propID == "P366" || propID == "P10565" || propID == "P186" || propID == "P452" || propID == "P176" || propID == "P1448" || propID == "P1813" {
 				var values []string
 				var rawValues []interface{}
 				for _, claim := range claims {

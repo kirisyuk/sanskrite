@@ -230,6 +230,40 @@ func (c *FirestoreRuntimeTaxonomyCache) Get(ctx context.Context) (*RuntimeTaxono
 		}
 	}
 
+	// Load industry taxonomy (Horizon-first)
+	if len(t.AllowedIndustryPaths) > 0 {
+		rt.AllowedIndustryPaths = map[string]struct{}{}
+		for _, p := range t.AllowedIndustryPaths {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			rt.AllowedIndustryPaths[p] = struct{}{}
+		}
+	}
+	if len(t.IndustrySynonyms) > 0 {
+		rt.IndustrySynonyms = map[string]string{}
+		for k, v := range t.IndustrySynonyms {
+			k = strings.ToLower(strings.TrimSpace(k))
+			v = strings.TrimSpace(v)
+			if k == "" || v == "" {
+				continue
+			}
+			rt.IndustrySynonyms[k] = v
+		}
+	}
+	if len(t.IndustryWikidataMap) > 0 {
+		rt.IndustryWikidataMap = map[string]string{}
+		for k, v := range t.IndustryWikidataMap {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if k == "" || v == "" {
+				continue
+			}
+			rt.IndustryWikidataMap[k] = v
+		}
+	}
+
 	c.cached = rt
 	c.loadedAt = now
 	return rt, nil

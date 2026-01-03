@@ -7,8 +7,10 @@ import (
 	"regexp"
 	"strings"
 
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
 
 var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
@@ -25,6 +27,7 @@ type PreCreateValidator struct {
 	orgDedup        *OrgDeduplicator
 	productDedup    *ProductDeduplicator
 	validationPolicy *policy.PolicyExecutor // Optional: unified validation policy
+	wikidataClient  coreontology.WikidataClientInterface
 }
 
 // NewPreCreateValidator creates a new pre-create validator.
@@ -39,6 +42,13 @@ func NewPreCreateValidator(geoBuilder *GeoHierarchyBuilder, orgDedup *OrgDedupli
 // WithValidationPolicy sets the validation policy executor.
 func (v *PreCreateValidator) WithValidationPolicy(executor *policy.PolicyExecutor) *PreCreateValidator {
 	v.validationPolicy = executor
+	return v
+}
+
+// WithWikidataClient sets the Wikidata client for conservative enrichment (QID-known only).
+// NOTE: This does NOT enable fuzzy Wikidata search; it only uses GetEntityData when wikidataId is already present.
+func (v *PreCreateValidator) WithWikidataClient(client coreontology.WikidataClientInterface) *PreCreateValidator {
+	v.wikidataClient = client
 	return v
 }
 
@@ -217,6 +227,25 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			} else {
 				log.Printf("%s GEO_REGION validation passed: %s", logPrefix, fragment.CanonicalPath)
 			}
+		}
+	}
+
+	// ==========================================================================
+	// Policy 4.5: Conservative Wikidata enrichment (QID-known only)
+	// ==========================================================================
+	// If fragment already has a Wikidata ID, enrich:
+	// - labels.en + description
+	// - identifiers.legalName (P1448) + identifiers.shortName (P1813)
+	// - industryPaths from P452 (mapped via runtime industry dictionary)
+	//
+	// IMPORTANT: We do NOT run search here. This avoids false matches.
+	if v.wikidataClient != nil {
+		if _, err := henrich.EnrichFragmentFromWikidataIfPresent(ctx, v.wikidataClient, fragment, henrich.ConservativeWikidataOptions{
+			Force:     true,
+			Overwrite: true,
+		}); err != nil {
+			// Best-effort: do not block creation.
+			result.Warnings = append(result.Warnings, fmt.Sprintf("wikidata enrichment skipped: %v", err))
 		}
 	}
 
