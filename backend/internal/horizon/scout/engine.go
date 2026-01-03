@@ -739,6 +739,15 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	tenantID := job.TenantID
 	projectID := job.ProjectID
 
+	// Optional task focus modules (specialties) requested by UI/lens.
+	// These are stored in job.State to keep schemas stable.
+	specialties := []string(nil)
+	if job.State != nil {
+		if v, ok := job.State["specialties"]; ok {
+			specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
+		}
+	}
+
 	// Attach telemetry context so LLM usage metrics get attributed even if individual agents
 	// don't fill task.TenantID/UserID fields.
 	lensID := strings.TrimSpace(job.LensID)
@@ -1296,6 +1305,24 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				fmt.Sprintf("Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships.", job.TargetCanonicalPath),
 			},
 		}
+		// Add specialty-specific research prompts when internal sources are empty (Critic is not run in this branch).
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement) {
+			validationResult.MissingInfo = append(validationResult.MissingInfo,
+				fmt.Sprintf("Who are the executive leaders (CEO, CFO, COO, CTO/CIO, CMO, CHRO, President/Managing Director, Chair) of %s? Provide names and roles with sources.", job.TargetCanonicalPath),
+			)
+		}
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyProductsAndServices) {
+			validationResult.MissingInfo = append(validationResult.MissingInfo,
+				fmt.Sprintf("What products and services does %s produce/offer? Provide a canonical list of outputs suitable for /product/... paths.", job.TargetCanonicalPath),
+				fmt.Sprintf("What key inputs/materials/components does %s consume? Provide a canonical list of inputs suitable for /product/... paths.", job.TargetCanonicalPath),
+			)
+			// For product nodes, also request upstream/downstream transformations.
+			if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/product/") {
+				validationResult.MissingInfo = append(validationResult.MissingInfo,
+					fmt.Sprintf("What are the upstream materials and downstream derived products for %s (produced from / used to produce)? Return TRANSFORMS_INTO relationships between products.", job.TargetCanonicalPath),
+				)
+			}
+		}
 	} else {
 		// EXTRACTION: Извлечение данных через Scout Agent
 		if err := e.transition(ctx, job, models.ScoutingJobStateExtraction, 0.5, "extraction"); err != nil {
@@ -1311,7 +1338,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		e.logLine(ctx, job, "info", fmt.Sprintf("> taxonomy classified: entityPath=%s sectorPath=%s", entityPath, sectorPath))
 
-		scoutResult, err = e.scoutAgent.ExtractFragmentData(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath)
+		scoutResult, err = e.scoutAgent.ExtractFragmentData(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath, specialties)
 		if err != nil {
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "extraction_failed")
 			return fmt.Errorf("failed to extract fragment data: %w", err)
@@ -1324,7 +1351,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		e.logLine(ctx, job, "info", "> critic validating extracted data")
 
-		validationResult, err = e.criticAgent.Validate(ctx, extractedFragment, scoutResult.Relations, aggregatedContent)
+		validationResult, err = e.criticAgent.Validate(ctx, extractedFragment, scoutResult.Relations, aggregatedContent, specialties)
 		if err != nil {
 			// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
 			fmt.Printf("Validation error: %v\n", err)
@@ -1419,7 +1446,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			"spherePathsTop":      trace.StrSlice(spherePaths, 10),
 			"keywordsTop":         trace.StrSlice(keywords, 10),
 		})
-		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords)
+		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties)
 		if err == nil {
 			// Capture canonicalPath drift introduced by research (aliasing).
 			oldCP := ""

@@ -233,12 +233,22 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// ==========================================================================
 	// Policy 4.5: Conservative Wikidata enrichment (QID-known only)
 	// ==========================================================================
+	// Optional: resolve missing Wikidata QID via search/scoring (feature-flagged; default OFF).
+	// If enabled and confident, we attach wikidataId BEFORE enrichment/dedup so the rest of the pipeline becomes deterministic.
+	if v.wikidataClient != nil {
+		qr, _, attached, err := henrich.ResolveAndAttachWikidataQIDIfMissing(ctx, v.wikidataClient, fragment, henrich.QIDResolveOptionsFromEnv())
+		if err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("wikidata qid resolve skipped: %v", err))
+		} else if attached && qr != nil && strings.TrimSpace(qr.QID) != "" {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("wikidata qid resolved: %s (score=%d, query=%q)", strings.TrimSpace(qr.QID), qr.Score, qr.Query))
+		}
+	}
 	// If fragment already has a Wikidata ID, enrich:
 	// - labels.en + description
 	// - identifiers.legalName (P1448) + identifiers.shortName (P1813)
 	// - industryPaths from P452 (mapped via runtime industry dictionary)
 	//
-	// IMPORTANT: We do NOT run search here. This avoids false matches.
+	// IMPORTANT: We do NOT run search here (unless the feature-flagged resolver above attached a QID).
 	if v.wikidataClient != nil {
 		if _, err := henrich.EnrichFragmentFromWikidataIfPresent(ctx, v.wikidataClient, fragment, henrich.ConservativeWikidataOptions{
 			Force:     true,

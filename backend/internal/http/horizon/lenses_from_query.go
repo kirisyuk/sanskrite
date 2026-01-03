@@ -12,20 +12,23 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type createLensFromQueryRequest struct {
-	Name             string   `json:"name"`
+	Name              string   `json:"name"`
 	ProjectID         string   `json:"projectId"`
-	Query            string   `json:"query"`
+	Query             string   `json:"query"`
 	MaxRecursionDepth *int     `json:"maxRecursionDepth,omitempty"`
 	RequestedMetrics  []string `json:"requestedMetrics,omitempty"`
-	Status           string   `json:"status,omitempty"` // ACTIVE|DORMANT
+	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
+	Specialties []string `json:"specialties,omitempty"`
+	Status      string   `json:"status,omitempty"` // ACTIVE|DORMANT
 }
 
 type createLensFromQueryResponse struct {
 	Intent *agents.IntentResolution `json:"intent"`
-	Lens   *models.Lens            `json:"lens"`
+	Lens   *models.Lens             `json:"lens"`
 }
 
 // CreateLensFromQuery resolves a natural language query into intent and creates a Lens with:
@@ -202,9 +205,9 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	}
 
 	viewConfig := map[string]interface{}{
-		"focus":      intent.Focus,
+		"focus":       intent.Focus,
 		"spherePaths": intent.SpherePaths,
-		"keywords":   intent.Keywords,
+		"keywords":    intent.Keywords,
 	}
 	if req.MaxRecursionDepth != nil {
 		viewConfig["maxRecursionDepth"] = *req.MaxRecursionDepth
@@ -212,23 +215,26 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	if len(req.RequestedMetrics) > 0 {
 		viewConfig["requestedMetrics"] = req.RequestedMetrics
 	}
+	if specs := taxonomy.NormalizeSpecialties(req.Specialties); len(specs) > 0 {
+		viewConfig["specialties"] = specs
+	}
 
 	lens := &models.Lens{
-		TenantID:  authInfo.TenantID,
-		ProjectID: req.ProjectID,
-		Name:      name,
-		Scope:     scope,
+		TenantID:   authInfo.TenantID,
+		ProjectID:  req.ProjectID,
+		Name:       name,
+		Scope:      scope,
 		ViewConfig: viewConfig,
-		Status:    status,
+		Status:     status,
 	}
 
 	trace.Log(ctx, "lens_create", "lens.built", map[string]any{
-		"tenantId":      lens.TenantID,
-		"projectId":     lens.ProjectID,
-		"name":          trace.Trunc(lens.Name, 120),
-		"status":        lens.Status,
-		"scopeN":        len(lens.Scope),
-		"scopeTop":      trace.StrSlice(lens.Scope, 12),
+		"tenantId":  lens.TenantID,
+		"projectId": lens.ProjectID,
+		"name":      trace.Trunc(lens.Name, 120),
+		"status":    lens.Status,
+		"scopeN":    len(lens.Scope),
+		"scopeTop":  trace.StrSlice(lens.Scope, 12),
 		"viewConfigKeys": func() []string {
 			keys := make([]string, 0, len(lens.ViewConfig))
 			for k := range lens.ViewConfig {
@@ -273,5 +279,3 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		Lens:   lens,
 	})
 }
-
-

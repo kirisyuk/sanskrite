@@ -173,7 +173,19 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeFacility,
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
-		Description: "Producer produces product",
+		Description:      "Producer produces product",
+	},
+
+	// CONSUMES: Consumption flows from consumer to product.
+	// Organizations, Facilities, and Products can consume a product.
+	models.DependencyTypeConsumes: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
+		Description:      "Consumer consumes product",
 	},
 
 	// LOCATED_IN: Entity is located within a geographic region.
@@ -186,7 +198,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeGeoRegion, // Nested regions: city in state
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion},
-		Description: "Entity is located within region",
+		Description:      "Entity is located within region",
 	},
 
 	// OPERATES_IN: Organization operates in a region or facility.
@@ -229,6 +241,13 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeGeoRegion,
 		},
 		Description: "Dependent entity depends on dependency",
+	},
+
+	// TRANSFORMS_INTO: Value chain transformation (product -> product).
+	models.DependencyTypeTransformsInto: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
+		Description:      "Product transforms into downstream product",
 	},
 }
 
@@ -303,4 +322,3 @@ func EdgeKey(sourceID, targetID string, edgeType models.DependencyType) string {
 	}
 	return sourceID + "|" + targetID + "|" + string(edgeType)
 }
-

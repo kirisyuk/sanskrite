@@ -11,12 +11,13 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func parseStringSlice(v interface{}) []string {
@@ -103,18 +104,18 @@ func dedupeCanonicalPaths(in []string) []string {
 
 // LensService управляет Lens и подписками на HorizonFragment
 type LensService struct {
-	lensesRepo        *repo.LensesRepository
-	fragmentsRepo     *repo.HorizonFragmentsRepository
-	scoutingJobsRepo  *repo.ScoutingJobsRepository
-	ontologyFactsRepo *corerepo.OntologyFactsRepository
-	lifecycle         *LifecycleManager
-	calculator        *MetricsCalculator
-	watchdogHook      func(ctx context.Context, fragmentID string)
-	queryResolver        *QueryResolver
-	realtime             *realtime.Publisher
-	criticalPathDetector *critical_path.Detector // Optional: for critical path detection
-	edgesRepo            *repo.DependencyEdgesRepository // Required for critical path detection
-	canonicalPathResolver *scout.CanonicalPathResolver // Optional: for early canonicalization and deduplication
+	lensesRepo            *repo.LensesRepository
+	fragmentsRepo         *repo.HorizonFragmentsRepository
+	scoutingJobsRepo      *repo.ScoutingJobsRepository
+	ontologyFactsRepo     *corerepo.OntologyFactsRepository
+	lifecycle             *LifecycleManager
+	calculator            *MetricsCalculator
+	watchdogHook          func(ctx context.Context, fragmentID string)
+	queryResolver         *QueryResolver
+	realtime              *realtime.Publisher
+	criticalPathDetector  *critical_path.Detector         // Optional: for critical path detection
+	edgesRepo             *repo.DependencyEdgesRepository // Required for critical path detection
+	canonicalPathResolver *scout.CanonicalPathResolver    // Optional: for early canonicalization and deduplication
 }
 
 // NewLensService создает новый Lens Service
@@ -289,11 +290,13 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// - focus: string (free-form, e.g. "battery logistics procurement")
 	// - spherePaths: []string | []any(strings) | "a,b,c" (e.g. "/sphere/logistics")
 	// - keywords: []string | []any(strings) | "a,b,c" (free-form tokens; not required to be canonical paths)
+	// - specialties: []string | []any(strings) | "a,b,c" (optional task focus modules: "management", "products_and_services")
 	requestedMetrics := []string(nil)
 	maxRecursionDepth := 2
 	focus := ""
 	spherePaths := []string(nil)
 	keywords := []string(nil)
+	specialties := []string(nil)
 	if lens.ViewConfig != nil {
 		if v, ok := lens.ViewConfig["requestedMetrics"]; ok {
 			requestedMetrics = parseStringSlice(v)
@@ -315,6 +318,9 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		if v, ok := lens.ViewConfig["keywords"]; ok {
 			keywords = parseStringSlice(v)
 		}
+		if v, ok := lens.ViewConfig["specialties"]; ok {
+			specialties = taxonomy.NormalizeSpecialties(parseStringSlice(v))
+		}
 	}
 	if maxRecursionDepth < 0 {
 		maxRecursionDepth = 0
@@ -331,12 +337,12 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Разделяем Scope на статические пути и QueryAddress
 	staticPaths, queryAddresses := splitScope(lens.Scope)
 	trace.Log(ctx, "scope", "scope.split", map[string]any{
-		"tenantId":       strings.TrimSpace(lens.TenantID),
-		"projectId":      strings.TrimSpace(lens.ProjectID),
-		"lensId":         lensID,
-		"staticPathsN":   len(staticPaths),
-		"queryAddressesN": len(queryAddresses),
-		"staticPathsTop": trace.StrSlice(staticPaths, 12),
+		"tenantId":          strings.TrimSpace(lens.TenantID),
+		"projectId":         strings.TrimSpace(lens.ProjectID),
+		"lensId":            lensID,
+		"staticPathsN":      len(staticPaths),
+		"queryAddressesN":   len(queryAddresses),
+		"staticPathsTop":    trace.StrSlice(staticPaths, 12),
 		"queryAddressesTop": trace.StrSlice(queryAddresses, 12),
 	})
 
@@ -344,11 +350,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	now := time.Now().UTC()
 	resolvedQueries, resolveErrors := resolveQueryAddresses(ctx, s.queryResolver, lens.TenantID, queryAddresses)
 	trace.Log(ctx, "scope", "scope.query_addresses.resolved", map[string]any{
-		"tenantId":      strings.TrimSpace(lens.TenantID),
-		"projectId":     strings.TrimSpace(lens.ProjectID),
-		"lensId":        lensID,
-		"resolvedN":     len(resolvedQueries),
-		"errorsN":       len(resolveErrors),
+		"tenantId":  strings.TrimSpace(lens.TenantID),
+		"projectId": strings.TrimSpace(lens.ProjectID),
+		"lensId":    lensID,
+		"resolvedN": len(resolvedQueries),
+		"errorsN":   len(resolveErrors),
 	})
 
 	// Сохраняем resolved queries в кэш
@@ -361,10 +367,10 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Avoid duplicate work (e.g. repeated anchors / resolved queries).
 	staticPaths = dedupeCanonicalPaths(staticPaths)
 	trace.Log(ctx, "scope", "scope.deduped", map[string]any{
-		"tenantId":     strings.TrimSpace(lens.TenantID),
-		"projectId":    strings.TrimSpace(lens.ProjectID),
-		"lensId":       lensID,
-		"staticPathsN": len(staticPaths),
+		"tenantId":       strings.TrimSpace(lens.TenantID),
+		"projectId":      strings.TrimSpace(lens.ProjectID),
+		"lensId":         lensID,
+		"staticPathsN":   len(staticPaths),
 		"staticPathsTop": trace.StrSlice(staticPaths, 20),
 	})
 
@@ -460,7 +466,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		var canonicalPath string
 		var fragment *models.HorizonFragment
 		var isCacheHit bool
-		
+
 		if s.canonicalPathResolver != nil {
 			// Determine fragment type from canonical path prefix (best-effort)
 			fragmentType := models.FragmentTypeOrganization // Default
@@ -509,7 +515,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			fragment, err = s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
 			isCacheHit = err == nil && fragment != nil
 		}
-		
+
 		isFragmentFreshEnough := false
 		if isCacheHit {
 			// If we already have verified (or at least non-low-confidence) data, do NOT create a new Scout job.
@@ -560,13 +566,13 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
 			if existingJobID, ok := activeScoutJobs[strings.TrimSpace(canonicalPath)]; ok && existingJobID != "" {
 				trace.Log(ctx, "root_jobs", "root_jobs.dedup_skip_active", map[string]any{
-					"tenantId":       strings.TrimSpace(lens.TenantID),
-					"projectId":      strings.TrimSpace(lens.ProjectID),
-					"lensId":         lensID,
-					"canonicalPath":  strings.TrimSpace(canonicalPath),
-					"existingJobId":  existingJobID,
-					"cacheHit":       isCacheHit,
-					"freshEnough":    isFragmentFreshEnough,
+					"tenantId":      strings.TrimSpace(lens.TenantID),
+					"projectId":     strings.TrimSpace(lens.ProjectID),
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"existingJobId": existingJobID,
+					"cacheHit":      isCacheHit,
+					"freshEnough":   isFragmentFreshEnough,
 				})
 				// Best-effort: signal "scouting" state but reuse existing job id.
 				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
@@ -622,6 +628,9 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			}
 			if len(keywords) > 0 {
 				state["keywords"] = keywords
+			}
+			if len(specialties) > 0 {
+				state["specialties"] = specialties
 			}
 			scoutingJob := &models.ScoutingJob{
 				AgentJob: agentmodels.AgentJob{
@@ -682,11 +691,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			})
 		} else if isCacheHit && isFragmentFreshEnough {
 			trace.Log(ctx, "root_jobs", "root_jobs.skip_fresh_verified", map[string]any{
-				"tenantId":      strings.TrimSpace(lens.TenantID),
-				"projectId":     strings.TrimSpace(lens.ProjectID),
-				"lensId":        lensID,
-				"canonicalPath": strings.TrimSpace(canonicalPath),
-				"fragmentId":    strings.TrimSpace(fragment.ID),
+				"tenantId":        strings.TrimSpace(lens.TenantID),
+				"projectId":       strings.TrimSpace(lens.ProjectID),
+				"lensId":          lensID,
+				"canonicalPath":   strings.TrimSpace(canonicalPath),
+				"fragmentId":      strings.TrimSpace(fragment.ID),
 				"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
 				"lastVerifiedAt": func() string {
 					if fragment.Metadata.LastVerifiedAt.IsZero() {
@@ -968,11 +977,13 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	// - focus: string (free-form)
 	// - spherePaths: []string | []any(strings) | "a,b,c"
 	// - keywords: []string | []any(strings) | "a,b,c"
+	// - specialties: []string | []any(strings) | "a,b,c"
 	requestedMetrics := []string(nil)
 	maxRecursionDepth := 2
 	focus := ""
 	spherePaths := []string(nil)
 	keywords := []string(nil)
+	specialties := []string(nil)
 	if lens.ViewConfig != nil {
 		if v, ok := lens.ViewConfig["requestedMetrics"]; ok {
 			requestedMetrics = parseStringSlice(v)
@@ -992,6 +1003,9 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 		}
 		if v, ok := lens.ViewConfig["keywords"]; ok {
 			keywords = parseStringSlice(v)
+		}
+		if v, ok := lens.ViewConfig["specialties"]; ok {
+			specialties = taxonomy.NormalizeSpecialties(parseStringSlice(v))
 		}
 	}
 	if maxRecursionDepth < 0 {
@@ -1020,29 +1034,29 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				p := strings.TrimSpace(j.TargetCanonicalPath)
 				// Normalize job path so we dedupe even if older jobs were created under alias paths.
 				if s.canonicalPathResolver != nil && p != "" {
-						// Best-effort: infer fragment type from path prefix.
-						ft := models.FragmentTypeOrganization
-						switch {
-						case strings.HasPrefix(p, "/product/"):
-							ft = models.FragmentTypeProduct
-						case strings.HasPrefix(p, "/program/"):
-							ft = models.FragmentTypeProgram
-						case strings.HasPrefix(p, "/market/"):
-							ft = models.FragmentTypeMarket
-						case strings.HasPrefix(p, "/fac/"):
-							ft = models.FragmentTypeFacility
-						case strings.HasPrefix(p, "/loc/") || strings.HasPrefix(p, "/region/"):
-							ft = models.FragmentTypeGeoRegion
-						case strings.HasPrefix(p, "/event/"):
-							ft = models.FragmentTypeEvent
-						case strings.HasPrefix(p, "/person/"):
-							ft = models.FragmentTypePerson
-						case strings.HasPrefix(p, "/media/"):
-							ft = models.FragmentTypeMediaChannel
-						case strings.HasPrefix(p, "/org/"):
-							ft = models.FragmentTypeOrganization
-						}
-						if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+					// Best-effort: infer fragment type from path prefix.
+					ft := models.FragmentTypeOrganization
+					switch {
+					case strings.HasPrefix(p, "/product/"):
+						ft = models.FragmentTypeProduct
+					case strings.HasPrefix(p, "/program/"):
+						ft = models.FragmentTypeProgram
+					case strings.HasPrefix(p, "/market/"):
+						ft = models.FragmentTypeMarket
+					case strings.HasPrefix(p, "/fac/"):
+						ft = models.FragmentTypeFacility
+					case strings.HasPrefix(p, "/loc/") || strings.HasPrefix(p, "/region/"):
+						ft = models.FragmentTypeGeoRegion
+					case strings.HasPrefix(p, "/event/"):
+						ft = models.FragmentTypeEvent
+					case strings.HasPrefix(p, "/person/"):
+						ft = models.FragmentTypePerson
+					case strings.HasPrefix(p, "/media/"):
+						ft = models.FragmentTypeMediaChannel
+					case strings.HasPrefix(p, "/org/"):
+						ft = models.FragmentTypeOrganization
+					}
+					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						p = resolved.CanonicalPath
 					}
 				}
@@ -1167,6 +1181,9 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 				if len(keywords) > 0 {
 					state["keywords"] = keywords
+				}
+				if len(specialties) > 0 {
+					state["specialties"] = specialties
 				}
 				scoutingJob := &models.ScoutingJob{
 					AgentJob: agentmodels.AgentJob{

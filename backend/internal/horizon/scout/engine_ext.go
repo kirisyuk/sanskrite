@@ -57,6 +57,47 @@ func parseStateString(v interface{}) string {
 	}
 }
 
+func parseStateStringSlice(v interface{}) []string {
+	if v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case []string:
+		out := make([]string, 0, len(t))
+		for _, s := range t {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(t))
+		for _, it := range t {
+			if s, ok := it.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+		return out
+	case string:
+		// comma-separated convenience
+		parts := strings.Split(t, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func normalizeEdgeConfidence(in float64) float64 {
 	// LLMs sometimes violate the contract and return 0..100 or other ranges.
 	// We normalize best-effort to keep graph materialization robust.
@@ -179,6 +220,15 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 	}
 
+	// Specialties (optional): used to enable/disable extra normalization rules safely.
+	specialties := []string(nil)
+	if job != nil && job.State != nil {
+		if v, ok := job.State["specialties"]; ok {
+			specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
+		}
+	}
+	enableManagement := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement)
+
 	for _, rel := range relations {
 		if rel.TargetName == "" {
 			continue
@@ -273,12 +323,12 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 
 			if !usedExistingDuplicate {
-			id, err := e.fragmentsRepo.Create(ctx, newFragment)
-			if err != nil {
-				fmt.Printf("Failed to create discovered fragment %s: %v\n", targetPath, err)
-				continue
-			}
-			targetID = id
+				id, err := e.fragmentsRepo.Create(ctx, newFragment)
+				if err != nil {
+					fmt.Printf("Failed to create discovered fragment %s: %v\n", targetPath, err)
+					continue
+				}
+				targetID = id
 				targetFragment = newFragment
 				targetFragment.ID = id
 			}
@@ -359,55 +409,55 @@ func (e *ScoutEngine) processRelationsInternal(
 				} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
 					// relation type / confidence not eligible for recursion
 				} else {
-				// Check if we should skip creating scouting job
-				shouldSkipJob := false
+					// Check if we should skip creating scouting job
+					shouldSkipJob := false
 
-				// CRITICAL: Skip self-reference (prevents infinite loops)
-				if sourceFragment != nil && strings.TrimSpace(targetPath) == strings.TrimSpace(sourceFragment.CanonicalPath) {
-					fmt.Printf("[ScoutEngine] Skipping self-reference job: %s -> %s. Circular dependency avoided.\n",
-						sourceFragment.CanonicalPath, targetPath)
-					shouldSkipJob = true
-				}
+					// CRITICAL: Skip self-reference (prevents infinite loops)
+					if sourceFragment != nil && strings.TrimSpace(targetPath) == strings.TrimSpace(sourceFragment.CanonicalPath) {
+						fmt.Printf("[ScoutEngine] Skipping self-reference job: %s -> %s. Circular dependency avoided.\n",
+							sourceFragment.CanonicalPath, targetPath)
+						shouldSkipJob = true
+					}
 
-				// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
-				// This prevents re-scouting entities that were just processed
-				if !shouldSkipJob && targetFragment != nil && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
-					fmt.Printf("[ScoutEngine] Target fragment already verified: %s (status=%s). Skipping scouting job.\n",
-						targetPath, targetFragment.Metadata.EpistemicStatus)
-					shouldSkipJob = true
-				}
+					// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
+					// This prevents re-scouting entities that were just processed
+					if !shouldSkipJob && targetFragment != nil && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+						fmt.Printf("[ScoutEngine] Target fragment already verified: %s (status=%s). Skipping scouting job.\n",
+							targetPath, targetFragment.Metadata.EpistemicStatus)
+						shouldSkipJob = true
+					}
 
-				// Check if edge already exists and target fragment is verified
-				// This prevents duplicate scouting jobs for already-processed entities
-				if !shouldSkipJob {
-					edgeType := models.DependencyType(rel.RelationType)
-					if e.edgesRepo != nil && sourceFragment != nil && sourceFragment.ID != "" && targetID != "" {
-						if existingEdge, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceFragment.ID, targetID, edgeType); err == nil && existingEdge != nil {
-							// Edge already exists, check if target fragment is verified
-							if targetFragment != nil && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
-								// Fragment is verified, skip creating new scouting job
-								fmt.Printf("[ScoutEngine] Edge already exists and target fragment is verified: %s -> %s (%s). Skipping scouting job.\n",
-									sourceFragment.CanonicalPath, targetPath, rel.RelationType)
-								shouldSkipJob = true
+					// Check if edge already exists and target fragment is verified
+					// This prevents duplicate scouting jobs for already-processed entities
+					if !shouldSkipJob {
+						edgeType := models.DependencyType(rel.RelationType)
+						if e.edgesRepo != nil && sourceFragment != nil && sourceFragment.ID != "" && targetID != "" {
+							if existingEdge, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceFragment.ID, targetID, edgeType); err == nil && existingEdge != nil {
+								// Edge already exists, check if target fragment is verified
+								if targetFragment != nil && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+									// Fragment is verified, skip creating new scouting job
+									fmt.Printf("[ScoutEngine] Edge already exists and target fragment is verified: %s -> %s (%s). Skipping scouting job.\n",
+										sourceFragment.CanonicalPath, targetPath, rel.RelationType)
+									shouldSkipJob = true
+								}
 							}
 						}
 					}
-				}
 
-				// Check if there's already an active scouting job for this canonicalPath (pending/running).
-				// Uses a prefetched snapshot to avoid per-relation queries.
-				if !shouldSkipJob {
-					if existingJobID, ok := activeJobByPath[strings.TrimSpace(targetPath)]; ok && strings.TrimSpace(existingJobID) != "" {
-						fmt.Printf("[ScoutEngine] Active scouting job already exists for %s (jobId=%s). Skipping duplicate.\n",
-							targetPath, existingJobID)
-						scheduledChildren[targetPath] = struct{}{}
-						shouldSkipJob = true
+					// Check if there's already an active scouting job for this canonicalPath (pending/running).
+					// Uses a prefetched snapshot to avoid per-relation queries.
+					if !shouldSkipJob {
+						if existingJobID, ok := activeJobByPath[strings.TrimSpace(targetPath)]; ok && strings.TrimSpace(existingJobID) != "" {
+							fmt.Printf("[ScoutEngine] Active scouting job already exists for %s (jobId=%s). Skipping duplicate.\n",
+								targetPath, existingJobID)
+							scheduledChildren[targetPath] = struct{}{}
+							shouldSkipJob = true
+						}
 					}
-				}
 
-				if shouldSkipJob {
-					continue // Skip to next relation
-				}
+					if shouldSkipJob {
+						continue // Skip to next relation
+					}
 
 					scheduledChildren[targetPath] = struct{}{}
 					scheduledCount++
@@ -455,6 +505,10 @@ func (e *ScoutEngine) processRelationsInternal(
 					if job != nil && job.State != nil {
 						if rm, ok := job.State["requestedMetrics"]; ok {
 							childState["requestedMetrics"] = rm
+						}
+						// Propagate specialties (optional task focus modules).
+						if v, ok := job.State["specialties"]; ok {
+							childState["specialties"] = v
 						}
 						// Propagate intent steering signals so recursive scouting stays aligned with the Lens focus.
 						// These may be non-canonical, but are safe to pass through job state.
@@ -576,10 +630,10 @@ func (e *ScoutEngine) processRelationsInternal(
 					// CRITICAL: Skip self-reference (prevents infinite loops)
 					if sourceFragment != nil && strings.TrimSpace(targetPath) == strings.TrimSpace(sourceFragment.CanonicalPath) {
 						trace.Log(ctx, "scout_decompose", "child_job.skip.self_reference", map[string]any{
-							"tenantId":         strings.TrimSpace(job.TenantID),
-							"projectId":        strings.TrimSpace(job.ProjectID),
-							"lensId":           strings.TrimSpace(job.LensID),
-							"jobId":            strings.TrimSpace(job.ID),
+							"tenantId":            strings.TrimSpace(job.TenantID),
+							"projectId":           strings.TrimSpace(job.ProjectID),
+							"lensId":              strings.TrimSpace(job.LensID),
+							"jobId":               strings.TrimSpace(job.ID),
 							"sourceCanonicalPath": strings.TrimSpace(sourceFragment.CanonicalPath),
 							"targetCanonicalPath": strings.TrimSpace(targetPath),
 						})
@@ -592,10 +646,10 @@ func (e *ScoutEngine) processRelationsInternal(
 					// This prevents re-scouting entities that were just processed
 					if !shouldSkipJob && targetFragment != nil && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
 						trace.Log(ctx, "scout_decompose", "child_job.skip.target_verified", map[string]any{
-							"tenantId":           strings.TrimSpace(job.TenantID),
-							"projectId":          strings.TrimSpace(job.ProjectID),
-							"lensId":             strings.TrimSpace(job.LensID),
-							"jobId":              strings.TrimSpace(job.ID),
+							"tenantId":            strings.TrimSpace(job.TenantID),
+							"projectId":           strings.TrimSpace(job.ProjectID),
+							"lensId":              strings.TrimSpace(job.LensID),
+							"jobId":               strings.TrimSpace(job.ID),
 							"targetCanonicalPath": strings.TrimSpace(targetPath),
 							"epistemicStatus":     string(targetFragment.Metadata.EpistemicStatus),
 						})
@@ -622,12 +676,12 @@ func (e *ScoutEngine) processRelationsInternal(
 					if !shouldSkipJob {
 						if existingJobID, ok := activeJobByPath[strings.TrimSpace(targetPath)]; ok && strings.TrimSpace(existingJobID) != "" {
 							trace.Log(ctx, "scout_decompose", "child_job.skip.active_exists", map[string]any{
-								"tenantId":           strings.TrimSpace(job.TenantID),
-								"projectId":          strings.TrimSpace(job.ProjectID),
-								"lensId":             strings.TrimSpace(job.LensID),
-								"jobId":              strings.TrimSpace(job.ID),
+								"tenantId":            strings.TrimSpace(job.TenantID),
+								"projectId":           strings.TrimSpace(job.ProjectID),
+								"lensId":              strings.TrimSpace(job.LensID),
+								"jobId":               strings.TrimSpace(job.ID),
 								"targetCanonicalPath": strings.TrimSpace(targetPath),
-								"existingJobId":      strings.TrimSpace(existingJobID),
+								"existingJobId":       strings.TrimSpace(existingJobID),
 							})
 							fmt.Printf("[ScoutEngine] Active scouting job already exists for %s (jobId=%s). Skipping duplicate.\n",
 								targetPath, existingJobID)
@@ -684,6 +738,9 @@ func (e *ScoutEngine) processRelationsInternal(
 						if rm, ok := job.State["requestedMetrics"]; ok {
 							childState["requestedMetrics"] = rm
 						}
+						if v, ok := job.State["specialties"]; ok {
+							childState["specialties"] = v
+						}
 					}
 					scoutingJob := &models.ScoutingJob{
 						AgentJob: agentmodels.AgentJob{
@@ -718,7 +775,7 @@ func (e *ScoutEngine) processRelationsInternal(
 
 		// Enforce directional semantics for common relations (best-effort, heuristic).
 		// This prevents obviously inverted edges like "/loc/astana SUPPLIES_TO /org/crrc".
-		edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(sourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType)
+		edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(sourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType, enableManagement)
 		switch edgeType {
 		case "SUBSIDIARY_OF":
 			// Canonical representation: OWNS from parent -> subsidiary.
@@ -768,7 +825,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		if e.validationPolicy != nil && sourceFragment != nil {
 			logPrefix := "[ScoutEngine:processRelations]"
 			fmt.Printf("%s Using ValidationPolicy for edge validation\n", logPrefix)
-			
+
 			decision, err := e.validationPolicy.Execute(ctx, policy.PolicyInput{
 				Kind: "edge",
 				Context: map[string]interface{}{
@@ -787,7 +844,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			if err != nil {
 				fmt.Printf("%s ERROR: ValidationPolicy failed: %v, falling back to hardcoded rules\n", logPrefix, err)
 			} else {
-				fmt.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f\n", 
+				fmt.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f\n",
 					logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
 
 				switch decision.Action {
@@ -865,13 +922,13 @@ func (e *ScoutEngine) processRelationsInternal(
 				LatencyHours:  24,
 			},
 			Qualifiers: map[string]interface{}{
-				"reason":              strings.TrimSpace(rel.Reason),
-				"rawRelationType":     rawRelationType,
+				"reason":                 strings.TrimSpace(rel.Reason),
+				"rawRelationType":        rawRelationType,
 				"normalizedRelationType": normalizedRelationType,
-				"rawConfidence":       rel.Confidence,
-				"targetName":          strings.TrimSpace(rel.TargetName),
-				"targetCanonicalPath": strings.TrimSpace(targetPath),
-				"sourceCanonicalPath": strings.TrimSpace(sourceFragment.CanonicalPath),
+				"rawConfidence":          rel.Confidence,
+				"targetName":             strings.TrimSpace(rel.TargetName),
+				"targetCanonicalPath":    strings.TrimSpace(targetPath),
+				"sourceCanonicalPath":    strings.TrimSpace(sourceFragment.CanonicalPath),
 			},
 			Provenance: models.Provenance{
 				Method:    provenanceMethod,
@@ -937,7 +994,7 @@ func (e *ScoutEngine) processRelationsInternal(
 // normalizeRelationEdge enforces directional semantics for common relation types.
 // It returns possibly swapped source/target IDs and/or adjusted edge type.
 // This is intentionally conservative: if unsure, it leaves the relation as-is.
-func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetID string, edgeType models.DependencyType, targetType models.FragmentType) (string, string, models.DependencyType, bool) {
+func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetID string, edgeType models.DependencyType, targetType models.FragmentType, enableManagement bool) (string, string, models.DependencyType, bool) {
 	if sourceFrag == nil {
 		return sourceID, targetID, edgeType, false
 	}
@@ -998,6 +1055,14 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 		// "X supplies to Y": X is ORG (supplier), Y can be ORG/FAC/PRODUCT/GEO (recipient).
 		// If GEO -> ORG/FAC/PRODUCT, it's almost certainly inverted.
 		if isGeo(srcType) && (isOrg(targetType) || isFac(targetType) || isProd(targetType)) {
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		}
+	case models.DependencyTypeManages, models.DependencyTypeEmployedBy, models.DependencyTypeBoardMemberOf, models.DependencyTypeFounded:
+		// Leadership/people relationships are directional and typically originate from PERSON -> ORG.
+		// When scouting an ORGANIZATION, LLM output may attach PERSON targets with these types;
+		// when the "management" specialty is enabled, we normalize the direction by swapping endpoints.
+		if enableManagement && isOrg(srcType) && isPerson(targetType) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}

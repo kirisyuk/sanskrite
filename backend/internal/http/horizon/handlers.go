@@ -16,6 +16,7 @@ type HorizonHandlers struct {
 	genAIHandler   *httputil.GenAIHandler
 	docsRepo       *corerepo.DocumentsRepository
 	usersRepo      *corerepo.UsersRepository
+	interactions   *corerepo.InteractionsRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -34,6 +35,12 @@ func (h *HorizonHandlers) WithLensItemsHandler(handler *LensItemsHandler) *Horiz
 // WithGenAIHandler добавляет GenAIHandler для вызова LLM
 func (h *HorizonHandlers) WithGenAIHandler(handler *httputil.GenAIHandler) *HorizonHandlers {
 	h.genAIHandler = handler
+	return h
+}
+
+// WithInteractionsRepo wires InteractionsRepository for persisting Horizon-side artifacts (e.g., graph queries).
+func (h *HorizonHandlers) WithInteractionsRepo(interactions *corerepo.InteractionsRepository) *HorizonHandlers {
+	h.interactions = interactions
 	return h
 }
 
@@ -209,6 +216,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "scope-scout":
 			h.ScopeScoutLensNode(w, r)
+			return
+		case "graph-query":
+			h.QueryGraph(w, r)
 			return
 		default:
 			http.Error(w, "Unknown subpath", http.StatusNotFound)

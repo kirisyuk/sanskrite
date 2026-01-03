@@ -1062,6 +1062,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const addNodeCacheRef = React.useRef<Map<string, HorizonSearchEntity[]>>(new Map());
   const addNodeAbortRef = React.useRef<AbortController | null>(null);
 
+  // Ask-Graph UI (FAB + command palette + chips)
+  type GraphQueryFinding = { nodeId: string; title: string; eventDate: string; source: string; url: string };
+  type GraphQueryChip = {
+    id: string; // interactionId (stable for this session)
+    question: string;
+    answer?: string;
+    relevantNodeIds: string[];
+    findings: GraphQueryFinding[];
+    sources: string[];
+    searchQueries: string[];
+    createdAt: number;
+  };
+
+  const [askGraphOpen, setAskGraphOpen] = React.useState(false);
+  const [askGraphQuery, setAskGraphQuery] = React.useState('');
+  const [askGraphLoading, setAskGraphLoading] = React.useState(false);
+  const [askGraphError, setAskGraphError] = React.useState<string | null>(null);
+  const askGraphInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [graphQueryChips, setGraphQueryChips] = React.useState<GraphQueryChip[]>([]);
+  const [graphQueryActiveChipId, setGraphQueryActiveChipId] = React.useState<string | null>(null);
+  const [graphQueryHighlightIds, setGraphQueryHighlightIds] = React.useState<Set<string> | null>(null);
+
   // Lens scope preview (empty state)
   const [lensName, setLensName] = React.useState<string | null>(null);
   const [lensScopePaths, setLensScopePaths] = React.useState<string[]>([]);
@@ -1102,6 +1124,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const t = window.setTimeout(() => addNodeInputRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
   }, [addNodeOpen]);
+
+  // Ask-graph: focus input when opened
+  React.useEffect(() => {
+    if (!askGraphOpen) return;
+    const t = window.setTimeout(() => askGraphInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, [askGraphOpen]);
 
   // Lens scope preview: load lens metadata (name + scope canonical paths)
   React.useEffect(() => {
@@ -4313,34 +4342,55 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort]);
 
   const displayNodes = React.useMemo(() => {
-    if (perfMode) return nodes;
-    if (!hoverHighlight || !hoveredNodeId) return nodes;
+    // Perf mode: keep visuals light, but still allow graph-query highlight (low-cost style).
+    const qset = graphQueryHighlightIds;
+    const qActive = !!qset && qset.size > 0;
+    if (perfMode && !qActive) return nodes;
 
-    const owned = hoverHighlight.nodeIds;
+    const owned = hoverHighlight?.nodeIds;
     const hovered = String(hoveredNodeId || '').trim();
+    const hoverActive = !!hoverHighlight && !!hovered;
 
     return nodes.map((n) => {
       const id = String(n.id || '').trim();
       const isGroup = Boolean((n.data as any)?.isGroup);
-      const isOwnedNode = id && owned.has(id);
+
+      const isOwnedNode = !!owned && id && owned.has(id);
       const isHovered = id === hovered;
+      const isQuery = !!qset && id && qset.has(id);
 
-      // Keep group nodes visible but muted to reduce noise.
-      const opacity = isGroup ? 0.18 : (isOwnedNode || isHovered ? 1 : 0.22);
+      // Base hover highlight behavior (existing UX).
+      let opacity = 1;
+      let zIndex = 5;
+      if (!perfMode && hoverActive) {
+        opacity = isGroup ? 0.18 : (isOwnedNode || isHovered ? 1 : 0.22);
+        zIndex = isOwnedNode || isHovered ? 20 : (isGroup ? 1 : 5);
+      } else if (isGroup) {
+        zIndex = 1;
+      }
 
-      // Elevate highlighted cluster nodes above muted ones.
-      const zIndex = isOwnedNode || isHovered ? 20 : (isGroup ? 1 : 5);
+      // Graph-query highlight: make affected nodes pop and lightly de-emphasize others.
+      // This is reversible (cleared on pane click / Esc / toggling chip).
+      const style: any = { ...(n as any).style, opacity };
+      if (qActive) {
+        if (isQuery && !isGroup) {
+          style.opacity = 1;
+          style.outline = theme === 'dark' ? '2px solid rgba(248,113,113,0.75)' : '2px solid rgba(220,38,38,0.60)';
+          style.outlineOffset = 2;
+          style.boxShadow =
+            theme === 'dark'
+              ? '0 0 0 4px rgba(248,113,113,0.18), 0 10px 26px rgba(0,0,0,0.35)'
+              : '0 0 0 4px rgba(220,38,38,0.14), 0 10px 26px rgba(0,0,0,0.18)';
+          zIndex = Math.max(zIndex, 40);
+        } else {
+          // Keep group containers very muted to avoid visual noise.
+          style.opacity = isGroup ? 0.12 : Math.min(style.opacity ?? 1, 0.55);
+        }
+      }
 
-      return {
-        ...n,
-        zIndex,
-        style: {
-          ...(n as any).style,
-          opacity,
-        },
-      } as any;
+      return { ...n, zIndex, style } as any;
     });
-  }, [perfMode, nodes, hoverHighlight, hoveredNodeId]);
+  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme]);
 
   // Lightweight info for perf mode (no re-styling of edges)
   const perfHoveredEdgeInfo = React.useMemo(() => {
@@ -4729,6 +4779,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setAddNodeActiveIndex(0);
   }, []);
 
+  const closeAskGraph = React.useCallback(() => {
+    setAskGraphOpen(false);
+    setAskGraphQuery('');
+    setAskGraphLoading(false);
+    setAskGraphError(null);
+  }, []);
+
   const extractStateMetrics = React.useCallback((raw: any): Record<string, number> | undefined => {
     if (!raw || typeof raw !== 'object') return undefined;
     const out: Record<string, number> = {};
@@ -5052,7 +5109,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (onEdgeSelect) {
       onEdgeSelect(null, null);
     }
-  }, [onNodeSelect, onEdgeSelect]);
+    // Also clear graph-query highlight (UX: click elsewhere returns to normal view)
+    if (graphQueryHighlightIds && graphQueryHighlightIds.size > 0) {
+      setGraphQueryHighlightIds(null);
+      setGraphQueryActiveChipId(null);
+    }
+  }, [onNodeSelect, onEdgeSelect, graphQueryHighlightIds]);
 
   const handleNodeDragStop = useCallback(async (_event: React.MouseEvent, node: Node<HorizonNodeData>) => {
     const d: any = node?.data;
@@ -5148,6 +5210,137 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setScopeScoutModal(null);
     }
   }, [lensId, onScopeScout, scopeScoutModal, scopeScoutDepth, setNodes]);
+
+  // Ask-graph helpers
+  const clearGraphQueryHighlight = React.useCallback(() => {
+    setGraphQueryHighlightIds(null);
+    setGraphQueryActiveChipId(null);
+  }, []);
+
+  // Esc clears highlight (when no overlays are open)
+  React.useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (askGraphOpen || addNodeOpen) return;
+      if (graphQueryHighlightIds && graphQueryHighlightIds.size > 0) {
+        e.preventDefault();
+        clearGraphQueryHighlight();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [askGraphOpen, addNodeOpen, graphQueryHighlightIds, clearGraphQueryHighlight]);
+
+  const submitAskGraph = React.useCallback(async () => {
+    const q = String(askGraphQuery || '').trim();
+    if (!lensId || !q || askGraphLoading) return;
+
+    // Snapshot current visible graph (nodes/edges in ReactFlow state). Use canonical state refs.
+    const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
+    const currentEdges: Edge[] = edgesStateRef.current || [];
+
+    const nodesSnap = currentNodes
+      .filter((n) => !((n.data as any)?.isGroup))
+      .map((n: any) => ({
+        id: String(n.id || '').trim(),
+        label: String(n?.data?.label || '').trim() || undefined,
+        type: String(n?.data?.type || '').trim() || undefined,
+        canonicalPath: String(n?.data?.canonicalPath || '').trim() || undefined,
+      }))
+      .filter((n) => n.id);
+
+    const nodeIdSet = new Set(nodesSnap.map((n) => n.id));
+    const edgesSnap = currentEdges
+      .filter((e: any) => nodeIdSet.has(String(e.source || '').trim()) && nodeIdSet.has(String(e.target || '').trim()))
+      .map((e: any) => ({
+        from: String(e.source || '').trim(),
+        to: String(e.target || '').trim(),
+        type: String(e?.data?.edgeType || e?.type || '').trim() || undefined,
+        label: String(e?.data?.edgeCaption || e?.label || '').trim() || undefined,
+      }));
+
+    if (nodesSnap.length === 0) {
+      setAskGraphError('Graph is empty. Load the graph first.');
+      return;
+    }
+
+    setAskGraphLoading(true);
+    setAskGraphError(null);
+    try {
+      const res = await api.queryHorizonGraph(lensId, {
+        question: q,
+        graph: { nodes: nodesSnap, edges: edgesSnap },
+      });
+
+      const chip: GraphQueryChip = {
+        id: String(res?.interactionId || '').trim() || `local-${Date.now()}`,
+        question: String(res?.question || q).trim(),
+        answer: typeof res?.answer === 'string' ? res.answer.trim() : undefined,
+        relevantNodeIds: Array.isArray(res?.relevantNodeIds) ? res.relevantNodeIds.map((x) => String(x || '').trim()).filter(Boolean) : [],
+        findings: Array.isArray(res?.findings)
+          ? (res.findings as any[]).filter(Boolean).map((f) => ({
+              nodeId: String(f?.nodeId || '').trim(),
+              title: String(f?.title || '').trim(),
+              eventDate: String(f?.eventDate || '').trim(),
+              source: String(f?.source || '').trim(),
+              url: String(f?.url || '').trim(),
+            }))
+          : [],
+        sources: Array.isArray(res?.sources) ? res.sources.map((s) => String(s || '').trim()).filter(Boolean) : [],
+        searchQueries: Array.isArray(res?.searchQueries) ? res.searchQueries.map((s) => String(s || '').trim()).filter(Boolean) : [],
+        createdAt: Date.now(),
+      };
+
+      setGraphQueryChips((prev) => {
+        const next = [chip, ...prev.filter((c) => c.id !== chip.id)];
+        return next.slice(0, 5);
+      });
+
+      // Apply highlight immediately.
+      const ids = chip.relevantNodeIds;
+      if (ids.length > 0) {
+        setGraphQueryHighlightIds(new Set(ids));
+        setGraphQueryActiveChipId(chip.id);
+      } else {
+        clearGraphQueryHighlight();
+      }
+
+      setAskGraphOpen(false);
+      setAskGraphQuery('');
+    } catch (e: any) {
+      const msg =
+        String(e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Failed to query graph').trim();
+      setAskGraphError(msg);
+    } finally {
+      setAskGraphLoading(false);
+    }
+  }, [askGraphQuery, askGraphLoading, lensId, clearGraphQueryHighlight]);
+
+  const truncateChip = React.useCallback((s: string, max: number) => {
+    const t = String(s || '').trim();
+    if (!t) return '';
+    return t.length > max ? `${t.slice(0, max)}…` : t;
+  }, []);
+
+  const toggleGraphQueryChip = React.useCallback(
+    (chip: GraphQueryChip) => {
+      const id = String(chip?.id || '').trim();
+      if (!id) return;
+      if (graphQueryActiveChipId === id) {
+        clearGraphQueryHighlight();
+        return;
+      }
+      const ids = Array.isArray(chip.relevantNodeIds) ? chip.relevantNodeIds : [];
+      if (ids.length === 0) {
+        clearGraphQueryHighlight();
+        setGraphQueryActiveChipId(id);
+        return;
+      }
+      setGraphQueryHighlightIds(new Set(ids));
+      setGraphQueryActiveChipId(id);
+    },
+    [graphQueryActiveChipId, clearGraphQueryHighlight],
+  );
 
   // Toolbar components
   const IconButton = ({ onClick, active, disabled, title, icon }: any) => (
@@ -6219,6 +6412,154 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           )}
         </ReactFlow>
 
+        {/* Ask-Graph FAB + recent questions chips (max 5) */}
+        <div
+          style={{
+            position: 'absolute',
+            right: 14,
+            bottom: 14,
+            zIndex: 220,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 8,
+            pointerEvents: 'none', // only inner elements handle pointer events
+          }}
+        >
+          {graphQueryChips.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 6,
+                justifyContent: 'flex-end',
+                maxWidth: 340,
+                pointerEvents: 'auto',
+              }}
+            >
+              {graphQueryChips.slice(0, 5).map((c) => {
+                const active = graphQueryActiveChipId === c.id && !!graphQueryHighlightIds && graphQueryHighlightIds.size > 0;
+                const fullQ = String(c.question || '').trim();
+                const nodesCount = Array.isArray(c.relevantNodeIds) ? c.relevantNodeIds.length : 0;
+                const sourcesCount = Array.isArray(c.sources) ? c.sources.length : 0;
+                const topFindings = Array.isArray(c.findings) ? c.findings.slice(0, 2).map((f) => String(f?.title || '').trim()).filter(Boolean) : [];
+                const tooltip =
+                  [
+                    fullQ || 'Question',
+                    '',
+                    `Nodes highlighted: ${nodesCount}`,
+                    `Sources: ${sourcesCount}`,
+                    topFindings.length > 0 ? '' : null,
+                    topFindings.length > 0 ? 'Top findings:' : null,
+                    ...topFindings.map((t) => `- ${t}`),
+                    c.answer ? '' : null,
+                    c.answer ? `Answer: ${String(c.answer || '').trim()}` : null,
+                  ]
+                    .filter((x) => typeof x === 'string' && String(x).length > 0)
+                    .join('\n');
+
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      toggleGraphQueryChip(c);
+                    }}
+                    title={tooltip}
+                    style={{
+                      maxWidth: 340,
+                      padding: '6px 10px',
+                      borderRadius: 999,
+                      border: active ? '1px solid rgba(248,113,113,0.55)' : '1px solid var(--border-subtle)',
+                      background: active
+                        ? (theme === 'dark' ? 'rgba(248,113,113,0.14)' : 'rgba(220,38,38,0.10)')
+                        : (theme === 'dark' ? 'rgba(0,0,0,0.30)' : 'rgba(255,255,255,0.72)'),
+                      color: 'var(--text-heading)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      backdropFilter: 'blur(8px)',
+                      boxShadow: active
+                        ? (theme === 'dark' ? '0 10px 28px rgba(0,0,0,0.40)' : '0 10px 28px rgba(0,0,0,0.18)')
+                        : undefined,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        minWidth: 0,
+                        maxWidth: 280,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {truncateChip(fullQ || 'Ask graph…', 64)}
+                    </span>
+                    {sourcesCount > 0 && (
+                      <span
+                        style={{
+                          flexShrink: 0,
+                          fontSize: 11,
+                          fontWeight: 800,
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          border: '1px solid var(--border-subtle)',
+                          background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                          color: 'var(--text-secondary-strong)',
+                        }}
+                        title={`${sourcesCount} sources`}
+                      >
+                        {sourcesCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              if (!lensId) return;
+              setAskGraphError(null);
+              setAskGraphOpen(true);
+            }}
+            disabled={!lensId || nodes.length === 0 || askGraphLoading}
+            title="Ask this graph"
+            style={{
+              pointerEvents: 'auto',
+              width: 44,
+              height: 44,
+              borderRadius: 999,
+              border: '1px solid var(--border-subtle)',
+              background: theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.80)',
+              color: 'var(--text-heading)',
+              cursor: (!lensId || nodes.length === 0 || askGraphLoading) ? 'not-allowed' : 'pointer',
+              opacity: (!lensId || nodes.length === 0 || askGraphLoading) ? 0.55 : 1,
+              // Use drop-shadow so the shadow follows the circular shape (box-shadow can look "square" visually).
+              boxShadow: 'none',
+              filter: theme === 'dark' ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 18,
+              fontWeight: 900,
+              lineHeight: 1,
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            ?
+          </button>
+        </div>
+
         {/* Perf-mode edge info (avoids heavy edge relabel/restyling) */}
         {perfMode && perfHoveredEdgeInfo && (
           <div
@@ -6699,6 +7040,151 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>esc</kbd>
                 <span>to close</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ask Graph Command Palette Overlay */}
+      {askGraphOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9998,
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            paddingTop: '15vh',
+            background: theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
+            backdropFilter: 'blur(4px)',
+          }}
+          onClick={() => closeAskGraph()}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 560,
+              maxWidth: '92vw',
+              display: 'flex',
+              flexDirection: 'column',
+              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 16,
+              boxShadow: theme === 'dark' ? '0 20px 60px rgba(0,0,0,0.6)' : '0 20px 60px rgba(0,0,0,0.2)',
+              overflow: 'hidden',
+              animation: 'horizon-command-pop 0.15s ease-out',
+            }}
+          >
+            <style>{`
+              @keyframes horizon-command-pop {
+                from { opacity: 0; transform: scale(0.96) translateY(10px); }
+                to { opacity: 1; transform: scale(1) translateY(0); }
+              }
+            `}</style>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div style={{ marginRight: 12, color: 'var(--text-secondary-strong)', display: 'flex', fontWeight: 900 }}>
+                ?
+              </div>
+              <input
+                ref={askGraphInputRef}
+                value={askGraphQuery}
+                onChange={(e) => {
+                  setAskGraphQuery(e.target.value);
+                  setAskGraphError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeAskGraph();
+                    return;
+                  }
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void submitAskGraph();
+                    return;
+                  }
+                }}
+                placeholder="Ask this graph… (press Enter)"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={askGraphLoading}
+                style={{
+                  flex: 1,
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-heading)',
+                  fontSize: 16,
+                  fontWeight: 550,
+                }}
+              />
+              {askGraphLoading && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>Asking…</div>
+              )}
+            </div>
+
+            <div style={{ padding: 14 }}>
+              {askGraphError && (
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: theme === 'dark' ? 'rgba(239,68,68,0.10)' : 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.22)', color: '#EF4444', fontSize: 13 }}>
+                  {askGraphError}
+                </div>
+              )}
+
+              {!askGraphError && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', lineHeight: 1.5 }}>
+                  Ask a question about the <b>currently visible</b> graph. We’ll highlight the affected nodes immediately.
+                  <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+                      Nodes: {nodes.filter((n: any) => !((n.data as any)?.isGroup)).length}
+                    </span>
+                    <span style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+                      Edges: {edges.length}
+                    </span>
+                    <span style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+                      Esc clears highlight
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => closeAskGraph()}
+                  disabled={askGraphLoading}
+                  style={{
+                    height: 36,
+                    padding: '0 14px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--text-secondary-strong)',
+                    cursor: askGraphLoading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitAskGraph()}
+                  disabled={askGraphLoading || !askGraphQuery.trim() || !lensId || nodes.length === 0}
+                  style={{
+                    height: 36,
+                    padding: '0 16px',
+                    borderRadius: 12,
+                    border: 'none',
+                    background: 'var(--accent-primary, #3B82F6)',
+                    color: '#fff',
+                    fontWeight: 800,
+                    cursor: (askGraphLoading || !askGraphQuery.trim() || !lensId || nodes.length === 0) ? 'not-allowed' : 'pointer',
+                    opacity: (askGraphLoading || !askGraphQuery.trim() || !lensId || nodes.length === 0) ? 0.6 : 1,
+                    boxShadow: '0 8px 20px rgba(59,130,246,0.25)',
+                  }}
+                >
+                  Ask
+                </button>
               </div>
             </div>
           </div>

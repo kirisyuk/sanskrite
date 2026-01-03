@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // CriticAgent проверяет извлеченные данные на соответствие источникам
@@ -40,8 +42,8 @@ type ValidationConflict struct {
 }
 
 // Validate проверяет извлеченные данные на соответствие источникам
-func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, relations []DiscoveredRelation, sourceContent string) (*ValidationResult, error) {
-	prompt := a.buildValidationPrompt(extractedData, relations, sourceContent)
+func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, relations []DiscoveredRelation, sourceContent string, specialties []string) (*ValidationResult, error) {
+	prompt := a.buildValidationPrompt(extractedData, relations, sourceContent, specialties)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -77,9 +79,15 @@ func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.Horizo
 }
 
 // buildValidationPrompt строит промпт для валидации данных
-func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, sourceContent string) string {
+func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, sourceContent string, specialties []string) string {
 	extractedJSON, _ := json.MarshalIndent(extractedData, "", "  ")
 	relationsJSON, _ := json.MarshalIndent(relations, "", "  ")
+	specialties = taxonomy.NormalizeSpecialties(specialties)
+	specBlock := ""
+	if len(specialties) > 0 {
+		specBlock = "REQUESTED SPECIALTIES (apply only those listed):\n"
+		specBlock += fmt.Sprintf("- %s\n\n", strings.Join(specialties, ", "))
+	}
 
 	return fmt.Sprintf(`You are a validation agent (Critic) for a risk analysis system. Your task is to verify that extracted data matches the source content and assess the completeness of the knowledge graph.
 
@@ -92,6 +100,7 @@ EXTRACTED RELATIONS (JSON):
 SOURCE CONTENT:
 %s
 
+%s
 TASK: Compare the extracted data with the source content and identify any conflicts, inconsistencies, or missing information. Pay close attention to missing relationships.
 
 	Return a JSON object with:
@@ -109,7 +118,16 @@ TASK: Compare the extracted data with the source content and identify any confli
 	Missing Info logic:
 	- If important fields (like location, key metrics for the sector) are empty or unknown, add a specific question to 'missingInfo'.
 	- If the entity is an Organization or Facility, and NO supply chain relations (suppliers, customers, competitors) were found, you MUST add a question to find them. Example: "Who are the key suppliers for Tesla?" or "What are the major competitors of this entity?"
+	- If "management" specialty is requested for an Organization/Facility, you MUST ensure leadership/board/founder coverage:
+	  - If there are no PERSON relations relevant to leadership (MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED), add specific questions like:
+	    - "Who is the CEO/CFO/COO/CTO/CIO/CMO/CHRO of <org>?" and "Who are the board members/chair of <org>?" and "Who founded <org>?"
+	  - NOTE: PERSON relations may appear inverted due to extraction being anchored on the organization; still treat them as valid signals for completeness.
+	- If "products_and_services" specialty is requested:
+	  - For ORGANIZATION/FACILITY: if there are no PRODUCT relations for outputs/inputs (PRODUCES / CONSUMES), add questions:
+	    - "What products and services does <org> produce/offer?" and "What key inputs/materials/components does <org> consume?"
+	  - For PRODUCT: if there are no product-to-product transformation relations (TRANSFORMS_INTO), add a question:
+	    - "What is this product produced from and what does it transform into? Provide upstream/downstream products."
 	- If relations seem sparse or inconsistent with the entity's scale, flag it.
 
-	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), sourceContent)
+	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), sourceContent, specBlock)
 }

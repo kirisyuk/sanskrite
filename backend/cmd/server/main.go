@@ -1357,7 +1357,11 @@ func main() {
 			}
 
 			// Create HTTP handlers
-			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).WithDocumentsRepo(docsRepo).WithUsersRepo(s.users)
+			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
+				WithDocumentsRepo(docsRepo).
+				WithUsersRepo(s.users).
+				WithGenAIHandler(genaiHandler).
+				WithInteractionsRepo(interactionsRepo)
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete

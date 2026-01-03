@@ -10,6 +10,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // ScoutingJobsRepository репозиторий для работы с ScoutingJob
@@ -42,60 +43,60 @@ func (r *ScoutingJobsRepository) Create(ctx context.Context, job *models.Scoutin
 	agentJob := &job.AgentJob
 	lockKey := buildScoutJobDedupKey(job)
 	trace.Log(ctx, "root_jobs", "scout_job.create.dedup.start", map[string]any{
-		"tenantId":         strings.TrimSpace(job.TenantID),
-		"projectId":        strings.TrimSpace(job.ProjectID),
-		"lensId":           strings.TrimSpace(job.LensID),
-		"agentId":          strings.TrimSpace(job.AgentID),
+		"tenantId":            strings.TrimSpace(job.TenantID),
+		"projectId":           strings.TrimSpace(job.ProjectID),
+		"lensId":              strings.TrimSpace(job.LensID),
+		"agentId":             strings.TrimSpace(job.AgentID),
 		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-		"lockKeySha1":      trace.HashText(lockKey),
+		"lockKeySha1":         trace.HashText(lockKey),
 	})
 	id, created, err := r.agentJobsRepo.CreateDedup(ctx, agentJob, lockKey)
 	if err != nil {
 		trace.Log(ctx, "root_jobs", "scout_job.create.dedup.error", map[string]any{
-			"tenantId":          strings.TrimSpace(job.TenantID),
-			"projectId":         strings.TrimSpace(job.ProjectID),
-			"lensId":            strings.TrimSpace(job.LensID),
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(job.LensID),
 			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-			"lockKeySha1":       trace.HashText(lockKey),
-			"error":             err.Error(),
+			"lockKeySha1":         trace.HashText(lockKey),
+			"error":               err.Error(),
 		})
 		return "", fmt.Errorf("failed to create scouting job: %w", err)
 	}
 	job.ID = id
 	trace.Log(ctx, "root_jobs", "scout_job.create.dedup.result", map[string]any{
-		"tenantId":          strings.TrimSpace(job.TenantID),
-		"projectId":         strings.TrimSpace(job.ProjectID),
-		"lensId":            strings.TrimSpace(job.LensID),
+		"tenantId":            strings.TrimSpace(job.TenantID),
+		"projectId":           strings.TrimSpace(job.ProjectID),
+		"lensId":              strings.TrimSpace(job.LensID),
 		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-		"jobId":             id,
-		"created":           created,
+		"jobId":               id,
+		"created":             created,
 	})
 	// Only enqueue when a new job was actually created.
 	if created && r.onCreate != nil {
 		trace.Log(ctx, "root_jobs", "scout_job.create.enqueue_hook.start", map[string]any{
-			"tenantId":          strings.TrimSpace(job.TenantID),
-			"projectId":         strings.TrimSpace(job.ProjectID),
-			"lensId":            strings.TrimSpace(job.LensID),
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(job.LensID),
 			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-			"jobId":             id,
+			"jobId":               id,
 		})
 		if err := r.onCreate(ctx, job); err != nil {
 			trace.Log(ctx, "root_jobs", "scout_job.create.enqueue_hook.error", map[string]any{
-				"tenantId":          strings.TrimSpace(job.TenantID),
-				"projectId":         strings.TrimSpace(job.ProjectID),
-				"lensId":            strings.TrimSpace(job.LensID),
+				"tenantId":            strings.TrimSpace(job.TenantID),
+				"projectId":           strings.TrimSpace(job.ProjectID),
+				"lensId":              strings.TrimSpace(job.LensID),
 				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-				"jobId":             id,
-				"error":             err.Error(),
+				"jobId":               id,
+				"error":               err.Error(),
 			})
 			return "", fmt.Errorf("scouting job created but enqueue hook failed: %w", err)
 		}
 		trace.Log(ctx, "root_jobs", "scout_job.create.enqueue_hook.ok", map[string]any{
-			"tenantId":          strings.TrimSpace(job.TenantID),
-			"projectId":         strings.TrimSpace(job.ProjectID),
-			"lensId":            strings.TrimSpace(job.LensID),
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(job.LensID),
 			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-			"jobId":             id,
+			"jobId":               id,
 		})
 	}
 
@@ -105,14 +106,28 @@ func (r *ScoutingJobsRepository) Create(ctx context.Context, job *models.Scoutin
 		srcIDs := extractSourceIDsFromScoutingJob(job)
 		if len(srcIDs) > 0 {
 			trace.Log(ctx, "root_jobs", "scout_job.create.dedup.merge_source_ids", map[string]any{
-				"tenantId":          strings.TrimSpace(job.TenantID),
-				"projectId":         strings.TrimSpace(job.ProjectID),
-				"lensId":            strings.TrimSpace(job.LensID),
+				"tenantId":            strings.TrimSpace(job.TenantID),
+				"projectId":           strings.TrimSpace(job.ProjectID),
+				"lensId":              strings.TrimSpace(job.LensID),
 				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-				"jobId":             id,
-				"sourceIdsN":        len(srcIDs),
+				"jobId":               id,
+				"sourceIdsN":          len(srcIDs),
 			})
 			_ = r.agentJobsRepo.MergeStateStringArray(ctx, id, "sourceIds", srcIDs)
+		}
+		// Also merge specialties (optional task focus modules) so UI can "upgrade" an existing pending/running job.
+		specs := extractSpecialtiesFromScoutingJob(job)
+		if len(specs) > 0 {
+			trace.Log(ctx, "root_jobs", "scout_job.create.dedup.merge_specialties", map[string]any{
+				"tenantId":            strings.TrimSpace(job.TenantID),
+				"projectId":           strings.TrimSpace(job.ProjectID),
+				"lensId":              strings.TrimSpace(job.LensID),
+				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"jobId":               id,
+				"specialtiesN":        len(specs),
+				"specialties":         trace.StrSlice(specs, 10),
+			})
+			_ = r.agentJobsRepo.MergeStateStringArray(ctx, id, "specialties", specs)
 		}
 	}
 	return id, nil
@@ -193,6 +208,38 @@ func extractSourceIDsFromScoutingJob(job *models.ScoutingJob) []string {
 		sort.Strings(out)
 	}
 	return out
+}
+
+func extractSpecialtiesFromScoutingJob(job *models.ScoutingJob) []string {
+	if job == nil {
+		return nil
+	}
+	raw := []string{}
+	if job.State != nil {
+		if v, ok := job.State["specialties"]; ok {
+			switch t := v.(type) {
+			case []string:
+				raw = append(raw, t...)
+			case []interface{}:
+				for _, it := range t {
+					if s, ok2 := it.(string); ok2 {
+						raw = append(raw, s)
+					}
+				}
+			case string:
+				raw = append(raw, t)
+			}
+		}
+	}
+	specs := taxonomy.NormalizeSpecialties(raw)
+	if len(specs) == 0 {
+		return nil
+	}
+	// Keep deterministic order for idempotent merges
+	if len(specs) > 1 {
+		sort.Strings(specs)
+	}
+	return specs
 }
 
 // Get получает ScoutingJob по ID

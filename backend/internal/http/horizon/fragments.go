@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // ListFragments получает список HorizonFragment через Lens scope
@@ -274,8 +275,9 @@ func (h *HorizonHandlers) RefreshFragment(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		Strategy string  `json:"strategy"`
-		MaxCost  float64 `json:"maxCost"`
+		Strategy    string   `json:"strategy"`
+		MaxCost     float64  `json:"maxCost"`
+		Specialties []string `json:"specialties,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -318,6 +320,13 @@ func (h *HorizonHandlers) RefreshFragment(w http.ResponseWriter, r *http.Request
 		TargetCanonicalPath: fragment.CanonicalPath,
 		ScoutingStrategy:    string(strategy),
 		CurrentState:        models.ScoutingJobStatePending,
+	}
+	// Optional: pass specialties into job state (normalized).
+	if specs := taxonomy.NormalizeSpecialties(req.Specialties); len(specs) > 0 {
+		if scoutingJob.State == nil {
+			scoutingJob.State = map[string]interface{}{}
+		}
+		scoutingJob.State["specialties"] = specs
 	}
 
 	jobID, err := h.service.ScoutingJobs().Create(r.Context(), scoutingJob)
@@ -380,8 +389,8 @@ func (h *HorizonHandlers) ExpandProductMaterials(w http.ResponseWriter, r *http.
 
 	// Parse optional request body for options
 	var reqBody struct {
-		UpstreamDepth    int  `json:"upstreamDepth"`
-		DownstreamDepth  int  `json:"downstreamDepth"`
+		UpstreamDepth    int   `json:"upstreamDepth"`
+		DownstreamDepth  int   `json:"downstreamDepth"`
 		IncludeProducers *bool `json:"includeProducers"`
 	}
 	if r.Body != nil && r.ContentLength > 0 {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // ResearchAgent выполняет дообогащение данных через LLM с Search Grounding
@@ -35,12 +36,13 @@ func (a *ResearchAgent) EnrichFragment(
 	focus string,
 	spherePaths []string,
 	keywords []string,
+	specialties []string,
 ) (*models.HorizonFragment, []DiscoveredRelation, error) {
 	if len(missingInfo) == 0 {
 		return fragment, nil, nil
 	}
 
-	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords)
+	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -157,12 +159,13 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 }
 
 // buildEnrichmentPrompt строит промпт для дообогащения фрагмента
-func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string) string {
+func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string, specialties []string) string {
 	fragmentJSON, _ := json.MarshalIndent(fragment, "", "  ")
 	questions := strings.Join(missingInfo, "\n- ")
 	focus = strings.TrimSpace(focus)
 	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
 	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
+	specialties = taxonomy.NormalizeSpecialties(specialties)
 	focusBlock := ""
 	if focus != "" || spheresLine != "" || keywordsLine != "" {
 		focusBlock = "FOCUS CONTEXT (use this to steer your grounded search; it may include non-canonical keywords):\n"
@@ -177,12 +180,31 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 		}
 		focusBlock += "\n"
 	}
+	specBlock := ""
+	if len(specialties) > 0 {
+		specBlock = "REQUESTED SPECIALTIES (apply only those listed):\n"
+		specBlock += fmt.Sprintf("- requestedSpecialties: %s\n\n", strings.Join(specialties, ", "))
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement) {
+			specBlock += "MODULE: management\n"
+			specBlock += "- Prioritize grounded evidence for executive leadership: CEO, CFO, COO, CTO/CIO, CMO, CHRO, President/Managing Director, Chair/Chairman, founders.\n"
+			specBlock += "- Output PERSON targets with /person/{slug} paths.\n"
+			specBlock += "- Use relation types MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED as appropriate.\n"
+			specBlock += "- NOTE: Since relation objects are anchored on the current fragment, PERSON relations may be normalized by the backend; still output the correct semantic relationType and strong evidence in 'reason'.\n\n"
+		}
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyProductsAndServices) {
+			specBlock += "MODULE: products_and_services\n"
+			specBlock += "- For organizations/facilities: prioritize outputs (PRODUCES) and inputs (CONSUMES) as PRODUCT targets.\n"
+			specBlock += "- For product fragments: prioritize upstream/downstream product transformations (TRANSFORMS_INTO between products).\n"
+			specBlock += "- Be strict about canonical product naming and /product/... paths; if classification is uncertain, use fallback /product/{slug} rather than inventing taxonomy.\n\n"
+		}
+	}
 
 	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided fragment using your search capabilities.
 
 CURRENT FRAGMENT DATA:
 %s
 
+%s
 %s
 CRITICAL MISSING INFORMATION (QUESTIONS TO ANSWER):
 - %s
@@ -294,7 +316,7 @@ CANONICAL PATH RULES:
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), focusBlock, questions)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), focusBlock, specBlock, questions)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

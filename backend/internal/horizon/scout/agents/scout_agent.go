@@ -9,6 +9,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // ScoutAgent извлекает структурированные данные из сырого контента
@@ -63,8 +64,8 @@ type scoutResultInternal struct {
 }
 
 // ExtractFragmentData извлекает данные HorizonFragment и связи из контента источника
-func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string) (*ScoutResult, error) {
-	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, sectorPath)
+func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string) (*ScoutResult, error) {
+	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, sectorPath, specialties)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -229,7 +230,31 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 }
 
 // buildExtractionPrompt строит промпт для извлечения данных
-func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string) string {
+func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string) string {
+	specialties = taxonomy.NormalizeSpecialties(specialties)
+	specBlock := ""
+	if len(specialties) > 0 {
+		specBlock = "SPECIALIZATION MODULES (optional; apply only those listed):\n"
+		specBlock += fmt.Sprintf("- requestedSpecialties: %s\n", strings.Join(specialties, ", "))
+		specBlock += "\n"
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement) {
+			specBlock += "MODULE: management (executive leadership / board / founders)\n"
+			specBlock += "- Extract top leadership: CEO, CFO, COO, CTO/CIO, CMO, CHRO, President/Managing Director, Chair/Chairman, Founders.\n"
+			specBlock += "- Represent people as targetType=PERSON with canonicalPath /person/{lowercase-slug}.\n"
+			specBlock += "- Use relationType: MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED as appropriate.\n"
+			specBlock += "- NOTE: This extraction is anchored on the current fragment. For PERSON relations, output the best semantic relationType even if the direction looks inverted; the backend will normalize direction when this module is enabled.\n"
+			specBlock += "- Put role/title and evidence in 'reason'.\n\n"
+		}
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyProductsAndServices) {
+			specBlock += "MODULE: products_and_services (outputs + inputs + product transformations)\n"
+			specBlock += "- For ORGANIZATION/FACILITY: extract outputs (PRODUCES: products/services offered) and inputs (CONSUMES: materials/components/energy/services consumed).\n"
+			specBlock += "- Represent products and services as targetType=PRODUCT with stable /product/... canonical paths when possible.\n"
+			specBlock += "  - If category/type/stage cannot be determined, use fallback /product/{slug}.\n"
+			specBlock += "- For PRODUCT fragments: extract product-to-product transformations using TRANSFORMS_INTO (source product -> target product).\n"
+			specBlock += "- Prefer canonical names (standard material/product names), not marketing names.\n\n"
+		}
+	}
+
 	return fmt.Sprintf(`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.
 
 TARGET ENTITY:
@@ -240,6 +265,7 @@ TARGET ENTITY:
 CONTENT TO ANALYZE:
 %s
 
+%s
 TASK: Extract all relevant information about this entity and return it as a JSON object with two main fields: "fragment" and "relations".
 
 1. "fragment" Field (Object):
@@ -355,5 +381,5 @@ CANONICAL PATH RULES:
 - ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content)
+Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, specBlock)
 }

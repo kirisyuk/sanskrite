@@ -24,14 +24,14 @@ type ValidationRulesRepo interface {
 
 // ValidationRule defines validation behavior for a combination.
 type ValidationRule struct {
-	ID              string  `json:"id" firestore:"id"`
-	SourceType      string  `json:"sourceType" firestore:"sourceType"`       // "ORGANIZATION", "FACILITY", "*"
-	TargetType      string  `json:"targetType" firestore:"targetType"`       // "ORGANIZATION", "FACILITY", "*"
-	RelationType    string  `json:"relationType" firestore:"relationType"`   // "SUPPLIES_TO", "*"
-	Action          string  `json:"action" firestore:"action"`               // "allow", "reject", "penalty"
+	ID                string  `json:"id" firestore:"id"`
+	SourceType        string  `json:"sourceType" firestore:"sourceType"`                                   // "ORGANIZATION", "FACILITY", "*"
+	TargetType        string  `json:"targetType" firestore:"targetType"`                                   // "ORGANIZATION", "FACILITY", "*"
+	RelationType      string  `json:"relationType" firestore:"relationType"`                               // "SUPPLIES_TO", "*"
+	Action            string  `json:"action" firestore:"action"`                                           // "allow", "reject", "penalty"
 	ConfidencePenalty float64 `json:"confidencePenalty,omitempty" firestore:"confidencePenalty,omitempty"` // For "penalty" action
-	Reason           string  `json:"reason" firestore:"reason"`              // Human-readable reason
-	Priority         int     `json:"priority" firestore:"priority"`
+	Reason            string  `json:"reason" firestore:"reason"`                                           // Human-readable reason
+	Priority          int     `json:"priority" firestore:"priority"`
 }
 
 // NewValidationPolicy creates a new ValidationPolicy.
@@ -49,7 +49,7 @@ func (p *ValidationPolicy) Name() string {
 // Decide validates a source×target×relationType combination or fragment.
 func (p *ValidationPolicy) Decide(ctx context.Context, input PolicyInput) (PolicyDecision, error) {
 	logPrefix := "[ValidationPolicy]"
-	
+
 	// Determine validation kind
 	kind, _ := input.Context["validationKind"].(string)
 	if kind == "" {
@@ -102,7 +102,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		}, nil
 	}
 
-	log.Printf("%s Validating fragment: id=%s, type=%s, canonicalPath=%s", 
+	log.Printf("%s Validating fragment: id=%s, type=%s, canonicalPath=%s",
 		logPrefix, fragment.ID, fragment.Type, fragment.CanonicalPath)
 
 	// Policy 1: Block /discovered/ paths
@@ -188,7 +188,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		}
 
 		if !reCountryAlpha2.MatchString(parts[1]) {
-			reason := fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country code %q (expected ISO3166-1 alpha2 lowercase)", 
+			reason := fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country code %q (expected ISO3166-1 alpha2 lowercase)",
 				fragment.CanonicalPath, parts[1])
 			log.Printf("%s REJECT: %s", logPrefix, reason)
 			return PolicyDecision{
@@ -228,7 +228,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	if err == nil && len(rules) > 0 {
 		rule := p.matchRule(rules, string(fragment.Type), "*", "*")
 		if rule != nil {
-			log.Printf("%s DB rule matched: id=%s, action=%s, priority=%d", 
+			log.Printf("%s DB rule matched: id=%s, action=%s, priority=%d",
 				logPrefix, rule.ID, rule.Action, rule.Priority)
 			switch rule.Action {
 			case "reject":
@@ -261,7 +261,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		}
 	}
 
-	log.Printf("%s ALLOW: fragment validation passed (canonicalPath=%s, type=%s)", 
+	log.Printf("%s ALLOW: fragment validation passed (canonicalPath=%s, type=%s)",
 		logPrefix, fragment.CanonicalPath, fragment.Type)
 	return PolicyDecision{
 		Action:       "allow",
@@ -273,7 +273,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 // validateEdge validates edge creation rules (hardcoded from edge_normalizer.go).
 func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) (PolicyDecision, error) {
 	logPrefix := "[ValidationPolicy:Edge]"
-	
+
 	var sourceType, targetType, relationType string
 	var sourceID, targetID string
 
@@ -281,7 +281,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		sourceID = input.Edge.SourceFragmentID
 		targetID = input.Edge.TargetFragmentID
 		relationType = string(input.Edge.Type)
-		log.Printf("%s Validating edge: sourceID=%s, targetID=%s, type=%s", 
+		log.Printf("%s Validating edge: sourceID=%s, targetID=%s, type=%s",
 			logPrefix, sourceID, targetID, relationType)
 	} else {
 		sourceID, _ = input.Context["sourceFragmentID"].(string)
@@ -289,7 +289,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		sourceType, _ = input.Context["sourceType"].(string)
 		targetType, _ = input.Context["targetType"].(string)
 		relationType, _ = input.Context["relationType"].(string)
-		log.Printf("%s Validating edge from context: sourceType=%s, targetType=%s, type=%s", 
+		log.Printf("%s Validating edge from context: sourceType=%s, targetType=%s, type=%s",
 			logPrefix, sourceType, targetType, relationType)
 	}
 
@@ -317,12 +317,12 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	// Policy 2: Edge direction validation (hardcoded from EdgeDirectionPolicies)
 	if sourceType != "" && targetType != "" && relationType != "" {
 		edgeType := horizonmodels.DependencyType(relationType)
-		isValid, shouldReverse, rule := p.validateEdgeDirection(edgeType, 
+		isValid, shouldReverse, rule := p.validateEdgeDirection(edgeType,
 			horizonmodels.FragmentType(sourceType), horizonmodels.FragmentType(targetType))
-		
+
 		if !isValid {
 			if shouldReverse {
-				reason := fmt.Sprintf("edge direction invalid but reversible: %s -> %s (%s). Rule: %s", 
+				reason := fmt.Sprintf("edge direction invalid but reversible: %s -> %s (%s). Rule: %s",
 					sourceType, targetType, relationType, rule.Description)
 				log.Printf("%s REVERSE: %s", logPrefix, reason)
 				return PolicyDecision{
@@ -332,7 +332,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 					Confidence:   1.0,
 				}, nil
 			} else {
-				reason := fmt.Sprintf("edge direction invalid and not reversible: %s -> %s (%s). Rule: %s", 
+				reason := fmt.Sprintf("edge direction invalid and not reversible: %s -> %s (%s). Rule: %s",
 					sourceType, targetType, relationType, rule.Description)
 				log.Printf("%s REJECT: %s", logPrefix, reason)
 				return PolicyDecision{
@@ -343,7 +343,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 				}, nil
 			}
 		} else if rule != nil {
-			log.Printf("%s Direction validation passed: %s -> %s (%s). Rule: %s", 
+			log.Printf("%s Direction validation passed: %s -> %s (%s). Rule: %s",
 				logPrefix, sourceType, targetType, relationType, rule.Description)
 		}
 	}
@@ -376,7 +376,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	if err == nil && len(rules) > 0 && sourceType != "" && targetType != "" && relationType != "" {
 		rule := p.matchRule(rules, sourceType, targetType, relationType)
 		if rule != nil {
-			log.Printf("%s DB rule matched: id=%s, action=%s, priority=%d", 
+			log.Printf("%s DB rule matched: id=%s, action=%s, priority=%d",
 				logPrefix, rule.ID, rule.Action, rule.Priority)
 			switch rule.Action {
 			case "reject":
@@ -409,7 +409,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		}
 	}
 
-	log.Printf("%s ALLOW: edge validation passed (sourceType=%s, targetType=%s, relationType=%s)", 
+	log.Printf("%s ALLOW: edge validation passed (sourceType=%s, targetType=%s, relationType=%s)",
 		logPrefix, sourceType, targetType, relationType)
 	return PolicyDecision{
 		Action:       "allow",
@@ -577,7 +577,16 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeFacility,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
-		Description: "Producer produces product",
+		Description:      "Producer produces product",
+	},
+	horizonmodels.DependencyTypeConsumes: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeProduct,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
+		Description:      "Consumer consumes product",
 	},
 	horizonmodels.DependencyTypeLocatedIn: {
 		ValidSourceTypes: []horizonmodels.FragmentType{
@@ -587,7 +596,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeGeoRegion,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeGeoRegion},
-		Description: "Entity is located within region",
+		Description:      "Entity is located within region",
 	},
 	horizonmodels.DependencyTypeOperatesIn: {
 		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
@@ -621,6 +630,11 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeGeoRegion,
 		},
 		Description: "Dependent entity depends on dependency",
+	},
+	horizonmodels.DependencyTypeTransformsInto: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
+		Description:      "Product transforms into downstream product",
 	},
 	horizonmodels.DependencyTypeInfluences: {
 		ValidSourceTypes: []horizonmodels.FragmentType{
@@ -671,4 +685,3 @@ func (p *ValidationPolicy) expectedPathPrefix(fragType horizonmodels.FragmentTyp
 		return ""
 	}
 }
-

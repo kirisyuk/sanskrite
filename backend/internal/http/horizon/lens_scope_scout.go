@@ -10,18 +10,21 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type scopeScoutLensNodeRequest struct {
 	FragmentID        string `json:"fragmentId"`
 	CanonicalPath     string `json:"canonicalPath"`
 	MaxRecursionDepth *int   `json:"maxRecursionDepth"`
+	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
+	Specialties []string `json:"specialties,omitempty"`
 }
 
 type scopeScoutLensNodeResponse struct {
-	JobID      string      `json:"jobId"`
-	ScopeAdded bool        `json:"scopeAdded"`
-	Target     string      `json:"targetCanonicalPath"`
+	JobID      string       `json:"jobId"`
+	ScopeAdded bool         `json:"scopeAdded"`
+	Target     string       `json:"targetCanonicalPath"`
 	Lens       *models.Lens `json:"lens,omitempty"`
 }
 
@@ -128,6 +131,8 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 	jobID := ""
 	if h.service.ScoutingJobs() != nil {
 		now := time.Now().UTC()
+		// Normalize specialties (ignore unknown values).
+		specialties := taxonomy.NormalizeSpecialties(body.Specialties)
 		state := map[string]interface{}{
 			"targetCanonicalPath": targetCanonicalPath,
 			"lensId":              lens.ID,
@@ -137,6 +142,9 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 			"maxRecursionDepth":   float64(maxDepth),
 			"trigger":             "ui.graph.scope_scout",
 			"correlationId":       correlationID,
+		}
+		if len(specialties) > 0 {
+			state["specialties"] = specialties
 		}
 		if sessionID != "" {
 			state["sessionId"] = sessionID
@@ -180,5 +188,3 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		Lens:       lens,
 	})
 }
-
-

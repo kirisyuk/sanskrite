@@ -19,6 +19,11 @@
   - [x] Реализовать подгрузку материалов вручную из фрагмента-продукта через wikidata - срочно
     - POST `/api/horizon/fragments/{id}/expand-materials` — синхронный вызов, возвращает статистику
   - Добавить клиентов организации в скаутинг, вызываемый вручную - тоже срочно
+- **Wikidata QID resolver (suggest-only → gated auto-apply)**
+  - Вынести поиск/скоринг Wikidata QID из `cmd/tools/horizon_find_missing_wikidata` в ядро как **suggest-only resolver** (без авто-записи).
+  - Добавить кэширование/TTL, type-gating (например, `P31=Q5` для PERSON), и телеметрию качества (score распределения, false positives).
+  - Добавить режим **auto-apply** только под feature-flag + строгие пороги/правила + dry-run.
+  - Перед включением auto-apply: прогнать тщательную проверку качества на репрезентативной выборке (precision/recall, ручной аудит top ошибок).
 - **Vertex AI Search для Horizon fragments**
   - Завершить overwrite re-export всех фрагментов в GCS в финальном формате Discovery Engine.
   - Перезапустить backfill (батчи) и убедиться, что поиск по fragments возвращает результаты.

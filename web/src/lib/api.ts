@@ -1792,6 +1792,42 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  /**
+   * Horizon - Ask a grounded question against the currently visible graph snapshot.
+   * POST /api/horizon/lenses/{lensId}/graph-query
+   */
+  async queryHorizonGraph(
+    lensId: string,
+    input: {
+      projectId?: string;
+      question: string;
+      graph: {
+        nodes: Array<{ id: string; label?: string; type?: string; canonicalPath?: string }>;
+        edges?: Array<{ from: string; to: string; type?: string; label?: string }>;
+      };
+    }
+  ): Promise<{
+    interactionId: string;
+    projectId: string;
+    lensId: string;
+    question: string;
+    answer: string;
+    relevantNodeIds: string[];
+    findings?: Array<{ nodeId: string; title: string; eventDate: string; source: string; url: string }>;
+    model?: string;
+    searchQueries?: string[];
+    sources?: string[];
+    timestamp: string;
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/graph-query`, input);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] queryHorizonGraph error:`, error);
+      throw error;
+    }
+  }
+
   async getHorizonLensAssemblyStatus(lensId: string): Promise<{
     status: string;
     phase: string;
