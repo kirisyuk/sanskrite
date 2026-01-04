@@ -32,6 +32,13 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     [],
   );
 
+  const normalizeEdgeType = React.useCallback((raw: any): string => {
+    const t = String(raw || '').trim();
+    if (!t) return '';
+    // Defensive normalization: "Located in" -> "LOCATED_IN"
+    return t.toUpperCase().replace(/\s+/g, '_');
+  }, []);
+
   const [fragment, setFragment] = React.useState<any>(null);
   const [entity, setEntity] = React.useState<any>(null);
   const [edge, setEdge] = React.useState<any>(null);
@@ -163,6 +170,20 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       setNodeExplainText(null);
       return;
     }
+
+    // Reset node-scoped UI state immediately on node switch,
+    // so we don't show the previous node's details while the new one loads.
+    setFragment(null);
+    setEntity(null);
+    setError(null);
+    setNodeExplainError(null);
+    setNodeExplainText(null);
+    setNodeExplainLoading(false);
+    setProductIOError(null);
+    setProductIOResult(null);
+    setProductIOLoading(false);
+    setEnsuring(false);
+    setEnriching(false);
 
     const loadData = async () => {
       setLoading(true);
@@ -959,22 +980,208 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   const nodeDisplayName = React.useMemo(() => {
     const fromNode = String(nodeData?.label || '').trim();
     if (fromNode) return fromNode;
-    const fromFrag =
-      String(fragment?.labels?.en || '').trim() ||
-      humanizeCanonicalPath(fragment?.canonicalPath) ||
-      '';
+    const wantId = String(nodeData?.fragmentId || nodeId || '').trim();
+    const loadedId = String((fragment as any)?.id || (fragment as any)?.ID || '').trim();
+    const canUseFragment = Boolean(!edgeId && wantId && loadedId && loadedId === wantId);
+    const fromFrag = canUseFragment
+      ? (String(fragment?.labels?.en || '').trim() || humanizeCanonicalPath(fragment?.canonicalPath) || '')
+      : '';
     if (fromFrag) return fromFrag;
     const fromPath = humanizeCanonicalPath(nodeData?.canonicalPath) || '';
     return fromPath || 'Node';
-  }, [nodeData, fragment]);
+  }, [nodeData, nodeId, edgeId, fragment]);
 
-  const nodeType = React.useMemo(() => String(nodeData?.type || fragment?.type || '').trim(), [nodeData, fragment]);
-  const nodeStatus = React.useMemo(() => String(nodeData?.status || fragment?.status || '').trim(), [nodeData, fragment]);
+  const nodeType = React.useMemo(() => {
+    const fromNode = String(nodeData?.type || '').trim();
+    if (fromNode) return fromNode;
+    const wantId = String(nodeData?.fragmentId || nodeId || '').trim();
+    const loadedId = String((fragment as any)?.id || (fragment as any)?.ID || '').trim();
+    const canUseFragment = Boolean(!edgeId && wantId && loadedId && loadedId === wantId);
+    if (!canUseFragment) return '';
+    return String(fragment?.type || '').trim();
+  }, [nodeData, nodeId, edgeId, fragment]);
+
+  const nodeStatus = React.useMemo(() => {
+    const fromNode = String(nodeData?.status || '').trim();
+    if (fromNode) return fromNode;
+    const wantId = String(nodeData?.fragmentId || nodeId || '').trim();
+    const loadedId = String((fragment as any)?.id || (fragment as any)?.ID || '').trim();
+    const canUseFragment = Boolean(!edgeId && wantId && loadedId && loadedId === wantId);
+    if (!canUseFragment) return '';
+    return String(fragment?.status || '').trim();
+  }, [nodeData, nodeId, edgeId, fragment]);
   const nodeCanonicalPath = React.useMemo(
-    () => String(nodeData?.canonicalPath || fragment?.canonicalPath || '').trim(),
-    [nodeData, fragment],
+    () => {
+      const fromNode = String(nodeData?.canonicalPath || '').trim();
+      if (fromNode) return fromNode;
+      const wantId = String(nodeData?.fragmentId || nodeId || '').trim();
+      const loadedId = String((fragment as any)?.id || (fragment as any)?.ID || '').trim();
+      const canUseFragment = Boolean(!edgeId && wantId && loadedId && loadedId === wantId);
+      if (!canUseFragment) return '';
+      return String(fragment?.canonicalPath || '').trim();
+    },
+    [nodeData, nodeId, edgeId, fragment],
   );
   const fragmentIdForNode = React.useMemo(() => String(nodeData?.fragmentId || nodeId || '').trim(), [nodeData, nodeId]);
+
+  const canUseLoadedFragment = React.useMemo(() => {
+    const wantId = String(nodeData?.fragmentId || nodeId || '').trim();
+    const loadedId = String((fragment as any)?.id || (fragment as any)?.ID || '').trim();
+    return Boolean(!edgeId && wantId && loadedId && loadedId === wantId);
+  }, [edgeId, nodeData?.fragmentId, nodeId, fragment]);
+
+  const [directRelationsLoading, setDirectRelationsLoading] = React.useState(false);
+  const [directRelationsError, setDirectRelationsError] = React.useState<string | null>(null);
+  const directRelationsErrorForRef = React.useRef<string>('');
+  const [govLocExpanded, setGovLocExpanded] = React.useState<Record<string, boolean>>({});
+  React.useEffect(() => {
+    // Reset per-node expansion state when switching nodes.
+    setGovLocExpanded({});
+  }, [fragmentIdForNode, edgeId]);
+  const [directRelations, setDirectRelations] = React.useState<{
+    managesOut: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
+    managesIn: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
+    boardOut: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
+    boardIn: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
+    locatedOut: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
+    locatedIn: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
+    source: {
+      centerFragmentId: string;
+      edgesReturned: number;
+      neighborFragmentsReturned: number;
+    };
+  } | null>(null);
+  const directRelationsReqKeyRef = React.useRef<string>('');
+
+  React.useEffect(() => {
+    const centerFragmentId = String(fragmentIdForNode || '').trim();
+    if (!nodeId || edgeId || !centerFragmentId) {
+      setDirectRelations(null);
+      setDirectRelationsError(null);
+      setDirectRelationsLoading(false);
+      directRelationsErrorForRef.current = '';
+      directRelationsReqKeyRef.current = '';
+      return;
+    }
+
+    const edgeTypes = ['MANAGES', 'BOARD_MEMBER_OF', 'LOCATED_IN'];
+    const reqKey = `${centerFragmentId}|${edgeTypes.join(',')}`;
+    if (directRelationsReqKeyRef.current === reqKey) return;
+    directRelationsReqKeyRef.current = reqKey;
+
+    let cancelled = false;
+    const run = async () => {
+      setDirectRelationsLoading(true);
+      setDirectRelationsError(null);
+      directRelationsErrorForRef.current = centerFragmentId;
+      try {
+        const resp = await api.getFragmentDependencies(centerFragmentId, {
+          direction: 'both',
+          edgeTypes,
+          includeFragments: true,
+          includeUnindexed: true,
+          maxPerType: 25,
+          maxEdges: 120,
+        });
+        if (cancelled) return;
+
+        const edges = Array.isArray(resp?.edges) ? resp.edges : [];
+        const fragments = Array.isArray(resp?.fragments) ? resp.fragments : [];
+        const byId: Record<string, any> = {};
+        for (const f of fragments) {
+          const id = String(f?.id || '').trim();
+          if (id) byId[id] = f;
+        }
+
+        const labelFor = (fragId: string): string => {
+          const id = String(fragId || '').trim();
+          const f = byId[id];
+          if (!f) return id;
+          const labels = f?.labels;
+          const fromLabels =
+            labels && typeof labels === 'object'
+              ? String(labels.en || labels[Object.keys(labels)[0]] || '').trim()
+              : '';
+          return fromLabels || humanizeCanonicalPath(String(f?.canonicalPath || '').trim()) || id;
+        };
+
+        const entryFor = (fragId: string) => {
+          const id = String(fragId || '').trim();
+          const f = byId[id];
+          return {
+            id,
+            label: labelFor(id),
+            canonicalPath: String(f?.canonicalPath || '').trim(),
+            type: String(f?.type || '').trim(),
+          };
+        };
+
+        const dedupePush = (arr: any[], item: any) => {
+          if (!item?.id) return;
+          if (arr.some((x) => String(x?.id || '') === item.id)) return;
+          arr.push(item);
+        };
+
+        const managesOut: any[] = [];
+        const managesIn: any[] = [];
+        const boardOut: any[] = [];
+        const boardIn: any[] = [];
+        const locatedOut: any[] = [];
+        const locatedIn: any[] = [];
+
+        for (const e of edges) {
+          const t = normalizeEdgeType((e as any)?.type);
+          const src = String((e as any)?.sourceFragmentId || '').trim();
+          const tgt = String((e as any)?.targetFragmentId || '').trim();
+          if (!t || !src || !tgt) continue;
+          if (src !== centerFragmentId && tgt !== centerFragmentId) continue;
+
+          const outgoing = src === centerFragmentId;
+          const otherId = outgoing ? tgt : src;
+          const other = entryFor(otherId);
+
+          if (t === 'MANAGES') {
+            if (outgoing) dedupePush(managesOut, other);
+            else dedupePush(managesIn, other);
+          }
+          if (t === 'BOARD_MEMBER_OF') {
+            if (outgoing) dedupePush(boardOut, other);
+            else dedupePush(boardIn, other);
+          }
+          if (t === 'LOCATED_IN') {
+            if (outgoing) dedupePush(locatedOut, other);
+            else dedupePush(locatedIn, other);
+          }
+        }
+
+        setDirectRelations({
+          managesOut,
+          managesIn,
+          boardOut,
+          boardIn,
+          locatedOut,
+          locatedIn,
+          source: {
+            centerFragmentId,
+            edgesReturned: edges.length,
+            neighborFragmentsReturned: Object.keys(byId).length,
+          },
+        });
+      } catch (err: any) {
+        if (cancelled) return;
+        setDirectRelations(null);
+        setDirectRelationsError(err?.response?.data?.error || err?.message || 'Failed to load direct relationships');
+        directRelationsErrorForRef.current = centerFragmentId;
+      } finally {
+        if (!cancelled) setDirectRelationsLoading(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [edgeId, fragmentIdForNode, nodeId, normalizeEdgeType]);
 
   const edgeTypeRaw = React.useMemo(
     () => String(edgeData?.edgeType || edge?.type || '').trim(),
@@ -1613,6 +1820,158 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             )}
           </SectionCard>
 
+          <SectionCard
+            title="Governance and location"
+            right={directRelationsLoading ? <Chip>Loading…</Chip> : undefined}
+          >
+            {(() => {
+              const currentFid = String(fragmentIdForNode || '').trim();
+              const showErr = Boolean(directRelationsError && directRelationsErrorForRef.current === currentFid);
+              const d =
+                currentFid && directRelations?.source?.centerFragmentId === currentFid
+                  ? directRelations
+                  : null;
+              const showSkeleton = Boolean(!showErr && currentFid && !d);
+              const PREVIEW_N = 3;
+
+              const renderList = (items: any[]) => {
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {items.map((n) => {
+                      const accent = getNodeColors(n.type || 'UNKNOWN', theme === 'dark' ? 'dark' : 'light').accent;
+                      return (
+                        <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                            {n.type ? (
+                              <AccentChip accent={accent}>
+                                <HorizonNodeIcon type={n.type} color={accent} size={14} />
+                                {formatHorizonFragmentType(n.type)}
+                              </AccentChip>
+                            ) : (
+                              <Chip>Unknown</Chip>
+                            )}
+                            <span style={{ color: 'var(--text-heading)', fontSize: 13, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {n.label}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              };
+
+              const t = String(nodeType || '').trim().toUpperCase();
+              const isPerson = t === 'PERSON';
+              const isOrg = t === 'ORGANIZATION';
+              const isGeo = t === 'GEO_REGION';
+
+              const Section: React.FC<{ title: string; items: any[] }> = ({ title, items }) => {
+                if (!items || items.length === 0) return null;
+                const key = `${currentFid}:${title}`;
+                const expanded = Boolean(govLocExpanded[key]);
+                const shown = expanded ? items : items.slice(0, PREVIEW_N);
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>{title}</div>
+                    <div>{renderList(shown)}</div>
+                    {!expanded && items.length > PREVIEW_N && (
+                      <button
+                        type="button"
+                        onClick={() => setGovLocExpanded((prev) => ({ ...prev, [key]: true }))}
+                        style={{
+                          alignSelf: 'flex-start',
+                          padding: '6px 10px',
+                          borderRadius: 10,
+                          border: '1px solid var(--border-subtle)',
+                          background: 'var(--bg-tertiary)',
+                          color: 'var(--text-heading)',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          fontWeight: 850,
+                        }}
+                      >
+                        Show more
+                      </button>
+                    )}
+                  </div>
+              );
+              };
+
+              const SkeletonBar: React.FC<{ w: string }> = ({ w }) => (
+                <div
+                  style={{
+                    width: w,
+                    height: 12,
+                    borderRadius: 999,
+                    background: theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)',
+                  }}
+                />
+              );
+
+              if (showErr) {
+                return (
+                  <div style={{ fontSize: 12, color: '#f87171', fontWeight: 650 }}>
+                    {directRelationsError}
+                  </div>
+                );
+              }
+
+              if (showSkeleton) {
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>Managed by</div>
+                      <SkeletonBar w="72%" />
+                      <SkeletonBar w="60%" />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>Located in</div>
+                      <SkeletonBar w="68%" />
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {/* Management */}
+                  {!isGeo && (
+                    <>
+                      <Section title="Managed by" items={d?.managesIn || []} />
+                      <Section title="Manages" items={d?.managesOut || []} />
+                    </>
+                  )}
+
+                  {/* Governance: show only the direction that makes sense for the node type */}
+                  {isOrg && <Section title="Board members" items={d?.boardIn || []} />}
+                  {isPerson && <Section title="Board of" items={d?.boardOut || []} />}
+
+                  {/* Location */}
+                  {!isGeo && <Section title="Located in" items={d?.locatedOut || []} />}
+                  {isGeo && <Section title="Located here" items={d?.locatedIn || []} />}
+
+                  {(() => {
+                    // If everything is empty, show a tiny neutral hint (but never show empty subsections).
+                    const hasAny =
+                      (d?.managesIn?.length || 0) > 0 ||
+                      (d?.managesOut?.length || 0) > 0 ||
+                      (d?.boardIn?.length || 0) > 0 ||
+                      (d?.boardOut?.length || 0) > 0 ||
+                      (d?.locatedOut?.length || 0) > 0 ||
+                      (d?.locatedIn?.length || 0) > 0;
+                    if (hasAny) return null;
+                    return (
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', fontWeight: 650 }}>
+                        No governance/location relationships found.
+                      </div>
+                    );
+                  })()}
+                </div>
+              );
+            })()}
+          </SectionCard>
+
           <Disclosure title="AI explanation" subtitle="Grounded + structured">
           <button
             type="button"
@@ -1817,7 +2176,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             </SectionCard>
           )}
 
-          {fragment && (
+          {canUseLoadedFragment && fragment && (
             <Disclosure title="Fragment details" subtitle="Source object metadata">
             {fragment.labels && Object.keys(fragment.labels).length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
@@ -1843,7 +2202,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             </Disclosure>
           )}
 
-          {entity && (
+          {canUseLoadedFragment && entity && (
             <Disclosure title="Linked entity" subtitle="Enriched business object">
               {entity.canonicalName && <KV k="Name" v={<span>{entity.canonicalName}</span>} />}
               {entity.type && <KV k="Type" v={<span>{entity.type}</span>} />}
@@ -1905,7 +2264,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       )}
 
               {/* Ensure / Enrich */}
-      {nodeId && nodeData && fragment && (
+      {nodeId && nodeData && canUseLoadedFragment && fragment && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <button
                     type="button"
@@ -1945,7 +2304,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             >
                     {ensuring ? 'Updating…' : 'Ensure entity'}
             </button>
-            {entity && (
+            {canUseLoadedFragment && entity && (
               <button
                       type="button"
                 onClick={async () => {

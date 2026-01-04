@@ -30,8 +30,12 @@ func validateCanonicalPath(path string) error {
 	if len(parts) == 0 {
 		return fmt.Errorf("canonical path has no segments: %s", path)
 	}
-	// Check that all segments are valid slugs (lowercase alphanumeric and hyphens)
-	slugRegex := regexp.MustCompile(`^[a-z0-9-]+$`)
+	// Check that all segments are valid slugs.
+	//
+	// NOTE: Horizon canonical paths frequently use underscores (e.g. `/org/government_of_saudi_arabia`),
+	// and we persist those into `ontology_entities.canonicalPaths` for stable linking/deduping.
+	// Therefore we allow `_` here in addition to `-`.
+	slugRegex := regexp.MustCompile(`^[a-z0-9-_]+$`)
 	for i, part := range parts {
 		if part == "" {
 			return fmt.Errorf("canonical path segment %d is empty: %s", i, path)

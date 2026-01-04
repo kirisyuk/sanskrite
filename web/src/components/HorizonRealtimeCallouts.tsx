@@ -18,6 +18,21 @@ export const HorizonRealtimeCallouts: React.FC<{
   const events = useHorizonRealtimeStore((s) => s.events);
   const [items, setItems] = React.useState<Array<HorizonRealtimeEvent & { dismissAt: number }>>([]);
   const seenRef = React.useRef<Set<string>>(new Set());
+  const MAX_SEEN_IDS = 1200;
+
+  const pruneSeen = React.useCallback(() => {
+    const seen = seenRef.current;
+    if (!seen) return;
+    if (seen.size <= MAX_SEEN_IDS) return;
+    // Set preserves insertion order; drop oldest ids first.
+    const over = seen.size - MAX_SEEN_IDS;
+    let dropped = 0;
+    for (const id of seen) {
+      seen.delete(id);
+      dropped += 1;
+      if (dropped >= over) break;
+    }
+  }, []);
 
   // Prune timer
   React.useEffect(() => {
@@ -28,6 +43,18 @@ export const HorizonRealtimeCallouts: React.FC<{
     }, 500);
     return () => window.clearInterval(id);
   }, [enabled]);
+
+  // Reset local caches when switching context / disabling (prevents unbounded growth over long sessions).
+  React.useEffect(() => {
+    if (!enabled) {
+      setItems([]);
+      seenRef.current.clear();
+      return;
+    }
+    // On context change, we don't want "seen" to keep growing with unrelated ids.
+    setItems([]);
+    seenRef.current.clear();
+  }, [enabled, lensId, projectId]);
 
   React.useEffect(() => {
     if (!enabled) return;
@@ -51,10 +78,11 @@ export const HorizonRealtimeCallouts: React.FC<{
       seenRef.current.add(ev.id);
       nextToAdd.push({ ...ev, dismissAt: now + 6500 });
     }
+    pruneSeen();
     if (nextToAdd.length === 0) return;
 
     setItems((prev) => [...prev, ...nextToAdd].slice(-6));
-  }, [events, enabled, lensId, projectId]);
+  }, [events, enabled, lensId, projectId, pruneSeen]);
 
   if (!enabled) return null;
   if (!items || items.length === 0) return null;

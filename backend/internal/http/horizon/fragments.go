@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -204,6 +205,7 @@ func (h *HorizonHandlers) GetFragmentEntity(w http.ResponseWriter, r *http.Reque
 	// Ensure on access (default behavior)
 	entity, _, _, err := h.service.EnsureEntityForFragment(r.Context(), fragmentID)
 	if err != nil {
+		log.Printf("[GetFragmentEntity] EnsureEntityForFragment failed: fragmentId=%s err=%v", fragmentID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

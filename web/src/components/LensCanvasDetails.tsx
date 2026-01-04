@@ -1,6 +1,23 @@
 import React from 'react';
 import { api } from '../lib/api';
 
+function pruneMapToMax<K, V>(m: Map<K, V>, maxSize: number) {
+  if (maxSize <= 0) {
+    m.clear();
+    return;
+  }
+  while (m.size > maxSize) {
+    const first = m.keys().next();
+    if (first.done) break;
+    m.delete(first.value);
+  }
+}
+
+function boundedMapSet<K, V>(m: Map<K, V>, key: K, value: V, maxSize: number) {
+  m.set(key, value);
+  pruneMapToMax(m, maxSize);
+}
+
 export interface LensCanvasDetailsProps {
   lens: any;
   assemblyStatus: any;
@@ -87,6 +104,22 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
     scopeSuggestAbortRef.current = null;
   }, []);
 
+  // Memory safety: clear per-lens caches when switching lenses / unmounting.
+  React.useEffect(() => {
+    scopeSuggestCacheRef.current.clear();
+    scopeResolveInFlightRef.current.clear();
+    setScopeResolved({});
+    closeScopeSuggest();
+  }, [lens?.id, closeScopeSuggest]);
+  React.useEffect(() => {
+    return () => {
+      try { scopeSuggestAbortRef.current?.abort(); } catch { /* ignore */ }
+      scopeSuggestAbortRef.current = null;
+      scopeSuggestCacheRef.current.clear();
+      scopeResolveInFlightRef.current.clear();
+    };
+  }, []);
+
   const pickScopeSuggestion = React.useCallback((r: SearchEntity) => {
     setNewScopePath(r.canonicalPath);
     closeScopeSuggest();
@@ -137,7 +170,7 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
       try {
         const res = await api.searchHorizonEntities(q, 8, ac.signal);
         const list = Array.isArray(res?.entities) ? (res.entities as SearchEntity[]) : [];
-        scopeSuggestCacheRef.current.set(key, list);
+        boundedMapSet(scopeSuggestCacheRef.current, key, list, 80);
         setScopeSuggestResults(list);
         setScopeSuggestIndex(0);
         setScopeSuggestLoading(false);

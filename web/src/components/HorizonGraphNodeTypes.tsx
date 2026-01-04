@@ -49,6 +49,23 @@ export interface HorizonNodeData {
   groupPageSize?: number;     // Items per page (default 12)
   groupAllChildIds?: string[]; // All child IDs for edge filtering
   onGroupPageChange?: (groupId: string, page: number) => void; // Callback for page change
+  // Right-side temporary stacking (Levels/Hierarchical UX)
+  // When many leaf right-nodes form a tall vertical column, we can collapse them into a single "stack"
+  // and expand on demand. These fields are view-only (not persisted).
+  stackGroupKey?: string; // stable key for the stack group
+  stackCount?: number; // total nodes in the stack
+  stackExpanded?: boolean; // whether the stack is currently expanded
+  onToggleStack?: (stackKey: string, nextExpanded: boolean) => void;
+  // Levels two-pane metadata (view-only)
+  levelsPane?: 'right' | 'left' | 'dock';
+  hiddenByStack?: boolean;
+  // Right-side contextual filters (Levels layout; view-only)
+  rightFiltersOpen?: boolean;
+  rightFilterHideLoneParents?: boolean;
+  rightFilterHideLoneChildren?: boolean;
+  rightFilterHideLoneGovernancePeople?: boolean;
+  onOpenRightFilters?: (nodeId: string, nextOpen: boolean) => void;
+  onToggleRightFilter?: (nodeId: string, key: 'loneParents' | 'loneChildren' | 'loneGovernancePeople', nextOn: boolean) => void;
   [key: string]: any;
 }
 
@@ -840,6 +857,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   ensureHorizonNode2026Styles();
   const { theme } = React.useContext(ThemeContext);
   const colors = getNodeColors(data.type, theme);
+  const [isHovering, setIsHovering] = React.useState(false);
+  const rightFiltersRef = React.useRef<HTMLDivElement | null>(null);
+  const rightFiltersBtnRef = React.useRef<HTMLButtonElement | null>(null);
   
   const isCritical = data.critical;
   const isCollapsed = data.collapsed;
@@ -856,6 +876,33 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const canExpandClick = Boolean(showExpand && !isLoadingRelated);
   const isPinnedToScope = Boolean((data as any)?.pinnedToScope);
   const canTogglePin = Boolean((data as any)?.onTogglePin && data.canonicalPath);
+  const stackKey = String((data as any)?.stackGroupKey || '').trim();
+  const stackCount = typeof (data as any)?.stackCount === 'number' ? (data as any).stackCount : undefined;
+  const stackExpanded = Boolean((data as any)?.stackExpanded);
+  const canToggleStack = Boolean(stackKey && stackCount && stackCount > 1 && typeof (data as any)?.onToggleStack === 'function');
+  // Collapsed stacked view: show 2–3 subtle "cards" peeking from underneath.
+  const stackLayers = canToggleStack && !stackExpanded
+    ? Math.min(3, Math.max(2, Math.ceil((stackCount || 0) / 8)))
+    : 0;
+
+  const isLevelsRight = String((data as any)?.levelsPane || '') === 'right';
+  const rightFiltersOpen = Boolean((data as any)?.rightFiltersOpen);
+  const canRightFilters = isLevelsRight && typeof (data as any)?.onOpenRightFilters === 'function' && typeof (data as any)?.onToggleRightFilter === 'function';
+  const rfHideParents = Boolean((data as any)?.rightFilterHideLoneParents);
+  const rfHideChildren = Boolean((data as any)?.rightFilterHideLoneChildren);
+  const rfHideGov = Boolean((data as any)?.rightFilterHideLoneGovernancePeople);
+
+  React.useEffect(() => {
+    if (!canRightFilters || !rightFiltersOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const t = e.target as any;
+      if (rightFiltersRef.current && rightFiltersRef.current.contains(t)) return;
+      if (rightFiltersBtnRef.current && rightFiltersBtnRef.current.contains(t)) return;
+      (data as any)?.onOpenRightFilters?.(data.id, false);
+    };
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => window.removeEventListener('mousedown', onMouseDown, true);
+  }, [canRightFilters, rightFiltersOpen, data]);
   
   // 2026 visual style: neutral surface with tinted accent (less "dashboardy", more product-like)
   const accentColor = isCritical ? '#EF4444' : colors.accent;
@@ -946,6 +993,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
 
       <div
         className={`hzn-node-2026 ${isSelected ? 'is-selected' : ''}`}
+        onMouseEnter={() => setIsHovering(true)}
+        onMouseLeave={() => setIsHovering(false)}
         style={{
           // CSS variables for 2026 styles
           ['--hzn-surface' as any]: surfaceBg,
@@ -966,8 +1015,38 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           position: 'relative',
           opacity: isCollapsed ? 0.7 : 1,
           cursor: 'default',
+          overflow: 'visible',
         }}
       >
+      {/* Stacked-node visual (collapsed): show 2-3 "cards" peeking from underneath */}
+      {stackLayers > 0 && (
+        <>
+          {Array.from({ length: stackLayers }).map((_, idx) => {
+            const layer = stackLayers - idx; // farthest first
+            const dy = layer * 8;
+            const dx = layer * 2;
+            return (
+              <div
+                key={`hzn-stack-layer-${layer}`}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  transform: `translate(${dx}px, ${dy}px)`,
+                  borderRadius: 16,
+                  background: theme === 'dark' ? 'rgba(17,24,39,0.62)' : 'rgba(255,255,255,0.78)',
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.10)'}`,
+                  boxShadow: theme === 'dark'
+                    ? '0 10px 22px rgba(0,0,0,0.16)'
+                    : '0 10px 22px rgba(0,0,0,0.06)',
+                  pointerEvents: 'none',
+                  zIndex: -(idx + 1),
+                }}
+              />
+            );
+          })}
+        </>
+      )}
+
       {/* Top handles: 2 handles для верхней группы (supply-chain) */}
       <Handle
         id="source-top"
@@ -1310,6 +1389,158 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             </button>
           )}
         </div>
+      )}
+
+      {/* Stack toggle: sits just below the node, pairs with the stacked-card visual cue */}
+      {canToggleStack && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            const cb = (data as any)?.onToggleStack as ((k: string, next: boolean) => void) | undefined;
+            cb?.(stackKey, !stackExpanded);
+          }}
+          aria-label={stackExpanded ? 'Collapse stack' : 'Expand stack'}
+          title={stackExpanded ? 'Collapse stacked nodes' : `Show ${Math.max(0, (stackCount || 0) - 1)} more`}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: -14,
+            transform: 'translateX(-50%)',
+            height: 26,
+            padding: '0 10px',
+            borderRadius: 999,
+            border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
+            background: theme === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.82)',
+            color: theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.86)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            boxShadow: theme === 'dark' ? '0 10px 24px rgba(0,0,0,0.28)' : '0 10px 24px rgba(0,0,0,0.12)',
+            fontSize: 12,
+            fontWeight: 800,
+            lineHeight: 1,
+            pointerEvents: 'auto',
+            zIndex: 3,
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2 3 7l9 5 9-5-9-5Z" />
+            <path d="M3 12l9 5 9-5" />
+            <path d="M3 17l9 5 9-5" />
+          </svg>
+          <span>
+            {stackExpanded ? 'Collapse' : `+${Math.max(0, (stackCount || 0) - 1)}`}
+          </span>
+        </button>
+      )}
+
+      {/* Right-side hover circle + filter chips (Levels right pane) */}
+      {canRightFilters && (
+        <>
+          <button
+            ref={rightFiltersBtnRef}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              (data as any)?.onOpenRightFilters?.(data.id, !rightFiltersOpen);
+            }}
+            title="Filters"
+            aria-label="Filters"
+            style={{
+              position: 'absolute',
+              right: -16,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
+              background: theme === 'dark' ? 'rgba(0,0,0,0.40)' : 'rgba(255,255,255,0.82)',
+              color: theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.86)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: theme === 'dark' ? '0 10px 24px rgba(0,0,0,0.24)' : '0 10px 24px rgba(0,0,0,0.10)',
+              opacity: (isHovering || rightFiltersOpen) ? 1 : 0,
+              pointerEvents: (isHovering || rightFiltersOpen) ? 'auto' : 'none',
+              transition: 'opacity 120ms ease',
+              zIndex: 4,
+            }}
+          >
+            {/* sliders/filter icon */}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" y1="21" x2="4" y2="14" />
+              <line x1="4" y1="10" x2="4" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12" y2="3" />
+              <line x1="20" y1="21" x2="20" y2="16" />
+              <line x1="20" y1="12" x2="20" y2="3" />
+              <line x1="1" y1="14" x2="7" y2="14" />
+              <line x1="9" y1="8" x2="15" y2="8" />
+              <line x1="17" y1="16" x2="23" y2="16" />
+            </svg>
+          </button>
+
+          {rightFiltersOpen && (
+            <div
+              ref={rightFiltersRef}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: `calc(100% + 18px)`,
+                transform: 'translateY(-50%)',
+                minWidth: 220,
+                padding: 10,
+                borderRadius: 14,
+                border: '1px solid var(--border-subtle)',
+                background: theme === 'dark' ? 'rgba(17,24,39,0.92)' : 'rgba(255,255,255,0.96)',
+                boxShadow: theme === 'dark' ? '0 18px 60px rgba(0,0,0,0.55)' : '0 18px 60px rgba(0,0,0,0.18)',
+                zIndex: 5,
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 800, color: theme === 'dark' ? 'rgba(255,255,255,0.78)' : 'rgba(15,23,42,0.78)', marginBottom: 8 }}>
+                Hide
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {([
+                  { key: 'loneParents', label: 'Lone parents', active: rfHideParents },
+                  { key: 'loneChildren', label: 'Lone children', active: rfHideChildren },
+                  { key: 'loneGovernancePeople', label: 'Lone board/exec', active: rfHideGov },
+                ] as const).map((chip) => (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    onClick={() => {
+                      (data as any)?.onToggleRightFilter?.(data.id, chip.key, !chip.active);
+                    }}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 999,
+                      border: `1px solid ${chip.active ? (theme === 'dark' ? 'rgba(59,130,246,0.55)' : 'rgba(59,130,246,0.45)') : 'var(--border-subtle)'}`,
+                      background: chip.active
+                        ? (theme === 'dark' ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.12)')
+                        : (theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.04)'),
+                      color: 'var(--text-heading)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 750,
+                    }}
+                    title={chip.label}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ marginTop: 10, fontSize: 11, color: theme === 'dark' ? 'rgba(255,255,255,0.58)' : 'rgba(15,23,42,0.56)', lineHeight: 1.35 }}>
+                Lone = nodes that only connect to this node.
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Метрики (если не collapsed) */}

@@ -967,6 +967,14 @@ export async function layoutLevelsTwoPane<T = any>(
       return out as Node<T>;
     });
 
+  // Preserve any "manually hidden" nodes (e.g., via UI filters) across relayouts.
+  // IMPORTANT: do NOT treat "hidden by stack" as manual, otherwise expanding a stack would never reveal its nodes.
+  const preHiddenIds = new Set<string>(
+    fragments
+      .filter((n) => Boolean((n as any).hidden) && !Boolean(((n as any)?.data as any)?.hiddenByStack))
+      .map((n) => n.id),
+  );
+
   const normId = (v: any) => String(v || '').trim();
   const edgeTypeOf = (e: any): string => normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
 
@@ -1023,6 +1031,20 @@ export async function layoutLevelsTwoPane<T = any>(
     'OPERATES_IN',
     'BASED_IN',
     'HEADQUARTERED_IN',
+  ]);
+
+  // Peer / market relations should NOT be treated as "upstream controllers".
+  // If we promote incoming peer neighbors into the right backbone, they form tall columns (as in the Partners example)
+  // and steal space from the meaningful control hierarchy. Keep them grouped on the left instead.
+  const PEER_TYPES = new Set([
+    'COMPETES_WITH',
+    'CONFLICTS_WITH',
+    'OPPOSES',
+    'PARTNERS_WITH',
+    'COOPERATES_WITH',
+    'RELATED_TO',
+    'SIMILAR_TO',
+    'LINKED_TO',
   ]);
 
   const getParentChild = (e: any): { parent: string; child: string } | null => {
@@ -1095,7 +1117,8 @@ export async function layoutLevelsTwoPane<T = any>(
       const d: any = n.data;
       const pid = String(d?.parentFragmentId || '').trim();
       if (!pid || !rightIds.has(pid)) continue;
-      if (d?.directionFromParent === 'incoming') {
+      const etp = normalizeEdgeType(d?.edgeTypeFromParent);
+      if (d?.directionFromParent === 'incoming' && !PEER_TYPES.has(etp)) {
         rightIds.add(n.id);
         changed = true;
       }
@@ -1580,6 +1603,159 @@ export async function layoutLevelsTwoPane<T = any>(
     attachChildrenWrap(g.children, g.groupId, g.rows);
   }
 
+  // === 6.5) Right-side temporary stacking (leaf columns) ===
+  // Goal: if a parent has many leaf children on the right backbone (and those children don't have left-groups),
+  // collapse them into a temporary "stack" controlled by a single visible node.
+  //
+  // We store state on the controlling node's data:
+  // - stackGroupKey: string
+  // - stackCount: number
+  // - stackExpanded: boolean
+  //
+  // The UI can toggle this and trigger a relayout.
+  const STACK_MIN = 6;
+  const expandedStackKeys = new Set<string>();
+  for (const n of fragments) {
+    const d: any = n.data;
+    const k = String(d?.stackGroupKey || '').trim();
+    if (!k) continue;
+    if (d?.stackExpanded) expandedStackKeys.add(k);
+  }
+
+  const stackHiddenIds = new Set<string>();
+  const stackMetaById = new Map<string, { key: string; count: number; expanded: boolean }>();
+  const stackMembersByKey = new Map<string, string[]>();
+
+  const isStackEligibleRightNode = (id: string) => {
+    if (!id) return false;
+    if (!rightIds.has(id)) return false;
+    // Must not have a left-group (no downstream block).
+    const leftKids = downstreamByRight.get(id);
+    if (leftKids && leftKids.length > 0) return false;
+    // Prefer stable nodes (not explicitly expanded).
+    const node = fragments.find((x) => x.id === id);
+    const d: any = node?.data;
+    if (d?.expanded) return false;
+    return true;
+  };
+
+  // Build candidate groups by (parentId, childLevel)
+  for (const [parentId, kidsSet] of childrenOf.entries()) {
+    const kids = Array.from(kidsSet || []).filter((id) => rightIds.has(id));
+    if (kids.length === 0) continue;
+    const buckets = new Map<number, string[]>();
+    for (const kid of kids) {
+      const lv = hLevel.get(kid) || 0;
+      const arr = buckets.get(lv) || [];
+      arr.push(kid);
+      buckets.set(lv, arr);
+    }
+    for (const [lv, list] of buckets.entries()) {
+      const eligible = list.filter((kid) => {
+        if (!isStackEligibleRightNode(kid)) return false;
+        // Must be a leaf in the right-hierarchy (no right-children). This is for stacking "child columns".
+        const rightKids = childrenOf.get(kid);
+        if (rightKids && rightKids.size > 0) return false;
+        return true;
+      });
+      if (eligible.length < STACK_MIN) continue;
+
+      const key = `levels:rightstack:${parentId}:${lv}`;
+      stackMembersByKey.set(key, eligible);
+      const expanded = expandedStackKeys.has(key);
+
+      // Choose a controller node (top-most by Y) to carry the stack control.
+      const ordered = [...eligible].sort((a, b) => {
+        const pa = rightPos.get(a);
+        const pb = rightPos.get(b);
+        const ya = (pa?.y ?? 0) + nodeHeight / 2;
+        const yb = (pb?.y ?? 0) + nodeHeight / 2;
+        return ya - yb;
+      });
+      const controllerId = ordered[0]!;
+
+      stackMetaById.set(controllerId, { key, count: eligible.length, expanded });
+      if (!expanded) {
+        for (const id of ordered) {
+          if (id === controllerId) continue;
+          stackHiddenIds.add(id);
+        }
+      }
+    }
+  }
+
+  // Also support stacking "parent columns" (many parents for a node).
+  // This matches the common UX: a node has a long vertical list of controllers/investors on the right,
+  // none of which have left-groups in the current view. Collapsing them reduces vertical sprawl.
+  for (const [childId, parsSet] of parentsOf.entries()) {
+    if (!rightIds.has(childId)) continue;
+    const pars = Array.from(parsSet || []).filter((id) => rightIds.has(id));
+    if (pars.length < STACK_MIN) continue;
+    const buckets = new Map<number, string[]>();
+    for (const pid of pars) {
+      const lv = hLevel.get(pid) || 0;
+      const arr = buckets.get(lv) || [];
+      arr.push(pid);
+      buckets.set(lv, arr);
+    }
+    for (const [lv, list] of buckets.entries()) {
+      const eligible = list.filter((pid) => {
+        if (!isStackEligibleRightNode(pid)) return false;
+        // Avoid stacking parents that themselves have left-groups (already filtered) or are explicitly expanded.
+        return true;
+      });
+      if (eligible.length < STACK_MIN) continue;
+      const key = `levels:rightstackp:${childId}:${lv}`;
+      stackMembersByKey.set(key, eligible);
+      const expanded = expandedStackKeys.has(key);
+
+      const ordered = [...eligible].sort((a, b) => {
+        const pa = rightPos.get(a);
+        const pb = rightPos.get(b);
+        const ya = (pa?.y ?? 0) + nodeHeight / 2;
+        const yb = (pb?.y ?? 0) + nodeHeight / 2;
+        return ya - yb;
+      });
+      const controllerId = ordered[0]!;
+      // If this node is already a controller for another stack, keep the first assignment (stable).
+      if (!stackMetaById.has(controllerId)) {
+        stackMetaById.set(controllerId, { key, count: eligible.length, expanded });
+      }
+      if (!expanded) {
+        for (const id of ordered) {
+          if (id === controllerId) continue;
+          // Do not hide if it is already a controller for some stack (keeps a single visible toggle per stack).
+          if (stackMetaById.has(id)) continue;
+          stackHiddenIds.add(id);
+        }
+      }
+    }
+  }
+
+  // If a level has no anchored nodes (no left groups), we can compact it by re-packing visible nodes.
+  // This makes collapsed stacks actually reclaim vertical space.
+  for (const [lv, ids] of idsByLevel.entries()) {
+    const hasAnchors = ids.some((id) => anchoredRightIds.has(id));
+    if (hasAnchors) continue;
+    const visible = ids.filter((id) => !stackHiddenIds.has(id) && !preHiddenIds.has(id));
+    if (visible.length <= 1) continue;
+    const gapY = rightGapY(lv);
+    const ordered = [...visible].sort((a, b) => {
+      const pa = rightPos.get(a);
+      const pb = rightPos.get(b);
+      const ya = (pa?.y ?? 0) + nodeHeight / 2;
+      const yb = (pb?.y ?? 0) + nodeHeight / 2;
+      return ya - yb;
+    });
+    // Start from the current top-most node to keep the column in roughly the same band.
+    const top0 = rightPos.get(ordered[0]!)?.y ?? 0;
+    let cursor = top0;
+    for (const id of ordered) {
+      rightPos.set(id, { x: rightPos.get(id)?.x ?? (RIGHT_BASE_X + lv * RIGHT_LEVEL_STEP_X), y: cursor });
+      cursor += nodeHeight + gapY;
+    }
+  }
+
   // === 7) Dock remaining nodes (islands) ===
   // In Levels mode with edge-type filters, the graph can be disconnected. Keep islands visible.
   const usedChildIds = new Set<string>(childNodes.map((n) => n.id));
@@ -1604,7 +1780,27 @@ export async function layoutLevelsTwoPane<T = any>(
     if (groupedChildIds.has(n.id)) return null as any;
     if (rightIds.has(n.id)) {
       const p = rightPos.get(n.id);
-      return p ? ({ ...n, position: { x: p.x, y: p.y } } as any) : n;
+      if (!p) return n;
+      const d0: any = (n as any).data || {};
+      // Clear stale stack fields unless explicitly re-applied below.
+      const d = { ...d0 };
+      delete d.stackGroupKey;
+      delete d.stackCount;
+      delete d.stackExpanded;
+      delete d.hiddenByStack;
+      delete d.levelsPane;
+
+      const meta = stackMetaById.get(n.id);
+      if (meta) {
+        d.stackGroupKey = meta.key;
+        d.stackCount = meta.count;
+        d.stackExpanded = meta.expanded;
+      }
+      const hiddenByStack = stackHiddenIds.has(n.id);
+      d.hiddenByStack = hiddenByStack;
+      d.levelsPane = 'right';
+      const hidden = preHiddenIds.has(n.id) || hiddenByStack;
+      return ({ ...n, hidden, data: d, position: { x: p.x, y: p.y } } as any);
     }
     if (dockMap.has(n.id)) return dockMap.get(n.id)!;
     return n;

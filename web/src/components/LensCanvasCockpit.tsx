@@ -376,6 +376,23 @@ const CUSTOM_EDGE_TYPES: EdgeTypes = {
   hznArcTop: HznArcTopEdge,
 };
 
+function pruneMapToMax<K, V>(m: Map<K, V>, maxSize: number) {
+  if (maxSize <= 0) {
+    m.clear();
+    return;
+  }
+  while (m.size > maxSize) {
+    const first = m.keys().next();
+    if (first.done) break;
+    m.delete(first.value);
+  }
+}
+
+function boundedMapSet<K, V>(m: Map<K, V>, key: K, value: V, maxSize: number) {
+  m.set(key, value);
+  pruneMapToMax(m, maxSize);
+}
+
 export interface LensCanvasCockpitProps {
   lensId: string | null;
   projectId?: string | null;
@@ -508,6 +525,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   } | null>(null);
   const edgeExplainPopoverRef = React.useRef<HTMLDivElement | null>(null);
   const [gridState, setGridState] = React.useState<GridState>(createEmptyGrid());
+
+  // Avoid unbounded growth across long sessions / lens switches.
+  React.useEffect(() => {
+    edgeExplainSessionCacheRef.current.clear();
+    setEdgeExplainPopover(null);
+  }, [lensId]);
 
   // Hover updates can fire very frequently; coalesce to 1 update per frame to avoid re-render storms.
   const hoverRafRef = React.useRef<number | null>(null);
@@ -690,7 +713,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const cached = await api.getHorizonAIExplanation('edge', args.edgeId, { lang });
         const md = String(cached?.markdown || '').trim();
         if (md) {
-          edgeExplainSessionCacheRef.current.set(cacheKey, { markdown: md, cachedAt: String(cached.updatedAt || '') || new Date().toISOString() });
+          boundedMapSet(
+            edgeExplainSessionCacheRef.current,
+            cacheKey,
+            { markdown: md, cachedAt: String(cached.updatedAt || '') || new Date().toISOString() },
+            200,
+          );
           setEdgeExplainPopover((p) => {
             if (!p || p.edgeId !== args.edgeId) return p;
             return { ...p, markdown: md, cachedAt: String(cached.updatedAt || ''), loading: false, error: null };
@@ -718,7 +746,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         lang,
         force: args.force,
       });
-      edgeExplainSessionCacheRef.current.set(cacheKey, { markdown: out.markdown, cachedAt: out.cachedAt || new Date().toISOString() });
+      boundedMapSet(
+        edgeExplainSessionCacheRef.current,
+        cacheKey,
+        { markdown: out.markdown, cachedAt: out.cachedAt || new Date().toISOString() },
+        200,
+      );
       setEdgeExplainPopover((p) => {
         if (!p || p.edgeId !== args.edgeId) return p;
         return { ...p, markdown: out.markdown, cachedAt: out.cachedAt, loading: false, error: null };
@@ -767,7 +800,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   }, []);
 
-  type HoverHighlightMode = 'off' | 'control' | 'production' | 'supplies' | 'competition';
+  type HoverHighlightMode = 'off' | 'control' | 'expansion' | 'production' | 'supplies' | 'competition';
   const [hoverHighlightMode, setHoverHighlightMode] = React.useState<HoverHighlightMode>('control');
 
   // Safety: if hover highlight is disabled, ensure no stale opacity stays on nodes (can happen if a rendered snapshot
@@ -812,7 +845,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const hoverModeMenuRef = React.useRef<HTMLDivElement | null>(null);
 
   // Levels (Hierarchical) expansion filter (controls which edge types are fetched on expand).
-  type LevelsExpandMode = 'all' | 'ownership' | 'dependencies' | 'context' | 'market' | 'influence' | 'balanced';
+  type LevelsExpandMode = 'all' | 'ownership' | 'expansion' | 'dependencies' | 'context' | 'market' | 'influence' | 'balanced';
   const [levelsExpandMode, setLevelsExpandMode] = React.useState<LevelsExpandMode>('ownership');
   const [showLevelsExpandMenu, setShowLevelsExpandMenu] = React.useState(false);
   const levelsExpandMenuRef = React.useRef<HTMLDivElement | null>(null);
@@ -821,6 +854,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     switch (m) {
       case 'ownership':
         return 'Corporate structure';
+      case 'expansion':
+        return 'Expansion';
       case 'dependencies':
         return 'Supply chain';
       case 'context':
@@ -839,6 +874,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const levelsExpandEdgeTypes = React.useMemo((): string[] => {
     const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
+    const EXPANSION = Array.from(new Set([...OWNERSHIP, 'PARTNERS_WITH']));
     const DEPENDENCIES = [
       'SUPPLIES_TO',
       'PRODUCES',
@@ -865,6 +901,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     switch (levelsExpandMode) {
       case 'ownership':
         return OWNERSHIP;
+      case 'expansion':
+        return EXPANSION;
       case 'dependencies':
         return DEPENDENCIES;
       case 'context':
@@ -1060,6 +1098,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const addNodeInputRef = React.useRef<HTMLInputElement | null>(null);
   const addNodeCacheRef = React.useRef<Map<string, HorizonSearchEntity[]>>(new Map());
   const addNodeAbortRef = React.useRef<AbortController | null>(null);
+
+  // If the add-node UI is closed/unmounted, abort in-flight requests and release retained results.
+  React.useEffect(() => {
+    if (addNodeOpen) return;
+    addNodeAbortRef.current?.abort();
+    addNodeAbortRef.current = null;
+    setAddNodeResults([]);
+    setAddNodeLoading(false);
+    setAddNodeError(null);
+    setAddNodeActiveIndex(0);
+  }, [addNodeOpen]);
+  React.useEffect(() => {
+    return () => {
+      addNodeAbortRef.current?.abort();
+      addNodeAbortRef.current = null;
+    };
+  }, []);
 
   // Ask-Graph UI (FAB + command palette + chips)
   type GraphQueryFinding = { nodeId: string; title: string; eventDate: string; source: string; url: string };
@@ -1347,7 +1402,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           }))
           .filter((e) => e.canonicalPath && e.name);
 
-        addNodeCacheRef.current.set(q, next);
+        boundedMapSet(addNodeCacheRef.current, q, next, 80);
         setAddNodeResults(next);
         setAddNodeActiveIndex(0);
       } catch (err: any) {
@@ -1369,6 +1424,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const onLoadRelatedRef = React.useRef<((fragmentId: string) => void) | null>(null);
   const onCollapseRef = React.useRef<((fragmentId: string) => void) | null>(null);
   const onScopeScoutRef = React.useRef<((fragmentId: string, canonicalPath?: string) => void) | null>(null);
+  const onArrangeRef = React.useRef<(() => void) | null>(null);
 
   // Stable proxies to avoid TDZ/circular hook deps between expand and collapse handlers.
   const invokeLoadRelated = React.useCallback((id: string) => {
@@ -1379,6 +1435,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, []);
   const invokeScopeScout = React.useCallback((fragmentId: string, canonicalPath?: string) => {
     onScopeScoutRef.current?.(fragmentId, canonicalPath);
+  }, []);
+  const invokeArrange = React.useCallback(() => {
+    const fn: any = onArrangeRef.current;
+    if (typeof fn === 'function') void fn();
   }, []);
 
   const openScopeScoutModal = React.useCallback((fragmentId: string, canonicalPath?: string) => {
@@ -3997,6 +4057,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (hoverHighlightMode === 'off') return null;
     const hovered = String(hoveredNodeId || '').trim();
     if (!hovered) return null;
+    const isControlLike = hoverHighlightMode === 'control' || hoverHighlightMode === 'expansion';
 
     const hoveredNode = nodes.find((n) => String(n.id || '').trim() === hovered);
     if (!hoveredNode) return null;
@@ -4049,6 +4110,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
     ]);
     const CONTROL_GOVERNANCE_TYPES = new Set<string>(['EMPLOYED_BY', 'FOUNDED']);
+    const EXPANSION_EXTRA_TYPES = new Set<string>(['PARTNERS_WITH']);
     const CONTROL_ULTIMATE_BLOCKING_TYPES = new Set<string>([
       // "Real" control signals that should prevent a PERSON from being considered ultimate if there's a higher controller in-cluster.
       // Exclude BOARD_MEMBER_OF / EXECUTIVE_OF on purpose (see comment above).
@@ -4059,6 +4121,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       switch (hoverHighlightMode) {
         case 'control':
           return CONTROL_CHAIN_TYPES.has(u) || CONTROL_GOVERNANCE_TYPES.has(u);
+        case 'expansion':
+          return CONTROL_CHAIN_TYPES.has(u) || CONTROL_GOVERNANCE_TYPES.has(u) || EXPANSION_EXTRA_TYPES.has(u);
         case 'production':
           return u === 'PRODUCES';
         case 'supplies':
@@ -4081,6 +4145,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const adjOut = new Map<string, Adj[]>();
     const adjIn = new Map<string, AdjIn[]>();
     const governanceEdges: Array<{ id: string; a: string; b: string }> = [];
+    const partnerEdges: Array<{ id: string; a: string; b: string }> = [];
 
     // Two-pass approach for control edges:
     // Pass 1: collect raw directed edges by semantic type
@@ -4111,8 +4176,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (!isEdgeTypeOfMode(edgeType)) continue;
       const u = normalizeType(edgeType);
 
-      // Control mode: use directional semantics.
-      if (hoverHighlightMode === 'control') {
+      // Control-like modes: use directional semantics for control chains.
+      if (isControlLike) {
+        // Expansion adds PARTNERS_WITH as a 1-hop overlay (not used to expand the control cluster).
+        if (hoverHighlightMode === 'expansion' && EXPANSION_EXTRA_TYPES.has(u)) {
+          partnerEdges.push({ id: eid, a: src, b: dst });
+          continue;
+        }
         if (CONTROL_GOVERNANCE_TYPES.has(u)) {
           governanceEdges.push({ id: eid, a: src, b: dst });
           continue;
@@ -4171,8 +4241,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       adj.get(dst)!.push({ to: src, edgeId: eid, edgeType: u });
     }
 
-    // Pass 2 (control mode only): resolve conflicts using X-position, then populate adjOut/adjIn.
-    if (hoverHighlightMode === 'control') {
+    // Pass 2 (control-like modes): resolve conflicts using X-position, then populate adjOut/adjIn.
+    if (isControlLike) {
       const EPS_X = 12;
       // For each pair with edges in both directions, decide which direction to keep.
       const conflictResolved = new Map<string, 'aToB' | 'bToA'>();
@@ -4219,17 +4289,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     }
 
-    if (hoverHighlightMode === 'control') {
+    if (isControlLike) {
       if (adjOut.size === 0 && adjIn.size === 0) return null;
     } else {
       if (adj.size === 0) return null;
     }
 
     const usedEdgeIds = new Set<string>();
-    const maxSteps = hoverHighlightMode === 'control' ? 6 : 1;
+    const maxSteps = isControlLike ? 6 : 1;
 
     // Default: undirected BFS (direct neighbors for most relations).
-    if (hoverHighlightMode !== 'control') {
+    if (!isControlLike) {
       const visited = new Set<string>();
       const q: Array<{ id: string; depth: number }> = [{ id: hovered, depth: 0 }];
       visited.add(hovered);
@@ -4343,6 +4413,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             visited.add(ge.a);
             usedEdgeIds.add(ge.id);
           }
+        }
+      }
+    }
+
+    // Expansion mode: overlay PARTNERS_WITH as a 1-hop neighborhood from the hovered node,
+    // plus include any partner edges fully inside the existing control cluster.
+    if (partnerEdges.length > 0) {
+      for (const pe of partnerEdges) {
+        if (visited.has(pe.a) && visited.has(pe.b)) {
+          usedEdgeIds.add(pe.id);
+        }
+      }
+      for (const pe of partnerEdges) {
+        if (pe.a === hovered) {
+          visited.add(pe.b);
+          usedEdgeIds.add(pe.id);
+        } else if (pe.b === hovered) {
+          visited.add(pe.a);
+          usedEdgeIds.add(pe.id);
         }
       }
     }
@@ -4561,6 +4650,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const CONTROL_EQUITY_TYPES = new Set<string>(['OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'INVESTS_IN']);
       const CONTROL_NON_EQUITY_TYPES = new Set<string>(['CONTROLS', 'MANAGES']);
       const CONTROL_GOVERNANCE_TYPES = new Set<string>(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY', 'FOUNDED']);
+      const isControlLike = hoverHighlightMode === 'control' || hoverHighlightMode === 'expansion';
       const out = baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const eid = String((e as any)?.id || '').trim();
@@ -4571,9 +4661,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         if (isHiEdge) {
           const edgeTypeRaw = (e as any)?.data?.edgeType || (e as any)?.data?.subkind || e.label || (e as any)?.type || '';
           const u = String(edgeTypeRaw || '').toUpperCase().trim();
-          const isGovernance = hoverHighlightMode === 'control' && CONTROL_GOVERNANCE_TYPES.has(u);
-          const isNonEquityChain = hoverHighlightMode === 'control' && CONTROL_NON_EQUITY_TYPES.has(u);
-          const isEquityChain = hoverHighlightMode === 'control' && CONTROL_EQUITY_TYPES.has(u);
+          const isGovernance = isControlLike && CONTROL_GOVERNANCE_TYPES.has(u);
+          const isNonEquityChain = isControlLike && CONTROL_NON_EQUITY_TYPES.has(u);
+          const isEquityChain = isControlLike && CONTROL_EQUITY_TYPES.has(u);
           const dash = isGovernance ? '2 3' : (isNonEquityChain ? '6 4' : undefined);
           return withLabel(e, isIncident, {
             ...baseStyle,
@@ -4641,6 +4731,254 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return baseVisibleEdges;
   }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort]);
 
+  // Right-side temporary stacking toggle (Levels layout):
+  // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
+  // Toggling updates that flag and triggers a relayout so the stack can expand/collapse.
+  const toggleStackGroup = React.useCallback((stackKey: string, nextExpanded: boolean) => {
+    const key = String(stackKey || '').trim();
+    if (!key) return;
+    setNodes((prev) =>
+      prev.map((n) => {
+        const d: any = (n as any)?.data;
+        if (!d || d.isGroup) return n;
+        const k = String(d.stackGroupKey || '').trim();
+        if (k !== key) return n;
+        const cur = Boolean(d.stackExpanded);
+        if (cur === nextExpanded) return n;
+        return { ...(n as any), data: { ...d, stackExpanded: nextExpanded } } as any;
+      }),
+    );
+    if (layoutMode === 'levels') {
+      window.setTimeout(() => invokeArrange(), 0);
+    }
+  }, [setNodes, layoutMode, invokeArrange]);
+
+  // Right-side node filters (Levels layout).
+  // These mutate `node.hidden` for selected neighbors and trigger relayout.
+  const openRightFilters = React.useCallback((nodeId: string, nextOpen: boolean) => {
+    const id = String(nodeId || '').trim();
+    if (!id) return;
+    setNodes((prev) =>
+      prev.map((n) => {
+        const d: any = (n as any)?.data;
+        if (!d || d.isGroup) return n;
+        const isRight = String(d.levelsPane || '') === 'right';
+        const isOpen = Boolean(d.rightFiltersOpen);
+        if (!isRight) {
+          if (!isOpen) return n;
+          const nd = { ...d };
+          delete nd.rightFiltersOpen;
+          return { ...(n as any), data: nd } as any;
+        }
+        if (String(n.id || '').trim() === id) {
+          return { ...(n as any), data: { ...d, rightFiltersOpen: nextOpen } } as any;
+        }
+        if (nextOpen && isOpen) {
+          const nd = { ...d };
+          delete nd.rightFiltersOpen;
+          return { ...(n as any), data: nd } as any;
+        }
+        return n;
+      }),
+    );
+  }, [setNodes]);
+
+  const toggleRightFilter = React.useCallback((
+    nodeId: string,
+    key: 'loneParents' | 'loneChildren' | 'loneGovernancePeople',
+    nextOn: boolean,
+  ) => {
+    const centerId = String(nodeId || '').trim();
+    if (!centerId) return;
+
+    const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
+    const snapEdges: Edge[] = (edgesStateRef.current || edges) as any;
+
+    const isGroup = (n: any) => Boolean((n as any)?.data?.isGroup);
+    const nodeById = new Map<string, Node<HorizonNodeData>>();
+    const typeById = new Map<string, string>();
+    const xById = new Map<string, number>();
+    for (const n of snapNodes) {
+      const id = String((n as any)?.id || '').trim();
+      if (!id) continue;
+      nodeById.set(id, n as any);
+      if (!isGroup(n)) {
+        const t = String((n as any)?.data?.type || '').toUpperCase().trim();
+        if (t) typeById.set(id, t);
+        const x = typeof (n as any)?.position?.x === 'number' ? (n as any).position.x : undefined;
+        if (typeof x === 'number' && Number.isFinite(x)) xById.set(id, x);
+      }
+    }
+    const center = nodeById.get(centerId);
+    if (!center || isGroup(center)) return;
+    const centerX = xById.get(centerId);
+    const EPS_X = 12;
+
+    const isRight = (id: string) => String((nodeById.get(id) as any)?.data?.levelsPane || '') === 'right';
+    const isPerson = (id: string) => (typeById.get(id) || '') === 'PERSON';
+
+    const allFragIds = new Set<string>(Array.from(nodeById.keys()).filter((id) => !isGroup(nodeById.get(id))));
+    const neighbors = new Map<string, Set<string>>();
+    const pairKey = (a: string, b: string) => (a < b ? `${a}||${b}` : `${b}||${a}`);
+    const pairTypes = new Map<string, Set<string>>();
+    const addNeighbor = (a: string, b: string) => {
+      if (!neighbors.has(a)) neighbors.set(a, new Set());
+      neighbors.get(a)!.add(b);
+    };
+
+    const GOVERNANCE_TYPES = new Set(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY']);
+    const HIER = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
+    const INV = new Set(['SUBSIDIARY_OF', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+
+    const edgeTypeOf = (e: any) => normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
+    const parentChildFromEdge = (e: any): { parent: string; child: string; et: string } | null => {
+      const s = String(e?.source || '').trim();
+      const t = String(e?.target || '').trim();
+      if (!s || !t) return null;
+      if (!allFragIds.has(s) || !allFragIds.has(t)) return null;
+      const et = edgeTypeOf(e);
+      if (!et) return null;
+      // Governance: if one side is PERSON, treat PERSON as controller.
+      if (et === 'BOARD_MEMBER_OF' || et === 'EXECUTIVE_OF') {
+        const sP = isPerson(s);
+        const tP = isPerson(t);
+        if (sP && !tP) return { parent: s, child: t, et };
+        if (tP && !sP) return { parent: t, child: s, et };
+        // fallback to direction
+        return { parent: s, child: t, et };
+      }
+      if (HIER.has(et)) return { parent: s, child: t, et };
+      if (INV.has(et)) return { parent: t, child: s, et };
+      return null;
+    };
+
+    for (const e of snapEdges as any[]) {
+      const s = String(e?.source || '').trim();
+      const t = String(e?.target || '').trim();
+      if (!s || !t) continue;
+      if (!allFragIds.has(s) || !allFragIds.has(t)) continue;
+      addNeighbor(s, t);
+      addNeighbor(t, s);
+      const pk = pairKey(s, t);
+      const et = edgeTypeOf(e);
+      if (et) {
+        if (!pairTypes.has(pk)) pairTypes.set(pk, new Set());
+        pairTypes.get(pk)!.add(et);
+      }
+    }
+
+    const lone = (id: string) => {
+      const ns = neighbors.get(id);
+      if (!ns || ns.size === 0) return true;
+      return ns.size === 1 && ns.has(centerId);
+    };
+
+    const loneParentsToHide = new Set<string>();
+    const loneChildrenToHide = new Set<string>();
+    const loneGovPeopleToHide = new Set<string>();
+
+    const centerEdges: Array<{ other: string; et: string; pc: { parent: string; child: string; et: string } | null }> = [];
+    for (const e of snapEdges as any[]) {
+      const s = String(e?.source || '').trim();
+      const t = String(e?.target || '').trim();
+      if (!s || !t) continue;
+      if (s !== centerId && t !== centerId) continue;
+      const other = s === centerId ? t : s;
+      const pc = parentChildFromEdge(e);
+      const et = edgeTypeOf(e);
+      centerEdges.push({ other, et, pc });
+    }
+
+    for (const { other, pc } of centerEdges) {
+      if (!other || !allFragIds.has(other)) continue;
+      if (!isRight(other)) continue;
+      const ox = xById.get(other);
+      if (pc && pc.child === centerId) {
+        // parent candidate
+        if (typeof centerX === 'number' && typeof ox === 'number' && ox < centerX + EPS_X) continue;
+        if (lone(other)) loneParentsToHide.add(other);
+      }
+      if (pc && pc.parent === centerId) {
+        // child candidate
+        if (typeof centerX === 'number' && typeof ox === 'number' && ox > centerX - EPS_X) continue;
+        if (lone(other)) loneChildrenToHide.add(other);
+      }
+
+      // governance-only person
+      if (isPerson(other) && lone(other)) {
+        const pk = pairKey(centerId, other);
+        const types = pairTypes.get(pk) || new Set<string>();
+        const onlyGov = Array.from(types).every((t) => GOVERNANCE_TYPES.has(t));
+        if (onlyGov) loneGovPeopleToHide.add(other);
+      }
+    }
+
+    const shouldHideParents = key === 'loneParents' ? nextOn : Boolean((center.data as any)?.rightFilterHideLoneParents);
+    const shouldHideChildren = key === 'loneChildren' ? nextOn : Boolean((center.data as any)?.rightFilterHideLoneChildren);
+    const shouldHideGov = key === 'loneGovernancePeople' ? nextOn : Boolean((center.data as any)?.rightFilterHideLoneGovernancePeople);
+
+    setNodes((prev) => {
+      return prev.map((n) => {
+        const id = String((n as any)?.id || '').trim();
+        const d0: any = (n as any)?.data;
+        if (!id || !d0 || d0.isGroup) return n;
+
+        let d = d0;
+        let changed = false;
+
+        const ensureArr = (k: string) => {
+          const v = d[k];
+          if (Array.isArray(v)) return v as string[];
+          return [];
+        };
+        const setArr = (k: string, arr: string[]) => {
+          if (d === d0) d = { ...d0 };
+          d[k] = arr;
+          changed = true;
+        };
+        const toggleReason = (k: string, shouldHide: boolean, inSet: boolean) => {
+          const arr0 = ensureArr(k);
+          const has = arr0.includes(centerId);
+          const want = shouldHide && inSet;
+          if (want && !has) {
+            setArr(k, [...arr0, centerId]);
+          } else if (!want && has) {
+            setArr(k, arr0.filter((x) => x !== centerId));
+          } else if (shouldHide && !inSet && has) {
+            // still on, but no longer eligible -> remove
+            setArr(k, arr0.filter((x) => x !== centerId));
+          }
+        };
+
+        if (id === centerId) {
+          if (d === d0) d = { ...d0 };
+          if (key === 'loneParents') d.rightFilterHideLoneParents = nextOn;
+          if (key === 'loneChildren') d.rightFilterHideLoneChildren = nextOn;
+          if (key === 'loneGovernancePeople') d.rightFilterHideLoneGovernancePeople = nextOn;
+          changed = true;
+        } else {
+          toggleReason('hiddenByLoneParentsOf', shouldHideParents, loneParentsToHide.has(id));
+          toggleReason('hiddenByLoneChildrenOf', shouldHideChildren, loneChildrenToHide.has(id));
+          toggleReason('hiddenByLoneGovernanceOf', shouldHideGov, loneGovPeopleToHide.has(id));
+        }
+
+        if (!changed) return n;
+
+        const reasons =
+          (Array.isArray(d.hiddenByLoneParentsOf) && d.hiddenByLoneParentsOf.length > 0) ||
+          (Array.isArray(d.hiddenByLoneChildrenOf) && d.hiddenByLoneChildrenOf.length > 0) ||
+          (Array.isArray(d.hiddenByLoneGovernanceOf) && d.hiddenByLoneGovernanceOf.length > 0);
+        const legacyHidden = Boolean((n as any).hidden) && !d.hiddenByStack && !reasons;
+        const hidden = legacyHidden || Boolean(d.hiddenByStack) || Boolean(reasons);
+        return { ...(n as any), hidden, data: d } as any;
+      });
+    });
+
+    if (layoutMode === 'levels') {
+      window.setTimeout(() => invokeArrange(), 0);
+    }
+  }, [nodes, edges, setNodes, layoutMode, invokeArrange, normalizeEdgeType]);
+
   const displayNodes = React.useMemo(() => {
     // Perf mode: keep visuals light, but still allow graph-query highlight (low-cost style).
     const qset = graphQueryHighlightIds;
@@ -4692,24 +5030,71 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Decoration flags (read by HorizonFragmentNode via data):
       // - hub: >=5 incoming or >=5 outgoing visible edges
       // - ultimate beneficiary (person): top of "up" traversal in control hover
+      // - stack toggle: temporary right-side stacked columns (levels layout)
       const isHub = !isGroup && id && hubNodeIds.has(id);
       const isUltimateBeneficiary = !isGroup && hoverActive && ultimatePersons && ultimatePersons.has(id);
+
+      const d0: any = (n as any).data || {};
+      const stackKey = String(d0?.stackGroupKey || '').trim();
+      const stackCount = typeof d0?.stackCount === 'number' ? d0.stackCount : undefined;
+      const hasStack = !isGroup && !!stackKey && typeof stackCount === 'number' && stackCount > 1;
+      const isLevelsRight = !isGroup && layoutMode === 'levels' && String(d0?.levelsPane || '') === 'right';
+
+      // Only clone data when needed (perf).
+      let nextData: any = d0;
+      let changed = false;
+      if (hasStack) {
+        if (nextData === d0) {
+          nextData = { ...d0 };
+          changed = true;
+        }
+        if (nextData.onToggleStack !== toggleStackGroup) {
+          nextData.onToggleStack = toggleStackGroup;
+          changed = true;
+        }
+      } else if (typeof nextData?.onToggleStack === 'function') {
+        nextData = { ...d0 };
+        delete nextData.onToggleStack;
+        changed = true;
+      }
+
       if (isHub || isUltimateBeneficiary) {
-        const d: any = (n as any).data || {};
-        return {
-          ...n,
-          data: {
-            ...d,
-            hubHighlight: isHub,
-            ultimateBeneficiaryHighlight: isUltimateBeneficiary,
-          },
-          zIndex,
-          style,
-        } as any;
+        if (nextData === d0) {
+          nextData = { ...d0 };
+          changed = true;
+        }
+        nextData.hubHighlight = isHub;
+        nextData.ultimateBeneficiaryHighlight = isUltimateBeneficiary;
+        changed = true;
+      }
+
+      if (isLevelsRight) {
+        if (nextData === d0) {
+          nextData = { ...d0 };
+          changed = true;
+        }
+        if (nextData.onOpenRightFilters !== openRightFilters) {
+          nextData.onOpenRightFilters = openRightFilters;
+          changed = true;
+        }
+        if (nextData.onToggleRightFilter !== toggleRightFilter) {
+          nextData.onToggleRightFilter = toggleRightFilter;
+          changed = true;
+        }
+      } else if (typeof (nextData as any)?.onOpenRightFilters === 'function' || typeof (nextData as any)?.onToggleRightFilter === 'function') {
+        if (nextData === d0) nextData = { ...d0 };
+        delete nextData.onOpenRightFilters;
+        delete nextData.onToggleRightFilter;
+        delete nextData.rightFiltersOpen;
+        changed = true;
+      }
+
+      if (changed) {
+        return { ...n, data: nextData, zIndex, style } as any;
       }
       return { ...n, zIndex, style } as any;
     });
-  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds]);
+  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter]);
 
   // Lightweight info for perf mode (no re-styling of edges)
   const perfHoveredEdgeInfo = React.useMemo(() => {
@@ -4878,6 +5263,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setArranging(false);
     }
   }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout]);
+
+  // Keep ref updated for stack toggle re-layout (avoid TDZ / circular deps).
+  onArrangeRef.current = () => { void handleArrange(); };
 
   // When switching layout mode, re-layout the currently visible graph.
   React.useEffect(() => {
@@ -5450,6 +5838,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setGraphQueryHighlightIds(null);
       setGraphQueryActiveChipId(null);
     }
+    // Close any open right-side filter menus (Levels UI)
+    setNodes((prev) =>
+      prev.map((n) => {
+        const d: any = (n as any)?.data;
+        if (!d || d.isGroup) return n;
+        if (!d.rightFiltersOpen) return n;
+        const nd = { ...d };
+        delete nd.rightFiltersOpen;
+        return { ...(n as any), data: nd } as any;
+      }),
+    );
   }, [onNodeSelect, onEdgeSelect, graphQueryHighlightIds]);
 
   const handleNodeDragStop = useCallback(async (_event: React.MouseEvent, node: Node<HorizonNodeData>) => {
@@ -5756,6 +6155,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return 'Off';
       case 'control':
         return 'Control';
+      case 'expansion':
+        return 'Expansion';
       case 'production':
         return 'Produces';
       case 'supplies':
@@ -5950,6 +6351,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               [
                 { key: 'off', label: 'Off', hint: 'No emphasis' },
                 { key: 'control', label: 'Control', hint: 'Equity ownership + control chains (dashed) + governance overlay' },
+                { key: 'expansion', label: 'Expansion', hint: 'Control chains + partners (1-hop)' },
                 { key: 'production', label: 'Produces', hint: 'Direct producers/outputs' },
                 { key: 'supplies', label: 'Supplies', hint: 'Direct suppliers/inputs' },
                 { key: 'competition', label: 'Competes', hint: 'Direct competition/conflict' },
@@ -6056,6 +6458,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               {(
                 [
                   { key: 'ownership', label: 'Corporate structure', hint: 'Holdings, subsidiaries, and investment portfolio' },
+                  { key: 'expansion', label: 'Expansion', hint: 'Control chains + partners' },
                   { key: 'dependencies', label: 'Supply chain', hint: 'Upstream suppliers and critical inputs' },
                   { key: 'context', label: 'Operating footprint', hint: 'Markets, jurisdictions, and regulatory environment' },
                   { key: 'market', label: 'Competitive landscape', hint: 'Competitors, partners, and market positioning' },
@@ -6504,6 +6907,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 >
                   <option value="off">Off</option>
                   <option value="control">Control</option>
+                  <option value="expansion">Expansion</option>
                   <option value="production">Production</option>
                   <option value="supplies">Supplies</option>
                   <option value="competition">Competition</option>

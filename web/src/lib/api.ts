@@ -1963,70 +1963,6 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async getFragmentDependencies(
-    fragmentId: string,
-    options?: {
-      direction?: 'outgoing' | 'incoming' | 'both';
-      type?: string;
-      includeUnindexed?: boolean;
-      edgeTypes?: string[];
-      semantic?: 'upstream' | 'downstream' | 'both';
-      includeFragments?: boolean;
-      includeCounts?: boolean;
-      maxNeighbors?: number;
-      maxEdges?: number;
-      maxPerType?: number;
-      limit?: number;
-    }
-  ): Promise<{
-    edges: any[];
-    total: number;
-    fragments?: any[];
-    counts?: any;
-  }> {
-    try {
-      const params: Record<string, any> = {};
-      if (options?.direction) {
-        params.direction = options.direction;
-      }
-      if (options?.type) {
-        params.type = options.type;
-      }
-      if (options?.includeUnindexed) {
-        params.includeUnindexed = '1';
-      }
-      if (Array.isArray(options?.edgeTypes) && options!.edgeTypes!.length > 0) {
-        params.edgeTypes = options!.edgeTypes!.join(',');
-      }
-      if (options?.semantic) {
-        params.semantic = options.semantic;
-      }
-      if (options?.includeFragments) {
-        params.includeFragments = '1';
-      }
-      if (options?.includeCounts) {
-        params.includeCounts = '1';
-      }
-      if (typeof options?.maxNeighbors === 'number' && Number.isFinite(options.maxNeighbors) && options.maxNeighbors > 0) {
-        params.maxNeighbors = String(Math.floor(options.maxNeighbors));
-      }
-      if (typeof options?.maxEdges === 'number' && Number.isFinite(options.maxEdges) && options.maxEdges > 0) {
-        params.maxEdges = String(Math.floor(options.maxEdges));
-      }
-      if (typeof options?.maxPerType === 'number' && Number.isFinite(options.maxPerType) && options.maxPerType > 0) {
-        params.maxPerType = String(Math.floor(options.maxPerType));
-      }
-      if (typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
-        params.limit = String(Math.floor(options.limit));
-      }
-      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/dependencies`, { params });
-      return response.data;
-    } catch (error: any) {
-      console.error(`[API] getFragmentDependencies error:`, error);
-      throw error;
-    }
-  }
-
   // --- Horizon Product IO (Hypothesis workflow, v1 PRODUCT-only) ---
   async extractProductIO(
     fragmentId: string,
@@ -2277,6 +2213,69 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] getFragmentExplain error:`, error);
+      throw error;
+    }
+  }
+
+  // --- Horizon Fragment Dependencies (direct edges / neighbors) ---
+  async getFragmentDependencies(
+    fragmentId: string,
+    options?: {
+      direction?: 'incoming' | 'outgoing' | 'both';
+      // Prefer edgeTypes for multiple values (comma-separated string).
+      edgeTypes?: string[];
+      includeFragments?: boolean;
+      includeUnindexed?: boolean;
+      includeCounts?: boolean;
+      // Optional budgets (applied only when provided)
+      maxNeighbors?: number;
+      maxEdges?: number;
+      maxPerType?: number;
+      limit?: number;
+      // Optional: semantic=upstream|downstream|both (keeps backend default unless provided)
+      semantic?: 'upstream' | 'downstream' | 'both';
+      // Optional: lensId (for lens-aware filtering on backend). Usually omit for inspector.
+      lensId?: string;
+    }
+  ): Promise<{
+    edges: any[];
+    total: number;
+    fragments?: any[];
+    counts?: any;
+  }> {
+    try {
+      const direction = options?.direction || 'both';
+      const edgeTypes = Array.isArray(options?.edgeTypes) ? options!.edgeTypes : [];
+      const params: any = {
+        direction,
+      };
+      if (edgeTypes.length > 0) {
+        // Backend supports edgeTypes=OWNS,CONTROLS,...
+        params.edgeTypes = edgeTypes.join(',');
+      }
+      if (options?.includeFragments) params.includeFragments = '1';
+      if (options?.includeUnindexed) params.includeUnindexed = '1';
+      if (options?.includeCounts) params.includeCounts = '1';
+      if (typeof options?.maxNeighbors === 'number' && options.maxNeighbors > 0) params.maxNeighbors = String(options.maxNeighbors);
+      if (typeof options?.maxEdges === 'number' && options.maxEdges > 0) params.maxEdges = String(options.maxEdges);
+      if (typeof options?.maxPerType === 'number' && options.maxPerType > 0) params.maxPerType = String(options.maxPerType);
+      if (typeof options?.limit === 'number' && options.limit > 0) params.limit = String(options.limit);
+      if (options?.semantic) params.semantic = options.semantic;
+
+      const headers: any = {};
+      if (options?.lensId) {
+        // Backend reads lensId from query OR X-Lens-Id header; we pass query when possible, but keep header too.
+        params.lensId = options.lensId;
+        headers['X-Lens-Id'] = options.lensId;
+      }
+
+      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/dependencies`, {
+        params,
+        headers,
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getFragmentDependencies error:`, error);
       throw error;
     }
   }

@@ -75,6 +75,7 @@ const HorizonPage: React.FC = () => {
 
   const assembly = useHorizonRealtimeStore((s) => s.assembly);
   const events = useHorizonRealtimeStore((s) => s.events);
+  const resetRealtime = useHorizonRealtimeStore((s) => s.reset);
   const resetEvents = useHorizonRealtimeStore((s) => s.resetEvents);
   const [lensStarted, setLensStarted] = React.useState(false);
   const [isCreatingLens, setIsCreatingLens] = React.useState(false);
@@ -198,6 +199,12 @@ const HorizonPage: React.FC = () => {
 
   // Initialize WebSocket connection (same flow as Discovery).
   useWebSocketConnection();
+
+  // Memory safety: drop accumulated realtime state when switching project/lens (store is global).
+  React.useEffect(() => {
+    resetRealtime();
+    resetEvents();
+  }, [currentProject?.id, selectedLensId, resetRealtime, resetEvents]);
   
   // Focus input when editing starts
   React.useEffect(() => {

@@ -798,6 +798,16 @@ export const Graph: React.FC = () => {
   // Сохраняем позиции нод в layout interaction (debounced, неблокирующее)
   const saveLayoutTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef<boolean>(false);
+
+  // Prevent pending debounced save from firing after unmount (can retain large node arrays longer than needed).
+  React.useEffect(() => {
+    return () => {
+      if (saveLayoutTimeoutRef.current) {
+        clearTimeout(saveLayoutTimeoutRef.current as any);
+        saveLayoutTimeoutRef.current = null;
+      }
+    };
+  }, []);
   
   const saveNodePositions = useCallback((nodes: Node[]) => {
     if (!projectId || projectId === 'local-unfold') {
