@@ -521,6 +521,14 @@ func (e *ScoutEngine) processRelationsInternal(
 						if v, ok := job.State["spherePaths"]; ok {
 							childState["spherePaths"] = v
 						}
+						// Propagate originalQuery + decompositionHints so grounded research stays aligned
+						// even deep in recursion (especially important for MARKET/PROGRAM anchors).
+						if v, ok := job.State["originalQuery"]; ok {
+							childState["originalQuery"] = v
+						}
+						if v, ok := job.State["decompositionHints"]; ok {
+							childState["decompositionHints"] = v
+						}
 					}
 					scoutingJob := &models.ScoutingJob{
 						AgentJob: agentmodels.AgentJob{

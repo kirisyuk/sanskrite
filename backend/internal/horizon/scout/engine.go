@@ -2,6 +2,7 @@ package scout
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -1448,19 +1449,35 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 			}
 		}
+		// Extract originalQuery and decompositionHints for MARKET-aware research
+		originalQuery := ""
+		var decompositionHints []agents.DecompositionHint
+		if job.State != nil {
+			if v, ok := job.State["originalQuery"].(string); ok {
+				originalQuery = strings.TrimSpace(v)
+			}
+			if v, ok := job.State["decompositionHints"]; ok && v != nil {
+				// Parse decompositionHints (may come as []interface{} from JSON)
+				if dhBytes, err := json.Marshal(v); err == nil {
+					_ = json.Unmarshal(dhBytes, &decompositionHints)
+				}
+			}
+		}
 		trace.Log(ctx, "scout_research", "scout.research.start", map[string]any{
-			"tenantId":            strings.TrimSpace(job.TenantID),
-			"projectId":           strings.TrimSpace(job.ProjectID),
-			"lensId":              strings.TrimSpace(lensID),
-			"jobId":               strings.TrimSpace(job.ID),
-			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-			"missingN":            len(validationResult.MissingInfo),
-			"missingTop":          trace.StrSlice(validationResult.MissingInfo, 6),
-			"focus":               trace.Trunc(focus, 140),
-			"spherePathsTop":      trace.StrSlice(spherePaths, 10),
-			"keywordsTop":         trace.StrSlice(keywords, 10),
+			"tenantId":              strings.TrimSpace(job.TenantID),
+			"projectId":             strings.TrimSpace(job.ProjectID),
+			"lensId":                strings.TrimSpace(lensID),
+			"jobId":                 strings.TrimSpace(job.ID),
+			"targetCanonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
+			"missingN":              len(validationResult.MissingInfo),
+			"missingTop":            trace.StrSlice(validationResult.MissingInfo, 6),
+			"focus":                 trace.Trunc(focus, 140),
+			"spherePathsTop":        trace.StrSlice(spherePaths, 10),
+			"keywordsTop":           trace.StrSlice(keywords, 10),
+			"originalQueryLen":      len(originalQuery),
+			"decompositionHintsN":   len(decompositionHints),
 		})
-		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties)
+		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, originalQuery, decompositionHints)
 		if err == nil {
 			// Capture canonicalPath drift introduced by research (aliasing).
 			oldCP := ""
@@ -2181,13 +2198,37 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 	}
 	spherePaths = taxonomy.NormalizeSpherePaths(spherePaths)
 
-	// If there's no intent signal, do nothing.
-	if focus == "" && len(keywords) == 0 && len(spherePaths) == 0 {
+	// Extract originalQuery and decompositionHints for MARKET-aware decomposition
+	originalQuery := ""
+	var decompositionHints []agents.DecompositionHint
+	if v, ok := job.State["originalQuery"].(string); ok {
+		originalQuery = strings.TrimSpace(v)
+	}
+	if v, ok := job.State["decompositionHints"]; ok && v != nil {
+		if dhBytes, err := json.Marshal(v); err == nil {
+			_ = json.Unmarshal(dhBytes, &decompositionHints)
+		}
+	}
+
+	// Check if this is an abstract anchor (MARKET/PROGRAM)
+	isAbstract := strings.HasPrefix(job.TargetCanonicalPath, "/market/") ||
+		strings.HasPrefix(job.TargetCanonicalPath, "/program/")
+
+	// Guardrail: do NOT run intent decomposition unless we have any intent signal.
+	// This is important to avoid changing behavior for ad-hoc "Scout it" / RefreshFragment calls
+	// that may target MARKET/PROGRAM nodes without any user intent context.
+	hasIntent := focus != "" || len(keywords) > 0 || len(spherePaths) > 0 || originalQuery != "" || len(decompositionHints) > 0
+	if !hasIntent {
 		return nil
 	}
 
 	agent := agents.NewIntentDecomposerAgent(e.aiExecutor)
-	rels, err := agent.Decompose(ctx, strings.TrimSpace(job.TargetCanonicalPath), focus, spherePaths, keywords)
+	opts := agents.DecomposeOptions{
+		IsAbstractAnchor:   isAbstract,
+		DecompositionHints: decompositionHints,
+		OriginalQuery:      originalQuery,
+	}
+	rels, err := agent.DecomposeWithOptions(ctx, strings.TrimSpace(job.TargetCanonicalPath), focus, spherePaths, keywords, opts)
 	if err != nil {
 		return err
 	}

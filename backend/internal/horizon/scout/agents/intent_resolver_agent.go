@@ -21,10 +21,28 @@ type IntentResolution struct {
 		Type          string  `json:"type"` // ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL (best-effort)
 		// Name is the preferred English display name for this anchor (NOT a slug, NOT a URL).
 		// If the original name is non-English and no established English name exists, transliteration is acceptable.
-		Name string `json:"name,omitempty"`
-		Confidence    float64 `json:"confidence"`
-		Reason        string  `json:"reason"`
+		Name       string  `json:"name,omitempty"`
+		Confidence float64 `json:"confidence"`
+		Reason     string  `json:"reason"`
 	} `json:"anchors"`
+	// DecompositionHints describe how abstract anchors (MARKET, PROGRAM) should be decomposed.
+	// These are synthesized by the LLM and passed to downstream research to guide exploration.
+	DecompositionHints []DecompositionHint `json:"decompositionHints,omitempty"`
+}
+
+// DecompositionHint describes how to decompose an abstract anchor (MARKET, PROGRAM, etc.)
+// into more concrete entities for research and scouting.
+type DecompositionHint struct {
+	// AnchorPath is the canonicalPath of the anchor this hint applies to.
+	AnchorPath string `json:"anchorPath"`
+	// EntityTypes suggest what types of entities should be discovered (e.g., ["ORGANIZATION", "PRODUCT"]).
+	EntityTypes []string `json:"entityTypes"`
+	// SubMarkets suggest market segmentations to explore (e.g., ["commercial banking", "consumer banking"]).
+	SubMarkets []string `json:"subMarkets,omitempty"`
+	// PlayerCategories suggest categories of players (e.g., ["local banks", "international banks", "fintechs"]).
+	PlayerCategories []string `json:"playerCategories,omitempty"`
+	// SearchQueries are concrete search queries to use for grounded research.
+	SearchQueries []string `json:"searchQueries"`
 }
 
 // IntentResolverAgent extracts anchors/spheres/keywords from a natural language query.
@@ -158,7 +176,72 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 		out.Focus = query
 	}
 
+	// Normalize decomposition hints: filter to valid anchors, dedupe, cap.
+	if len(out.DecompositionHints) > 0 {
+		anchorPathSet := make(map[string]struct{}, len(out.Anchors))
+		for _, a := range out.Anchors {
+			anchorPathSet[a.CanonicalPath] = struct{}{}
+		}
+		validHints := make([]DecompositionHint, 0, len(out.DecompositionHints))
+		for _, h := range out.DecompositionHints {
+			h.AnchorPath = slugifyCanonicalPath(strings.TrimSpace(h.AnchorPath))
+			if _, ok := anchorPathSet[h.AnchorPath]; !ok {
+				continue // skip hints for non-existent anchors
+			}
+			// Dedupe and cap searchQueries
+			seenQ := make(map[string]struct{})
+			queries := make([]string, 0, len(h.SearchQueries))
+			for _, q := range h.SearchQueries {
+				q = strings.TrimSpace(q)
+				if q == "" {
+					continue
+				}
+				lq := strings.ToLower(q)
+				if _, ok := seenQ[lq]; ok {
+					continue
+				}
+				seenQ[lq] = struct{}{}
+				queries = append(queries, q)
+				if len(queries) >= 8 {
+					break
+				}
+			}
+			h.SearchQueries = queries
+			// Dedupe entityTypes
+			h.EntityTypes = dedupStrings(h.EntityTypes, 6)
+			h.SubMarkets = dedupStrings(h.SubMarkets, 8)
+			h.PlayerCategories = dedupStrings(h.PlayerCategories, 8)
+			validHints = append(validHints, h)
+			if len(validHints) >= 5 {
+				break
+			}
+		}
+		out.DecompositionHints = validHints
+	}
+
 	return &out, nil
+}
+
+// dedupStrings deduplicates and caps a string slice.
+func dedupStrings(in []string, maxN int) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		key := strings.ToLower(s)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, s)
+		if len(out) >= maxN {
+			break
+		}
+	}
+	return out
 }
 
 func (a *IntentResolverAgent) buildPrompt(query string) string {
@@ -191,6 +274,15 @@ OUTPUT JSON SCHEMA:
       "name": "string (preferred English display name; NOT a slug; translate to English when possible)",
       "confidence": 0.0,
       "reason": "short reason"
+    }
+  ],
+  "decompositionHints": [
+    {
+      "anchorPath": "string (must match one of the anchors' canonicalPath)",
+      "entityTypes": ["ORGANIZATION", "PRODUCT", ...],
+      "subMarkets": ["segment1", "segment2", ...],
+      "playerCategories": ["category1", "category2", ...],
+      "searchQueries": ["concrete search query 1", "concrete search query 2", ...]
     }
   ]
 }
@@ -249,6 +341,25 @@ RULES:
   - choose products/materials at the right level (raw vs component vs finished) when possible
 - Provide 1-3 anchors (anchor = what the Lens should attach to).
 - Provide 1-3 spherePaths.
+
+DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
+- If any anchor has type MARKET or PROGRAM, you MUST provide decompositionHints for that anchor.
+- decompositionHints help downstream research know HOW to explore abstract anchors.
+- For MARKET anchors:
+  - entityTypes: what entities to discover (typically ["ORGANIZATION", "PRODUCT", "FACILITY"])
+  - subMarkets: market segments to explore (e.g., ["commercial banking", "retail banking", "islamic banking"])
+  - playerCategories: types of players (e.g., ["local banks", "international banks", "fintechs", "regulators"])
+  - searchQueries: 3-5 concrete search queries in English for grounded research
+    - searchQueries MUST be designed to yield REAL-WORLD entities (company/bank/regulator names) that we can anchor as /org/... etc.
+    - Avoid "market size" / "market share" queries that only return abstract numbers.
+      - If you include a market-share query, phrase it as "top X by market share" so the intent is to extract PLAYERS.
+    - Example for "Saudi B2B SME banking":
+      ["top SME banks in Saudi Arabia 2024", "Saudi Arabia SME banking providers list", "Saudi B2B banking platforms for SMEs", "Saudi Arabian Monetary Authority SME banking regulations"]
+- For PROGRAM anchors:
+  - entityTypes: what entities participate (e.g., ["ORGANIZATION", "FACILITY", "PRODUCT"])
+  - playerCategories: types of participants (e.g., ["implementing agencies", "contractors", "beneficiaries"])
+  - searchQueries: 3-5 concrete search queries about the program
+- searchQueries MUST be in English and actionable for web search.
 - Return ONLY JSON. No markdown. No commentary.`,
 		query, quotedBlock)
 }

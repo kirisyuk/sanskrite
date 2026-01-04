@@ -242,6 +242,14 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"spherePaths": intent.SpherePaths,
 		"keywords":    intent.Keywords,
 	}
+	// Preserve original query for downstream research (helps with abstract/market queries).
+	if req.Query != "" {
+		viewConfig["originalQuery"] = req.Query
+	}
+	// Decomposition hints help research understand how to break down abstract anchors (markets, programs).
+	if len(intent.DecompositionHints) > 0 {
+		viewConfig["decompositionHints"] = intent.DecompositionHints
+	}
 	if req.MaxRecursionDepth != nil {
 		viewConfig["maxRecursionDepth"] = *req.MaxRecursionDepth
 	}

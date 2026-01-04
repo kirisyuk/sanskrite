@@ -25,6 +25,17 @@ type intentDecompositionResult struct {
 	Relations []DiscoveredRelation `json:"relations"`
 }
 
+// DecomposeOptions contains additional options for intent decomposition.
+type DecomposeOptions struct {
+	// IsAbstractAnchor indicates the target is a MARKET/PROGRAM/abstract entity
+	// that should be decomposed into concrete entities with higher confidence.
+	IsAbstractAnchor bool
+	// DecompositionHints provide structured guidance for decomposition.
+	DecompositionHints []DecompositionHint
+	// OriginalQuery is the raw user query for context.
+	OriginalQuery string
+}
+
 func (a *IntentDecomposerAgent) Decompose(
 	ctx context.Context,
 	targetCanonicalPath string,
@@ -32,12 +43,29 @@ func (a *IntentDecomposerAgent) Decompose(
 	spherePaths []string,
 	keywords []string,
 ) ([]DiscoveredRelation, error) {
+	return a.DecomposeWithOptions(ctx, targetCanonicalPath, focus, spherePaths, keywords, DecomposeOptions{})
+}
+
+// DecomposeWithOptions is like Decompose but accepts additional options.
+func (a *IntentDecomposerAgent) DecomposeWithOptions(
+	ctx context.Context,
+	targetCanonicalPath string,
+	focus string,
+	spherePaths []string,
+	keywords []string,
+	opts DecomposeOptions,
+) ([]DiscoveredRelation, error) {
 	targetCanonicalPath = strings.TrimSpace(targetCanonicalPath)
 	if targetCanonicalPath == "" {
 		return nil, fmt.Errorf("targetCanonicalPath is required")
 	}
 
-	prompt := a.buildPrompt(targetCanonicalPath, focus, spherePaths, keywords)
+	// Auto-detect abstract anchor from path prefix
+	isAbstract := opts.IsAbstractAnchor ||
+		strings.HasPrefix(targetCanonicalPath, "/market/") ||
+		strings.HasPrefix(targetCanonicalPath, "/program/")
+
+	prompt := a.buildPromptWithOptions(targetCanonicalPath, focus, spherePaths, keywords, opts)
 	verifier := ai.NewSimpleJSONVerifier()
 
 	task := &ai.AITask{
@@ -65,7 +93,7 @@ func (a *IntentDecomposerAgent) Decompose(
 	if err := json.Unmarshal(b, &out); err != nil {
 		return nil, fmt.Errorf("failed to parse intent decomposition result: %w", err)
 	}
-	// Best-effort cleanup: drop empty rows, clamp confidence to low envelope.
+	// Best-effort cleanup: drop empty rows, clamp confidence to appropriate envelope.
 	clean := make([]DiscoveredRelation, 0, len(out.Relations))
 	for _, r := range out.Relations {
 		r.TargetName = strings.TrimSpace(r.TargetName)
@@ -76,9 +104,20 @@ func (a *IntentDecomposerAgent) Decompose(
 		if r.TargetName == "" || r.TargetCanonicalPath == "" || r.RelationType == "" || r.TargetType == "" {
 			continue
 		}
-		if r.Confidence <= 0 || r.Confidence > 0.65 {
-			// Force hypothesis envelope: we are seeding, not asserting.
-			r.Confidence = 0.35
+		if isAbstract {
+			// For MARKET/PROGRAM decomposition, use higher confidence (0.60..0.75)
+			// to ensure discovered relations trigger recursive scouting (threshold >= 0.55).
+			if r.Confidence <= 0 || r.Confidence > 0.85 {
+				r.Confidence = 0.65
+			} else if r.Confidence < 0.55 {
+				// Boost low-confidence relations to meet scouting threshold
+				r.Confidence = 0.60
+			}
+		} else {
+			if r.Confidence <= 0 || r.Confidence > 0.65 {
+				// Force hypothesis envelope: we are seeding, not asserting.
+				r.Confidence = 0.35
+			}
 		}
 		clean = append(clean, r)
 		if len(clean) >= 12 {
@@ -88,14 +127,18 @@ func (a *IntentDecomposerAgent) Decompose(
 	return clean, nil
 }
 
-func (a *IntentDecomposerAgent) buildPrompt(targetCanonicalPath string, focus string, spherePaths []string, keywords []string) string {
+func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath string, focus string, spherePaths []string, keywords []string, opts DecomposeOptions) string {
 	focus = strings.TrimSpace(focus)
+	originalQuery := strings.TrimSpace(opts.OriginalQuery)
 	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
 	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
 
 	ctxBlock := ""
-	if focus != "" || spheresLine != "" || keywordsLine != "" {
+	if focus != "" || spheresLine != "" || keywordsLine != "" || originalQuery != "" {
 		ctxBlock = "INTENT CONTEXT (steer towards reusable supply-chain/logistics structure; do NOT invent citations):\n"
+		if originalQuery != "" {
+			ctxBlock += fmt.Sprintf("- originalQuery: \"%s\"\n", originalQuery)
+		}
 		if focus != "" {
 			ctxBlock += fmt.Sprintf("- focus: %s\n", focus)
 		}
@@ -108,6 +151,45 @@ func (a *IntentDecomposerAgent) buildPrompt(targetCanonicalPath string, focus st
 		ctxBlock += "\n"
 	}
 
+	// Add MARKET/PROGRAM decomposition guidance if applicable
+	decompositionBlock := ""
+	isAbstract := opts.IsAbstractAnchor ||
+		strings.HasPrefix(targetCanonicalPath, "/market/") ||
+		strings.HasPrefix(targetCanonicalPath, "/program/")
+	if isAbstract {
+		decompositionBlock = "MARKET/PROGRAM DECOMPOSITION MODE:\n"
+		decompositionBlock += "This is an ABSTRACT anchor. Your PRIMARY goal is to discover CONCRETE entities.\n"
+		decompositionBlock += "Output relations to:\n"
+		decompositionBlock += "- Major players (organizations, banks, companies, service providers)\n"
+		decompositionBlock += "- Key products or services\n"
+		decompositionBlock += "- Regulatory bodies\n"
+		decompositionBlock += "- Key facilities or infrastructure\n"
+		decompositionBlock += "Use confidence >= 0.60 for well-known players.\n\n"
+
+		// Add hints if available
+		for _, h := range opts.DecompositionHints {
+			if h.AnchorPath == targetCanonicalPath {
+				if len(h.EntityTypes) > 0 {
+					decompositionBlock += fmt.Sprintf("Target entity types: %s\n", strings.Join(h.EntityTypes, ", "))
+				}
+				if len(h.SubMarkets) > 0 {
+					decompositionBlock += fmt.Sprintf("Sub-markets: %s\n", strings.Join(h.SubMarkets, ", "))
+				}
+				if len(h.PlayerCategories) > 0 {
+					decompositionBlock += fmt.Sprintf("Player categories: %s\n", strings.Join(h.PlayerCategories, ", "))
+				}
+				if len(h.SearchQueries) > 0 {
+					decompositionBlock += "Search guidance:\n"
+					for _, q := range h.SearchQueries {
+						decompositionBlock += fmt.Sprintf("  - %s\n", q)
+					}
+				}
+				decompositionBlock += "\n"
+				break
+			}
+		}
+	}
+
 	return fmt.Sprintf(`You are an intent decomposition agent for a risk analysis system.
 
 GOAL:
@@ -117,6 +199,7 @@ This is used to seed exploration when the local corpus is empty. Be conservative
 TARGET:
 - canonicalPath: %s
 
+%s
 %s
 RELATION DIRECTION RULES (STRICT):
 Each relation is a directed edge FROM TARGET (source) TO targetCanonicalPath (target).
@@ -191,5 +274,5 @@ RULES:
   - LOCATED_IN: target MUST be GEO_REGION
   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
 - NEVER use "/discovered/*".
-- Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock)
+- Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock, decompositionBlock)
 }

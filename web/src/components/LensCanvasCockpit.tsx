@@ -4021,15 +4021,39 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
     if (!visibleNodeIds.has(hovered)) return null;
 
+    // Node types (for control semantics, especially PERSON heuristics)
+    const typeById = new Map<string, string>();
+    for (const n of nodes) {
+      const id = String(n.id || '').trim();
+      if (!id) continue;
+      if ((n as any).hidden) continue;
+      if ((n.data as any)?.isGroup) continue;
+      const t = String((n.data as any)?.type || '').toUpperCase().trim();
+      if (t) typeById.set(id, t);
+    }
+    const isPerson = (id: string) => (typeById.get(id) || '') === 'PERSON';
+
     const normalizeType = (t: string) => String(t || '').toUpperCase().trim();
     // Control highlight uses two semantic buckets:
     // - "chain" (transitive control propagation): used for traversal up/down
-    //   - equity: OWNS/SUBSIDIARY_OF/INVESTS_IN
+    //   - equity: OWNS/PARENT_OF/SUBSIDIARY_OF/INVESTS_IN
     //   - non-equity control: CONTROLS/MANAGES
-    //   - governance-as-control signal: BOARD_MEMBER_OF (used for traversal; treated as bidirectional to be robust to edge direction)
+    //   - governance-as-control signal: BOARD_MEMBER_OF / EXECUTIVE_OF (used for traversal; treated as bidirectional to be robust to edge direction)
     // - "governance overlay": shown inside the cluster (not used to expand it)
-    const CONTROL_CHAIN_TYPES = new Set<string>(['OWNS', 'SUBSIDIARY_OF', 'INVESTS_IN', 'CONTROLS', 'MANAGES', 'BOARD_MEMBER_OF']);
+    //
+    // IMPORTANT: ultimate beneficiary detection (PERSON highlight) should NOT be blocked by governance-as-control edges
+    // (BOARD/EXECUTIVE), otherwise a single board edge can "disqualify" a real UBO from being considered ultimate.
+    const CONTROL_CHAIN_TYPES = new Set<string>([
+      'OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'INVESTS_IN',
+      'CONTROLS', 'MANAGES',
+      'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
+    ]);
     const CONTROL_GOVERNANCE_TYPES = new Set<string>(['EMPLOYED_BY', 'FOUNDED']);
+    const CONTROL_ULTIMATE_BLOCKING_TYPES = new Set<string>([
+      // "Real" control signals that should prevent a PERSON from being considered ultimate if there's a higher controller in-cluster.
+      // Exclude BOARD_MEMBER_OF / EXECUTIVE_OF on purpose (see comment above).
+      'OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'INVESTS_IN', 'CONTROLS', 'MANAGES',
+    ]);
     const isEdgeTypeOfMode = (t: string) => {
       const u = normalizeType(t);
       switch (hoverHighlightMode) {
@@ -4046,8 +4070,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     };
 
-    type Adj = { to: string; edgeId: string };
-    type AdjIn = { from: string; edgeId: string };
+    type Adj = { to: string; edgeId: string; edgeType: string };
+    type AdjIn = { from: string; edgeId: string; edgeType: string };
     // For most modes we treat the relation as undirected (we only need "neighbors").
     const adj = new Map<string, Adj[]>();
     // For control we want directional semantics:
@@ -4057,12 +4081,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const adjOut = new Map<string, Adj[]>();
     const adjIn = new Map<string, AdjIn[]>();
     const governanceEdges: Array<{ id: string; a: string; b: string }> = [];
-    const addDirected = (from: string, to: string, edgeId: string) => {
+
+    // Two-pass approach for control edges:
+    // Pass 1: collect raw directed edges by semantic type
+    // Pass 2: detect conflicts (A->B and B->A) and resolve via X-position
+    type RawEdge = { from: string; to: string; edgeId: string; edgeType: string };
+    const rawControlEdges: RawEdge[] = [];
+    // Track node pairs that have edges in each direction (for conflict detection)
+    const pairKey = (a: string, b: string) => a < b ? `${a}|${b}` : `${b}|${a}`;
+    const pairDirections = new Map<string, { aToB: RawEdge[]; bToA: RawEdge[] }>();
+
+    const addDirected = (from: string, to: string, edgeId: string, edgeType: string) => {
       if (!from || !to) return;
       if (!adjOut.has(from)) adjOut.set(from, []);
-      adjOut.get(from)!.push({ to, edgeId });
+      adjOut.get(from)!.push({ to, edgeId, edgeType });
       if (!adjIn.has(to)) adjIn.set(to, []);
-      adjIn.get(to)!.push({ from, edgeId });
+      adjIn.get(to)!.push({ from, edgeId, edgeType });
     };
 
     for (const e of edges) {
@@ -4087,58 +4121,102 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           continue;
         }
 
-        // Normalize "control direction" so that from -> to means "from controls to".
-        //
-        // In Levels Two-Pane mode we additionally de-noise incorrect loops by using layout geometry:
-        // if two nodes have a clear left/right separation, we treat the RIGHT node as controller.
-        // This collapses erroneous mutual OWNS loops (A->B and B->A) into a single direction.
-        const EPS_X = 12;
+        // Determine "natural" direction based on edge type semantics:
+        // - OWNS, INVESTS_IN, CONTROLS, MANAGES, PARENT_OF: source -> target (source controls target)
+        // - SUBSIDIARY_OF: target -> source (target controls source, i.e. parent is target)
         let from = src;
         let to = dst;
+        if (u === 'SUBSIDIARY_OF') {
+          from = dst;
+          to = src;
+        }
 
-        if (isLevelsLayout) {
-          const sx = xById.get(src);
-          const tx = xById.get(dst);
-          if (typeof sx === 'number' && typeof tx === 'number' && Math.abs(sx - tx) > EPS_X) {
-            if (sx > tx) {
-              from = src;
-              to = dst;
-            } else {
-              from = dst;
-              to = src;
-            }
-          } else {
-            // Fallback to semantic inversion for SUBSIDIARY_OF.
-            if (u === 'SUBSIDIARY_OF') {
-              from = dst;
-              to = src;
-            }
-          }
-        } else {
-          // Non-levels: keep legacy semantics.
-          if (u === 'SUBSIDIARY_OF') {
+        // BOARD_MEMBER_OF / EXECUTIVE_OF:
+        // - Strong governance/control signals.
+        // - If one side is PERSON, enforce direction PERSON -> OTHER (person is controller).
+        if (u === 'BOARD_MEMBER_OF' || u === 'EXECUTIVE_OF') {
+          const srcIsPerson = isPerson(src);
+          const dstIsPerson = isPerson(dst);
+          if (srcIsPerson && !dstIsPerson) {
+            from = src;
+            to = dst;
+          } else if (dstIsPerson && !srcIsPerson) {
             from = dst;
             to = src;
           }
+          // else: keep semantic direction
         }
 
-        // BOARD_MEMBER_OF is treated as a strong governance/control signal:
-        // we allow traversal BOTH ways (robust to inconsistent edge direction in the graph).
-        if (u === 'BOARD_MEMBER_OF') {
-          addDirected(from, to, eid);
-          addDirected(to, from, eid);
-          continue;
+        // Collect for conflict detection
+        const pk = pairKey(from, to);
+        if (!pairDirections.has(pk)) {
+          pairDirections.set(pk, { aToB: [], bToA: [] });
         }
-
-        addDirected(from, to, eid);
+        const pd = pairDirections.get(pk)!;
+        // "a" is the lexicographically smaller node in the pair key
+        const aNode = from < to ? from : to;
+        if (from === aNode) {
+          pd.aToB.push({ from, to, edgeId: eid, edgeType: u });
+        } else {
+          pd.bToA.push({ from, to, edgeId: eid, edgeType: u });
+        }
+        rawControlEdges.push({ from, to, edgeId: eid, edgeType: u });
         continue;
       }
 
       // Other modes: undirected neighbor graph.
       if (!adj.has(src)) adj.set(src, []);
       if (!adj.has(dst)) adj.set(dst, []);
-      adj.get(src)!.push({ to: dst, edgeId: eid });
-      adj.get(dst)!.push({ to: src, edgeId: eid });
+      adj.get(src)!.push({ to: dst, edgeId: eid, edgeType: u });
+      adj.get(dst)!.push({ to: src, edgeId: eid, edgeType: u });
+    }
+
+    // Pass 2 (control mode only): resolve conflicts using X-position, then populate adjOut/adjIn.
+    if (hoverHighlightMode === 'control') {
+      const EPS_X = 12;
+      // For each pair with edges in both directions, decide which direction to keep.
+      const conflictResolved = new Map<string, 'aToB' | 'bToA'>();
+      for (const [pk, pd] of pairDirections.entries()) {
+        if (pd.aToB.length > 0 && pd.bToA.length > 0) {
+          // Conflict: edges in both directions. Use X-position to resolve.
+          const [aNode, bNode] = pk.split('|');
+          const ax = xById.get(aNode!);
+          const bx = xById.get(bNode!);
+          if (typeof ax === 'number' && typeof bx === 'number' && Math.abs(ax - bx) > EPS_X) {
+            // Node with higher X is the controller
+            if (ax > bx) {
+              conflictResolved.set(pk, 'aToB'); // a controls b
+            } else {
+              conflictResolved.set(pk, 'bToA'); // b controls a
+            }
+          } else {
+            // X too close: prefer edges with stronger semantics (OWNS > INVESTS_IN > others)
+            const scoreType = (t: string) => {
+              if (t === 'OWNS' || t === 'PARENT_OF') return 3;
+              if (t === 'INVESTS_IN' || t === 'SUBSIDIARY_OF') return 2;
+              return 1;
+            };
+            const aToBScore = Math.max(...pd.aToB.map((e) => scoreType(e.edgeType)));
+            const bToAScore = Math.max(...pd.bToA.map((e) => scoreType(e.edgeType)));
+            conflictResolved.set(pk, aToBScore >= bToAScore ? 'aToB' : 'bToA');
+          }
+        }
+      }
+
+      // Now add edges, skipping the "wrong" direction for conflicting pairs.
+      for (const re of rawControlEdges) {
+        const pk = pairKey(re.from, re.to);
+        const resolved = conflictResolved.get(pk);
+        if (resolved) {
+          const aNode = re.from < re.to ? re.from : re.to;
+          const isAToB = re.from === aNode;
+          if ((resolved === 'aToB' && !isAToB) || (resolved === 'bToA' && isAToB)) {
+            // This edge is in the "wrong" direction for this conflicting pair; skip it.
+            continue;
+          }
+        }
+        addDirected(re.from, re.to, re.edgeId, re.edgeType);
+      }
     }
 
     if (hoverHighlightMode === 'control') {
@@ -4179,20 +4257,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const downVisited = new Set<string>([hovered]);
     const upVisited = new Set<string>([hovered]);
 
-    const qDown: Array<{ id: string; depth: number }> = [{ id: hovered, depth: 0 }];
-    while (qDown.length > 0) {
-      const cur = qDown.shift()!;
-      if (cur.depth >= maxSteps) continue;
-      const next = adjOut.get(cur.id) || [];
-      for (const a of next) {
-        usedEdgeIds.add(a.edgeId);
-        if (!downVisited.has(a.to)) {
-          downVisited.add(a.to);
-          qDown.push({ id: a.to, depth: cur.depth + 1 });
-        }
-      }
-    }
-
+    // Up traversal first — determines the set of "controllers" so we can prevent down traversal
+    // from leaking into the controllers' other holdings.
     const qUp: Array<{ id: string; depth: number }> = [{ id: hovered, depth: 0 }];
     while (qUp.length > 0) {
       const cur = qUp.shift()!;
@@ -4203,6 +4269,52 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         if (!upVisited.has(a.from)) {
           upVisited.add(a.from);
           qUp.push({ id: a.from, depth: cur.depth + 1 });
+        }
+      }
+    }
+
+    // Down traversal — expand only the hovered node's controlled entities, but:
+    // - never expand from PERSON nodes unless hover is on a PERSON
+    // - never expand from nodes that are in the up-cluster (controllers) to avoid showing their other holdings
+    // - in Levels layout, only allow "leftward" steps (more subordinate) to avoid backtracking via bad edges
+    const EPS_X = 12;
+    const hoveredX = xById.get(hovered);
+    const qDown: Array<{ id: string; depth: number }> = [{ id: hovered, depth: 0 }];
+    while (qDown.length > 0) {
+      const cur = qDown.shift()!;
+      if (cur.depth >= maxSteps) continue;
+      // When hovering a non-person entity, do not expand "down" from PERSON nodes.
+      if (!isPerson(hovered) && isPerson(cur.id)) continue;
+      // Do not fan out from controllers (nodes discovered by the up traversal).
+      if (cur.id !== hovered && upVisited.has(cur.id)) continue;
+
+      const next = adjOut.get(cur.id) || [];
+      for (const a of next) {
+        usedEdgeIds.add(a.edgeId);
+
+        // Never traverse "down" into controllers.
+        if (a.to !== hovered && upVisited.has(a.to)) {
+          continue;
+        }
+        // In Levels layout, "down" must move LEFT (more subordinate).
+        if (isLevelsLayout) {
+          const cx = xById.get(cur.id);
+          const tx = xById.get(a.to);
+          if (
+            typeof cx === 'number' &&
+            typeof tx === 'number' &&
+            Number.isFinite(cx) &&
+            Number.isFinite(tx) &&
+            // require a meaningful move to the left; also never go to the right of the hovered node
+            (tx > cx - EPS_X || (typeof hoveredX === 'number' && Number.isFinite(hoveredX) && tx > hoveredX - EPS_X))
+          ) {
+            continue;
+          }
+        }
+
+        if (!downVisited.has(a.to)) {
+          downVisited.add(a.to);
+          qDown.push({ id: a.to, depth: cur.depth + 1 });
         }
       }
     }
@@ -4239,21 +4351,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Ultimate beneficiaries (persons) for "up" traversal:
     // highlight only PERSON nodes that have no further controllers within the up-cluster.
-    const typeById = new Map<string, string>();
-    for (const n of nodes) {
-      const id = String(n.id || '').trim();
-      if (!id) continue;
-      if ((n as any).hidden) continue;
-      if ((n.data as any)?.isGroup) continue;
-      const t = String((n.data as any)?.type || '').toUpperCase().trim();
-      if (t) typeById.set(id, t);
-    }
-    const isPerson = (id: string) => (typeById.get(id) || '') === 'PERSON';
     const ultimatePersonIds = new Set<string>();
     for (const id of upVisited) {
       if (!isPerson(id)) continue;
       const nextUp = adjIn.get(id) || [];
-      const hasHigherControllerInCluster = nextUp.some((a) => upVisited.has(a.from));
+      const hasHigherControllerInCluster = nextUp.some((a) =>
+        upVisited.has(a.from) && CONTROL_ULTIMATE_BLOCKING_TYPES.has(normalizeType(a.edgeType))
+      );
       if (!hasHigherControllerInCluster) ultimatePersonIds.add(id);
     }
 
@@ -4454,9 +4558,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Hover highlight mode: highlight selected relation cluster and fade everything else.
     if (hoverHighlight && hoveredNodeId) {
       const hiEdgeIds = hoverHighlight.edgeIds;
-      const CONTROL_EQUITY_TYPES = new Set<string>(['OWNS', 'SUBSIDIARY_OF', 'INVESTS_IN']);
+      const CONTROL_EQUITY_TYPES = new Set<string>(['OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'INVESTS_IN']);
       const CONTROL_NON_EQUITY_TYPES = new Set<string>(['CONTROLS', 'MANAGES']);
-      const CONTROL_GOVERNANCE_TYPES = new Set<string>(['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED']);
+      const CONTROL_GOVERNANCE_TYPES = new Set<string>(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY', 'FOUNDED']);
       const out = baseVisibleEdges.map((e) => {
         const { baseStyle } = baseStyled(e);
         const eid = String((e as any)?.id || '').trim();
@@ -5196,8 +5300,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Fit view to the new node
       try {
         const inst: any = reactFlowInstanceRef.current;
-        const n = inst?.getNode?.(fragmentId);
-        if (n) inst?.fitView?.({ nodes: [n], padding: 0.25, duration: 350 });
+        // ReactFlow state updates are async; the node might not be immediately available via getNode().
+        // Use a short retry + fallback to setCenter so users always "see" the newly added node.
+        const focus = () => {
+          const n = inst?.getNode?.(fragmentId);
+          if (n) {
+            inst?.fitView?.({ nodes: [n], padding: 0.25, duration: 350 });
+            return true;
+          }
+          return false;
+        };
+        if (!focus()) {
+          window.setTimeout(() => {
+            try {
+              if (focus()) return;
+              // Fallback: center viewport on the intended position.
+              const cx = position.x + ELK_NODE_WIDTH / 2;
+              const cy = position.y + ELK_NODE_HEIGHT / 2;
+              const zoom = typeof inst?.getZoom === 'function' ? inst.getZoom() : undefined;
+              inst?.setCenter?.(cx, cy, { zoom: typeof zoom === 'number' ? zoom : 1, duration: 350 });
+            } catch {}
+          }, 50);
+        }
       } catch {}
 
       closeAddNode();

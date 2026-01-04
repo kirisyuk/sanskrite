@@ -29,6 +29,7 @@ type researchResult struct {
 
 // EnrichFragment обогащает HorizonFragment и находит новые связи.
 // focus/spherePaths/keywords are optional steering signals for grounded search (they may be non-canonical).
+// originalQuery and decompositionHints are additional context for MARKET-aware research.
 func (a *ResearchAgent) EnrichFragment(
 	ctx context.Context,
 	fragment *models.HorizonFragment,
@@ -37,12 +38,14 @@ func (a *ResearchAgent) EnrichFragment(
 	spherePaths []string,
 	keywords []string,
 	specialties []string,
+	originalQuery string,
+	decompositionHints []DecompositionHint,
 ) (*models.HorizonFragment, []DiscoveredRelation, error) {
 	if len(missingInfo) == 0 {
 		return fragment, nil, nil
 	}
 
-	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties)
+	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, originalQuery, decompositionHints)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -159,16 +162,20 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 }
 
 // buildEnrichmentPrompt строит промпт для дообогащения фрагмента
-func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string, specialties []string) string {
+func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string, specialties []string, originalQuery string, decompositionHints []DecompositionHint) string {
 	fragmentJSON, _ := json.MarshalIndent(fragment, "", "  ")
 	questions := strings.Join(missingInfo, "\n- ")
 	focus = strings.TrimSpace(focus)
+	originalQuery = strings.TrimSpace(originalQuery)
 	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
 	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
 	specialties = taxonomy.NormalizeSpecialties(specialties)
 	focusBlock := ""
-	if focus != "" || spheresLine != "" || keywordsLine != "" {
+	if focus != "" || spheresLine != "" || keywordsLine != "" || originalQuery != "" {
 		focusBlock = "FOCUS CONTEXT (use this to steer your grounded search; it may include non-canonical keywords):\n"
+		if originalQuery != "" {
+			focusBlock += fmt.Sprintf("- originalQuery: \"%s\"\n", originalQuery)
+		}
 		if focus != "" {
 			focusBlock += fmt.Sprintf("- focus: %s\n", focus)
 		}
@@ -179,6 +186,53 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 			focusBlock += fmt.Sprintf("- keywords: %s\n", keywordsLine)
 		}
 		focusBlock += "\n"
+	}
+
+	// Add MARKET decomposition block if applicable
+	decompositionBlock := ""
+	if fragment != nil && (fragment.Type == models.FragmentTypeMarket || fragment.Type == models.FragmentTypeProgram || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
+		// Find matching decomposition hint
+		var hint *DecompositionHint
+		for i := range decompositionHints {
+			if decompositionHints[i].AnchorPath == fragment.CanonicalPath {
+				hint = &decompositionHints[i]
+				break
+			}
+		}
+		if hint != nil {
+			decompositionBlock = "MARKET/PROGRAM DECOMPOSITION GUIDANCE:\n"
+			decompositionBlock += "This is an abstract anchor that should be DECOMPOSED into concrete entities.\n"
+			if len(hint.EntityTypes) > 0 {
+				decompositionBlock += fmt.Sprintf("- Target entity types: %s\n", strings.Join(hint.EntityTypes, ", "))
+			}
+			if len(hint.SubMarkets) > 0 {
+				decompositionBlock += fmt.Sprintf("- Sub-markets to explore: %s\n", strings.Join(hint.SubMarkets, ", "))
+			}
+			if len(hint.PlayerCategories) > 0 {
+				decompositionBlock += fmt.Sprintf("- Player categories: %s\n", strings.Join(hint.PlayerCategories, ", "))
+			}
+			if len(hint.SearchQueries) > 0 {
+				decompositionBlock += "- Suggested search queries:\n"
+				for _, q := range hint.SearchQueries {
+					decompositionBlock += fmt.Sprintf("  * %s\n", q)
+				}
+			}
+			decompositionBlock += "\nYour PRIMARY goal is to DISCOVER relations to concrete entities (organizations, products, facilities) that constitute this market/program.\n"
+			decompositionBlock += "Use the suggested search queries to find real players. Output them as relations with high confidence (0.7+).\n"
+			decompositionBlock += "IMPORTANT: If you encounter market size/market share metrics, treat them as SUPPORTING evidence only. The output MUST still be real-world entities.\n\n"
+		} else if originalQuery != "" {
+			// Fallback: generate decomposition guidance from originalQuery
+			decompositionBlock = "MARKET/PROGRAM DECOMPOSITION GUIDANCE:\n"
+			decompositionBlock += fmt.Sprintf("This is an abstract anchor. The user's original query was: \"%s\"\n", originalQuery)
+			decompositionBlock += "Your PRIMARY goal is to DISCOVER relations to concrete entities (organizations, products, facilities) that constitute this market/program.\n"
+			decompositionBlock += "Search for:\n"
+			decompositionBlock += "- Major players (companies, banks, service providers)\n"
+			decompositionBlock += "- Key products or services in this market\n"
+			decompositionBlock += "- Regulatory bodies or governing organizations\n"
+			decompositionBlock += "- Notable facilities or infrastructure\n"
+			decompositionBlock += "Output discovered entities as relations with confidence >= 0.7.\n"
+			decompositionBlock += "IMPORTANT: If you encounter market size/market share metrics, treat them as SUPPORTING evidence only. The output MUST still be real-world entities.\n\n"
+		}
 	}
 	specBlock := ""
 	if len(specialties) > 0 {
@@ -204,6 +258,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 CURRENT FRAGMENT DATA:
 %s
 
+%s
 %s
 %s
 CRITICAL MISSING INFORMATION (QUESTIONS TO ANSWER):
@@ -316,7 +371,7 @@ CANONICAL PATH RULES:
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), focusBlock, specBlock, questions)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), focusBlock, specBlock, decompositionBlock, questions)
 }
 
 func dedupNonEmptyStrings(in []string) []string {
