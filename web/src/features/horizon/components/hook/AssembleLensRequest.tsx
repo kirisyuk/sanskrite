@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ThemeContext } from '../../../../components/ThemeProvider';
+import { api } from '../../../../lib/api';
 
 interface AssembleLensRequestProps {
   projectId: string;
@@ -13,6 +14,8 @@ export interface AssembleLensRequest {
   projectId: string;
   query: string;
   name?: string;
+  /** Optional: UI-selected canonical paths to be merged into lens scope. */
+  prefetchScope?: string[];
   filters: {
     maxRecursionDepth: number;
   };
@@ -47,11 +50,19 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
 }) => {
   const { theme } = React.useContext(ThemeContext);
   const [inputValue, setInputValue] = useState('');
+  type PrefetchEntity = { id: string; canonicalPath: string; name: string; type: string };
+  const [selectedEntities, setSelectedEntities] = useState<PrefetchEntity[]>([]);
+  const [entityLoading, setEntityLoading] = useState(false);
+  const [entitySuggestions, setEntitySuggestions] = useState<PrefetchEntity[]>([]);
+  const [showEntityDropdown, setShowEntityDropdown] = useState(false);
   const [filters, setFilters] = useState({
     maxRecursionDepth: 1,
   });
   const [showSettings, setShowSettings] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const entityAbortRef = useRef<AbortController | null>(null);
+  const entityDebounceRef = useRef<number | null>(null);
   const [placeholder] = useState(() => 
     PLACEHOLDER_VARIANTS[Math.floor(Math.random() * PLACEHOLDER_VARIANTS.length)]
   );
@@ -70,15 +81,101 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     setInputValue(e.target.value);
   };
 
-  const handleAssemble = () => {
-    const q = inputValue.trim();
-    if (!q) {
+  // Prefetch entity suggestions (existing objects) for chip selection.
+  useEffect(() => {
+    // Keep UX natural:
+    // - chips live "inside" the query input
+    // - we only show entity suggestions when the user is typing a single token (no spaces)
+    //   so we don't spam suggestions while writing a long sentence.
+    const raw = inputValue.trim();
+    const token = raw.startsWith('@') ? raw.slice(1) : raw;
+    const canSuggest = token.length >= 2 && !/\s/.test(raw);
+    if (!canSuggest) {
+      setEntitySuggestions([]);
+      setEntityLoading(false);
+      setShowEntityDropdown(false);
+      try { entityAbortRef.current?.abort(); } catch {}
       return;
     }
+
+    if (entityDebounceRef.current) {
+      window.clearTimeout(entityDebounceRef.current);
+    }
+
+    setEntityLoading(true);
+    entityDebounceRef.current = window.setTimeout(async () => {
+      try {
+        try { entityAbortRef.current?.abort(); } catch {}
+        const ac = new AbortController();
+        entityAbortRef.current = ac;
+        const res = await api.searchHorizonEntities(token, 10, ac.signal);
+        const selected = new Set(selectedEntities.map((e) => e.canonicalPath));
+        const list: PrefetchEntity[] = (res?.entities || [])
+          .map((e: any) => ({
+            id: String(e.id || '').trim(),
+            canonicalPath: String(e.canonicalPath || '').trim(),
+            name: String(e.name || '').trim(),
+            type: String(e.type || '').trim(),
+          }))
+          .filter((e) => e.canonicalPath && e.name && !selected.has(e.canonicalPath));
+        setEntitySuggestions(list);
+        setShowEntityDropdown(true);
+      } catch (err: any) {
+        // Ignore aborts
+        if (err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') return;
+        setEntitySuggestions([]);
+        setShowEntityDropdown(false);
+      } finally {
+        setEntityLoading(false);
+      }
+    }, 180) as unknown as number;
+
+    return () => {
+      if (entityDebounceRef.current) window.clearTimeout(entityDebounceRef.current);
+    };
+  }, [inputValue, selectedEntities]);
+
+  // Close dropdown on outside click.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const el = rootRef.current;
+      if (!el) return;
+      if (el.contains(e.target as any)) return;
+      setShowEntityDropdown(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, []);
+
+  const addEntity = (ent: PrefetchEntity) => {
+    const cp = String(ent.canonicalPath || '').trim();
+    if (!cp) return;
+    setSelectedEntities((prev) => {
+      if (prev.some((x) => x.canonicalPath === cp)) return prev;
+      return [...prev, ent];
+    });
+    // Remove the current token (user was likely typing an entity name).
+    setInputValue('');
+    setShowEntityDropdown(false);
+    // Keep focus in the query input for fast workflow.
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const removeEntity = (canonicalPath: string) => {
+    const cp = String(canonicalPath || '').trim();
+    if (!cp) return;
+    setSelectedEntities((prev) => prev.filter((x) => x.canonicalPath !== cp));
+  };
+
+  const handleAssemble = () => {
+    const q = inputValue.trim();
+    const prefetchScope = selectedEntities.map((e) => e.canonicalPath).filter(Boolean);
+    if (!q && prefetchScope.length === 0) return;
 
     const request: AssembleLensRequest = {
       projectId,
       query: q,
+      prefetchScope,
       filters,
     };
 
@@ -120,11 +217,33 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     position: 'relative',
   };
 
-  const inputStyle: React.CSSProperties = {
+  const tokenFieldStyle: React.CSSProperties = {
     flex: 1,
-    width: '100%',
-    padding: '16px 16px 16px 12px',
-    fontSize: '16px',
+    minWidth: 0,
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    padding: '10px 10px 10px 12px',
+    cursor: 'text',
+  };
+  const chipStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '6px 10px',
+    borderRadius: 999,
+    border: '1px solid var(--border-subtle)',
+    background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.04)',
+    color: 'var(--text-heading)',
+    cursor: 'pointer',
+    maxWidth: '100%',
+  };
+  const queryInputStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 180,
+    padding: '10px 10px',
+    fontSize: 16,
     fontWeight: 500,
     backgroundColor: 'transparent',
     border: 'none',
@@ -132,11 +251,11 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     color: 'var(--text-heading)',
   };
 
-  const sendBtnDisabled = disabled || !inputValue.trim();
+  const sendBtnDisabled = disabled || (!inputValue.trim() && selectedEntities.length === 0);
 
   return (
     <div style={containerStyle}>
-      <div style={inputContainerStyle}>
+      <div style={inputContainerStyle} ref={rootRef}>
         <div style={containerStyleForInput}>
           {/* Left Icon */}
           <div style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', color: 'var(--text-secondary-strong)' }}>
@@ -145,21 +264,61 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
             </svg>
           </div>
 
-          <input
-            ref={inputRef}
-            type="text"
-            value={inputValue}
-            onChange={handleInputChange}
-            placeholder={placeholder}
-            style={inputStyle}
-            disabled={disabled}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !disabled) {
-                e.preventDefault();
-                handleAssemble();
-              }
+          {/* Tokenized input: chips + free text in one "natural" field */}
+          <div
+            style={tokenFieldStyle}
+            onMouseDown={(e) => {
+              // Focus the input when user clicks anywhere inside the token field.
+              e.preventDefault();
+              inputRef.current?.focus();
             }}
-          />
+          >
+            {selectedEntities.map((e) => (
+              <button
+                key={e.canonicalPath}
+                type="button"
+                onClick={() => removeEntity(e.canonicalPath)}
+                title={`Remove ${e.name}`}
+                style={chipStyle}
+              >
+                <span style={{ fontSize: 12, fontWeight: 750, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {e.name}
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>
+                  ×
+                </span>
+              </button>
+            ))}
+
+            <input
+              ref={inputRef}
+              type="text"
+              value={inputValue}
+              onChange={handleInputChange}
+              placeholder={selectedEntities.length === 0 ? placeholder : ''}
+              style={queryInputStyle}
+              disabled={disabled}
+              onFocus={() => {
+                if (entitySuggestions.length > 0) setShowEntityDropdown(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setShowEntityDropdown(false);
+                  return;
+                }
+                if (e.key === 'Enter' && !disabled) {
+                  e.preventDefault();
+                  handleAssemble();
+                }
+              }}
+            />
+
+            {entityLoading && (
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                Searching…
+              </span>
+            )}
+          </div>
 
           {/* Right Actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 12 }}>
@@ -218,6 +377,59 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Entity dropdown (prefetch) */}
+        {showEntityDropdown && entitySuggestions.length > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: '100%',
+              marginTop: 10,
+              borderRadius: 14,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-elevated)',
+              boxShadow: theme === 'dark' ? '0 22px 60px rgba(0,0,0,0.45)' : '0 22px 60px rgba(0,0,0,0.14)',
+              overflow: 'hidden',
+              zIndex: 90,
+            }}
+          >
+            {entitySuggestions.slice(0, 10).map((e) => (
+              <button
+                key={e.canonicalPath}
+                type="button"
+                onClick={() => addEntity(e)}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                }}
+                onMouseEnter={(ev) => (ev.currentTarget.style.background = 'var(--white-06)')}
+                onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {e.name}
+                  </div>
+                  <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {e.canonicalPath}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', flexShrink: 0 }}>
+                  {e.type}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Suggestions (only when centered) */}

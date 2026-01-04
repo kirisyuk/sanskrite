@@ -1140,6 +1140,11 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 			}
 
+			// Pin/unpin (scope-only) updates should not trigger scouting.
+			if SkipScouting(ctx) {
+				continue
+			}
+
 			// Создаем ScoutingJob для нового узла в scope (аналогично CreateLens)
 			// Это гарантирует, что данные для нового узла будут собраны немедленно,
 			// а не ждать первого Watchdog scan (который может быть через 1 час)

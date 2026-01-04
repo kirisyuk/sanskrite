@@ -1613,6 +1613,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       name?: string;
       maxRecursionDepth?: number;
       requestedMetrics?: string[];
+      prefetchScope?: string[];
       status?: string;
     },
     options?: { correlationId?: string; sessionId?: string }
@@ -1717,7 +1718,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       scopeFragments?: Record<string, string>;
       resolvedQueries?: Record<string, string[]>;
       lastResolved?: string;
-    }
+    },
+    options?: { skipScouting?: boolean; correlationId?: string; sessionId?: string }
   ): Promise<{
     id: string;
     tenantId: string;
@@ -1734,7 +1736,11 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     lastResolved?: string;
   }> {
     try {
-      const response = await this.client.put(`/api/horizon/lenses/${lensId}`, data);
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      if (options?.skipScouting) headers['X-Horizon-Skip-Scouting'] = '1';
+      const response = await this.client.put(`/api/horizon/lenses/${lensId}`, data, { headers });
       return response.data;
     } catch (error: any) {
       console.error(`[API] updateHorizonLens error:`, error);

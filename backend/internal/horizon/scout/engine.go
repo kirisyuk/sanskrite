@@ -573,6 +573,20 @@ func (e *ScoutEngine) transition(ctx context.Context, job *models.ScoutingJob, n
 	}
 	// Update local job snapshot (best-effort)
 	job.CurrentState = newState
+	// IMPORTANT: keep AgentJob.Status in sync with the transitioned state.
+	// Otherwise subsequent best-effort Update() calls from ScoutEngine (which persist job.State, attempts, etc.)
+	// can overwrite the terminal status back to "pending"/"running", causing CreateDedup() to incorrectly
+	// treat old jobs as active forever and to reuse jobId (created=false).
+	switch newState {
+	case models.ScoutingJobStateVerified:
+		job.Status = coreModels.AgentJobStatusCompleted
+	case models.ScoutingJobStateRejected, models.ScoutingJobStateFailed:
+		job.Status = coreModels.AgentJobStatusFailed
+	default:
+		// Any non-terminal scout state counts as running from AgentJob perspective.
+		// (pending is only used at creation time).
+		job.Status = coreModels.AgentJobStatusRunning
+	}
 	if job.State == nil {
 		job.State = map[string]interface{}{}
 	}

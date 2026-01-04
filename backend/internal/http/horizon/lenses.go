@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
@@ -164,7 +165,31 @@ func (h *HorizonHandlers) UpdateLens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lens.ID = lensID
-	if err := h.service.Lens().UpdateLens(r.Context(), &lens); err != nil {
+
+	// Enforce tenant (do not trust client-sent tenantId).
+	lens.TenantID = authInfo.TenantID
+
+	// Best-effort: validate access and freeze projectId to existing lens (do not allow cross-project moves here).
+	if old, err := h.service.Lens().GetLens(r.Context(), lensID); err == nil && old != nil {
+		if old.TenantID != authInfo.TenantID {
+			http.Error(w, "Access denied", http.StatusForbidden)
+			return
+		}
+		if strings.TrimSpace(old.ProjectID) != "" {
+			lens.ProjectID = old.ProjectID
+		}
+	}
+
+	ctx := r.Context()
+	// Optional header: suppress scouting for scope-only updates (e.g., pin/unpin).
+	if v := strings.TrimSpace(r.Header.Get("X-Horizon-Skip-Scouting")); v != "" {
+		v = strings.ToLower(v)
+		if v == "1" || v == "true" || v == "yes" || v == "on" {
+			ctx = hlens.WithSkipScouting(ctx)
+		}
+	}
+
+	if err := h.service.Lens().UpdateLens(ctx, &lens); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

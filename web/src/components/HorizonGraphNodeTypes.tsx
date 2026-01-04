@@ -586,6 +586,8 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   const totalPages = data.groupTotalPages ?? 1;
   const hasPagination = totalPages > 1;
   const onGroupPageChange = data.onGroupPageChange;
+  const hideHeader = Boolean((data as any)?.groupHideHeader);
+  const noFill = Boolean((data as any)?.groupNoFill);
 
   // Get colors based on semantic group or fall back to edge type colors
   let bg: string;
@@ -604,6 +606,13 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
     bg = theme === 'dark' ? scheme.dark : scheme.light;
     border = theme === 'dark' ? scheme.borderDark : scheme.borderLight;
     icon = '';
+  }
+
+  // In some layouts (e.g. Levels Two-Pane), groups are purely structural containers.
+  // Best practice: no semantic fill, only a subtle outline.
+  if (noFill) {
+    bg = 'transparent';
+    border = theme === 'dark' ? 'rgba(148, 163, 184, 0.28)' : 'rgba(100, 116, 139, 0.22)';
   }
 
   const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.85)';
@@ -690,9 +699,10 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         background: bg,
         border: `1px dashed ${border}`,
         borderRadius: 12,
-        boxShadow:
-          (theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)') +
-          (ring ? `, 0 0 0 3px ${ring}` : ''),
+        boxShadow: (noFill && !ring)
+          ? 'none'
+          : ((theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)') +
+            (ring ? `, 0 0 0 3px ${ring}` : '')),
         // Groups are real containers in Freeform/Linear pagination modes; they must allow interaction
         // (pagination buttons). Backdrop-only groups should not intercept clicks.
         pointerEvents: isBackdrop ? 'none' : 'auto',
@@ -701,49 +711,51 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         cursor: interactive ? 'grab' : 'default',
       }}
     >
-      {/* Header */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 12,
-          top: 10,
-          right: 12,
-          display: 'flex',
-          alignItems: 'baseline',
-          justifyContent: 'space-between',
-          gap: 10,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-          {icon && <span style={{ fontSize: 12 }}>{icon}</span>}
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', color: titleColor }}>
-            {title}
+      {/* Header (optional) */}
+      {!hideHeader && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 12,
+            top: 10,
+            right: 12,
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 10,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+            {icon && <span style={{ fontSize: 12 }}>{icon}</span>}
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', color: titleColor }}>
+              {title}
+            </div>
+            {count !== undefined && (
+              <div style={{ fontSize: 11, fontWeight: 600, color: subtitleColor }}>
+                ({count})
+              </div>
+            )}
           </div>
-          {count !== undefined && (
-            <div style={{ fontSize: 11, fontWeight: 600, color: subtitleColor }}>
-              ({count})
+          {subtitle && (
+            <div
+              style={{
+                fontSize: 9,
+                fontWeight: 500,
+                color: subtitleColor,
+                textTransform: 'uppercase',
+                letterSpacing: '0.3px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: '50%',
+              }}
+              title={edgeTypes.join(', ')}
+            >
+              {subtitle}
             </div>
           )}
         </div>
-        {subtitle && (
-          <div
-            style={{
-              fontSize: 9,
-              fontWeight: 500,
-              color: subtitleColor,
-              textTransform: 'uppercase',
-              letterSpacing: '0.3px',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              maxWidth: '50%',
-            }}
-            title={edgeTypes.join(', ')}
-          >
-            {subtitle}
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Pagination Controls (Bottom) */}
       {hasPagination && (
@@ -833,6 +845,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isCollapsed = data.collapsed;
   const isExpanded = data.expanded;
   const isLoadingRelated = Boolean(data.isLoadingRelated);
+  const isHub = Boolean((data as any)?.hubHighlight);
+  const isUltimateBeneficiary = Boolean((data as any)?.ultimateBeneficiaryHighlight);
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
   const canScopeScout = Boolean((isExpanded || data.loadRelatedAttempted) && data.onScopeScout && !data.scopeScoutDone);
@@ -854,6 +868,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const shadowBase = theme === 'dark' ? '0 8px 22px rgba(0,0,0,0.30)' : '0 8px 22px rgba(0,0,0,0.10)';
   const criticalRing = hexToRgba('#EF4444', theme === 'dark' ? 0.55 : 0.35);
   const q = getHorizonNodeVisualQuality();
+
+  // Additional semantic highlights:
+  // - Ultimate beneficiaries (PERSON) on upward control traversal: greenish ring
+  // - Hubs (in>=5 or out>=5): amber ring
+  // Priority: critical > beneficiary > hub
+  const hubRing = theme === 'dark' ? 'rgba(251, 191, 36, 0.60)' : 'rgba(245, 158, 11, 0.55)';
+  const beneficiaryRing = theme === 'dark' ? 'rgba(52, 211, 153, 0.56)' : 'rgba(16, 185, 129, 0.46)';
+  const highlightRing = !isCritical ? (isUltimateBeneficiary ? beneficiaryRing : (isHub ? hubRing : null)) : null;
 
   const displayLabel = data.label || humanizeCanonicalPath(data.canonicalPath) || 'Fragment';
   const titleLineClamp = isCollapsed ? 2 : (data.showMetrics ? 2 : 6);
@@ -931,9 +953,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           ['--hzn-accent' as any]: accentColor,
           ['--hzn-accent-soft' as any]: accentSoft,
           ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,
-          ['--hzn-shadow' as any]: isCritical
-            ? `0 0 0 2px ${criticalRing}, ${shadowBase}`
-            : (q === 'max' ? `${shadowBase}, 0 18px 60px rgba(0,0,0,0.18)` : shadowBase),
+          ['--hzn-shadow' as any]: (() => {
+            const baseShadow = isCritical
+              ? `0 0 0 2px ${criticalRing}, ${shadowBase}`
+              : (q === 'max' ? `${shadowBase}, 0 18px 60px rgba(0,0,0,0.18)` : shadowBase);
+            return highlightRing ? `0 0 0 2px ${highlightRing}, ${baseShadow}` : baseShadow;
+          })(),
           padding: isCollapsed ? '8px 12px 12px' : '10px 14px 14px',
           width: `${NODE_WIDTH_PX}px`,
           height: `${NODE_CARD_HEIGHT_PX}px`,

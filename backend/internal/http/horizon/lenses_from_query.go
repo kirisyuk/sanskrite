@@ -21,6 +21,9 @@ type createLensFromQueryRequest struct {
 	Query             string   `json:"query"`
 	MaxRecursionDepth *int     `json:"maxRecursionDepth,omitempty"`
 	RequestedMetrics  []string `json:"requestedMetrics,omitempty"`
+	// Optional: canonical paths selected from prefetch/autocomplete UI.
+	// These are merged into the final lens scope (deduped).
+	PrefetchScope []string `json:"prefetchScope,omitempty"`
 	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
 	Specialties []string `json:"specialties,omitempty"`
 	Status      string   `json:"status,omitempty"` // ACTIVE|DORMANT
@@ -57,6 +60,23 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	req.Query = strings.TrimSpace(req.Query)
 	req.Name = strings.TrimSpace(req.Name)
 	req.Status = strings.TrimSpace(req.Status)
+	// Normalize prefetch scope paths.
+	if len(req.PrefetchScope) > 0 {
+		out := make([]string, 0, len(req.PrefetchScope))
+		seen := make(map[string]struct{}, len(req.PrefetchScope))
+		for _, raw := range req.PrefetchScope {
+			cp := strings.TrimSpace(raw)
+			if cp == "" {
+				continue
+			}
+			if _, ok := seen[cp]; ok {
+				continue
+			}
+			seen[cp] = struct{}{}
+			out = append(out, cp)
+		}
+		req.PrefetchScope = out
+	}
 
 	if req.ProjectID == "" {
 		http.Error(w, "projectId is required", http.StatusBadRequest)
@@ -95,6 +115,7 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"statusProvided":    req.Status != "",
 		"maxRecursionDepth": req.MaxRecursionDepth,
 		"requestedMetricsN": len(req.RequestedMetrics),
+		"prefetchScopeN":    len(req.PrefetchScope),
 	})
 
 	// 1) Resolve intent (precheck).
@@ -167,6 +188,18 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	seenScope := make(map[string]struct{}, len(intent.Anchors))
 	for _, a := range intent.Anchors {
 		cp := strings.TrimSpace(a.CanonicalPath)
+		if cp == "" {
+			continue
+		}
+		if _, ok := seenScope[cp]; ok {
+			continue
+		}
+		seenScope[cp] = struct{}{}
+		scope = append(scope, cp)
+	}
+	// Merge prefetch scope (UI-selected entities) into the final scope.
+	for _, raw := range req.PrefetchScope {
+		cp := strings.TrimSpace(raw)
 		if cp == "" {
 			continue
 		}

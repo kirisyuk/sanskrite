@@ -23,6 +23,9 @@ export interface LensCanvasProps {
   showInputInProgress?: boolean;
   onAssemble?: (request: AssembleLensRequest) => void;
   isCreatingLens?: boolean;
+  /** When creating a new lens (lensId=null), filter progress events to only those matching this creation attempt. */
+  activeCreateCorrelationId?: string | null;
+  activeCreateSessionId?: string | null;
   onClose: () => void;
 }
 
@@ -34,6 +37,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   showInputInProgress = false,
   onAssemble,
   isCreatingLens = false,
+  activeCreateCorrelationId = null,
+  activeCreateSessionId = null,
   onClose,
 }) => {
   const { theme } = React.useContext(ThemeContext);
@@ -418,6 +423,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 showInput={showInputInProgress}
                 onAssemble={onAssemble}
                 isCreatingLens={isCreatingLens}
+                activeCreateCorrelationId={activeCreateCorrelationId}
+                activeCreateSessionId={activeCreateSessionId}
               />
             )}
             {viewMode === 'details' && lens && (

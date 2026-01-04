@@ -8,6 +8,9 @@ export interface LensCanvasProgressProps {
   showInput?: boolean;
   onAssemble?: (request: AssembleLensRequest) => void;
   isCreatingLens?: boolean;
+  /** When creating a new lens (lensId=null), filter progress events to only those matching this creation attempt. */
+  activeCreateCorrelationId?: string | null;
+  activeCreateSessionId?: string | null;
 }
 
 const formatEdgeType = (type: string) => {
@@ -82,6 +85,8 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
   showInput = false,
   onAssemble,
   isCreatingLens = false,
+  activeCreateCorrelationId = null,
+  activeCreateSessionId = null,
 }) => {
   const events = useHorizonRealtimeStore((s) => s.events);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
@@ -90,7 +95,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
   // Show events that match the lensId/projectId
   // If filtering by lensId, only show events with matching lensId (or no lensId if projectId matches)
   const filteredEvents = React.useMemo(() => {
-    return (events || []).filter((ev) => {
+    const base = (events || []).filter((ev) => {
       // If filtering by projectId, event must match projectId (or have no projectId)
       if (projectId) {
         if (ev.projectId && ev.projectId !== projectId) {
@@ -109,7 +114,28 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
       }
       return true;
     });
-  }, [events, lensId, projectId]);
+
+    // New Lens is an "ultimate" user intent: do not show unrelated background jobs.
+    // If no lens is selected:
+    // - when NOT creating: show no events at all (keep the creation UX clean)
+    // - when creating: show only events belonging to this creation attempt (correlation/session ID)
+    if (!lensId) {
+      if (!isCreatingLens) return [];
+      const cid = String(activeCreateCorrelationId || '').trim();
+      const sid = String(activeCreateSessionId || '').trim();
+      if (!cid && !sid) return [];
+      return base.filter((ev) => {
+        const d: any = (ev as any)?.data;
+        const evCid = typeof d?.correlationId === 'string' ? String(d.correlationId).trim() : '';
+        const evSid = typeof d?.sessionId === 'string' ? String(d.sessionId).trim() : '';
+        if (cid && evCid && evCid === cid) return true;
+        if (sid && evSid && evSid === sid) return true;
+        return false;
+      });
+    }
+
+    return base;
+  }, [events, lensId, projectId, isCreatingLens, activeCreateCorrelationId, activeCreateSessionId]);
 
   // Auto-scroll to bottom when new events arrive
   React.useEffect(() => {

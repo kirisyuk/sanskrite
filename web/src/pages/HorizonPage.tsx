@@ -78,6 +78,8 @@ const HorizonPage: React.FC = () => {
   const resetEvents = useHorizonRealtimeStore((s) => s.resetEvents);
   const [lensStarted, setLensStarted] = React.useState(false);
   const [isCreatingLens, setIsCreatingLens] = React.useState(false);
+  const [activeCreateCorrelationId, setActiveCreateCorrelationId] = React.useState<string | null>(null);
+  const [activeCreateSessionId, setActiveCreateSessionId] = React.useState<string | null>(null);
   const creatingLensRef = React.useRef(false);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
   
@@ -264,22 +266,64 @@ const HorizonPage: React.FC = () => {
     setIsCreatingLens(true);
 
     try {
-      // Assemble via NL query -> intent -> lens (backend precheck).
-      // Realtime assembly/scout progress is delivered via horizon.* websocket events.
+      // Two creation modes:
+      // 1) Prefetch-only (chips only): create lens with explicit scope (no scouting).
+      // 2) Query (+ optional prefetch scope): create lens from NL query (scouting), merging prefetchScope into final scope.
       const correlationId = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
         ? (globalThis.crypto as any).randomUUID()
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const sessionId = (window as any).__horizonSessionId || correlationId;
       (window as any).__horizonSessionId = sessionId;
 
+      // Mark current create attempt so Progress view can ignore unrelated background jobs.
+      setActiveCreateCorrelationId(correlationId);
+      setActiveCreateSessionId(sessionId);
+
       resetEvents();
       setLensStarted(true);
 
+      const q = String(request.query || '').trim();
+      const prefetchScope = Array.from(
+        new Set(
+          (request.prefetchScope || [])
+            .map((x) => String(x || '').trim())
+            .filter(Boolean),
+        ),
+      );
+
+      // Mode 1: no free-text query — create a lens directly from preselected scope.
+      if (!q && prefetchScope.length > 0) {
+        const defaultName = prefetchScope.length === 1
+          ? prefetchScope[0].split('/').filter(Boolean).slice(-1)[0] || 'Lens'
+          : `Lens (${prefetchScope.length})`;
+        const lens = await api.createHorizonLens(
+          {
+            projectId: request.projectId,
+            name: String(request.name || '').trim() || defaultName,
+            scope: prefetchScope,
+            status: 'ACTIVE',
+          },
+          { correlationId, sessionId },
+        );
+
+        if (lens?.id) {
+          setSelectedLensId(lens.id);
+          window.dispatchEvent(new CustomEvent('horizon:lens-created', {
+            detail: { lensId: lens.id, projectId: request.projectId },
+          }));
+        } else {
+          setSelectedLensId(null);
+        }
+        return;
+      }
+
+      // Mode 2: query-based lens creation (scouting) — merge prefetch scope into final scope server-side.
       const result = await api.createHorizonLensFromQuery(
         {
           projectId: request.projectId,
-          query: request.query,
+          query: q,
           maxRecursionDepth: request.filters?.maxRecursionDepth ?? 1,
+          prefetchScope: prefetchScope.length > 0 ? prefetchScope : undefined,
         },
         { correlationId, sessionId }
       );
@@ -300,6 +344,8 @@ const HorizonPage: React.FC = () => {
     } finally {
       creatingLensRef.current = false;
       setIsCreatingLens(false);
+      setActiveCreateCorrelationId(null);
+      setActiveCreateSessionId(null);
     }
   }, [resetEvents]);
 
@@ -357,6 +403,8 @@ const HorizonPage: React.FC = () => {
           setSelectedLensId(null);
           setLensStarted(false);
           resetEvents();
+          setActiveCreateCorrelationId(null);
+          setActiveCreateSessionId(null);
           // Note: currentProject should already be set from SidebarPanel project selection
           // LensCanvas will use currentProject.id as projectId for creating the lens
         }}
@@ -394,12 +442,16 @@ const HorizonPage: React.FC = () => {
               showInputInProgress={true}
               onAssemble={handleAssembleLens}
               isCreatingLens={isCreatingLens}
+              activeCreateCorrelationId={activeCreateCorrelationId}
+              activeCreateSessionId={activeCreateSessionId}
               onClose={() => {
                 // Only close lens if one is selected, otherwise just reset state
                 if (selectedLensId) {
                   setSelectedLensId(null);
                 }
                 setLensStarted(false);
+                setActiveCreateCorrelationId(null);
+                setActiveCreateSessionId(null);
               }}
             />
           ) : (

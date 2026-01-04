@@ -924,6 +924,696 @@ export async function layoutLevelsFullGraph<T = any>(
 }
 
 /**
+ * Levels (Hierarchical) — Two-pane layout (contract-driven, v2).
+ *
+ * Contract:
+ * - **Left side**: per-node expanded hierarchy shown top-down inside a (potentially large) group.
+ *   - max 6 items per row, unlimited rows (no pagination).
+ * - **Right side**: a backbone of "single nodes" shown as a left-to-right hierarchy:
+ *   - less subordinate (upstream/parents) to the LEFT
+ *   - more subordinate (downstream/children) to the RIGHT
+ * - **Upstream group disappears**:
+ *   - any upstream neighbor (directionFromParent === 'incoming') is promoted into the right backbone.
+ *
+ * Notes:
+ * - Edge routing stays as-is (spaghetti allowed).
+ * - This is only intended for "levels" mode and is invoked from `LensCanvasCockpit`.
+ */
+export async function layoutLevelsTwoPane<T = any>(
+  nodes: Node<T>[],
+  edges: Edge[],
+  options: LayoutOptions_Custom = {},
+): Promise<Node<T>[]> {
+  const {
+    nodeWidth = DEFAULT_NODE_WIDTH,
+    nodeHeight = DEFAULT_NODE_HEIGHT,
+    nodeSpacing = 60,
+    layerSpacing = 150,
+  } = options;
+
+  if (!nodes || nodes.length === 0) return nodes;
+
+  const isGroup = (n: Node<T>) => Boolean((n.data as any)?.isGroup);
+
+  // Strip any prior grouping from fragment nodes (ReactFlow parent linkage must be rebuilt deterministically).
+  const fragments: Node<T>[] = nodes
+    .filter((n) => !isGroup(n))
+    .map((n) => {
+      const out: any = { ...n };
+      delete out.parentId;
+      delete out.parentNode;
+      delete out.extent;
+      delete out.expandParent;
+      return out as Node<T>;
+    });
+
+  const normId = (v: any) => String(v || '').trim();
+  const edgeTypeOf = (e: any): string => normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
+
+  // Hierarchy edge sets (same intent as `deriveLevelsTreeMetadata`, but local to this layout).
+  // Parent is the "more ultimate" entity (should be further RIGHT).
+  // IMPORTANT: When multiple hierarchy-ish edges exist between the same two nodes
+  // (e.g. OWNS vs INFLUENCES), we must pick a single "best" direction to avoid
+  // contradictions. We prioritize direct control/ownership over influence.
+  const STRONG_CONTROL_TYPES = new Set([
+    'OWNS',
+    'SUBSIDIARY_OF',
+    'PARENT_OF',
+    'MANAGES',
+    'CONTROLS',
+    'INVESTS_IN',
+  ]);
+  const GOVERNANCE_CONTROL_TYPES = new Set(['BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
+  const SUPPLY_CHAIN_TYPES = new Set(['PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO']);
+  const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
+  const hierarchyScore = (et: string): number => {
+    const t = String(et || '').trim();
+    if (!t) return 0;
+    if (STRONG_CONTROL_TYPES.has(t)) return 400;
+    if (GOVERNANCE_CONTROL_TYPES.has(t)) return 220;
+    if (SUPPLY_CHAIN_TYPES.has(t)) return 120;
+    if (INFLUENCE_TYPES.has(t)) return 40;
+    // Dependencies/context still participate, but below direct control.
+    return 80;
+  };
+  const HIERARCHY_TYPES = new Set([
+    'OWNS',
+    'PARENT_OF',
+    'MANAGES',
+    'CONTROLS',
+    'INVESTS_IN',
+    'BOARD_MEMBER_OF',
+    'EXECUTIVE_OF',
+    'PRODUCES',
+    'SUPPLIES_TO',
+    'TRANSFORMS_INTO',
+    'INFLUENCES',
+    'AFFECTS',
+    'REGULATES',
+    'IMPACTS',
+  ]);
+  const INVERTED_HIERARCHY_TYPES = new Set([
+    'SUBSIDIARY_OF',
+    'DEPENDS_ON',
+    'REQUIRES',
+    'NEEDS',
+    'USES',
+    'CONSUMES',
+    'LOCATED_IN',
+    'OPERATES_IN',
+    'BASED_IN',
+    'HEADQUARTERED_IN',
+  ]);
+
+  const getParentChild = (e: any): { parent: string; child: string } | null => {
+    const s = normId(e?.source);
+    const t = normId(e?.target);
+    if (!s || !t) return null;
+    const et = edgeTypeOf(e);
+    if (HIERARCHY_TYPES.has(et)) return { parent: s, child: t };
+    if (INVERTED_HIERARCHY_TYPES.has(et)) return { parent: t, child: s };
+    return null;
+  };
+
+  type PcScored = { parent: string; child: string; et: string; score: number };
+  const pairKey = (a: string, b: string) => (a < b ? `${a}||${b}` : `${b}||${a}`);
+  const getParentChildScored = (e: any): PcScored | null => {
+    const s = normId(e?.source);
+    const t = normId(e?.target);
+    if (!s || !t) return null;
+    const et = edgeTypeOf(e);
+    if (HIERARCHY_TYPES.has(et)) return { parent: s, child: t, et, score: hierarchyScore(et) };
+    if (INVERTED_HIERARCHY_TYPES.has(et)) return { parent: t, child: s, et, score: hierarchyScore(et) };
+    return null;
+  };
+
+  // Precompute the best hierarchy relation for every node-pair (to avoid conflicts).
+  const bestPcByPair = new Map<string, PcScored>();
+  for (const e of (edges || []) as any[]) {
+    const pc = getParentChildScored(e);
+    if (!pc) continue;
+    const key = pairKey(pc.parent, pc.child);
+    const prev = bestPcByPair.get(key);
+    if (!prev || pc.score > prev.score) {
+      bestPcByPair.set(key, pc);
+      continue;
+    }
+    // Tie-break (stable): prefer non-influence when scores match (extra safety for future scoring tweaks).
+    if (prev && pc.score === prev.score) {
+      const prevIsInfluence = INFLUENCE_TYPES.has(prev.et);
+      const curIsInfluence = INFLUENCE_TYPES.has(pc.et);
+      if (prevIsInfluence && !curIsInfluence) {
+        bestPcByPair.set(key, pc);
+      }
+    }
+  }
+
+  // === 1) Build Right backbone set ===
+  // Base: expanded nodes + roots (depth=0).
+  const rightIds = new Set<string>();
+  for (const n of fragments) {
+    const d: any = n.data;
+    if (d?.expanded) rightIds.add(n.id);
+    if (typeof d?.depth === 'number' && d.depth === 0) rightIds.add(n.id);
+  }
+  if (rightIds.size === 0 && fragments[0]) rightIds.add(fragments[0].id);
+
+  const fragmentIdSet = new Set(fragments.map((n) => n.id));
+
+  // Promote upstream neighbors into the right backbone (Upstream group disappears).
+  // Two signals:
+  // - metadata-based (expansion): parentFragmentId in rightIds AND directionFromParent === 'incoming'
+  // - edge-based (hierarchy): if there is a hierarchy edge Parent -> Child and Child is already on the right,
+  //   then Parent becomes a right-node too (if it exists on canvas).
+  //
+  // Iterate until stable to capture multi-step promotions.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const n of fragments) {
+      if (rightIds.has(n.id)) continue;
+      const d: any = n.data;
+      const pid = String(d?.parentFragmentId || '').trim();
+      if (!pid || !rightIds.has(pid)) continue;
+      if (d?.directionFromParent === 'incoming') {
+        rightIds.add(n.id);
+        changed = true;
+      }
+    }
+
+    for (const pc of bestPcByPair.values()) {
+      if (!fragmentIdSet.has(pc.parent)) continue;
+      if (rightIds.has(pc.child) && !rightIds.has(pc.parent)) {
+        rightIds.add(pc.parent);
+        changed = true;
+      }
+    }
+  }
+
+  const rightNodes = fragments.filter((n) => rightIds.has(n.id));
+
+  // === 2) Compute RIGHT horizontal levels (hierarchy within right nodes) ===
+  // We build hierarchy from real graph edges between right nodes (not from expansion parentFragmentId),
+  // so that nodes that were in the Lens (depth=0) still get correctly placed relative to each other
+  // (e.g., Group42 left of Mubadala, UAE right of Mubadala).
+  const rightIdSet = new Set(rightNodes.map((n) => n.id));
+  const childrenOf = new Map<string, Set<string>>(); // parent -> children
+  const parentsOf = new Map<string, Set<string>>(); // child -> parents
+
+  for (const pc of bestPcByPair.values()) {
+    if (!rightIdSet.has(pc.parent) || !rightIdSet.has(pc.child)) continue;
+    const kids = childrenOf.get(pc.parent) || new Set<string>();
+    kids.add(pc.child);
+    childrenOf.set(pc.parent, kids);
+    const pars = parentsOf.get(pc.child) || new Set<string>();
+    pars.add(pc.parent);
+    parentsOf.set(pc.child, pars);
+  }
+
+  // Horizontal level is computed as "height" in the right-only hierarchy:
+  // leaves (most subordinate) = 0, parent = max(child)+1.
+  const hLevel = new Map<string, number>();
+  const hVisiting = new Set<string>();
+  const computeLevel = (id: string): number => {
+    if (hLevel.has(id)) return hLevel.get(id)!;
+    if (hVisiting.has(id)) return 0; // cycle guard
+    hVisiting.add(id);
+    const kids = Array.from(childrenOf.get(id) || []);
+    if (kids.length === 0) {
+      hLevel.set(id, 0);
+      hVisiting.delete(id);
+      return 0;
+    }
+    let m = 0;
+    for (const k of kids) m = Math.max(m, computeLevel(k));
+    const lv = m + 1;
+    hLevel.set(id, lv);
+    hVisiting.delete(id);
+    return lv;
+  };
+  let maxLevel = 0;
+  for (const n of rightNodes) {
+    maxLevel = Math.max(maxLevel, computeLevel(n.id));
+  }
+
+  // === 3) Build Left blocks (Downstream only) ===
+  // Anything attached to a right node (parentFragmentId == rightId) that is NOT in right backbone
+  // stays in the left block. This is the "big group" that may be multi-row.
+  const downstreamByRight = new Map<string, Node<T>[]>();
+  for (const n of fragments) {
+    if (rightIds.has(n.id)) continue;
+    const d: any = n.data;
+    const pid = String(d?.parentFragmentId || '').trim();
+    if (!pid || !rightIds.has(pid)) continue;
+    const list = downstreamByRight.get(pid) || [];
+    list.push(n);
+    downstreamByRight.set(pid, list);
+  }
+
+  const sortByPriorityThenLabel = (list: Node<T>[]) => {
+    return [...list].sort((a, b) => {
+      const ap = getEdgePriority((a.data as any)?.edgeTypeFromParent);
+      const bp = getEdgePriority((b.data as any)?.edgeTypeFromParent);
+      if (ap !== bp) return ap - bp;
+      const al = String((a.data as any)?.label || a.id);
+      const bl = String((b.data as any)?.label || b.id);
+      return al.localeCompare(bl);
+    });
+  };
+
+  for (const [rid, list] of downstreamByRight.entries()) {
+    downstreamByRight.set(rid, sortByPriorityThenLabel(list));
+  }
+
+  // === 4) Geometry constants ===
+  // Right hierarchy is laid out in "columns" by horizontal level.
+  // Spec: distance between right nodes horizontally is ~1 node.
+  // We interpret this as 1 node-width GAP between columns => step ~= 2 * nodeWidth.
+  const RIGHT_LEVEL_STEP_X = Math.max(nodeWidth * 2, nodeWidth + nodeSpacing);
+  const RIGHT_BASE_X = 520; // leftmost right-hierarchy column anchor
+
+  // Extra air between left (groups) and right (hierarchy) — about half a node width.
+  const GROUP_GAP_X = 22 + Math.floor(nodeWidth / 2);
+  const GROUP_GAP_Y = Math.max(16, Math.floor(layerSpacing * 0.12));
+
+  // Right-side vertical density:
+  // The right hierarchy should be compact (especially the first column / nearest level).
+  const RIGHT_GAP_Y_BASE = Math.max(18, Math.floor(nodeSpacing * 0.35)); // ~20-24px with defaults
+  const rightGapY = (level: number) => {
+    // Level 1 (closest to the root node) should be tighter.
+    if (level === 1) return Math.max(12, Math.floor(RIGHT_GAP_Y_BASE * 0.65));
+    return RIGHT_GAP_Y_BASE;
+  };
+
+  // Group content wrap:
+  // - Fill order is column-major (vertical first, then horizontal).
+  // - Rows:
+  //   - count <= 2  => stacked vertically
+  //   - count <= 12 => 2 rows
+  //   - count > 12  => 3 rows
+  const PAD_X = 16;
+  const PAD_TOP = 12;
+  const PAD_BOTTOM = 12;
+  // Keep left-group grids compact regardless of right-hierarchy spacing.
+  const groupChildGapX = Math.min(40, nodeSpacing);
+  const groupChildGapY = 40;
+
+  const groupDimsWrap = (count: number) => {
+    const safeCount = Math.max(0, Math.floor(count));
+    if (safeCount <= 0) return { w: PAD_X * 2, h: PAD_TOP + PAD_BOTTOM, cols: 0, rows: 0 };
+
+    const rows =
+      safeCount <= 2 ? safeCount
+        : safeCount <= 12 ? 2
+          : 3;
+    const cols = Math.ceil(safeCount / rows);
+    const innerW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+    const innerH = rows * nodeHeight + Math.max(0, rows - 1) * groupChildGapY;
+    const w = innerW + PAD_X * 2;
+    const h = innerH + PAD_TOP + PAD_BOTTOM;
+    return { w, h, cols, rows };
+  };
+
+  // === 5) Place Right hierarchy nodes ===
+  // X: by horizontal level (leaf=0 on the left, ultimate=maxLevel on the right).
+  // Y: symmetric / barycentric layout:
+  // - nodes with children are centered around their children
+  // - multiple parents are placed symmetrically around the node to the right (via overlap resolution per column)
+  const rightSorted = [...rightNodes].sort((a, b) => {
+    const la = hLevel.get(a.id) || 0;
+    const lb = hLevel.get(b.id) || 0;
+    if (la !== lb) return la - lb;
+    const ya = a.position?.y ?? 0;
+    const yb = b.position?.y ?? 0;
+    if (ya !== yb) return ya - yb;
+    const al = String((a.data as any)?.label || a.id);
+    const bl = String((b.data as any)?.label || b.id);
+    return al.localeCompare(bl);
+  });
+
+  const rightPos = new Map<string, { x: number; y: number }>();
+  const unitHeights = new Map<string, number>();
+
+  for (const rn of rightSorted) {
+    const children = downstreamByRight.get(rn.id) || [];
+    const h = children.length > 0 ? Math.max(nodeHeight, groupDimsWrap(children.length).h) : nodeHeight;
+    unitHeights.set(rn.id, h);
+  }
+
+  const unitH = (id: string) => unitHeights.get(id) || nodeHeight;
+
+  // Group right nodes by horizontal level.
+  const idsByLevel = new Map<number, string[]>();
+  for (const rn of rightSorted) {
+    const lv = hLevel.get(rn.id) || 0;
+    const arr = idsByLevel.get(lv) || [];
+    arr.push(rn.id);
+    idsByLevel.set(lv, arr);
+  }
+  for (const [lv, arr] of idsByLevel.entries()) {
+    idsByLevel.set(
+      lv,
+      [...arr].sort((a, b) => {
+        const al = String((rightNodes.find((n) => n.id === a)?.data as any)?.label || a);
+        const bl = String((rightNodes.find((n) => n.id === b)?.data as any)?.label || b);
+        return al.localeCompare(bl);
+      }),
+    );
+  }
+
+  // Compute y-centers by propagating from leaves (level 0) to ultimate nodes (maxLevel).
+  const yCenter = new Map<string, number>();
+  let cursorY = 0;
+
+  const ensureLevelY = (level: number) => {
+    const ids = idsByLevel.get(level) || [];
+    if (ids.length === 0) return;
+    const gapY = rightGapY(level);
+
+    const desired = new Map<string, number>();
+    for (const id of ids) {
+      const kids = Array.from(childrenOf.get(id) || []);
+      if (kids.length > 0) {
+        const ys = kids.map((k) => yCenter.get(k)).filter((v): v is number => typeof v === 'number');
+        if (ys.length > 0) {
+          desired.set(id, ys.reduce((s, v) => s + v, 0) / ys.length);
+          continue;
+        }
+      }
+      // Fallback: append at the end.
+      desired.set(id, cursorY + unitH(id) / 2);
+      cursorY += unitH(id) + gapY;
+    }
+
+    // Resolve overlaps within this level (keeps vertical symmetry; parents with same target Y spread evenly).
+    const sorted = [...ids].sort((a, b) => (desired.get(a)! - desired.get(b)!));
+    let prevBottom = -Infinity;
+    for (const id of sorted) {
+      const half = unitH(id) / 2;
+      const minY = isFinite(prevBottom) ? prevBottom + gapY + half : -Infinity;
+      const yc = Math.max(desired.get(id)!, minY);
+      yCenter.set(id, yc);
+      prevBottom = yc + half;
+    }
+  };
+
+  // Level 0: deterministic stack.
+  ensureLevelY(0);
+  // Higher levels: barycentric.
+  for (let lv = 1; lv <= maxLevel; lv++) ensureLevelY(lv);
+
+  // Assign final positions.
+  for (const rn of rightSorted) {
+    const lv = hLevel.get(rn.id) || 0;
+    const x = RIGHT_BASE_X + lv * RIGHT_LEVEL_STEP_X;
+    const yc = yCenter.get(rn.id) ?? 0;
+    rightPos.set(rn.id, { x, y: yc - nodeHeight / 2 });
+  }
+
+  // Center vertically around 0 for nicer initial view
+  if (rightSorted.length > 0) {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const rn of rightSorted) {
+      const p = rightPos.get(rn.id)!;
+      const h = unitHeights.get(rn.id) || nodeHeight;
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y + h);
+    }
+    const shiftY = -((minY + maxY) / 2);
+    for (const rn of rightSorted) {
+      const p = rightPos.get(rn.id)!;
+      rightPos.set(rn.id, { x: p.x, y: p.y + shiftY });
+    }
+  }
+
+  // === 6) Build group containers (Downstream only) + attach children ===
+  const groupNodes: Node<T>[] = [];
+  const childNodes: Node<T>[] = [];
+
+  const attachChildrenWrap = (children: Node<T>[], groupId: string, rows: number) => {
+    const safeRows = Math.max(1, Math.floor(rows || 1));
+    for (let idx = 0; idx < children.length; idx++) {
+      const child = children[idx]!;
+      // Column-major: first fill vertical, then move right.
+      const rowIdx = idx % safeRows;
+      const colIdx = Math.floor(idx / safeRows);
+      const cx = PAD_X + colIdx * (nodeWidth + groupChildGapX);
+      const cy = PAD_TOP + rowIdx * (nodeHeight + groupChildGapY);
+      childNodes.push({
+        ...(child as any),
+        parentId: groupId,
+        extent: 'parent' as any,
+        zIndex: 1,
+        hidden: false,
+        position: { x: cx, y: cy },
+      } as any);
+    }
+  };
+
+  // Build left-band groups first, then pack vertically to avoid overlaps.
+  type GroupInfo = {
+    parentId: string;
+    groupId: string;
+    w: number;
+    h: number;
+    cols: number;
+    rows: number;
+    gx: number;
+    desiredGy: number;
+    gy: number;
+    children: Node<T>[];
+    edgeTypes: string[];
+  };
+
+  const groupInfos: GroupInfo[] = [];
+  const leftBandRightX = RIGHT_BASE_X - GROUP_GAP_X;
+
+  for (const rn of rightSorted) {
+    const children = downstreamByRight.get(rn.id) || [];
+    if (children.length === 0) continue;
+    const rp = rightPos.get(rn.id)!;
+    const dim = groupDimsWrap(children.length);
+    const groupId = `levels:left:${rn.id}:down`;
+    const gx = leftBandRightX - dim.w;
+
+    const nodeCenterY = rp.y + nodeHeight / 2;
+    const desiredGy = nodeCenterY - dim.h / 2;
+
+    const edgeTypes = Array.from(
+      new Set(children.map((n) => String((n.data as any)?.edgeTypeFromParent || '').trim()).filter(Boolean).map((t) => normalizeEdgeType(t))),
+    );
+
+    groupInfos.push({
+      parentId: rn.id,
+      groupId,
+      w: dim.w,
+      h: dim.h,
+      cols: dim.cols,
+      rows: dim.rows,
+      gx,
+      desiredGy,
+      gy: desiredGy,
+      children,
+      edgeTypes,
+    });
+  }
+
+  // Pack groups in the left band to prevent overlaps.
+  // Desired behavior: if two groups overlap, the lower one gets a slot below the upper one.
+  const GROUP_STACK_GAP_Y = Math.max(16, Math.floor(groupChildGapY * 0.4)); // compact but readable
+  groupInfos.sort((a, b) => a.desiredGy - b.desiredGy);
+  let prevBottom = -Infinity;
+  const anchoredRightIds = new Set<string>(); // right nodes that must stay aligned with their (packed) group
+  for (const g of groupInfos) {
+    const top = g.desiredGy;
+    const minTop = isFinite(prevBottom) ? prevBottom + GROUP_STACK_GAP_Y : -Infinity;
+    g.gy = Math.max(top, minTop);
+    prevBottom = g.gy + g.h;
+    // Keep the parent node strictly aligned to the group's vertical center.
+    const newNodeY = (g.gy + g.h / 2) - nodeHeight / 2;
+    const rp = rightPos.get(g.parentId);
+    if (rp) rightPos.set(g.parentId, { x: rp.x, y: newNodeY });
+    anchoredRightIds.add(g.parentId);
+  }
+
+  // After groups are packed (and their parent right-nodes were shifted),
+  // re-balance the RIGHT hierarchy vertically so that:
+  // - nodes expanded from groups don't "fly away"
+  // - children stay close to their parents
+  // while keeping anchored nodes fixed (those that have groups).
+  //
+  // We do a couple of barycentric sweeps:
+  // - right-to-left: align a node to the average Y of its parents
+  // - left-to-right: align a node to the average Y of its children
+  // with collision resolution per level.
+  {
+    const centerY = (id: string) => {
+      const p = rightPos.get(id);
+      return (p ? p.y : 0) + nodeHeight / 2;
+    };
+
+    const yC = new Map<string, number>();
+    for (const rn of rightSorted) yC.set(rn.id, centerY(rn.id));
+
+    const resolveCollisions = (ids: string[], gapY: number) => {
+      if (ids.length <= 1) return;
+      // Iterative 1D separation with anchors.
+      const H = (id: string) => nodeHeight;
+      for (let iter = 0; iter < 10; iter++) {
+        const ordered = [...ids].sort((a, b) => (yC.get(a)! - yC.get(b)!));
+        let moved = false;
+        for (let i = 0; i < ordered.length - 1; i++) {
+          const a = ordered[i]!;
+          const b = ordered[i + 1]!;
+          const ay = yC.get(a)!;
+          const by = yC.get(b)!;
+          const minDist = H(a) / 2 + H(b) / 2 + gapY;
+          const dist = by - ay;
+          if (dist >= minDist) continue;
+          const push = (minDist - dist);
+          const aAnch = anchoredRightIds.has(a);
+          const bAnch = anchoredRightIds.has(b);
+          if (aAnch && bAnch) continue; // can't fix; should be rare
+          if (aAnch) {
+            yC.set(b, by + push);
+            moved = true;
+          } else if (bAnch) {
+            yC.set(a, ay - push);
+            moved = true;
+          } else {
+            yC.set(a, ay - push / 2);
+            yC.set(b, by + push / 2);
+            moved = true;
+          }
+        }
+        // Re-pin anchors to their current (post-pack) positions
+        for (const id of anchoredRightIds) yC.set(id, centerY(id));
+        if (!moved) break;
+      }
+    };
+
+    const idsForLevel = (lv: number) => idsByLevel.get(lv) || [];
+
+    const blend = (cur: number, next: number, a: number) => cur * (1 - a) + next * a;
+    const alpha = 0.65; // fairly strong pull towards target
+
+    for (let sweep = 0; sweep < 2; sweep++) {
+      // Right-to-left: follow parents (keeps newly promoted nodes close to their right-side ancestors).
+      for (let lv = maxLevel - 1; lv >= 0; lv--) {
+        const ids = idsForLevel(lv);
+        if (ids.length === 0) continue;
+        for (const id of ids) {
+          if (anchoredRightIds.has(id)) continue;
+          const pars = Array.from(parentsOf.get(id) || []).filter((p) => typeof yC.get(p) === 'number');
+          if (pars.length === 0) continue;
+          const target = pars.reduce((s, p) => s + (yC.get(p) || 0), 0) / pars.length;
+          yC.set(id, blend(yC.get(id) || 0, target, alpha));
+        }
+        resolveCollisions(ids, rightGapY(lv));
+      }
+
+      // Left-to-right: follow children (keeps parents centered around their subtrees).
+      for (let lv = 1; lv <= maxLevel; lv++) {
+        const ids = idsForLevel(lv);
+        if (ids.length === 0) continue;
+        for (const id of ids) {
+          if (anchoredRightIds.has(id)) continue;
+          const kids = Array.from(childrenOf.get(id) || []).filter((c) => typeof yC.get(c) === 'number');
+          if (kids.length === 0) continue;
+          const target = kids.reduce((s, c) => s + (yC.get(c) || 0), 0) / kids.length;
+          yC.set(id, blend(yC.get(id) || 0, target, alpha * 0.75));
+        }
+        resolveCollisions(ids, rightGapY(lv));
+      }
+    }
+
+    // Commit y back into rightPos (x stays the same).
+    for (const rn of rightSorted) {
+      const p = rightPos.get(rn.id);
+      if (!p) continue;
+      const yc = yC.get(rn.id) ?? (p.y + nodeHeight / 2);
+      rightPos.set(rn.id, { x: p.x, y: yc - nodeHeight / 2 });
+    }
+
+    // Keep group alignment strict after right-side relaxation:
+    // group stays where it was packed, node stays anchored to it (already fixed),
+    // non-anchored nodes moved, groups unaffected.
+  }
+
+  // Emit group nodes + children after packing.
+  // IMPORTANT: group children must NOT also be returned as standalone nodes, otherwise ReactFlow
+  // may apply the "last duplicate id wins" behavior and scramble the grid when multiple groups exist.
+  const groupedChildIds = new Set<string>();
+  for (const g of groupInfos) {
+    for (const c of g.children) groupedChildIds.add(c.id);
+    groupNodes.push({
+      id: g.groupId,
+      type: 'horizonGroup' as any,
+      position: { x: g.gx, y: g.gy },
+      selectable: false,
+      draggable: false,
+      connectable: false,
+      focusable: false,
+      deletable: false,
+      style: { width: g.w, height: g.h, zIndex: 0 } as any,
+      data: {
+        isGroup: true,
+        groupIsBackdrop: false,
+        groupInteractive: false,
+        groupHideHeader: true,
+        groupNoFill: true,
+        groupParentId: g.parentId,
+        groupSemanticGroup: 'customers',
+        groupEdgeTypes: g.edgeTypes,
+        groupCount: g.children.length,
+        groupAllChildIds: g.children.map((n) => n.id),
+        // Pagination disabled
+        groupCurrentPage: 0,
+        groupTotalPages: 1,
+        groupPageSize: g.children.length,
+        groupMaxCols: g.cols,
+        groupMaxRows: g.rows,
+      } as any,
+    } as any);
+
+    attachChildrenWrap(g.children, g.groupId, g.rows);
+  }
+
+  // === 7) Dock remaining nodes (islands) ===
+  // In Levels mode with edge-type filters, the graph can be disconnected. Keep islands visible.
+  const usedChildIds = new Set<string>(childNodes.map((n) => n.id));
+  const passthrough = fragments.filter((n) => !rightIds.has(n.id) && !usedChildIds.has(n.id));
+  const dockCols = 6;
+  const dockColW = nodeWidth + nodeSpacing;
+  const dockRowH = nodeHeight + Math.max(40, Math.floor(nodeSpacing * 1.1));
+  const dockStartY = (rightPos.get(rightSorted[0]?.id || '')?.y ?? 0) - 2 * dockRowH;
+  // Dock lives strictly to the LEFT of the left-band (groups) so it never interferes with the right hierarchy.
+  const dockX = (RIGHT_BASE_X - GROUP_GAP_X) - 420 - dockCols * dockColW;
+  const docked = passthrough.map((n, i) => {
+    const row = Math.floor(i / dockCols);
+    const col = i % dockCols;
+    return { ...n, position: { x: dockX + col * dockColW, y: dockStartY + row * dockRowH } };
+  });
+
+  // === 8) Output ===
+  const dockMap = new Map(docked.map((n) => [n.id, n]));
+
+  const placedFragments: Node<T>[] = fragments.map((n) => {
+    // If this node is rendered inside a group, it must not appear as a standalone node.
+    if (groupedChildIds.has(n.id)) return null as any;
+    if (rightIds.has(n.id)) {
+      const p = rightPos.get(n.id);
+      return p ? ({ ...n, position: { x: p.x, y: p.y } } as any) : n;
+    }
+    if (dockMap.has(n.id)) return dockMap.get(n.id)!;
+    return n;
+  });
+
+  return [...groupNodes, ...placedFragments.filter(Boolean) as any, ...childNodes];
+}
+
+/**
  * Derive stable "Levels" metadata (depth/parent/root + edgeType/direction) for an existing graph.
  *
  * Why: nodes loaded from backend are flat (often depth=0 for everything). In Levels mode, that
@@ -991,6 +1681,24 @@ export function deriveLevelsTreeMetadata<T = any>(
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'
   ]);
+  const STRONG_CONTROL_TYPES = new Set([
+    'OWNS',
+    'SUBSIDIARY_OF',
+    'PARENT_OF',
+    'MANAGES',
+    'CONTROLS',
+    'INVESTS_IN',
+  ]);
+  const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
+  const hierarchyScore = (et: string): number => {
+    const t = String(et || '').toUpperCase().trim();
+    if (!t) return 0;
+    if (STRONG_CONTROL_TYPES.has(t)) return 400;
+    if (t === 'BOARD_MEMBER_OF' || t === 'EXECUTIVE_OF') return 220;
+    if (t === 'PRODUCES' || t === 'SUPPLIES_TO' || t === 'TRANSFORMS_INTO') return 120;
+    if (INFLUENCE_TYPES.has(t)) return 40;
+    return 80;
+  };
   
   const INVERTED_HIERARCHY_TYPES = new Set([
     // NOTE: SUBSIDIARY_OF is inverse of OWNS (subsidiary -> parent). The backend often normalizes it into OWNS,
@@ -1009,6 +1717,9 @@ export function deriveLevelsTreeMetadata<T = any>(
     else adj.set(from, [item]);
   };
 
+  // Keep only the best hierarchy-ish edge per node-pair (prevents OWNS vs INFLUENCES contradictions).
+  const bestHierByPair = new Map<string, { s: string; t: string; et: string; score: number }>();
+
   for (const e of edges as any[]) {
     const s = String(e?.source || '').trim();
     const t = String(e?.target || '').trim();
@@ -1017,9 +1728,29 @@ export function deriveLevelsTreeMetadata<T = any>(
     const et = edgeTypeOf(e);
     if (allowed && !allowed.has(et)) continue;
 
-    // We store edge as is.
+    // For hierarchy-ish edges, keep only the best one per node pair (prevents OWNS vs INFLUENCES contradictions).
+    const isHier = HIERARCHY_TYPES.has(et) || INVERTED_HIERARCHY_TYPES.has(et);
+    if (isHier) {
+      const key = s < t ? `${s}||${t}` : `${t}||${s}`;
+      const prev = bestHierByPair.get(key);
+      const cur = { s, t, et, score: hierarchyScore(et) };
+      if (!prev || cur.score > prev.score || (cur.score === prev.score && INFLUENCE_TYPES.has(prev.et) && !INFLUENCE_TYPES.has(cur.et))) {
+        bestHierByPair.set(key, cur);
+      }
+      continue;
+    }
+
+    // Non-hierarchy edges: store as-is.
     add(s, { to: t, edgeType: et, dir: 'outgoing' });
     add(t, { to: s, edgeType: et, dir: 'incoming' });
+  }
+
+  // Materialize best hierarchy edges (if any).
+  if (bestHierByPair.size > 0) {
+    for (const v of bestHierByPair.values()) {
+      add(v.s, { to: v.t, edgeType: v.et, dir: 'outgoing' });
+      add(v.t, { to: v.s, edgeType: v.et, dir: 'incoming' });
+    }
   }
 
   const visited = new Set<string>();
@@ -1043,7 +1774,8 @@ export function deriveLevelsTreeMetadata<T = any>(
   while (climbing) {
     const incomingEdges = adj.get(curr) || [];
     // Find parent: someone connected via Incoming Hierarchy or Outgoing Inverted
-    const parentEdge = incomingEdges.find(a => {
+    const parentEdge = incomingEdges
+      .filter(a => {
         // We are looking for the node that IS the parent of `curr`.
         // If edge is Hierarchy (OWNS): Parent -> Child. 
         // We want Parent. So we need `curr` to be target (Incoming).
@@ -1054,7 +1786,8 @@ export function deriveLevelsTreeMetadata<T = any>(
         if (INVERTED_HIERARCHY_TYPES.has(a.edgeType) && a.dir === 'outgoing') return true;
         
         return false;
-    });
+      })
+      .sort((a, b) => (hierarchyScore(b.edgeType) - hierarchyScore(a.edgeType)))[0];
 
     if (parentEdge && !pathVisited.has(parentEdge.to)) {
         curr = parentEdge.to;

@@ -68,6 +68,38 @@ func (r *AgentJobsRepository) CreateDedup(ctx context.Context, job *models.Agent
 	lockRef := r.db.Collection("agent_job_dedup_locks").Doc(lockID)
 
 	var reusedID string
+	// Helper: determine whether an existing job should be considered "active" for dedup purposes.
+	// We intentionally add safety checks here because some subsystems (e.g., Horizon Scout)
+	// historically had bugs where job.Status might remain "running" even after reaching a terminal
+	// state in job.State["currentState"].
+	isActive := func(existing *models.AgentJob) bool {
+		if existing == nil {
+			return false
+		}
+		if existing.Status != models.AgentJobStatusPending && existing.Status != models.AgentJobStatusRunning {
+			return false
+		}
+		// If CompletedAt is set, treat as inactive regardless of Status.
+		if existing.CompletedAt != nil && !existing.CompletedAt.IsZero() {
+			return false
+		}
+		// If state.currentState looks terminal, do NOT treat as active even if Status says running.
+		if existing.State != nil {
+			if v, ok := existing.State["currentState"].(string); ok {
+				cs := strings.TrimSpace(strings.ToUpper(v))
+				switch cs {
+				case "VERIFIED", "FAILED", "REJECTED", "COMPLETED":
+					return false
+				}
+			}
+		}
+		// Staleness guard: pending/running jobs that haven't updated for a long time are considered stale.
+		// This prevents a single stuck job from blocking re-runs forever.
+		if !existing.UpdatedAt.IsZero() && now.Sub(existing.UpdatedAt.UTC()) > 6*time.Hour {
+			return false
+		}
+		return true
+	}
 
 	trace.Log(ctx, "root_jobs", "agent_job.create_dedup.txn.start", map[string]any{
 		"tenantId":    strings.TrimSpace(job.TenantID),
@@ -91,7 +123,7 @@ func (r *AgentJobsRepository) CreateDedup(ctx context.Context, job *models.Agent
 				if jerr == nil && jobSnap.Exists() {
 					var existing models.AgentJob
 					if derr := jobSnap.DataTo(&existing); derr == nil {
-						if existing.Status == models.AgentJobStatusPending || existing.Status == models.AgentJobStatusRunning {
+						if isActive(&existing) {
 							reusedID = candidate
 							// Touch lock (helps debugging/monitoring).
 							_ = tx.Set(lockRef, map[string]interface{}{

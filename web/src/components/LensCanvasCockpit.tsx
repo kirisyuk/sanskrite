@@ -27,8 +27,7 @@ import {
   layoutExpansionWithGroups,
   layoutFullGraph,
   layoutLinearFullGraph,
-  layoutLevelsFullGraph,
-  deriveLevelsTreeMetadata,
+  layoutLevelsTwoPane,
   rebuildGroupContainers,
   getSemanticGroup,
   getLinearSection,
@@ -1205,7 +1204,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           scopeFragments: lens.scopeFragments,
           resolvedQueries: lens.resolvedQueries,
           lastResolved: lens.lastResolved,
-        });
+        }, { skipScouting: true });
         lensMetaRef.current = updated;
         const cleaned = (Array.isArray(updated?.scope) ? updated.scope : [])
           .map((s: any) => String(s || '').trim())
@@ -1719,6 +1718,83 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
       
       return { ...e, ...handles };
+    });
+  }, []);
+
+  /**
+   * Recalculate edge handles for Levels (Hierarchical) Two-Pane layout.
+   *
+   * Contract:
+   * - Nodes inside group containers (left hierarchies) always use RIGHT-side handles.
+   * - Right-side nodes choose LEFT/RIGHT handle based on relative horizontal position (level) and edge direction.
+   *   - If the other node is to the right => connect via right side (source-right / target-left).
+   *   - If the other node is to the left  => connect via left side (source-left / target-right).
+   *   - If X is approximately equal, fall back to vertical (top/bottom) based on Y.
+   */
+  const recalculateLevelsTwoPaneHandles = useCallback((
+    edgeList: Edge[],
+    nodeList: Node<HorizonNodeData>[]
+  ): Edge[] => {
+    const nodeMap = new Map<string, Node<HorizonNodeData>>();
+    for (const n of nodeList) {
+      const d: any = n.data;
+      if (d?.isGroup) continue;
+      nodeMap.set(n.id, n);
+      if (d?.fragmentId) nodeMap.set(String(d.fragmentId), n);
+    }
+
+    const eps = 8; // px threshold to treat as "same column"
+
+    const isInGroup = (n: Node<HorizonNodeData>) => {
+      const pid = (n as any).parentId || (n as any).parentNode;
+      return Boolean(pid);
+    };
+
+    return edgeList.map((e) => {
+      const sourceNode = nodeMap.get(e.source);
+      const targetNode = nodeMap.get(e.target);
+      if (!sourceNode || !targetNode) return e;
+
+      const sx = sourceNode.position?.x ?? 0;
+      const sy = sourceNode.position?.y ?? 0;
+      const tx = targetNode.position?.x ?? 0;
+      const ty = targetNode.position?.y ?? 0;
+
+      const sGrouped = isInGroup(sourceNode);
+      const tGrouped = isInGroup(targetNode);
+
+      // Defaults
+      let sourceHandle = e.sourceHandle || 'source-right';
+      let targetHandle = e.targetHandle || 'target-left';
+
+      // Hard rule for Two-Pane:
+      // If an edge connects a right-node to a group-child, it must enter/exit the right-node from the LEFT side
+      // and the group-child from the RIGHT side (groups are on the left).
+      if (!sGrouped && tGrouped) {
+        return { ...e, sourceHandle: 'source-left', targetHandle: 'target-right' };
+      }
+      if (sGrouped && !tGrouped) {
+        return { ...e, sourceHandle: 'source-right', targetHandle: 'target-left' };
+      }
+
+      // Group nodes: always right side
+      if (sGrouped) {
+        sourceHandle = 'source-right';
+      } else {
+        if (tx > sx + eps) sourceHandle = 'source-right';
+        else if (tx < sx - eps) sourceHandle = 'source-left';
+        else sourceHandle = (ty > sy) ? 'source-bottom' : 'source-top';
+      }
+
+      if (tGrouped) {
+        targetHandle = 'target-right';
+      } else {
+        if (sx < tx - eps) targetHandle = 'target-left';
+        else if (sx > tx + eps) targetHandle = 'target-right';
+        else targetHandle = (sy > ty) ? 'target-bottom' : 'target-top';
+      }
+
+      return { ...e, sourceHandle, targetHandle };
     });
   }, []);
 
@@ -2648,14 +2724,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return;
       }
       if (isLevelsLayout) {
-        const rootForLevels = selectedNodeId || fragmentNodes[0]?.id || '';
-        const normalized = deriveLevelsTreeMetadata(
-          fragmentNodes as any,
-          nextEdges as any,
-          rootForLevels,
-          levelsExpandEdgeTypes.length > 0 ? levelsExpandEdgeTypes : undefined,
-        );
-        const arranged = await layoutLevelsFullGraph(normalized as any, nextEdges as any, {
+        // Levels (Hierarchical): contract-driven Two-Pane layout.
+        // IMPORTANT: pass through existing group nodes so pagination state can be preserved.
+        const arranged = await layoutLevelsTwoPane(nextNodes as any, nextEdges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -2663,11 +2734,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           layerSpacing: ELK_LAYER_SPACING,
           maxChildRows: ELK_MAX_CHILD_ROWS,
         });
-        const withCallbacks = arranged.map((node) => ({
-          ...node,
-          data: { ...(node.data as any), onLoadRelated: invokeLoadRelated, onCollapse: invokeCollapse, onScopeScout: invokeScopeScout },
-        }));
-        const updatedEdges = recalculateLinearHandles(nextEdges, withCallbacks);
+        const withCallbacks = arranged.map((node) => {
+          if ((node.data as any)?.isGroup) {
+            return { ...node, data: { ...node.data, onGroupPageChange: handleGroupPageChange } };
+          }
+          return {
+            ...node,
+            data: { ...(node.data as any), onLoadRelated: invokeLoadRelated, onCollapse: invokeCollapse, onScopeScout: invokeScopeScout },
+          };
+        });
+        const updatedEdges = recalculateLevelsTwoPaneHandles(nextEdges, withCallbacks as any);
         setNodes(withCallbacks as any);
         setEdges(updatedEdges as any);
         return;
@@ -2715,6 +2791,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     isFreeformLayout,
     setGridState,
     recalculateLinearHandles,
+    recalculateLevelsTwoPaneHandles,
     handleGroupPageChange,
     invokeLoadRelated,
     invokeCollapse,
@@ -3475,6 +3552,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         });
       }
 
+      // Levels mode (Two-Pane contract): if user expands a node that was inside a group,
+      // it must become a "right" node immediately (before layout), otherwise its newly fetched
+      // neighbors won't be placed under its own left block.
+      if (isLevelsLayout && isNodeInGroup) {
+        preprocessedNodes = preprocessedNodes.map((n) => {
+          const nodeFragmentId = norm(n.data?.fragmentId || n.id);
+          if (nodeFragmentId !== fragmentId) return n;
+          const newData = { ...n.data } as any;
+          newData.expanded = true;
+          newData.collapsed = false;
+          // Detach from the group container (the Two-Pane layout will re-place it in the right column)
+          return {
+            ...n,
+            parentId: undefined,
+            parentNode: undefined as any,
+            extent: undefined,
+            data: newData,
+          };
+        });
+      }
+
       // Update existing related nodes to include parentFragmentId so they get grouped (freeform layout)
       // This handles cases like: Tesla and BYD both on graph, expanding Tesla should group BYD
           // В freeform режиме используется группировка, в linear - нет (TODO)
@@ -3508,7 +3606,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             ...n.data,
             // Freeform uses parentFragmentId for container parenting; Linear uses global section containers,
             // but still needs edgeType/direction + depth for correct quadrant placement.
-            ...(isFreeformLayout ? { parentFragmentId: fragmentId } : {}),
+            ...(isFreeformLayout || isLevelsLayout ? { parentFragmentId: fragmentId } : {}),
             edgeTypeFromParent,
             directionFromParent,
             // Make absorbed nodes non-central so they move into section groups in Linear.
@@ -3581,7 +3679,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         // Apply Linear handle rules using the freshly updated node data (edgeTypeFromParent/directionFromParent)
         linearEdgesAfterLayout = recalculateLinearHandles(mergedEdges, layoutedNodes);
       } else if (isLevelsLayout) {
-        // Levels layout: re-layout the whole visible graph (like Linear) but without group containers.
+        // Levels layout (contract-driven): Two-Pane model
+        // - right column: expanded nodes (plus depth=0 roots)
+        // - left blocks: paged 1-row upstream/downstream groups per right node
         const mergedEdges: Edge[] = (() => {
           const out: Edge[] = [];
           const seen = new Set<string>();
@@ -3603,16 +3703,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           return out;
         })();
 
-        const fragmentNodes = [...updatedCurrentNodes, ...newNodes].filter((n) => !(n?.data as any)?.isGroup);
-        // In Levels mode, build a stable spanning tree from the expanded node as the "focus root".
-        // This prevents "lost layers" when previously-loaded nodes were flat (depth=0 for everything).
-        const normalized = deriveLevelsTreeMetadata(
-          fragmentNodes as any,
-          mergedEdges as any,
-          fragmentId,
-          levelsExpandEdgeTypes.length > 0 ? levelsExpandEdgeTypes : undefined,
-        );
-        layoutedNodes = await layoutLevelsFullGraph(normalized as any, mergedEdges as any, {
+        // Keep any existing group nodes in the input so pagination state can be preserved.
+        const allNodes = [...updatedCurrentNodes, ...newNodes];
+        layoutedNodes = await layoutLevelsTwoPane(allNodes as any, mergedEdges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -3620,7 +3713,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           layerSpacing: ELK_LAYER_SPACING,
           maxChildRows: ELK_MAX_CHILD_ROWS,
         });
-        linearEdgesAfterLayout = recalculateLinearHandles(mergedEdges, layoutedNodes);
+        linearEdgesAfterLayout = recalculateLevelsTwoPaneHandles(mergedEdges, layoutedNodes as any);
       } else {
         // Fallback: используем freeform
         layoutedNodes = await layoutExpansionWithGroups(
@@ -3790,7 +3883,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       // Update refs SYNCHRONOUSLY before state (refs are immediate, state is async)
       // This ensures subsequent expansions see the correct values
-      if (isFreeformLayout) {
+      // NOTE: Levels mode also needs "expanded" tracking to avoid regrouping already-expanded nodes
+      // when using the contract-driven Two-Pane layout.
+      if (isFreeformLayout || isLevelsLayout) {
         expandedNodesRef.current.add(fragmentId);
         if (rootNodeIdRef.current === null) {
           rootNodeIdRef.current = fragmentId;
@@ -3799,7 +3894,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         dbg('[Cockpit] Refs: marked as expanded:', fragmentId, 'expandedNodes:', Array.from(expandedNodesRef.current));
 
         // Update grid state: add expanded node to the grid (freeform only)
-        setGridState((prevGrid) => {
+        if (isFreeformLayout) setGridState((prevGrid) => {
           let newGrid = { ...prevGrid };
 
           // If this is the first expansion, set root node at (0, 0)
@@ -3910,12 +4005,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Visible nodes (exclude hidden) + group lookup
     const visibleNodeIds = new Set<string>();
     const groupIds = new Set<string>();
+    const xById = new Map<string, number>();
     for (const n of nodes) {
       const id = String(n.id || '').trim();
       if (!id) continue;
       if ((n as any).hidden) continue;
       visibleNodeIds.add(id);
       if ((n.data as any)?.isGroup) groupIds.add(id);
+      // For Levels Two-Pane we can use x-position as a reliable hierarchy hint:
+      // "more ultimate" nodes are placed to the RIGHT.
+      if (!(n.data as any)?.isGroup) {
+        const x = typeof (n as any)?.position?.x === 'number' ? (n as any).position.x : undefined;
+        if (typeof x === 'number' && Number.isFinite(x)) xById.set(id, x);
+      }
     }
     if (!visibleNodeIds.has(hovered)) return null;
 
@@ -3923,10 +4025,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Control highlight uses two semantic buckets:
     // - "chain" (transitive control propagation): used for traversal up/down
     //   - equity: OWNS/SUBSIDIARY_OF/INVESTS_IN
-    //   - non-equity control: CONTROLS/MANAGES (same traversal semantics, different rendering)
-    // - "governance overlay": board/employment/founding ties shown inside the cluster (not used to expand it)
-    const CONTROL_CHAIN_TYPES = new Set<string>(['OWNS', 'SUBSIDIARY_OF', 'INVESTS_IN', 'CONTROLS', 'MANAGES']);
-    const CONTROL_GOVERNANCE_TYPES = new Set<string>(['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED']);
+    //   - non-equity control: CONTROLS/MANAGES
+    //   - governance-as-control signal: BOARD_MEMBER_OF (used for traversal; treated as bidirectional to be robust to edge direction)
+    // - "governance overlay": shown inside the cluster (not used to expand it)
+    const CONTROL_CHAIN_TYPES = new Set<string>(['OWNS', 'SUBSIDIARY_OF', 'INVESTS_IN', 'CONTROLS', 'MANAGES', 'BOARD_MEMBER_OF']);
+    const CONTROL_GOVERNANCE_TYPES = new Set<string>(['EMPLOYED_BY', 'FOUNDED']);
     const isEdgeTypeOfMode = (t: string) => {
       const u = normalizeType(t);
       switch (hoverHighlightMode) {
@@ -3954,6 +4057,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const adjOut = new Map<string, Adj[]>();
     const adjIn = new Map<string, AdjIn[]>();
     const governanceEdges: Array<{ id: string; a: string; b: string }> = [];
+    const addDirected = (from: string, to: string, edgeId: string) => {
+      if (!from || !to) return;
+      if (!adjOut.has(from)) adjOut.set(from, []);
+      adjOut.get(from)!.push({ to, edgeId });
+      if (!adjIn.has(to)) adjIn.set(to, []);
+      adjIn.get(to)!.push({ from, edgeId });
+    };
 
     for (const e of edges) {
       const eid = String((e as any)?.id || '').trim();
@@ -3978,19 +4088,49 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
 
         // Normalize "control direction" so that from -> to means "from controls to".
-        // SUBSIDIARY_OF is inverse of OWNS: subsidiary -> owner, but control flows owner -> subsidiary.
+        //
+        // In Levels Two-Pane mode we additionally de-noise incorrect loops by using layout geometry:
+        // if two nodes have a clear left/right separation, we treat the RIGHT node as controller.
+        // This collapses erroneous mutual OWNS loops (A->B and B->A) into a single direction.
+        const EPS_X = 12;
         let from = src;
         let to = dst;
-        if (u === 'SUBSIDIARY_OF') {
-          from = dst;
-          to = src;
+
+        if (isLevelsLayout) {
+          const sx = xById.get(src);
+          const tx = xById.get(dst);
+          if (typeof sx === 'number' && typeof tx === 'number' && Math.abs(sx - tx) > EPS_X) {
+            if (sx > tx) {
+              from = src;
+              to = dst;
+            } else {
+              from = dst;
+              to = src;
+            }
+          } else {
+            // Fallback to semantic inversion for SUBSIDIARY_OF.
+            if (u === 'SUBSIDIARY_OF') {
+              from = dst;
+              to = src;
+            }
+          }
+        } else {
+          // Non-levels: keep legacy semantics.
+          if (u === 'SUBSIDIARY_OF') {
+            from = dst;
+            to = src;
+          }
         }
 
-        if (!adjOut.has(from)) adjOut.set(from, []);
-        adjOut.get(from)!.push({ to, edgeId: eid });
+        // BOARD_MEMBER_OF is treated as a strong governance/control signal:
+        // we allow traversal BOTH ways (robust to inconsistent edge direction in the graph).
+        if (u === 'BOARD_MEMBER_OF') {
+          addDirected(from, to, eid);
+          addDirected(to, from, eid);
+          continue;
+        }
 
-        if (!adjIn.has(to)) adjIn.set(to, []);
-        adjIn.get(to)!.push({ from, edgeId: eid });
+        addDirected(from, to, eid);
         continue;
       }
 
@@ -4096,8 +4236,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     if (visited.size <= 1 || usedEdgeIds.size === 0) return null;
-    return { nodeIds: visited, edgeIds: usedEdgeIds };
-  }, [perfMode, hoverHighlightMode, hoveredNodeId, nodes, edges]);
+
+    // Ultimate beneficiaries (persons) for "up" traversal:
+    // highlight only PERSON nodes that have no further controllers within the up-cluster.
+    const typeById = new Map<string, string>();
+    for (const n of nodes) {
+      const id = String(n.id || '').trim();
+      if (!id) continue;
+      if ((n as any).hidden) continue;
+      if ((n.data as any)?.isGroup) continue;
+      const t = String((n.data as any)?.type || '').toUpperCase().trim();
+      if (t) typeById.set(id, t);
+    }
+    const isPerson = (id: string) => (typeById.get(id) || '') === 'PERSON';
+    const ultimatePersonIds = new Set<string>();
+    for (const id of upVisited) {
+      if (!isPerson(id)) continue;
+      const nextUp = adjIn.get(id) || [];
+      const hasHigherControllerInCluster = nextUp.some((a) => upVisited.has(a.from));
+      if (!hasHigherControllerInCluster) ultimatePersonIds.add(id);
+    }
+
+    return { nodeIds: visited, edgeIds: usedEdgeIds, ultimatePersonIds };
+  }, [perfMode, hoverHighlightMode, hoveredNodeId, nodes, edges, isLevelsLayout]);
 
   // Pagination: hide children on non-active pages; never render edges connected to hidden nodes.
   const hiddenNodeIds = React.useMemo(() => {
@@ -4112,6 +4273,41 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (hiddenNodeIds.size === 0) return edges;
     return edges.filter((e) => !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target));
   }, [edges, hiddenNodeIds]);
+
+  // Hub nodes: inDegree >= 5 and/or outDegree >= 5 (visible graph only, ignore group containers).
+  const hubNodeIds = React.useMemo(() => {
+    const visibleFragIds = new Set<string>();
+    const groupIds = new Set<string>();
+    for (const n of nodes) {
+      const id = String(n.id || '').trim();
+      if (!id) continue;
+      if ((n as any).hidden) continue;
+      if ((n.data as any)?.isGroup) groupIds.add(id);
+      else visibleFragIds.add(id);
+    }
+
+    const inDeg = new Map<string, number>();
+    const outDeg = new Map<string, number>();
+    const inc = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) || 0) + 1);
+
+    for (const e of visibleEdges) {
+      const s = String((e as any)?.source || '').trim();
+      const t = String((e as any)?.target || '').trim();
+      if (!s || !t) continue;
+      if (!visibleFragIds.has(s) || !visibleFragIds.has(t)) continue;
+      if (groupIds.has(s) || groupIds.has(t)) continue;
+      inc(outDeg, s);
+      inc(inDeg, t);
+    }
+
+    const out = new Set<string>();
+    for (const id of visibleFragIds) {
+      const i = inDeg.get(id) || 0;
+      const o = outDeg.get(id) || 0;
+      if (i >= 5 || o >= 5) out.add(id);
+    }
+    return out;
+  }, [nodes, visibleEdges]);
 
   // Base edge presentation (labels hidden, dimmed) - computed only when the underlying edge set changes.
   // This avoids O(E) object cloning on every hover state update when nothing is hovered/selected.
@@ -4348,6 +4544,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (perfMode && !qActive) return nodes;
 
     const owned = hoverHighlight?.nodeIds;
+    const ultimatePersons: Set<string> | undefined = (hoverHighlight as any)?.ultimatePersonIds;
     const hovered = String(hoveredNodeId || '').trim();
     const hoverActive = !!hoverHighlight && !!hovered;
 
@@ -4388,9 +4585,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       }
 
+      // Decoration flags (read by HorizonFragmentNode via data):
+      // - hub: >=5 incoming or >=5 outgoing visible edges
+      // - ultimate beneficiary (person): top of "up" traversal in control hover
+      const isHub = !isGroup && id && hubNodeIds.has(id);
+      const isUltimateBeneficiary = !isGroup && hoverActive && ultimatePersons && ultimatePersons.has(id);
+      if (isHub || isUltimateBeneficiary) {
+        const d: any = (n as any).data || {};
+        return {
+          ...n,
+          data: {
+            ...d,
+            hubHighlight: isHub,
+            ultimateBeneficiaryHighlight: isUltimateBeneficiary,
+          },
+          zIndex,
+          style,
+        } as any;
+      }
       return { ...n, zIndex, style } as any;
     });
-  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme]);
+  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds]);
 
   // Lightweight info for perf mode (no re-styling of edges)
   const perfHoveredEdgeInfo = React.useMemo(() => {
@@ -4477,15 +4692,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const updatedEdges = recalculateLinearHandles(edges, finalFragments);
         setEdges(updatedEdges);
       } else if (isLevelsLayout) {
-        // Hierarchical / Levels layout: depth-aware quadrants (no container nodes yet)
-        const rootForLevels = selectedNodeId || fragmentNodes[0]?.id || '';
-        const normalized = deriveLevelsTreeMetadata(
-          fragmentNodes as any,
-          edges as any,
-          rootForLevels,
-          levelsExpandEdgeTypes.length > 0 ? levelsExpandEdgeTypes : undefined,
-        );
-        arrangedFragments = await layoutLevelsFullGraph(normalized as any, edges, {
+        // Levels (Hierarchical): contract-driven Two-Pane layout.
+        // IMPORTANT: pass the current nodes (including existing groups) so pagination can be preserved.
+        arrangedFragments = await layoutLevelsTwoPane(nodes as any, edges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -4494,20 +4703,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
         });
 
-        const finalFragments = arrangedFragments.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            onLoadRelated: invokeLoadRelated,
-            onCollapse: invokeCollapse,
-            onScopeScout: invokeScopeScout,
-          },
-        }));
+        const finalFragments = arrangedFragments.map((node) => {
+          if ((node.data as any)?.isGroup) return node as any;
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              onLoadRelated: invokeLoadRelated,
+              onCollapse: invokeCollapse,
+              onScopeScout: invokeScopeScout,
+            },
+          };
+        });
 
         withGroups = finalFragments;
 
-        // Use linear handle heuristics (top/bottom quadrants) for now.
-        const updatedEdges = recalculateLinearHandles(edges, finalFragments);
+        // Levels Two-Pane: attach edges to left/right handles based on columns + group membership.
+        const updatedEdges = recalculateLevelsTwoPaneHandles(edges, finalFragments as any);
         setEdges(updatedEdges);
       } else {
         // Fallback: используем freeform
@@ -4597,7 +4809,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           // Recalculate edge handles for Linear layout based on node positions
           nextEdges = recalculateLinearHandles(nextEdges, nextNodes);
         } else if (isLevelsLayout) {
-          const laidOut = await layoutLevelsFullGraph(fragmentNodes, nextEdges, {
+          const laidOut = await layoutLevelsTwoPane(fragmentNodes as any, nextEdges as any, {
             direction: 'DOWN',
             nodeWidth: ELK_NODE_WIDTH,
             nodeHeight: ELK_NODE_HEIGHT,
@@ -4607,8 +4819,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           });
           nextNodes = laidOut as any;
 
-          // Use linear handle heuristics for top/bottom quadrants.
-          nextEdges = recalculateLinearHandles(nextEdges, nextNodes);
+          // Levels Two-Pane: attach edges to left/right handles based on columns + group membership.
+          nextEdges = recalculateLevelsTwoPaneHandles(nextEdges, nextNodes);
         } else {
           // Freeform layout: run ELK on fragments then rebuild semantic-group containers.
           const arrangedFragments = await layoutFullGraph(fragmentNodes, nextEdges, {
