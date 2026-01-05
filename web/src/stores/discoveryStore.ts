@@ -998,7 +998,6 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
         wsRef.onmessage = (evt) => {
           try {
             const msg = JSON.parse(evt.data);
-            console.log('[WS] Received message', { type: msg?.type, hasData: !!msg?.data, rawLength: evt.data?.length });
             import('./wsStore').then(({ useWsStore }) => {
               try { useWsStore.getState().noteMessage(msg?.type, msg?.data); } catch {}
             }).catch(() => {});
