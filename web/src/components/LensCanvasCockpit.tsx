@@ -836,7 +836,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const [showMiniMap, setShowMiniMap] = React.useState(false);
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
-  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear' | 'levels'>('freeform');
+  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear' | 'levels'>('levels');
   const [showToolbarMenu, setShowToolbarMenu] = React.useState(false);
   const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [showLayoutMenu, setShowLayoutMenu] = React.useState(false);
@@ -853,7 +853,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const levelsExpandLabel = React.useCallback((m: LevelsExpandMode): string => {
     switch (m) {
       case 'ownership':
-        return 'Corporate structure';
+        return 'Control';
       case 'expansion':
         return 'Expansion';
       case 'dependencies':
@@ -918,6 +918,54 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return [];
     }
   }, [levelsExpandMode]);
+
+  // Trace (multi-hop exploration that adds nodes/edges to the current Lens).
+  type TraceDirection = 'up' | 'down' | 'both';
+  type TraceScopeKey = 'ownership' | 'dependencies' | 'context' | 'market' | 'influence' | 'all';
+  type TraceDraft = {
+    rootId: string;
+    rootLabel?: string;
+    direction: TraceDirection;
+    scopes: Record<TraceScopeKey, boolean>;
+    /** Space/comma-separated keywords, matched against canonicalPath/label (AND semantics). */
+    keywords: string;
+    /** Max hop distance. */
+    depth: number;
+    /** Safety budgets (soft caps). */
+    maxNodes: number;
+    maxEdges: number;
+  };
+  const [traceDraft, setTraceDraft] = React.useState<TraceDraft | null>(null);
+  type TraceUndoEntry = {
+    runId: string;
+    rootId: string;
+    nodeIds: string[];
+    edgeIds: string[];
+    /** Existing nodes that were temporarily modified (e.g. traceBackbone). */
+    touched?: Array<{ id: string; prevTraceBackbone?: boolean }>;
+    finishedAt: number;
+  };
+  const [traceUndoStack, setTraceUndoStack] = React.useState<TraceUndoEntry[]>([]);
+
+  type TraceJob = {
+    runId: string;
+    rootId: string;
+    status: 'running' | 'stopped' | 'done' | 'error';
+    message?: string;
+    depth: number;
+    maxDepth: number;
+    processed: number;
+    queued: number;
+    addedNodes: number;
+    addedEdges: number;
+    startedAt: number;
+  };
+  const [traceJob, setTraceJob] = React.useState<TraceJob | null>(null);
+  // Disallow undo while trace is running (avoids surprise mutations mid-run).
+  const canUndoTrace = traceUndoStack.length > 0 && (!traceJob || traceJob.status !== 'running');
+  const traceAbortRef = React.useRef<AbortController | null>(null);
+  const traceActiveRunIdRef = React.useRef<string | null>(null);
+  const traceLastProgressAtRef = React.useRef<number>(0);
 
   // Visual settings (toolbar modal)
   type VisualPreset = 'max' | 'balanced' | 'minimal' | 'custom';
@@ -1099,6 +1147,72 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const addNodeCacheRef = React.useRef<Map<string, HorizonSearchEntity[]>>(new Map());
   const addNodeAbortRef = React.useRef<AbortController | null>(null);
 
+  const graphSearchResults = React.useMemo(() => {
+    if (!addNodeOpen) return [] as Array<{ node: Node<HorizonNodeData>; label: string; type?: string; canonicalPath?: string; score: number }>;
+    const raw = String(addNodeQuery || '').trim().toLowerCase();
+    if (!raw) return [];
+    const tokens = raw
+      .split(/[\s,;]+/g)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    if (tokens.length === 0) return [];
+
+    const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
+    const candidates = snapNodes.filter((n: any) => !((n?.data as any)?.isGroup));
+
+    const scoreOf = (hay: string): number => {
+      let s = 0;
+      for (const t of tokens) {
+        const idx = hay.indexOf(t);
+        if (idx < 0) return -1;
+        if (idx === 0) s += 4;
+        else if (idx <= 3) s += 3;
+        else s += 1;
+      }
+      return s;
+    };
+
+    const out: Array<{ node: Node<HorizonNodeData>; label: string; type?: string; canonicalPath?: string; score: number }> = [];
+    for (const n of candidates) {
+      const d: any = (n as any)?.data || {};
+      const label = String(d?.label || '').trim() || String(d?.canonicalPath || '').trim() || String(d?.fragmentId || n.id || '').trim();
+      const canonicalPath = String(d?.canonicalPath || '').trim() || undefined;
+      const type = String(d?.type || '').trim() || undefined;
+      const fragId = String(d?.fragmentId || '').trim();
+      const hay = `${label} ${canonicalPath || ''} ${type || ''} ${fragId} ${(n as any)?.id || ''}`.toLowerCase();
+      const score = scoreOf(hay);
+      if (score < 0) continue;
+      out.push({ node: n as any, label, canonicalPath, type, score });
+    }
+    out.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+    return out.slice(0, 10);
+  }, [addNodeOpen, addNodeQuery, nodes]);
+
+  const filteredAddNodeResults = React.useMemo(() => {
+    if (!addNodeOpen) return [] as HorizonSearchEntity[];
+    const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
+    const existingPaths = new Set(
+      snapNodes
+        .filter((n: any) => !((n?.data as any)?.isGroup))
+        .map((n: any) => String(n?.data?.canonicalPath || '').trim())
+        .filter(Boolean),
+    );
+    return (addNodeResults || []).filter((r) => {
+      const cp = String(r?.canonicalPath || '').trim();
+      return !cp || !existingPaths.has(cp);
+    });
+  }, [addNodeOpen, addNodeResults, nodes]);
+
+  const paletteSelectableItems = React.useMemo(() => {
+    return [
+      ...graphSearchResults.map((m) => ({ kind: 'graph' as const, node: m.node, label: m.label, canonicalPath: m.canonicalPath, type: m.type })),
+      ...filteredAddNodeResults.map((r) => ({ kind: 'index' as const, entity: r })),
+    ];
+  }, [graphSearchResults, filteredAddNodeResults]);
+
+  const addNodeQueryTrim = String(addNodeQuery || '').trim();
+
   // If the add-node UI is closed/unmounted, abort in-flight requests and release retained results.
   React.useEffect(() => {
     if (addNodeOpen) return;
@@ -1153,6 +1267,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   // Prevent mode-switch relayout loops
   const lastAppliedLayoutModeRef = React.useRef<'freeform' | 'linear' | 'levels' | null>(null);
+  const autoArrangeOnceRef = React.useRef<boolean>(false);
 
   // When graph grows large and user didn't override perf mode, auto-disable heavy visuals once.
   React.useEffect(() => {
@@ -1178,6 +1293,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const t = window.setTimeout(() => addNodeInputRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
   }, [addNodeOpen]);
+
+  // Keep active index valid as results change (graph + index combined).
+  React.useEffect(() => {
+    if (!addNodeOpen) return;
+    const max = Math.max(0, paletteSelectableItems.length - 1);
+    setAddNodeActiveIndex((i) => Math.min(Math.max(0, i), max));
+  }, [addNodeOpen, paletteSelectableItems.length]);
 
   // Ask-graph: focus input when opened
   React.useEffect(() => {
@@ -1441,6 +1563,675 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (typeof fn === 'function') void fn();
   }, []);
 
+  const stopTrace = React.useCallback(() => {
+    traceAbortRef.current?.abort();
+    traceAbortRef.current = null;
+    traceActiveRunIdRef.current = null;
+    setTraceJob((prev) => {
+      if (!prev) return prev;
+      if (prev.status !== 'running') return prev;
+      return { ...prev, status: 'stopped', message: 'Stopped' };
+    });
+  }, []);
+
+  const undoLastTrace = React.useCallback(() => {
+    const last = traceUndoStack[traceUndoStack.length - 1];
+    if (!last) return;
+    const nodeSet = new Set(last.nodeIds.map((x) => String(x || '').trim()).filter(Boolean));
+    const edgeSet = new Set(last.edgeIds.map((x) => String(x || '').trim()).filter(Boolean));
+    setNodes((prev) => (prev || []).filter((n) => !nodeSet.has(String((n as any)?.id || '').trim())));
+    setEdges((prev) => (prev || []).filter((e) => !edgeSet.has(String((e as any)?.id || '').trim())));
+    if (Array.isArray(last.touched) && last.touched.length > 0) {
+      const byId = new Map(last.touched.map((t) => [String(t.id || '').trim(), t]));
+      setNodes((prev) => {
+        return (prev || []).map((n) => {
+          const id = String((n as any)?.id || '').trim();
+          const hit = byId.get(id);
+          if (!hit) return n;
+          const d0: any = (n as any)?.data;
+          if (!d0 || (d0 as any)?.isGroup) return n;
+          const prevTB = hit.prevTraceBackbone;
+          const curTB = (d0 as any)?.traceBackbone;
+          const wantTB = typeof prevTB === 'boolean' ? prevTB : undefined;
+          if (curTB === wantTB) return n;
+          const d = { ...d0 };
+          if (typeof wantTB === 'boolean') d.traceBackbone = wantTB;
+          else delete d.traceBackbone;
+          return { ...(n as any), data: d } as any;
+        });
+      });
+    }
+    setTraceUndoStack((prev) => prev.slice(0, -1));
+    if (layoutMode === 'levels') {
+      window.setTimeout(() => invokeArrange(), 0);
+    }
+  }, [traceUndoStack, setNodes, setEdges, layoutMode, invokeArrange]);
+
+  const openTraceModalForNode = React.useCallback((nodeId: string) => {
+    const rawId = String(nodeId || '').trim();
+    if (!rawId) return;
+    let rootLabel: string | undefined;
+    let rootId: string = rawId;
+    try {
+      const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
+      const n = currentNodes.find((x) => String((x.data as any)?.fragmentId || x.id || '').trim() === rawId);
+      const d: any = n?.data;
+      // Prefer fragmentId for API calls.
+      const fid = String(d?.fragmentId || '').trim();
+      if (fid) rootId = fid;
+      rootLabel = String(d?.label || '').trim() || String(d?.canonicalPath || '').trim() || undefined;
+    } catch {
+      // ignore
+    }
+
+    const scopes: Record<TraceScopeKey, boolean> = {
+      ownership: false,
+      dependencies: false,
+      context: false,
+      market: false,
+      influence: false,
+      all: false,
+    };
+    // Seed scopes from current Hierarchical expansion mode (keeps UX consistent).
+    if (levelsExpandMode === 'ownership') scopes.ownership = true;
+    else if (levelsExpandMode === 'dependencies') scopes.dependencies = true;
+    else if (levelsExpandMode === 'context') scopes.context = true;
+    else if (levelsExpandMode === 'market') scopes.market = true;
+    else if (levelsExpandMode === 'influence') scopes.influence = true;
+    else if (levelsExpandMode === 'balanced') {
+      scopes.ownership = true;
+      scopes.context = true;
+      scopes.market = true;
+    } else if (levelsExpandMode === 'expansion') {
+      scopes.ownership = true;
+      scopes.market = true;
+    } else {
+      // 'all'
+      scopes.all = true;
+    }
+
+    setTraceDraft({
+      rootId,
+      rootLabel,
+      direction: 'up',
+      scopes,
+      keywords: '',
+      depth: 3,
+      maxNodes: 160,
+      maxEdges: 260,
+    });
+  }, [levelsExpandMode]);
+
+  // Helper function for edge styles based on type
+  // Цветовая схема общепринятая для графов знаний
+  const getEdgeStyle = (edgeType: string | undefined, criticality: number | undefined) => {
+    const type = (edgeType || '').toUpperCase();
+    const baseWidth = criticality ? Math.max(1, criticality * 2) : 1.5;
+
+    // 🔴 Конкуренция/Конфликт — Красный
+    if (['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES'].includes(type)) {
+      return {
+        stroke: '#EF4444', // red-500
+        strokeWidth: baseWidth + 0.5,
+      };
+    }
+
+    // 🟢 Партнёрство/Кооперация — Зелёный
+    if (['PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPLIES_TO', 'SUPPORTS'].includes(type)) {
+      return {
+        stroke: '#22C55E', // green-500
+        strokeWidth: baseWidth,
+      };
+    }
+
+    // 🟠 Влияние — Оранжевый
+    if (['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'].includes(type)) {
+      return {
+        stroke: '#F97316', // orange-500
+        strokeWidth: baseWidth,
+      };
+    }
+
+    // 🔵 Equity ownership / corporate structure — Blue (solid)
+    // Treat INVESTS_IN here intentionally (often part of ownership structure in our UX).
+    if (['OWNS', 'INVESTS_IN', 'PARENT_OF', 'SUBSIDIARY_OF'].includes(type)) {
+      return {
+        stroke: '#3B82F6', // blue-500
+        strokeWidth: baseWidth,
+      };
+    }
+
+    // 🟦 Control / management (non-equity) — Indigo (dashed)
+    if (['CONTROLS', 'MANAGES'].includes(type)) {
+      return {
+        stroke: '#6366F1', // indigo-500
+        strokeWidth: Math.max(1.3, baseWidth),
+        strokeDasharray: '6 4',
+      };
+    }
+
+    // 🟦 Governance ties — Indigo (light dotted)
+    if (['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED'].includes(type)) {
+      return {
+        stroke: '#6366F1', // indigo-500
+        strokeWidth: Math.max(1.1, baseWidth * 0.9),
+        strokeDasharray: '2 3',
+      };
+    }
+
+    // ⚪ Зависимость — Серый пунктир
+    if (['DEPENDS_ON', 'REQUIRES', 'USES', 'NEEDS'].includes(type)) {
+      return {
+        stroke: '#9CA3AF', // gray-400
+        strokeWidth: 1,
+        strokeDasharray: '4 2',
+      };
+    }
+
+    // 🟣 Локация — Фиолетовый
+    if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'].includes(type)) {
+      return {
+        stroke: '#A855F7', // purple-500
+        strokeWidth: baseWidth,
+      };
+    }
+
+    // По умолчанию — нейтральный серо-голубой
+    return {
+      stroke: '#64748B', // slate-500
+      strokeWidth: baseWidth,
+    };
+  };
+
+  const runTrace = React.useCallback(async (draft: TraceDraft) => {
+    const rootFragId = String(draft?.rootId || '').trim();
+    if (!rootFragId) return;
+
+    // Single active trace at a time.
+    stopTrace();
+
+    const runId = `trace:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+    traceActiveRunIdRef.current = runId;
+    const ac = new AbortController();
+    traceAbortRef.current = ac;
+    traceLastProgressAtRef.current = 0;
+
+    const startedAt = Date.now();
+    setTraceJob({
+      runId,
+      rootId: rootFragId,
+      status: 'running',
+      message: 'Starting…',
+      depth: 0,
+      maxDepth: Math.max(1, Math.min(12, Math.floor(draft.depth || 1))),
+      processed: 0,
+      queued: 1,
+      addedNodes: 0,
+      addedEdges: 0,
+      startedAt,
+    });
+
+    // Ensure Hierarchical mode (Levels).
+    if (layoutMode !== 'levels') {
+      setLayoutMode('levels');
+      // Give React a beat to flush state before we start mutating the graph.
+      await new Promise((r) => window.setTimeout(r, 0));
+    }
+
+    const normEdgeTypeLocal = (t: any) => String(t || '').toUpperCase().trim();
+    const splitKeywords = (raw: string): string[] => {
+      return String(raw || '')
+        .split(/[\s,;]+/g)
+        .map((x) => x.trim().toLowerCase())
+        .filter(Boolean)
+        .slice(0, 10);
+    };
+    const tokens = splitKeywords(draft.keywords);
+    const matchesKeywords = (frag: any): boolean => {
+      if (!tokens || tokens.length === 0) return true;
+      const label = String(frag?.labels?.en || frag?.label || frag?.name || '').trim();
+      const cp = String(frag?.canonicalPath || '').trim();
+      const hay = `${label} ${cp}`.toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    };
+
+    const wantsAll = Boolean(draft.scopes?.all) || !draft.scopes || Object.values(draft.scopes).every((v) => !v);
+    const unionEdgeTypes = (() => {
+      if (wantsAll) return [] as string[];
+      const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
+      const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES'];
+      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES'];
+      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'SIMILAR_TO', 'LINKED_TO'];
+      const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
+      const out = new Set<string>();
+      if (draft.scopes.ownership) for (const t of OWNERSHIP) out.add(t);
+      if (draft.scopes.dependencies) for (const t of DEPENDENCIES) out.add(t);
+      if (draft.scopes.context) for (const t of CONTEXT) out.add(t);
+      if (draft.scopes.market) for (const t of MARKET) out.add(t);
+      if (draft.scopes.influence) for (const t of INFLUENCE) out.add(t);
+      return Array.from(out);
+    })();
+
+    // Relative direction inference for traversal (best-effort, front-end guard; backend can pre-filter too).
+    const CONTROL_FWD = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
+    const CONTROL_INV = new Set(['SUBSIDIARY_OF']);
+    const SUPPLY_FWD = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
+    const SUPPLY_INV = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+    const PEER = new Set(['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'SIMILAR_TO', 'LINKED_TO']);
+    const CONTEXTISH = new Set(['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES']);
+    const INFLUENCEISH = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS']);
+
+    type Rel = 'up' | 'down' | 'peer' | 'unknown';
+    const relForEdge = (fromId: string, s: string, t: string, et: string): Rel => {
+      if (!fromId || !s || !t) return 'unknown';
+      if (PEER.has(et)) return 'peer';
+      if (CONTEXTISH.has(et) || INFLUENCEISH.has(et)) return 'peer';
+
+      // Control hierarchy
+      if (CONTROL_FWD.has(et)) {
+        if (fromId === t) return 'up';    // from = child, other = parent
+        if (fromId === s) return 'down';  // from = parent, other = child
+      }
+      if (CONTROL_INV.has(et)) {
+        // SUBSIDIARY_OF: child(source) -> parent(target)
+        if (fromId === s) return 'up';
+        if (fromId === t) return 'down';
+      }
+
+      // Supply-chain-ish
+      if (SUPPLY_FWD.has(et)) {
+        // supplier(source) -> consumer(target)
+        if (fromId === t) return 'up';
+        if (fromId === s) return 'down';
+      }
+      if (SUPPLY_INV.has(et)) {
+        // depends_on: dependent(source) -> dependency(target)
+        if (fromId === s) return 'up';
+        if (fromId === t) return 'down';
+      }
+
+      return 'unknown';
+    };
+
+    const want = (rel: Rel): boolean => {
+      const d = draft.direction || 'both';
+      if (d === 'both') return rel !== 'unknown';
+      return rel === d;
+    };
+
+    const semanticParam =
+      draft.direction === 'up'
+        ? 'upstream'
+        : draft.direction === 'down'
+          ? 'downstream'
+          : 'both';
+
+    const addedNodeIds: string[] = [];
+    const addedEdgeIds: string[] = [];
+    // Nodes we've already traversed along the up/down hierarchy (loop guard) — by fragmentId.
+    const traversed = new Set<string>([rootFragId]);
+    // Existing nodes we modified (so Undo can restore).
+    const touchedPrevById = new Map<string, boolean | undefined>();
+    let frontier: string[] = [rootFragId]; // fragmentIds
+
+    const bump = (patch: Partial<TraceJob>) => {
+      const now = Date.now();
+      if (now - traceLastProgressAtRef.current < 180) return;
+      traceLastProgressAtRef.current = now;
+      setTraceJob((prev) => {
+        if (!prev || prev.runId !== runId) return prev;
+        return { ...prev, ...patch };
+      });
+    };
+
+    let processed = 0;
+    let depth = 0;
+    let aborted = false;
+    let capped: string | null = null;
+
+    try {
+      const maxDepthLimit = Math.max(1, Math.min(12, Math.floor(draft.depth || 1)));
+      console.log('[Trace] Starting BFS. maxDepth:', maxDepthLimit, 'direction:', draft.direction, 'scopes:', draft.scopes);
+
+      while (frontier.length > 0 && depth < maxDepthLimit) {
+        if (traceActiveRunIdRef.current !== runId) break;
+        depth += 1;
+        console.log('[Trace] === Layer', depth, '===  frontier.length:', frontier.length, 'frontier:', frontier.slice(0, 5));
+        bump({ depth, queued: frontier.length, message: `Depth ${depth}…` });
+
+        const layerNewNodes: Node<HorizonNodeData>[] = [];
+        const layerNewEdges: Edge[] = [];
+        const nextFrontierSet = new Set<string>();
+        const touchedTraceBackbone = new Map<string, boolean | undefined>();
+
+        for (const fromFragIdRaw of frontier) {
+          const fromFragId = String(fromFragIdRaw || '').trim();
+          if (!fromFragId) continue;
+          if (traceActiveRunIdRef.current !== runId) break;
+          processed += 1;
+
+          // Build a robust mapping fragmentId -> current nodeId (some nodes may be keyed by lensItemId).
+          const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
+          const snapEdges: Edge[] = (edgesStateRef.current || edges) as any;
+          const fragToNodeId = new Map<string, string>();
+          const nodeById = new Map<string, Node<HorizonNodeData>>();
+          for (const n of snapNodes) {
+            const nid = String((n as any)?.id || '').trim();
+            if (nid) nodeById.set(nid, n as any);
+            const fid = String((n as any)?.data?.fragmentId || '').trim();
+            if (fid && !fragToNodeId.has(fid)) fragToNodeId.set(fid, nid || fid);
+          }
+          const resolveNodeId = (fragId: string) => fragToNodeId.get(fragId) || fragId;
+          const rootNodeId = resolveNodeId(rootFragId);
+          const fromNodeId = resolveNodeId(fromFragId);
+
+          let deps: any;
+          try {
+            deps = await api.getFragmentDependencies(fromFragId, {
+              direction: 'both',
+              ...(unionEdgeTypes.length > 0 ? { edgeTypes: unionEdgeTypes } : {}),
+              semantic: semanticParam as any,
+              includeFragments: true,
+              maxNeighbors: 84,
+              maxPerType: 22,
+              limit: 650,
+              ...(lensId ? { lensId } : {}),
+              signal: ac.signal,
+            });
+          } catch (err: any) {
+            if (err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') {
+              aborted = true;
+              break;
+            }
+            console.warn('[Trace] getFragmentDependencies failed', err);
+            throw err;
+          }
+
+          const depEdges: any[] = Array.isArray(deps?.edges) ? deps.edges : [];
+          const frags: any[] = Array.isArray((deps as any)?.fragments) ? (deps as any).fragments : [];
+          console.log('[Trace] Node', fromFragId, '→ API returned', depEdges.length, 'edges,', frags.length, 'fragments');
+          const byId = new Map<string, any>();
+          for (const f of frags) {
+            const fid = String(f?.id || '').trim();
+            if (!fid) continue;
+            if (!byId.has(fid)) byId.set(fid, f);
+          }
+
+          const currentNodeIds = new Set<string>(snapNodes.map((n) => String((n as any)?.id || '').trim()).filter(Boolean));
+          const currentEdgeIds = new Set<string>(snapEdges.map((e) => String((e as any)?.id || '').trim()).filter(Boolean));
+
+          for (const e of depEdges) {
+            const s = String(e?.sourceFragmentId || e?.source || '').trim();
+            const t = String(e?.targetFragmentId || e?.target || '').trim();
+            if (!s || !t) continue;
+            if (s !== fromFragId && t !== fromFragId) continue;
+            const otherFragId = s === fromFragId ? t : s;
+            if (!otherFragId) continue;
+
+            const et = normEdgeTypeLocal(e?.type || e?.edgeType || e?.subkind || e?.label);
+            const rel = relForEdge(fromFragId, s, t, et);
+            console.log('[Trace]   edge:', et, 's:', s.slice(0, 8), 't:', t.slice(0, 8), 'from:', fromFragId.slice(0, 8), '→ rel:', rel, 'want:', want(rel));
+            if (!want(rel)) continue;
+
+            let otherFrag = byId.get(otherFragId) || null;
+            if (tokens.length > 0 && otherFrag && !matchesKeywords(otherFrag)) {
+              continue;
+            }
+            if (tokens.length > 0 && !otherFrag) {
+              try {
+                otherFrag = await api.getHorizonFragment(otherFragId, ac.signal);
+              } catch {
+                otherFrag = null;
+              }
+              // If keyword filtering is active and we can't fetch the fragment, skip it.
+              if (!otherFrag) continue;
+              if (otherFrag && !matchesKeywords(otherFrag)) continue;
+            }
+
+            // Soft caps (avoid blowing up the canvas).
+            const otherNodeId = resolveNodeId(otherFragId);
+            const willCreateNewNode = !currentNodeIds.has(otherNodeId) && !layerNewNodes.some((n) => String(n.id || '').trim() === otherNodeId);
+            if (willCreateNewNode) {
+              if (addedNodeIds.length + layerNewNodes.length >= Math.max(20, Math.floor(draft.maxNodes || 160))) {
+                capped = 'Node limit reached';
+                break;
+              }
+
+              // For newly created nodes, try a best-effort fetch to populate label/canonicalPath
+              // (keeps UX readable even when backend didn't include fragments).
+              if (!otherFrag) {
+                try {
+                  otherFrag = await api.getHorizonFragment(otherFragId, ac.signal);
+                } catch {
+                  otherFrag = null;
+                }
+              }
+              const fragObj = otherFrag || { id: otherFragId, canonicalPath: '', labels: {} };
+              const stateMetrics: Record<string, number> = {};
+              if (fragObj?.state) {
+                Object.entries(fragObj.state).forEach(([k, v]: [string, any]) => {
+                  if (typeof v === 'object' && v !== null && 'value' in v) {
+                    stateMetrics[k] = typeof (v as any).value === 'number' ? (v as any).value : 0;
+                  } else if (typeof v === 'number') {
+                    stateMetrics[k] = v;
+                  }
+                });
+              }
+
+              const directionFromParent: 'incoming' | 'outgoing' =
+                rel === 'up' ? 'incoming' : 'outgoing';
+              const isBackbone = rel === 'up' || rel === 'down';
+
+              layerNewNodes.push({
+                id: otherNodeId,
+                type: 'horizonFragment' as const,
+                position: { x: 0, y: 0 },
+                data: {
+                  id: otherNodeId,
+                  lensItemId: '',
+                  fragmentId: otherFragId,
+                  parentFragmentId: fromNodeId,
+                  rootFragmentId: rootNodeId,
+                  edgeTypeFromParent: et,
+                  directionFromParent,
+                  depth,
+                  canonicalPath: fragObj?.canonicalPath,
+                  indexPaths: Array.isArray(fragObj?.indexPaths) ? fragObj.indexPaths : undefined,
+                  label: fragObj?.labels?.en || humanizeCanonicalPath(fragObj?.canonicalPath) || 'Fragment',
+                  type: fragObj?.type,
+                  state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
+                  showMetrics: showNodeMetrics,
+                  status: fragObj?.status,
+                  expanded: false,
+                  collapsed: false,
+                  critical: false,
+                  onLoadRelated: invokeLoadRelated,
+                  onCollapse: invokeCollapse,
+                  onScopeScout: invokeScopeScout,
+                  traceRunId: runId,
+                  traceBackbone: isBackbone ? true : undefined,
+                } as any,
+              });
+            }
+
+            // BFS frontier management (no loops): traverse only up/down; peer matches are included but not expanded.
+            if ((rel === 'up' || rel === 'down') && !traversed.has(otherFragId)) {
+              traversed.add(otherFragId);
+              nextFrontierSet.add(otherFragId);
+              console.log('[Trace]   → added to frontier:', otherFragId.slice(0, 12), 'rel:', rel);
+            }
+
+            // If the node already exists and is part of the backbone traversal, ensure it is treated as backbone.
+            if ((rel === 'up' || rel === 'down') && currentNodeIds.has(otherNodeId)) {
+              const existing = nodeById.get(otherNodeId);
+              const d0: any = (existing as any)?.data;
+              const already = Boolean(d0?.traceBackbone);
+              if (!already) {
+                // Record previous value only once (per-layer); we'll merge into touchedPrevById below.
+                if (!touchedTraceBackbone.has(otherNodeId)) {
+                  touchedTraceBackbone.set(otherNodeId, typeof d0?.traceBackbone === 'boolean' ? d0.traceBackbone : undefined);
+                }
+              }
+            }
+
+            // Add edge if both endpoints exist or are created in this layer.
+            const sourceNodeId = resolveNodeId(s);
+            const targetNodeId = resolveNodeId(t);
+            const haveSource = currentNodeIds.has(sourceNodeId) || layerNewNodes.some((n) => String(n.id || '').trim() === sourceNodeId);
+            const haveTarget = currentNodeIds.has(targetNodeId) || layerNewNodes.some((n) => String(n.id || '').trim() === targetNodeId);
+            const haveOther = haveSource && haveTarget;
+            if (!haveOther) continue;
+            const edgeId = String(e?.id || '').trim() || `trace:${runId}:${s}->${t}:${et}`;
+            if (currentEdgeIds.has(edgeId) || layerNewEdges.some((x) => x.id === edgeId)) continue;
+            if (addedEdgeIds.length + layerNewEdges.length >= Math.max(40, Math.floor(draft.maxEdges || 260))) {
+              capped = 'Edge limit reached';
+              break;
+            }
+
+            const baseStyle = getEdgeStyle(et, (e as any)?.criticality);
+            const stroke = getEdgeStroke(baseStyle);
+            layerNewEdges.push({
+              id: edgeId,
+              source: sourceNodeId,
+              target: targetNodeId,
+              type: 'default',
+              label: undefined,
+              interactionWidth: 18,
+              markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+              style: baseStyle,
+              data: {
+                ...(e?.properties || {}),
+                edgeType: et,
+                edgeCaption: getEdgeCaptionShort(et),
+                traceRunId: runId,
+              } as any,
+            });
+          }
+
+          bump({
+            processed,
+            queued: frontier.length,
+            addedNodes: addedNodeIds.length + layerNewNodes.length,
+            addedEdges: addedEdgeIds.length + layerNewEdges.length,
+          });
+
+          if (aborted || capped) break;
+        }
+
+        // Apply any traceBackbone toggles to existing nodes in one pass (stable + undoable).
+        if (touchedTraceBackbone.size > 0) {
+          const touchedIds = new Set<string>(Array.from(touchedTraceBackbone.keys()));
+          // Merge into run-level touched map (for undo).
+          for (const [id, prev] of touchedTraceBackbone.entries()) {
+            if (!touchedPrevById.has(id)) touchedPrevById.set(id, prev);
+          }
+          setNodes((prev) => {
+            return (prev || []).map((n) => {
+              const id = String((n as any)?.id || '').trim();
+              if (!touchedIds.has(id)) return n;
+              const d0: any = (n as any)?.data;
+              if (!d0 || d0.isGroup) return n;
+              if (d0.traceBackbone) return n;
+              return { ...(n as any), data: { ...d0, traceBackbone: true } } as any;
+            });
+          });
+        }
+
+        // Next frontier for BFS.
+        console.log('[Trace] Layer', depth, 'done. nextFrontierSet.size:', nextFrontierSet.size, 'layerNewNodes:', layerNewNodes.length, 'layerNewEdges:', layerNewEdges.length);
+        frontier = Array.from(nextFrontierSet);
+
+        // Apply batched updates for this layer.
+        if (layerNewNodes.length > 0) {
+          addedNodeIds.push(...layerNewNodes.map((n) => n.id));
+          setNodes((prev) => {
+            const existing = new Set((prev || []).map((n) => String(n.id || '').trim()).filter(Boolean));
+            const add = layerNewNodes.filter((n) => !existing.has(String(n.id || '').trim()));
+            return add.length > 0 ? ([...(prev || []), ...add] as any) : prev;
+          });
+        }
+        if (layerNewEdges.length > 0) {
+          addedEdgeIds.push(...layerNewEdges.map((e) => e.id));
+          setEdges((prev) => {
+            const existing = new Set((prev || []).map((e) => String(e.id || '').trim()).filter(Boolean));
+            const add = layerNewEdges.filter((e) => !existing.has(String(e.id || '').trim()));
+            return add.length > 0 ? ([...(prev || []), ...add] as any) : prev;
+          });
+        }
+        if (layerNewNodes.length > 0 || layerNewEdges.length > 0) {
+          window.setTimeout(() => invokeArrange(), 0);
+        }
+
+        if (aborted || capped) break;
+      }
+    } finally {
+      // Clear active run ref unless a new run started.
+      if (traceActiveRunIdRef.current === runId) {
+        traceActiveRunIdRef.current = null;
+        traceAbortRef.current = null;
+      }
+    }
+
+    const finishedAt = Date.now();
+    if (!aborted && !capped && addedNodeIds.length === 0 && addedEdgeIds.length === 0) {
+      setTraceJob((prev) => (prev && prev.runId === runId ? { ...prev, status: 'done', message: 'No matches' } : prev));
+      return;
+    }
+
+    if (addedNodeIds.length > 0 || addedEdgeIds.length > 0) {
+      setTraceUndoStack((prev) => {
+        const touchedList =
+          touchedPrevById.size > 0
+            ? Array.from(touchedPrevById.entries()).map(([id, prevTraceBackbone]) => ({ id, prevTraceBackbone }))
+            : undefined;
+        const next = [...prev, { runId, rootId: rootFragId, nodeIds: addedNodeIds, edgeIds: addedEdgeIds, touched: touchedList, finishedAt }];
+        return next.slice(-12);
+      });
+    }
+
+    setTraceJob((prev) => {
+      if (!prev || prev.runId !== runId) return prev;
+      if (aborted) return { ...prev, status: 'stopped', message: 'Stopped' };
+      if (capped) return { ...prev, status: 'done', message: capped };
+      return { ...prev, status: 'done', message: 'Done' };
+    });
+  }, [
+    stopTrace,
+    layoutMode,
+    setLayoutMode,
+    lensId,
+    setNodes,
+    setEdges,
+    invokeArrange,
+    getEdgeStyle,
+    getEdgeStroke,
+    getEdgeCaptionShort,
+    showNodeMetrics,
+    invokeLoadRelated,
+    invokeCollapse,
+    invokeScopeScout,
+  ]);
+
+  const startTraceFromModal = React.useCallback(async () => {
+    const draft = traceDraft;
+    if (!draft) return;
+    setTraceDraft(null);
+    await runTrace(draft);
+  }, [traceDraft, runTrace]);
+
+  // Close trace modal on Escape.
+  React.useEffect(() => {
+    if (!traceDraft) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setTraceDraft(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [traceDraft]);
+
   const openScopeScoutModal = React.useCallback((fragmentId: string, canonicalPath?: string) => {
     const fid = String(fragmentId || '').trim();
     let label: string | undefined;
@@ -1535,87 +2326,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const getEdgePriority = (edgeType: string | undefined): number => {
     const type = (edgeType || '').toUpperCase();
     return EDGE_TYPE_PRIORITY[type] ?? DEFAULT_EDGE_PRIORITY;
-  };
-
-  // Helper function for edge styles based on type
-  // Цветовая схема общепринятая для графов знаний
-  const getEdgeStyle = (edgeType: string | undefined, criticality: number | undefined) => {
-    const type = (edgeType || '').toUpperCase();
-    const baseWidth = criticality ? Math.max(1, criticality * 2) : 1.5;
-    
-    // 🔴 Конкуренция/Конфликт — Красный
-    if (['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES'].includes(type)) {
-      return {
-        stroke: '#EF4444', // red-500
-        strokeWidth: baseWidth + 0.5,
-      };
-    }
-    
-    // 🟢 Партнёрство/Кооперация — Зелёный
-    if (['PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPLIES_TO', 'SUPPORTS'].includes(type)) {
-      return {
-        stroke: '#22C55E', // green-500
-        strokeWidth: baseWidth,
-      };
-    }
-    
-    // 🟠 Влияние — Оранжевый
-    if (['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'].includes(type)) {
-      return {
-        stroke: '#F97316', // orange-500
-        strokeWidth: baseWidth,
-      };
-    }
-    
-    // 🔵 Equity ownership / corporate structure — Blue (solid)
-    // Treat INVESTS_IN here intentionally (often part of ownership structure in our UX).
-    if (['OWNS', 'INVESTS_IN', 'PARENT_OF', 'SUBSIDIARY_OF'].includes(type)) {
-      return {
-        stroke: '#3B82F6', // blue-500
-        strokeWidth: baseWidth,
-      };
-    }
-
-    // 🟦 Control / management (non-equity) — Indigo (dashed)
-    if (['CONTROLS', 'MANAGES'].includes(type)) {
-      return {
-        stroke: '#6366F1', // indigo-500
-        strokeWidth: Math.max(1.3, baseWidth),
-        strokeDasharray: '6 4',
-      };
-    }
-
-    // 🟦 Governance ties — Indigo (light dotted)
-    if (['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED'].includes(type)) {
-      return {
-        stroke: '#6366F1', // indigo-500
-        strokeWidth: Math.max(1.1, baseWidth * 0.9),
-        strokeDasharray: '2 3',
-      };
-    }
-    
-    // ⚪ Зависимость — Серый пунктир
-    if (['DEPENDS_ON', 'REQUIRES', 'USES', 'NEEDS'].includes(type)) {
-      return {
-        stroke: '#9CA3AF', // gray-400
-        strokeWidth: 1,
-        strokeDasharray: '4 2',
-      };
-    }
-    
-    // 🟣 Локация — Фиолетовый
-    if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'].includes(type)) {
-      return {
-        stroke: '#A855F7', // purple-500
-        strokeWidth: baseWidth,
-      };
-    }
-    
-    // По умолчанию — нейтральный серо-голубой
-    return {
-      stroke: '#64748B', // slate-500
-      strokeWidth: baseWidth,
-    };
   };
 
   const normalizeEdgeType = useCallback((t: string | undefined) => (t || '').toUpperCase().trim(), []);
@@ -1966,6 +2676,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     const loadLensItems = async () => {
       try {
+        // New lens / reload: allow a single auto-arrange if default layout is Hierarchical.
+        autoArrangeOnceRef.current = false;
         const itemsRaw = await api.getLensItems(lensId);
         const items = Array.isArray(itemsRaw) ? (itemsRaw as LensItem[]) : [];
         if (!Array.isArray(itemsRaw)) {
@@ -1995,6 +2707,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     loadLensItems();
   }, [lensId, setNodes, setEdges, dbg]);
+
+  // Default Hierarchical UX: once nodes are loaded, automatically apply the layout contract.
+  React.useEffect(() => {
+    if (layoutMode !== 'levels') return;
+    if (arranging) return;
+    if (autoArrangeOnceRef.current) return;
+    if (!nodes || nodes.length === 0) return;
+    // Only trigger when we have at least one fragment node (not just UI containers).
+    const hasFragments = nodes.some((n) => !((n.data as any)?.isGroup));
+    if (!hasFragments) return;
+    autoArrangeOnceRef.current = true;
+    window.setTimeout(() => invokeArrange(), 0);
+  }, [layoutMode, nodes.length, arranging, invokeArrange]);
 
   // Преобразование LensItems в ReactFlow ноды и рёбра
   const convertLensItemsToGraph = useCallback((items: LensItem[] | null | undefined) => {
@@ -5081,11 +5806,32 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           nextData.onToggleRightFilter = toggleRightFilter;
           changed = true;
         }
-      } else if (typeof (nextData as any)?.onOpenRightFilters === 'function' || typeof (nextData as any)?.onToggleRightFilter === 'function') {
+        if (nextData.onTrace !== openTraceModalForNode) {
+          nextData.onTrace = openTraceModalForNode;
+          changed = true;
+        }
+        if (nextData.onUndoTrace !== undoLastTrace) {
+          nextData.onUndoTrace = undoLastTrace;
+          changed = true;
+        }
+        if (Boolean(nextData.canUndoTrace) !== Boolean(canUndoTrace)) {
+          nextData.canUndoTrace = canUndoTrace;
+          changed = true;
+        }
+      } else if (
+        typeof (nextData as any)?.onOpenRightFilters === 'function' ||
+        typeof (nextData as any)?.onToggleRightFilter === 'function' ||
+        typeof (nextData as any)?.onTrace === 'function' ||
+        typeof (nextData as any)?.onUndoTrace === 'function' ||
+        typeof (nextData as any)?.canUndoTrace !== 'undefined'
+      ) {
         if (nextData === d0) nextData = { ...d0 };
         delete nextData.onOpenRightFilters;
         delete nextData.onToggleRightFilter;
         delete nextData.rightFiltersOpen;
+        delete nextData.onTrace;
+        delete nextData.onUndoTrace;
+        delete nextData.canUndoTrace;
         changed = true;
       }
 
@@ -5094,7 +5840,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
       return { ...n, zIndex, style } as any;
     });
-  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter]);
+  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace]);
 
   // Lightweight info for perf mode (no re-styling of edges)
   const perfHoveredEdgeInfo = React.useMemo(() => {
@@ -5483,6 +6229,26 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setAddNodeActiveIndex(0);
   }, []);
 
+  const openCommandPalette = React.useCallback(() => {
+    if (!lensId) return;
+    // Single palette at a time.
+    setAskGraphOpen(false);
+    setAddNodeOpen(true);
+    setAddNodeQuery('');
+    setAddNodeResults([]);
+    setAddNodeLoading(false);
+    setAddNodeError(null);
+    setAddNodeActiveIndex(0);
+  }, [lensId]);
+
+  const toggleCommandPalette = React.useCallback(() => {
+    if (addNodeOpen) {
+      closeAddNode();
+      return;
+    }
+    openCommandPalette();
+  }, [addNodeOpen, closeAddNode, openCommandPalette]);
+
   const closeAskGraph = React.useCallback(() => {
     setAskGraphOpen(false);
     setAskGraphQuery('');
@@ -5720,6 +6486,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       projectId,
       setLensItems,
       setNodes,
+      setEdges,
       isFreeformLayout,
       setGridState,
       closeAddNode,
@@ -5729,6 +6496,88 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       invokeCollapse,
       invokeScopeScout,
     ],
+  );
+
+  const focusGraphNodeFromPalette = React.useCallback(
+    (nodeId: string) => {
+      const id = String(nodeId || '').trim();
+      if (!id) return;
+
+      const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
+      const snapEdges: Edge[] = (edgesStateRef.current || edges) as any;
+      const node = snapNodes.find((n: any) => String(n?.id || '').trim() === id);
+      if (!node) return;
+      if (((node as any)?.data as any)?.isGroup) return;
+
+      // Keep selection consistent with click behavior (one selected node, no selected edges).
+      ignorePaneClicksUntilRef.current = Date.now() + 250;
+      setNodes((prev) =>
+        (prev || []).map((n: any) => {
+          if ((n?.data as any)?.isGroup) return { ...n, selected: false };
+          return { ...n, selected: String(n?.id || '').trim() === id };
+        }),
+      );
+      setEdges((prev) => (prev || []).map((e: any) => ({ ...e, selected: false })));
+
+      // Notify inspector with the same "visible context" payload we build on click.
+      if (onNodeSelect) {
+        const selectedId = id;
+        const selectedFragmentId = ((node as any)?.data as any)?.fragmentId || selectedId;
+
+        const incidentEdges = snapEdges
+          .filter((e: any) => e.source === selectedId || e.target === selectedId)
+          .map((e: any) => {
+            const src = snapNodes.find((n: any) => n.id === e.source);
+            const tgt = snapNodes.find((n: any) => n.id === e.target);
+            return {
+              id: e.id,
+              edgeType: (e as any)?.data?.edgeType || e.label || 'UNKNOWN',
+              sourceNodeId: e.source,
+              targetNodeId: e.target,
+              sourceFragmentId: (src?.data as any)?.fragmentId || e.source,
+              targetFragmentId: (tgt?.data as any)?.fragmentId || e.target,
+              criticality: (e as any)?.data?.criticality,
+              amplification: (e as any)?.data?.amplification,
+              latencyHours: (e as any)?.data?.latencyHours,
+            };
+          });
+
+        const neighborNodeIds = new Set<string>();
+        for (const e of incidentEdges as any[]) {
+          if (e.sourceNodeId && e.sourceNodeId !== selectedId) neighborNodeIds.add(e.sourceNodeId);
+          if (e.targetNodeId && e.targetNodeId !== selectedId) neighborNodeIds.add(e.targetNodeId);
+        }
+
+        const neighborNodes = Array.from(neighborNodeIds)
+          .map((nid) => snapNodes.find((n: any) => n.id === nid))
+          .filter(Boolean)
+          .map((n: any) => ({
+            nodeId: n.id,
+            fragmentId: n.data?.fragmentId || n.id,
+            label: n.data?.label || null,
+            canonicalPath: n.data?.canonicalPath || null,
+            type: n.data?.type || null,
+          }));
+
+        const nodeDataWithContext: any = {
+          ...((node as any)?.data || {}),
+          fragmentId: selectedFragmentId,
+          visibleIncidentEdges: incidentEdges,
+          visibleNeighborNodes: neighborNodes,
+        };
+
+        onNodeSelect(selectedId, nodeDataWithContext);
+      }
+
+      // Focus viewport.
+      try {
+        const inst: any = reactFlowInstanceRef.current;
+        inst?.fitView?.({ nodes: [node as any], padding: 0.25, duration: 350 });
+      } catch {}
+
+      closeAddNode();
+    },
+    [nodes, edges, setNodes, setEdges, onNodeSelect, closeAddNode],
   );
 
   const bgColor = theme === 'dark' ? 'var(--bg-primary)' : 'var(--bg-primary)';
@@ -5951,6 +6800,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setGraphQueryHighlightIds(null);
     setGraphQueryActiveChipId(null);
   }, []);
+
+  // Ctrl+K / ⌘K opens the command palette (Search / Add).
+  React.useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const key = String((e as any)?.key || '').toLowerCase();
+      const isK = key === 'k';
+      if (!isK) return;
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.altKey) return;
+      // Shift+K is still commonly used for command palettes too; allow it.
+      if (!lensId) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      toggleCommandPalette();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [lensId, toggleCommandPalette]);
 
   // Esc clears highlight (when no overlays are open)
   React.useEffect(() => {
@@ -6178,22 +7046,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load Graph" icon={Icons.Load} />
       <IconButton
         onClick={() => {
-          if (!lensId) return;
-          setAddNodeOpen((v) => {
-            const next = !v;
-            if (next) {
-              setAddNodeQuery('');
-              setAddNodeResults([]);
-              setAddNodeError(null);
-              setAddNodeActiveIndex(0);
-            }
-            return next;
-          });
+          toggleCommandPalette();
         }}
         disabled={!lensId}
         active={addNodeOpen}
-        title={addNodeOpen ? 'Close add-node' : 'Add node'}
-        icon={Icons.Plus}
+        title={addNodeOpen ? 'Close search (Ctrl+K)' : 'Search / add (Ctrl+K)'}
+        icon={Icons.Search}
       />
       <IconButton onClick={handleArrange} disabled={arranging || nodes.length === 0} title="Arrange Graph" icon={Icons.Magic} />
       <IconButton
@@ -6457,7 +7315,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               </div>
               {(
                 [
-                  { key: 'ownership', label: 'Corporate structure', hint: 'Holdings, subsidiaries, and investment portfolio' },
+                  { key: 'ownership', label: 'Control', hint: 'Holdings, subsidiaries, and investment portfolio' },
                   { key: 'expansion', label: 'Expansion', hint: 'Control chains + partners' },
                   { key: 'dependencies', label: 'Supply chain', hint: 'Upstream suppliers and critical inputs' },
                   { key: 'context', label: 'Operating footprint', hint: 'Markets, jurisdictions, and regulatory environment' },
@@ -6679,6 +7537,276 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+
+      {/* Trace modal */}
+      {traceDraft && ReactDOM.createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setTraceDraft(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9600,
+            background: 'rgba(0,0,0,0.35)',
+            backdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 620,
+              maxWidth: 'min(620px, calc(100vw - 32px))',
+              borderRadius: 18,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-elevated)',
+              boxShadow: '0 18px 60px rgba(0,0,0,0.35)',
+              padding: 14,
+              color: 'var(--text-heading)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 900 }}>
+                  Trace
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 3 }}>
+                  Starting from <span style={{ fontWeight: 800, color: 'var(--text-heading)' }}>{traceDraft.rootLabel || traceDraft.rootId}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTraceDraft(null)}
+                className="sidebar-icon-btn"
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  cursor: 'pointer',
+                }}
+                title="Close"
+              >
+                {Icons.X}
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 12, background: 'var(--bg-base)' }}>
+                <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 8 }}>Direction</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {([
+                    { key: 'up' as const, label: 'Up (hierarchy)' },
+                    { key: 'down' as const, label: 'Down (hierarchy)' },
+                    { key: 'both' as const, label: 'Both' },
+                  ] as const).map((opt) => {
+                    const active = traceDraft.direction === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setTraceDraft((prev) => prev ? ({ ...prev, direction: opt.key }) : prev)}
+                        style={{
+                          padding: '7px 10px',
+                          borderRadius: 999,
+                          border: '1px solid var(--border-subtle)',
+                          background: active ? 'var(--white-10)' : 'transparent',
+                          color: 'var(--text-heading)',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          fontWeight: 850,
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                  If you’re not in Hierarchical view, Trace will switch to it automatically.
+                </div>
+              </div>
+
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 12, background: 'var(--bg-base)' }}>
+                <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 8 }}>Scope</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {([
+                    { key: 'ownership' as const, label: 'Governance & Equity' },
+                    { key: 'dependencies' as const, label: 'Supply chain' },
+                    { key: 'context' as const, label: 'Operating footprint' },
+                    { key: 'market' as const, label: 'Market' },
+                    { key: 'influence' as const, label: 'Influence' },
+                    { key: 'all' as const, label: 'Full network' },
+                  ] as const).map((opt) => {
+                    const active = Boolean(traceDraft.scopes?.[opt.key]);
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => {
+                          setTraceDraft((prev) => {
+                            if (!prev) return prev;
+                            const nextScopes = { ...(prev.scopes || ({} as any)) };
+                            if (opt.key === 'all') {
+                              const nextAll = !Boolean(nextScopes.all);
+                              for (const k of Object.keys(nextScopes) as TraceScopeKey[]) nextScopes[k] = false;
+                              nextScopes.all = nextAll;
+                            } else {
+                              nextScopes.all = false;
+                              nextScopes[opt.key] = !Boolean(nextScopes[opt.key]);
+                            }
+                            return { ...prev, scopes: nextScopes };
+                          });
+                        }}
+                        style={{
+                          padding: '7px 10px',
+                          borderRadius: 999,
+                          border: '1px solid var(--border-subtle)',
+                          background: active ? 'var(--white-10)' : 'transparent',
+                          color: 'var(--text-heading)',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          fontWeight: 850,
+                        }}
+                        title={opt.label}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                  Tip: avoid “Full network” with depth &gt; 3 on large graphs.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 12, background: 'var(--bg-base)' }}>
+                <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 8 }}>Filters</div>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Keywords (AND)</div>
+                  <input
+                    value={traceDraft.keywords}
+                    onChange={(e) => setTraceDraft((prev) => prev ? ({ ...prev, keywords: e.target.value }) : prev)}
+                    placeholder="e.g. oil, refinery, uae"
+                    style={{
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-elevated)',
+                      color: 'var(--text-heading)',
+                      borderRadius: 12,
+                      padding: '8px 10px',
+                      fontSize: 12,
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 14, padding: 12, background: 'var(--bg-base)' }}>
+                <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 8 }}>Limits</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Depth</div>
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={traceDraft.depth}
+                      onChange={(e) => setTraceDraft((prev) => prev ? ({ ...prev, depth: Math.max(1, Math.min(12, Number(e.target.value) || 1)) }) : prev)}
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-elevated)',
+                        color: 'var(--text-heading)',
+                        borderRadius: 12,
+                        padding: '8px 10px',
+                        fontSize: 12,
+                      }}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Max nodes</div>
+                    <input
+                      type="number"
+                      min={20}
+                      max={1200}
+                      value={traceDraft.maxNodes}
+                      onChange={(e) => setTraceDraft((prev) => prev ? ({ ...prev, maxNodes: Math.max(20, Math.min(1200, Number(e.target.value) || 160)) }) : prev)}
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-elevated)',
+                        color: 'var(--text-heading)',
+                        borderRadius: 12,
+                        padding: '8px 10px',
+                        fontSize: 12,
+                      }}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Max edges</div>
+                    <input
+                      type="number"
+                      min={40}
+                      max={2400}
+                      value={traceDraft.maxEdges}
+                      onChange={(e) => setTraceDraft((prev) => prev ? ({ ...prev, maxEdges: Math.max(40, Math.min(2400, Number(e.target.value) || 260)) }) : prev)}
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-elevated)',
+                        color: 'var(--text-heading)',
+                        borderRadius: 12,
+                        padding: '8px 10px',
+                        fontSize: 12,
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
+              <button
+                type="button"
+                onClick={() => setTraceDraft(null)}
+                style={{
+                  padding: '9px 12px',
+                  borderRadius: 12,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-heading)',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 850,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void startTraceFromModal()}
+                style={{
+                  padding: '9px 12px',
+                  borderRadius: 12,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--white-10)',
+                  color: 'var(--text-heading)',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 900,
+                }}
+              >
+                Start trace
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* Visual settings modal */}
       {visualSettingsOpen && ReactDOM.createPortal(
@@ -6921,6 +8049,136 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       {/* Graph */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', width: '100%' }}>
+        {/* Trace status callout (bottom-left) */}
+        {traceJob && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 16,
+              bottom: 16,
+              zIndex: 85,
+              width: 340,
+              maxWidth: 'min(340px, calc(100vw - 32px))',
+              borderRadius: 14,
+              border: '1px solid var(--border-subtle)',
+              background: theme === 'dark' ? 'rgba(0,0,0,0.40)' : 'rgba(255,255,255,0.70)',
+              backdropFilter: 'blur(10px)',
+              boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.45)' : '0 14px 40px rgba(0,0,0,0.18)',
+              padding: '10px 12px',
+              pointerEvents: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>
+                  Trace {traceJob.status === 'running' ? 'running…' : traceJob.status === 'stopped' ? 'stopped' : traceJob.status === 'error' ? 'error' : 'done'}
+                </div>
+                <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                  {traceJob.message || `Depth ${traceJob.depth}/${traceJob.maxDepth}`}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (traceJob.status === 'running') return;
+                  setTraceJob(null);
+                }}
+                disabled={traceJob.status === 'running'}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  cursor: traceJob.status === 'running' ? 'not-allowed' : 'pointer',
+                  opacity: traceJob.status === 'running' ? 0.45 : 1,
+                }}
+                title="Dismiss"
+                aria-label="Dismiss"
+              >
+                {Icons.X}
+              </button>
+            </div>
+
+            <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                <div style={{ fontWeight: 900, color: 'var(--text-heading)' }}>{traceJob.addedNodes}</div>
+                <div>nodes</div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                <div style={{ fontWeight: 900, color: 'var(--text-heading)' }}>{traceJob.addedEdges}</div>
+                <div>edges</div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                <div style={{ fontWeight: 900, color: 'var(--text-heading)' }}>{traceJob.processed}</div>
+                <div>visited</div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              {traceJob.status === 'running' ? (
+                <button
+                  type="button"
+                  onClick={() => stopTrace()}
+                  style={{
+                    flex: 1,
+                    padding: '8px 10px',
+                    borderRadius: 12,
+                    border: '1px solid rgba(248,113,113,0.55)',
+                    background: theme === 'dark' ? 'rgba(248,113,113,0.12)' : 'rgba(248,113,113,0.10)',
+                    color: 'var(--text-heading)',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 900,
+                  }}
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setTraceJob(null)}
+                  style={{
+                    flex: 1,
+                    padding: '8px 10px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--text-heading)',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 850,
+                  }}
+                >
+                  Close
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => undoLastTrace()}
+                disabled={!canUndoTrace}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 12,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-heading)',
+                  cursor: canUndoTrace ? 'pointer' : 'not-allowed',
+                  fontSize: 12,
+                  fontWeight: 900,
+                  opacity: canUndoTrace ? 1 : 0.45,
+                  whiteSpace: 'nowrap',
+                }}
+                title={canUndoTrace ? 'Undo last trace' : 'No trace to undo'}
+              >
+                Undo
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Canvas toolbar overlay (actions + overflow menu) */}
     <div
       style={{
@@ -7609,7 +8867,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       </div>
 
-      {/* Add Node Command Palette Overlay */}
+      {/* Search / Add Command Palette Overlay */}
       {addNodeOpen && (
         <div
           style={{
@@ -7666,7 +8924,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   }
                   if (e.key === 'ArrowDown') {
                     e.preventDefault();
-                    setAddNodeActiveIndex((i) => Math.min(i + 1, Math.max(0, addNodeResults.length - 1)));
+                    setAddNodeActiveIndex((i) => Math.min(i + 1, Math.max(0, paletteSelectableItems.length - 1)));
                     return;
                   }
                   if (e.key === 'ArrowUp') {
@@ -7676,12 +8934,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   }
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    const picked = addNodeResults[addNodeActiveIndex];
-                    if (picked) void addNodeToLens(picked);
+                    const picked = paletteSelectableItems[addNodeActiveIndex];
+                    if (!picked) return;
+                    if (picked.kind === 'graph') {
+                      focusGraphNodeFromPalette(picked.node.id);
+                      return;
+                    }
+                    if (picked.kind === 'index') {
+                      void addNodeToLens(picked.entity);
+                      return;
+                    }
                     return;
                   }
                 }}
-                placeholder="Type to search fragments…"
+                placeholder="Search nodes (on graph) or add fragments…"
                 autoComplete="off"
                 spellCheck={false}
                 style={{
@@ -7700,15 +8966,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             </div>
 
             <div style={{ maxHeight: 400, overflowY: 'auto', padding: '6px 0' }}>
-              {!addNodeLoading && !addNodeError && addNodeQuery.trim().length < 2 && (
+              {!addNodeLoading && !addNodeError && !addNodeQueryTrim && (
                 <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
-                  Type a name or path to find fragments
-                </div>
-              )}
-
-              {!addNodeLoading && !addNodeError && addNodeQuery.trim().length >= 2 && addNodeResults.length === 0 && (
-                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
-                  No fragments found for "{addNodeQuery}"
+                  Type to search nodes on this graph, or add from the global index
                 </div>
               )}
 
@@ -7718,14 +8978,81 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </div>
               )}
 
-              {addNodeResults.map((r, idx) => {
-                const isActive = idx === addNodeActiveIndex;
+              {/* On-graph matches */}
+              {graphSearchResults.length > 0 && (
+                <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                  On graph
+                </div>
+              )}
+              {graphSearchResults.map((m, idx) => {
+                const absIdx = idx;
+                const isActive = absIdx === addNodeActiveIndex;
+                return (
+                  <button
+                    key={`graph-${m.node.id}-${idx}`}
+                    type="button"
+                    onClick={() => focusGraphNodeFromPalette(m.node.id)}
+                    onMouseEnter={() => setAddNodeActiveIndex(absIdx)}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '10px 16px',
+                      border: 'none',
+                      borderLeft: `3px solid ${isActive ? 'var(--accent-primary, #3B82F6)' : 'transparent'}`,
+                      background: isActive ? (theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : 'transparent',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 2,
+                      transition: 'background 0.1s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {m.label}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                        {m.type && (
+                          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary-strong)', textTransform: 'uppercase', opacity: 0.8 }}>
+                            {m.type}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', border: '1px solid var(--border-subtle)', borderRadius: 999, padding: '2px 8px', background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}>
+                          Focus
+                        </div>
+                      </div>
+                    </div>
+                    {m.canonicalPath && (
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'monospace', opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {m.canonicalPath}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+
+              {/* Index matches (global) */}
+              {addNodeQueryTrim.length >= 2 && (
+                <div style={{ padding: `${graphSearchResults.length > 0 ? '12px' : '10px'} 16px 6px`, fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                  Add to graph
+                </div>
+              )}
+
+              {addNodeQueryTrim.length >= 2 && !addNodeLoading && !addNodeError && filteredAddNodeResults.length === 0 && (
+                <div style={{ padding: '16px 24px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
+                  No results for "{addNodeQueryTrim}"
+                </div>
+              )}
+
+              {filteredAddNodeResults.map((r, idx) => {
+                const absIdx = graphSearchResults.length + idx;
+                const isActive = absIdx === addNodeActiveIndex;
                 return (
                   <button
                     key={`${r.canonicalPath}-${idx}`}
                     type="button"
                     onClick={() => void addNodeToLens(r)}
-                    onMouseEnter={() => setAddNodeActiveIndex(idx)}
+                    onMouseEnter={() => setAddNodeActiveIndex(absIdx)}
                     style={{
                       width: '100%',
                       textAlign: 'left',
@@ -7744,8 +9071,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                       <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {r.name}
                       </div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary-strong)', textTransform: 'uppercase', opacity: 0.8, flexShrink: 0 }}>
-                        {r.type}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary-strong)', textTransform: 'uppercase', opacity: 0.8 }}>
+                          {r.type}
+                        </div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', border: '1px solid var(--border-subtle)', borderRadius: 999, padding: '2px 8px', background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}>
+                          Add
+                        </div>
                       </div>
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'monospace', opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -7775,7 +9107,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>↵</kbd>
-                <span>to select</span>
+                <span>to focus / add</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>esc</kbd>

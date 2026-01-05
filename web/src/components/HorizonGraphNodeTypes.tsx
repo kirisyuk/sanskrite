@@ -66,6 +66,10 @@ export interface HorizonNodeData {
   rightFilterHideLoneGovernancePeople?: boolean;
   onOpenRightFilters?: (nodeId: string, nextOpen: boolean) => void;
   onToggleRightFilter?: (nodeId: string, key: 'loneParents' | 'loneChildren' | 'loneGovernancePeople', nextOn: boolean) => void;
+  // Right-side node actions (Levels layout; view-only)
+  onTrace?: (nodeId: string) => void;
+  onUndoTrace?: () => void;
+  canUndoTrace?: boolean;
   [key: string]: any;
 }
 
@@ -891,6 +895,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const rfHideParents = Boolean((data as any)?.rightFilterHideLoneParents);
   const rfHideChildren = Boolean((data as any)?.rightFilterHideLoneChildren);
   const rfHideGov = Boolean((data as any)?.rightFilterHideLoneGovernancePeople);
+  const canTrace = typeof (data as any)?.onTrace === 'function';
+  const canUndoTrace = Boolean((data as any)?.canUndoTrace) && typeof (data as any)?.onUndoTrace === 'function';
 
   React.useEffect(() => {
     if (!canRightFilters || !rightFiltersOpen) return;
@@ -1436,7 +1442,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         </button>
       )}
 
-      {/* Right-side hover circle + filter chips (Levels right pane) */}
+      {/* Right-side hover circle + actions menu (Levels right pane) */}
       {canRightFilters && (
         <>
           <button
@@ -1446,8 +1452,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               e.stopPropagation();
               (data as any)?.onOpenRightFilters?.(data.id, !rightFiltersOpen);
             }}
-            title="Filters"
-            aria-label="Filters"
+            title="Actions"
+            aria-label="Actions"
             style={{
               position: 'absolute',
               right: -16,
@@ -1470,17 +1476,11 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               zIndex: 4,
             }}
           >
-            {/* sliders/filter icon */}
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="4" y1="21" x2="4" y2="14" />
-              <line x1="4" y1="10" x2="4" y2="3" />
-              <line x1="12" y1="21" x2="12" y2="12" />
-              <line x1="12" y1="8" x2="12" y2="3" />
-              <line x1="20" y1="21" x2="20" y2="16" />
-              <line x1="20" y1="12" x2="20" y2="3" />
-              <line x1="1" y1="14" x2="7" y2="14" />
-              <line x1="9" y1="8" x2="15" y2="8" />
-              <line x1="17" y1="16" x2="23" y2="16" />
+            {/* actions / more icon */}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="12" cy="5" r="2.1" />
+              <circle cx="12" cy="12" r="2.1" />
+              <circle cx="12" cy="19" r="2.1" />
             </svg>
           </button>
 
@@ -1502,8 +1502,35 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                 zIndex: 5,
               }}
             >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>
+                  Actions
+                </div>
+                <button
+                  type="button"
+                  onClick={() => (data as any)?.onOpenRightFilters?.(data.id, false)}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 10,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--text-secondary-strong)',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    lineHeight: 1,
+                  }}
+                  title="Close"
+                  aria-label="Close"
+                >
+                  <span style={{ fontSize: 14, fontWeight: 900 }}>×</span>
+                </button>
+              </div>
+
               <div style={{ fontSize: 11, fontWeight: 800, color: theme === 'dark' ? 'rgba(255,255,255,0.78)' : 'rgba(15,23,42,0.78)', marginBottom: 8 }}>
-                Hide
+                Hide (context)
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {([
@@ -1537,6 +1564,68 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               </div>
               <div style={{ marginTop: 10, fontSize: 11, color: theme === 'dark' ? 'rgba(255,255,255,0.58)' : 'rgba(15,23,42,0.56)', lineHeight: 1.35 }}>
                 Lone = nodes that only connect to this node.
+              </div>
+
+              <div style={{ height: 1, background: 'var(--border-subtle)', margin: '10px 0' }} />
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button
+                  type="button"
+                  disabled={!canTrace}
+                  onClick={() => {
+                    (data as any)?.onTrace?.(data.id);
+                    (data as any)?.onOpenRightFilters?.(data.id, false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-subtle)',
+                    background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.04)',
+                    color: 'var(--text-heading)',
+                    cursor: canTrace ? 'pointer' : 'not-allowed',
+                    fontSize: 12,
+                    fontWeight: 850,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    opacity: canTrace ? 1 : 0.45,
+                  }}
+                  title={canTrace ? 'Trace…' : 'Trace is unavailable'}
+                >
+                  <span>Trace…</span>
+                  <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 900 }}>↗</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!canUndoTrace}
+                  onClick={() => {
+                    (data as any)?.onUndoTrace?.();
+                    (data as any)?.onOpenRightFilters?.(data.id, false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--text-heading)',
+                    cursor: canUndoTrace ? 'pointer' : 'not-allowed',
+                    fontSize: 12,
+                    fontWeight: 850,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    opacity: canUndoTrace ? 1 : 0.45,
+                  }}
+                  title={canUndoTrace ? 'Undo last trace' : 'No trace to undo'}
+                >
+                  <span>Undo last trace</span>
+                  <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 900 }}>↶</span>
+                </button>
               </div>
             </div>
           )}

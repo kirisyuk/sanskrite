@@ -1096,6 +1096,8 @@ export async function layoutLevelsTwoPane<T = any>(
   for (const n of fragments) {
     const d: any = n.data;
     if (d?.expanded) rightIds.add(n.id);
+    // Trace can optionally force certain nodes into the backbone for multi-hop visualization.
+    if (d?.traceBackbone) rightIds.add(n.id);
     if (typeof d?.depth === 'number' && d.depth === 0) rightIds.add(n.id);
   }
   if (rightIds.size === 0 && fragments[0]) rightIds.add(fragments[0].id);
@@ -1626,6 +1628,14 @@ export async function layoutLevelsTwoPane<T = any>(
   const stackMetaById = new Map<string, { key: string; count: number; expanded: boolean }>();
   const stackMembersByKey = new Map<string, string[]>();
 
+  // Stack grouping policy (2026-01): only stack nodes of the SAME fragment type.
+  // Rationale: mixed-type stacks look like a bug and hide important semantic differences.
+  const typeOfRightNode = (id: string): string => {
+    const node = fragments.find((x) => x.id === id);
+    const t = String((node as any)?.data?.type || '').trim();
+    return t || 'UNKNOWN';
+  };
+
   const isStackEligibleRightNode = (id: string) => {
     if (!id) return false;
     if (!rightIds.has(id)) return false;
@@ -1651,34 +1661,44 @@ export async function layoutLevelsTwoPane<T = any>(
       buckets.set(lv, arr);
     }
     for (const [lv, list] of buckets.entries()) {
-      const eligible = list.filter((kid) => {
+      // Partition by type so we only collapse homogeneous stacks.
+      const byType = new Map<string, string[]>();
+      for (const kid of list) {
+        const t = typeOfRightNode(kid);
+        const arr = byType.get(t) || [];
+        arr.push(kid);
+        byType.set(t, arr);
+      }
+      for (const [t, typeList] of byType.entries()) {
+        const eligible = typeList.filter((kid) => {
         if (!isStackEligibleRightNode(kid)) return false;
         // Must be a leaf in the right-hierarchy (no right-children). This is for stacking "child columns".
         const rightKids = childrenOf.get(kid);
         if (rightKids && rightKids.size > 0) return false;
         return true;
       });
-      if (eligible.length < STACK_MIN) continue;
+        if (eligible.length < STACK_MIN) continue;
 
-      const key = `levels:rightstack:${parentId}:${lv}`;
-      stackMembersByKey.set(key, eligible);
-      const expanded = expandedStackKeys.has(key);
+        const key = `levels:rightstack:${parentId}:${lv}:${t}`;
+        stackMembersByKey.set(key, eligible);
+        const expanded = expandedStackKeys.has(key);
 
-      // Choose a controller node (top-most by Y) to carry the stack control.
-      const ordered = [...eligible].sort((a, b) => {
-        const pa = rightPos.get(a);
-        const pb = rightPos.get(b);
-        const ya = (pa?.y ?? 0) + nodeHeight / 2;
-        const yb = (pb?.y ?? 0) + nodeHeight / 2;
-        return ya - yb;
-      });
-      const controllerId = ordered[0]!;
+        // Choose a controller node (top-most by Y) to carry the stack control.
+        const ordered = [...eligible].sort((a, b) => {
+          const pa = rightPos.get(a);
+          const pb = rightPos.get(b);
+          const ya = (pa?.y ?? 0) + nodeHeight / 2;
+          const yb = (pb?.y ?? 0) + nodeHeight / 2;
+          return ya - yb;
+        });
+        const controllerId = ordered[0]!;
 
-      stackMetaById.set(controllerId, { key, count: eligible.length, expanded });
-      if (!expanded) {
-        for (const id of ordered) {
-          if (id === controllerId) continue;
-          stackHiddenIds.add(id);
+        stackMetaById.set(controllerId, { key, count: eligible.length, expanded });
+        if (!expanded) {
+          for (const id of ordered) {
+            if (id === controllerId) continue;
+            stackHiddenIds.add(id);
+          }
         }
       }
     }
@@ -1699,34 +1719,44 @@ export async function layoutLevelsTwoPane<T = any>(
       buckets.set(lv, arr);
     }
     for (const [lv, list] of buckets.entries()) {
-      const eligible = list.filter((pid) => {
-        if (!isStackEligibleRightNode(pid)) return false;
-        // Avoid stacking parents that themselves have left-groups (already filtered) or are explicitly expanded.
-        return true;
-      });
-      if (eligible.length < STACK_MIN) continue;
-      const key = `levels:rightstackp:${childId}:${lv}`;
-      stackMembersByKey.set(key, eligible);
-      const expanded = expandedStackKeys.has(key);
-
-      const ordered = [...eligible].sort((a, b) => {
-        const pa = rightPos.get(a);
-        const pb = rightPos.get(b);
-        const ya = (pa?.y ?? 0) + nodeHeight / 2;
-        const yb = (pb?.y ?? 0) + nodeHeight / 2;
-        return ya - yb;
-      });
-      const controllerId = ordered[0]!;
-      // If this node is already a controller for another stack, keep the first assignment (stable).
-      if (!stackMetaById.has(controllerId)) {
-        stackMetaById.set(controllerId, { key, count: eligible.length, expanded });
+      // Partition by type so we only collapse homogeneous stacks.
+      const byType = new Map<string, string[]>();
+      for (const pid of list) {
+        const t = typeOfRightNode(pid);
+        const arr = byType.get(t) || [];
+        arr.push(pid);
+        byType.set(t, arr);
       }
-      if (!expanded) {
-        for (const id of ordered) {
-          if (id === controllerId) continue;
-          // Do not hide if it is already a controller for some stack (keeps a single visible toggle per stack).
-          if (stackMetaById.has(id)) continue;
-          stackHiddenIds.add(id);
+      for (const [t, typeList] of byType.entries()) {
+        const eligible = typeList.filter((pid) => {
+          if (!isStackEligibleRightNode(pid)) return false;
+          // Avoid stacking parents that themselves have left-groups (already filtered) or are explicitly expanded.
+          return true;
+        });
+        if (eligible.length < STACK_MIN) continue;
+        const key = `levels:rightstackp:${childId}:${lv}:${t}`;
+        stackMembersByKey.set(key, eligible);
+        const expanded = expandedStackKeys.has(key);
+
+        const ordered = [...eligible].sort((a, b) => {
+          const pa = rightPos.get(a);
+          const pb = rightPos.get(b);
+          const ya = (pa?.y ?? 0) + nodeHeight / 2;
+          const yb = (pb?.y ?? 0) + nodeHeight / 2;
+          return ya - yb;
+        });
+        const controllerId = ordered[0]!;
+        // If this node is already a controller for another stack, keep the first assignment (stable).
+        if (!stackMetaById.has(controllerId)) {
+          stackMetaById.set(controllerId, { key, count: eligible.length, expanded });
+        }
+        if (!expanded) {
+          for (const id of ordered) {
+            if (id === controllerId) continue;
+            // Do not hide if it is already a controller for some stack (keeps a single visible toggle per stack).
+            if (stackMetaById.has(id)) continue;
+            stackHiddenIds.add(id);
+          }
         }
       }
     }

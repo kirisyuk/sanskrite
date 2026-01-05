@@ -1926,9 +1926,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // --- Horizon Fragments ---
-  async getHorizonFragment(fragmentId: string): Promise<any> {
+  async getHorizonFragment(fragmentId: string, signal?: AbortSignal): Promise<any> {
     try {
-      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}`);
+      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}`, { signal });
       return response.data;
     } catch (error: any) {
       console.error(`[API] getHorizonFragment error:`, error);
@@ -2236,6 +2236,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       semantic?: 'upstream' | 'downstream' | 'both';
       // Optional: lensId (for lens-aware filtering on backend). Usually omit for inspector.
       lensId?: string;
+      // Optional request abort.
+      signal?: AbortSignal;
     }
   ): Promise<{
     edges: any[];
@@ -2272,6 +2274,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/dependencies`, {
         params,
         headers,
+        signal: options?.signal,
       });
       return response.data;
     } catch (error: any) {
