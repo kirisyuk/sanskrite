@@ -55,6 +55,11 @@ export interface HorizonNodeData {
   stackGroupKey?: string; // stable key for the stack group
   stackCount?: number; // total nodes in the stack
   stackExpanded?: boolean; // whether the stack is currently expanded
+  // Named stack controllers (Levels right pane): semantic stacks (Persons/Products/Control/Geolocation)
+  stackTitle?: string;
+  stackKind?: 'persons' | 'products' | 'control' | 'geolocation';
+  /** Visual type override for the stack controller node (drives color/icon); e.g. PERSON/PRODUCT/ORGANIZATION/GEO_REGION */
+  stackVisualType?: string;
   onToggleStack?: (stackKey: string, nextExpanded: boolean) => void;
   // Levels two-pane metadata (view-only)
   levelsPane?: 'right' | 'left' | 'dock';
@@ -70,6 +75,14 @@ export interface HorizonNodeData {
   onTrace?: (nodeId: string) => void;
   onUndoTrace?: () => void;
   canUndoTrace?: boolean;
+  // Local relation filters (Levels layout; per-node toggle to show/hide neighbors by edge type)
+  localFiltersOpen?: boolean;
+  /** Map of edge type → visible (true = show, false = hide neighbors with this edge type). */
+  localFilterState?: Record<string, boolean>;
+  /** List of edge types available for this node (derived from current levelsExpandMode). */
+  localFilterEdgeTypes?: string[];
+  onOpenLocalFilters?: (nodeId: string, nextOpen: boolean) => void;
+  onToggleLocalFilter?: (nodeId: string, edgeType: string, nextVisible: boolean) => void;
   [key: string]: any;
 }
 
@@ -252,17 +265,6 @@ const ensureHorizonNode2026Styles = () => {
       background:
         radial-gradient(140px 80px at 18% 6%, var(--hzn-accent-soft) 0%, rgba(0,0,0,0) 70%),
         linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.00) 50%);
-      opacity: 0.9;
-    }
-    :root[data-hzn-node-visuals="max"] .hzn-node-2026::after {
-      content: "";
-      position: absolute;
-      left: 0;
-      right: 0;
-      top: 0;
-      height: 2px;
-      pointer-events: none;
-      background: linear-gradient(90deg, var(--hzn-accent) 0%, rgba(0,0,0,0) 60%);
       opacity: 0.9;
     }
     .hzn-node-2026.is-selected {
@@ -455,6 +457,416 @@ export const getMetricColor = (key: string, value: number): string => {
   return '#EF4444'; // red
 };
 
+/** Get edge stroke color by edge type (matches getEdgeStyle in LensCanvasCockpit) */
+export const getEdgeColor = (edgeType: string | undefined): string => {
+  const type = (edgeType || '').toUpperCase();
+  // Competition/Conflict — Red
+  if (['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES'].includes(type)) return '#EF4444';
+  // Partnership/Cooperation — Green
+  if (['PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPLIES_TO', 'SUPPORTS'].includes(type)) return '#22C55E';
+  // Influence — Orange
+  if (['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'].includes(type)) return '#F97316';
+  // Ownership — Blue
+  if (['OWNS', 'INVESTS_IN', 'PARENT_OF', 'SUBSIDIARY_OF'].includes(type)) return '#3B82F6';
+  // Control/Management — Indigo
+  if (['CONTROLS', 'MANAGES'].includes(type)) return '#6366F1';
+  // Governance — Indigo (lighter)
+  if (['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED'].includes(type)) return '#6366F1';
+  // Dependency — Gray
+  if (['DEPENDS_ON', 'REQUIRES', 'USES', 'NEEDS'].includes(type)) return '#9CA3AF';
+  // Location — Purple
+  if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'].includes(type)) return '#A855F7';
+  // Default — Slate
+  return '#64748B';
+};
+
+const EdgeTypeIcon = ({ edgeType, color }: { edgeType: string; color: string }) => {
+  const et = (edgeType || '').toUpperCase().trim();
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: color,
+    strokeWidth: 2.5,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+  };
+
+  // IMPORTANT: icons must be unique per edge type (no shared SVGs), otherwise toggles are ambiguous.
+  switch (et) {
+    // Context / location
+    case 'LOCATED_IN':
+      return (
+        <svg {...common}>
+          <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11z" />
+          <circle cx="12" cy="10" r="2.5" />
+        </svg>
+      );
+    case 'OPERATES_IN':
+      return (
+        <svg {...common}>
+          <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11z" />
+          <rect x="10.5" y="8.5" width="3" height="3" rx="0.6" />
+        </svg>
+      );
+    case 'BASED_IN':
+      return (
+        <svg {...common}>
+          <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11z" />
+          <path d="M9.5 11.5h5" />
+        </svg>
+      );
+    case 'HEADQUARTERED_IN':
+      return (
+        <svg {...common}>
+          <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11z" />
+          <path d="M10 8v6" />
+          <path d="M10 8h4l-1 1 1 1h-4" />
+        </svg>
+      );
+    case 'REGULATES':
+      return (
+        <svg {...common}>
+          <path d="M14 4l6 6" />
+          <path d="M13 5l-2 2 6 6 2-2" />
+          <path d="M9 9l-5 5" />
+          <path d="M8 10l6 6" />
+          <path d="M4 20h8" />
+        </svg>
+      );
+
+    // Dependencies / usage
+    case 'DEPENDS_ON':
+      return (
+        <svg {...common}>
+          <path d="M10 13a5 5 0 0 1 0-7l1.5-1.5a5 5 0 0 1 7 7L17 13" />
+          <path d="M14 11a5 5 0 0 1 0 7L12.5 19.5a5 5 0 0 1-7-7L7 11" />
+        </svg>
+      );
+    case 'REQUIRES':
+      return (
+        <svg {...common}>
+          <rect x="7" y="11" width="10" height="9" rx="2" />
+          <path d="M9 11V8a3 3 0 0 1 6 0v3" />
+        </svg>
+      );
+    case 'NEEDS':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v6" />
+          <path d="M12 17h.01" />
+        </svg>
+      );
+    case 'USES':
+      return (
+        <svg {...common}>
+          <path d="M14 7a4 4 0 0 0-5 5l-5 5 2 2 5-5a4 4 0 0 0 5-5l-2 2-2-2z" />
+        </svg>
+      );
+    case 'CONSUMES':
+      return (
+        <svg {...common}>
+          <path d="M12 3v10" />
+          <path d="M8 9l4 4 4-4" />
+          <path d="M7 21v-4h10v4" />
+          <path d="M5 21h14" />
+        </svg>
+      );
+    case 'TRANSFORMS_INTO':
+      return (
+        <svg {...common}>
+          <path d="M16 3h4v4" />
+          <path d="M20 3l-5 5" />
+          <path d="M8 21H4v-4" />
+          <path d="M4 21l5-5" />
+          <path d="M7 7h6" />
+          <path d="M11 17h6" />
+        </svg>
+      );
+
+    // Ownership / control
+    case 'OWNS':
+      return (
+        <svg {...common}>
+          <circle cx="8.5" cy="12" r="3" />
+          <path d="M11.5 12H21" />
+          <path d="M18 12v3" />
+          <path d="M16 12v2" />
+        </svg>
+      );
+    case 'PARENT_OF':
+      return (
+        <svg {...common}>
+          <path d="M12 5v6" />
+          <path d="M6 9h12" />
+          <path d="M12 11l-4 4" />
+          <path d="M12 11l4 4" />
+          <path d="M8 21v-3" />
+          <path d="M16 21v-3" />
+        </svg>
+      );
+    case 'SUBSIDIARY_OF':
+      return (
+        <svg {...common}>
+          <rect x="6" y="3" width="12" height="6" rx="1.5" />
+          <path d="M12 21v-6" />
+          <path d="M8 15l4-4 4 4" />
+        </svg>
+      );
+    case 'INVESTS_IN':
+      return (
+        <svg {...common}>
+          <path d="M3 17l6-6 4 4 7-7" />
+          <path d="M14 8h6v6" />
+        </svg>
+      );
+    case 'CONTROLS':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="7" />
+          <circle cx="12" cy="12" r="2" />
+          <path d="M12 2v3" />
+          <path d="M12 19v3" />
+          <path d="M2 12h3" />
+          <path d="M19 12h3" />
+        </svg>
+      );
+    case 'MANAGES':
+      return (
+        <svg {...common}>
+          <rect x="7" y="4" width="10" height="16" rx="2" />
+          <path d="M10 4v2h4V4" />
+          <path d="M9.5 9h5" />
+          <path d="M9.5 13h5" />
+          <path d="M9.5 17h5" />
+        </svg>
+      );
+
+    // Governance / people
+    case 'BOARD_MEMBER_OF':
+      return (
+        <svg {...common}>
+          <path d="M15 7a3 3 0 1 1-6 0a3 3 0 0 1 6 0z" />
+          <path d="M5 21a7 7 0 0 1 14 0" />
+          <path d="M19 8v4" />
+          <path d="M17 10h4" />
+        </svg>
+      );
+    case 'EXECUTIVE_OF':
+      return (
+        <svg {...common}>
+          <path d="M15 7a3 3 0 1 1-6 0a3 3 0 0 1 6 0z" />
+          <path d="M5 21a7 7 0 0 1 14 0" />
+          <path d="M18 6l.7 1.4 1.6.2-1.15 1.1.27 1.6L18 9.6l-1.42.75.27-1.6-1.15-1.1 1.6-.2z" />
+        </svg>
+      );
+    case 'EMPLOYED_BY':
+      return (
+        <svg {...common}>
+          <rect x="6" y="7" width="12" height="10" rx="2" />
+          <path d="M9 7V5h6v2" />
+          <path d="M6 12h12" />
+        </svg>
+      );
+    case 'FOUNDED':
+      return (
+        <svg {...common}>
+          <path d="M6 3v18" />
+          <path d="M6 4h11l-2 3 2 3H6" />
+        </svg>
+      );
+
+    // Supply chain
+    case 'PRODUCES':
+      return (
+        <svg {...common}>
+          <path d="M3 21V11l6-3v3l6-3v5h6v8H3z" />
+          <path d="M7 21v-4" />
+          <path d="M11 21v-4" />
+        </svg>
+      );
+    case 'SUPPLIES_TO':
+      return (
+        <svg {...common}>
+          <path d="M3 7h11v10H3z" />
+          <path d="M14 10h4l3 3v4h-7" />
+          <circle cx="7" cy="19" r="1.5" />
+          <circle cx="18" cy="19" r="1.5" />
+        </svg>
+      );
+    case 'SUPPORTS':
+      return (
+        <svg {...common}>
+          <path d="M12 21s-7-4.5-9-9a5 5 0 0 1 9-3a5 5 0 0 1 9 3c-2 4.5-9 9-9 9z" />
+        </svg>
+      );
+
+    // Market relations
+    case 'PARTNERS_WITH':
+      return (
+        <svg {...common}>
+          <path d="M8 12l2 2 6-6" />
+          <path d="M7 7h10" />
+          <path d="M7 17h10" />
+          <path d="M6 12h2" />
+          <path d="M16 12h2" />
+        </svg>
+      );
+    case 'COOPERATES_WITH':
+      return (
+        <svg {...common}>
+          <path d="M15 7a3 3 0 1 1-6 0a3 3 0 0 1 6 0z" />
+          <path d="M5 21a7 7 0 0 1 14 0" />
+          <path d="M6 10a2.5 2.5 0 0 1 3-2" />
+          <path d="M18 10a2.5 2.5 0 0 0-3-2" />
+        </svg>
+      );
+    case 'RELATED_TO':
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="12" r="3" />
+          <circle cx="16" cy="12" r="3" />
+          <path d="M11 12h2" />
+        </svg>
+      );
+    case 'SIMILAR_TO':
+      return (
+        <svg {...common}>
+          <path d="M7 10h10" />
+          <path d="M7 14h10" />
+        </svg>
+      );
+    case 'LINKED_TO':
+      return (
+        <svg {...common}>
+          <path d="M14 3h7v7" />
+          <path d="M10 14L21 3" />
+          <path d="M5 7v14h14v-5" />
+        </svg>
+      );
+    case 'COMPETES_WITH':
+      return (
+        <svg {...common}>
+          <path d="M7 8h10" />
+          <path d="M7 8l2-2" />
+          <path d="M7 8l2 2" />
+          <path d="M17 16H7" />
+          <path d="M17 16l-2-2" />
+          <path d="M17 16l-2 2" />
+        </svg>
+      );
+    case 'CONFLICTS_WITH':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="7" />
+          <path d="M8 16l8-8" />
+        </svg>
+      );
+    case 'OPPOSES':
+      return (
+        <svg {...common}>
+          <path d="M7 12h10" />
+          <path d="M7 12l2-2" />
+          <path d="M7 12l2 2" />
+          <path d="M17 12l-2-2" />
+          <path d="M17 12l-2 2" />
+        </svg>
+      );
+
+    // Influence
+    case 'INFLUENCES':
+      return (
+        <svg {...common}>
+          <path d="M4 12c2-4 4-4 6 0s4 4 10 0" />
+          <path d="M18 8l2 4-2 4" />
+        </svg>
+      );
+    case 'AFFECTS':
+      return (
+        <svg {...common}>
+          <path d="M13 2L4 14h7l-1 8 9-12h-7z" />
+        </svg>
+      );
+    case 'IMPACTS':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="7" />
+          <path d="M12 5v4" />
+          <path d="M16 8l-4 4" />
+        </svg>
+      );
+    default:
+      break;
+  }
+
+  // Default: dot
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="4" />
+    </svg>
+  );
+};
+
+const edgeCaptionShort = (raw: any): string => {
+  const t = String(raw || '').trim();
+  if (!t) return 'Relation';
+  const u = t.toUpperCase();
+  const MAP: Record<string, string> = {
+    // Dependency / usage
+    DEPENDS_ON: 'Depends',
+    REQUIRES: 'Requires',
+    NEEDS: 'Needs',
+    USES: 'Uses',
+    CONSUMES: 'Consumes',
+    TRANSFORMS_INTO: 'Transforms',
+    // Ownership / control
+    OWNS: 'Owns',
+    MANAGES: 'Manages',
+    CONTROLS: 'Controls',
+    INVESTS_IN: 'Invests',
+    PARENT_OF: 'Parent',
+    SUBSIDIARY_OF: 'Subsidiary',
+    EMPLOYED_BY: 'Employed',
+    BOARD_MEMBER_OF: 'Board',
+    EXECUTIVE_OF: 'Executive',
+    FOUNDED: 'Founded',
+    // Cooperation / relationships
+    PARTNERS_WITH: 'Partners',
+    COOPERATES_WITH: 'Cooperates',
+    SUPPORTS: 'Supports',
+    SUPPLIES_TO: 'Supplies',
+    PRODUCES: 'Produces',
+    RELATED_TO: 'Related',
+    SIMILAR_TO: 'Similar',
+    LINKED_TO: 'Linked',
+    // Location / context
+    LOCATED_IN: 'Located',
+    OPERATES_IN: 'Operates',
+    BASED_IN: 'Based',
+    HEADQUARTERED_IN: 'HQ',
+    // Competition / conflict
+    COMPETES_WITH: 'Competes',
+    CONFLICTS_WITH: 'Conflicts',
+    OPPOSES: 'Opposes',
+    // Influence / regulation
+    INFLUENCES: 'Influences',
+    AFFECTS: 'Affects',
+    REGULATES: 'Regulates',
+    IMPACTS: 'Impacts',
+  };
+  if (MAP[u]) return MAP[u];
+  const human = u
+    .replace(/_WITH$/g, '')
+    .replace(/_TO$/g, '')
+    .replace(/_OF$/g, '')
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return human.length > 18 ? `${human.slice(0, 18)}…` : human;
+};
+
 const EDGE_GROUP_COLORS: Record<
   string,
   { light: string; dark: string; borderLight: string; borderDark: string }
@@ -643,9 +1055,20 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
 
   // Optional: intra-group subsections (used by Levels Two-Pane left groups to separate children by fragment type).
   const typeBlocks = (data as any)?.groupTypeBlocks as
-    | Array<{ typeKey: string; label: string; startX: number; dividerX?: number; blockW?: number }>
+    | Array<{
+        typeKey: string;
+        label: string;
+        startX: number;
+        dividerX?: number;
+        blockW?: number;
+        relationBlocks?: Array<{ label: string; startX: number; blockW: number }>;
+        relationLabelY?: number;
+      }>
     | undefined;
   const showTypeBlocks = Array.isArray(typeBlocks) && typeBlocks.length > 1;
+  const showRelationBlocks =
+    Array.isArray(typeBlocks) &&
+    typeBlocks.some((b) => Array.isArray((b as any)?.relationBlocks) && ((b as any).relationBlocks as any[]).length > 1);
 
   // Levels Two-Pane: ports for aggregated edges (one per edge type).
   const edgePorts = (data as any)?.groupEdgePorts as
@@ -791,6 +1214,48 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                 {String(b?.label || b?.typeKey || '')}
               </div>
             );
+          })}
+        </>
+      )}
+
+      {/* Optional: Relation subsections (within a type block).
+          IMPORTANT: render even when there is only ONE type block (typeBlocks.length === 1). */}
+      {showRelationBlocks && Array.isArray(typeBlocks) && (
+        <>
+          {typeBlocks.flatMap((b, bIdx) => {
+            const rels = Array.isArray(b?.relationBlocks) ? b.relationBlocks : [];
+            const y = typeof b?.relationLabelY === 'number' ? b.relationLabelY : undefined;
+            if (!rels || rels.length <= 1 || typeof y !== 'number') return [];
+            return rels.map((rb, rIdx) => {
+              const left = typeof rb?.startX === 'number' ? rb.startX : (typeof b?.startX === 'number' ? b.startX : 12);
+              const w = typeof rb?.blockW === 'number' ? rb.blockW : 80;
+              const label = String(rb?.label || '').trim();
+              return (
+                <div
+                  key={`rel-label-${bIdx}-${rIdx}`}
+                  style={{
+                    position: 'absolute',
+                    left,
+                    top: y,
+                    width: w,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: subtitleColor,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.25px',
+                    textAlign: 'center',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    opacity: theme === 'dark' ? 0.55 : 0.60,
+                    pointerEvents: 'none',
+                  }}
+                  title={label}
+                >
+                  {label}
+                </div>
+              );
+            });
           })}
         </>
       )}
@@ -995,6 +1460,16 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const stackCount = typeof (data as any)?.stackCount === 'number' ? (data as any).stackCount : undefined;
   const stackExpanded = Boolean((data as any)?.stackExpanded);
   const canToggleStack = Boolean(stackKey && stackCount && stackCount > 1 && typeof (data as any)?.onToggleStack === 'function');
+  const stackTitle = String((data as any)?.stackTitle || '').trim();
+  const stackVisualType = String((data as any)?.stackVisualType || '').trim();
+  const controllerId = String((data as any)?.stackControllerId || '').trim();
+  const isStackController = Boolean(canToggleStack && controllerId && controllerId === String(data.id || '').trim());
+  const isCollapsedStackController = Boolean(isStackController && !stackExpanded && (stackCount || 0) > 1);
+  const stackPreviewOpen = Boolean((data as any)?.stackPreviewOpen);
+  const stackPreviewItems = Array.isArray((data as any)?.stackPreviewItems) ? ((data as any)?.stackPreviewItems as any[]) : [];
+  const stackPreviewMore = typeof (data as any)?.stackPreviewMore === 'number' ? (data as any).stackPreviewMore : 0;
+  const onStackPreviewSelect = (data as any)?.onStackPreviewSelect as ((nodeId: string) => void) | undefined;
+  const onStackPreviewMore = (data as any)?.onStackPreviewMore as (() => void) | undefined;
   // Collapsed stacked view: show 2–3 subtle "cards" peeking from underneath.
   const stackLayers = canToggleStack && !stackExpanded
     ? Math.min(3, Math.max(2, Math.ceil((stackCount || 0) / 8)))
@@ -1009,6 +1484,13 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const canTrace = typeof (data as any)?.onTrace === 'function';
   const canUndoTrace = Boolean((data as any)?.canUndoTrace) && typeof (data as any)?.onUndoTrace === 'function';
 
+  // Local relation filters (edge-type toggles shown above node on click)
+  const localFiltersOpen = Boolean((data as any)?.localFiltersOpen);
+  const localFilterState = ((data as any)?.localFilterState || {}) as Record<string, boolean>;
+  const localFilterEdgeTypes = Array.isArray((data as any)?.localFilterEdgeTypes) ? ((data as any)?.localFilterEdgeTypes as string[]) : [];
+  const canLocalFilters = localFilterEdgeTypes.length > 0 && typeof (data as any)?.onToggleLocalFilter === 'function';
+  const localFiltersRef = React.useRef<HTMLDivElement | null>(null);
+
   React.useEffect(() => {
     if (!canRightFilters || !rightFiltersOpen) return;
     const onMouseDown = (e: MouseEvent) => {
@@ -1020,13 +1502,34 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     window.addEventListener('mousedown', onMouseDown, true);
     return () => window.removeEventListener('mousedown', onMouseDown, true);
   }, [canRightFilters, rightFiltersOpen, data]);
+
+  React.useEffect(() => {
+    if (!canLocalFilters || !localFiltersOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const t = e.target as any;
+      if (localFiltersRef.current && localFiltersRef.current.contains(t)) return;
+      // Close on any click outside the filters
+      (data as any)?.onOpenLocalFilters?.(data.id, false);
+    };
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => window.removeEventListener('mousedown', onMouseDown, true);
+  }, [canLocalFilters, localFiltersOpen, data]);
   
+  // Stack controllers can have a separate visual type (Persons/Products/Control/Geolocation).
+  const visualType = isCollapsedStackController && stackVisualType ? stackVisualType : (data.type || '');
+  const colorsForVisual = visualType ? getNodeColors(visualType, theme) : colors;
+
   // 2026 visual style: neutral surface with tinted accent (less "dashboardy", more product-like)
-  const accentColor = isCritical ? '#EF4444' : colors.accent;
+  const accentColor = isCritical ? '#EF4444' : (colorsForVisual?.accent || colors.accent);
   const textColor = theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.88)';
   const mutedTextColor = theme === 'dark' ? 'rgba(255,255,255,0.62)' : 'rgba(15,23,42,0.56)';
-  const surfaceBg = theme === 'dark' ? 'rgba(17,24,39,0.90)' : 'rgba(255,255,255,0.96)';
-  const surfaceBorder = theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)';
+  // Premium stack controllers: slightly richer surface, consistent with palette.
+  const surfaceBg = isCollapsedStackController
+    ? (theme === 'dark' ? 'rgba(17,24,39,0.94)' : 'rgba(255,255,255,0.98)')
+    : (theme === 'dark' ? 'rgba(17,24,39,0.90)' : 'rgba(255,255,255,0.96)');
+  const surfaceBorder = isCollapsedStackController
+    ? (theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)')
+    : (theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)');
   const accentSoft = hexToRgba(accentColor, theme === 'dark' ? 0.22 : 0.16);
   const accentRing = hexToRgba(accentColor, theme === 'dark' ? 0.55 : 0.34);
   const shadowBase = theme === 'dark' ? '0 8px 22px rgba(0,0,0,0.30)' : '0 8px 22px rgba(0,0,0,0.10)';
@@ -1041,7 +1544,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const beneficiaryRing = theme === 'dark' ? 'rgba(52, 211, 153, 0.56)' : 'rgba(16, 185, 129, 0.46)';
   const highlightRing = !isCritical ? (isUltimateBeneficiary ? beneficiaryRing : (isHub ? hubRing : null)) : null;
 
-  const displayLabel = data.label || humanizeCanonicalPath(data.canonicalPath) || 'Fragment';
+  const displayLabel =
+    (isCollapsedStackController && stackTitle)
+      ? stackTitle
+      : (data.label || humanizeCanonicalPath(data.canonicalPath) || 'Fragment');
   const titleLineClamp = isCollapsed ? 2 : (data.showMetrics ? 2 : 6);
   const displayType = data.type || 'Unknown';
   // Keep node size consistent with ELK layout defaults used in the canvas (see LensCanvasCockpit)
@@ -1106,6 +1612,164 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             </span>
           </button>
         </NodeToolbar>
+      )}
+
+      {/* Stack preview chips (collapsed stack): show up to 5 hidden members + more.
+          IMPORTANT: render INSIDE the node DOM (not NodeToolbar), so it scales with graph zoom. */}
+      {canToggleStack && !stackExpanded && stackPreviewOpen && (
+        (() => {
+          return (
+        <div
+          style={{
+            position: 'absolute',
+            left: '100%',
+            top: 12,
+            marginLeft: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            padding: 0,
+            borderRadius: 0,
+            border: 'none',
+            background: 'transparent',
+            boxShadow: 'none',
+            pointerEvents: 'auto',
+            maxWidth: 240,
+            zIndex: 60,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {stackPreviewItems.slice(0, 5).map((it: any) => {
+            const id = String(it?.nodeId || '').trim();
+            const label = String(it?.label || '').trim() || 'Fragment';
+            const t = String(it?.type || '').trim() || 'UNKNOWN';
+            const c = getNodeColors(t, theme);
+            return (
+              <button
+                key={`stack-prev-${id}`}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStackPreviewSelect?.(id);
+                }}
+                title={label}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '2px 0',
+                  borderRadius: 0,
+                  border: 'none',
+                  background: 'transparent',
+                  color: textColor,
+                  cursor: 'pointer',
+                  width: '100%',
+                  textAlign: 'left',
+                }}
+              >
+                <HorizonNodeIcon type={t} color={c.accent} size={14} />
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    flex: 1,
+                  }}
+                >
+                  {label}
+                </span>
+              </button>
+            );
+          })}
+
+          {stackPreviewMore > 0 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStackPreviewMore?.();
+              }}
+              title={`Show ${stackPreviewMore} more`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                gap: 8,
+                padding: '2px 0',
+                borderRadius: 0,
+                border: 'none',
+                background: 'transparent',
+                color: mutedTextColor,
+                cursor: 'pointer',
+                width: '100%',
+                fontSize: 12,
+                fontWeight: 800,
+              }}
+            >
+              +{stackPreviewMore} more
+            </button>
+          )}
+        </div>
+          );
+        })()
+      )}
+
+      {/* Local relation filters (edge-type toggles above the node, shown on click).
+          Renders INSIDE the node DOM so it scales with graph zoom. */}
+      {canLocalFilters && localFiltersOpen && (
+        <div
+          ref={localFiltersRef}
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            left: 0,
+            marginBottom: 8,
+            display: 'flex',
+            flexDirection: 'row',
+            gap: 4,
+            padding: 0,
+            background: 'transparent',
+            pointerEvents: 'auto',
+            zIndex: 60,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {localFilterEdgeTypes.map((et) => {
+            const isVisible = localFilterState[et] !== false; // default true
+            const color = getEdgeColor(et);
+            return (
+              <button
+                key={`lf-${et}`}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  (data as any)?.onToggleLocalFilter?.(data.id, et, !isVisible);
+                }}
+                title={`${isVisible ? 'Hide' : 'Show'} ${edgeCaptionShort(et)}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 22,
+                  height: 22,
+                  borderRadius: 6,
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  opacity: isVisible ? 1 : 0.35,
+                  transition: 'opacity 0.15s ease',
+                }}
+              >
+                <EdgeTypeIcon edgeType={et} color={color} />
+              </button>
+            );
+          })}
+        </div>
       )}
 
       <div
@@ -1297,7 +1961,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
           }}
         >
-          <HorizonNodeIcon type={data.type} color={accentColor} size={18} />
+          <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
         </div>
         
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1328,7 +1992,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                 letterSpacing: '0.5px',
               }}
             >
-              {formatType(displayType)}
+              {isCollapsedStackController
+                ? `STACK • ${(stackCount || 0)}`
+                : formatType(displayType)}
             </div>
           )}
 

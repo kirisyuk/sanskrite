@@ -13,6 +13,8 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
@@ -200,8 +202,12 @@ func main() {
 	}
 	log.Printf("pagination: page-size=%d", *pageSize)
 
-	rows, scanned, err := scan(ctx, db, entityRepo, entityCache, wdClient, tax)
+	rows, scanned, lastSeen, err := scan(ctx, db, entityRepo, entityCache, wdClient, tax)
 	if err != nil {
+		// IMPORTANT: log.Fatalf exits immediately (no defers), so we must print resume cursor here.
+		if strings.TrimSpace(lastSeen) != "" {
+			log.Printf("resume cursor: start-after=%s", strings.TrimSpace(lastSeen))
+		}
 		log.Fatalf("FATAL: scan failed: %v", err)
 	}
 
@@ -211,10 +217,13 @@ func main() {
 		writeJSONL(out, rows)
 	}
 
+	if strings.TrimSpace(lastSeen) != "" {
+		log.Printf("resume cursor: start-after=%s", strings.TrimSpace(lastSeen))
+	}
 	log.Printf("✓ Done. scanned=%d missingPrinted=%d (see log for resume cursor)", scanned, len(rows))
 }
 
-func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.EntityRepository, entityCache map[string]*coreModels.Entity, wdClient *shttp.WikidataClient, tax *coreModels.HorizonTaxonomy) ([]Row, int, error) {
+func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.EntityRepository, entityCache map[string]*coreModels.Entity, wdClient *shttp.WikidataClient, tax *coreModels.HorizonTaxonomy) ([]Row, int, string, error) {
 	base := db.Collection("horizon_fragments").Where("tenantId", "==", strings.TrimSpace(*tenantID)).
 		Where("type", "in", []interface{}{string(hmodels.FragmentTypeOrganization), string(hmodels.FragmentTypePerson)}).
 		OrderBy(firestore.DocumentID, firestore.Asc)
@@ -274,6 +283,8 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 
 	cursor := strings.TrimSpace(*startAfterDocID)
 	lastSeen := cursor
+	transientErrs := 0
+	const maxTransientErrs = 20
 	for len(out) < *limit && scanned < *maxScan {
 		pageQ := base.Limit(*pageSize)
 		if lastSeen != "" {
@@ -289,7 +300,22 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 			}
 			if err != nil {
 				iter.Stop()
-				return out, scanned, fmt.Errorf("failed to iterate fragments: %w", err)
+				// Transient Firestore/network errors are common on long scans. Retry by restarting
+				// pagination from the last seen document ID, with exponential backoff.
+				if isTransientFirestoreErr(err) && transientErrs < maxTransientErrs {
+					transientErrs++
+					backoff := time.Duration(1<<minInt(transientErrs, 5)) * time.Second // 2s,4s,8s,16s,32s cap
+					if backoff > 30*time.Second {
+						backoff = 30 * time.Second
+					}
+					log.Printf("WARNING: transient Firestore error while scanning (retry %d/%d in %s): %v (resume cursor: start-after=%s)",
+						transientErrs, maxTransientErrs, backoff, err, lastSeen)
+					time.Sleep(backoff)
+					// Force "continue scan" semantics even if we read < pageSize.
+					pageCount = *pageSize
+					break
+				}
+				return out, scanned, lastSeen, fmt.Errorf("failed to iterate fragments: %w", err)
 			}
 			pageCount++
 			scanned++
@@ -478,10 +504,6 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 		}
 	}
 
-	if lastSeen != "" {
-		log.Printf("resume cursor: start-after=%s", lastSeen)
-	}
-
 	// After scan: optionally merge observed industries into taxonomy doc.
 	if dict != nil && *expandIndustryDict {
 		if tax == nil {
@@ -500,7 +522,37 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 		}
 	}
 
-	return out, scanned, nil
+	return out, scanned, lastSeen, nil
+}
+
+func isTransientFirestoreErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
+			return true
+		}
+	}
+	// Fallback for wrapped/transport errors (common on Windows).
+	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "wsarecv") ||
+		strings.Contains(s, "forcibly closed") ||
+		strings.Contains(s, "connection was forcibly closed") ||
+		strings.Contains(s, "connection attempt failed") ||
+		strings.Contains(s, "timeout") ||
+		strings.Contains(s, "unavailable") {
+		return true
+	}
+	return false
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func applyWikidataConservativeToFragmentAndEntity(

@@ -844,6 +844,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [showHoverModeMenu, setShowHoverModeMenu] = React.useState(false);
   const hoverModeMenuRef = React.useRef<HTMLDivElement | null>(null);
 
+  // Stack preview overlay (Levels): show up to 5 hidden stack members as chips on controller click.
+  const stackPreviewControllerIdRef = React.useRef<string | null>(null);
+  const pendingFocusNodeIdRef = React.useRef<string | null>(null);
+
   // Levels (Hierarchical) expansion filter (controls which edge types are fetched on expand).
   type LevelsExpandMode = 'all' | 'ownership' | 'expansion' | 'dependencies' | 'context' | 'market' | 'influence' | 'balanced';
   const [levelsExpandMode, setLevelsExpandMode] = React.useState<LevelsExpandMode>('ownership');
@@ -1558,9 +1562,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const invokeScopeScout = React.useCallback((fragmentId: string, canonicalPath?: string) => {
     onScopeScoutRef.current?.(fragmentId, canonicalPath);
   }, []);
+  // Arrange scheduler: coalesce bursts of events (expand/add edges/page changes) into a single relayout.
+  // This prevents cascading full-graph layouts in the same tick.
+  const arrangeRafRef = React.useRef<number | null>(null);
+  const arrangePendingRef = React.useRef<boolean>(false);
   const invokeArrange = React.useCallback(() => {
+    if (arrangeRafRef.current != null) {
+      arrangePendingRef.current = true;
+      return;
+    }
+    arrangeRafRef.current = window.requestAnimationFrame(() => {
+      arrangeRafRef.current = null;
     const fn: any = onArrangeRef.current;
     if (typeof fn === 'function') void fn();
+      // If more requests came in while we were queued, run one more frame.
+      if (arrangePendingRef.current) {
+        arrangePendingRef.current = false;
+        invokeArrange();
+      }
+    });
   }, []);
 
   const stopTrace = React.useCallback(() => {
@@ -1603,7 +1623,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
     setTraceUndoStack((prev) => prev.slice(0, -1));
     if (layoutMode === 'levels') {
-      window.setTimeout(() => invokeArrange(), 0);
+      invokeArrange();
     }
   }, [traceUndoStack, setNodes, setEdges, layoutMode, invokeArrange]);
 
@@ -2159,7 +2179,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           });
         }
         if (layerNewNodes.length > 0 || layerNewEdges.length > 0) {
-          window.setTimeout(() => invokeArrange(), 0);
+          invokeArrange();
         }
 
         if (aborted || capped) break;
@@ -2505,6 +2525,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     edgeList: Edge[],
     nodeList: Node<HorizonNodeData>[]
   ): Edge[] => {
+    // Always rebuild stack-proxy edges; remove prior ones to avoid stale edges.
+    const baseEdgeList = (edgeList || []).filter((e: any) => {
+      const id = String(e?.id || '').trim();
+      const d: any = e?.data || {};
+      if (d.levelsStackProxy) return false;
+      if (id.startsWith('levels:stackproxy:')) return false;
+      // Also rebuild group-proxy edges (group↔outside via group handlers).
+      if (d.levelsGroupProxy) return false;
+      if (id.startsWith('levels:gproxy:')) return false;
+      return true;
+    });
+
     const nodeMap = new Map<string, Node<HorizonNodeData>>();
     const groupMap = new Map<string, Node<HorizonNodeData>>();
     for (const n of nodeList) {
@@ -2530,15 +2562,132 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
 
     const normalizeTypeKey = (t: any) => String(t || '').toUpperCase().trim().replace(/\s+/g, '_') || 'UNKNOWN';
+    const PEER_EDGE_TYPES = new Set<string>([
+      'COMPETES_WITH',
+      'CONFLICTS_WITH',
+      'OPPOSES',
+      'PARTNERS_WITH',
+      'COOPERATES_WITH',
+      'RELATED_TO',
+      'SIMILAR_TO',
+      'LINKED_TO',
+    ]);
+
+    // === Levels right-stack edge proxying ===
+    // Stacked nodes are hidden (and `visibleEdges` filters out edges incident to hidden nodes).
+    // To preserve connectivity, we generate proxy edges that connect every external neighbor
+    // to the stack controller, preserving edge type + direction.
+    const stackControllerByHiddenId = new Map<string, string>();
+    for (const n of nodeList) {
+      const d: any = n.data;
+      if (!d || d.isGroup) continue;
+      if (!d.hiddenByStack) continue;
+      const ctrl = String((d as any)?.stackControllerId || '').trim();
+      if (!ctrl) continue;
+      stackControllerByHiddenId.set(String(n.id || '').trim(), ctrl);
+    }
+    const stackProxyEdges: Edge[] = [];
+    if (stackControllerByHiddenId.size > 0) {
+      const seenProxy = new Set<string>();
+      for (const e of baseEdgeList) {
+        const eidRaw = String((e as any)?.id || '').trim();
+        if (eidRaw.startsWith('levels:agg:')) continue;
+        const ed: any = (e as any)?.data || {};
+        if (ed.levelsAgg) continue;
+        if (ed.levelsStackProxy) continue;
+        const s = String((e as any)?.source || '').trim();
+        const t = String((e as any)?.target || '').trim();
+        if (!s || !t) continue;
+
+        const sCtrl = stackControllerByHiddenId.get(s);
+        const tCtrl = stackControllerByHiddenId.get(t);
+        if (!sCtrl && !tCtrl) continue;
+
+        const edgeType = normalizedEdgeTypeOf(e);
+        const baseStyle = (ed as any)?.baseStyle || getEdgeStyle(edgeType, (ed as any)?.criticality);
+        const stroke = getEdgeStroke(baseStyle);
+
+        // Source hidden -> proxy from controller to target
+        if (sCtrl) {
+          const proxySource = sCtrl;
+          const proxyTarget = tCtrl ? tCtrl : t;
+          if (proxySource && proxyTarget && proxySource !== proxyTarget) {
+            const pid = `levels:stackproxy:${proxySource}->${proxyTarget}:edge:${edgeType}`;
+            if (!seenProxy.has(pid)) {
+              seenProxy.add(pid);
+              stackProxyEdges.push({
+                id: pid,
+                source: proxySource,
+                target: proxyTarget,
+                type: 'hzn',
+                interactionWidth: 18,
+                markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+                style: baseStyle,
+                data: {
+                  ...ed,
+                  edgeType,
+                  edgeCaption: getEdgeCaptionShort(edgeType),
+                  baseStyle,
+                  levelsStackProxy: true,
+                  levelsStackProxyFromHidden: s,
+                  levelsStackControllerId: sCtrl,
+                } as any,
+              } as any);
+            }
+          }
+        }
+
+        // Target hidden -> proxy from source to controller
+        if (tCtrl) {
+          const proxySource = sCtrl ? sCtrl : s;
+          const proxyTarget = tCtrl;
+          if (proxySource && proxyTarget && proxySource !== proxyTarget) {
+            const pid = `levels:stackproxy:${proxySource}->${proxyTarget}:edge:${edgeType}`;
+            if (!seenProxy.has(pid)) {
+              seenProxy.add(pid);
+              stackProxyEdges.push({
+                id: pid,
+                source: proxySource,
+                target: proxyTarget,
+                type: 'hzn',
+                interactionWidth: 18,
+                markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+                style: baseStyle,
+                data: {
+                  ...ed,
+                  edgeType,
+                  edgeCaption: getEdgeCaptionShort(edgeType),
+                  baseStyle,
+                  levelsStackProxy: true,
+                  levelsStackProxyToHidden: t,
+                  levelsStackControllerId: tCtrl,
+                } as any,
+              } as any);
+            }
+          }
+        }
+      }
+    }
+
+    const edgeListWithStackProxy = stackProxyEdges.length > 0 ? [...baseEdgeList, ...stackProxyEdges] : baseEdgeList;
+
+    const stripAggFlags = (d0: any) => {
+      const d = { ...(d0 || {}) };
+      delete d.levelsHiddenByAggregation;
+      delete d.levelsAggKey;
+      return d;
+    };
 
     // === Levels Two-Pane aggregation:
     // If we have left group containers (levels:left:*), collapse per-child edges (parent<->child)
     // into one edge per EDGE TYPE handle (show all relation types).
     const aggEdges: Edge[] = [];
     const perChildEdgeIdsToAggKey = new Map<string, string>(); // edgeId -> aggKey (used for hover reveal)
+    const noHoverRevealEdgeIds = new Set<string>(); // edges that should stay hidden even on hover (proxied to group)
 
     // Build child lookup by groupId (only current nodes).
     const childrenByGroupId = new Map<string, Node<HorizonNodeData>[]>();
+    const groupIdByChildId = new Map<string, string>(); // child node id -> groupId
     for (const n of nodeList) {
       const d: any = n.data;
       if (d?.isGroup) continue;
@@ -2547,6 +2696,35 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const arr = childrenByGroupId.get(pid) || [];
       arr.push(n);
       childrenByGroupId.set(pid, arr);
+      groupIdByChildId.set(String(n.id || '').trim(), pid);
+    }
+
+    // Helper maps for Levels left groups.
+    const groupParentByGroupId = new Map<string, string>(); // groupId -> parentId (right backbone node)
+    const portHandlesByGroupId = new Map<string, Map<string, { sourceHandleId: string; targetHandleId: string }>>();
+    for (const [gid, gnode] of groupMap.entries()) {
+      if (!gid.startsWith('levels:left:')) continue;
+      const gd: any = gnode.data || {};
+      const parentId = String(gd?.groupParentId || '').trim();
+      if (parentId) groupParentByGroupId.set(gid, parentId);
+      const ports = Array.isArray(gd?.groupEdgePorts) ? (gd.groupEdgePorts as any[]) : [];
+      const edgeTypesFallback = Array.isArray(gd?.groupEdgeTypes) ? (gd.groupEdgeTypes as any[]) : [];
+      const m = new Map<string, { sourceHandleId: string; targetHandleId: string }>();
+      if (ports.length > 0) {
+        for (const p of ports) {
+          const et = normalizedEdgeTypeOf({ data: { edgeType: p?.edgeType } } as any);
+          const targetHandleId = String(p?.targetHandleId || `edge:${et}:target`).trim();
+          const sourceHandleId = String(p?.sourceHandleId || `edge:${et}:source`).trim();
+          if (et) m.set(et, { sourceHandleId, targetHandleId });
+        }
+      } else {
+        for (const etRaw of edgeTypesFallback) {
+          const et = normalizedEdgeTypeOf({ data: { edgeType: etRaw } } as any);
+          if (!et) continue;
+          m.set(et, { sourceHandleId: `edge:${et}:source`, targetHandleId: `edge:${et}:target` });
+        }
+      }
+      portHandlesByGroupId.set(gid, m);
     }
 
     for (const [gid, gnode] of groupMap.entries()) {
@@ -2578,10 +2756,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const candidates: Edge[] = [];
         let parentAsSource = 0;
         let parentAsTarget = 0;
-        for (const e of edgeList) {
+        for (const e of edgeListWithStackProxy) {
           const eidRaw = String((e as any)?.id || '').trim();
           if (eidRaw.startsWith('levels:agg:')) continue;
           if (Boolean((e as any)?.data?.levelsAgg)) continue;
+          if (Boolean((e as any)?.data?.levelsStackProxy)) continue;
           const s = String((e as any)?.source || '').trim();
           const t = String((e as any)?.target || '').trim();
           if (!s || !t) continue;
@@ -2629,6 +2808,172 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     }
 
+    // === Levels group-proxy edges ===
+    // If a grouped child has edges to nodes OUTSIDE its group, those edges should terminate on the GROUP handlers,
+    // not on the child nodes. We generate aggregated proxy edges (one per group/outside/edgeType),
+    // and keep originals hidden (no hover reveal) to avoid clutter inside groups.
+    const groupProxyBuckets = new Map<
+      string,
+      | { kind: 'node'; groupId: string; outsideId: string; edgeType: string; groupAsSource: number; outsideAsSource: number }
+      | { kind: 'group'; groupA: string; groupB: string; edgeType: string; aToB: number; bToA: number }
+    >();
+
+    for (const e of edgeListWithStackProxy) {
+      const eidRaw = String((e as any)?.id || '').trim();
+      const ed: any = (e as any)?.data || {};
+      if (!eidRaw) continue;
+      if (eidRaw.startsWith('levels:agg:')) continue;
+      if (eidRaw.startsWith('levels:gproxy:')) continue;
+      if (Boolean(ed.levelsAgg)) continue;
+      if (Boolean(ed.levelsGroupProxy)) continue;
+
+      const s = String((e as any)?.source || '').trim();
+      const t = String((e as any)?.target || '').trim();
+      if (!s || !t) continue;
+      const sg = groupIdByChildId.get(s);
+      const tg = groupIdByChildId.get(t);
+      if (!sg && !tg) continue;
+      const edgeType = normalizedEdgeTypeOf(e);
+      if (!edgeType) continue;
+
+      // Only proxy for Levels left groups.
+      const sgIsLeftGroup = !!sg && sg.startsWith('levels:left:') && portHandlesByGroupId.has(sg);
+      const tgIsLeftGroup = !!tg && tg.startsWith('levels:left:') && portHandlesByGroupId.has(tg);
+
+      // Child-to-child across two different left groups -> proxy group-to-group.
+      if (sgIsLeftGroup && tgIsLeftGroup && sg !== tg) {
+        const a = sg < tg ? sg : tg;
+        const b = sg < tg ? tg : sg;
+        const k = `gpair:${a}<->${b}::edge:${edgeType}`;
+        const bucket = groupProxyBuckets.get(k);
+        const fromA = (groupIdByChildId.get(s) === a) && (groupIdByChildId.get(t) === b);
+        const fromB = (groupIdByChildId.get(s) === b) && (groupIdByChildId.get(t) === a);
+        if (!bucket || bucket.kind !== 'group') {
+          groupProxyBuckets.set(k, { kind: 'group', groupA: a, groupB: b, edgeType, aToB: fromA ? 1 : 0, bToA: fromB ? 1 : 0 });
+        } else {
+          if (fromA) bucket.aToB += 1;
+          if (fromB) bucket.bToA += 1;
+        }
+        if (eidRaw) {
+          perChildEdgeIdsToAggKey.set(eidRaw, k);
+          noHoverRevealEdgeIds.add(eidRaw);
+        }
+        continue;
+      }
+
+      // Exactly one endpoint is a grouped child in a left group -> proxy group-to-node.
+      const groupId = sgIsLeftGroup ? sg! : (tgIsLeftGroup ? tg! : '');
+      if (!groupId) continue;
+      const outsideId = sgIsLeftGroup ? t : s;
+
+      // Do not proxy edges between group child and its own group parent (handled by levels:agg edges).
+      const parentId = groupParentByGroupId.get(groupId);
+      if (parentId && outsideId === parentId) continue;
+
+      const k = `${groupId}::node:${outsideId}::edge:${edgeType}`;
+      const bucket = groupProxyBuckets.get(k);
+      // If the original edge source is the grouped CHILD, count as groupAsSource; else outsideAsSource.
+      const childId = sgIsLeftGroup ? s : t;
+      const groupIsSource = String((e as any)?.source || '').trim() === childId;
+      if (!bucket || bucket.kind !== 'node') {
+        groupProxyBuckets.set(k, {
+          kind: 'node',
+          groupId,
+          outsideId,
+          edgeType,
+          groupAsSource: groupIsSource ? 1 : 0,
+          outsideAsSource: groupIsSource ? 0 : 1,
+        });
+      } else {
+        if (groupIsSource) bucket.groupAsSource += 1;
+        else bucket.outsideAsSource += 1;
+      }
+      if (eidRaw) {
+        perChildEdgeIdsToAggKey.set(eidRaw, k);
+        noHoverRevealEdgeIds.add(eidRaw);
+      }
+    }
+
+    // Emit group-proxy edges as levelsAgg edges (but they won't be suppressed on hover; originals never reveal).
+    for (const b of groupProxyBuckets.values()) {
+      if (b.kind === 'node') {
+        const groupId = b.groupId;
+        const outsideId = b.outsideId;
+        const edgeType = b.edgeType;
+        const port = portHandlesByGroupId.get(groupId)?.get(edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
+        const baseStyle = getEdgeStyle(edgeType, undefined);
+        const stroke = getEdgeStroke(baseStyle);
+        const id = `levels:gproxy:${groupId}:node:${outsideId}:edge:${edgeType}`;
+        const aggKey = `${groupId}::node:${outsideId}::edge:${edgeType}`;
+        const groupToOutside = b.groupAsSource >= b.outsideAsSource;
+        const gNode = groupMap.get(groupId);
+        const oNode = nodeMap.get(outsideId);
+        const gx = typeof (gNode as any)?.position?.x === 'number' ? (gNode as any).position.x : 0;
+        const ox = typeof (oNode as any)?.position?.x === 'number' ? (oNode as any).position.x : 0;
+        const outsideIsRightOfGroup = ox > gx + eps;
+        const outsideIsLeftOfGroup = ox < gx - eps;
+        const outsideTargetHandle = outsideIsRightOfGroup ? 'target-left' : (outsideIsLeftOfGroup ? 'target-right' : 'target-left');
+        const outsideSourceHandle = outsideIsRightOfGroup ? 'source-left' : (outsideIsLeftOfGroup ? 'source-right' : 'source-left');
+        aggEdges.push({
+          id,
+          source: groupToOutside ? groupId : outsideId,
+          target: groupToOutside ? outsideId : groupId,
+          ...(groupToOutside
+            ? { sourceHandle: port.sourceHandleId, targetHandle: outsideTargetHandle }
+            : { sourceHandle: outsideSourceHandle, targetHandle: port.targetHandleId }),
+          type: 'hzn',
+          interactionWidth: 18,
+          markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+          style: baseStyle,
+          data: {
+            edgeType,
+            edgeCaption: getEdgeCaptionShort(edgeType),
+            baseStyle,
+            levelsAgg: true,
+            levelsAggKey: aggKey,
+            levelsAggEdgeType: edgeType,
+            levelsAggGroupId: groupId,
+            levelsGroupProxy: true,
+            levelsGroupProxyOutsideId: outsideId,
+          } as any,
+        } as any);
+      } else {
+        const a = b.groupA;
+        const c = b.groupB;
+        const edgeType = b.edgeType;
+        const portA = portHandlesByGroupId.get(a)?.get(edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
+        const portB = portHandlesByGroupId.get(c)?.get(edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
+        const baseStyle = getEdgeStyle(edgeType, undefined);
+        const stroke = getEdgeStroke(baseStyle);
+        const id = `levels:gproxy:${a}<->${c}:edge:${edgeType}`;
+        const aggKey = `gpair:${a}<->${c}::edge:${edgeType}`;
+        const aToB = b.aToB >= b.bToA;
+        aggEdges.push({
+          id,
+          source: aToB ? a : c,
+          target: aToB ? c : a,
+          ...(aToB
+            ? { sourceHandle: portA.sourceHandleId, targetHandle: portB.targetHandleId }
+            : { sourceHandle: portB.sourceHandleId, targetHandle: portA.targetHandleId }),
+          type: 'hzn',
+          interactionWidth: 18,
+          markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+          style: baseStyle,
+          data: {
+            edgeType,
+            edgeCaption: getEdgeCaptionShort(edgeType),
+            baseStyle,
+            levelsAgg: true,
+            levelsAggKey: aggKey,
+            levelsAggEdgeType: edgeType,
+            levelsAggGroupId: aToB ? a : c,
+            levelsGroupProxy: true,
+            levelsGroupProxyOtherGroupId: aToB ? c : a,
+          } as any,
+        } as any);
+      }
+    }
+
     const mapped = edgeList.map((e) => {
       const sourceNode = nodeMap.get(e.source);
       const targetNode = nodeMap.get(e.target);
@@ -2641,6 +2986,31 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       const sGrouped = isInGroup(sourceNode);
       const tGrouped = isInGroup(targetNode);
+      const isStackProxy = Boolean(((e as any)?.data as any)?.levelsStackProxy);
+      const isPeerEdge = PEER_EDGE_TYPES.has(normalizedEdgeTypeOf(e));
+
+      if (sGrouped && tGrouped) {
+        const eid = String((e as any)?.id || '').trim();
+        const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
+        const d0: any = (e as any)?.data || {};
+        const noHover = eid && noHoverRevealEdgeIds.has(eid);
+        const d = aggKey
+          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
+          : stripAggFlags(d0);
+        return { ...e, data: d };
+      }
+
+      // If BOTH endpoints are group children (and this edge is proxied), keep it hidden always.
+      if (sGrouped && tGrouped) {
+        const eid = String((e as any)?.id || '').trim();
+        const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
+        const d0: any = (e as any)?.data || {};
+        const noHover = eid && noHoverRevealEdgeIds.has(eid);
+        const d = aggKey
+          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
+          : d0;
+        return { ...e, data: d };
+      }
 
       // Defaults
       let sourceHandle = e.sourceHandle || 'source-right';
@@ -2653,8 +3023,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const eid = String((e as any)?.id || '').trim();
         const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
         const d0: any = (e as any)?.data || {};
+        const noHover = eid && noHoverRevealEdgeIds.has(eid);
         const d = aggKey
-          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey }
+          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
           : d0;
         return { ...e, data: d, sourceHandle: 'source-left', targetHandle: 'target-right' };
       }
@@ -2662,8 +3033,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const eid = String((e as any)?.id || '').trim();
         const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
         const d0: any = (e as any)?.data || {};
+        const noHover = eid && noHoverRevealEdgeIds.has(eid);
         const d = aggKey
-          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey }
+          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
           : d0;
         return { ...e, data: d, sourceHandle: 'source-right', targetHandle: 'target-left' };
       }
@@ -2674,7 +3046,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       } else {
         if (tx > sx + eps) sourceHandle = 'source-right';
         else if (tx < sx - eps) sourceHandle = 'source-left';
-        else sourceHandle = (ty > sy) ? 'source-bottom' : 'source-top';
+        else sourceHandle = (isStackProxy || isPeerEdge) ? 'source-right' : ((ty > sy) ? 'source-bottom' : 'source-top');
       }
 
       if (tGrouped) {
@@ -2682,7 +3054,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       } else {
         if (sx < tx - eps) targetHandle = 'target-left';
         else if (sx > tx + eps) targetHandle = 'target-right';
-        else targetHandle = (sy > ty) ? 'target-bottom' : 'target-top';
+        else targetHandle = (isStackProxy || isPeerEdge) ? 'target-left' : ((sy > ty) ? 'target-bottom' : 'target-top');
       }
 
       return { ...e, sourceHandle, targetHandle };
@@ -2698,7 +3070,90 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       seen.add(id);
       return true;
     });
-    return [...mapped, ...appended];
+    // Ensure stack-proxy edges are included too (they are already in `mapped` if we used the extended list).
+    // Re-run mapping using the extended list so proxy edges get correct handles.
+    const mappedWithProxy = edgeListWithStackProxy.map((e) => {
+      const sourceNode = nodeMap.get(e.source);
+      const targetNode = nodeMap.get(e.target);
+      if (!sourceNode || !targetNode) return e;
+
+      const sx = sourceNode.position?.x ?? 0;
+      const sy = sourceNode.position?.y ?? 0;
+      const tx = targetNode.position?.x ?? 0;
+      const ty = targetNode.position?.y ?? 0;
+
+      const sGrouped = isInGroup(sourceNode);
+      const tGrouped = isInGroup(targetNode);
+      const isStackProxy = Boolean(((e as any)?.data as any)?.levelsStackProxy);
+      const isPeerEdge = PEER_EDGE_TYPES.has(normalizedEdgeTypeOf(e));
+
+      // Defaults
+      let sourceHandle = e.sourceHandle || 'source-right';
+      let targetHandle = e.targetHandle || 'target-left';
+
+      if (!sGrouped && tGrouped) {
+        const eid = String((e as any)?.id || '').trim();
+        const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
+        const d0: any = (e as any)?.data || {};
+        const noHover = eid && noHoverRevealEdgeIds.has(eid);
+        const d = aggKey
+          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
+          : stripAggFlags(d0);
+        return { ...e, data: d, sourceHandle: 'source-left', targetHandle: 'target-right' };
+      }
+      if (sGrouped && !tGrouped) {
+        const eid = String((e as any)?.id || '').trim();
+        const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
+        const d0: any = (e as any)?.data || {};
+        const noHover = eid && noHoverRevealEdgeIds.has(eid);
+        const d = aggKey
+          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
+          : stripAggFlags(d0);
+        return { ...e, data: d, sourceHandle: 'source-right', targetHandle: 'target-left' };
+      }
+
+      // Edge no longer points into a group-child: clear any stale aggregation-hiding flags
+      // (this is the key fix for "node left group => show its original connection again").
+      const d0: any = (e as any)?.data || {};
+      const hadAggHide = Boolean(d0.levelsHiddenByAggregation) || Boolean(d0.levelsAggKey);
+      const eOut: any = hadAggHide ? { ...e, data: stripAggFlags(d0) } : e;
+
+      if (sGrouped) sourceHandle = 'source-right';
+      else {
+        if (tx > sx + eps) sourceHandle = 'source-right';
+        else if (tx < sx - eps) sourceHandle = 'source-left';
+        else sourceHandle = (isStackProxy || isPeerEdge) ? 'source-right' : ((ty > sy) ? 'source-bottom' : 'source-top');
+      }
+
+      if (tGrouped) targetHandle = 'target-right';
+      else {
+        if (sx < tx - eps) targetHandle = 'target-left';
+        else if (sx > tx + eps) targetHandle = 'target-right';
+        else targetHandle = (isStackProxy || isPeerEdge) ? 'target-left' : ((sy > ty) ? 'target-bottom' : 'target-top');
+      }
+
+      return { ...(eOut as any), sourceHandle, targetHandle };
+    });
+
+    // Drop stale agg edges that no longer have any supporting candidates after regrouping/extraction.
+    const validAggIds = new Set<string>(aggEdges.map((e: any) => String(e?.id || '').trim()).filter(Boolean));
+    const filteredMapped = mappedWithProxy.filter((e: any) => {
+      const d: any = e?.data || {};
+      if (!d.levelsAgg) return true;
+      const id = String(e?.id || '').trim();
+      if ((id.startsWith('levels:agg:') || id.startsWith('levels:gproxy:')) && !validAggIds.has(id)) return false;
+      return true;
+    });
+
+    const seen2 = new Set<string>(filteredMapped.map((e: any) => String(e?.id || '').trim()).filter(Boolean));
+    const appended2 = aggEdges.filter((e) => {
+      const id = String((e as any)?.id || '').trim();
+      if (!id) return false;
+      if (seen2.has(id)) return false;
+      seen2.add(id);
+      return true;
+    });
+    return [...filteredMapped, ...appended2];
   }, []);
 
   /**
@@ -2851,7 +3306,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const hasFragments = nodes.some((n) => !((n.data as any)?.isGroup));
     if (!hasFragments) return;
     autoArrangeOnceRef.current = true;
-    window.setTimeout(() => invokeArrange(), 0);
+    invokeArrange();
   }, [layoutMode, nodes.length, arranging, invokeArrange]);
 
   // Преобразование LensItems в ReactFlow ноды и рёбра
@@ -3943,7 +4398,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // debug logs removed
       
       const updateEdgeInfo = (neighborId: string, edgeType: string, direction: 'incoming' | 'outgoing') => {
-        const effectiveDirection: 'incoming' | 'outgoing' = direction;
+        // In Levels mode we interpret some relations with inverted "up/down" meaning for placement:
+        // - DEPENDS_ON: if neighbor → central (incoming), neighbor is a dependent (downstream) => treat as 'outgoing' for grouping/placement
+        // - DEPENDS_ON: if central → neighbor (outgoing), neighbor is a prerequisite (upstream) => treat as 'incoming'
+        let effectiveDirection: 'incoming' | 'outgoing' = direction;
+        const etUpper = String(edgeType || '').toUpperCase().trim();
+        const DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+        if (layoutMode === 'levels' && DEP_TYPES.has(etUpper)) {
+          effectiveDirection = direction === 'incoming' ? 'outgoing' : 'incoming';
+        }
 
         const existingType = fragmentEdgeType.get(neighborId);
         const existingDir = fragmentDirection.get(neighborId);
@@ -3966,10 +4429,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           fragmentEdgeType.set(neighborId, edgeType);
           fragmentDirection.set(neighborId, effectiveDirection);
         } else {
+          // === LEVELS PRODUCT OVERRIDE ===
+          // In Levels mode, if the expanded node has an OUTGOING PRODUCES edge to a neighbor,
+          // it must dominate placement/grouping even if other edge types exist (including dependencies).
+          // Otherwise products can "escape" into the right backbone due to dependency heuristics.
+          const existingUpper = String(existingType || '').toUpperCase().trim();
+          const newUpper = String(edgeType || '').toUpperCase().trim();
+          const existingIsProducesOut = layoutMode === 'levels' && existingUpper === 'PRODUCES' && existingDir === 'outgoing';
+          const newIsProducesOut = layoutMode === 'levels' && newUpper === 'PRODUCES' && effectiveDirection === 'outgoing';
+          if (existingIsProducesOut) return;
+          if (newIsProducesOut) {
+            fragmentEdgeType.set(neighborId, edgeType);
+            fragmentDirection.set(neighborId, effectiveDirection);
+            return;
+          }
+
           // === LINEAR LAYOUT SPECIAL LOGIC ===
           // In Linear mode, incoming dependency edges (neighbor DEPENDS_ON central) MUST determine placement.
           // These nodes should ALWAYS go to BOTTOM row, regardless of other edges they might have.
-          if (layoutMode === 'linear' || layoutMode === 'levels') {
+          if (layoutMode === 'linear') {
             // 1. If EXISTING is an incoming dependency, NEVER override it
             if (existingDir === 'incoming' && isIncomingDependencyType(existingType)) {
               // debug logs removed
@@ -5378,6 +5856,34 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     });
   }, [visibleEdges, perfMode, openEdgeExplainPopover]);
 
+  // Levels: derive aggKeys per node once per edge-set, so hover can suppress aggregated edges without an extra full scan.
+  const levelsAggKeysByNodeId = React.useMemo(() => {
+    if (!isLevelsLayout) return new Map<string, Set<string>>();
+    const map = new Map<string, Set<string>>();
+    for (const e of baseVisibleEdges) {
+      const d: any = (e as any)?.data || {};
+      if (!d.levelsHiddenByAggregation) continue;
+      // For certain edges (e.g., cross-group edges proxied to group handlers), we never reveal the original,
+      // so we also must NOT suppress the aggregated edge on hover.
+      if (d.levelsNoHoverReveal) continue;
+      const k = String(d.levelsAggKey || '').trim();
+      if (!k) continue;
+      const s = String((e as any)?.source || '').trim();
+      const t = String((e as any)?.target || '').trim();
+      if (s) {
+        const set = map.get(s) || new Set<string>();
+        set.add(k);
+        map.set(s, set);
+      }
+      if (t) {
+        const set = map.get(t) || new Set<string>();
+        set.add(k);
+        map.set(t, set);
+      }
+    }
+    return map;
+  }, [isLevelsLayout, baseVisibleEdges]);
+
   // Derive edges styles for hover highlighting (do not mutate base edges)
   // Labels are hidden by default to reduce visual noise, shown only on hover
   const displayEdges = React.useMemo(() => {
@@ -5395,27 +5901,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     let edgesForDisplay: Edge[] = baseVisibleEdges;
     if (isLevelsLayout) {
       const hovered = String(hoveredNodeId || '').trim();
-      const aggKeysToSuppress = new Set<string>();
+      const aggKeysToSuppress = hovered ? (levelsAggKeysByNodeId.get(hovered) || null) : null;
       edgesForDisplay = baseVisibleEdges.map((e) => {
         const d: any = (e as any)?.data || {};
         if (d.levelsHiddenByAggregation) {
+          if (d.levelsNoHoverReveal) return { ...(e as any), hidden: true } as any;
           const isIncident = hovered && (e.source === hovered || e.target === hovered);
           if (!isIncident) return { ...(e as any), hidden: true } as any;
-          const k = String(d.levelsAggKey || '').trim();
-          if (k) aggKeysToSuppress.add(k);
           return { ...(e as any), hidden: false } as any;
+        }
+        if (aggKeysToSuppress && d.levelsAgg) {
+          const k = String(d.levelsAggKey || '').trim();
+          if (k && aggKeysToSuppress.has(k)) return { ...(e as any), hidden: true } as any;
         }
         return e;
       });
-      if (hovered && aggKeysToSuppress.size > 0) {
-        edgesForDisplay = edgesForDisplay.map((e) => {
-          const d: any = (e as any)?.data || {};
-          if (!d.levelsAgg) return e;
-          const k = String(d.levelsAggKey || '').trim();
-          if (k && aggKeysToSuppress.has(k)) return { ...(e as any), hidden: true } as any;
-          return e;
-        });
-      }
     }
 
     const baseStyled = (e: Edge) => {
@@ -5430,8 +5930,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Helper to create edge with optional label
     const withLabel = (e: Edge, showLabel: boolean, style: any, raiseToFront: boolean) => {
-      const { edgeLabel } = baseStyled(e);
       const d: any = (e as any)?.data || {};
+      if (!showLabel) {
+        return {
+          ...e,
+          label: undefined,
+          data: { ...d, showLabel: false, raiseToFront: false },
+          style,
+        };
+      }
+      const { edgeLabel } = baseStyled(e);
       return {
         ...e,
         label: undefined,
@@ -5616,7 +6124,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Default: dim all edges, hide labels
     return edgesForDisplay;
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -5636,7 +6144,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }),
     );
     if (layoutMode === 'levels') {
-      window.setTimeout(() => invokeArrange(), 0);
+      invokeArrange();
     }
   }, [setNodes, layoutMode, invokeArrange]);
 
@@ -5851,18 +6359,201 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
         if (!changed) return n;
 
-        const reasons =
+        const reasonsAfter =
           (Array.isArray(d.hiddenByLoneParentsOf) && d.hiddenByLoneParentsOf.length > 0) ||
           (Array.isArray(d.hiddenByLoneChildrenOf) && d.hiddenByLoneChildrenOf.length > 0) ||
-          (Array.isArray(d.hiddenByLoneGovernanceOf) && d.hiddenByLoneGovernanceOf.length > 0);
-        const legacyHidden = Boolean((n as any).hidden) && !d.hiddenByStack && !reasons;
-        const hidden = legacyHidden || Boolean(d.hiddenByStack) || Boolean(reasons);
+          (Array.isArray(d.hiddenByLoneGovernanceOf) && d.hiddenByLoneGovernanceOf.length > 0) ||
+          (Array.isArray(d.hiddenByLocalFilter) && d.hiddenByLocalFilter.length > 0);
+        const reasonsBefore =
+          (Array.isArray(d0.hiddenByLoneParentsOf) && d0.hiddenByLoneParentsOf.length > 0) ||
+          (Array.isArray(d0.hiddenByLoneChildrenOf) && d0.hiddenByLoneChildrenOf.length > 0) ||
+          (Array.isArray(d0.hiddenByLoneGovernanceOf) && d0.hiddenByLoneGovernanceOf.length > 0) ||
+          (Array.isArray(d0.hiddenByLocalFilter) && d0.hiddenByLocalFilter.length > 0);
+        // Preserve truly manual hidden state, but do NOT "stick" hidden after filter toggles.
+        const legacyHidden = Boolean((n as any).hidden) && !d.hiddenByStack && !reasonsAfter && !reasonsBefore;
+        const hidden = legacyHidden || Boolean(d.hiddenByStack) || Boolean(reasonsAfter);
         return { ...(n as any), hidden, data: d } as any;
       });
     });
 
     if (layoutMode === 'levels') {
-      window.setTimeout(() => invokeArrange(), 0);
+      invokeArrange();
+    }
+  }, [nodes, edges, setNodes, layoutMode, invokeArrange, normalizeEdgeType]);
+
+  // Local relation filters (Levels layout): per-node toggles to show/hide neighbors by edge type.
+  // When a node is clicked, we show icons for each edge type in levelsExpandEdgeTypes.
+  // Clicking an icon toggles visibility of neighbors connected by that edge type for that specific node.
+  const getDependentEdgeTypesForNode = React.useCallback((centerNodeId: string): string[] => {
+    const centerId = String(centerNodeId || '').trim();
+    if (!centerId) return [];
+    const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
+    const snapEdges: Edge[] = (edgesStateRef.current || edges) as any;
+    const isGroup = (n: any) => Boolean((n as any)?.data?.isGroup);
+    const allExpand = new Set((levelsExpandEdgeTypes || []).map((x) => String(x || '').toUpperCase().trim()).filter(Boolean));
+    if (allExpand.size === 0) return [];
+
+    // Dependents = nodes created/attached from this node expansion (parentFragmentId is node.id).
+    const dependentIds = new Set<string>();
+    for (const n of snapNodes as any[]) {
+      const nid = String(n?.id || '').trim();
+      if (!nid) continue;
+      if (nid === centerId) continue;
+      const d: any = n?.data;
+      if (!d || d.isGroup) continue;
+      if (String(d.parentFragmentId || '').trim() === centerId) dependentIds.add(nid);
+    }
+    if (dependentIds.size === 0) return [];
+
+    const seen = new Set<string>();
+    const edgeTypeOf = (e: any) => normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
+    for (const e of snapEdges as any[]) {
+      const s = String(e?.source || '').trim();
+      const t = String(e?.target || '').trim();
+      if (!s || !t) continue;
+      const other = s === centerId ? t : t === centerId ? s : '';
+      if (!other || !dependentIds.has(other)) continue;
+      const et = edgeTypeOf(e);
+      if (!et || !allExpand.has(et)) continue;
+      seen.add(et);
+    }
+
+    const out = Array.from(seen);
+    out.sort((a, b) => {
+      const pa = getEdgePriority(a);
+      const pb = getEdgePriority(b);
+      if (pa !== pb) return pa - pb;
+      return a.localeCompare(b);
+    });
+    return out;
+  }, [nodes, edges, levelsExpandEdgeTypes, normalizeEdgeType, getEdgePriority]);
+
+  const openLocalFilters = React.useCallback((nodeId: string, nextOpen: boolean) => {
+    const id = String(nodeId || '').trim();
+    if (!id) return;
+    setNodes((prev) =>
+      prev.map((n) => {
+        const d: any = (n as any)?.data;
+        if (!d || d.isGroup) return n;
+        const nid = String(n.id || '').trim();
+        if (nid === id) {
+          const nd: any = { ...d, localFiltersOpen: nextOpen };
+          if (nextOpen) {
+            const ets = getDependentEdgeTypesForNode(id);
+            nd.localFilterEdgeTypes = ets;
+          } else {
+            delete nd.localFilterEdgeTypes;
+          }
+          return { ...(n as any), data: nd } as any;
+        }
+        // Close any other open local filters
+        if (nextOpen && Boolean(d.localFiltersOpen)) {
+          const nd = { ...d };
+          delete nd.localFiltersOpen;
+          delete nd.localFilterEdgeTypes;
+          return { ...(n as any), data: nd } as any;
+        }
+        return n;
+      }),
+    );
+  }, [setNodes, getDependentEdgeTypesForNode]);
+
+  const toggleLocalFilter = React.useCallback((
+    nodeId: string,
+    edgeType: string,
+    nextVisible: boolean,
+  ) => {
+    const centerId = String(nodeId || '').trim();
+    const et = String(edgeType || '').toUpperCase().trim();
+    if (!centerId || !et) return;
+
+    const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
+    const snapEdges: Edge[] = (edgesStateRef.current || edges) as any;
+
+    const isGroup = (n: any) => Boolean((n as any)?.data?.isGroup);
+    const nodeById = new Map<string, Node<HorizonNodeData>>();
+    for (const n of snapNodes) {
+      const id = String((n as any)?.id || '').trim();
+      if (id) nodeById.set(id, n as any);
+    }
+    const center = nodeById.get(centerId);
+    if (!center || isGroup(center)) return;
+
+    // Find dependent nodes connected by this edge type (ONLY dependents of this node)
+    const edgeTypeOf = (e: any) => normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
+    const dependentIds = new Set<string>();
+    for (const n of snapNodes as any[]) {
+      const nid = String(n?.id || '').trim();
+      if (!nid || nid === centerId) continue;
+      const d: any = (n as any)?.data;
+      if (!d || d.isGroup) continue;
+      if (String(d.parentFragmentId || '').trim() === centerId) dependentIds.add(nid);
+    }
+    const neighborsToToggle = new Set<string>();
+    for (const e of snapEdges as any[]) {
+      const s = String(e?.source || '').trim();
+      const t = String(e?.target || '').trim();
+      if (!s || !t) continue;
+      const eType = edgeTypeOf(e);
+      if (eType !== et) continue;
+      if (s === centerId && dependentIds.has(t) && nodeById.has(t) && !isGroup(nodeById.get(t))) {
+        neighborsToToggle.add(t);
+      } else if (t === centerId && dependentIds.has(s) && nodeById.has(s) && !isGroup(nodeById.get(s))) {
+        neighborsToToggle.add(s);
+      }
+    }
+
+    setNodes((prev) => {
+      return prev.map((n) => {
+        const id = String((n as any)?.id || '').trim();
+        const d0: any = (n as any)?.data;
+        if (!id || !d0 || d0.isGroup) return n;
+
+        let d = d0;
+        let changed = false;
+
+        // Update the local filter state for the center node
+        if (id === centerId) {
+          const prevState = (d.localFilterState || {}) as Record<string, boolean>;
+          const newState = { ...prevState, [et]: nextVisible };
+          d = { ...d0, localFilterState: newState };
+          changed = true;
+        } else if (neighborsToToggle.has(id)) {
+          // Track which center+edgeType combos hide this node
+          const reasonKey = 'hiddenByLocalFilter';
+          const filterKey = `${centerId}:${et}`;
+          const arr0 = Array.isArray(d[reasonKey]) ? (d[reasonKey] as string[]) : [];
+          const has = arr0.includes(filterKey);
+          if (!nextVisible && !has) {
+            d = { ...d0, [reasonKey]: [...arr0, filterKey] };
+            changed = true;
+          } else if (nextVisible && has) {
+            d = { ...d0, [reasonKey]: arr0.filter((x: string) => x !== filterKey) };
+            changed = true;
+          }
+        }
+
+        if (!changed) return n;
+
+        // Compute hidden state from all reasons
+        const reasonsAfter =
+          (Array.isArray(d.hiddenByLoneParentsOf) && d.hiddenByLoneParentsOf.length > 0) ||
+          (Array.isArray(d.hiddenByLoneChildrenOf) && d.hiddenByLoneChildrenOf.length > 0) ||
+          (Array.isArray(d.hiddenByLoneGovernanceOf) && d.hiddenByLoneGovernanceOf.length > 0) ||
+          (Array.isArray(d.hiddenByLocalFilter) && d.hiddenByLocalFilter.length > 0);
+        const reasonsBefore =
+          (Array.isArray(d0.hiddenByLoneParentsOf) && d0.hiddenByLoneParentsOf.length > 0) ||
+          (Array.isArray(d0.hiddenByLoneChildrenOf) && d0.hiddenByLoneChildrenOf.length > 0) ||
+          (Array.isArray(d0.hiddenByLoneGovernanceOf) && d0.hiddenByLoneGovernanceOf.length > 0) ||
+          (Array.isArray(d0.hiddenByLocalFilter) && d0.hiddenByLocalFilter.length > 0);
+        const legacyHidden = Boolean((n as any).hidden) && !d.hiddenByStack && !reasonsAfter && !reasonsBefore;
+        const hidden = legacyHidden || Boolean(d.hiddenByStack) || Boolean(reasonsAfter);
+        return { ...(n as any), hidden, data: d } as any;
+      });
+    });
+
+    if (layoutMode === 'levels') {
+      invokeArrange();
     }
   }, [nodes, edges, setNodes, layoutMode, invokeArrange, normalizeEdgeType]);
 
@@ -5997,12 +6688,41 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         changed = true;
       }
 
+      // Local relation filters (all non-group nodes in Levels mode)
+      const isLevelsMode = layoutMode === 'levels';
+      if (!isGroup && isLevelsMode && levelsExpandEdgeTypes.length > 0) {
+        if (nextData === d0) {
+          nextData = { ...d0 };
+          changed = true;
+        }
+        if (nextData.onOpenLocalFilters !== openLocalFilters) {
+          nextData.onOpenLocalFilters = openLocalFilters;
+          changed = true;
+        }
+        if (nextData.onToggleLocalFilter !== toggleLocalFilter) {
+          nextData.onToggleLocalFilter = toggleLocalFilter;
+          changed = true;
+        }
+      } else if (
+        typeof (nextData as any)?.onOpenLocalFilters === 'function' ||
+        typeof (nextData as any)?.onToggleLocalFilter === 'function' ||
+        Array.isArray((nextData as any)?.localFilterEdgeTypes)
+      ) {
+        if (nextData === d0) nextData = { ...d0 };
+        delete nextData.onOpenLocalFilters;
+        delete nextData.onToggleLocalFilter;
+        delete nextData.localFilterEdgeTypes;
+        delete nextData.localFiltersOpen;
+        delete nextData.localFilterState;
+        changed = true;
+      }
+
       if (changed) {
         return { ...n, data: nextData, zIndex, style } as any;
       }
       return { ...n, zIndex, style } as any;
     });
-  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace]);
+  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace, openLocalFilters, toggleLocalFilter, levelsExpandEdgeTypes]);
 
   // Lightweight info for perf mode (no re-styling of edges)
   const perfHoveredEdgeInfo = React.useMemo(() => {
@@ -6156,12 +6876,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
       setNodes(withCallbacks);
 
+      // Focus behavior after arrange:
+      // - If a stack-preview chip requested focus, center on that node (and avoid full-graph fitView).
+      // - Otherwise keep the existing fitView behavior.
+      const focusId = String(pendingFocusNodeIdRef.current || '').trim();
+      pendingFocusNodeIdRef.current = null;
+      if (focusId) {
+        const target = withCallbacks.find((n: any) => String(n?.id || '').trim() === focusId) as any;
+        setTimeout(() => {
+          try {
+            const inst: any = reactFlowInstanceRef.current;
+            if (inst && target) inst.fitView?.({ nodes: [target], padding: 0.35, duration: 420 });
+          } catch {}
+        }, 60);
+      } else {
       // Fit view после arrange
       setTimeout(() => {
         if (reactFlowInstanceRef.current && withGroups.length > 0) {
           reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 400 });
         }
       }, 100);
+      }
 
       dbg('[Cockpit] Arrange completed');
     } catch (err: any) {
@@ -6758,6 +7493,115 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     ignorePaneClicksUntilRef.current = Date.now() + 250;
     event.stopPropagation();
     event.preventDefault();
+
+    // Levels stack preview: clicking a collapsed stack controller shows chip overlays.
+    // Clicking elsewhere (another node) closes the preview.
+    const clearStackPreview = () => {
+      const prevId = stackPreviewControllerIdRef.current;
+      if (!prevId) return;
+      stackPreviewControllerIdRef.current = null;
+      setNodes((prev) =>
+        (prev || []).map((n) => {
+          if (String((n as any)?.id || '').trim() !== prevId) return n;
+          const d0: any = (n as any)?.data || {};
+          if (!d0.stackPreviewOpen && !d0.stackPreviewItems && !d0.stackPreviewMore) return n;
+          const d = { ...d0 };
+          delete d.stackPreviewOpen;
+          delete d.stackPreviewItems;
+          delete d.stackPreviewMore;
+          delete d.onStackPreviewSelect;
+          delete d.onStackPreviewMore;
+          return { ...(n as any), data: d } as any;
+        }),
+      );
+    };
+
+    const openStackPreview = (controllerId: string, stackKey: string) => {
+      const key = String(stackKey || '').trim();
+      const cid = String(controllerId || '').trim();
+      if (!key || !cid) return;
+
+      // Collect hidden members for this stack.
+      const members = (nodesStateRef.current || nodes)
+        .filter((n) => !(n as any)?.data?.isGroup)
+        .filter((n) => String(((n as any)?.data as any)?.stackGroupKey || '').trim() === key)
+        .filter((n) => String((n as any)?.id || '').trim() !== cid)
+        .filter((n) => Boolean(((n as any)?.data as any)?.hiddenByStack) || Boolean((n as any)?.hidden));
+
+      members.sort((a: any, b: any) => {
+        const al = String(a?.data?.label || a?.data?.canonicalPath || a?.id || '');
+        const bl = String(b?.data?.label || b?.data?.canonicalPath || b?.id || '');
+        return al.localeCompare(bl);
+      });
+
+      const items = members.slice(0, 5).map((n: any) => ({
+        nodeId: String(n.id || '').trim(),
+        label: String(n.data?.label || '').trim() || humanizeCanonicalPath(String(n.data?.canonicalPath || '').trim()) || 'Fragment',
+        type: String(n.data?.type || '').trim() || 'UNKNOWN',
+      }));
+      const more = Math.max(0, members.length - items.length);
+
+      stackPreviewControllerIdRef.current = cid;
+      setNodes((prev) =>
+        (prev || []).map((n) => {
+          const id = String((n as any)?.id || '').trim();
+          if (id !== cid) return n;
+          const d0: any = (n as any)?.data || {};
+          const d = {
+            ...d0,
+            stackPreviewOpen: true,
+            stackPreviewItems: items,
+            stackPreviewMore: more,
+            onStackPreviewSelect: (targetNodeId: string) => {
+              const tid = String(targetNodeId || '').trim();
+              if (!tid) return;
+              clearStackPreview();
+              pendingFocusNodeIdRef.current = tid;
+              if (typeof (d0 as any)?.onToggleStack === 'function') {
+                try { (d0 as any).onToggleStack(key, true); } catch {}
+              }
+            },
+            onStackPreviewMore: () => {
+              clearStackPreview();
+              if (typeof (d0 as any)?.onToggleStack === 'function') {
+                try { (d0 as any).onToggleStack(key, true); } catch {}
+              }
+            },
+          };
+          return { ...(n as any), data: d } as any;
+        }),
+      );
+    };
+
+    if (layoutMode === 'levels') {
+      const d: any = node.data as any;
+      const key = String(d?.stackGroupKey || '').trim();
+      const count = typeof d?.stackCount === 'number' ? d.stackCount : 0;
+      const expanded = Boolean(d?.stackExpanded);
+      const ctrl = String((d as any)?.stackControllerId || '').trim();
+      const isController = key && ctrl && ctrl === String(node.id || '').trim();
+      const isGroup = Boolean(d?.isGroup);
+      if (isController && count > 1 && !expanded) {
+        const currentlyOpen = stackPreviewControllerIdRef.current === String(node.id || '').trim();
+        if (currentlyOpen) {
+          clearStackPreview();
+        } else {
+          clearStackPreview();
+          openStackPreview(String(node.id || '').trim(), key);
+        }
+        // Close local filters when opening stack preview
+        openLocalFilters(String(node.id || '').trim(), false);
+      } else {
+        clearStackPreview();
+        // Toggle local relation filters for non-group, non-stack nodes
+        if (!isGroup) {
+          const nodeId = String(node.id || '').trim();
+          const isOpen = Boolean(d?.localFiltersOpen);
+          openLocalFilters(nodeId, !isOpen);
+        }
+      }
+    }
+
     if (onNodeSelect) {
       const selectedId = node.id;
       const selectedFragmentId = (node.data as any)?.fragmentId || selectedId;
@@ -6815,6 +7659,37 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     ignorePaneClicksUntilRef.current = Date.now() + 250;
     event.stopPropagation();
     event.preventDefault();
+
+    // Click elsewhere should close stack preview and local filters too.
+    if (stackPreviewControllerIdRef.current) {
+      const prevId = stackPreviewControllerIdRef.current;
+      stackPreviewControllerIdRef.current = null;
+      setNodes((prev) =>
+        (prev || []).map((n) => {
+          if (String((n as any)?.id || '').trim() !== prevId) return n;
+          const d0: any = (n as any)?.data || {};
+          if (!d0.stackPreviewOpen && !d0.stackPreviewItems && !d0.stackPreviewMore) return n;
+          const d = { ...d0 };
+          delete d.stackPreviewOpen;
+          delete d.stackPreviewItems;
+          delete d.stackPreviewMore;
+          delete d.onStackPreviewSelect;
+          delete d.onStackPreviewMore;
+          return { ...(n as any), data: d } as any;
+        }),
+      );
+    }
+    // Close any open local relation filters
+    setNodes((prev) =>
+      prev.map((n) => {
+        const d: any = (n as any)?.data;
+        if (!d || d.isGroup || !d.localFiltersOpen) return n;
+        const nd = { ...d };
+        delete nd.localFiltersOpen;
+        return { ...(n as any), data: nd } as any;
+      }),
+    );
+
     if (onEdgeSelect) {
       // Get source and target nodes to extract fragmentIds
       const sourceNode = nodes.find((n) => n.id === edge.source);
@@ -6845,18 +7720,38 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       onEdgeSelect(null, null);
     }
     // Also clear graph-query highlight (UX: click elsewhere returns to normal view)
+    // Clear stack preview overlay (Levels).
+    if (stackPreviewControllerIdRef.current) {
+      const prevId = stackPreviewControllerIdRef.current;
+      stackPreviewControllerIdRef.current = null;
+      setNodes((prev) =>
+        (prev || []).map((n) => {
+          if (String((n as any)?.id || '').trim() !== prevId) return n;
+          const d0: any = (n as any)?.data || {};
+          if (!d0.stackPreviewOpen && !d0.stackPreviewItems && !d0.stackPreviewMore) return n;
+          const d = { ...d0 };
+          delete d.stackPreviewOpen;
+          delete d.stackPreviewItems;
+          delete d.stackPreviewMore;
+          delete d.onStackPreviewSelect;
+          delete d.onStackPreviewMore;
+          return { ...(n as any), data: d } as any;
+        }),
+      );
+    }
     if (graphQueryHighlightIds && graphQueryHighlightIds.size > 0) {
       setGraphQueryHighlightIds(null);
       setGraphQueryActiveChipId(null);
     }
-    // Close any open right-side filter menus (Levels UI)
+    // Close any open right-side filter menus and local relation filters (Levels UI)
     setNodes((prev) =>
       prev.map((n) => {
         const d: any = (n as any)?.data;
         if (!d || d.isGroup) return n;
-        if (!d.rightFiltersOpen) return n;
+        if (!d.rightFiltersOpen && !d.localFiltersOpen) return n;
         const nd = { ...d };
         delete nd.rightFiltersOpen;
+        delete nd.localFiltersOpen;
         return { ...(n as any), data: nd } as any;
       }),
     );

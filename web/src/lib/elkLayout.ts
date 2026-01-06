@@ -1046,6 +1046,21 @@ export async function layoutLevelsTwoPane<T = any>(
     'SIMILAR_TO',
     'LINKED_TO',
   ]);
+  // In Levels mode, some relations are "inverted" for upstream promotion.
+  // Example: A -(DEPENDS_ON)-> B means A is downstream of B.
+  // If B is expanded/central, the edge is incoming to B, but A should stay in the LEFT group (downstream),
+  // not be promoted into the right backbone.
+  const INCOMING_STAY_IN_GROUP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+
+  // Context / geography relations should stay in LEFT groups even when they are "incoming" to an expanded node.
+  // Otherwise expanding a GEO node would promote many orgs/places into the right backbone and compete for space.
+  const CONTEXT_GROUP_ONLY_TYPES = new Set([
+    'LOCATED_IN',
+    'OPERATES_IN',
+    'BASED_IN',
+    'HEADQUARTERED_IN',
+    'REGULATES',
+  ]);
 
   const getParentChild = (e: any): { parent: string; child: string } | null => {
     const s = normId(e?.source);
@@ -1120,7 +1135,12 @@ export async function layoutLevelsTwoPane<T = any>(
       const pid = String(d?.parentFragmentId || '').trim();
       if (!pid || !rightIds.has(pid)) continue;
       const etp = normalizeEdgeType(d?.edgeTypeFromParent);
-      if (d?.directionFromParent === 'incoming' && !PEER_TYPES.has(etp)) {
+      if (
+        d?.directionFromParent === 'incoming' &&
+        !PEER_TYPES.has(etp) &&
+        !CONTEXT_GROUP_ONLY_TYPES.has(etp) &&
+        !INCOMING_STAY_IN_GROUP_TYPES.has(etp)
+      ) {
         rightIds.add(n.id);
         changed = true;
       }
@@ -1128,12 +1148,53 @@ export async function layoutLevelsTwoPane<T = any>(
 
     for (const pc of bestPcByPair.values()) {
       if (!fragmentIdSet.has(pc.parent)) continue;
+      // Never promote context/geography parents into the right backbone; keep them grouped on the left.
+      if (CONTEXT_GROUP_ONLY_TYPES.has(normalizeEdgeType(pc.et))) continue;
       if (rightIds.has(pc.child) && !rightIds.has(pc.parent)) {
         rightIds.add(pc.parent);
         changed = true;
       }
     }
   }
+
+  // === 1.25) Lens focus islands ===
+  // Nodes pinned to the Lens scope but currently disconnected (degree=0) should NOT compete for space
+  // inside the main right hierarchy. Instead, we render them in a dedicated far-right group.
+  // Once they gain any edge (e.g. after expansion), they automatically rejoin the normal hierarchy.
+  const degreeById = new Map<string, number>();
+  for (const e of (edges || []) as any[]) {
+    const eid = String(e?.id || '').trim();
+    if (eid.startsWith('levels:agg:')) continue;
+    if (Boolean(e?.data?.levelsAgg)) continue;
+    if (Boolean(e?.data?.levelsStackProxy)) continue;
+    const s = normId(e?.source);
+    const t = normId(e?.target);
+    if (!s || !t) continue;
+    if (s === t) continue;
+    if (!fragmentIdSet.has(s) || !fragmentIdSet.has(t)) continue;
+    degreeById.set(s, (degreeById.get(s) || 0) + 1);
+    degreeById.set(t, (degreeById.get(t) || 0) + 1);
+  }
+
+  const focusIslandNodesAll = fragments.filter((n) => {
+    const d: any = n.data;
+    if (!d?.pinnedToScope) return false;
+    if (d?.expanded) return false;
+    if (d?.traceBackbone) return false;
+    const deg = degreeById.get(n.id) || 0;
+    return deg === 0;
+  });
+  const focusIslandIds = new Set<string>(focusIslandNodesAll.map((n) => n.id));
+  // Keep at least one right node (algorithm expects a non-empty backbone).
+  if (focusIslandIds.size > 0) {
+    for (const id of focusIslandIds) rightIds.delete(id);
+    if (rightIds.size === 0 && fragments[0]) {
+      const keep = fragments[0].id;
+      rightIds.add(keep);
+      focusIslandIds.delete(keep);
+    }
+  }
+  const focusIslandNodes = focusIslandNodesAll.filter((n) => focusIslandIds.has(n.id));
 
   const rightNodes = fragments.filter((n) => rightIds.has(n.id));
 
@@ -1239,7 +1300,8 @@ export async function layoutLevelsTwoPane<T = any>(
   const PAD_X = 16;
   // Extra vertical air so the (optional) type headers fit comfortably inside the group.
   const PAD_TOP = 28;
-  const PAD_BOTTOM = 20;
+  const PAD_BOTTOM_BASE = 20;
+  const REL_SUBTITLE_H = 14; // space for relation subtitles (only used when group is large)
   // Keep left-group grids compact regardless of right-hierarchy spacing.
   const groupChildGapX = Math.min(40, nodeSpacing);
   const groupChildGapY = 40;
@@ -1273,27 +1335,90 @@ export async function layoutLevelsTwoPane<T = any>(
     return 500; // stable middle bucket for new/unknown types
   };
 
-  type TypeBlock<TNode = any> = { typeKey: string; nodes: Node<TNode>[]; cols: number; startX: number };
+  type RelBlock<TNode = any> = {
+    edgeTypeKey: string;
+    label: string;
+    nodes: Node<TNode>[];
+    cols: number;
+    startX: number;
+    blockW: number;
+  };
+  type TypeBlock<TNode = any> = {
+    typeKey: string;
+    rows: number;
+    cols: number;
+    startX: number;
+    blockW: number;
+    relBlocks: RelBlock<TNode>[];
+  };
 
-  const groupDimsWrap = (children: Node<T>[]) => {
+  const edgeTypeCaptionShortLocal = (raw: any): string => {
+    const t = normalizeEdgeType(String(raw || '').trim());
+    const MAP: Record<string, string> = {
+      DEPENDS_ON: 'Depends',
+      REQUIRES: 'Requires',
+      NEEDS: 'Needs',
+      USES: 'Uses',
+      CONSUMES: 'Consumes',
+      OWNS: 'Owns',
+      MANAGES: 'Manages',
+      CONTROLS: 'Controls',
+      INVESTS_IN: 'Invests',
+      PARENT_OF: 'Parent',
+      SUBSIDIARY_OF: 'Subsidiary',
+      BOARD_MEMBER_OF: 'Board',
+      EXECUTIVE_OF: 'Executive',
+      SUPPLIES_TO: 'Supplies',
+      PRODUCES: 'Produces',
+      TRANSFORMS_INTO: 'Transforms',
+      LOCATED_IN: 'Located',
+      OPERATES_IN: 'Operates',
+      BASED_IN: 'Based',
+      HEADQUARTERED_IN: 'HQ',
+      COMPETES_WITH: 'Competes',
+      PARTNERS_WITH: 'Partners',
+      COOPERATES_WITH: 'Cooperates',
+      REGULATES: 'Regulates',
+      INFLUENCES: 'Influences',
+      AFFECTS: 'Affects',
+      IMPACTS: 'Impacts',
+    };
+    if (MAP[t]) return MAP[t]!;
+    const human = t
+      .replace(/_WITH$/g, '')
+      .replace(/_TO$/g, '')
+      .replace(/_OF$/g, '')
+      .replace(/_/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    return human.length > 18 ? `${human.slice(0, 18)}…` : human;
+  };
+
+  const groupDimsWrap = (children: Node<T>[], parentId: string) => {
     const safeChildren = Array.isArray(children) ? children.filter(Boolean) : [];
     const safeCount = safeChildren.length;
     if (safeCount <= 0) {
       return {
         w: PAD_X * 2,
-        h: PAD_TOP + PAD_BOTTOM,
+        h: PAD_TOP + PAD_BOTTOM_BASE,
         cols: 0,
         rows: 0,
         blocks: [] as TypeBlock<T>[],
         interBlockGapX: 0,
+        relLabelY: PAD_TOP,
+        padBottom: PAD_BOTTOM_BASE,
       };
     }
 
-    // Global row policy stays the same as before, but now we split horizontally by type.
-    const rows =
-      safeCount <= 2 ? safeCount
-        : safeCount <= 12 ? 2
-          : 3;
+    // Row policy is applied PER TYPE BLOCK (otherwise splitting into types can create "empty rows").
+    const rowsForCount = (cnt: number): number => {
+      const c = Math.max(0, Math.floor(cnt || 0));
+      if (c <= 0) return 1;
+      if (c <= 2) return c;
+      if (c <= 12) return 2;
+      return 3;
+    };
+    const useRelGrouping = safeCount > 4;
 
     // Bucket by `data.type` (stable: preserve order within each bucket).
     const byType = new Map<string, Node<T>[]>();
@@ -1315,27 +1440,136 @@ export async function layoutLevelsTwoPane<T = any>(
     const blocks: TypeBlock<T>[] = [];
     // Make separation visually obvious; a slightly larger gap costs width but greatly helps scanning.
     const interBlockGapX = Math.max(84, Math.floor(nodeWidth * 0.45));
+    const interRelGapX = Math.max(24, Math.floor(nodeWidth * 0.18));
+
+    const bestRelTypeToParent = (child: Node<T>): string => {
+      const cid = String(child?.id || '').trim();
+      const pid = String(parentId || '').trim();
+      if (!pid || !cid) return normalizeEdgeType((child.data as any)?.edgeTypeFromParent);
+      const found = new Set<string>();
+      for (const e of (edges || []) as any[]) {
+        const eid = String(e?.id || '').trim();
+        if (eid.startsWith('levels:agg:')) continue;
+        if (Boolean(e?.data?.levelsAgg)) continue;
+        if (Boolean(e?.data?.levelsStackProxy)) continue;
+        const s = normId(e?.source);
+        const t = normId(e?.target);
+        if (!s || !t) continue;
+        const hit = (s === pid && t === cid) || (s === cid && t === pid);
+        if (!hit) continue;
+        const et = edgeTypeOf(e);
+        if (et) found.add(et);
+      }
+      // Product rule: if the expanded node (group parent) has an OUTGOING PRODUCES edge to this child,
+      // it must dominate relation grouping even if other edge types exist between the same nodes.
+      // (UX: products should always be surfaced as "Produces" when present.)
+      if (found.size > 0 && found.has('PRODUCES')) {
+        for (const e of (edges || []) as any[]) {
+          const eid = String(e?.id || '').trim();
+          if (eid.startsWith('levels:agg:')) continue;
+          if (Boolean(e?.data?.levelsAgg)) continue;
+          if (Boolean(e?.data?.levelsStackProxy)) continue;
+          const s = normId(e?.source);
+          const t = normId(e?.target);
+          if (s !== pid || t !== cid) continue; // only OUTGOING from parent -> child
+          if (edgeTypeOf(e) === 'PRODUCES') return 'PRODUCES';
+        }
+      }
+      if (found.size === 0) return normalizeEdgeType((child.data as any)?.edgeTypeFromParent);
+      const ordered = Array.from(found).sort((a, b) => {
+        const ap = getEdgePriority(a);
+        const bp = getEdgePriority(b);
+        if (ap !== bp) return ap - bp;
+        return a.localeCompare(b);
+      });
+      return ordered[0] || normalizeEdgeType((child.data as any)?.edgeTypeFromParent);
+    };
 
     let cursorX = 0;
     let totalCols = 0;
+    let maxInnerH = 0;
     for (let i = 0; i < typeKeys.length; i++) {
       const typeKey = typeKeys[i]!;
       const list = byType.get(typeKey) || [];
       if (list.length === 0) continue;
-      const cols = Math.ceil(list.length / Math.max(1, rows));
-      // We keep only minimal geometry for downstream rendering: startX and cols.
-      blocks.push({ typeKey, nodes: list, cols, startX: cursorX });
-      totalCols += cols;
-      const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
-      cursorX += blockW;
+      const rowsForType = rowsForCount(list.length);
+      const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
+      maxInnerH = Math.max(maxInnerH, innerHForType);
+
+      // Optionally group within the type block by the PRIORITY relation type to the parent.
+      const relBlocks: RelBlock<T>[] = [];
+      if (useRelGrouping) {
+        const byRel = new Map<string, Node<T>[]>();
+        for (const n of list) {
+          const rel = bestRelTypeToParent(n);
+          const arr = byRel.get(rel) || [];
+          arr.push(n);
+          byRel.set(rel, arr);
+        }
+        const relKeys = Array.from(byRel.keys()).sort((a, b) => {
+          const ap = getEdgePriority(a);
+          const bp = getEdgePriority(b);
+          if (ap !== bp) return ap - bp;
+          return a.localeCompare(b);
+        });
+        let relCursor = 0;
+        let relColsTotal = 0;
+        for (let ri = 0; ri < relKeys.length; ri++) {
+          const relKey = relKeys[ri]!;
+          const nodesRel = (byRel.get(relKey) || []).slice().sort((a, b) => {
+            const al = String((a.data as any)?.label || a.id);
+            const bl = String((b.data as any)?.label || b.id);
+            return al.localeCompare(bl);
+          });
+          const cols = Math.ceil(nodesRel.length / Math.max(1, rowsForType));
+          const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+          relBlocks.push({
+            edgeTypeKey: relKey,
+            label: edgeTypeCaptionShortLocal(relKey),
+            nodes: nodesRel,
+            cols,
+            startX: relCursor,
+            blockW,
+          });
+          relColsTotal += cols;
+          relCursor += blockW;
+          if (ri < relKeys.length - 1) relCursor += interRelGapX;
+        }
+        totalCols += relColsTotal;
+        const typeBlockW = relCursor;
+        blocks.push({ typeKey, rows: rowsForType, cols: relColsTotal, startX: cursorX, blockW: typeBlockW, relBlocks });
+        cursorX += typeBlockW;
+      } else {
+        const nodesFlat = list.slice().sort((a, b) => {
+          const al = String((a.data as any)?.label || a.id);
+          const bl = String((b.data as any)?.label || b.id);
+          return al.localeCompare(bl);
+        });
+        const cols = Math.ceil(nodesFlat.length / Math.max(1, rowsForType));
+        const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+        relBlocks.push({
+          edgeTypeKey: '',
+          label: '',
+          nodes: nodesFlat,
+          cols,
+          startX: 0,
+          blockW,
+        });
+        totalCols += cols;
+        blocks.push({ typeKey, rows: rowsForType, cols, startX: cursorX, blockW, relBlocks });
+        cursorX += blockW;
+      }
+
       if (i < typeKeys.length - 1) cursorX += interBlockGapX;
     }
 
     const innerW = cursorX;
-    const innerH = rows * nodeHeight + Math.max(0, rows - 1) * groupChildGapY;
+    const innerH = Math.max(nodeHeight, maxInnerH);
     const w = innerW + PAD_X * 2;
-    const h = innerH + PAD_TOP + PAD_BOTTOM;
-    return { w, h, cols: totalCols, rows, blocks, interBlockGapX };
+    const padBottom = PAD_BOTTOM_BASE + (useRelGrouping ? REL_SUBTITLE_H : 0);
+    const relLabelY = PAD_TOP + innerH + 4;
+    const h = innerH + PAD_TOP + padBottom;
+    return { w, h, cols: totalCols, rows: Math.max(1, Math.floor(maxInnerH / nodeHeight)), blocks, interBlockGapX, relLabelY, padBottom, interRelGapX };
   };
 
   // === 5) Place Right hierarchy nodes ===
@@ -1360,7 +1594,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
   for (const rn of rightSorted) {
     const children = downstreamByRight.get(rn.id) || [];
-    const h = children.length > 0 ? Math.max(nodeHeight, groupDimsWrap(children).h) : nodeHeight;
+    const h = children.length > 0 ? Math.max(nodeHeight, groupDimsWrap(children, rn.id).h) : nodeHeight;
     unitHeights.set(rn.id, h);
   }
 
@@ -1459,23 +1693,27 @@ export async function layoutLevelsTwoPane<T = any>(
     groupId: string,
     rows: number,
   ) => {
-    const safeRows = Math.max(1, Math.floor(rows || 1));
     for (const b of blocks) {
-      for (let idx = 0; idx < b.nodes.length; idx++) {
-        const child = b.nodes[idx]!;
-        // Column-major within each type block: first fill vertical, then move right.
-        const rowIdx = idx % safeRows;
-        const colIdx = Math.floor(idx / safeRows);
-        const cx = PAD_X + b.startX + colIdx * (nodeWidth + groupChildGapX);
-        const cy = PAD_TOP + rowIdx * (nodeHeight + groupChildGapY);
-        childNodes.push({
-          ...(child as any),
-          parentId: groupId,
-          extent: 'parent' as any,
-          zIndex: 1,
-          hidden: false,
-          position: { x: cx, y: cy },
-        } as any);
+      const safeRows = Math.max(1, Math.floor((b as any)?.rows || rows || 1));
+      for (const rb of (b.relBlocks || [])) {
+        for (let idx = 0; idx < rb.nodes.length; idx++) {
+          const child = rb.nodes[idx]!;
+          // Column-major within each relation sub-block: first fill vertical, then move right.
+          const rowIdx = idx % safeRows;
+          const colIdx = Math.floor(idx / safeRows);
+          const cx = PAD_X + b.startX + rb.startX + colIdx * (nodeWidth + groupChildGapX);
+          const cy = PAD_TOP + rowIdx * (nodeHeight + groupChildGapY);
+          childNodes.push({
+            ...(child as any),
+            parentId: groupId,
+            extent: 'parent' as any,
+            zIndex: 1,
+            // Preserve manual/UX-driven hidden state across relayouts (e.g., local relation filters).
+            // NOTE: we explicitly do NOT treat hiddenByStack as manual (handled separately).
+            hidden: preHiddenIds.has(child.id) || Boolean((child as any).hidden),
+            position: { x: cx, y: cy },
+          } as any);
+        }
       }
     }
   };
@@ -1494,6 +1732,7 @@ export async function layoutLevelsTwoPane<T = any>(
     children: Node<T>[];
     blocks: TypeBlock<T>[];
     interBlockGapX: number;
+    relLabelY: number;
     edgeTypes: string[];
   };
 
@@ -1504,7 +1743,7 @@ export async function layoutLevelsTwoPane<T = any>(
     const children = downstreamByRight.get(rn.id) || [];
     if (children.length === 0) continue;
     const rp = rightPos.get(rn.id)!;
-    const dim = groupDimsWrap(children);
+    const dim = groupDimsWrap(children, rn.id);
     const groupId = `levels:left:${rn.id}:down`;
     const gx = leftBandRightX - dim.w;
 
@@ -1519,11 +1758,19 @@ export async function layoutLevelsTwoPane<T = any>(
       const eid = String(e?.id || '').trim();
       if (eid.startsWith('levels:agg:')) continue;
       if (Boolean(e?.data?.levelsAgg)) continue;
+      if (Boolean(e?.data?.levelsStackProxy)) continue;
+      if (eid.startsWith('levels:stackproxy:')) continue;
+      if (Boolean(e?.data?.levelsGroupProxy)) continue;
+      if (eid.startsWith('levels:gproxy:')) continue;
       const s = normId(e?.source);
       const t = normId(e?.target);
       if (!s || !t) continue;
       if (s === rn.id && childIdSet.has(t)) edgeTypeSet.add(edgeTypeOf(e));
       else if (t === rn.id && childIdSet.has(s)) edgeTypeSet.add(edgeTypeOf(e));
+      // Also include edge types for edges that touch group children but connect OUTSIDE the group.
+      // These edges will be proxied to group handlers in Levels mode (so the group needs ports for them).
+      else if (childIdSet.has(s) && !childIdSet.has(t)) edgeTypeSet.add(edgeTypeOf(e));
+      else if (childIdSet.has(t) && !childIdSet.has(s)) edgeTypeSet.add(edgeTypeOf(e));
     }
     // Fallback: if no edges found (rare), use metadata.
     if (edgeTypeSet.size === 0) {
@@ -1552,6 +1799,7 @@ export async function layoutLevelsTwoPane<T = any>(
       children,
       blocks: dim.blocks,
       interBlockGapX: dim.interBlockGapX,
+      relLabelY: dim.relLabelY,
       edgeTypes,
     });
   }
@@ -1694,7 +1942,7 @@ export async function layoutLevelsTwoPane<T = any>(
       const airTop = Math.floor(g.h * 0.25);
       const airBottom = Math.floor(g.h * 0.25);
       const yTop = Math.max(airTop, PAD_TOP + 18);
-      const yBot = Math.min(g.h - Math.max(airBottom, PAD_BOTTOM + 18), Math.floor(g.h * 0.75));
+      const yBot = Math.min(g.h - Math.max(airBottom, PAD_BOTTOM_BASE + 18), Math.floor(g.h * 0.75));
       const yHi = Math.max(yTop, yBot);
       return types.map((et, idx) => {
         const edgeType = normalizeEdgeType(et);
@@ -1733,8 +1981,10 @@ export async function layoutLevelsTwoPane<T = any>(
               .replace(/_/g, ' ')
               .toLowerCase()
               .replace(/\b\w/g, (c) => c.toUpperCase());
-            const cols = Math.max(1, Math.floor((b as any)?.cols || 1));
-            const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+            const blockW = Math.max(1, Math.floor((b as any)?.blockW || 0)) || (
+              Math.max(1, Math.floor((b as any)?.cols || 1)) * nodeWidth +
+              Math.max(0, Math.max(1, Math.floor((b as any)?.cols || 1)) - 1) * groupChildGapX
+            );
             const rawStart = Math.max(0, Math.floor((b as any)?.startX || 0));
             const startX = PAD_X + rawStart;
             const endX = startX + blockW;
@@ -1743,7 +1993,18 @@ export async function layoutLevelsTwoPane<T = any>(
 
             // Visual divider lines between horizontal type sections (keep as-is).
             const dividerX = hasNext ? (endX + gapX) : undefined;
-            return { typeKey, label, cols, blockW, startX, dividerX };
+            const relBlocks = Array.isArray((b as any)?.relBlocks) ? ((b as any).relBlocks as any[]) : [];
+            const relationBlocks =
+              relBlocks.length > 1
+                ? relBlocks.map((rb: any) => {
+                    const rbStart = Math.max(0, Math.floor(rb?.startX || 0));
+                    const rbW = Math.max(1, Math.floor(rb?.blockW || 0));
+                    const edgeTypeKey = String(rb?.edgeTypeKey || '').trim();
+                    const relLabel = String(rb?.label || edgeTypeKey || '').trim();
+                    return { label: relLabel, startX: startX + rbStart, blockW: rbW };
+                  })
+                : undefined;
+            return { typeKey, label, blockW, startX, dividerX, relationBlocks, relationLabelY: g.relLabelY };
           }),
         // Ports for aggregated edges (one per edge type).
         groupEdgePorts,
@@ -1764,6 +2025,73 @@ export async function layoutLevelsTwoPane<T = any>(
     attachChildrenWrap(g.blocks, g.groupId, g.rows);
   }
 
+  // Lens focus objects: far-right group for pinned, disconnected nodes (degree=0).
+  if (focusIslandNodes.length > 0) {
+    const FOCUS_GROUP_ID = 'levels:right:focus';
+    for (const n of focusIslandNodes) groupedChildIds.add(n.id);
+
+    const count = focusIslandNodes.length;
+    const focusRows = Math.max(1, Math.min(4, count));
+    const focusCols = Math.max(1, Math.ceil(count / focusRows));
+    const FOCUS_PAD_X = 14;
+    const FOCUS_PAD_TOP = 36; // leave room for the group header
+    const FOCUS_PAD_BOTTOM = 14;
+    const focusGapX = Math.min(40, nodeSpacing);
+    const focusGapY = 40;
+    const innerW = focusCols * nodeWidth + Math.max(0, focusCols - 1) * focusGapX;
+    const innerH = focusRows * nodeHeight + Math.max(0, focusRows - 1) * focusGapY;
+    const focusW = innerW + FOCUS_PAD_X * 2;
+    const focusH = innerH + FOCUS_PAD_TOP + FOCUS_PAD_BOTTOM;
+
+    // Place one column to the right of the rightmost hierarchy column.
+    const focusX = RIGHT_BASE_X + (maxLevel + 1) * RIGHT_LEVEL_STEP_X + Math.floor(nodeWidth * 0.75);
+    // Keep centered vertically around the origin (the hierarchy is centered already).
+    const focusY = -Math.floor(focusH / 2);
+
+    groupNodes.push({
+      id: FOCUS_GROUP_ID,
+      type: 'horizonGroup' as any,
+      position: { x: focusX, y: focusY },
+      selectable: false,
+      draggable: false,
+      connectable: false,
+      focusable: false,
+      deletable: false,
+      style: { width: focusW, height: focusH, zIndex: 0 } as any,
+      data: {
+        isGroup: true,
+        groupIsBackdrop: false,
+        groupInteractive: false,
+        groupHideHeader: false,
+        groupNoFill: true,
+        groupTitle: 'Lens focus objects',
+        groupCount: count,
+        groupEdgeTypes: [],
+        groupCurrentPage: 0,
+        groupTotalPages: 1,
+        groupPageSize: count,
+        groupAllChildIds: focusIslandNodes.map((n) => n.id),
+      } as any,
+    } as any);
+
+    // Attach children as a simple grid.
+    for (let idx = 0; idx < focusIslandNodes.length; idx++) {
+      const child = focusIslandNodes[idx]!;
+      const rowIdx = idx % focusRows;
+      const colIdx = Math.floor(idx / focusRows);
+      const cx = FOCUS_PAD_X + colIdx * (nodeWidth + focusGapX);
+      const cy = FOCUS_PAD_TOP + rowIdx * (nodeHeight + focusGapY);
+      childNodes.push({
+        ...(child as any),
+        parentId: FOCUS_GROUP_ID,
+        extent: 'parent' as any,
+        zIndex: 1,
+        hidden: preHiddenIds.has(child.id),
+        position: { x: cx, y: cy },
+      } as any);
+    }
+  }
+
   // === 6.5) Right-side temporary stacking (leaf columns) ===
   // Goal: if a parent has many leaf children on the right backbone (and those children don't have left-groups),
   // collapse them into a temporary "stack" controlled by a single visible node.
@@ -1774,7 +2102,11 @@ export async function layoutLevelsTwoPane<T = any>(
   // - stackExpanded: boolean
   //
   // The UI can toggle this and trigger a relayout.
-  const STACK_MIN = 6;
+  // 2026-01 (visual contract):
+  // - Right-side stacks are semantic buckets (not raw fragment-type stacks).
+  // - Only apply to nodes on the RIGHT pane (not in left groups).
+  // - Only when bucket size > 1.
+  const STACK_MIN = 2;
   const expandedStackKeys = new Set<string>();
   for (const n of fragments) {
     const d: any = n.data;
@@ -1784,15 +2116,43 @@ export async function layoutLevelsTwoPane<T = any>(
   }
 
   const stackHiddenIds = new Set<string>();
-  const stackMetaById = new Map<string, { key: string; count: number; expanded: boolean }>();
+  const stackMetaById = new Map<string, { key: string; count: number; expanded: boolean; title: string; kind: string; visualType: string }>();
   const stackMembersByKey = new Map<string, string[]>();
+  // Membership maps (used to preserve connectivity via stack-proxy edges).
+  const stackKeyByMemberId = new Map<string, string>(); // memberId -> stackGroupKey
+  const stackControllerByMemberId = new Map<string, string>(); // memberId -> controllerId
 
-  // Stack grouping policy (2026-01): only stack nodes of the SAME fragment type.
-  // Rationale: mixed-type stacks look like a bug and hide important semantic differences.
-  const typeOfRightNode = (id: string): string => {
+  const CONTROL_EDGE_TYPES = new Set(['OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN']);
+  const GEO_TYPES = new Set(['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY']);
+  const stackKindOfRightNode = (id: string, relatedId?: string): { kind: string; title: string; visualType: string } | null => {
     const node = fragments.find((x) => x.id === id);
-    const t = String((node as any)?.data?.type || '').trim();
-    return t || 'UNKNOWN';
+    const d: any = (node as any)?.data;
+    const tk = normalizeFragmentType(String(d?.type || '').trim());
+    if (!tk) return null;
+
+    // Persons: always bucket by type (if >1)
+    if (tk === 'PERSON') return { kind: 'persons', title: 'Persons', visualType: 'PERSON' };
+    // Geolocation: geo-like nodes
+    if (GEO_TYPES.has(tk) || tk.includes('GEO')) return { kind: 'geolocation', title: 'Geolocation', visualType: 'GEO_REGION' };
+    // Products: only for "incoming products" (these are the products that end up on the right pane)
+    if (tk === 'PRODUCT' && String(d?.directionFromParent || '').trim() === 'incoming') return { kind: 'products', title: 'Products', visualType: 'PRODUCT' };
+    // Control: organizations that are owners/investors/controllers (ignore weak reverse relations)
+    if (tk === 'ORGANIZATION') {
+      const et = normalizeEdgeType(String(d?.edgeTypeFromParent || '').trim());
+      if (CONTROL_EDGE_TYPES.has(et)) return { kind: 'control', title: 'Control', visualType: 'ORGANIZATION' };
+      // If we know the related counterpart in the right-hierarchy, prefer the best hierarchy edge between them.
+      if (relatedId) {
+        const a = String(id || '').trim();
+        const b = String(relatedId || '').trim();
+        if (a && b) {
+          const key = a < b ? `${a}||${b}` : `${b}||${a}`;
+          const pc = bestPcByPair.get(key);
+          const et2 = normalizeEdgeType(String((pc as any)?.et || '').trim());
+          if (CONTROL_EDGE_TYPES.has(et2)) return { kind: 'control', title: 'Control', visualType: 'ORGANIZATION' };
+        }
+      }
+    }
+    return null;
   };
 
   const isStackEligibleRightNode = (id: string) => {
@@ -1820,25 +2180,26 @@ export async function layoutLevelsTwoPane<T = any>(
       buckets.set(lv, arr);
     }
     for (const [lv, list] of buckets.entries()) {
-      // Partition by type so we only collapse homogeneous stacks.
-      const byType = new Map<string, string[]>();
+      // Partition by semantic stack kind so we get stable named stacks (Persons/Products/Control/Geolocation).
+      const byKind = new Map<string, { meta: { kind: string; title: string; visualType: string }; ids: string[] }>();
       for (const kid of list) {
-        const t = typeOfRightNode(kid);
-        const arr = byType.get(t) || [];
-        arr.push(kid);
-        byType.set(t, arr);
+        const meta = stackKindOfRightNode(kid, parentId);
+        if (!meta) continue;
+        const hit = byKind.get(meta.kind) || { meta, ids: [] as string[] };
+        hit.ids.push(kid);
+        byKind.set(meta.kind, hit);
       }
-      for (const [t, typeList] of byType.entries()) {
-        const eligible = typeList.filter((kid) => {
-        if (!isStackEligibleRightNode(kid)) return false;
-        // Must be a leaf in the right-hierarchy (no right-children). This is for stacking "child columns".
-        const rightKids = childrenOf.get(kid);
-        if (rightKids && rightKids.size > 0) return false;
-        return true;
-      });
+      for (const { meta, ids } of byKind.values()) {
+        const eligible = ids.filter((kid) => {
+          if (!isStackEligibleRightNode(kid)) return false;
+          // Must be a leaf in the right-hierarchy (no right-children). This is for stacking "child columns".
+          const rightKids = childrenOf.get(kid);
+          if (rightKids && rightKids.size > 0) return false;
+          return true;
+        });
         if (eligible.length < STACK_MIN) continue;
 
-        const key = `levels:rightstack:${parentId}:${lv}:${t}`;
+        const key = `levels:rightstack:${parentId}:${lv}:${meta.kind}`;
         stackMembersByKey.set(key, eligible);
         const expanded = expandedStackKeys.has(key);
 
@@ -1852,7 +2213,12 @@ export async function layoutLevelsTwoPane<T = any>(
         });
         const controllerId = ordered[0]!;
 
-        stackMetaById.set(controllerId, { key, count: eligible.length, expanded });
+        stackMetaById.set(controllerId, { key, count: eligible.length, expanded, title: meta.title, kind: meta.kind, visualType: meta.visualType });
+        // Record membership for all members so the UI can proxy edges to the controller.
+        for (const id of ordered) {
+          if (!stackKeyByMemberId.has(id)) stackKeyByMemberId.set(id, key);
+          if (!stackControllerByMemberId.has(id)) stackControllerByMemberId.set(id, controllerId);
+        }
         if (!expanded) {
           for (const id of ordered) {
             if (id === controllerId) continue;
@@ -1869,7 +2235,7 @@ export async function layoutLevelsTwoPane<T = any>(
   for (const [childId, parsSet] of parentsOf.entries()) {
     if (!rightIds.has(childId)) continue;
     const pars = Array.from(parsSet || []).filter((id) => rightIds.has(id));
-    if (pars.length < STACK_MIN) continue;
+    if (pars.length < 2) continue;
     const buckets = new Map<number, string[]>();
     for (const pid of pars) {
       const lv = hLevel.get(pid) || 0;
@@ -1878,22 +2244,22 @@ export async function layoutLevelsTwoPane<T = any>(
       buckets.set(lv, arr);
     }
     for (const [lv, list] of buckets.entries()) {
-      // Partition by type so we only collapse homogeneous stacks.
-      const byType = new Map<string, string[]>();
+      const byKind = new Map<string, { meta: { kind: string; title: string; visualType: string }; ids: string[] }>();
       for (const pid of list) {
-        const t = typeOfRightNode(pid);
-        const arr = byType.get(t) || [];
-        arr.push(pid);
-        byType.set(t, arr);
+        const meta = stackKindOfRightNode(pid, childId);
+        if (!meta) continue;
+        const hit = byKind.get(meta.kind) || { meta, ids: [] as string[] };
+        hit.ids.push(pid);
+        byKind.set(meta.kind, hit);
       }
-      for (const [t, typeList] of byType.entries()) {
-        const eligible = typeList.filter((pid) => {
+      for (const { meta, ids } of byKind.values()) {
+        const eligible = ids.filter((pid) => {
           if (!isStackEligibleRightNode(pid)) return false;
           // Avoid stacking parents that themselves have left-groups (already filtered) or are explicitly expanded.
           return true;
         });
         if (eligible.length < STACK_MIN) continue;
-        const key = `levels:rightstackp:${childId}:${lv}:${t}`;
+        const key = `levels:rightstackp:${childId}:${lv}:${meta.kind}`;
         stackMembersByKey.set(key, eligible);
         const expanded = expandedStackKeys.has(key);
 
@@ -1907,7 +2273,12 @@ export async function layoutLevelsTwoPane<T = any>(
         const controllerId = ordered[0]!;
         // If this node is already a controller for another stack, keep the first assignment (stable).
         if (!stackMetaById.has(controllerId)) {
-          stackMetaById.set(controllerId, { key, count: eligible.length, expanded });
+          stackMetaById.set(controllerId, { key, count: eligible.length, expanded, title: meta.title, kind: meta.kind, visualType: meta.visualType });
+        }
+        // Record membership for all members so the UI can proxy edges to the controller.
+        for (const id of ordered) {
+          if (!stackKeyByMemberId.has(id)) stackKeyByMemberId.set(id, key);
+          if (!stackControllerByMemberId.has(id)) stackControllerByMemberId.set(id, controllerId);
         }
         if (!expanded) {
           for (const id of ordered) {
@@ -1977,13 +2348,24 @@ export async function layoutLevelsTwoPane<T = any>(
       delete d.stackCount;
       delete d.stackExpanded;
       delete d.hiddenByStack;
+      delete (d as any).stackControllerId;
       delete d.levelsPane;
+
+      // Preserve stack membership for ALL members (not only the controller).
+      const memberKey = stackKeyByMemberId.get(n.id);
+      if (memberKey) d.stackGroupKey = memberKey;
+      const ctrl = stackControllerByMemberId.get(n.id);
+      if (ctrl) (d as any).stackControllerId = ctrl;
 
       const meta = stackMetaById.get(n.id);
       if (meta) {
         d.stackGroupKey = meta.key;
         d.stackCount = meta.count;
         d.stackExpanded = meta.expanded;
+        // Premium stack controller UI (rendered by HorizonFragmentNode)
+        (d as any).stackTitle = meta.title;
+        (d as any).stackKind = meta.kind;
+        (d as any).stackVisualType = meta.visualType;
       }
       const hiddenByStack = stackHiddenIds.has(n.id);
       d.hiddenByStack = hiddenByStack;
