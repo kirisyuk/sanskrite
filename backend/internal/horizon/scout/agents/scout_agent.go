@@ -46,6 +46,34 @@ type DiscoveredRelation struct {
 type ScoutResult struct {
 	Fragment  models.HorizonFragment `json:"fragment"`
 	Relations []DiscoveredRelation   `json:"relations"`
+	// SupplyChains is populated only when supply_chain specialty is enabled.
+	// Each chain is an ordered sequence of nodes representing a supply chain path.
+	SupplyChains []SupplyChain `json:"supplyChains,omitempty"`
+}
+
+// SupplyChain represents an ordered sequence of supply chain nodes.
+// Nodes alternate between actors (org/fac) and products, forming a chain:
+// supplier → product → processor → product → customer
+type SupplyChain struct {
+	// Nodes is an ordered list of entities in the supply chain.
+	// Expected pattern: [actor, product, actor, product, ...]
+	Nodes []SupplyChainNode `json:"nodes"`
+	// Confidence for the entire chain (0.0-1.0)
+	Confidence float64 `json:"confidence"`
+	// Reason/evidence for this chain
+	Reason string `json:"reason,omitempty"`
+}
+
+// SupplyChainNode represents a single node in a supply chain.
+type SupplyChainNode struct {
+	// CanonicalPath is the stable path for this entity (/org/..., /fac/..., /product/...)
+	CanonicalPath string `json:"canonicalPath"`
+	// Name is the human-readable name
+	Name string `json:"name"`
+	// Type is the fragment type: ORGANIZATION, FACILITY, PRODUCT
+	Type string `json:"type"`
+	// Role describes the node's function in the chain (optional): supplier, processor, assembler, distributor, customer
+	Role string `json:"role,omitempty"`
 }
 
 // Вспомогательная структура для парсинга, чтобы поймать name
@@ -59,13 +87,14 @@ type extractedFragment struct {
 }
 
 type scoutResultInternal struct {
-	Fragment  extractedFragment    `json:"fragment"`
-	Relations []DiscoveredRelation `json:"relations"`
+	Fragment     extractedFragment    `json:"fragment"`
+	Relations    []DiscoveredRelation `json:"relations"`
+	SupplyChains []SupplyChain        `json:"supplyChains,omitempty"`
 }
 
 // ExtractFragmentData извлекает данные HorizonFragment и связи из контента источника
-func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string) (*ScoutResult, error) {
-	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, sectorPath, specialties)
+func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string) (*ScoutResult, error) {
+	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -100,8 +129,9 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 
 	if err := json.Unmarshal(jsonData, &internalResult); err == nil {
 		scoutResult = &ScoutResult{
-			Fragment:  internalResult.Fragment.HorizonFragment,
-			Relations: internalResult.Relations,
+			Fragment:     internalResult.Fragment.HorizonFragment,
+			Relations:    internalResult.Relations,
+			SupplyChains: internalResult.SupplyChains,
 		}
 		// Handle name fields from internal struct (prefer LegalName)
 		legal := strings.TrimSpace(internalResult.Fragment.LegalName)
@@ -230,8 +260,12 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 }
 
 // buildExtractionPrompt строит промпт для извлечения данных
-func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string) string {
+func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string) string {
 	specialties = taxonomy.NormalizeSpecialties(specialties)
+	chainBlock := ""
+	if strings.TrimSpace(chainContext) != "" {
+		chainBlock = strings.TrimSpace(chainContext) + "\n"
+	}
 	specBlock := ""
 	if len(specialties) > 0 {
 		specBlock = "SPECIALIZATION MODULES (optional; apply only those listed):\n"
@@ -253,6 +287,33 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "- For PRODUCT fragments: extract product-to-product transformations using TRANSFORMS_INTO (source product -> target product).\n"
 			specBlock += "- Prefer canonical names (standard material/product names), not marketing names.\n\n"
 		}
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
+			specBlock += "MODULE: supply_chain (build complete supply chains)\n"
+			specBlock += "- Your PRIMARY goal is to identify and return COMPLETE SUPPLY CHAINS as ordered node sequences.\n"
+			specBlock += "- A supply chain is an ordered path: supplier → product → processor → product → customer → ...\n"
+			specBlock += "- Nodes alternate between ACTORS (ORGANIZATION/FACILITY) and PRODUCTS.\n"
+			specBlock += "- For each chain, include:\n"
+			specBlock += "  - All intermediate products (materials, components, finished goods)\n"
+			specBlock += "  - All actors: suppliers, manufacturers, processors, assemblers, distributors, customers\n"
+			specBlock += "- Return chains in the 'supplyChains' field (see output schema below).\n"
+			specBlock += "- Each node needs: canonicalPath, name, type (ORGANIZATION/FACILITY/PRODUCT), and optional role.\n"
+			specBlock += "- Roles: supplier, processor, manufacturer, assembler, distributor, customer, or describe the function.\n"
+			specBlock += "- Multiple chains are expected — different product lines, different suppliers, branching paths.\n"
+			specBlock += "- Canonical paths: /org/{slug} for organizations, /fac/{org}/{slug} for facilities, /product/{category}/{type}/{stage}/{slug} for products.\n"
+			specBlock += "- IMPORTANT: Also output individual 'relations' for non-chain relationships (location, ownership, etc.).\n\n"
+		}
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {
+			specBlock += "MODULE: equity (ownership & control)\n"
+			specBlock += "- Your PRIMARY goal is to extract OWNERSHIP/CONTROL structure: who owns/controls whom.\n"
+			specBlock += "- Focus on equity relationships (shareholders, subsidiaries, parent companies, ultimate beneficial owners, state ownership).\n"
+			specBlock += "- Use relation types:\n"
+			specBlock += "  - OWNS: owner -> owned entity (equity ownership/control)\n"
+			specBlock += "  - SUBSIDIARY_OF: owned entity -> owner (inverse; backend will normalize to OWNS)\n"
+			specBlock += "  - CONTROLS: controller -> controlled entity (non-equity/indirect control when ownership is unclear)\n"
+			specBlock += "  - INVESTS_IN: investor -> investee (minority investment; not necessarily control)\n"
+			specBlock += "- IMPORTANT: Do NOT use OWNS for employment/management roles (CEO/board). That belongs to management module.\n"
+			specBlock += "- Put stake/percent/voting rights (if known) and evidence in 'reason'.\n\n"
+		}
 	}
 
 	return fmt.Sprintf(`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.
@@ -266,7 +327,8 @@ CONTENT TO ANALYZE:
 %s
 
 %s
-TASK: Extract all relevant information about this entity and return it as a JSON object with two main fields: "fragment" and "relations".
+%s
+TASK: Extract all relevant information about this entity and return it as a JSON object with fields: "fragment", "relations", and optionally "supplyChains" (if supply_chain module is enabled).
 
 1. "fragment" Field (Object):
    Must match the fragment schema:
@@ -339,6 +401,24 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.
 
+3. "supplyChains" Field (Array of Objects) - ONLY if supply_chain module is enabled:
+   Each object represents one supply chain path with:
+   - nodes: Ordered array of entities in the chain. Each node has:
+     - canonicalPath: stable path (/org/..., /fac/..., /product/...)
+     - name: human-readable name
+     - type: ORGANIZATION | FACILITY | PRODUCT
+     - role: (optional) supplier, processor, manufacturer, assembler, distributor, customer
+   - confidence: 0.0 to 1.0 for the entire chain
+   - reason: evidence/source for this chain
+   
+   CHAIN STRUCTURE:
+   - Nodes MUST alternate: actor → product → actor → product → ...
+   - Actors are ORGANIZATION or FACILITY
+   - Products link actors in the chain
+   - Example chain nodes (canonical paths, alternating actor/product):
+     [/org/{supplier}, /product/raw/mineral/extraction/{slug}, /fac/{orgSlug}/{facilitySlug}, /product/component/electronic/manufacturing/{slug}, /org/{customer}]
+   - Multiple chains expected for different product lines or branches
+
 CANONICAL PATH RULES:
 - NEVER use "/discovered/*" (this is not allowed).
 - Prefer existing stable namespaces:
@@ -381,5 +461,5 @@ CANONICAL PATH RULES:
 - ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, specBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock)
 }

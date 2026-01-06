@@ -87,6 +87,7 @@ func main() {
 	fragmentsRepo := horizonrepo.NewHorizonFragmentsRepository(fsClient)
 	edgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient)
 	lensesRepo := horizonrepo.NewLensesRepository(fsClient)
+	cascadeVisitedRepo := horizonrepo.NewCascadeVisitedRepository(fsClient)
 	agentJobsRepo := corerepo.NewAgentJobsRepository(fsClient)
 	scoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 	framesRepo := horizonrepo.NewFramesRepository(fsClient)
@@ -128,6 +129,7 @@ func main() {
 		nil, // realtime disabled
 		aiExecutor,
 	)
+	scoutEngine.WithCascadeVisitedRepo(cascadeVisitedRepo)
 
 	// Optional: delete existing fragment to force fresh scouting.
 	if *forceScoutFlag {

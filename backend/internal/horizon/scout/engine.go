@@ -277,6 +277,7 @@ type ScoutEngine struct {
 	framesRepo              *repo.FramesRepository
 	edgesRepo               *repo.DependencyEdgesRepository
 	scoutingJobsRepo        *repo.ScoutingJobsRepository
+	cascadeVisitedRepo      *repo.CascadeVisitedRepository
 	lensesRepo              *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
 	realtime                *realtime.Publisher
 	taxonomyClassifier      *TaxonomyClassifier
@@ -374,6 +375,13 @@ func (e *ScoutEngine) WithSpendLedger(ledger *repo.HorizonSpendLedger) *ScoutEng
 	return e
 }
 
+// WithCascadeVisitedRepo wires cascade-level visited set storage (optional).
+// Used to prevent cycles / avalanche fanout inside a single cascade (especially supply_chain mode).
+func (e *ScoutEngine) WithCascadeVisitedRepo(r *repo.CascadeVisitedRepository) *ScoutEngine {
+	e.cascadeVisitedRepo = r
+	return e
+}
+
 func (e *ScoutEngine) WithBudgetPolicy(policy BudgetPolicy) *ScoutEngine {
 	e.budgetPolicy = policy
 	return e
@@ -457,6 +465,7 @@ func NewScoutEngine(
 		framesRepo:              framesRepo,
 		edgesRepo:               edgesRepo,
 		scoutingJobsRepo:        scoutingJobsRepo,
+		cascadeVisitedRepo:      nil,
 		realtime:                realtime,
 		taxonomyClassifier:      NewTaxonomyClassifier(aiExecutor),
 		aiExecutor:              aiExecutor,
@@ -760,6 +769,17 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if job.State != nil {
 		if v, ok := job.State["specialties"]; ok {
 			specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
+		}
+	}
+
+	// Supply chain context (optional): when supply_chain specialty is enabled, we pass
+	// already-discovered chain nodes/edges + gaps to the LLM to keep it focused and incremental.
+	chainContextForPrompt := ""
+	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) && job.State != nil {
+		if v, ok := job.State["chainContext"]; ok {
+			if cc, _ := ParseChainContext(v); cc != nil {
+				chainContextForPrompt = cc.ToPromptContext()
+			}
 		}
 	}
 
@@ -1353,7 +1373,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		e.logLine(ctx, job, "info", fmt.Sprintf("> taxonomy classified: entityPath=%s sectorPath=%s", entityPath, sectorPath))
 
-		scoutResult, err = e.scoutAgent.ExtractFragmentData(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath, specialties)
+		scoutResult, err = e.scoutAgent.ExtractFragmentData(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath, specialties, chainContextForPrompt)
 		if err != nil {
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "extraction_failed")
 			return fmt.Errorf("failed to extract fragment data: %w", err)
@@ -1366,7 +1386,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		e.logLine(ctx, job, "info", "> critic validating extracted data")
 
-		validationResult, err = e.criticAgent.Validate(ctx, extractedFragment, scoutResult.Relations, aggregatedContent, specialties)
+		validationResult, err = e.criticAgent.Validate(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, aggregatedContent, specialties)
 		if err != nil {
 			// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
 			fmt.Printf("Validation error: %v\n", err)
@@ -1477,7 +1497,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			"originalQueryLen":      len(originalQuery),
 			"decompositionHintsN":   len(decompositionHints),
 		})
-		enrichedFragment, newRelations, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, originalQuery, decompositionHints)
+		enrichedFragment, newRelations, newSupplyChains, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints)
 		if err == nil {
 			// Capture canonicalPath drift introduced by research (aliasing).
 			oldCP := ""
@@ -1494,6 +1514,12 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				fmt.Printf("[ScoutEngine] Research found %d new relations.\n", len(newRelations))
 				e.logLine(ctx, job, "info", fmt.Sprintf("> research found %d new relations", len(newRelations)))
 			}
+			// Append supply chains from research (if supply_chain mode enabled)
+			if len(newSupplyChains) > 0 {
+				scoutResult.SupplyChains = append(scoutResult.SupplyChains, newSupplyChains...)
+				fmt.Printf("[ScoutEngine] Research found %d new supply chains.\n", len(newSupplyChains))
+				e.logLine(ctx, job, "info", fmt.Sprintf("> research found %d new supply chains", len(newSupplyChains)))
+			}
 			// Обновляем LastVerifiedAt
 			extractedFragment.Metadata.LastVerifiedAt = time.Now()
 			trace.Log(ctx, "scout_research", "scout.research.ok", map[string]any{
@@ -1505,6 +1531,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				"fragmentCanonicalPathBefore": oldCP,
 				"fragmentCanonicalPathAfter":  newCP,
 				"newRelationsN":               len(newRelations),
+				"newSupplyChainsN":            len(newSupplyChains),
 				"relationsTopCanonicalPaths": func() []string {
 					out := make([]string, 0, len(newRelations))
 					for _, r := range newRelations {
@@ -1918,6 +1945,14 @@ SKIP_RESEARCH:
 		// Используем existingFragment, так как он содержит актуальный ID после сохранения
 		if err := e.processDiscoveredRelations(ctx, job, existingFragment, scoutResult.Relations); err != nil {
 			fmt.Printf("Decomposition failed: %v\n", err)
+		}
+	}
+
+	// SUPPLY CHAIN: Parse and persist supply chain fragments and edges
+	if len(scoutResult.SupplyChains) > 0 {
+		if err := e.processSupplyChains(ctx, job, existingFragment, scoutResult.SupplyChains); err != nil {
+			fmt.Printf("[ScoutEngine] Supply chain processing failed: %v\n", err)
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain processing failed: %v", err))
 		}
 	}
 

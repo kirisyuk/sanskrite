@@ -197,10 +197,31 @@ func (e *ScoutEngine) processRelationsInternal(
 	// - Normalize symmetric edges so A<->B is represented consistently.
 	seenEdgeKeys := map[string]struct{}{}
 
+	// Specialties (optional): used to enable/disable extra normalization rules safely.
+	// NOTE: We read specialties early so shouldRecurse can use them for supply_chain mode filtering.
+	specialties := []string(nil)
+	if job != nil && job.State != nil {
+		if v, ok := job.State["specialties"]; ok {
+			specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
+		}
+	}
+	isSupplyChainMode := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
+	isEquityMode := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity)
+	cascadeID := ""
+	if job != nil && job.State != nil {
+		if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
+			cascadeID = strings.TrimSpace(v)
+		}
+	}
+	if cascadeID == "" && job != nil {
+		cascadeID = strings.TrimSpace(job.ID)
+	}
+
 	// Relation-level guardrails:
 	// - Do not recurse on COMPETES_WITH (explodes breadth and is rarely needed for local intent).
 	// - Do not recurse on INFLUENCES (spheres and vague influences create huge expansions).
 	// - Require a moderate confidence for recursion to avoid "broad hallucinated" graphs.
+	// - In supply_chain mode: ONLY recurse on supply-chain relevant edge types.
 	shouldRecurse := func(relType string, conf float64, targetPath string, targetType models.FragmentType) bool {
 		rt := strings.TrimSpace(relType)
 		if rt == "" {
@@ -212,6 +233,36 @@ func (e *ScoutEngine) processRelationsInternal(
 		if strings.HasPrefix(strings.TrimSpace(targetPath), "/sphere/") || targetType == models.FragmentTypeSphere {
 			return false
 		}
+
+		// Supply chain mode: strict filtering to only follow supply-chain edges
+		if isSupplyChainMode {
+			switch rt {
+			case string(models.DependencyTypeSuppliesTo),
+				string(models.DependencyTypeDependsOn),
+				string(models.DependencyTypeProduces),
+				string(models.DependencyTypeConsumes),
+				string(models.DependencyTypeTransformsInto):
+				return true
+			default:
+				// In supply chain mode, skip non-supply-chain edges to stay focused
+				return false
+			}
+		}
+
+		// Equity mode: follow only ownership/control edges
+		if isEquityMode {
+			switch rt {
+			case string(models.DependencyTypeOwns),
+				string(models.DependencyTypeSubsidiaryOf),
+				string(models.DependencyTypeControls),
+				string(models.DependencyTypeInvestsIn):
+				return true
+			default:
+				return false
+			}
+		}
+
+		// General mode: exclude known noisy edge types
 		switch rt {
 		case string(models.DependencyTypeCompetesWith), string(models.DependencyTypeInfluences):
 			return false
@@ -220,10 +271,10 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 	}
 
-	// Specialties (optional): used to enable/disable extra normalization rules safely.
-	specialties := []string(nil)
+	// NOTE: specialties already read above for shouldRecurse filtering
 	if job != nil && job.State != nil {
-		if v, ok := job.State["specialties"]; ok {
+		// Skip duplicate read - already done above
+		if v, ok := job.State["specialties"]; ok && len(specialties) == 0 {
 			specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
 		}
 	}
@@ -459,6 +510,51 @@ func (e *ScoutEngine) processRelationsInternal(
 						continue // Skip to next relation
 					}
 
+					// Supply-chain cascade visited set: prevent enqueueing same targetPath multiple times inside this cascade.
+					// This is a guardrail against cycles/avalanche fanout; enabled only in supply_chain mode.
+					if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
+						already, vErr := e.cascadeVisitedRepo.TryMarkVisited(
+							ctx,
+							job.TenantID,
+							job.ProjectID,
+							cascadeID,
+							targetPath,
+							job.ID,
+							currentDepth+1,
+						)
+						if vErr != nil {
+							msg := fmt.Sprintf("[SupplyChainVisited] ERROR mark tenant=%s cascade=%s target=%s err=%v",
+								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), vErr)
+							fmt.Printf("%s\n", msg)
+							e.logLine(ctx, job, "warn", msg)
+						} else if already {
+							msg := fmt.Sprintf("[SupplyChainVisited] SKIP alreadyVisited tenant=%s cascade=%s target=%s depth=%d",
+								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), currentDepth+1)
+							fmt.Printf("%s\n", msg)
+							e.logLine(ctx, job, "info", msg)
+							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.skip", map[string]any{
+								"tenantId":  strings.TrimSpace(job.TenantID),
+								"projectId": strings.TrimSpace(job.ProjectID),
+								"lensId":    strings.TrimSpace(job.LensID),
+								"jobId":     strings.TrimSpace(job.ID),
+								"cascadeId": strings.TrimSpace(cascadeID),
+								"target":    strings.TrimSpace(targetPath),
+								"depth":     currentDepth + 1,
+							})
+							continue
+						} else {
+							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.mark", map[string]any{
+								"tenantId":  strings.TrimSpace(job.TenantID),
+								"projectId": strings.TrimSpace(job.ProjectID),
+								"lensId":    strings.TrimSpace(job.LensID),
+								"jobId":     strings.TrimSpace(job.ID),
+								"cascadeId": strings.TrimSpace(cascadeID),
+								"target":    strings.TrimSpace(targetPath),
+								"depth":     currentDepth + 1,
+							})
+						}
+					}
+
 					scheduledChildren[targetPath] = struct{}{}
 					scheduledCount++
 
@@ -510,6 +606,11 @@ func (e *ScoutEngine) processRelationsInternal(
 						if v, ok := job.State["specialties"]; ok {
 							childState["specialties"] = v
 						}
+						// Propagate supply chain context for continuous chain building.
+						// This includes discovered chain fragments so far, enabling agents to extend them.
+						if v, ok := job.State["chainContext"]; ok {
+							childState["chainContext"] = v
+						}
 						// Propagate intent steering signals so recursive scouting stays aligned with the Lens focus.
 						// These may be non-canonical, but are safe to pass through job state.
 						if v, ok := job.State["focus"]; ok {
@@ -548,8 +649,54 @@ func (e *ScoutEngine) processRelationsInternal(
 							ProjectID:   job.ProjectID,
 						},
 					}
+					// Supply-chain cascade visited set: prevent enqueueing same targetPath multiple times inside this cascade.
+					if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
+						already, vErr := e.cascadeVisitedRepo.TryMarkVisited(
+							ctx,
+							job.TenantID,
+							job.ProjectID,
+							cascadeID,
+							targetPath,
+							job.ID,
+							currentDepth+1,
+						)
+						if vErr != nil {
+							msg := fmt.Sprintf("[SupplyChainVisited] ERROR mark tenant=%s cascade=%s target=%s err=%v",
+								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), vErr)
+							fmt.Printf("%s\n", msg)
+							e.logLine(ctx, job, "warn", msg)
+						} else if already {
+							msg := fmt.Sprintf("[SupplyChainVisited] SKIP alreadyVisited tenant=%s cascade=%s target=%s depth=%d",
+								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), currentDepth+1)
+							fmt.Printf("%s\n", msg)
+							e.logLine(ctx, job, "info", msg)
+							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.skip", map[string]any{
+								"tenantId":  strings.TrimSpace(job.TenantID),
+								"projectId": strings.TrimSpace(job.ProjectID),
+								"lensId":    strings.TrimSpace(job.LensID),
+								"jobId":     strings.TrimSpace(job.ID),
+								"cascadeId": strings.TrimSpace(cascadeID),
+								"target":    strings.TrimSpace(targetPath),
+								"depth":     currentDepth + 1,
+							})
+							continue
+						}
+					}
+
 					if _, err := e.scoutingJobsRepo.Create(ctx, scoutingJob); err != nil {
 						fmt.Printf("Failed to create recursive job for %s: %v\n", targetPath, err)
+						// Best-effort: undo visited marker so quality isn't blocked by transient enqueue failures.
+						if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
+							_ = e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath)
+							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.unmark_on_create_fail", map[string]any{
+								"tenantId":  strings.TrimSpace(job.TenantID),
+								"projectId": strings.TrimSpace(job.ProjectID),
+								"lensId":    strings.TrimSpace(job.LensID),
+								"jobId":     strings.TrimSpace(job.ID),
+								"cascadeId": strings.TrimSpace(cascadeID),
+								"target":    strings.TrimSpace(targetPath),
+							})
+						}
 					} else {
 						fmt.Printf("Triggered recursive scouting for: %s\n", targetPath)
 					}
@@ -770,6 +917,19 @@ func (e *ScoutEngine) processRelationsInternal(
 					}
 					if _, err := e.scoutingJobsRepo.Create(ctx, scoutingJob); err == nil {
 						fmt.Printf("Triggered recursive scouting (existing fragment) for: %s\n", targetPath)
+					} else {
+						// Best-effort: undo visited marker so quality isn't blocked by transient enqueue failures.
+						if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
+							_ = e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath)
+							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.unmark_on_create_fail", map[string]any{
+								"tenantId":  strings.TrimSpace(job.TenantID),
+								"projectId": strings.TrimSpace(job.ProjectID),
+								"lensId":    strings.TrimSpace(job.LensID),
+								"jobId":     strings.TrimSpace(job.ID),
+								"cascadeId": strings.TrimSpace(cascadeID),
+								"target":    strings.TrimSpace(targetPath),
+							})
+						}
 					}
 				}
 			}
@@ -1077,4 +1237,733 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 	}
 
 	return sourceID, targetID, edgeType, changed
+}
+
+// processSupplyChains parses supply chain output from agents and persists fragments/edges.
+func (e *ScoutEngine) processSupplyChains(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	sourceFragment *models.HorizonFragment,
+	chains []agents.SupplyChain,
+) error {
+	if len(chains) == 0 {
+		return nil
+	}
+
+	parser := NewSupplyChainParser()
+	result, err := parser.ParseSupplyChains(chains, sourceFragment.CanonicalPath)
+	if err != nil {
+		msg := fmt.Sprintf("[SupplyChainParse] failed to parse supplyChains: %v", err)
+		fmt.Printf("%s\n", msg)
+		e.logLine(ctx, job, "warn", msg)
+		return fmt.Errorf("failed to parse supply chains: %w", err)
+	}
+
+	lensID := ""
+	if job.State != nil {
+		if v, ok := job.State["lensId"]; ok {
+			lensID, _ = v.(string)
+		}
+	}
+
+	{
+		msg := fmt.Sprintf("[SupplyChainParse] chains=%d nodes=%d edges=%d fragments=%d stats=%+v",
+			len(chains), result.Stats.NodesTotal, len(result.Edges), len(result.Fragments), result.Stats)
+		fmt.Printf("%s\n", msg)
+		e.logLine(ctx, job, "info", msg)
+		trace.Log(ctx, "SupplyChain", "SupplyChain.parse.ok", map[string]any{
+			"tenantId":        strings.TrimSpace(job.TenantID),
+			"projectId":       strings.TrimSpace(job.ProjectID),
+			"lensId":          lensID,
+			"jobId":           strings.TrimSpace(job.ID),
+			"target":          strings.TrimSpace(job.TargetCanonicalPath),
+			"chainsN":         len(chains),
+			"fragmentsN":      len(result.Fragments),
+			"edgesN":          len(result.Edges),
+			"parserStats":     result.Stats,
+			"chainContextLen": func() int { if job.State == nil { return 0 }; s, _ := job.State["chainContext"].(string); return len(s) }(),
+		})
+	}
+
+	// Map canonical path -> fragment ID for edge creation
+	pathToID := make(map[string]string)
+	if sourceFragment != nil && sourceFragment.ID != "" {
+		pathToID[sourceFragment.CanonicalPath] = sourceFragment.ID
+	}
+
+	// Persist fragments discovered in supply chains
+	createdFrags := 0
+	updatedFrags := 0
+	createErrors := 0
+	previewLimit := 20
+	for canonicalPath, frag := range result.Fragments {
+		// Skip the source fragment itself
+		if canonicalPath == sourceFragment.CanonicalPath {
+			continue
+		}
+
+		// IMPORTANT: Horizon fragments are global-scoped (except SUPPLY_LINK).
+		// If tenantId != global/empty, fragment.Validate() will fail and nothing will be created.
+		frag.TenantID = "global"
+		frag.Status = "active"
+		frag.Governance.Owner = "SYSTEM"
+		frag.Governance.Status = string(models.FragmentStatusActive)
+		// Keep LastVerifiedAt zero so freshness checks won't skip scouting for newly discovered nodes.
+		if frag.Metadata.CreatedAt.IsZero() {
+			frag.Metadata.CreatedAt = time.Now().UTC()
+		}
+		frag.Metadata.LastUpdatedAt = time.Now().UTC()
+		if frag.Metadata.EpistemicStatus == "" {
+			frag.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
+		}
+		if frag.Provenance.Method == "" {
+			frag.Provenance.Method = "scout_supply_chain"
+		}
+		if len(frag.Provenance.SourceIDs) == 0 && job != nil {
+			frag.Provenance.SourceIDs = []string{job.ID}
+		}
+
+		// Check if fragment already exists
+		existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
+		if err != nil {
+			// Create new fragment
+			frag.Metadata.CreatedAt = time.Now().UTC()
+			frag.Metadata.LastUpdatedAt = time.Now().UTC()
+			frag.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
+
+			id, createErr := e.fragmentsRepo.Create(ctx, frag)
+			if createErr != nil {
+				createErrors++
+				msg := fmt.Sprintf("[SupplyChainFragmentCreate] FAILED canonicalPath=%s err=%v", canonicalPath, createErr)
+				fmt.Printf("%s\n", msg)
+				e.logLine(ctx, job, "warn", msg)
+				continue
+			}
+			frag.ID = id
+			pathToID[canonicalPath] = id
+			createdFrags++
+			if createdFrags <= previewLimit {
+				msg := fmt.Sprintf("[SupplyChainFragmentCreate] OK canonicalPath=%s id=%s type=%s", canonicalPath, id, frag.Type)
+				e.logLine(ctx, job, "info", msg)
+			}
+		} else {
+			// Fragment exists, store ID for edge creation
+			pathToID[canonicalPath] = existing.ID
+
+			// Optionally update labels/identifiers if new info
+			if existing.Labels == nil {
+				existing.Labels = make(map[string]string)
+			}
+			if existing.Identifiers == nil {
+				existing.Identifiers = make(map[string]string)
+			}
+			updated := false
+			for k, v := range frag.Labels {
+				if existing.Labels[k] == "" && v != "" {
+					existing.Labels[k] = v
+					updated = true
+				}
+			}
+			for k, v := range frag.Identifiers {
+				if existing.Identifiers[k] == "" && v != "" {
+					existing.Identifiers[k] = v
+					updated = true
+				}
+			}
+			if updated {
+				existing.Metadata.LastUpdatedAt = time.Now().UTC()
+				if err := e.fragmentsRepo.Update(ctx, existing); err != nil {
+					msg := fmt.Sprintf("[SupplyChainFragmentUpdate] FAILED canonicalPath=%s id=%s err=%v", canonicalPath, existing.ID, err)
+					fmt.Printf("%s\n", msg)
+					e.logLine(ctx, job, "warn", msg)
+				} else {
+					updatedFrags++
+					if updatedFrags <= previewLimit {
+						msg := fmt.Sprintf("[SupplyChainFragmentUpdate] OK canonicalPath=%s id=%s", canonicalPath, existing.ID)
+						e.logLine(ctx, job, "info", msg)
+					}
+				}
+			}
+		}
+	}
+
+	// Create edges using fragment IDs
+	provenanceMethod := "scout_supply_chain"
+	createdEdges := 0
+	edgeDupes := 0
+	edgeCreateErrors := 0
+	edgeReversed := 0
+	edgePenalized := 0
+	edgePreviewLimit := 40
+	for _, chainEdge := range result.Edges {
+		sourceID := pathToID[chainEdge.SourceCanonicalPath]
+		targetID := pathToID[chainEdge.TargetCanonicalPath]
+
+		if sourceID == "" || targetID == "" {
+			// Try to look up missing IDs
+			if sourceID == "" {
+				if frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, chainEdge.SourceCanonicalPath); err == nil && frag != nil {
+					sourceID = frag.ID
+					pathToID[chainEdge.SourceCanonicalPath] = sourceID
+				}
+			}
+			if targetID == "" {
+				if frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, chainEdge.TargetCanonicalPath); err == nil && frag != nil {
+					targetID = frag.ID
+					pathToID[chainEdge.TargetCanonicalPath] = targetID
+				}
+			}
+			if sourceID == "" || targetID == "" {
+				msg := fmt.Sprintf("[SupplyChainEdge] SKIP missingFragmentId source=%s target=%s type=%s",
+					chainEdge.SourceCanonicalPath, chainEdge.TargetCanonicalPath, chainEdge.RelationType)
+				fmt.Printf("%s\n", msg)
+				e.logLine(ctx, job, "warn", msg)
+				continue
+			}
+		}
+
+		edgeType := models.DependencyType(chainEdge.RelationType)
+
+		// Policy: self-loop prevention
+		if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(targetID) == "" || IsSelfLoop(sourceID, targetID) {
+			continue
+		}
+
+		// Resolve endpoint types for policy validation (best-effort).
+		resolveTypeByCanonical := func(cp string) models.FragmentType {
+			cp = strings.TrimSpace(cp)
+			if cp == "" {
+				return ""
+			}
+			if sourceFragment != nil && strings.TrimSpace(sourceFragment.CanonicalPath) == cp {
+				return sourceFragment.Type
+			}
+			if e.fragmentsRepo != nil {
+				if f, ferr := e.fragmentsRepo.GetByCanonicalPath(ctx, cp); ferr == nil && f != nil {
+					return f.Type
+				}
+			}
+			return ""
+		}
+		srcTypeActual := resolveTypeByCanonical(chainEdge.SourceCanonicalPath)
+		dstTypeActual := resolveTypeByCanonical(chainEdge.TargetCanonicalPath)
+
+		// Policy: direction validation & reversal (best-effort, same behavior as processDiscoveredRelations).
+		edgeCriticality := normalizeEdgeConfidence(chainEdge.Confidence)
+		directionChanged := false
+		if e.validationPolicy != nil {
+			decision, derr := e.validationPolicy.Execute(ctx, policy.PolicyInput{
+				Kind: "edge",
+				Context: map[string]interface{}{
+					"validationKind":   "edge",
+					"sourceFragmentID": sourceID,
+					"targetFragmentID": targetID,
+					"sourceType":       string(srcTypeActual),
+					"targetType":       string(dstTypeActual),
+					"relationType":     string(edgeType),
+				},
+				Fragment: nil,
+			})
+			if derr == nil {
+				switch decision.Action {
+				case "reject":
+					// Non-blocking: apply penalty to criticality to de-prioritize doubtful edges.
+					edgeCriticality = edgeCriticality * 0.35
+					edgePenalized++
+					msg := fmt.Sprintf("[SupplyChainPolicy] PENALTY action=reject edge=%s -[%s]-> %s path=%s conf=%.3f->%.3f",
+						chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath, normalizeEdgeConfidence(chainEdge.Confidence), edgeCriticality)
+					e.logLine(ctx, job, "warn", msg)
+				case "reverse":
+					shouldReverse, _ := decision.Params["shouldReverse"].(bool)
+					if shouldReverse {
+						sourceID, targetID = targetID, sourceID
+						directionChanged = true
+						edgeReversed++
+						msg := fmt.Sprintf("[SupplyChainPolicy] REVERSE edge=%s -[%s]-> %s path=%s",
+							chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath)
+						e.logLine(ctx, job, "info", msg)
+					}
+				}
+			} else if derr != nil {
+				msg := fmt.Sprintf("[SupplyChainPolicy] ERROR validationPolicy err=%v", derr)
+				e.logLine(ctx, job, "warn", msg)
+			}
+		}
+
+		// Check for existing edge
+		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceID, targetID, edgeType); err == nil {
+			// Edge already exists, skip
+			edgeDupes++
+			continue
+		}
+
+		edge := &models.DependencyEdge{
+			TenantID:         "global",
+			SourceFragmentID: sourceID,
+			TargetFragmentID: targetID,
+			Type:             edgeType,
+			Properties: models.EdgeProperties{
+				Criticality:   edgeCriticality,
+				Amplification: 1.0,
+				LatencyHours:  24,
+			},
+			Qualifiers: map[string]interface{}{
+				"reason":              chainEdge.Reason,
+				"sourceCanonicalPath": chainEdge.SourceCanonicalPath,
+				"targetCanonicalPath": chainEdge.TargetCanonicalPath,
+				"rawConfidence":       chainEdge.Confidence,
+				"fromSupplyChain":     true,
+			},
+			Provenance: models.Provenance{
+				Method:    provenanceMethod,
+				SourceIDs: []string{job.ID},
+			},
+			Metadata: models.EdgeMetadata{
+				CreatedAt:     time.Now().UTC(),
+				LastUpdatedAt: time.Now().UTC(),
+			},
+		}
+		if directionChanged {
+			edge.Qualifiers["normalizedDirection"] = true
+			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
+		}
+
+		if id, createErr := e.edgesRepo.Create(ctx, edge); createErr != nil {
+			edgeCreateErrors++
+			msg := fmt.Sprintf("[SupplyChainEdgeCreate] FAILED %s -[%s]-> %s err=%v",
+				chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, createErr)
+			fmt.Printf("%s\n", msg)
+			e.logLine(ctx, job, "warn", msg)
+		} else {
+			edge.ID = id
+			createdEdges++
+			if createdEdges <= edgePreviewLimit {
+				e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainEdgeCreate] OK %s -[%s]-> %s id=%s crit=%.3f raw=%.3f",
+					chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, id, edge.Properties.Criticality, chainEdge.Confidence))
+			}
+
+			// Realtime event
+			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
+				"tenantId":         job.TenantID,
+				"projectId":        job.ProjectID,
+				"lensId":           lensID,
+				"edgeId":           edge.ID,
+				"sourceFragmentId": edge.SourceFragmentID,
+				"targetFragmentId": edge.TargetFragmentID,
+				"type":             string(edge.Type),
+				"properties":       edge.Properties,
+				"fromSupplyChain":  true,
+			})
+		}
+	}
+
+	// Update chain context in job state for propagation to child jobs
+	if job.State == nil {
+		job.State = make(map[string]interface{})
+	}
+	existingContext, _ := ParseChainContext(job.State["chainContext"])
+	existingContext.MergeFromParsedResult(result)
+
+	// Identify gaps: nodes that have only incoming or only outgoing edges
+	gapHints := e.identifyChainGaps(result, existingContext)
+	existingContext.GapHints = gapHints
+
+	if contextJSON, err := existingContext.ToJSON(); err == nil {
+		if job.State == nil {
+			job.State = make(map[string]interface{})
+		}
+		job.State["chainContext"] = contextJSON
+		// Update job state in repository
+		if e.scoutingJobsRepo != nil {
+			if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+				fmt.Printf("[ScoutEngine] Failed to update job chain context: %v\n", err)
+			}
+		}
+	}
+
+	// In supply_chain mode, schedule follow-up scout jobs based on supply chain nodes/gaps,
+	// not only on plain relations. This enables branching chain expansion even when LLM outputs
+	// most structure via supplyChains.
+	_ = e.scheduleSupplyChainChildJobs(ctx, job, sourceFragment, result, existingContext)
+
+	trace.Log(ctx, "scout_supply_chain", "scout.supply_chain.processed", map[string]any{
+		"tenantId":       strings.TrimSpace(job.TenantID),
+		"projectId":      strings.TrimSpace(job.ProjectID),
+		"lensId":         lensID,
+		"jobId":          strings.TrimSpace(job.ID),
+		"chainsCount":    len(chains),
+		"fragmentsCount": len(result.Fragments),
+		"edgesCount":     len(result.Edges),
+		"gapHintsCount":  len(gapHints),
+		"supplyChainLogSummary": map[string]any{
+			"createdFragments": createdFrags,
+			"updatedFragments": updatedFrags,
+			"fragmentErrors":   createErrors,
+			"createdEdges":     createdEdges,
+			"edgeDupes":        edgeDupes,
+			"edgeErrors":       edgeCreateErrors,
+			"edgeReversed":     edgeReversed,
+			"edgePenalized":    edgePenalized,
+		},
+	})
+	{
+		msg := fmt.Sprintf("[SupplyChainSummary] fragments(created=%d updated=%d err=%d) edges(created=%d dupes=%d err=%d reversed=%d penalized=%d) gaps=%d",
+			createdFrags, updatedFrags, createErrors, createdEdges, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, len(gapHints))
+		fmt.Printf("%s\n", msg)
+		e.logLine(ctx, job, "info", msg)
+	}
+
+	return nil
+}
+
+// scheduleSupplyChainChildJobs enqueues child scouting jobs for discovered supply chain nodes
+// (and especially gap nodes). This is supply_chain-only and does not affect general mode.
+func (e *ScoutEngine) scheduleSupplyChainChildJobs(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	sourceFragment *models.HorizonFragment,
+	result *ParsedChainResult,
+	context *ChainContext,
+) error {
+	if e == nil || job == nil || job.State == nil || e.scoutingJobsRepo == nil || e.fragmentsRepo == nil {
+		return nil
+	}
+
+	specialties := []string(nil)
+	if v, ok := job.State["specialties"]; ok {
+		specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
+	}
+	if !taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
+		return nil
+	}
+
+	// Depth guardrails
+	currentDepth := parseStateInt(job.State["recursionDepth"], 0)
+	maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
+	if maxDepth < 0 {
+		maxDepth = 0
+	}
+	if currentDepth >= maxDepth {
+		return nil
+	}
+
+	// Breadth guardrails (supply_chain is allowed to be wider by default).
+	maxChildren := 80
+	if v, ok := job.State["maxChildrenPerJob"]; ok {
+		maxChildren = parseStateInt(v, maxChildren)
+	}
+	if maxChildren < 0 {
+		maxChildren = 0
+	}
+	if maxChildren == 0 {
+		return nil
+	}
+
+	// Best-effort: prefetch active (pending/running) scout jobs for this project/lens
+	activeJobByPath := map[string]string{} // canonicalPath -> jobId
+	{
+		lensID := strings.TrimSpace(job.LensID)
+		if lensID == "" {
+			lensID = parseStateString(job.State["lensId"])
+		}
+		if jobs, err := e.scoutingJobsRepo.ListByProjectAndLens(ctx, job.TenantID, job.ProjectID, lensID, 300); err == nil {
+			for _, j := range jobs {
+				if j == nil {
+					continue
+				}
+				if j.Status != agentmodels.AgentJobStatusPending && j.Status != agentmodels.AgentJobStatusRunning {
+					continue
+				}
+				p := strings.TrimSpace(j.TargetCanonicalPath)
+				if p == "" {
+					continue
+				}
+				if _, ok := activeJobByPath[p]; !ok {
+					activeJobByPath[p] = j.ID
+				}
+			}
+		}
+	}
+
+	// Build candidate list:
+	// 1) newly seen nodes (this run)
+	// 2) gap nodes (missing upstream/downstream)
+	candidates := make([]string, 0, 64)
+	seen := map[string]struct{}{}
+	add := func(cp string) {
+		cp = strings.TrimSpace(cp)
+		if cp == "" {
+			return
+		}
+		if sourceFragment != nil && strings.TrimSpace(sourceFragment.CanonicalPath) == cp {
+			return
+		}
+		if _, ok := seen[cp]; ok {
+			return
+		}
+		seen[cp] = struct{}{}
+		candidates = append(candidates, cp)
+	}
+
+	if result != nil {
+		for cp := range result.Fragments {
+			add(cp)
+		}
+	}
+
+	// Gap nodes derived from context edges
+	if context != nil {
+		incoming := map[string]int{}
+		outgoing := map[string]int{}
+		for _, e2 := range context.DiscoveredEdges {
+			outgoing[strings.TrimSpace(e2.Source)]++
+			incoming[strings.TrimSpace(e2.Target)]++
+		}
+		for _, cp := range context.DiscoveredNodes {
+			cp = strings.TrimSpace(cp)
+			if cp == "" {
+				continue
+			}
+			isProduct := strings.HasPrefix(cp, "/product/")
+			isActor := strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/fac/")
+			// prioritize obvious open ends
+			if isProduct && (incoming[cp] == 0 || outgoing[cp] == 0) {
+				add(cp)
+			}
+			if isActor && (incoming[cp] == 0 || outgoing[cp] == 0) {
+				add(cp)
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		msg := "[SupplyChainSchedule] no candidates"
+		e.logLine(ctx, job, "info", msg)
+		return nil
+	}
+
+	scheduled := 0
+	scheduledChildren := map[string]struct{}{}
+	skippedActive := 0
+	skippedMissingFrag := 0
+	skippedVerified := 0
+	skippedDup := 0
+	skippedVisited := 0
+
+	cascadeID := ""
+	if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
+		cascadeID = strings.TrimSpace(v)
+	}
+	if cascadeID == "" {
+		cascadeID = strings.TrimSpace(job.ID)
+	}
+	for _, targetPath := range candidates {
+		if scheduled >= maxChildren {
+			break
+		}
+		if _, ok := scheduledChildren[targetPath]; ok {
+			skippedDup++
+			continue
+		}
+		if existingJobID, ok := activeJobByPath[targetPath]; ok && strings.TrimSpace(existingJobID) != "" {
+			skippedActive++
+			continue
+		}
+
+		frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, targetPath)
+		if err != nil || frag == nil {
+			// If the fragment isn't there for some reason, skip; supplyChains materialization should have created it.
+			skippedMissingFrag++
+			continue
+		}
+
+		// Skip if already verified (consistent with relation-driven recursion)
+		shouldScout := frag.Metadata.LastVerifiedAt.IsZero() || frag.Metadata.EpistemicStatus == models.EpistemicStatusLowConfidence
+		if !shouldScout {
+			skippedVerified++
+			continue
+		}
+
+		// Cascade visited set: enqueue-once-per-canonicalPath inside this cascade.
+		// Best-effort delete on enqueue failure to avoid harming quality.
+		if e.cascadeVisitedRepo != nil {
+			already, vErr := e.cascadeVisitedRepo.TryMarkVisited(ctx, job.TenantID, job.ProjectID, cascadeID, targetPath, job.ID, currentDepth+1)
+			if vErr != nil {
+				msg := fmt.Sprintf("[SupplyChainVisited] ERROR mark tenant=%s cascade=%s target=%s err=%v",
+					strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), vErr)
+				fmt.Printf("%s\n", msg)
+				e.logLine(ctx, job, "warn", msg)
+			} else if already {
+				skippedVisited++
+				msg := fmt.Sprintf("[SupplyChainVisited] SKIP alreadyVisited tenant=%s cascade=%s target=%s depth=%d",
+					strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), currentDepth+1)
+				e.logLine(ctx, job, "info", msg)
+				continue
+			}
+		}
+
+		scheduledChildren[targetPath] = struct{}{}
+		scheduled++
+
+		agentID := job.AgentID
+		if agentID == "" {
+			agentID = "scout"
+		}
+		now := time.Now().UTC()
+		childState := map[string]interface{}{
+			"targetCanonicalPath": targetPath,
+			"currentState":        string(models.ScoutingJobStatePending),
+			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+			"recursionDepth":      float64(currentDepth + 1),
+			"maxRecursionDepth":   float64(maxDepth),
+			"parentJobId":         job.ID,
+		}
+		// Propagate lens id
+		if strings.TrimSpace(job.LensID) != "" {
+			childState["lensId"] = strings.TrimSpace(job.LensID)
+		} else if v := parseStateString(job.State["lensId"]); v != "" {
+			childState["lensId"] = v
+		}
+		// Propagate breadth cap
+		childState["maxChildrenPerJob"] = float64(maxChildren)
+		// Propagate cascade root id for budget attribution
+		if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
+			childState["cascadeRootJobId"] = strings.TrimSpace(v)
+		} else {
+			childState["cascadeRootJobId"] = job.ID
+		}
+		// Pass through steering signals
+		if rm, ok := job.State["requestedMetrics"]; ok {
+			childState["requestedMetrics"] = rm
+		}
+		if v, ok := job.State["specialties"]; ok {
+			childState["specialties"] = v
+		}
+		if v, ok := job.State["chainContext"]; ok {
+			childState["chainContext"] = v
+		}
+		if v, ok := job.State["focus"]; ok {
+			childState["focus"] = v
+		}
+		if v, ok := job.State["keywords"]; ok {
+			childState["keywords"] = v
+		}
+		if v, ok := job.State["spherePaths"]; ok {
+			childState["spherePaths"] = v
+		}
+		if v, ok := job.State["originalQuery"]; ok {
+			childState["originalQuery"] = v
+		}
+		if v, ok := job.State["decompositionHints"]; ok {
+			childState["decompositionHints"] = v
+		}
+
+		scoutingJob := &models.ScoutingJob{
+			AgentJob: agentmodels.AgentJob{
+				TenantID:  job.TenantID,
+				ProjectID: job.ProjectID,
+				Status:    agentmodels.AgentJobStatusPending,
+				AgentID:   agentID,
+				CreatedAt: now,
+				UpdatedAt: now,
+				State:     childState,
+			},
+			LensID:              strings.TrimSpace(job.LensID),
+			TargetCanonicalPath: targetPath,
+			ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
+			BillingContext: models.BillingContext{
+				ChargeModel: string(models.ChargeModelBounty),
+				ProjectID:   job.ProjectID,
+			},
+			CurrentState: models.ScoutingJobStatePending,
+		}
+		if _, err := e.scoutingJobsRepo.Create(ctx, scoutingJob); err != nil {
+			// Undo visited marker on enqueue failure.
+			if e.cascadeVisitedRepo != nil {
+				_ = e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath)
+				trace.Log(ctx, "SupplyChain", "SupplyChain.visited.unmark_on_create_fail", map[string]any{
+					"tenantId":  strings.TrimSpace(job.TenantID),
+					"projectId": strings.TrimSpace(job.ProjectID),
+					"lensId":    strings.TrimSpace(job.LensID),
+					"jobId":     strings.TrimSpace(job.ID),
+					"cascadeId": strings.TrimSpace(cascadeID),
+					"target":    strings.TrimSpace(targetPath),
+				})
+			}
+		}
+	}
+
+	if scheduled > 0 {
+		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=%d candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d) depth=%d/%d cap=%d",
+			scheduled, len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, currentDepth, maxDepth, maxChildren)
+		fmt.Printf("%s\n", msg)
+		e.logLine(ctx, job, "info", msg)
+		trace.Log(ctx, "SupplyChain", "SupplyChain.schedule.children", map[string]any{
+			"tenantId":        strings.TrimSpace(job.TenantID),
+			"projectId":       strings.TrimSpace(job.ProjectID),
+			"lensId":          strings.TrimSpace(job.LensID),
+			"jobId":           strings.TrimSpace(job.ID),
+			"candidatesN":     len(candidates),
+			"enqueuedN":       scheduled,
+			"skippedActiveN":  skippedActive,
+			"skippedVerifiedN": skippedVerified,
+			"skippedMissingN": skippedMissingFrag,
+			"skippedDupN":     skippedDup,
+			"skippedVisitedN": skippedVisited,
+			"depth":           currentDepth,
+			"maxDepth":        maxDepth,
+			"cap":             maxChildren,
+		})
+	} else {
+		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=0 candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d) depth=%d/%d cap=%d",
+			len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, currentDepth, maxDepth, maxChildren)
+		fmt.Printf("%s\n", msg)
+		e.logLine(ctx, job, "info", msg)
+	}
+	return nil
+}
+
+// identifyChainGaps finds gaps in the supply chain that should be filled.
+func (e *ScoutEngine) identifyChainGaps(result *ParsedChainResult, context *ChainContext) []string {
+	hints := make([]string, 0)
+
+	// Build edge maps to identify nodes with missing upstream/downstream
+	incomingCount := make(map[string]int)
+	outgoingCount := make(map[string]int)
+
+	for _, edge := range context.DiscoveredEdges {
+		outgoingCount[edge.Source]++
+		incomingCount[edge.Target]++
+	}
+
+	// Find nodes that might need more connections
+	for _, node := range context.DiscoveredNodes {
+		isProduct := strings.HasPrefix(node, "/product/")
+		isActor := strings.HasPrefix(node, "/org/") || strings.HasPrefix(node, "/fac/")
+
+		if isProduct {
+			// Products should have both incoming (producer) and outgoing (consumer) edges
+			if incomingCount[node] == 0 {
+				hints = append(hints, fmt.Sprintf("Who produces %s? Find upstream supplier.", node))
+			}
+			if outgoingCount[node] == 0 {
+				hints = append(hints, fmt.Sprintf("Who consumes %s? Find downstream customer.", node))
+			}
+		} else if isActor {
+			// Actors at chain ends might need extension
+			if incomingCount[node] == 0 && outgoingCount[node] > 0 {
+				hints = append(hints, fmt.Sprintf("Who supplies to %s? Find upstream supplier.", node))
+			}
+			if outgoingCount[node] == 0 && incomingCount[node] > 0 {
+				hints = append(hints, fmt.Sprintf("Who does %s supply to? Find downstream customer.", node))
+			}
+		}
+	}
+
+	// Limit hints to avoid prompt bloat
+	if len(hints) > 5 {
+		hints = hints[:5]
+	}
+
+	return hints
 }

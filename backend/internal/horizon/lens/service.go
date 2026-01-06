@@ -632,6 +632,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			if len(specialties) > 0 {
 				state["specialties"] = specialties
 			}
+			// Supply chain mode needs higher breadth to build branching chains.
+			// Keep general behavior unchanged by only setting this when supply_chain specialty is enabled.
+			if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
+				state["maxChildrenPerJob"] = 80.0
+			}
 			// Pass through originalQuery and decompositionHints for MARKET-aware research.
 			if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
 				state["originalQuery"] = strings.TrimSpace(oq)

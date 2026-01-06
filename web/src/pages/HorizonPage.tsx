@@ -331,6 +331,7 @@ const HorizonPage: React.FC = () => {
           query: q,
           maxRecursionDepth: request.filters?.maxRecursionDepth ?? 1,
           prefetchScope: prefetchScope.length > 0 ? prefetchScope : undefined,
+          specialties: request.filters?.specialties,
         },
         { correlationId, sessionId }
       );

@@ -2506,9 +2506,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     nodeList: Node<HorizonNodeData>[]
   ): Edge[] => {
     const nodeMap = new Map<string, Node<HorizonNodeData>>();
+    const groupMap = new Map<string, Node<HorizonNodeData>>();
     for (const n of nodeList) {
       const d: any = n.data;
-      if (d?.isGroup) continue;
+      if (d?.isGroup) {
+        groupMap.set(String(n.id || '').trim(), n);
+        continue;
+      }
       nodeMap.set(n.id, n);
       if (d?.fragmentId) nodeMap.set(String(d.fragmentId), n);
     }
@@ -2520,7 +2524,112 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return Boolean(pid);
     };
 
-    return edgeList.map((e) => {
+    const normalizedEdgeTypeOf = (e: any): string => {
+      const raw = (e as any)?.data?.edgeType || (e as any)?.data?.subkind || (e as any)?.label || (e as any)?.type || '';
+      return String(raw || '').toUpperCase().trim() || 'OTHER';
+    };
+
+    const normalizeTypeKey = (t: any) => String(t || '').toUpperCase().trim().replace(/\s+/g, '_') || 'UNKNOWN';
+
+    // === Levels Two-Pane aggregation:
+    // If we have left group containers (levels:left:*), collapse per-child edges (parent<->child)
+    // into one edge per EDGE TYPE handle (show all relation types).
+    const aggEdges: Edge[] = [];
+    const perChildEdgeIdsToAggKey = new Map<string, string>(); // edgeId -> aggKey (used for hover reveal)
+
+    // Build child lookup by groupId (only current nodes).
+    const childrenByGroupId = new Map<string, Node<HorizonNodeData>[]>();
+    for (const n of nodeList) {
+      const d: any = n.data;
+      if (d?.isGroup) continue;
+      const pid = String((n as any).parentId || (n as any).parentNode || '').trim();
+      if (!pid) continue;
+      const arr = childrenByGroupId.get(pid) || [];
+      arr.push(n);
+      childrenByGroupId.set(pid, arr);
+    }
+
+    for (const [gid, gnode] of groupMap.entries()) {
+      // Only target the Levels Two-Pane left blocks (created by layoutLevelsTwoPane).
+      if (!gid.startsWith('levels:left:')) continue;
+      const gd: any = gnode.data;
+      const parentId = String(gd?.groupParentId || '').trim();
+      if (!parentId) continue;
+      const ports = (gd?.groupEdgePorts as any[]) || [];
+      const edgeTypesFallback = Array.isArray(gd?.groupEdgeTypes) ? (gd.groupEdgeTypes as any[]) : [];
+      const portList =
+        Array.isArray(ports) && ports.length > 0
+          ? ports
+          : edgeTypesFallback.map((et: any) => ({
+              edgeType: normalizeEdgeType(et),
+              targetHandleId: `edge:${normalizeEdgeType(et)}:target`,
+              sourceHandleId: `edge:${normalizeEdgeType(et)}:source`,
+            }));
+      if (!Array.isArray(portList) || portList.length === 0) continue;
+
+      const kids = childrenByGroupId.get(gid) || [];
+      if (kids.length === 0) continue;
+      const childIds = new Set(kids.map((n) => String(n.id || '').trim()).filter(Boolean));
+      for (const p of portList) {
+        const edgeType = normalizedEdgeTypeOf({ data: { edgeType: p?.edgeType } } as any);
+        const targetHandleId = String(p?.targetHandleId || `edge:${edgeType}:target`).trim();
+        const sourceHandleId = String(p?.sourceHandleId || `edge:${edgeType}:source`).trim();
+
+        const candidates: Edge[] = [];
+        let parentAsSource = 0;
+        let parentAsTarget = 0;
+        for (const e of edgeList) {
+          const eidRaw = String((e as any)?.id || '').trim();
+          if (eidRaw.startsWith('levels:agg:')) continue;
+          if (Boolean((e as any)?.data?.levelsAgg)) continue;
+          const s = String((e as any)?.source || '').trim();
+          const t = String((e as any)?.target || '').trim();
+          if (!s || !t) continue;
+          const isPC =
+            (s === parentId && childIds.has(t)) ||
+            (t === parentId && childIds.has(s));
+          if (!isPC) continue;
+          const et = normalizedEdgeTypeOf(e);
+          if (et !== edgeType) continue;
+          candidates.push(e);
+          if (s === parentId) parentAsSource += 1;
+          else if (t === parentId) parentAsTarget += 1;
+        }
+        if (candidates.length === 0) continue;
+
+        const aggKey = `${gid}::edge:${edgeType}`;
+        for (const ce of candidates) {
+          const eid = String((ce as any)?.id || '').trim();
+          if (eid) perChildEdgeIdsToAggKey.set(eid, aggKey);
+        }
+
+        const parentToGroup = parentAsSource >= parentAsTarget;
+        const id = `levels:agg:${gid}:edge:${edgeType}`;
+        const baseStyle = getEdgeStyle(edgeType, undefined);
+        aggEdges.push({
+          id,
+          source: parentToGroup ? parentId : gid,
+          target: parentToGroup ? gid : parentId,
+          ...(parentToGroup
+            ? { sourceHandle: 'source-left', targetHandle: targetHandleId }
+            : { sourceHandle: sourceHandleId, targetHandle: 'target-left' }),
+          type: 'hzn',
+          style: baseStyle,
+          data: {
+            edgeType,
+            edgeCaption: getEdgeCaptionShort(edgeType),
+            baseStyle,
+            levelsAgg: true,
+            levelsAggKey: aggKey,
+            levelsAggEdgeType: edgeType,
+            levelsAggGroupId: gid,
+            levelsAggDirection: parentToGroup ? 'parent_to_group' : 'group_to_parent',
+          } as any,
+        } as any);
+      }
+    }
+
+    const mapped = edgeList.map((e) => {
       const sourceNode = nodeMap.get(e.source);
       const targetNode = nodeMap.get(e.target);
       if (!sourceNode || !targetNode) return e;
@@ -2541,10 +2650,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // If an edge connects a right-node to a group-child, it must enter/exit the right-node from the LEFT side
       // and the group-child from the RIGHT side (groups are on the left).
       if (!sGrouped && tGrouped) {
-        return { ...e, sourceHandle: 'source-left', targetHandle: 'target-right' };
+        const eid = String((e as any)?.id || '').trim();
+        const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
+        const d0: any = (e as any)?.data || {};
+        const d = aggKey
+          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey }
+          : d0;
+        return { ...e, data: d, sourceHandle: 'source-left', targetHandle: 'target-right' };
       }
       if (sGrouped && !tGrouped) {
-        return { ...e, sourceHandle: 'source-right', targetHandle: 'target-left' };
+        const eid = String((e as any)?.id || '').trim();
+        const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
+        const d0: any = (e as any)?.data || {};
+        const d = aggKey
+          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey }
+          : d0;
+        return { ...e, data: d, sourceHandle: 'source-right', targetHandle: 'target-left' };
       }
 
       // Group nodes: always right side
@@ -2566,6 +2687,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       return { ...e, sourceHandle, targetHandle };
     });
+
+    // Append aggregated edges (stable) after mapping.
+    // Deduplicate by id just in case upstream edges already contain a matching id.
+    const seen = new Set<string>(mapped.map((e) => String((e as any)?.id || '').trim()).filter(Boolean));
+    const appended = aggEdges.filter((e) => {
+      const id = String((e as any)?.id || '').trim();
+      if (!id) return false;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    return [...mapped, ...appended];
   }, []);
 
   /**
@@ -4347,7 +4480,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           const newData = { ...n.data } as any;
           newData.expanded = true;
           newData.collapsed = false;
-          // Detach from the group container (the Two-Pane layout will re-place it in the right column)
           return {
             ...n,
             parentId: undefined,
@@ -5256,6 +5388,36 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // just return filtered edges.
     if (perfMode) return baseVisibleEdges;
 
+    // Levels Two-Pane aggregation:
+    // - hide per-child edges by default (they exist for hover reveal)
+    // - show per-child edges incident to hovered node
+    // - hide the aggregated edge for the hovered node's bucket to reduce clutter
+    let edgesForDisplay: Edge[] = baseVisibleEdges;
+    if (isLevelsLayout) {
+      const hovered = String(hoveredNodeId || '').trim();
+      const aggKeysToSuppress = new Set<string>();
+      edgesForDisplay = baseVisibleEdges.map((e) => {
+        const d: any = (e as any)?.data || {};
+        if (d.levelsHiddenByAggregation) {
+          const isIncident = hovered && (e.source === hovered || e.target === hovered);
+          if (!isIncident) return { ...(e as any), hidden: true } as any;
+          const k = String(d.levelsAggKey || '').trim();
+          if (k) aggKeysToSuppress.add(k);
+          return { ...(e as any), hidden: false } as any;
+        }
+        return e;
+      });
+      if (hovered && aggKeysToSuppress.size > 0) {
+        edgesForDisplay = edgesForDisplay.map((e) => {
+          const d: any = (e as any)?.data || {};
+          if (!d.levelsAgg) return e;
+          const k = String(d.levelsAggKey || '').trim();
+          if (k && aggKeysToSuppress.has(k)) return { ...(e as any), hidden: true } as any;
+          return e;
+        });
+      }
+    }
+
     const baseStyled = (e: Edge) => {
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
       const edgeTypeRaw = (e as any)?.data?.edgeType || (e as any)?.data?.subkind || e.label;
@@ -5280,7 +5442,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Edge hover: show only this edge's label
     if (hoveredEdgeId) {
-      const out = baseVisibleEdges.map((e) => {
+      const out = edgesForDisplay.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isHovered = e.id === hoveredEdgeId;
         if (isHovered) {
@@ -5304,7 +5466,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const groupNode = nodes.find((n) => n.id === hoveredGroupId);
       const gd: any = groupNode?.data;
       if (!groupNode || !gd?.isGroup) {
-        return baseVisibleEdges.map((e) => {
+        return edgesForDisplay.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
         });
@@ -5326,7 +5488,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           .map((n) => n.id),
       );
       if (!groupParentId || childIds.size === 0) {
-        return baseVisibleEdges.map((e) => {
+        return edgesForDisplay.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
         });
@@ -5352,7 +5514,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return e.target === groupParentId && childIds.has(e.source);
       };
 
-      const out = baseVisibleEdges.map((e) => {
+      const out = edgesForDisplay.map((e) => {
         const { baseStyle } = baseStyled(e);
         if (isGroupEdge(e)) {
           const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
@@ -5376,7 +5538,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const CONTROL_NON_EQUITY_TYPES = new Set<string>(['CONTROLS', 'MANAGES']);
       const CONTROL_GOVERNANCE_TYPES = new Set<string>(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY', 'FOUNDED']);
       const isControlLike = hoverHighlightMode === 'control' || hoverHighlightMode === 'expansion';
-      const out = baseVisibleEdges.map((e) => {
+      const out = edgesForDisplay.map((e) => {
         const { baseStyle } = baseStyled(e);
         const eid = String((e as any)?.id || '').trim();
         const isHiEdge = eid && hiEdgeIds.has(eid);
@@ -5413,7 +5575,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Node hover: highlight incident edges and show their labels
     if (hoveredNodeId) {
       const nodeId = hoveredNodeId;
-      const out = baseVisibleEdges.map((e) => {
+      const out = edgesForDisplay.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
@@ -5434,7 +5596,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Selected node (when not hovering): highlight incident edges, show labels
     if (selectedNodeId) {
       const nodeId = selectedNodeId;
-      const out = baseVisibleEdges.map((e) => {
+      const out = edgesForDisplay.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
         if (isIncident) {
@@ -5453,8 +5615,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     // Default: dim all edges, hide labels
-    return baseVisibleEdges;
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort]);
+    return edgesForDisplay;
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.

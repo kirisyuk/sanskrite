@@ -1614,6 +1614,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       maxRecursionDepth?: number;
       requestedMetrics?: string[];
       prefetchScope?: string[];
+      specialties?: string[];
       status?: string;
     },
     options?: { correlationId?: string; sessionId?: string }

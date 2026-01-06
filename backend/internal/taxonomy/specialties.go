@@ -10,9 +10,13 @@ import (
 // Canonical specialty names (stable API):
 // - "management": executive leadership / board / founders (people "above" the org)
 // - "products_and_services": products/services the org produces/offers + inputs it consumes (and product->product transforms when scouting products)
+// - "supply_chain": build complete supply chains as ordered node sequences (supplier → product → customer → ...)
+// - "equity": ownership/control relationships (who owns/controls whom)
 const (
 	SpecialtyManagement          = "management"
 	SpecialtyProductsAndServices = "products_and_services"
+	SpecialtySupplyChain         = "supply_chain"
+	SpecialtyEquity              = "equity"
 )
 
 var specialtySynonyms = map[string]string{
@@ -40,6 +44,30 @@ var specialtySynonyms = map[string]string{
 	"productio":             SpecialtyProductsAndServices,
 	"outputs":               SpecialtyProductsAndServices,
 	"inputs_outputs":        SpecialtyProductsAndServices,
+
+	// supply chain
+	"supply_chain":  SpecialtySupplyChain,
+	"supply-chain":  SpecialtySupplyChain,
+	"supplychain":   SpecialtySupplyChain,
+	"scm":           SpecialtySupplyChain,
+	"value_chain":   SpecialtySupplyChain,
+	"value-chain":   SpecialtySupplyChain,
+	"valuechain":    SpecialtySupplyChain,
+	"procurement":   SpecialtySupplyChain,
+	"sourcing":      SpecialtySupplyChain,
+	"suppliers":     SpecialtySupplyChain,
+	"supply":        SpecialtySupplyChain,
+
+	// equity / ownership
+	"equity":              SpecialtyEquity,
+	"ownership":           SpecialtyEquity,
+	"owners":              SpecialtyEquity,
+	"shareholders":        SpecialtyEquity,
+	"shareholder":         SpecialtyEquity,
+	"corporate_structure": SpecialtyEquity,
+	"corp_structure":      SpecialtyEquity,
+	"control":             SpecialtyEquity,
+	"controls":            SpecialtyEquity,
 }
 
 // NormalizeSpecialties takes a user-provided list and returns a deduplicated list of canonical specialties.
@@ -68,7 +96,7 @@ func NormalizeSpecialties(in []string) []string {
 			s = canon
 		}
 		switch s {
-		case SpecialtyManagement, SpecialtyProductsAndServices:
+		case SpecialtyManagement, SpecialtyProductsAndServices, SpecialtySupplyChain, SpecialtyEquity:
 			// ok
 		default:
 			return

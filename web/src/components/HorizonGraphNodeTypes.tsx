@@ -641,6 +641,18 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
   const ring = selected ? (theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.20)') : undefined;
 
+  // Optional: intra-group subsections (used by Levels Two-Pane left groups to separate children by fragment type).
+  const typeBlocks = (data as any)?.groupTypeBlocks as
+    | Array<{ typeKey: string; label: string; startX: number; dividerX?: number; blockW?: number }>
+    | undefined;
+  const showTypeBlocks = Array.isArray(typeBlocks) && typeBlocks.length > 1;
+
+  // Levels Two-Pane: ports for aggregated edges (one per edge type).
+  const edgePorts = (data as any)?.groupEdgePorts as
+    | Array<{ edgeType: string; targetHandleId: string; sourceHandleId: string; y: number }>
+    | undefined;
+  const showEdgePorts = Array.isArray(edgePorts) && edgePorts.length > 0;
+
   const semanticFallback: Record<SemanticGroup, string> = {
     'supply-chain': 'Supply Chain',
     'customers': 'Customers & Outputs',
@@ -732,6 +744,105 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         cursor: interactive ? 'grab' : 'default',
       }}
     >
+      {/* Optional: Type subsections (visual separators + labels). Keep pointerEvents off. */}
+      {showTypeBlocks && (
+        <>
+          {typeBlocks!.map((b, idx) => {
+            if (typeof b?.dividerX !== 'number') return null;
+            return (
+              <div
+                key={`type-divider-${idx}`}
+                style={{
+                  position: 'absolute',
+                  left: b.dividerX,
+                  top: 6,
+                  bottom: 6,
+                  width: 1,
+                  borderLeft: `1px dashed ${border}`,
+                  opacity: theme === 'dark' ? 0.28 : 0.22,
+                  pointerEvents: 'none',
+                }}
+              />
+            );
+          })}
+          {typeBlocks!.map((b, idx) => {
+            const left = typeof b?.startX === 'number' ? b.startX : 12;
+            const maxWidth = typeof b?.blockW === 'number' ? b.blockW : 240;
+            return (
+              <div
+                key={`type-label-${idx}`}
+                style={{
+                  position: 'absolute',
+                  left,
+                  top: 4,
+                  maxWidth,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: subtitleColor,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.3px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  pointerEvents: 'none',
+                }}
+                title={String(b?.label || b?.typeKey || '')}
+              >
+                {String(b?.label || b?.typeKey || '')}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* Aggregation ports (edge types): always on the RIGHT edge, spaced vertically. */}
+      {showEdgePorts && (
+        <>
+          {edgePorts!.map((p, idx) => {
+            const y = typeof p?.y === 'number' ? p.y : undefined;
+            if (typeof y !== 'number') return null;
+            const targetId = String(p?.targetHandleId || '').trim() || `edge:${String(p?.edgeType || 'OTHER').trim()}:target`;
+            const sourceId = String(p?.sourceHandleId || '').trim() || `edge:${String(p?.edgeType || 'OTHER').trim()}:source`;
+            return (
+              <React.Fragment key={`edge-port-${idx}-${targetId}-${sourceId}`}>
+                <Handle
+                  id={targetId}
+                  type="target"
+                  position={Position.Right}
+                  className="hzn-handle"
+                  style={{
+                    background: border,
+                    width: '10px',
+                    height: '10px',
+                    border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
+                    right: '-5px',
+                    top: `${y}px`,
+                    opacity: 0.85,
+                    pointerEvents: 'none',
+                  }}
+                />
+                <Handle
+                  id={sourceId}
+                  type="source"
+                  position={Position.Right}
+                  className="hzn-handle"
+                  style={{
+                    background: border,
+                    width: '10px',
+                    height: '10px',
+                    border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
+                    right: '-5px',
+                    top: `${y}px`,
+                    opacity: 0, // hidden but present for correct directionality
+                    pointerEvents: 'none',
+                  }}
+                />
+              </React.Fragment>
+            );
+          })}
+        </>
+      )}
+
       {/* Header (optional) */}
       {!hideHeader && (
         <div

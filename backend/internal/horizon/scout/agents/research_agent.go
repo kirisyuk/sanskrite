@@ -23,13 +23,15 @@ func NewResearchAgent(executor *ai.AITaskExecutor) *ResearchAgent {
 
 // Internal struct to parse Research result
 type researchResult struct {
-	Fragment  map[string]interface{} `json:"fragment,omitempty"`
-	Relations []DiscoveredRelation   `json:"relations,omitempty"`
+	Fragment     map[string]interface{} `json:"fragment,omitempty"`
+	Relations    []DiscoveredRelation   `json:"relations,omitempty"`
+	SupplyChains []SupplyChain          `json:"supplyChains,omitempty"`
 }
 
 // EnrichFragment обогащает HorizonFragment и находит новые связи.
 // focus/spherePaths/keywords are optional steering signals for grounded search (they may be non-canonical).
 // originalQuery and decompositionHints are additional context for MARKET-aware research.
+// Returns: enriched fragment, discovered relations, discovered supply chains (if supply_chain mode), error
 func (a *ResearchAgent) EnrichFragment(
 	ctx context.Context,
 	fragment *models.HorizonFragment,
@@ -38,14 +40,15 @@ func (a *ResearchAgent) EnrichFragment(
 	spherePaths []string,
 	keywords []string,
 	specialties []string,
+	chainContext string,
 	originalQuery string,
 	decompositionHints []DecompositionHint,
-) (*models.HorizonFragment, []DiscoveredRelation, error) {
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, error) {
 	if len(missingInfo) == 0 {
-		return fragment, nil, nil
+		return fragment, nil, nil, nil
 	}
 
-	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, originalQuery, decompositionHints)
+	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -66,13 +69,13 @@ func (a *ResearchAgent) EnrichFragment(
 
 	result, err := a.executor.ExecuteStructuredTask(ctx, task)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
 	}
 
 	// Преобразуем результат
 	jsonData, err := json.Marshal(result)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal research result: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to marshal research result: %w", err)
 	}
 	fmt.Printf("[ResearchAgent] Raw Result: %s\n", jsonData)
 
@@ -83,9 +86,9 @@ func (a *ResearchAgent) EnrichFragment(
 		if err2 := json.Unmarshal(jsonData, &partialFrag); err2 == nil {
 			// Merge only fragment, no relations
 			a.mergeFragment(fragment, &partialFrag)
-			return fragment, nil, nil
+			return fragment, nil, nil, nil
 		}
-		return nil, nil, fmt.Errorf("failed to unmarshal enriched result: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to unmarshal enriched result: %w", err)
 	}
 
 	// Merge Fragment
@@ -97,7 +100,7 @@ func (a *ResearchAgent) EnrichFragment(
 		}
 	}
 
-	return fragment, res.Relations, nil
+	return fragment, res.Relations, res.SupplyChains, nil
 }
 
 // mergeFragment merges partial data into the main fragment
@@ -162,7 +165,7 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 }
 
 // buildEnrichmentPrompt строит промпт для дообогащения фрагмента
-func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string, specialties []string, originalQuery string, decompositionHints []DecompositionHint) string {
+func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string, specialties []string, chainContext string, originalQuery string, decompositionHints []DecompositionHint) string {
 	fragmentJSON, _ := json.MarshalIndent(fragment, "", "  ")
 	questions := strings.Join(missingInfo, "\n- ")
 	focus = strings.TrimSpace(focus)
@@ -170,6 +173,10 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
 	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
 	specialties = taxonomy.NormalizeSpecialties(specialties)
+	chainBlock := ""
+	if strings.TrimSpace(chainContext) != "" {
+		chainBlock = strings.TrimSpace(chainContext) + "\n"
+	}
 	focusBlock := ""
 	if focus != "" || spheresLine != "" || keywordsLine != "" || originalQuery != "" {
 		focusBlock = "FOCUS CONTEXT (use this to steer your grounded search; it may include non-canonical keywords):\n"
@@ -251,6 +258,27 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 			specBlock += "- For product fragments: prioritize upstream/downstream product transformations (TRANSFORMS_INTO between products).\n"
 			specBlock += "- Be strict about canonical product naming and /product/... paths; if classification is uncertain, use fallback /product/{slug} rather than inventing taxonomy.\n\n"
 		}
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
+			specBlock += "MODULE: supply_chain (build and extend supply chains)\n"
+			specBlock += "- Your PRIMARY goal is to discover and return COMPLETE SUPPLY CHAINS.\n"
+			specBlock += "- A supply chain is an ordered sequence: supplier → product → processor → product → customer → ...\n"
+			specBlock += "- Search for:\n"
+			specBlock += "  - UPSTREAM: who supplies raw materials/components to this entity?\n"
+			specBlock += "  - DOWNSTREAM: who receives products/services from this entity?\n"
+			specBlock += "  - PRODUCTS: what materials/products flow through the chain?\n"
+			specBlock += "- Return chains in the 'supplyChains' field (see output schema).\n"
+			specBlock += "- Each node: canonicalPath, name, type (ORGANIZATION/FACILITY/PRODUCT), optional role.\n"
+			specBlock += "- Nodes alternate: actor → product → actor → product → ...\n"
+			specBlock += "- Multiple chains expected for different product lines.\n"
+			specBlock += "- Also include individual 'relations' for non-chain findings.\n\n"
+		}
+		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {
+			specBlock += "MODULE: equity (ownership & control)\n"
+			specBlock += "- Your PRIMARY goal is to discover ownership/control structure with grounded evidence.\n"
+			specBlock += "- Search for: shareholders, parent company, subsidiaries, ultimate beneficial owner, state ownership, voting control.\n"
+			specBlock += "- Use relation types OWNS / SUBSIDIARY_OF / CONTROLS / INVESTS_IN.\n"
+			specBlock += "- Put stake/percent/voting rights and source evidence in 'reason'.\n\n"
+		}
 	}
 
 	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided fragment using your search capabilities.
@@ -261,13 +289,18 @@ CURRENT FRAGMENT DATA:
 %s
 %s
 %s
+%s
 CRITICAL MISSING INFORMATION (QUESTIONS TO ANSWER):
 - %s
 
 TASK: Use your search tools to find answers to the missing information questions.
-Return a JSON object with two fields:
+Return a JSON object with fields:
 1. "fragment": A JSON object containing ONLY the new or updated fields for the fragment that you found (e.g., "state", "homeLocation").
 2. "relations": An array of DiscoveredRelation objects if you found new dependencies (suppliers, competitors, etc.).
+3. "supplyChains": (ONLY if supply_chain module enabled) Array of supply chain objects, each with:
+   - "nodes": ordered array of {canonicalPath, name, type, role?}
+   - "confidence": 0.0-1.0
+   - "reason": evidence for this chain
 
 Name Normalization Rules:
 - For organizations and similar entities, ALWAYS provide:
@@ -371,7 +404,7 @@ CANONICAL PATH RULES:
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), focusBlock, specBlock, decompositionBlock, questions)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, specBlock, decompositionBlock, questions)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

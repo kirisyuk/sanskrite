@@ -983,6 +983,7 @@ func main() {
 		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
+		horizonCascadeVisitedRepo := horizonrepo.NewCascadeVisitedRepository(fsClient.Client())
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
@@ -1215,6 +1216,8 @@ func main() {
 			scoutEngine.WithFactEmitter(ontology.NewFactEmitter(ontologyFactsRepo, pub))
 			// Budget enforcement wiring.
 			scoutEngine.WithSpendLedger(horizonSpendLedger)
+			// Cascade-level visited set (guardrail against cycles/avalanche fanout).
+			scoutEngine.WithCascadeVisitedRepo(horizonCascadeVisitedRepo)
 
 			// Wire CanonizationPolicy and ValidationPolicy for normalization and validation
 			scoutEngine.WithCanonizationPolicy(canonizationPolicyExecutor)

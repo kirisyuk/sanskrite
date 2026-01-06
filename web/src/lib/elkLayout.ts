@@ -1237,26 +1237,105 @@ export async function layoutLevelsTwoPane<T = any>(
   //   - count <= 12 => 2 rows
   //   - count > 12  => 3 rows
   const PAD_X = 16;
-  const PAD_TOP = 12;
-  const PAD_BOTTOM = 12;
+  // Extra vertical air so the (optional) type headers fit comfortably inside the group.
+  const PAD_TOP = 28;
+  const PAD_BOTTOM = 20;
   // Keep left-group grids compact regardless of right-hierarchy spacing.
   const groupChildGapX = Math.min(40, nodeSpacing);
   const groupChildGapY = 40;
 
-  const groupDimsWrap = (count: number) => {
-    const safeCount = Math.max(0, Math.floor(count));
-    if (safeCount <= 0) return { w: PAD_X * 2, h: PAD_TOP + PAD_BOTTOM, cols: 0, rows: 0 };
+  const normalizeFragmentType = (t: any): string => {
+    const raw = String(t || '').trim();
+    if (!raw) return 'UNKNOWN';
+    return raw.toUpperCase().replace(/\s+/g, '_');
+  };
 
+  // Type bucketing order for horizontal separation inside left groups.
+  // Product request: keep Products separate from Organizations, etc.
+  const typeOrderScore = (t: string): number => {
+    const tt = normalizeFragmentType(t);
+    // "Products"
+    if (tt === 'PRODUCT') return 10;
+    if (tt === 'SERVICE') return 20;
+    if (tt === 'TECHNOLOGY') return 30;
+    // "Organizations / actors"
+    if (tt === 'ORGANIZATION') return 110;
+    if (tt === 'PERSON') return 120;
+    if (tt === 'MEDIA_CHANNEL') return 130;
+    // "Places / assets"
+    if (tt === 'FACILITY') return 210;
+    if (tt === 'GEO_REGION') return 220;
+    if (tt === 'LOCATION') return 230;
+    // Other domain objects
+    if (tt === 'EVENT') return 310;
+    if (tt === 'RISK') return 320;
+    if (tt === 'UNKNOWN') return 900;
+    return 500; // stable middle bucket for new/unknown types
+  };
+
+  type TypeBlock<TNode = any> = { typeKey: string; nodes: Node<TNode>[]; cols: number; startX: number };
+
+  const groupDimsWrap = (children: Node<T>[]) => {
+    const safeChildren = Array.isArray(children) ? children.filter(Boolean) : [];
+    const safeCount = safeChildren.length;
+    if (safeCount <= 0) {
+      return {
+        w: PAD_X * 2,
+        h: PAD_TOP + PAD_BOTTOM,
+        cols: 0,
+        rows: 0,
+        blocks: [] as TypeBlock<T>[],
+        interBlockGapX: 0,
+      };
+    }
+
+    // Global row policy stays the same as before, but now we split horizontally by type.
     const rows =
       safeCount <= 2 ? safeCount
         : safeCount <= 12 ? 2
           : 3;
-    const cols = Math.ceil(safeCount / rows);
-    const innerW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+
+    // Bucket by `data.type` (stable: preserve order within each bucket).
+    const byType = new Map<string, Node<T>[]>();
+    for (const n of safeChildren) {
+      const d: any = n.data;
+      const tk = normalizeFragmentType(d?.type);
+      const arr = byType.get(tk) || [];
+      arr.push(n);
+      byType.set(tk, arr);
+    }
+
+    const typeKeys = Array.from(byType.keys()).sort((a, b) => {
+      const sa = typeOrderScore(a);
+      const sb = typeOrderScore(b);
+      if (sa !== sb) return sa - sb;
+      return a.localeCompare(b);
+    });
+
+    const blocks: TypeBlock<T>[] = [];
+    // Make separation visually obvious; a slightly larger gap costs width but greatly helps scanning.
+    const interBlockGapX = Math.max(84, Math.floor(nodeWidth * 0.45));
+
+    let cursorX = 0;
+    let totalCols = 0;
+    for (let i = 0; i < typeKeys.length; i++) {
+      const typeKey = typeKeys[i]!;
+      const list = byType.get(typeKey) || [];
+      if (list.length === 0) continue;
+      const cols = Math.ceil(list.length / Math.max(1, rows));
+      // We keep only minimal geometry for downstream rendering: startX and cols.
+      blocks.push({ typeKey, nodes: list, cols, startX: cursorX });
+      totalCols += cols;
+      const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+      cursorX += blockW;
+      if (i < typeKeys.length - 1) cursorX += interBlockGapX;
+    }
+
+    const innerW = cursorX;
     const innerH = rows * nodeHeight + Math.max(0, rows - 1) * groupChildGapY;
     const w = innerW + PAD_X * 2;
     const h = innerH + PAD_TOP + PAD_BOTTOM;
-    return { w, h, cols, rows };
+    return { w, h, cols: totalCols, rows, blocks, interBlockGapX };
   };
 
   // === 5) Place Right hierarchy nodes ===
@@ -1281,7 +1360,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
   for (const rn of rightSorted) {
     const children = downstreamByRight.get(rn.id) || [];
-    const h = children.length > 0 ? Math.max(nodeHeight, groupDimsWrap(children.length).h) : nodeHeight;
+    const h = children.length > 0 ? Math.max(nodeHeight, groupDimsWrap(children).h) : nodeHeight;
     unitHeights.set(rn.id, h);
   }
 
@@ -1309,7 +1388,6 @@ export async function layoutLevelsTwoPane<T = any>(
   // Compute y-centers by propagating from leaves (level 0) to ultimate nodes (maxLevel).
   const yCenter = new Map<string, number>();
   let cursorY = 0;
-
   const ensureLevelY = (level: number) => {
     const ids = idsByLevel.get(level) || [];
     if (ids.length === 0) return;
@@ -1325,7 +1403,7 @@ export async function layoutLevelsTwoPane<T = any>(
           continue;
         }
       }
-      // Fallback: append at the end.
+      // Leaf fallback: append at the end.
       desired.set(id, cursorY + unitH(id) / 2);
       cursorY += unitH(id) + gapY;
     }
@@ -1376,23 +1454,29 @@ export async function layoutLevelsTwoPane<T = any>(
   const groupNodes: Node<T>[] = [];
   const childNodes: Node<T>[] = [];
 
-  const attachChildrenWrap = (children: Node<T>[], groupId: string, rows: number) => {
+  const attachChildrenWrap = (
+    blocks: TypeBlock<T>[],
+    groupId: string,
+    rows: number,
+  ) => {
     const safeRows = Math.max(1, Math.floor(rows || 1));
-    for (let idx = 0; idx < children.length; idx++) {
-      const child = children[idx]!;
-      // Column-major: first fill vertical, then move right.
-      const rowIdx = idx % safeRows;
-      const colIdx = Math.floor(idx / safeRows);
-      const cx = PAD_X + colIdx * (nodeWidth + groupChildGapX);
-      const cy = PAD_TOP + rowIdx * (nodeHeight + groupChildGapY);
-      childNodes.push({
-        ...(child as any),
-        parentId: groupId,
-        extent: 'parent' as any,
-        zIndex: 1,
-        hidden: false,
-        position: { x: cx, y: cy },
-      } as any);
+    for (const b of blocks) {
+      for (let idx = 0; idx < b.nodes.length; idx++) {
+        const child = b.nodes[idx]!;
+        // Column-major within each type block: first fill vertical, then move right.
+        const rowIdx = idx % safeRows;
+        const colIdx = Math.floor(idx / safeRows);
+        const cx = PAD_X + b.startX + colIdx * (nodeWidth + groupChildGapX);
+        const cy = PAD_TOP + rowIdx * (nodeHeight + groupChildGapY);
+        childNodes.push({
+          ...(child as any),
+          parentId: groupId,
+          extent: 'parent' as any,
+          zIndex: 1,
+          hidden: false,
+          position: { x: cx, y: cy },
+        } as any);
+      }
     }
   };
 
@@ -1408,6 +1492,8 @@ export async function layoutLevelsTwoPane<T = any>(
     desiredGy: number;
     gy: number;
     children: Node<T>[];
+    blocks: TypeBlock<T>[];
+    interBlockGapX: number;
     edgeTypes: string[];
   };
 
@@ -1418,16 +1504,40 @@ export async function layoutLevelsTwoPane<T = any>(
     const children = downstreamByRight.get(rn.id) || [];
     if (children.length === 0) continue;
     const rp = rightPos.get(rn.id)!;
-    const dim = groupDimsWrap(children.length);
+    const dim = groupDimsWrap(children);
     const groupId = `levels:left:${rn.id}:down`;
     const gx = leftBandRightX - dim.w;
 
     const nodeCenterY = rp.y + nodeHeight / 2;
     const desiredGy = nodeCenterY - dim.h / 2;
 
-    const edgeTypes = Array.from(
-      new Set(children.map((n) => String((n.data as any)?.edgeTypeFromParent || '').trim()).filter(Boolean).map((t) => normalizeEdgeType(t))),
-    );
+    // Edge types for this group: derive from REAL graph edges between (parent rn) and its children.
+    // This enables showing ALL relation types (OWNS + COMPETES + ...), not only one metadata edgeTypeFromParent.
+    const childIdSet = new Set(children.map((n) => String(n.id || '').trim()).filter(Boolean));
+    const edgeTypeSet = new Set<string>();
+    for (const e of (edges || []) as any[]) {
+      const eid = String(e?.id || '').trim();
+      if (eid.startsWith('levels:agg:')) continue;
+      if (Boolean(e?.data?.levelsAgg)) continue;
+      const s = normId(e?.source);
+      const t = normId(e?.target);
+      if (!s || !t) continue;
+      if (s === rn.id && childIdSet.has(t)) edgeTypeSet.add(edgeTypeOf(e));
+      else if (t === rn.id && childIdSet.has(s)) edgeTypeSet.add(edgeTypeOf(e));
+    }
+    // Fallback: if no edges found (rare), use metadata.
+    if (edgeTypeSet.size === 0) {
+      for (const c of children) {
+        const et = normalizeEdgeType((c.data as any)?.edgeTypeFromParent);
+        if (et) edgeTypeSet.add(et);
+      }
+    }
+    const edgeTypes = Array.from(edgeTypeSet).sort((a, b) => {
+      const ap = getEdgePriority(a);
+      const bp = getEdgePriority(b);
+      if (ap !== bp) return ap - bp;
+      return a.localeCompare(b);
+    });
 
     groupInfos.push({
       parentId: rn.id,
@@ -1440,6 +1550,8 @@ export async function layoutLevelsTwoPane<T = any>(
       desiredGy,
       gy: desiredGy,
       children,
+      blocks: dim.blocks,
+      interBlockGapX: dim.interBlockGapX,
       edgeTypes,
     });
   }
@@ -1572,6 +1684,31 @@ export async function layoutLevelsTwoPane<T = any>(
   const groupedChildIds = new Set<string>();
   for (const g of groupInfos) {
     for (const c of g.children) groupedChildIds.add(c.id);
+
+    // Build ports for ALL edge types present in this group (one port per edgeType).
+    // Ports are placed on the RIGHT edge (facing backbone), packed into the central 50% with 25% air top+bottom.
+    const groupEdgePorts = (() => {
+      const types = Array.isArray(g.edgeTypes) ? g.edgeTypes.filter(Boolean) : [];
+      const count = types.length;
+      if (count === 0) return [];
+      const airTop = Math.floor(g.h * 0.25);
+      const airBottom = Math.floor(g.h * 0.25);
+      const yTop = Math.max(airTop, PAD_TOP + 18);
+      const yBot = Math.min(g.h - Math.max(airBottom, PAD_BOTTOM + 18), Math.floor(g.h * 0.75));
+      const yHi = Math.max(yTop, yBot);
+      return types.map((et, idx) => {
+        const edgeType = normalizeEdgeType(et);
+        const targetHandleId = `edge:${edgeType}:target`;
+        const sourceHandleId = `edge:${edgeType}:source`;
+        const yCenter =
+          count <= 1
+            ? Math.round((yTop + yHi) / 2)
+            : Math.round(yTop + (idx * (yHi - yTop)) / Math.max(1, count - 1));
+        const y = Math.max(0, Math.min(g.h - 10, yCenter - 5)); // handle is 10px tall
+        return { edgeType, targetHandleId, sourceHandleId, y };
+      });
+    })();
+
     groupNodes.push({
       id: g.groupId,
       type: 'horizonGroup' as any,
@@ -1588,6 +1725,28 @@ export async function layoutLevelsTwoPane<T = any>(
         groupInteractive: false,
         groupHideHeader: true,
         groupNoFill: true,
+        // Optional: show type subsections inside the group container (visual separators + labels).
+        groupTypeBlocks:
+          (g.blocks || []).map((b, idx) => {
+            const typeKey = String((b as any)?.typeKey || '').trim() || 'UNKNOWN';
+            const label = typeKey
+              .replace(/_/g, ' ')
+              .toLowerCase()
+              .replace(/\b\w/g, (c) => c.toUpperCase());
+            const cols = Math.max(1, Math.floor((b as any)?.cols || 1));
+            const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+            const rawStart = Math.max(0, Math.floor((b as any)?.startX || 0));
+            const startX = PAD_X + rawStart;
+            const endX = startX + blockW;
+            const gapX = Math.max(0, Math.floor((g.interBlockGapX || 0) / 2));
+            const hasNext = idx < (g.blocks?.length || 0) - 1;
+
+            // Visual divider lines between horizontal type sections (keep as-is).
+            const dividerX = hasNext ? (endX + gapX) : undefined;
+            return { typeKey, label, cols, blockW, startX, dividerX };
+          }),
+        // Ports for aggregated edges (one per edge type).
+        groupEdgePorts,
         groupParentId: g.parentId,
         groupSemanticGroup: 'customers',
         groupEdgeTypes: g.edgeTypes,
@@ -1602,7 +1761,7 @@ export async function layoutLevelsTwoPane<T = any>(
       } as any,
     } as any);
 
-    attachChildrenWrap(g.children, g.groupId, g.rows);
+    attachChildrenWrap(g.blocks, g.groupId, g.rows);
   }
 
   // === 6.5) Right-side temporary stacking (leaf columns) ===

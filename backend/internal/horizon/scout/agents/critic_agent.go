@@ -42,8 +42,8 @@ type ValidationConflict struct {
 }
 
 // Validate проверяет извлеченные данные на соответствие источникам
-func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, relations []DiscoveredRelation, sourceContent string, specialties []string) (*ValidationResult, error) {
-	prompt := a.buildValidationPrompt(extractedData, relations, sourceContent, specialties)
+func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string) (*ValidationResult, error) {
+	prompt := a.buildValidationPrompt(extractedData, relations, supplyChains, sourceContent, specialties)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -79,14 +79,29 @@ func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.Horizo
 }
 
 // buildValidationPrompt строит промпт для валидации данных
-func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, sourceContent string, specialties []string) string {
+func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string) string {
 	extractedJSON, _ := json.MarshalIndent(extractedData, "", "  ")
 	relationsJSON, _ := json.MarshalIndent(relations, "", "  ")
+	supplyChainsJSON := "[]"
+	if len(supplyChains) > 0 {
+		if b, err := json.MarshalIndent(supplyChains, "", "  "); err == nil {
+			supplyChainsJSON = string(b)
+		}
+	}
 	specialties = taxonomy.NormalizeSpecialties(specialties)
 	specBlock := ""
 	if len(specialties) > 0 {
 		specBlock = "REQUESTED SPECIALTIES (apply only those listed):\n"
 		specBlock += fmt.Sprintf("- %s\n\n", strings.Join(specialties, ", "))
+	}
+
+	supplyChainBlock := ""
+	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
+		supplyChainBlock = fmt.Sprintf(`
+EXTRACTED SUPPLY CHAINS (JSON):
+%s
+
+`, supplyChainsJSON)
 	}
 
 	return fmt.Sprintf(`You are a validation agent (Critic) for a risk analysis system. Your task is to verify that extracted data matches the source content and assess the completeness of the knowledge graph.
@@ -96,7 +111,7 @@ EXTRACTED DATA (JSON):
 
 EXTRACTED RELATIONS (JSON):
 %s
-
+%s
 SOURCE CONTENT:
 %s
 
@@ -127,7 +142,21 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "What products and services does <org> produce/offer?" and "What key inputs/materials/components does <org> consume?"
 	  - For PRODUCT: if there are no product-to-product transformation relations (TRANSFORMS_INTO), add a question:
 	    - "What is this product produced from and what does it transform into? Provide upstream/downstream products."
+	- If "supply_chain" specialty is requested:
+	  - Validate that extracted supply chains are COMPLETE and COHERENT:
+	    - Nodes must alternate: actor (org/fac) → product → actor → product → ...
+	    - Each chain should have at least 3 nodes (actor → product → actor)
+	    - Products should have valid /product/... canonical paths
+	  - If chains are incomplete or missing, add specific questions:
+	    - "Who are the upstream suppliers and what materials do they provide?"
+	    - "Who are the downstream customers and what products do they receive?"
+	    - "What intermediate products/materials flow through this supply chain?"
+	  - Check for GAPS: if an actor produces a product but no downstream consumer is found, flag it.
+	- If "equity" specialty is requested:
+	  - Ensure ownership/control relations are present (OWNS / SUBSIDIARY_OF / CONTROLS / INVESTS_IN).
+	  - If none are found for an ORGANIZATION, add questions like:
+	    - "Who owns <org> (shareholders/parent company/UBO)?" and "What subsidiaries does <org> own/control?"
 	- If relations seem sparse or inconsistent with the entity's scale, flag it.
 
-	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), sourceContent, specBlock)
+	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, sourceContent, specBlock)
 }

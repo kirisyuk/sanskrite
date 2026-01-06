@@ -7,6 +7,7 @@ import { HorizonNodeIcon, getNodeColors, formatHorizonFragmentType, getMetricCol
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { HorizonOnDemandDependencyResolverModal, type HorizonOnDemandContext } from './HorizonOnDemandDependencyResolverModal';
 
 interface ObjectInspectorProps {
   nodeId: string | null;
@@ -60,6 +61,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   const [productIOLoading, setProductIOLoading] = React.useState(false);
   const [productIOError, setProductIOError] = React.useState<string | null>(null);
   const [productIOResult, setProductIOResult] = React.useState<{ nodes: number; edges: number } | null>(null);
+  const [onDemandOpen, setOnDemandOpen] = React.useState(false);
+  const [onDemandCtx, setOnDemandCtx] = React.useState<HorizonOnDemandContext | null>(null);
 
   // Lens-scope pin state (best-effort): derived from lens.scope to avoid stale nodeData snapshots.
   const [lensScopePinned, setLensScopePinned] = React.useState<boolean | null>(null);
@@ -1251,6 +1254,15 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
   return (
     <div style={{ padding: '8px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* On-demand resolver modal (no writes) */}
+      {onDemandOpen && onDemandCtx && (
+        <HorizonOnDemandDependencyResolverModal
+          open={onDemandOpen}
+          onClose={() => setOnDemandOpen(false)}
+          context={onDemandCtx}
+        />
+      )}
+
       {/* Top summary */}
       <div
         style={{
@@ -2223,6 +2235,188 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
           {(nodeData?.fragmentId || nodeId) && (
             <Disclosure title="Actions" subtitle="Operational / experimental">
+              {/* On-demand resolver (no writes) */}
+              {nodeId && nodeData && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', marginBottom: 8 }}>
+                    On-demand: resolve dependency via product
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginBottom: 10, lineHeight: 1.35 }}>
+                    Runs a grounded LLM request and shows JSON request/response. Does not write anything to the graph.
+                  </div>
+                  {(() => {
+                    const selectedType = String((nodeData as any)?.type || (fragment as any)?.type || '').trim().toUpperCase();
+                    const canOpen = !Boolean(edgeId) && (selectedType === 'ORGANIZATION' || selectedType === 'FACILITY');
+
+                    const openResolver = () => {
+                      try {
+                        const incidentEdgesRaw = (nodeData as any)?.visibleIncidentEdges;
+                        const neighborNodesRaw = (nodeData as any)?.visibleNeighborNodes;
+                        const incidentEdgesAll = Array.isArray(incidentEdgesRaw) ? incidentEdgesRaw : [];
+                        const neighborNodesAll = Array.isArray(neighborNodesRaw) ? neighborNodesRaw : [];
+
+                        const selectedNodeId = String(nodeId);
+                        const selectedPath = String((nodeData as any)?.canonicalPath || (fragment as any)?.canonicalPath || '');
+                        const normalizeEdgeType = (t: any) => String(t || '').trim().toUpperCase();
+
+                        // Filter only SUPPLIES_TO and DEPENDS_ON edges between orgs
+                        const supplyChainEdgeTypes = new Set(['SUPPLIES_TO', 'DEPENDS_ON']);
+                        const incidentEdges = incidentEdgesAll.filter((e: any) => {
+                          const et = normalizeEdgeType(e?.edgeType);
+                          if (!supplyChainEdgeTypes.has(et)) return false;
+                          // Both source and target should be ORG or FAC
+                          const srcType = String(e?.sourceType || '').toUpperCase();
+                          const tgtType = String(e?.targetType || '').toUpperCase();
+                          const validTypes = ['ORGANIZATION', 'FACILITY'];
+                          return validTypes.includes(srcType) && validTypes.includes(tgtType);
+                        });
+
+                        // Build node lookup including selected node
+                        const nodeById = new Map<string, any>();
+                        nodeById.set(String(nodeId), {
+                          nodeId: String(nodeId),
+                          fragmentId: (nodeData as any)?.fragmentId || nodeId,
+                          canonicalPath: selectedPath || null,
+                          type: (nodeData as any)?.type || (fragment as any)?.type || null,
+                          label: (nodeData as any)?.label || nodeDisplayName || null,
+                        });
+                        for (const n of neighborNodesAll) {
+                          nodeById.set(String(n?.nodeId || ''), n);
+                        }
+
+                        // Get neighbor org nodes (other side of incidentEdges)
+                        const neighborNodeIds = new Set<string>();
+                        for (const e of incidentEdges) {
+                          const srcId = String(e?.sourceNodeId || '');
+                          const tgtId = String(e?.targetNodeId || '');
+                          if (srcId !== selectedNodeId) neighborNodeIds.add(srcId);
+                          if (tgtId !== selectedNodeId) neighborNodeIds.add(tgtId);
+                        }
+                        const neighborNodes = neighborNodesAll.filter((n: any) => neighborNodeIds.has(String(n?.nodeId || '')));
+
+                        // Build edges with labels
+                        const edgesOut = incidentEdges.map((e: any) => {
+                          const src = nodeById.get(String(e?.sourceNodeId));
+                          const tgt = nodeById.get(String(e?.targetNodeId));
+                          return {
+                            id: String(e?.id || ''),
+                            edgeType: String(e?.edgeType || ''),
+                            sourceNodeId: String(e?.sourceNodeId || ''),
+                            targetNodeId: String(e?.targetNodeId || ''),
+                            sourceFragmentId: src?.fragmentId || e?.sourceFragmentId || null,
+                            targetFragmentId: tgt?.fragmentId || e?.targetFragmentId || null,
+                            sourceCanonicalPath: src?.canonicalPath || null,
+                            targetCanonicalPath: tgt?.canonicalPath || null,
+                            sourceType: src?.type || null,
+                            targetType: tgt?.type || null,
+                            sourceLabel: src?.label || null,
+                            targetLabel: tgt?.label || null,
+                            products: Array.isArray(e?.products) ? e.products : [],
+                            brandNames: Array.isArray(e?.brandNames) ? e.brandNames : [],
+                            criticality: e?.criticality,
+                          };
+                        });
+
+                        // Build neighborContext: what each neighbor produces/supplies
+                        // For now, we extract from PRODUCES edges in neighborNodesAll
+                        const neighborContext: Record<string, { produces?: string[]; suppliesTo?: string[]; dependsOn?: string[] }> = {};
+                        for (const n of neighborNodes) {
+                          const nPath = String(n?.canonicalPath || '');
+                          if (!nPath) continue;
+                          neighborContext[nPath] = { produces: [], suppliesTo: [], dependsOn: [] };
+                        }
+                        // Scan all edges to find PRODUCES edges from neighbors
+                        for (const e of incidentEdgesAll) {
+                          const et = normalizeEdgeType(e?.edgeType);
+                          const srcPath = String(e?.sourceCanonicalPath || '');
+                          const tgtPath = String(e?.targetCanonicalPath || '');
+                          if (et === 'PRODUCES' && neighborContext[srcPath] && tgtPath.startsWith('/product/')) {
+                            neighborContext[srcPath].produces?.push(tgtPath);
+                          }
+                          if (et === 'SUPPLIES_TO' && neighborContext[srcPath]) {
+                            neighborContext[srcPath].suppliesTo?.push(tgtPath);
+                          }
+                          if (et === 'DEPENDS_ON' && neighborContext[srcPath]) {
+                            neighborContext[srcPath].dependsOn?.push(tgtPath);
+                          }
+                        }
+
+                        // Collect known products from graph (PRODUCES targets, product-type neighbors)
+                        const knownProductPaths = new Set<string>();
+                        for (const e of incidentEdgesAll) {
+                          const tgtPath = String(e?.targetCanonicalPath || '');
+                          const srcPath = String(e?.sourceCanonicalPath || '');
+                          if (tgtPath.startsWith('/product/')) knownProductPaths.add(tgtPath);
+                          if (srcPath.startsWith('/product/')) knownProductPaths.add(srcPath);
+                        }
+                        for (const n of neighborNodesAll) {
+                          const nPath = String(n?.canonicalPath || '');
+                          if (nPath.startsWith('/product/')) knownProductPaths.add(nPath);
+                        }
+                        const knownProducts = Array.from(knownProductPaths).map((p) => {
+                          const n = neighborNodesAll.find((nn: any) => String(nn?.canonicalPath || '') === p);
+                          return { canonicalPath: p, label: n?.label || undefined };
+                        });
+
+                        const ctx: HorizonOnDemandContext = {
+                          v: 2,
+                          scenario: 'org_supply_chain',
+                          selected: {
+                            nodeId: String(nodeId),
+                            fragmentId: String((nodeData as any)?.fragmentId || nodeId),
+                            canonicalPath: selectedPath || null,
+                            type: String((nodeData as any)?.type || (fragment as any)?.type || '') || null,
+                            label: String((nodeData as any)?.label || nodeDisplayName || '') || null,
+                          },
+                          incidentEdges: edgesOut,
+                          neighborNodes: neighborNodes.map((n: any) => ({
+                            nodeId: String(n?.nodeId || ''),
+                            fragmentId: n?.fragmentId || null,
+                            canonicalPath: n?.canonicalPath || null,
+                            type: n?.type || null,
+                            label: n?.label || null,
+                          })),
+                          neighborContext,
+                          knownProducts,
+                        };
+                        setOnDemandCtx(ctx);
+                        setOnDemandOpen(true);
+                      } catch (e) {
+                        console.warn('[ObjectInspector] failed to open on-demand resolver', e);
+                      }
+                    };
+
+                    if (!canOpen) {
+                      return (
+                        <div style={{ fontSize: 11, color: 'var(--text-tertiary-weak)' }}>
+                          Select an organization to resolve supply-chain products.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <button
+                        type="button"
+                        onClick={openResolver}
+                        style={{
+                          padding: '8px 10px',
+                          fontSize: 12,
+                          fontWeight: 800,
+                          borderRadius: 12,
+                          border: '1px solid var(--border-subtle)',
+                          background: 'var(--bg-tertiary)',
+                          color: 'var(--text-heading)',
+                          cursor: 'pointer',
+                          width: '100%',
+                        }}
+                      >
+                        Resolve supply-chain products
+                      </button>
+                    );
+                  })()}
+                </div>
+              )}
+
               {/* Product IO */}
       {nodeData?.fragmentId && (
                 <div style={{ marginBottom: 12 }}>

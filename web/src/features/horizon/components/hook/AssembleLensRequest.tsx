@@ -10,6 +10,9 @@ interface AssembleLensRequestProps {
   pinnedBottom?: boolean;
 }
 
+/** Lens mode determines the focus of scouting and research agents */
+export type LensMode = 'general' | 'supply_chain' | 'equity';
+
 export interface AssembleLensRequest {
   projectId: string;
   query: string;
@@ -18,6 +21,10 @@ export interface AssembleLensRequest {
   prefetchScope?: string[];
   filters: {
     maxRecursionDepth: number;
+    /** Lens mode: general (default), supply_chain, or equity */
+    mode: LensMode;
+    /** Optional specialties derived from mode */
+    specialties?: string[];
   };
 }
 
@@ -55,12 +62,22 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   const [entityLoading, setEntityLoading] = useState(false);
   const [entitySuggestions, setEntitySuggestions] = useState<PrefetchEntity[]>([]);
   const [showEntityDropdown, setShowEntityDropdown] = useState(false);
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<{
+    maxRecursionDepth: number;
+    mode: LensMode;
+    specialties?: string[];
+  }>({
     maxRecursionDepth: 1,
+    mode: 'general',
   });
   const [showSettings, setShowSettings] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const settingsDialogRef = useRef<HTMLDivElement>(null);
+  const settingsCloseBtnRef = useRef<HTMLButtonElement>(null);
+  const lastActiveElRef = useRef<HTMLElement | null>(null);
+  const settingsTitleId = React.useId();
+  const settingsDescId = React.useId();
   const entityAbortRef = useRef<AbortController | null>(null);
   const entityDebounceRef = useRef<number | null>(null);
   const [placeholder] = useState(() => 
@@ -76,6 +93,66 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
       inputRef.current.focus();
     }
   }, []);
+
+  // Settings dialog: a11y + focus trap + ESC + scroll lock
+  useEffect(() => {
+    if (!showSettings) return;
+
+    lastActiveElRef.current = (document.activeElement as HTMLElement) || null;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const getFocusables = (root: HTMLElement | null) => {
+      if (!root) return [] as HTMLElement[];
+      const nodes = root.querySelectorAll<HTMLElement>(
+        'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
+      );
+      return Array.from(nodes).filter((el) => {
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      });
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowSettings(false);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      const focusables = getFocusables(settingsDialogRef.current);
+      if (focusables.length === 0) return;
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+
+      if (e.shiftKey) {
+        if (!active || active === first || !settingsDialogRef.current?.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (!active || !settingsDialogRef.current?.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        } else if (active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    window.setTimeout(() => settingsCloseBtnRef.current?.focus(), 0);
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = prevOverflow;
+      window.setTimeout(() => lastActiveElRef.current?.focus?.(), 0);
+    };
+  }, [showSettings]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
@@ -180,6 +257,38 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     };
 
     onAssemble(request);
+  };
+
+  const clampInt = (v: number, min: number, max: number) => {
+    const n = Number.isFinite(v) ? Math.trunc(v) : min;
+    return Math.max(min, Math.min(max, n));
+  };
+
+  const setMode = (mode: LensMode) => {
+    const recommendedDepthByMode: Record<LensMode, number> = {
+      general: 1,
+      supply_chain: 2,
+      equity: 1,
+    };
+    const specialties =
+      mode === 'supply_chain'
+        ? ['supply_chain', 'products_and_services']
+        : mode === 'equity'
+          ? ['management']
+          : [];
+    setFilters((prev) => {
+      if (prev.mode === mode) return prev;
+      return {
+        ...prev,
+        mode,
+        specialties,
+        maxRecursionDepth: clampInt(recommendedDepthByMode[mode] ?? prev.maxRecursionDepth, 0, 5),
+      };
+    });
+  };
+
+  const setMaxDepth = (v: number) => {
+    setFilters((prev) => ({ ...prev, maxRecursionDepth: clampInt(v, 0, 5) }));
   };
 
   const containerStyle: React.CSSProperties = {
@@ -469,69 +578,210 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
 
       {/* Settings Modal */}
       {showSettings && createPortal(
-        <div className="fixed inset-0 z-[80] flex items-center justify-center" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowSettings(false)} />
-          <div className="relative w-full max-w-lg rounded-xl border p-4" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--overlay-line-90)', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)' }}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-lg" style={{ color: 'var(--text-heading)' }}>Settings</div>
-              <button onClick={() => setShowSettings(false)} aria-label="Close" className="rounded-full" style={{ width: 32, height: 32 }}>
-                <svg viewBox="0 0 24 24" className="w-6 h-6"><path d="M6 6l12 12M18 6L6 18" stroke="var(--text-secondary-strong)" strokeWidth="2"/></svg>
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={settingsTitleId}
+          aria-describedby={settingsDescId}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowSettings(false);
+          }}
+          style={{
+            background: 'rgba(0,0,0,0.35)',
+            backdropFilter: 'blur(6px)',
+            padding: 16,
+          }}
+        >
+          <div
+            ref={settingsDialogRef}
+            className="w-full max-w-lg rounded-2xl border"
+            style={{
+              backgroundColor: 'var(--bg-elevated)',
+              borderColor: 'var(--overlay-line-90)',
+              boxShadow: '0 18px 60px rgba(0, 0, 0, 0.40)',
+              overflow: 'hidden',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="px-5 py-4 flex items-start justify-between gap-4"
+              style={{ borderBottom: '1px solid var(--overlay-line-90)' }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div
+                  id={settingsTitleId}
+                  className="text-[15px] font-semibold"
+                  style={{ color: 'var(--text-heading)', letterSpacing: '-0.01em' }}
+                >
+                  Settings
+                </div>
+                <div
+                  id={settingsDescId}
+                  className="text-[12px] mt-0.5"
+                  style={{ color: 'var(--text-secondary-strong)', lineHeight: 1.4 }}
+                >
+                  Choose the lens and control how deep recursive expansion goes. Press Esc to close.
+                </div>
+              </div>
+              <button
+                ref={settingsCloseBtnRef}
+                type="button"
+                onClick={() => setShowSettings(false)}
+                aria-label="Close settings"
+                className="rounded-lg p-2 transition-colors"
+                style={{
+                  color: 'var(--text-secondary-strong)',
+                  backgroundColor: 'transparent',
+                  border: '1px solid var(--border-subtle)',
+                  flexShrink: 0,
+                }}
+              >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor">
+                  <path d="M6 6l12 12M18 6L6 18" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
               </button>
             </div>
-            <div className="space-y-3">
-              <div className="rounded-lg p-3" style={{ backgroundColor: 'var(--white-06)' }}>
-                <div>
-                  <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary-strong)' }}>Max recursion depth</label>
+
+            <div className="px-5 py-4 space-y-4">
+              {/* Analysis mode */}
+              <fieldset className="rounded-xl p-3" style={{ backgroundColor: 'transparent' }}>
+                <legend className="text-[12px] px-1" style={{ color: 'var(--text-secondary-strong)' }}>
+                  Analysis mode
+                </legend>
+                <div className="mt-2 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Analysis mode">
+                  {([
+                    { value: 'general' as const, label: 'General', desc: 'Broad exploration' },
+                    { value: 'supply_chain' as const, label: 'Supply chain', desc: 'Material & product flows' },
+                    { value: 'equity' as const, label: 'Equity', desc: 'Ownership & control' },
+                  ]).map((opt) => {
+                    const active = filters.mode === opt.value;
+                    return (
+                      <label
+                        key={opt.value}
+                        className="rounded-xl border px-3 py-2 cursor-pointer select-none"
+                        style={{
+                          borderColor: active ? 'var(--overlay-line-80)' : 'var(--border-subtle)',
+                          background: active ? 'var(--white-10)' : 'transparent',
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="analysis-mode"
+                          className="sr-only"
+                          checked={active}
+                          onChange={() => setMode(opt.value)}
+                        />
+                        <div className="text-[12px] font-semibold" style={{ color: 'var(--text-heading)' }}>
+                          {opt.label}
+                        </div>
+                        <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-tertiary-weak)', lineHeight: 1.35 }}>
+                          {opt.desc}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+
+              {/* Recursion depth */}
+              <div className="rounded-xl p-3" style={{ backgroundColor: 'var(--white-06)' }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div style={{ minWidth: 0 }}>
+                    <div className="text-[12px] font-semibold" style={{ color: 'var(--text-heading)' }}>
+                      Recursion depth
+                    </div>
+                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                      Controls how far we expand linked fragments. Range: 0–5.
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      aria-label="Decrease recursion depth"
+                      onClick={() => setMaxDepth(filters.maxRecursionDepth - 1)}
+                      disabled={filters.maxRecursionDepth <= 0}
+                      className="rounded-lg px-2 py-1 border text-[12px]"
+                      style={{
+                        borderColor: 'var(--border-subtle)',
+                        color: 'var(--text-heading)',
+                        background: 'transparent',
+                        opacity: filters.maxRecursionDepth <= 0 ? 0.45 : 1,
+                        cursor: filters.maxRecursionDepth <= 0 ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={5}
+                      step={1}
+                      value={filters.maxRecursionDepth}
+                      onChange={(e) => setMaxDepth(Number(e.target.value))}
+                      className="text-[12px] rounded-lg border px-2 py-1 w-[64px]"
+                      style={{
+                        backgroundColor: 'var(--bg-input)',
+                        color: 'var(--text-heading)',
+                        borderColor: 'var(--border-input, rgba(255, 255, 255, 0.1))',
+                        outline: 'none',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label="Increase recursion depth"
+                      onClick={() => setMaxDepth(filters.maxRecursionDepth + 1)}
+                      disabled={filters.maxRecursionDepth >= 5}
+                      className="rounded-lg px-2 py-1 border text-[12px]"
+                      style={{
+                        borderColor: 'var(--border-subtle)',
+                        color: 'var(--text-heading)',
+                        background: 'transparent',
+                        opacity: filters.maxRecursionDepth >= 5 ? 0.45 : 1,
+                        cursor: filters.maxRecursionDepth >= 5 ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-3">
                   <input
-                    type="number"
+                    type="range"
                     min={0}
                     max={5}
+                    step={1}
                     value={filters.maxRecursionDepth}
-                    onChange={(e) =>
-                      setFilters({
-                        ...filters,
-                        maxRecursionDepth: Math.max(0, Math.min(5, parseInt(e.target.value || '1', 10))),
-                      })
-                    }
+                    onChange={(e) => setMaxDepth(Number(e.target.value))}
+                    aria-label="Recursion depth"
                     className="w-full"
                     style={{
-                      backgroundColor: 'var(--bg-input)',
-                      color: 'var(--text-heading)',
-                      border: '1px solid var(--border-input, rgba(255, 255, 255, 0.1))',
-                      borderRadius: '8px',
-                      padding: '8px 12px',
-                      outline: 'none',
-                      fontSize: '14px',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
-                    }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--overlay-line-80)';
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--border-input, rgba(255, 255, 255, 0.1))';
+                      accentColor: 'var(--text-heading)',
                     }}
                   />
-                  <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-                    Maximum depth for recursive fragment expansion (0-5)
+                  <div className="mt-1 flex justify-between text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <span key={i} style={{ width: '16px', textAlign: 'center' }}>{i}</span>
+                    ))}
                   </div>
                 </div>
               </div>
             </div>
-            <div className="mt-4 text-right">
+
+            <div
+              className="px-5 py-3 flex items-center justify-end gap-2"
+              style={{ borderTop: '1px solid var(--overlay-line-90)' }}
+            >
               <button
-                className="px-3 py-2 rounded transition-colors"
+                type="button"
+                className="px-3 py-2 rounded-lg border text-[12px] transition-colors"
                 onClick={() => setShowSettings(false)}
-                style={{ background: 'transparent', color: 'var(--text-heading)' }}
-                onMouseEnter={(e) => { 
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
-                }}
-                onMouseLeave={(e) => { 
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                style={{
+                  background: 'transparent',
+                  color: 'var(--text-heading)',
+                  borderColor: 'var(--border-subtle)',
                 }}
               >
                 Done
