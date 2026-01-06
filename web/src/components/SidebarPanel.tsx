@@ -541,15 +541,17 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   }, [sidebarMainTab]);
 
   React.useEffect(() => {
-    // If a project is selected, default to details view (lenses/jobs) since that's the primary workspace.
+    // Horizon: if a project is selected, default to details view (lenses) since that's the primary workspace.
+    // Discovery: DO NOT auto-switch to details (which currently shows Jobs) when selecting a chat/project.
     if (!isModernSidebarMode) return;
-    if (currentProject?.id && currentProject.id !== 'local-unfold') {
-      setSidebarMainTab('details');
+    if (isHorizonMode) {
+      if (currentProject?.id && currentProject.id !== 'local-unfold') setSidebarMainTab('details');
+      else setSidebarMainTab('projects');
     } else {
       setSidebarMainTab('projects');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.id, isModernSidebarMode]);
+  }, [currentProject?.id, isModernSidebarMode, isHorizonMode]);
 
   const hasSelectedProject = Boolean(currentProject?.id && currentProject.id !== 'local-unfold');
   const isDetailsView = sidebarMainTab === 'details' && hasSelectedProject;
@@ -770,13 +772,13 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           // If clicking the already selected project, just switch to details (lenses/jobs).
           // This fixes the "Back -> click same project does nothing" UX, since currentProject.id doesn't change.
           if (isSelected) {
-            setSidebarMainTab('details');
+            if (isHorizonMode) setSidebarMainTab('details');
             return;
           }
           onCloseAllModals?.();
           setCurrentProject(project);
           // Immediately switch to details view; don't wait for currentProject.id effect.
-          setSidebarMainTab('details');
+          if (isHorizonMode) setSidebarMainTab('details');
           if (isMobile) onClose();
         }}
         title={project.displayName}

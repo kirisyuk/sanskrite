@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -43,6 +44,7 @@ var (
 	grounding = flag.Bool("grounding", true, "Enable search grounding (googleSearch) when supported by the model/service")
 	minCapScore = flag.Int("min-capability-score", 0, "Override MinCapabilityScore (0 = derive from model registry)")
 	maxOutputTokens = flag.Int("max-output-tokens", 8192, "Max output tokens budget for the model (minimum 8192; lower values may truncate structured JSON)")
+	llmConcurrency = flag.Int("llm-concurrency", 1, "How many LLM batch calls to run in parallel (>=1). Each worker processes whole batches.")
 
 	edgeTypes = flag.String("edge-types", "INFLUENCES,DEPENDS_ON", "Comma-separated edge types considered 'weak'")
 	limit     = flag.Int("limit", 10, "How many PERSON<->ORG edges to classify")
@@ -126,6 +128,7 @@ type Row struct {
 		PromptTokens int    `json:"promptTokens,omitempty"`
 		OutputTokens int    `json:"outputTokens,omitempty"`
 		TotalTokens  int    `json:"totalTokens,omitempty"`
+		DurationMs   int    `json:"durationMs,omitempty"`
 		Raw          string `json:"raw,omitempty"`
 	} `json:"llm"`
 
@@ -163,6 +166,9 @@ func main() {
 	}
 	if *maxOutputTokens < 8192 {
 		*maxOutputTokens = 8192
+	}
+	if *llmConcurrency <= 0 {
+		*llmConcurrency = 1
 	}
 	if *saveCursorEveryPages <= 0 {
 		*saveCursorEveryPages = 1
@@ -220,6 +226,11 @@ func main() {
 	log.Printf("=== Horizon: LLM classify weak PERSON<->ORG edges ===")
 	log.Printf("project=%s tenant=%s model=%s edgeTypes=%v limit=%d batchSize=%d maxScan=%d apply=%v",
 		*projectID, *tenantID, strings.TrimSpace(*model), types, *limit, *batchSize, *maxScan, *apply)
+	startedAt := time.Now()
+	var llmTotalMs int64
+	var llmCalls int64
+	var proFallbackBatches int64
+	var flashBatches int64
 
 	pairs, resume, scanned, err := collectPairs(ctx, fsSession, cache, types, *limit)
 	if err != nil {
@@ -241,40 +252,98 @@ func main() {
 		return
 	}
 
-	// Process in batches
+	// Partition into batches
+	type batchJob struct {
+		idx   int
+		items []PairInput
+	}
+	jobs := make(chan batchJob)
+	var encMu sync.Mutex
+	writeRow := func(row *Row) {
+		if row == nil {
+			return
+		}
+		encMu.Lock()
+		_ = enc.Encode(row)
+		encMu.Unlock()
+	}
+
+	workerN := min(*llmConcurrency, max(1, (len(pairs)+*batchSize-1)/max(1, *batchSize)))
+	log.Printf("parallel: llm_concurrency=%d workers=%d total_pairs=%d batch_size=%d", *llmConcurrency, workerN, len(pairs), *batchSize)
+
+	var wg sync.WaitGroup
+	wg.Add(workerN)
+	for w := 0; w < workerN; w++ {
+		go func(workerID int) {
+			defer wg.Done()
+			for job := range jobs {
+				// Build repos on-demand from the current Firestore client (supports periodic refresh).
+				db, derr := fsSession.DB(ctx)
+				var edgesRepo *hrepo.DependencyEdgesRepository
+				if derr != nil {
+					log.Printf("WARNING: worker=%d batch=%d failed to get Firestore client: %v", workerID, job.idx, derr)
+				} else if db != nil {
+					fr := hrepo.NewHorizonFragmentsRepository(db)
+					edgesRepo = hrepo.NewDependencyEdgesRepository(db).WithFragmentsRepo(fr)
+				}
+
+				stats := &batchStats{}
+				err := classifyBatch(ctx, client, exec, modelManager, fsSession, edgesRepo, writeRow, job.items, stats)
+				if err != nil {
+					log.Printf("WARNING: worker=%d batch=%d classification failed: %v", workerID, job.idx, err)
+					for _, p := range job.items {
+						li := makeLLMInput(p, strings.TrimSpace(*inputLevel))
+						writeRow(&Row{
+							EdgeID:    p.Edge.ID,
+							OldType:   p.Edge.Type,
+							Reason:    "llm_error: " + err.Error(),
+							Input:     p,
+							LLMInput:  li,
+							ScannedAt: time.Now().UTC(),
+						})
+					}
+					continue
+				}
+
+				if stats.LLMCalls > 0 {
+					atomic.AddInt64(&llmCalls, int64(stats.LLMCalls))
+					atomic.AddInt64(&llmTotalMs, stats.LLMTime.Milliseconds())
+					if stats.UsedModel == "gemini-3-pro-preview" {
+						atomic.AddInt64(&proFallbackBatches, 1)
+					} else if stats.UsedModel == "gemini-3-flash-preview" {
+						atomic.AddInt64(&flashBatches, 1)
+					}
+					log.Printf("LLM batch done: worker=%d batch=%d model=%s llm_ms=%d", workerID, job.idx, stats.UsedModel, stats.LLMTime.Milliseconds())
+				}
+			}
+		}(w)
+	}
+
+	// Enqueue jobs
+	batchIdx := 0
 	for i := 0; i < len(pairs); i += *batchSize {
 		j := i + *batchSize
 		if j > len(pairs) {
 			j = len(pairs)
 		}
-		batch := pairs[i:j]
-		// Build repos on-demand from the current Firestore client (supports periodic refresh).
-		db, derr := fsSession.DB(ctx)
-		if derr != nil {
-			log.Printf("WARNING: failed to get Firestore client for batch: %v", derr)
-		}
-		var edgesRepo *hrepo.DependencyEdgesRepository
-		if db != nil {
-			fr := hrepo.NewHorizonFragmentsRepository(db)
-			edgesRepo = hrepo.NewDependencyEdgesRepository(db).WithFragmentsRepo(fr)
-		}
-		if err := classifyBatch(ctx, client, exec, modelManager, fsSession, edgesRepo, enc, batch); err != nil {
-			log.Printf("WARNING: batch classification failed: %v", err)
-			// Still emit per-edge error rows
-			for _, p := range batch {
-				li := makeLLMInput(p, strings.TrimSpace(*inputLevel))
-				row := &Row{
-					EdgeID:    p.Edge.ID,
-					OldType:   p.Edge.Type,
-					Reason:    "llm_error: " + err.Error(),
-					Input:     p,
-					LLMInput:  li,
-					ScannedAt: time.Now().UTC(),
-				}
-				_ = enc.Encode(row)
-			}
-		}
+		jobs <- batchJob{idx: batchIdx, items: pairs[i:j]}
+		batchIdx++
 	}
+	close(jobs)
+	wg.Wait()
+
+	total := time.Since(startedAt)
+	llmMs := atomic.LoadInt64(&llmTotalMs)
+	calls := atomic.LoadInt64(&llmCalls)
+	log.Printf("DONE: total_ms=%d llm_calls=%d llm_ms=%d llm_pct=%.1f%% avg_llm_ms_per_call=%.0f batches_flash=%d batches_pro=%d",
+		total.Milliseconds(),
+		calls,
+		llmMs,
+		100*float64(llmMs)/float64(max(1, total.Milliseconds())),
+		float64(llmMs)/float64(max(1, calls)),
+		atomic.LoadInt64(&flashBatches),
+		atomic.LoadInt64(&proFallbackBatches),
+	)
 }
 
 func newGenAIClient() *gen_combined.Client {
@@ -479,7 +548,13 @@ func collectPairs(ctx context.Context, fs *firestoreSession, cache *fragmentCach
 	return out, lastSeen, scanned, nil
 }
 
-func classifyBatch(ctx context.Context, client *gen_combined.Client, exec *ai.AITaskExecutor, mm *ai.AIModelManager, fs *firestoreSession, edgesRepo *hrepo.DependencyEdgesRepository, enc *json.Encoder, batch []PairInput) error {
+type batchStats struct {
+	LLMTime  time.Duration
+	LLMCalls int
+	UsedModel string
+}
+
+func classifyBatch(ctx context.Context, client *gen_combined.Client, exec *ai.AITaskExecutor, mm *ai.AIModelManager, fs *firestoreSession, edgesRepo *hrepo.DependencyEdgesRepository, writeRow func(*Row), batch []PairInput, stats *batchStats) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -572,7 +647,13 @@ func classifyBatch(ctx context.Context, client *gen_combined.Client, exec *ai.AI
 			EnableTelemetry: true,
 		}
 
+		llmStarted := time.Now()
 		parsedAny, err := exec.ExecuteStructuredTask(llmCtx, task)
+		llmDur := time.Since(llmStarted)
+		if stats != nil {
+			stats.LLMCalls++
+			stats.LLMTime += llmDur
+		}
 		if err != nil {
 			return err
 		}
@@ -587,7 +668,10 @@ func classifyBatch(ctx context.Context, client *gen_combined.Client, exec *ai.AI
 			byID[strings.TrimSpace(it.EdgeID)] = it
 		}
 
-		return emitRowsAndOptionallyApply(ctx, fs, edgesRepo, enc, batch, byID, u.model, u.prompt, u.out, u.total, raw, parsed.SchemaVersion, level)
+		if stats != nil {
+			stats.UsedModel = modelName
+		}
+		return emitRowsAndOptionallyApply(ctx, fs, edgesRepo, writeRow, batch, byID, u.model, u.prompt, u.out, u.total, int(llmDur.Milliseconds()), raw, parsed.SchemaVersion, level)
 	}
 
 	// direct engine: combined client with strict JSON tool-call schema
@@ -609,7 +693,13 @@ func classifyBatch(ctx context.Context, client *gen_combined.Client, exec *ai.AI
 		ToolChoice:        "required",
 		ParallelToolCalls: false,
 	}
+	llmStarted := time.Now()
 	resp, err := client.GenAIGenerate(llmCtx, req)
+	llmDur := time.Since(llmStarted)
+	if stats != nil {
+		stats.LLMCalls++
+		stats.LLMTime += llmDur
+	}
 	if err != nil || resp == nil {
 		if err == nil {
 			err = fmt.Errorf("nil response")
@@ -639,20 +729,24 @@ func classifyBatch(ctx context.Context, client *gen_combined.Client, exec *ai.AI
 	for _, it := range parsed.Items {
 		byID[strings.TrimSpace(it.EdgeID)] = it
 	}
-	return emitRowsAndOptionallyApply(ctx, fs, edgesRepo, enc, batch, byID, u.model, u.prompt, u.out, u.total, raw, parsed.SchemaVersion, level)
+	if stats != nil {
+		stats.UsedModel = u.model
+	}
+	return emitRowsAndOptionallyApply(ctx, fs, edgesRepo, writeRow, batch, byID, u.model, u.prompt, u.out, u.total, int(llmDur.Milliseconds()), raw, parsed.SchemaVersion, level)
 }
 
 func emitRowsAndOptionallyApply(
 	ctx context.Context,
 	fs *firestoreSession,
 	edgesRepo *hrepo.DependencyEdgesRepository,
-	enc *json.Encoder,
+	writeRow func(*Row),
 	batch []PairInput,
 	byID map[string]LLMResponseItem,
 	model string,
 	promptTokens int,
 	outputTokens int,
 	totalTokens int,
+	llmDurationMs int,
 	raw string,
 	schemaVersion string,
 	level string,
@@ -673,11 +767,12 @@ func emitRowsAndOptionallyApply(
 		row.LLM.PromptTokens = promptTokens
 		row.LLM.OutputTokens = outputTokens
 		row.LLM.TotalTokens = totalTokens
+		row.LLM.DurationMs = llmDurationMs
 		row.LLM.Raw = safePreview(raw, 20000)
 
 		if !ok {
 			row.Reason = "missing item for edgeId"
-			_ = enc.Encode(row)
+			writeRow(row)
 			continue
 		}
 		row.NewType = strings.ToUpper(strings.TrimSpace(it.RelationType))
@@ -688,7 +783,7 @@ func emitRowsAndOptionallyApply(
 		if *apply && row.NewType != "NONE" {
 			if edgesRepo == nil {
 				row.Reason = "apply failed: edgesRepo not configured"
-				_ = enc.Encode(row)
+				writeRow(row)
 				continue
 			}
 			edge, gerr := edgesRepo.Get(ctx, p.Edge.ID)
@@ -702,7 +797,7 @@ func emitRowsAndOptionallyApply(
 			}
 			if gerr != nil || edge == nil {
 				row.Reason = "apply failed: cannot load edge"
-				_ = enc.Encode(row)
+				writeRow(row)
 				continue
 			}
 			newType := hmodels.DependencyType(row.NewType)
@@ -719,7 +814,7 @@ func emitRowsAndOptionallyApply(
 				} else {
 					row.Reason = "apply skipped: direction policy mismatch"
 				}
-				_ = enc.Encode(row)
+				writeRow(row)
 				continue
 			}
 
@@ -756,7 +851,7 @@ func emitRowsAndOptionallyApply(
 			}
 		}
 
-		_ = enc.Encode(row)
+		writeRow(row)
 	}
 	return nil
 }

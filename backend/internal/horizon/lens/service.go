@@ -1260,7 +1260,7 @@ func (s *LensService) DeleteLens(ctx context.Context, lensID string) error {
 
 	// Fast path: if we have ScopeFragments cache, decrement by fragment IDs directly.
 	// This avoids alias/canonicalPath mismatches when lens.Scope contains non-canonical paths.
-	if lens.ScopeFragments != nil && len(lens.ScopeFragments) > 0 {
+	if len(lens.ScopeFragments) > 0 {
 		seen := map[string]struct{}{}
 		for _, fragmentID := range lens.ScopeFragments {
 			fragmentID = strings.TrimSpace(fragmentID)

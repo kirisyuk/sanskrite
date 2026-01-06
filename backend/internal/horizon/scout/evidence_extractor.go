@@ -111,3 +111,12 @@ func extractFirstRelevantSentences(sentences []string, maxLength int) string {
 
 	return quote
 }
+
+// Keep helper functions referenced (gopls:unusedfunc). These are intentionally kept for near-term integration
+// into evidence selection logic (keyword-based snippet extraction).
+var (
+	_ = extractMetricKeywords
+	_ = containsKeywords
+	_ = splitIntoSentences
+	_ = extractFirstRelevantSentences
+)

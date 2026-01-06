@@ -132,7 +132,7 @@ func MapIndustryQIDsToPaths(qids []string) []string {
 		}
 		// Optional allow-list enforcement: if allow-list is present, keep only allowed.
 		// Accept exact match OR when any ancestor is allowed (so allow-list can be sector-level).
-		if t.AllowedIndustryPaths != nil && len(t.AllowedIndustryPaths) > 0 {
+		if len(t.AllowedIndustryPaths) > 0 {
 			if _, ok2 := t.AllowedIndustryPaths[p]; !ok2 {
 				// Check ancestors: /industry/a/b/c -> /industry/a/b -> /industry/a -> /industry
 				parts := strings.Split(strings.Trim(p, "/"), "/")
@@ -174,7 +174,7 @@ func NormalizeEventType(in string) string {
 				s = strings.ToLower(strings.TrimSpace(v))
 			}
 		}
-		if t.AllowedEventTypes != nil && len(t.AllowedEventTypes) > 0 {
+		if len(t.AllowedEventTypes) > 0 {
 			if _, ok := t.AllowedEventTypes[s]; ok {
 				return s
 			}
@@ -216,7 +216,7 @@ func NormalizeRelationType(in string) string {
 	case "DEPENDS":
 		return "DEPENDS_ON"
 	}
-	if t := getRuntimeTaxonomy(); t != nil && t.AllowedRelationTypes != nil && len(t.AllowedRelationTypes) > 0 {
+	if t := getRuntimeTaxonomy(); t != nil && len(t.AllowedRelationTypes) > 0 {
 		if _, ok := t.AllowedRelationTypes[s]; ok {
 			return s
 		}
@@ -249,13 +249,13 @@ func NormalizeSignalType(in string) string {
 			}
 		}
 		// Validate against allowed types
-		if t.SignalTypes != nil && len(t.SignalTypes) > 0 {
+		if len(t.SignalTypes) > 0 {
 			if _, ok := t.SignalTypes[s]; ok {
 				return s
 			}
 		}
 		// If taxonomy is loaded but type not found, return "other"
-		if t.AllowedSignalKinds != nil && len(t.AllowedSignalKinds) > 0 {
+		if len(t.AllowedSignalKinds) > 0 {
 			return "other"
 		}
 	}

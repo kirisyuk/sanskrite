@@ -1272,16 +1272,22 @@ func (e *ScoutEngine) processSupplyChains(
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
 		trace.Log(ctx, "SupplyChain", "SupplyChain.parse.ok", map[string]any{
-			"tenantId":        strings.TrimSpace(job.TenantID),
-			"projectId":       strings.TrimSpace(job.ProjectID),
-			"lensId":          lensID,
-			"jobId":           strings.TrimSpace(job.ID),
-			"target":          strings.TrimSpace(job.TargetCanonicalPath),
-			"chainsN":         len(chains),
-			"fragmentsN":      len(result.Fragments),
-			"edgesN":          len(result.Edges),
-			"parserStats":     result.Stats,
-			"chainContextLen": func() int { if job.State == nil { return 0 }; s, _ := job.State["chainContext"].(string); return len(s) }(),
+			"tenantId":    strings.TrimSpace(job.TenantID),
+			"projectId":   strings.TrimSpace(job.ProjectID),
+			"lensId":      lensID,
+			"jobId":       strings.TrimSpace(job.ID),
+			"target":      strings.TrimSpace(job.TargetCanonicalPath),
+			"chainsN":     len(chains),
+			"fragmentsN":  len(result.Fragments),
+			"edgesN":      len(result.Edges),
+			"parserStats": result.Stats,
+			"chainContextLen": func() int {
+				if job.State == nil {
+					return 0
+				}
+				s, _ := job.State["chainContext"].(string)
+				return len(s)
+			}(),
 		})
 	}
 
@@ -1484,7 +1490,7 @@ func (e *ScoutEngine) processSupplyChains(
 						e.logLine(ctx, job, "info", msg)
 					}
 				}
-			} else if derr != nil {
+			} else {
 				msg := fmt.Sprintf("[SupplyChainPolicy] ERROR validationPolicy err=%v", derr)
 				e.logLine(ctx, job, "warn", msg)
 			}
@@ -1899,20 +1905,20 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
 		trace.Log(ctx, "SupplyChain", "SupplyChain.schedule.children", map[string]any{
-			"tenantId":        strings.TrimSpace(job.TenantID),
-			"projectId":       strings.TrimSpace(job.ProjectID),
-			"lensId":          strings.TrimSpace(job.LensID),
-			"jobId":           strings.TrimSpace(job.ID),
-			"candidatesN":     len(candidates),
-			"enqueuedN":       scheduled,
-			"skippedActiveN":  skippedActive,
+			"tenantId":         strings.TrimSpace(job.TenantID),
+			"projectId":        strings.TrimSpace(job.ProjectID),
+			"lensId":           strings.TrimSpace(job.LensID),
+			"jobId":            strings.TrimSpace(job.ID),
+			"candidatesN":      len(candidates),
+			"enqueuedN":        scheduled,
+			"skippedActiveN":   skippedActive,
 			"skippedVerifiedN": skippedVerified,
-			"skippedMissingN": skippedMissingFrag,
-			"skippedDupN":     skippedDup,
-			"skippedVisitedN": skippedVisited,
-			"depth":           currentDepth,
-			"maxDepth":        maxDepth,
-			"cap":             maxChildren,
+			"skippedMissingN":  skippedMissingFrag,
+			"skippedDupN":      skippedDup,
+			"skippedVisitedN":  skippedVisited,
+			"depth":            currentDepth,
+			"maxDepth":         maxDepth,
+			"cap":              maxChildren,
 		})
 	} else {
 		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=0 candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d) depth=%d/%d cap=%d",
@@ -1924,7 +1930,7 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 }
 
 // identifyChainGaps finds gaps in the supply chain that should be filled.
-func (e *ScoutEngine) identifyChainGaps(result *ParsedChainResult, context *ChainContext) []string {
+func (e *ScoutEngine) identifyChainGaps(_ *ParsedChainResult, context *ChainContext) []string {
 	hints := make([]string, 0)
 
 	// Build edge maps to identify nodes with missing upstream/downstream
