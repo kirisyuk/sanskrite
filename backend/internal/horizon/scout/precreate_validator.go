@@ -23,18 +23,19 @@ var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
 
 // PreCreateValidator validates fragments before creation and applies corrective policies.
 type PreCreateValidator struct {
-	geoBuilder      *GeoHierarchyBuilder
-	orgDedup        *OrgDeduplicator
-	productDedup    *ProductDeduplicator
+	geoBuilder       *GeoHierarchyBuilder
+	orgDedup         *OrgDeduplicator
+	productDedup     *ProductDeduplicator
 	validationPolicy *policy.PolicyExecutor // Optional: unified validation policy
-	wikidataClient  coreontology.WikidataClientInterface
+	wikidataClient   coreontology.WikidataClientInterface
+	geonamesClient   coreontology.GeoNamesClientInterface
 }
 
 // NewPreCreateValidator creates a new pre-create validator.
 func NewPreCreateValidator(geoBuilder *GeoHierarchyBuilder, orgDedup *OrgDeduplicator, productDedup *ProductDeduplicator) *PreCreateValidator {
 	return &PreCreateValidator{
-		geoBuilder: geoBuilder,
-		orgDedup:   orgDedup,
+		geoBuilder:   geoBuilder,
+		orgDedup:     orgDedup,
 		productDedup: productDedup,
 	}
 }
@@ -49,6 +50,13 @@ func (v *PreCreateValidator) WithValidationPolicy(executor *policy.PolicyExecuto
 // NOTE: This does NOT enable fuzzy Wikidata search; it only uses GetEntityData when wikidataId is already present.
 func (v *PreCreateValidator) WithWikidataClient(client coreontology.WikidataClientInterface) *PreCreateValidator {
 	v.wikidataClient = client
+	return v
+}
+
+// WithGeoNamesClient sets the GeoNames client for deterministic geo enrichment/normalization.
+// NOTE: wiring only; actual geo canonicalization rules are implemented elsewhere.
+func (v *PreCreateValidator) WithGeoNamesClient(client coreontology.GeoNamesClientInterface) *PreCreateValidator {
+	v.geonamesClient = client
 	return v
 }
 
@@ -67,7 +75,7 @@ type ValidationResult struct {
 // - BlockReason if creation should be blocked entirely
 func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *models.HorizonFragment) (*ValidationResult, error) {
 	logPrefix := "[PreCreateValidator]"
-	
+
 	if v == nil {
 		return &ValidationResult{IsValid: true}, nil
 	}
@@ -76,7 +84,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		return &ValidationResult{IsValid: false, BlockReason: "nil fragment"}, nil
 	}
 
-	log.Printf("%s Validating fragment: id=%s, type=%s, canonicalPath=%s", 
+	log.Printf("%s Validating fragment: id=%s, type=%s, canonicalPath=%s",
 		logPrefix, fragment.ID, fragment.Type, fragment.CanonicalPath)
 
 	result := &ValidationResult{IsValid: true}
@@ -94,7 +102,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			log.Printf("%s ERROR: ValidationPolicy failed: %v", logPrefix, err)
 			// Fall through to hardcoded validation
 		} else {
-			log.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f", 
+			log.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f",
 				logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
 
 			switch decision.Action {

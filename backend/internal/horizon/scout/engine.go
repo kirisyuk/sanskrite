@@ -283,6 +283,7 @@ type ScoutEngine struct {
 	taxonomyClassifier      *TaxonomyClassifier
 	aiExecutor              *ai.AITaskExecutor
 	wikidataClient          coreontology.WikidataClientInterface // Optional: shared for enrichment/dedup (no search by default)
+	geonamesClient          coreontology.GeoNamesClientInterface // Optional: deterministic geo normalization/enrichment
 	spendLedger             *repo.HorizonSpendLedger
 	budgetPolicy            BudgetPolicy
 	propagationTrigger      func(ctx context.Context, fragmentID string) error
@@ -516,6 +517,15 @@ func (e *ScoutEngine) WithWikidataClient(client coreontology.WikidataClientInter
 	// Also update PreCreateValidator for conservative enrichment (QID-known only).
 	if e.preCreateValidator != nil {
 		e.preCreateValidator.WithWikidataClient(client)
+	}
+	return e
+}
+
+// WithGeoNamesClient sets the GeoNames client for deterministic geo operations.
+func (e *ScoutEngine) WithGeoNamesClient(client coreontology.GeoNamesClientInterface) *ScoutEngine {
+	e.geonamesClient = client
+	if e.preCreateValidator != nil {
+		e.preCreateValidator.WithGeoNamesClient(client)
 	}
 	return e
 }
@@ -1484,18 +1494,18 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 		}
 		trace.Log(ctx, "scout_research", "scout.research.start", map[string]any{
-			"tenantId":              strings.TrimSpace(job.TenantID),
-			"projectId":             strings.TrimSpace(job.ProjectID),
-			"lensId":                strings.TrimSpace(lensID),
-			"jobId":                 strings.TrimSpace(job.ID),
-			"targetCanonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
-			"missingN":              len(validationResult.MissingInfo),
-			"missingTop":            trace.StrSlice(validationResult.MissingInfo, 6),
-			"focus":                 trace.Trunc(focus, 140),
-			"spherePathsTop":        trace.StrSlice(spherePaths, 10),
-			"keywordsTop":           trace.StrSlice(keywords, 10),
-			"originalQueryLen":      len(originalQuery),
-			"decompositionHintsN":   len(decompositionHints),
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"projectId":           strings.TrimSpace(job.ProjectID),
+			"lensId":              strings.TrimSpace(lensID),
+			"jobId":               strings.TrimSpace(job.ID),
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"missingN":            len(validationResult.MissingInfo),
+			"missingTop":          trace.StrSlice(validationResult.MissingInfo, 6),
+			"focus":               trace.Trunc(focus, 140),
+			"spherePathsTop":      trace.StrSlice(spherePaths, 10),
+			"keywordsTop":         trace.StrSlice(keywords, 10),
+			"originalQueryLen":    len(originalQuery),
+			"decompositionHintsN": len(decompositionHints),
 		})
 		enrichedFragment, newRelations, newSupplyChains, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints)
 		if err == nil {

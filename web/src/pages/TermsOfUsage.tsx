@@ -212,6 +212,12 @@ export default function TermsOfUsage() {
             and privacy policies.
           </p>
           <p className="mt-2">
+            <strong>Open data attribution:</strong> The Service may use geographic data from{' '}
+            <a href="https://www.geonames.org/" className="underline" target="_blank" rel="noopener noreferrer">GeoNames</a>
+            . Data © GeoNames and licensed under{' '}
+            <a href="https://creativecommons.org/licenses/by/4.0/" className="underline" target="_blank" rel="noopener noreferrer">CC BY</a>.
+          </p>
+          <p className="mt-2">
             The Company does NOT endorse, warrant, or assume any responsibility for any Third-Party Services. Your use of Third-Party Services is entirely at your 
             own risk. You agree to review and comply with the terms and policies of any Third-Party Services you access through the Service.
           </p>

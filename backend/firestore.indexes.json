@@ -934,6 +934,32 @@
         { "fieldPath": "lensId", "order": "ASCENDING" },
         { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "external_data_cache",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "service", "order": "ASCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "key", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "external_data_cache",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "service", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "external_data_cache",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "service", "order": "ASCENDING" },
+        { "fieldPath": "types", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

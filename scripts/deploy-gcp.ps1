@@ -16,7 +16,7 @@ $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 # Build and push Go API
 Exec "gcloud builds submit `"$repo/backend`" --project $ProjectId --tag gcr.io/$ProjectId/sanskrite-api:latest"
 if (-not $BuildOnly) {
-  Exec "gcloud run deploy sanskrite-api --image gcr.io/$ProjectId/sanskrite-api:latest --project $ProjectId --region $Region --allow-unauthenticated --port 8080"
+  Exec "gcloud run deploy sanskrite-api --image gcr.io/$ProjectId/sanskrite-api:latest --project $ProjectId --region $Region --allow-unauthenticated --port 8080 --set-env-vars GEONAMES_USERNAME=kirisyuk"
 }
 
 # Build and push Telegram service

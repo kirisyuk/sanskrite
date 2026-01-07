@@ -32,6 +32,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/domain"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
+	"github.com/igorkirisyuk/sanskrite/internal/geonames"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -461,6 +462,10 @@ func main() {
 			logger.Printf("Tavily client disabled: TAVILY_API_KEY not set (Research mode and Web Search will not work)")
 		}
 
+		// Universal external data cache (Firestore).
+		// Used by external providers to avoid repeated calls and stabilize normalization.
+		externalCacheRepo := repo.NewExternalDataCacheRepository(fsClient.Client())
+
 		// Initialize Wikidata client (for Knowledge Search tool)
 		// Wikidata doesn't require API key - uses public API
 		wikidataClient := httphandlers.GetWikidataClientFromEnv()
@@ -469,6 +474,27 @@ func main() {
 			logger.Printf("Wikidata client initialized (Knowledge Search tool enabled)")
 		} else {
 			logger.Printf("Wikidata client disabled: initialization failed")
+		}
+
+		// Initialize GeoNames client (for deterministic geo hierarchy normalization)
+		geonamesClient := httphandlers.GetGeoNamesClientFromEnv()
+		var geonamesClientForHorizon ontology.GeoNamesClientInterface
+		if geonamesClient != nil {
+			gnUser := strings.TrimSpace(os.Getenv("GEONAMES_USERNAME"))
+			if gnUser == "" {
+				gnUser = strings.TrimSpace(os.Getenv("HORIZON_GEONAMES_USERNAME"))
+			}
+			if gnUser == "" {
+				gnUser = "<unknown>"
+			}
+			logger.Printf("GeoNames client initialized (geo hierarchy resolver enabled): username=%s", gnUser)
+			geonamesClientForHorizon = geonames.NewCachedClient(
+				geonames.NewAdapter(geonamesClient),
+				externalCacheRepo,
+				geonames.CacheOptionsFromEnv(),
+			)
+		} else {
+			logger.Printf("GeoNames client disabled: GEONAMES_USERNAME not set")
 		}
 
 		// Initialize Ontology tools
@@ -1212,6 +1238,10 @@ func main() {
 			if wikidataClient != nil {
 				scoutEngine.WithWikidataClient(wikidata.NewAdapter(wikidataClient))
 			}
+			// Wire GeoNames into Scout for deterministic /loc normalization (country/admin1/city).
+			if geonamesClientForHorizon != nil {
+				scoutEngine.WithGeoNamesClient(geonamesClientForHorizon)
+			}
 			// Unified ontology facts emitter: allows Scout to persist minimal OntologyFacts even when sources pipeline is paused.
 			scoutEngine.WithFactEmitter(ontology.NewFactEmitter(ontologyFactsRepo, pub))
 			// Budget enforcement wiring.
@@ -1232,6 +1262,9 @@ func main() {
 				canonizationPolicyExecutor,
 				orgDeduplicator,
 			)
+			if geonamesClientForHorizon != nil {
+				canonicalPathResolver.WithGeoNamesClient(geonamesClientForHorizon)
+			}
 			scoutEngine.WithCanonicalPathResolver(canonicalPathResolver)
 			// Wire LensesRepository for updating lens ViewConfig on assembly completion
 			scoutEngine.WithLensesRepository(horizonLensesRepo)
@@ -1471,7 +1504,7 @@ func main() {
 		if err := scoutEngine.ExecuteScoutingJob(execCtx, job); err != nil {
 			// Log detailed error for debugging
 			logger.Printf("ERROR: Scout job execution failed: jobId=%s, canonicalPath=%s, error=%v", jobID, job.TargetCanonicalPath, err)
-			
+
 			// Retry behavior:
 			// - transient failures: return 500 to let Cloud Tasks retry
 			// - last attempt: mark failed and ACK (200) so it becomes "poison" (no more retries)

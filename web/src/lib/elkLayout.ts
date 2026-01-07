@@ -1421,7 +1421,13 @@ export async function layoutLevelsTwoPane<T = any>(
   };
 
   const groupDimsWrap = (children: Node<T>[], parentId: string) => {
-    const safeChildren = Array.isArray(children) ? children.filter(Boolean) : [];
+    // IMPORTANT: group grid must be computed from VISIBLE children only.
+    // If we include `hidden` nodes (e.g. local relation filters), we can end up reserving empty rows/slots.
+    const safeChildren = Array.isArray(children)
+      ? children
+          .filter(Boolean)
+          .filter((n) => !preHiddenIds.has(n.id) && !Boolean((n as any).hidden))
+      : [];
     const safeCount = safeChildren.length;
     if (safeCount <= 0) {
       return {
@@ -1439,8 +1445,9 @@ export async function layoutLevelsTwoPane<T = any>(
     // Row policy is applied PER TYPE BLOCK (otherwise splitting into types can create "empty rows").
     const rowsForCount = (cnt: number): number => {
       const c = Math.max(0, Math.floor(cnt || 0));
+      // UX: for small groups (<5 items) always keep a single row to avoid wasting vertical space.
       if (c <= 0) return 1;
-      if (c <= 2) return c;
+      if (c <= 4) return 1;
       if (c <= 12) return 2;
       return 3;
     };
@@ -1514,13 +1521,11 @@ export async function layoutLevelsTwoPane<T = any>(
     let cursorX = 0;
     let totalCols = 0;
     let maxInnerH = 0;
+    let maxRows = 1;
     for (let i = 0; i < typeKeys.length; i++) {
       const typeKey = typeKeys[i]!;
       const list = byType.get(typeKey) || [];
       if (list.length === 0) continue;
-      const rowsForType = rowsForCount(list.length);
-      const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
-      maxInnerH = Math.max(maxInnerH, innerHForType);
 
       // Optionally group within the type block by the PRIORITY relation type to the parent.
       const relBlocks: RelBlock<T>[] = [];
@@ -1532,6 +1537,19 @@ export async function layoutLevelsTwoPane<T = any>(
           arr.push(n);
           byRel.set(rel, arr);
         }
+        // Auto-shrink rows if the "last row" would be entirely empty in this type block.
+        // Example: ORG block has many nodes overall (so rowsForCount => 2),
+        // but split by relation into many 1-node sub-blocks => second row is unused.
+        const baseRowsForType = rowsForCount(list.length);
+        let maxRelSize = 1;
+        for (const v of byRel.values()) {
+          maxRelSize = Math.max(maxRelSize, (v || []).length);
+        }
+        const rowsForType = Math.max(1, Math.min(baseRowsForType, maxRelSize));
+        const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
+        maxInnerH = Math.max(maxInnerH, innerHForType);
+        maxRows = Math.max(maxRows, rowsForType);
+
         const relKeys = Array.from(byRel.keys()).sort((a, b) => {
           const ap = getEdgePriority(a);
           const bp = getEdgePriority(b);
@@ -1566,6 +1584,11 @@ export async function layoutLevelsTwoPane<T = any>(
         blocks.push({ typeKey, rows: rowsForType, cols: relColsTotal, startX: cursorX, blockW: typeBlockW, relBlocks });
         cursorX += typeBlockW;
       } else {
+        const rowsForType = rowsForCount(list.length);
+        const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
+        maxInnerH = Math.max(maxInnerH, innerHForType);
+        maxRows = Math.max(maxRows, rowsForType);
+
         const nodesFlat = list.slice().sort((a, b) => {
           const al = String((a.data as any)?.label || a.id);
           const bl = String((b.data as any)?.label || b.id);
@@ -1595,7 +1618,7 @@ export async function layoutLevelsTwoPane<T = any>(
     const padBottom = PAD_BOTTOM_BASE + (useRelGrouping ? REL_SUBTITLE_H : 0);
     const relLabelY = PAD_TOP + innerH + 4;
     const h = innerH + PAD_TOP + padBottom;
-    return { w, h, cols: totalCols, rows: Math.max(1, Math.floor(maxInnerH / nodeHeight)), blocks, interBlockGapX, relLabelY, padBottom, interRelGapX };
+    return { w, h, cols: totalCols, rows: Math.max(1, maxRows), blocks, interBlockGapX, relLabelY, padBottom, interRelGapX };
   };
 
   // === 5) Place Right hierarchy nodes ===
@@ -1749,9 +1772,9 @@ export async function layoutLevelsTwoPane<T = any>(
     })();
 
     // Persons: always bucket by type (if >1)
-    if (tk === 'PERSON') return { kind: 'persons', title: 'Persons', visualType: 'PERSON' };
+    if (tk === 'PERSON') return { kind: 'persons', title: 'People', visualType: 'PERSON' };
     // Geolocation: geo-like nodes
-    if (GEO_TYPES.has(tk) || tk.includes('GEO')) return { kind: 'geolocation', title: 'Geolocation', visualType: 'GEO_REGION' };
+    if (GEO_TYPES.has(tk) || tk.includes('GEO')) return { kind: 'geolocation', title: 'Locations', visualType: 'GEO_REGION' };
     // Products: only for "incoming products" (these are the products that end up on the right pane)
     if (tk === 'PRODUCT' && String(d?.directionFromParent || '').trim() === 'incoming') return { kind: 'products', title: 'Products', visualType: 'PRODUCT' };
     // Supply: immediate suppliers/producers feeding INTO the expanded node (incoming edges to central).
@@ -1760,7 +1783,7 @@ export async function layoutLevelsTwoPane<T = any>(
       const et = normalizeEdgeType(String(d?.edgeTypeFromParent || '').trim());
       const dir = String(d?.directionFromParent || '').trim();
       if ((pairTypes && Array.from(pairTypes).some((x) => SUPPLY_EDGE_TYPES.has(normalizeEdgeType(x)))) || (SUPPLY_EDGE_TYPES.has(et) && dir === 'incoming')) {
-        return { kind: 'suppliers', title: 'Supply', visualType: 'SUPPLIER' };
+        return { kind: 'suppliers', title: 'Suppliers', visualType: 'SUPPLIER' };
       }
     }
     // Control: organizations that are owners/investors/controllers (ignore weak reverse relations)
@@ -1772,14 +1795,14 @@ export async function layoutLevelsTwoPane<T = any>(
         CONTROL_EDGE_TYPES.has(et) ||
         (pairTypes && Array.from(pairTypes).some((x) => CONTROL_EDGE_TYPES.has(normalizeEdgeType(x))))
       ) {
-        return { kind: 'control', title: 'Control', visualType: 'ORGANIZATION' };
+        return { kind: 'control', title: 'Stakeholders', visualType: 'ORGANIZATION' };
       }
       // Suppliers: organizations that supply to us (SUPPLIES_TO incoming = they supply to us)
       if (
         (pairTypes && Array.from(pairTypes).some((x) => SUPPLY_EDGE_TYPES.has(normalizeEdgeType(x)))) ||
         (SUPPLY_EDGE_TYPES.has(et) && dir === 'incoming')
       ) {
-        return { kind: 'suppliers', title: 'Supply', visualType: 'SUPPLIER' };
+        return { kind: 'suppliers', title: 'Suppliers', visualType: 'SUPPLIER' };
       }
       // If we know the related counterpart in the right-hierarchy, prefer the best hierarchy edge between them.
       if (relatedId) {
@@ -1789,7 +1812,7 @@ export async function layoutLevelsTwoPane<T = any>(
           const key = a < b ? `${a}||${b}` : `${b}||${a}`;
           const pc = bestPcByPair.get(key);
           const et2 = normalizeEdgeType(String((pc as any)?.et || '').trim());
-          if (CONTROL_EDGE_TYPES.has(et2)) return { kind: 'control', title: 'Control', visualType: 'ORGANIZATION' };
+          if (CONTROL_EDGE_TYPES.has(et2)) return { kind: 'control', title: 'Stakeholders', visualType: 'ORGANIZATION' };
         }
       }
     }
@@ -2053,7 +2076,9 @@ export async function layoutLevelsTwoPane<T = any>(
   const leftBandRightX = RIGHT_BASE_X - GROUP_GAP_X;
 
   for (const rn of rightSorted) {
-    const children = downstreamByRight.get(rn.id) || [];
+    const allChildren = downstreamByRight.get(rn.id) || [];
+    // Build groups only from visible children; hidden ones shouldn't reserve layout space.
+    const children = allChildren.filter((c) => !preHiddenIds.has(c.id) && !Boolean((c as any).hidden));
     if (children.length === 0) continue;
     const rp = rightPos.get(rn.id)!;
     const dim = groupDimsWrap(children, rn.id);
@@ -2120,6 +2145,57 @@ export async function layoutLevelsTwoPane<T = any>(
   // Pack groups in the left band to prevent overlaps.
   // Desired behavior: if two groups overlap, the lower one gets a slot below the upper one.
   const GROUP_STACK_GAP_Y = Math.max(16, Math.floor(groupChildGapY * 0.4)); // compact but readable
+
+  // === Barycentric pull for groups: move each group towards the center-of-mass of its backbone neighbors ===
+  // This prevents long edges when an expanded node (e.g. Lithography Scanner) has many consumers above it.
+  {
+    // Build adjacency: parentId -> Set<backbone neighbor ids> (via real edges, not proxy).
+    const backboneNeighbors = new Map<string, Set<string>>();
+    const rightIdSet = new Set(rightSorted.map((n) => n.id));
+    for (const e of (edges || []) as any[]) {
+      const eid = String(e?.id || '').trim();
+      if (eid.startsWith('levels:agg:')) continue;
+      if (eid.startsWith('levels:stackproxy:')) continue;
+      if (eid.startsWith('levels:gproxy:')) continue;
+      if (Boolean(e?.data?.levelsAgg)) continue;
+      if (Boolean(e?.data?.levelsStackProxy)) continue;
+      if (Boolean(e?.data?.levelsGroupProxy)) continue;
+      const s = normId(e?.source);
+      const t = normId(e?.target);
+      if (!s || !t || s === t) continue;
+      // Both endpoints must be in backbone.
+      if (!rightIdSet.has(s) || !rightIdSet.has(t)) continue;
+      const setS = backboneNeighbors.get(s) || new Set<string>();
+      setS.add(t);
+      backboneNeighbors.set(s, setS);
+      const setT = backboneNeighbors.get(t) || new Set<string>();
+      setT.add(s);
+      backboneNeighbors.set(t, setT);
+    }
+
+    // For each group, compute pull = average Y of backbone neighbors of parentId.
+    // Blend desiredGy towards pull (weight 0.5) to avoid drastic jumps.
+    const PULL_WEIGHT = 0.5;
+    for (const g of groupInfos) {
+      const neighbors = backboneNeighbors.get(g.parentId);
+      if (!neighbors || neighbors.size === 0) continue;
+      let sumY = 0;
+      let count = 0;
+      for (const nid of neighbors) {
+        const p = rightPos.get(nid);
+        if (p) {
+          sumY += p.y + nodeHeight / 2;
+          count++;
+        }
+      }
+      if (count === 0) continue;
+      const pullCenterY = sumY / count;
+      const pullGroupY = pullCenterY - g.h / 2;
+      // Blend: move desiredGy towards pullGroupY.
+      g.desiredGy = g.desiredGy * (1 - PULL_WEIGHT) + pullGroupY * PULL_WEIGHT;
+    }
+  }
+
   groupInfos.sort((a, b) => a.desiredGy - b.desiredGy);
   let prevBottom = -Infinity;
   const anchoredRightIds = new Set<string>(); // right nodes that must stay aligned with their (packed) group

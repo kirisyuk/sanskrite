@@ -127,6 +127,7 @@ firebase hosting:channel:list
 - `GCP_PROJECT_ID` - Your GCP project ID
 - `FRONTEND_ORIGIN` - Frontend URL for CORS
 - `TELEGRAM_SERVICE_URL` - Telegram service URL
+- `GEONAMES_USERNAME` - GeoNames username (used for deterministic geo hierarchy normalization)
 - `PORT` - Auto-set by Cloud Run (8080)
 
 ### Telegram Service (Cloud Run)

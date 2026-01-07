@@ -42,6 +42,7 @@ import {
 } from '../lib/elkLayout';
 import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
+import { ExpandEmptyToast } from './ExpandEmptyToast';
 
 /**
  * Custom edge that draws an arc (inverted parabola) going UP and over.
@@ -500,6 +501,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [error, setError] = React.useState<string | null>(null);
   const [lensItems, setLensItems] = React.useState<LensItem[]>([]);
   const [loadingFragmentId, setLoadingFragmentId] = React.useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
+  const [expandEmptyToast, setExpandEmptyToast] = React.useState(false);
+  const [expandModeGlow, setExpandModeGlow] = React.useState(false);
   const [scopeScoutModal, setScopeScoutModal] = React.useState<{
     fragmentId: string;
     canonicalPath?: string;
@@ -3253,6 +3257,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const ELK_LAYER_SPACING = 150; // Увеличено для incoming/outgoing
   const ELK_MAX_CHILD_ROWS = 3; // Максимум 3 строки детей
 
+  // Focus/center viewport on a specific fragment node (used after expand/collapse to keep context).
+  const focusOnFragment = React.useCallback((rawId: string) => {
+    const fragmentId = String(rawId || '').trim();
+    const inst: any = reactFlowInstanceRef.current;
+    if (!fragmentId || !inst) return;
+    const node: any = inst.getNode?.(fragmentId);
+    if (!node) return;
+    const x0 = (node.positionAbsolute?.x ?? node.position?.x ?? 0);
+    const y0 = (node.positionAbsolute?.y ?? node.position?.y ?? 0);
+    const w = typeof node.width === 'number' ? node.width : ELK_NODE_WIDTH;
+    const h = typeof node.height === 'number' ? node.height : ELK_NODE_HEIGHT;
+    const cx = x0 + w / 2;
+    const cy = y0 + h / 2;
+    const z = inst.getZoom?.();
+    // Prefer setCenter (keeps zoom stable). Fall back to fitView if unavailable.
+    if (typeof inst.setCenter === 'function') {
+      inst.setCenter(cx, cy, { zoom: typeof z === 'number' ? z : undefined, duration: 360 });
+      return;
+    }
+    if (typeof inst.fitView === 'function') {
+      inst.fitView({ nodes: [node], padding: 0.25, duration: 360 });
+    }
+  }, [ELK_NODE_HEIGHT, ELK_NODE_WIDTH]);
+
   // Загружаем существующие LensItems при монтировании
   React.useEffect(() => {
     if (!lensId) {
@@ -4094,6 +4122,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const updatedEdges = recalculateLinearHandles(nextEdges, withCallbacks);
         setNodes(withCallbacks as any);
         setEdges(updatedEdges as any);
+        setTimeout(() => focusOnFragment(fragmentId), 80);
         return;
       }
       if (isLevelsLayout) {
@@ -4119,6 +4148,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const updatedEdges = recalculateLevelsTwoPaneHandles(nextEdges, withCallbacks as any);
         setNodes(withCallbacks as any);
         setEdges(updatedEdges as any);
+        setTimeout(() => focusOnFragment(fragmentId), 80);
         return;
       }
 
@@ -4150,11 +4180,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Freeform handle recalculation is not strictly required here; keep existing edge handles.
       setNodes(withCallbacks as any);
       setEdges(outEdges as any);
+      setTimeout(() => focusOnFragment(fragmentId), 80);
     } catch (e) {
       console.error('[Cockpit] Collapse relayout failed', e);
       // Fallback: still update state without relayout
       setNodes(nextNodes as any);
       setEdges(nextEdges as any);
+      setTimeout(() => focusOnFragment(fragmentId), 80);
     }
   }, [
     setNodes,
@@ -4388,6 +4420,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           ),
         );
         setLoadingFragmentId(null);
+        // Show toast notification for empty expand result + glow on expand mode button
+        setExpandEmptyToast(true);
+        setExpandModeGlow(true);
+        setTimeout(() => setExpandModeGlow(false), 2500); // Glow fades after toast
         return;
       }
 
@@ -5380,6 +5416,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           if (toFit.length > 0) {
             inst.fitView?.({ nodes: toFit, padding: 0.25, duration: 400 });
           }
+          // Always keep the expanded/collapsed node in focus (centered).
+          focusOnFragment(fragmentId);
         }
       }, 100);
 
@@ -6051,6 +6089,32 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       };
     };
 
+    // Persisted selection highlight (keeps an edge emphasized until the user clicks elsewhere).
+    // Hover still works normally; we only skip this overlay in "edge hover" mode (hoveredEdgeId),
+    // because that path intentionally fades everything except the hovered edge.
+    const applySelectedEdge = (list: Edge[]) => {
+      const sel = String(selectedEdgeId || '').trim();
+      if (!sel) return list;
+      const out = list.map((e) => {
+        if (String(e.id || '').trim() !== sel) return e;
+        const { baseStyle } = baseStyled(e);
+        const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+        return withLabel(
+          e,
+          false,
+          {
+            ...baseStyle,
+            opacity: 1,
+            strokeWidth: strokeWidth + 1.8,
+          },
+          true,
+        );
+      });
+      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
+      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
+      return [...rest, ...raised];
+    };
+
     // Edge hover: show only this edge's label
     if (hoveredEdgeId) {
       const out = edgesForDisplay.map((e) => {
@@ -6077,10 +6141,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const groupNode = nodes.find((n) => n.id === hoveredGroupId);
       const gd: any = groupNode?.data;
       if (!groupNode || !gd?.isGroup) {
-        return edgesForDisplay.map((e) => {
+        return applySelectedEdge(edgesForDisplay.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
-        });
+        }));
       }
 
       const groupEdgeType = normalizeEdgeType(gd.groupEdgeType);
@@ -6099,10 +6163,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           .map((n) => n.id),
       );
       if (!groupParentId || childIds.size === 0) {
-        return edgesForDisplay.map((e) => {
+        return applySelectedEdge(edgesForDisplay.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
-        });
+        }));
       }
 
       const isGroupEdge = (e: any) => {
@@ -6139,7 +6203,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
       const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
       const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return [...rest, ...raised];
+      return applySelectedEdge([...rest, ...raised]);
     }
 
     // Hover highlight mode: highlight selected relation cluster and fade everything else.
@@ -6180,7 +6244,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
       const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
       const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return [...rest, ...raised];
+      return applySelectedEdge([...rest, ...raised]);
     }
 
     // Node hover: highlight incident edges and show their labels
@@ -6201,7 +6265,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
       const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
       const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return [...rest, ...raised];
+      return applySelectedEdge([...rest, ...raised]);
     }
 
     // Selected node (when not hovering): highlight incident edges, show labels
@@ -6222,12 +6286,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
       const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
       const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return [...rest, ...raised];
+      return applySelectedEdge([...rest, ...raised]);
     }
 
     // Default: dim all edges, hide labels
-    return edgesForDisplay;
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId]);
+    return applySelectedEdge(edgesForDisplay);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -7597,6 +7661,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     event.stopPropagation();
     event.preventDefault();
 
+    // Selecting a node should clear any selected edge highlight.
+    setSelectedEdgeId(null);
+    onEdgeSelect?.(null, null);
+
     // Levels stack preview: clicking a collapsed stack controller shows chip overlays.
     // Clicking elsewhere (another node) closes the preview.
     const clearStackPreview = () => {
@@ -7763,6 +7831,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     event.stopPropagation();
     event.preventDefault();
 
+    // Persist edge highlight until user explicitly clicks elsewhere / another object.
+    setSelectedEdgeId(String(edge.id || '').trim() || null);
+
     // Click elsewhere should close stack preview and local filters too.
     if (stackPreviewControllerIdRef.current) {
       const prevId = stackPreviewControllerIdRef.current;
@@ -7822,6 +7893,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (onEdgeSelect) {
       onEdgeSelect(null, null);
     }
+    setSelectedEdgeId(null);
     // Also clear graph-query highlight (UX: click elsewhere returns to normal view)
     // Clear stack preview overlay (Levels).
     if (stackPreviewControllerIdRef.current) {
@@ -8434,13 +8506,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               gap: 6,
               padding: '6px 8px',
               borderRadius: 10,
-              border: '1px solid var(--border-subtle)',
+              border: expandModeGlow ? '1px solid rgba(245, 158, 11, 0.6)' : '1px solid var(--border-subtle)',
               background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.40)',
               color: 'var(--text-heading)',
               cursor: 'pointer',
               fontSize: 12,
               fontWeight: 750,
               lineHeight: 1,
+              boxShadow: expandModeGlow
+                ? '0 0 12px rgba(245, 158, 11, 0.4), 0 0 24px rgba(245, 158, 11, 0.2)'
+                : 'none',
+              transition: 'box-shadow 0.4s ease, border-color 0.4s ease',
             }}
           >
             <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 800 }}>Expand:</span>
@@ -10550,6 +10626,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         </div>,
         document.body
       )}
+
+      {/* Toast notification for empty expand results */}
+      <ExpandEmptyToast
+        visible={expandEmptyToast}
+        onHide={() => setExpandEmptyToast(false)}
+        message="No related objects found"
+        subMessage="Try a different expansion mode"
+      />
     </div>
   );
 };
