@@ -54,6 +54,7 @@ var (
 	startAfter = flag.String("start-after", "", "Resume cursor: start scanning after this Firestore document ID (__name__)")
 	cursorFile = flag.String("cursor-file", "", "Optional path to persist resume cursor. If set and --start-after is empty, it will be loaded from this file; cursor is saved periodically during scan.")
 	saveCursorEveryPages = flag.Int("save-cursor-every-pages", 1, "Persist cursor after every N scanned pages when --cursor-file is set (minimum 1).")
+	scanProgressEveryPages = flag.Int("scan-progress-every-pages", 10, "Log scan progress every N pages during collectPairs (0 disables).")
 	firestoreRefreshInterval = flag.Duration("firestore-refresh-interval", 45*time.Minute, "Recreate Firestore client every this interval (0 disables). Useful for very long runs where auth may expire.")
 
 	apply = flag.Bool("apply", false, "Apply edge type changes (default: dry-run log only)")
@@ -173,6 +174,9 @@ func main() {
 	if *saveCursorEveryPages <= 0 {
 		*saveCursorEveryPages = 1
 	}
+	if *scanProgressEveryPages < 0 {
+		*scanProgressEveryPages = 0
+	}
 	// Load cursor from file if requested and explicit --start-after is empty.
 	if strings.TrimSpace(*startAfter) == "" && strings.TrimSpace(*cursorFile) != "" {
 		if st, err := readCursorFile(*cursorFile); err == nil && strings.TrimSpace(st.StartAfter) != "" {
@@ -244,6 +248,7 @@ func main() {
 			StartAfter: strings.TrimSpace(resume),
 			UpdatedAt: time.Now().UTC(),
 			Scanned:   scanned,
+			Collected: len(pairs),
 		})
 	}
 	log.Printf("collected=%d scanned=%d", len(pairs), scanned)
@@ -461,6 +466,14 @@ func collectPairs(ctx context.Context, fs *firestoreSession, cache *fragmentCach
 			return out, lastSeen, scanned, err
 		}
 		base = makeBase(db)
+		// Critical: do NOT call fs.DB() while a page iterator is active, because refreshInterval closes the client.
+		// Load fragments using the same db client as this page's iterator.
+		if cache != nil {
+			frRepo := hrepo.NewHorizonFragmentsRepository(db)
+			cache.setLoader(func(ctx context.Context, id string) (*hmodels.HorizonFragment, error) {
+				return frRepo.Get(ctx, id)
+			})
+		}
 
 		q := base.Limit(*pageSize)
 		if lastSeen != "" {
@@ -502,6 +515,27 @@ func collectPairs(ctx context.Context, fs *firestoreSession, cache *fragmentCach
 			if sid == "" || tid == "" {
 				continue
 			}
+			// Fast-path filter: if canonical paths are present in qualifiers, we can avoid fragment reads
+			// for obviously non PERSON<->ORG edges.
+			sp := qualString(e.Qualifiers, "sourceCanonicalPath")
+			tp := qualString(e.Qualifiers, "targetCanonicalPath")
+			var personID, orgID string
+			if sp != "" && tp != "" {
+				spPerson, spOrg := isPersonCanonicalPath(sp), isOrgCanonicalPath(sp)
+				tpPerson, tpOrg := isPersonCanonicalPath(tp), isOrgCanonicalPath(tp)
+				if (spPerson && tpOrg) || (spOrg && tpPerson) {
+					if spPerson {
+						personID, orgID = sid, tid
+					} else {
+						personID, orgID = tid, sid
+					}
+				} else if (spPerson || spOrg || tpPerson || tpOrg) && !(spPerson && tpPerson) && !(spOrg && tpOrg) {
+					// Paths indicate some known entity kinds but not a PERSON<->ORG pair; skip without reads.
+					continue
+				}
+			}
+
+			// Load fragments (only after passing fast-path or if fast-path couldn't decide).
 			sf, err1 := cache.get(ctx, sid)
 			tf, err2 := cache.get(ctx, tid)
 			if err1 != nil || err2 != nil || sf == nil || tf == nil {
@@ -509,12 +543,22 @@ func collectPairs(ctx context.Context, fs *firestoreSession, cache *fragmentCach
 			}
 
 			person, org := (*hmodels.HorizonFragment)(nil), (*hmodels.HorizonFragment)(nil)
-			if sf.Type == hmodels.FragmentTypePerson && tf.Type == hmodels.FragmentTypeOrganization {
-				person, org = sf, tf
-			} else if sf.Type == hmodels.FragmentTypeOrganization && tf.Type == hmodels.FragmentTypePerson {
-				person, org = tf, sf
+			if personID != "" && orgID != "" {
+				// Use qualifier-based direction if available.
+				if strings.EqualFold(personID, sid) {
+					person, org = sf, tf
+				} else {
+					person, org = tf, sf
+				}
 			} else {
-				continue
+				// Fallback to fragment types.
+				if sf.Type == hmodels.FragmentTypePerson && tf.Type == hmodels.FragmentTypeOrganization {
+					person, org = sf, tf
+				} else if sf.Type == hmodels.FragmentTypeOrganization && tf.Type == hmodels.FragmentTypePerson {
+					person, org = tf, sf
+				} else {
+					continue
+				}
 			}
 
 			out = append(out, PairInput{
@@ -539,9 +583,14 @@ func collectPairs(ctx context.Context, fs *firestoreSession, cache *fragmentCach
 				StartAfter: strings.TrimSpace(lastSeen),
 				UpdatedAt: time.Now().UTC(),
 				Scanned:   scanned,
+				Collected: len(out),
 			})
 		}
+		if *scanProgressEveryPages > 0 && pages%max(1, *scanProgressEveryPages) == 0 {
+			log.Printf("scan progress: pages=%d scanned=%d collected=%d lastSeen=%s", pages, scanned, len(out), lastSeen)
+		}
 		if pageCount < *pageSize {
+			log.Printf("scan done: pages=%d scanned=%d collected=%d lastSeen=%s", pages, scanned, len(out), lastSeen)
 			break
 		}
 	}
@@ -1058,6 +1107,24 @@ func safePreview(s string, max int) string {
 	return s[:max] + "..."
 }
 
+func qualString(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+func isPersonCanonicalPath(p string) bool { return strings.HasPrefix(strings.TrimSpace(p), "/person/") }
+func isOrgCanonicalPath(p string) bool    { return strings.HasPrefix(strings.TrimSpace(p), "/org/") }
+
 // =============================================================================
 // Fragment cache (reduces Firestore reads)
 // =============================================================================
@@ -1065,15 +1132,29 @@ func safePreview(s string, max int) string {
 type fragmentCache struct {
 	load func(ctx context.Context, id string) (*hmodels.HorizonFragment, error)
 	mu   sync.RWMutex
-	m    map[string]*hmodels.HorizonFragment
+	m    map[string]fragmentCacheEntry
+}
+
+type fragmentCacheEntry struct {
+	f   *hmodels.HorizonFragment
+	err error
 }
 
 func newFragmentCache(load func(ctx context.Context, id string) (*hmodels.HorizonFragment, error)) *fragmentCache {
-	return &fragmentCache{load: load, m: map[string]*hmodels.HorizonFragment{}}
+	return &fragmentCache{load: load, m: map[string]fragmentCacheEntry{}}
+}
+
+func (c *fragmentCache) setLoader(load func(ctx context.Context, id string) (*hmodels.HorizonFragment, error)) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.load = load
+	c.mu.Unlock()
 }
 
 func (c *fragmentCache) get(ctx context.Context, id string) (*hmodels.HorizonFragment, error) {
-	if c == nil || c.load == nil {
+	if c == nil {
 		return nil, fmt.Errorf("fragment cache not configured")
 	}
 	id = strings.TrimSpace(id)
@@ -1081,19 +1162,56 @@ func (c *fragmentCache) get(ctx context.Context, id string) (*hmodels.HorizonFra
 		return nil, fmt.Errorf("empty id")
 	}
 	c.mu.RLock()
-	if v, ok := c.m[id]; ok && v != nil {
+	load := c.load
+	if ent, ok := c.m[id]; ok {
 		c.mu.RUnlock()
-		return v, nil
+		if ent.err != nil {
+			return nil, ent.err
+		}
+		if ent.f != nil {
+			return ent.f, nil
+		}
+		return nil, fmt.Errorf("fragment not found: %s", id)
 	}
 	c.mu.RUnlock()
-	f, err := c.load(ctx, id)
+	if load == nil {
+		return nil, fmt.Errorf("fragment cache not configured")
+	}
+
+	// Avoid getting stuck on a single fragment read forever.
+	loadCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	f, err := load(loadCtx, id)
 	if err != nil || f == nil {
+		// Cache only "stable" errors (e.g., NotFound). Do not cache transient errors/timeouts.
+		if shouldCacheFragmentErr(err) {
+			c.mu.Lock()
+			c.m[id] = fragmentCacheEntry{f: nil, err: err}
+			c.mu.Unlock()
+		}
 		return nil, err
 	}
 	c.mu.Lock()
-	c.m[id] = f
+	c.m[id] = fragmentCacheEntry{f: f, err: nil}
 	c.mu.Unlock()
 	return f, nil
+}
+
+func shouldCacheFragmentErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	code := status.Code(err)
+	switch code {
+	case codes.DeadlineExceeded, codes.Unavailable, codes.Unauthenticated, codes.ResourceExhausted, codes.Aborted, codes.Canceled:
+		return false
+	case codes.NotFound:
+		return true
+	default:
+		// For unknown errors, be conservative (don't cache) to allow retries.
+		return false
+	}
 }
 
 // =============================================================================
@@ -1104,6 +1222,7 @@ type cursorState struct {
 	StartAfter string    `json:"startAfter"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 	Scanned    int       `json:"scanned,omitempty"`
+	Collected  int       `json:"collected,omitempty"`
 }
 
 func readCursorFile(path string) (cursorState, error) {

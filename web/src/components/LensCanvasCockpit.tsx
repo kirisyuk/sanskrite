@@ -4444,6 +4444,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             return;
           }
 
+          // === LEVELS CONTROL OVERRIDE ===
+          // If there is a control/ownership edge from the expanded node to the neighbor (OUTGOING),
+          // it must dominate over influence edges. Otherwise a node can be incorrectly promoted to the right backbone
+          // due to an incoming INFLUENCES edge, and "miss" the left group.
+          const LEVELS_CONTROL_TYPES = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'SUBSIDIARY_OF']);
+          const LEVELS_INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
+          const existingIsControlOut =
+            layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(existingUpper) && existingDir === 'outgoing';
+          const newIsControlOut =
+            layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(newUpper) && effectiveDirection === 'outgoing';
+          const existingIsInfluence = layoutMode === 'levels' && LEVELS_INFLUENCE_TYPES.has(existingUpper);
+          const newIsInfluence = layoutMode === 'levels' && LEVELS_INFLUENCE_TYPES.has(newUpper);
+          if (existingIsControlOut && newIsInfluence) return;
+          if (newIsControlOut && existingIsInfluence) {
+            fragmentEdgeType.set(neighborId, edgeType);
+            fragmentDirection.set(neighborId, effectiveDirection);
+            return;
+          }
+
           // === LINEAR LAYOUT SPECIAL LOGIC ===
           // In Linear mode, incoming dependency edges (neighbor DEPENDS_ON central) MUST determine placement.
           // These nodes should ALWAYS go to BOTTOM row, regardless of other edges they might have.
@@ -4612,12 +4631,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const addedEdgePairs = new Set<string>(); // Для отслеживания уже добавленных пар (избежание дубликатов)
       const newEdges: Edge[] = [];
 
+      // If a neighbor has ANY outgoing edge INTO the expanded node (neighbor → expanded),
+      // then we do NOT render dependency edges outgoing FROM the expanded node (expanded -(DEPENDS_*)-> neighbor).
+      // This avoids confusing bidirectional "Depends" visuals when the relationship is already expressed in reverse.
+      const DEP_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+      const centralFragId = String(fragmentId || '').trim();
+      const neighborsWithOutgoingIntoCentral = new Set<string>();
+      for (const e of depEdges) {
+        const s0 = String(e?.sourceFragmentId || '').trim();
+        const t0 = String(e?.targetFragmentId || '').trim();
+        if (!s0 || !t0) continue;
+        if (t0 === centralFragId) neighborsWithOutgoingIntoCentral.add(s0);
+      }
+
       for (const e of depEdges) {
         const s = String(e?.sourceFragmentId || '').trim();
         const t = String(e?.targetFragmentId || '').trim();
         if (!s || !t) continue;
         
         const edgeType = String(e?.type || e?.edgeType || '').toUpperCase();
+        if (s === centralFragId && DEP_EDGE_TYPES.has(edgeType) && neighborsWithOutgoingIntoCentral.has(t)) {
+          continue;
+        }
         const isSymmetric = SYMMETRIC_EDGE_TYPES.has(edgeType);
         
         // Для симметричных связей: фильтруем дубликаты пар (A-B и B-A считаем одним ребром)
@@ -5798,9 +5833,77 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, [nodes]);
 
   const visibleEdges = React.useMemo(() => {
-    if (hiddenNodeIds.size === 0) return edges;
-    return edges.filter((e) => !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target));
-  }, [edges, hiddenNodeIds]);
+    const isGeoType = (t: string) => {
+      const tt = String(t || '').toUpperCase().trim().replace(/\s+/g, '_');
+      if (!tt) return false;
+      if (tt.includes('GEO')) return true;
+      return tt === 'LOCATION' || tt === 'COUNTRY' || tt === 'STATE' || tt === 'PROVINCE' || tt === 'CITY' || tt === 'REGION';
+    };
+    const isPersonType = (t: string) => {
+      const tt = String(t || '').toUpperCase().trim().replace(/\s+/g, '_');
+      return tt === 'PERSON';
+    };
+    const INFLUENCEISH = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
+    const edgeTypeOf = (e: any): string => {
+      const raw = (e as any)?.data?.edgeType || (e as any)?.data?.subkind || (e as any)?.label || (e as any)?.type || '';
+      return String(raw || '').toUpperCase().trim();
+    };
+
+    // Map nodeId + fragmentId -> visual type (stack controllers can override type via stackVisualType).
+    const typeByKey = new Map<string, string>();
+    for (const n of nodes) {
+      const d: any = (n as any)?.data;
+      if (d?.isGroup) continue;
+      const id = String((n as any)?.id || '').trim();
+      const fid = String(d?.fragmentId || '').trim();
+      const vt = String(d?.stackVisualType || d?.type || '').toUpperCase().trim().replace(/\s+/g, '_');
+      if (id) typeByKey.set(id, vt);
+      if (fid) typeByKey.set(fid, vt);
+    }
+
+    // Suppress Influence-ish edges between:
+    // - ORGANIZATION ↔ GEO
+    // - ORGANIZATION ↔ PERSON
+    // when ANY other relation exists between the same pair. Rule is direction-agnostic.
+    const pairHasNonInfluence = new Set<string>();
+    const pairHasAnyInfluence = new Set<string>();
+    const pairKey = (a: string, b: string) => (a < b ? `${a}||${b}` : `${b}||${a}`);
+
+    for (const e of edges) {
+      const s = String((e as any)?.source || '').trim();
+      const t = String((e as any)?.target || '').trim();
+      if (!s || !t || s === t) continue;
+      const st = typeByKey.get(s) || '';
+      const tt = typeByKey.get(t) || '';
+      if (!st || !tt) continue;
+      const isOrgGeo = (st === 'ORGANIZATION' && isGeoType(tt)) || (tt === 'ORGANIZATION' && isGeoType(st));
+      const isOrgPerson = (st === 'ORGANIZATION' && isPersonType(tt)) || (tt === 'ORGANIZATION' && isPersonType(st));
+      if (!isOrgGeo && !isOrgPerson) continue;
+      const et = edgeTypeOf(e);
+      const k = pairKey(s, t);
+      if (INFLUENCEISH.has(et)) pairHasAnyInfluence.add(k);
+      else pairHasNonInfluence.add(k);
+    }
+
+    const base = hiddenNodeIds.size === 0 ? edges : edges.filter((e) => !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target));
+    if (pairHasNonInfluence.size === 0 || pairHasAnyInfluence.size === 0) return base;
+    return base.filter((e) => {
+      const s = String((e as any)?.source || '').trim();
+      const t = String((e as any)?.target || '').trim();
+      if (!s || !t || s === t) return true;
+      const st = typeByKey.get(s) || '';
+      const tt = typeByKey.get(t) || '';
+      if (!st || !tt) return true;
+      const isOrgGeo = (st === 'ORGANIZATION' && isGeoType(tt)) || (tt === 'ORGANIZATION' && isGeoType(st));
+      const isOrgPerson = (st === 'ORGANIZATION' && isPersonType(tt)) || (tt === 'ORGANIZATION' && isPersonType(st));
+      if (!isOrgGeo && !isOrgPerson) return true;
+      const k = pairKey(s, t);
+      if (!pairHasNonInfluence.has(k)) return true;
+      const et = edgeTypeOf(e);
+      if (INFLUENCEISH.has(et)) return false;
+      return true;
+    });
+  }, [edges, hiddenNodeIds, nodes]);
 
   // Hub nodes: inDegree >= 5 and/or outDegree >= 5 (visible graph only, ignore group containers).
   const hubNodeIds = React.useMemo(() => {

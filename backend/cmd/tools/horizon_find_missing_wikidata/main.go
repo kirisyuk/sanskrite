@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -27,6 +29,10 @@ import (
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
+
+// Used to print a reliable resume cursor on Ctrl+C / SIGTERM.
+// NOTE: atomic.Value must be Store()'d before first Load().
+var globalLastSeen atomic.Value // string
 
 var (
 	projectID          = flag.String("project", "", "GCP project ID (required)")
@@ -202,6 +208,22 @@ func main() {
 	}
 	log.Printf("pagination: page-size=%d", *pageSize)
 
+	// Always be able to print a resume cursor even if the process is interrupted (Ctrl+C / SIGTERM).
+	globalLastSeen.Store(strings.TrimSpace(*startAfterDocID))
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		if v := globalLastSeen.Load(); v != nil {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				log.Printf("resume cursor: start-after=%s", strings.TrimSpace(s))
+			}
+		}
+		log.Printf("FATAL: interrupted")
+		os.Exit(130)
+	}()
+
 	rows, scanned, lastSeen, err := scan(ctx, db, entityRepo, entityCache, wdClient, tax)
 	if err != nil {
 		// IMPORTANT: log.Fatalf exits immediately (no defers), so we must print resume cursor here.
@@ -321,6 +343,7 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 			scanned++
 			atomic.StoreInt64(&scannedAtomic, int64(scanned))
 			lastSeen = doc.Ref.ID
+			globalLastSeen.Store(lastSeen)
 			if scanned > *maxScan {
 				break
 			}

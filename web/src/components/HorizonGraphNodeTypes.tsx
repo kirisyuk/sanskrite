@@ -57,7 +57,9 @@ export interface HorizonNodeData {
   stackExpanded?: boolean; // whether the stack is currently expanded
   // Named stack controllers (Levels right pane): semantic stacks (Persons/Products/Control/Geolocation)
   stackTitle?: string;
-  stackKind?: 'persons' | 'products' | 'control' | 'geolocation';
+  /** Stack subtitle (context label): e.g. "Dubai Future Foundation" under "Control" */
+  stackSubtitle?: string;
+  stackKind?: 'persons' | 'products' | 'control' | 'geolocation' | 'suppliers';
   /** Visual type override for the stack controller node (drives color/icon); e.g. PERSON/PRODUCT/ORGANIZATION/GEO_REGION */
   stackVisualType?: string;
   onToggleStack?: (stackKey: string, nextExpanded: boolean) => void;
@@ -110,6 +112,12 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     border: '#10B981', borderDark: '#34D399',
     text: '#065F46', textDark: '#A7F3D0',
     accent: '#10B981', accentDark: '#34D399',
+  },
+  'SUPPLIER': {
+    bg: '#ECFDF5', bgDark: '#022C22',
+    border: '#22C55E', borderDark: '#4ADE80',
+    text: '#166534', textDark: '#BBF7D0',
+    accent: '#22C55E', accentDark: '#4ADE80',
   },
   'FACILITY': {
     bg: '#FFEDD5', bgDark: '#7C2D12',
@@ -388,6 +396,18 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
           <polyline points="3.29 7 12 12 20.71 7" />
           <line x1="12" y1="22" x2="12" y2="12" />
+        </svg>
+      );
+    
+    case 'SUPPLIER':
+      // Truck icon (delivery/supply)
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" />
+          <path d="M15 18h2a1 1 0 0 0 1-1v-3.28a1 1 0 0 0-.684-.948l-1.923-.641a1 1 0 0 1-.684-.949V8a1 1 0 0 1 1-1h1.382a1 1 0 0 1 .894.553l1.448 2.894A1 1 0 0 0 20.382 11H22" />
+          <circle cx="7" cy="18" r="2" />
+          <path d="M22 18h-4" />
+          <circle cx="19" cy="18" r="2" />
         </svg>
       );
     
@@ -1461,6 +1481,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const stackExpanded = Boolean((data as any)?.stackExpanded);
   const canToggleStack = Boolean(stackKey && stackCount && stackCount > 1 && typeof (data as any)?.onToggleStack === 'function');
   const stackTitle = String((data as any)?.stackTitle || '').trim();
+  const stackSubtitle = String((data as any)?.stackSubtitle || '').trim();
   const stackVisualType = String((data as any)?.stackVisualType || '').trim();
   const controllerId = String((data as any)?.stackControllerId || '').trim();
   const isStackController = Boolean(canToggleStack && controllerId && controllerId === String(data.id || '').trim());
@@ -1948,120 +1969,274 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         }}
       />
 
-      {/* Заголовок с иконкой */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-        <div
-          style={{
-            padding: '4px',
-            borderRadius: '6px',
-            background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
-          }}
-        >
-          <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
-        </div>
-        
-        <div style={{ flex: 1, minWidth: 0 }}>
+      {/* Header */}
+      {isCollapsedStackController ? (
+        <>
+          {/* Stack controller: centered premium layout (icon above text) */}
           <div
             style={{
-              fontSize: 13,
-              fontWeight: 700,
-              color: textColor,
-              lineHeight: 1.3,
-              overflow: 'hidden',
-              display: '-webkit-box',
-              WebkitBoxOrient: 'vertical' as any,
-              WebkitLineClamp: titleLineClamp as any,
+              position: 'absolute',
+              inset: '12px 14px 20px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              textAlign: 'center',
+              gap: 8,
+              pointerEvents: 'none',
             }}
-            title={displayLabel}
           >
-            {displayLabel}
-          </div>
-          
-          {!isCollapsed && (
             <div
               style={{
-                fontSize: 10,
-                color: mutedTextColor,
-                marginTop: '2px',
-                fontWeight: 650,
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
-              }}
-            >
-              {isCollapsedStackController
-                ? `STACK • ${(stackCount || 0)}`
-                : formatType(displayType)}
-            </div>
-          )}
-
-        </div>
-        
-        {/* Right-side actions / indicators */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          {canTogglePin && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                const cb = (data as any)?.onTogglePin as
-                  | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
-                  | undefined;
-                cb?.({ fragmentId: data.fragmentId, canonicalPath: data.canonicalPath, nextPinned: !isPinnedToScope });
-              }}
-              aria-label={isPinnedToScope ? 'Unpin from scope' : 'Pin to scope'}
-              title={isPinnedToScope ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
-              style={{
-                width: 22,
-                height: 22,
-                borderRadius: 8,
-                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-                background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
-                color: isPinnedToScope ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)'),
-                cursor: 'pointer',
+                width: 44,
+                height: 44,
+                borderRadius: 14,
+                background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)'}`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                boxShadow: theme === 'dark'
+                  ? `0 14px 30px rgba(0,0,0,0.22), inset 0 0 0 1px ${hexToRgba(accentColor, 0.18)}`
+                  : `0 14px 30px rgba(0,0,0,0.10), inset 0 0 0 1px ${hexToRgba(accentColor, 0.12)}`,
               }}
             >
-              {/* Lucide "pin" (thumbtack) */}
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill={isPinnedToScope ? 'currentColor' : 'none'}
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="12" y1="17" x2="12" y2="22" />
-                <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-              </svg>
-            </button>
-          )}
+              <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={22} />
+            </div>
 
-          {/* Индикатор критичности */}
-          {isCritical && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, width: '100%' }}>
+              <div
+                style={{
+                  fontSize: 15,
+                  fontWeight: 850,
+                  color: textColor,
+                  letterSpacing: '-0.01em',
+                  lineHeight: 1.15,
+                  width: '100%',
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={stackTitle || displayLabel}
+              >
+                {stackTitle || displayLabel}
+              </div>
+              {stackSubtitle && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 520,
+                    color: mutedTextColor,
+                    lineHeight: 1.2,
+                    width: '100%',
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={stackSubtitle}
+                >
+                  {stackSubtitle}
+                </div>
+              )}
+              <div
+                style={{
+                  marginTop: 4,
+                  fontSize: 11,
+                  fontWeight: 800,
+                  color: theme === 'dark' ? 'rgba(255,255,255,0.80)' : 'rgba(15,23,42,0.76)',
+                  opacity: 0.9,
+                }}
+              >
+                STACK • {(stackCount || 0)}
+              </div>
+            </div>
+          </div>
+
+          {/* Right-side actions / indicators: keep clickable, don't disturb centered stack layout */}
+          <div
+            style={{
+              position: 'absolute',
+              right: 10,
+              top: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              zIndex: 3,
+            }}
+          >
+            {canTogglePin && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const cb = (data as any)?.onTogglePin as
+                    | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
+                    | undefined;
+                  cb?.({ fragmentId: data.fragmentId, canonicalPath: data.canonicalPath, nextPinned: !isPinnedToScope });
+                }}
+                aria-label={isPinnedToScope ? 'Unpin from scope' : 'Pin to scope'}
+                title={isPinnedToScope ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 8,
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                  background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                  color: isPinnedToScope ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)'),
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                  pointerEvents: 'auto',
+                }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill={isPinnedToScope ? 'currentColor' : 'none'}
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="12" y1="17" x2="12" y2="22" />
+                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                </svg>
+              </button>
+            )}
+            {isCritical && (
+              <div
+                style={{
+                  width: '10px',
+                  height: '10px',
+                  borderRadius: '50%',
+                  background: '#EF4444',
+                  flexShrink: 0,
+                  boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)',
+                  animation: 'horizon-pulse 2s infinite',
+                }}
+                title="Critical"
+              />
+            )}
+          </div>
+        </>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+          <div
+            style={{
+              padding: '4px',
+              borderRadius: '6px',
+              background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
+            }}
+          >
+            <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
+          </div>
+          
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div
               style={{
-                width: '10px',
-                height: '10px',
-                borderRadius: '50%',
-                background: '#EF4444',
-                flexShrink: 0,
-                boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)',
-                animation: 'horizon-pulse 2s infinite',
+                fontSize: 13,
+                fontWeight: 700,
+                color: textColor,
+                lineHeight: 1.3,
+                overflow: 'hidden',
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical' as any,
+                WebkitLineClamp: titleLineClamp as any,
               }}
-              title="Critical"
-            />
-          )}
+              title={displayLabel}
+            >
+              {displayLabel}
+            </div>
+            
+            {!isCollapsed && (
+              <div
+                style={{
+                  fontSize: 10,
+                  color: mutedTextColor,
+                  marginTop: '2px',
+                  fontWeight: 650,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                }}
+              >
+                {formatType(displayType)}
+              </div>
+            )}
+
+          </div>
+          
+          {/* Right-side actions / indicators */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            {canTogglePin && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const cb = (data as any)?.onTogglePin as
+                    | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
+                    | undefined;
+                  cb?.({ fragmentId: data.fragmentId, canonicalPath: data.canonicalPath, nextPinned: !isPinnedToScope });
+                }}
+                aria-label={isPinnedToScope ? 'Unpin from scope' : 'Pin to scope'}
+                title={isPinnedToScope ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 8,
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                  background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                  color: isPinnedToScope ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)'),
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                }}
+              >
+                {/* Lucide "pin" (thumbtack) */}
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill={isPinnedToScope ? 'currentColor' : 'none'}
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="12" y1="17" x2="12" y2="22" />
+                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                </svg>
+              </button>
+            )}
+
+            {/* Индикатор критичности */}
+            {isCritical && (
+              <div
+                style={{
+                  width: '10px',
+                  height: '10px',
+                  borderRadius: '50%',
+                  background: '#EF4444',
+                  flexShrink: 0,
+                  boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)',
+                  animation: 'horizon-pulse 2s infinite',
+                }}
+                title="Critical"
+              />
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Expand / collapse moved to bottom-right (less intrusive; more discoverable near content). */}
       {(showExpand || canCollapse) && (
