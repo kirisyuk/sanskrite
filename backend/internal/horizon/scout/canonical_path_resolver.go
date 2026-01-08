@@ -164,11 +164,18 @@ func (r *CanonicalPathResolver) Resolve(
 		}
 
 		// Extract organization name from canonical path for deduplication
-		// Format: /org/{slug} -> extract slug as potential shortName
+		// Supported formats:
+		// - legacy:   /org/{slug}
+		// - preferred:/org/{iso2|na}/{slug}
 		if strings.HasPrefix(result.CanonicalPath, "/org/") {
 			parts := strings.Split(strings.Trim(result.CanonicalPath, "/"), "/")
 			if len(parts) >= 2 {
-				slug := parts[1]
+				slug := ""
+				if len(parts) >= 3 {
+					slug = parts[2]
+				} else {
+					slug = parts[1]
+				}
 				// Try to infer shortName from slug (reverse slugify-ish) to improve dedup hits.
 				// Important: OrgDeduplicator matches shortName exactly (repo FindByIdentifier),
 				// so we want a readable title-cased string, not the raw slug.

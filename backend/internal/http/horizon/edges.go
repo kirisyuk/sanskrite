@@ -567,6 +567,8 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			"OPERATES_IN":     {},
 			"BASED_IN":        {},
 			"HEADQUARTERED_IN": {},
+			// Governance/context edges: org/fac -> auditor is upstream context relative to the org.
+			"AUDITED_BY": {},
 		}
 		// Symmetric relations: always treated as upstream environment by default.
 		symmetric := map[string]struct{}{
@@ -575,6 +577,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			"OPPOSES":        {},
 			"PARTNERS_WITH":  {},
 			"COOPERATES_WITH": {},
+			"RELATIVE_OF":    {},
 			"RELATED_TO":     {},
 			"SIMILAR_TO":     {},
 			"LINKED_TO":      {},

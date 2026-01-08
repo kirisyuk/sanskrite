@@ -40,6 +40,7 @@ func main() {
 		Version:   *version,
 		UpdatedAt: now,
 		CanonicalPrefixes: []string{
+			"/gov/",
 			"/org/",
 			"/fac/",
 			"/loc/",
@@ -47,6 +48,7 @@ func main() {
 			"/product/",
 			"/program/",
 			"/market/",
+			"/segment/",
 			"/event/",
 			"/sphere/",
 			"/industry/",
@@ -331,6 +333,10 @@ func main() {
 			"FOUNDED",
 			"INVESTS_IN",
 			"PARTNERS_WITH",
+			// OSINT-lite / governance extensions
+			"AUDITED_BY",
+			"RELATIVE_OF",
+			"RELATED_TO",
 		},
 		AllowedMetricUnits: []string{"usd", "eur", "rub", "units", "units_per_day", "days", "hours", "ratio", "index_point", "code"},
 

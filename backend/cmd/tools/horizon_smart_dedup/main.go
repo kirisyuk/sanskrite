@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
@@ -31,14 +32,17 @@ import (
 // 8. Deduplicates resulting edges
 
 var (
-	projectID       = flag.String("project", "", "GCP project ID (required)")
-	apply           = flag.Bool("apply", false, "Apply changes (default: dry-run)")
-	dryRun          = flag.Bool("dry-run", false, "Force dry-run even if --apply is set")
-	tenantID        = flag.String("tenant", "global", "Tenant ID (default: global)")
-	verbose         = flag.Bool("verbose", false, "Verbose logging")
-	typeFilter      = flag.String("type", "", "Filter by fragment type (GEO_REGION, ORGANIZATION, FACILITY, etc.)")
-	skipVertexSync  = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
+	projectID          = flag.String("project", "", "GCP project ID (required)")
+	apply              = flag.Bool("apply", false, "Apply changes (default: dry-run)")
+	dryRun             = flag.Bool("dry-run", false, "Force dry-run even if --apply is set")
+	tenantID           = flag.String("tenant", "global", "Tenant ID (default: global)")
+	verbose            = flag.Bool("verbose", false, "Verbose logging")
+	typeFilter         = flag.String("type", "", "Filter by fragment type (GEO_REGION, ORGANIZATION, FACILITY, etc.)")
+	unionClusters      = flag.Bool("union-clusters", false, "Build transitive clusters via union-find across signals (recommended for per-type runs; helps catch chain duplicates)")
+	skipVertexSync     = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
 	enableProductAlias = flag.Bool("enable-product-alias", false, "Enable PRODUCT alias clustering (model/SKU heuristic). Default OFF: better duplicates than false-positive merges.")
+	enableOrgNameOnly  = flag.Bool("enable-org-name-only", false, "Enable ORGANIZATION name-only clustering (shortName/label[en]). Default OFF (too many false merges).")
+	enableOrgFuzzyName = flag.Bool("enable-org-fuzzy-name", false, "Enable ORGANIZATION fuzzy-ish name clustering (normalized legalName + stub-rescue normalized label/legal). Default OFF.")
 )
 
 // DuplicateCluster represents a group of fragments that are duplicates of each other
@@ -50,14 +54,14 @@ type DuplicateCluster struct {
 }
 
 type Stats struct {
-	TotalFragments     int
-	ClustersFound      int
-	FragmentsMerged    int
-	FragmentsDeleted   int
-	PathsFixed         int
-	EdgesReassigned    int
-	EdgesDeleted       int
-	EdgesDeduplicated  int
+	TotalFragments      int
+	ClustersFound       int
+	FragmentsMerged     int
+	FragmentsDeleted    int
+	PathsFixed          int
+	EdgesReassigned     int
+	EdgesDeleted        int
+	EdgesDeduplicated   int
 	EdgesDirectionFixed int
 }
 
@@ -130,15 +134,17 @@ func main() {
 
 	// Step 2: Build indexes for duplicate detection
 	log.Printf("\n=== Step 2: Building indexes ===")
-	wikidataIndex := make(map[string][]*models.HorizonFragment)        // wikidataID -> fragments
-	shortNameIndex := make(map[string][]*models.HorizonFragment)       // type:shortName -> fragments
-	legalNameIndex := make(map[string][]*models.HorizonFragment)       // type:legalName -> fragments
-	labelENIndex := make(map[string][]*models.HorizonFragment)         // type:label_en -> fragments (Tier 2)
-	normalizedLegalIndex := make(map[string][]*models.HorizonFragment) // type:normalized_legal -> fragments
-	orgNormalizedNameIndex := make(map[string][]*models.HorizonFragment) // type:normalized(label/legal) -> org fragments (LOW-signal stub rescue)
-	geoCityIndex := make(map[string][]*models.HorizonFragment)         // city_name -> geo fragments
-	productNameIndex := make(map[string][]*models.HorizonFragment)     // product_name -> product fragments
-	productAliasIndex := make(map[string][]*models.HorizonFragment)    // product_alias_key -> product fragments (label/short/legal + legacy slug aliases)
+	wikidataIndex := make(map[string][]*models.HorizonFragment)               // wikidataID -> fragments
+	shortNameIndex := make(map[string][]*models.HorizonFragment)              // type:shortName -> fragments
+	legalNameIndex := make(map[string][]*models.HorizonFragment)              // type:legalName -> fragments
+	labelENIndex := make(map[string][]*models.HorizonFragment)                // type:label_en -> fragments (Tier 2)
+	normalizedLegalIndex := make(map[string][]*models.HorizonFragment)        // type:normalized_legal -> fragments
+	orgNormalizedNameIndex := make(map[string][]*models.HorizonFragment)      // type:normalized(label/legal) -> org fragments (LOW-signal stub rescue)
+	facilityNormalizedNameIndex := make(map[string][]*models.HorizonFragment) // facility_key -> facility fragments (normalized name; scoped by /fac/{org}/)
+	geoCityIndex := make(map[string][]*models.HorizonFragment)                // city_name -> geo fragments
+	productNameIndex := make(map[string][]*models.HorizonFragment)            // product_name -> product fragments
+	productAliasIndex := make(map[string][]*models.HorizonFragment)           // product_alias_key -> product fragments (label/short/legal + legacy slug aliases)
+	personPhoneticIndex := make(map[string][]*models.HorizonFragment)         // phonetic_key -> person fragments (catches Tahnoon/Tahnoun, Khalid/Halid)
 
 	for _, f := range fragments {
 		// Index by Wikidata ID
@@ -148,34 +154,126 @@ func main() {
 
 		// Index by shortName (type-scoped)
 		if shortName := strings.TrimSpace(f.Identifiers["shortName"]); shortName != "" {
-			key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(shortName))
-			shortNameIndex[key] = append(shortNameIndex[key], f)
+			// For ORG: shortName is name-only and very collision-prone; default OFF.
+			if f.Type == models.FragmentTypeOrganization {
+				if !isGovCanonicalPath(f.CanonicalPath) && *enableOrgNameOnly {
+					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
+					if iso2 != "na" {
+						key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(shortName))
+						shortNameIndex[key] = append(shortNameIndex[key], f)
+					}
+				}
+			} else {
+				key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(shortName))
+				shortNameIndex[key] = append(shortNameIndex[key], f)
+			}
 		}
 
-		// Index by legalName (type-scoped) — Tier 1 (100% confidence for orgs)
+		// Index by legalName (type-scoped)
 		if legalName := strings.TrimSpace(f.Identifiers["legalName"]); legalName != "" {
-			key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(legalName))
-			legalNameIndex[key] = append(legalNameIndex[key], f)
+			// For ORG: only within known ISO2; skip /gov/* entirely.
+			if f.Type == models.FragmentTypeOrganization {
+				if !isGovCanonicalPath(f.CanonicalPath) {
+					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
+					if iso2 != "na" {
+						key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(legalName))
+						legalNameIndex[key] = append(legalNameIndex[key], f)
+					}
+				}
+			} else {
+				key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(legalName))
+				legalNameIndex[key] = append(legalNameIndex[key], f)
+			}
 		}
 
 		// Index by label[en] (type-scoped) — Tier 2 (high confidence)
 		if labelEN := strings.TrimSpace(f.Labels["en"]); labelEN != "" {
-			key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(labelEN))
-			labelENIndex[key] = append(labelENIndex[key], f)
+			// For ORG: label is name-only and very collision-prone; default OFF.
+			if f.Type == models.FragmentTypeOrganization {
+				if !isGovCanonicalPath(f.CanonicalPath) && *enableOrgNameOnly {
+					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
+					if iso2 != "na" {
+						key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(labelEN))
+						labelENIndex[key] = append(labelENIndex[key], f)
+					}
+				}
+			} else {
+				key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(labelEN))
+				labelENIndex[key] = append(labelENIndex[key], f)
+			}
 		}
 
 		// Index by normalized legalName (removes JSC, LLC, Inc, etc.)
 		if legalName := strings.TrimSpace(f.Identifiers["legalName"]); legalName != "" {
-			normalized := normalizeLegalName(legalName)
-			if normalized != "" {
-				key := fmt.Sprintf("%s:%s", f.Type, normalized)
-				normalizedLegalIndex[key] = append(normalizedLegalIndex[key], f)
+			// For ORG: this is fuzzy-ish; default OFF.
+			if f.Type == models.FragmentTypeOrganization {
+				if !isGovCanonicalPath(f.CanonicalPath) && *enableOrgFuzzyName {
+					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
+					if iso2 != "na" {
+						normalized := normalizeLegalName(legalName)
+						if normalized != "" {
+							key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, normalized)
+							normalizedLegalIndex[key] = append(normalizedLegalIndex[key], f)
+						}
+					}
+				}
+			} else {
+				normalized := normalizeLegalName(legalName)
+				if normalized != "" {
+					key := fmt.Sprintf("%s:%s", f.Type, normalized)
+					normalizedLegalIndex[key] = append(normalizedLegalIndex[key], f)
+				}
+			}
+		}
+
+		// FACILITY-only: normalized name index (stopwords/punctuation) scoped by /fac/{org}/ prefix.
+		// This catches common duplicates like:
+		//   "Four Points by Sheraton Riyadh Khaldia" vs "four points sheraton riyadh khaldia"
+		// Cross-org matching: facilities with same normalized name are likely the same,
+		// even if they are under different parent orgs (e.g., /fac/marriott/... vs /fac/khaldia-towers-company/...).
+		// The normalization function requires at least 3 meaningful tokens to reduce false positives.
+		if f.Type == models.FragmentTypeFacility {
+			aliasSet := map[string]struct{}{}
+			addFacilityAlias := func(s string, src string) {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					return
+				}
+				k := normalizeFacilityAliasKey(s)
+				if k == "" {
+					return
+				}
+				// No org scoping: if normalized name is specific enough, match across orgs
+				key := fmt.Sprintf("%s:%s", f.Type, k)
+				aliasSet[key] = struct{}{}
+				// DEBUG for specific IDs
+				if f.ID == "anz6w0uDOjDlSorQLA6S" || f.ID == "756btZKk76bzLQfNp7XM" {
+					log.Printf("  DEBUG FACILITY INDEX: id=%s src=%s input=%q key=%q", f.ID, src, s, key)
+				}
+			}
+			addFacilityAlias(f.Labels["en"], "label.en")
+			addFacilityAlias(f.Identifiers["shortName"], "shortName")
+			addFacilityAlias(f.Identifiers["legalName"], "legalName")
+			// Also index last slug as a name-ish alias (unslugify).
+			if pn := extractFacilityNameFromPath(f.CanonicalPath); pn != "" {
+				addFacilityAlias(strings.ReplaceAll(pn, "-", " "), "canonicalSlug")
+			}
+			for k := range aliasSet {
+				facilityNormalizedNameIndex[k] = append(facilityNormalizedNameIndex[k], f)
 			}
 		}
 
 		// ORG-only: index normalized label/legal for LOW-signal stub rescue (e.g., "softbank group" → "softbank")
 		// Safety is enforced when creating clusters (must include at least one high-signal org + one low-signal stub).
 		if f.Type == models.FragmentTypeOrganization {
+			// Default OFF: still name-based; also never run for /gov/* and never when country is unknown.
+			if isGovCanonicalPath(f.CanonicalPath) || !*enableOrgFuzzyName {
+				continue
+			}
+			iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
+			if iso2 == "na" {
+				continue
+			}
 			labelEN := strings.TrimSpace(f.Labels["en"])
 			legalName := strings.TrimSpace(f.Identifiers["legalName"])
 			seed := legalName
@@ -185,7 +283,7 @@ func main() {
 			if seed != "" {
 				n := normalizeLegalName(seed)
 				if n != "" {
-					key := fmt.Sprintf("%s:%s", f.Type, n)
+					key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, n)
 					orgNormalizedNameIndex[key] = append(orgNormalizedNameIndex[key], f)
 				}
 			}
@@ -240,6 +338,33 @@ func main() {
 				productAliasIndex[k] = append(productAliasIndex[k], f)
 			}
 		}
+
+		// PERSON: phonetic index for Arabic/transliteration variations (Tahnoon/Tahnoun, Khalid/Halid)
+		if f.Type == "PERSON" {
+			phoneticSet := map[string]struct{}{}
+			addPersonPhonetic := func(s string) {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					return
+				}
+				k := normalizePhoneticKey(s)
+				if k == "" {
+					return
+				}
+				key := fmt.Sprintf("PERSON:%s", k)
+				phoneticSet[key] = struct{}{}
+			}
+			addPersonPhonetic(f.Labels["en"])
+			addPersonPhonetic(f.Identifiers["shortName"])
+			addPersonPhonetic(f.Identifiers["legalName"])
+			// Also index from canonical path slug
+			if slug := extractPersonNameFromPath(f.CanonicalPath); slug != "" {
+				addPersonPhonetic(strings.ReplaceAll(slug, "-", " "))
+			}
+			for k := range phoneticSet {
+				personPhoneticIndex[k] = append(personPhoneticIndex[k], f)
+			}
+		}
 	}
 
 	// Index GEO_REGION by canonical path (for org-as-country matching)
@@ -266,11 +391,13 @@ func main() {
 	log.Printf("✓ Label[en] index: %d unique keys", len(labelENIndex))
 	log.Printf("✓ Normalized legal index: %d unique keys", len(normalizedLegalIndex))
 	log.Printf("✓ ORG normalized name index: %d unique keys", len(orgNormalizedNameIndex))
+	log.Printf("✓ FACILITY normalized name index: %d unique keys", len(facilityNormalizedNameIndex))
 	log.Printf("✓ GEO city index: %d unique cities", len(geoCityIndex))
 	log.Printf("✓ GEO by path index: %d unique paths", len(geoByPath))
 	log.Printf("✓ CanonicalPath index: %d unique keys", len(byCanonicalPath))
 	log.Printf("✓ PRODUCT name index: %d unique names", len(productNameIndex))
 	log.Printf("✓ PRODUCT alias index: %d unique aliases", len(productAliasIndex))
+	log.Printf("✓ PERSON phonetic index: %d unique keys", len(personPhoneticIndex))
 
 	// Build fragment type cache for edge direction fixing (Step 6)
 	fragmentTypes := make(map[string]models.FragmentType)
@@ -298,6 +425,10 @@ func main() {
 			continue
 		}
 		if f.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		// Never treat /gov/* as "org-as-country": it's a different namespace and should not be merged into GEO_REGION.
+		if isGovCanonicalPath(f.CanonicalPath) {
 			continue
 		}
 
@@ -634,6 +765,57 @@ func main() {
 	}
 	log.Printf("  Found %d label[en]-based clusters", labelENClusters)
 
+	// Priority 4.5: FACILITY normalized name matches (scoped by /fac/{org}/ when available)
+	// NOTE: We allow canonicals from earlier clusters to participate here for transitive merges.
+	// Example: A is canonical in shortName cluster {A,B}, but A also matches C via facilityNormName.
+	// We want {A,B,C} to all merge. So we only skip fragments that were marked as DUPLICATES, not canonicals.
+	facilityNormNameClusters := 0
+	for key, frags := range facilityNormalizedNameIndex {
+		if len(frags) <= 1 {
+			continue
+		}
+		var unprocessed []*models.HorizonFragment
+		for _, f := range frags {
+			if f == nil {
+				continue
+			}
+			// Allow fragment even if processed, as long as it might bridge clusters.
+			// Safety: we'll dedupe clusters later anyway.
+			unprocessed = append(unprocessed, f)
+		}
+		if len(unprocessed) <= 1 {
+			continue
+		}
+
+		// Extra safety: require at least one non-stub (some signal like legalName/shortName or ACTIVE governance)
+		nonStub := 0
+		for _, f := range unprocessed {
+			if strings.TrimSpace(f.Identifiers["legalName"]) != "" ||
+				strings.TrimSpace(f.Identifiers["shortName"]) != "" ||
+				strings.EqualFold(strings.TrimSpace(f.Governance.Status), "ACTIVE") {
+				nonStub++
+			}
+		}
+		if nonStub == 0 {
+			continue
+		}
+
+		cluster := &DuplicateCluster{
+			MatchType:  "facilityNormName",
+			MatchValue: key,
+			Fragments:  unprocessed,
+		}
+		cluster.CanonicalID = selectCanonical(unprocessed)
+		clusters = append(clusters, cluster)
+		for _, f := range unprocessed {
+			if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
+				processedFragmentIDs[f.ID] = true
+			}
+		}
+		facilityNormNameClusters++
+	}
+	log.Printf("  Found %d facilityNormName-based clusters", facilityNormNameClusters)
+
 	// Priority 5: Normalized legalName matches (removes JSC, LLC, Inc, etc.)
 	// NOTE: Skip for GEO_REGION — normalization is too aggressive (e.g., "City of London" → "London")
 	normalizedLegalClusters := 0
@@ -813,6 +995,34 @@ func main() {
 		log.Printf("  Found %d productAlias-based clusters (disabled; use --enable-product-alias)", productAliasClusters)
 	}
 
+	// Priority 7: PERSON phonetic matches (catches Tahnoon/Tahnoun, Khalid/Halid)
+	personPhoneticClusters := 0
+	for key, frags := range personPhoneticIndex {
+		if len(frags) <= 1 {
+			continue
+		}
+		var unprocessed []*models.HorizonFragment
+		for _, f := range frags {
+			if !processedFragmentIDs[f.ID] {
+				unprocessed = append(unprocessed, f)
+			}
+		}
+		if len(unprocessed) > 1 {
+			cluster := &DuplicateCluster{
+				MatchType:  "personPhonetic",
+				MatchValue: key,
+				Fragments:  unprocessed,
+			}
+			cluster.CanonicalID = selectCanonical(unprocessed)
+			clusters = append(clusters, cluster)
+			for _, f := range unprocessed {
+				processedFragmentIDs[f.ID] = true
+			}
+			personPhoneticClusters++
+		}
+	}
+	log.Printf("  Found %d personPhonetic-based clusters", personPhoneticClusters)
+
 	stats.ClustersFound = len(clusters)
 	log.Printf("✓ Total duplicate clusters: %d", len(clusters))
 
@@ -978,7 +1188,8 @@ func main() {
 }
 
 func loadAllFragments(ctx context.Context, db *firestore.Client, tenantID, typeFilter string) ([]*models.HorizonFragment, error) {
-	q := db.Collection("horizon_fragments").Where("tenantId", "==", tenantID)
+	col := db.Collection("horizon_fragments")
+	q := col.Where("tenantId", "==", tenantID)
 
 	if typeFilter != "" {
 		q = q.Where("type", "==", typeFilter)
@@ -988,6 +1199,7 @@ func loadAllFragments(ctx context.Context, db *firestore.Client, tenantID, typeF
 	defer iter.Stop()
 
 	var fragments []*models.HorizonFragment
+	loadedIDs := make(map[string]bool)
 	count := 0
 	for {
 		doc, err := iter.Next()
@@ -1007,10 +1219,48 @@ func loadAllFragments(ctx context.Context, db *firestore.Client, tenantID, typeF
 			f.ID = doc.Ref.ID
 		}
 		fragments = append(fragments, &f)
+		loadedIDs[f.ID] = true
 		count++
 
 		if count%1000 == 0 {
 			log.Printf("  ... loaded %d fragments", count)
+		}
+	}
+
+	// DEBUG: Check if specific known IDs were missed by the query (Firestore eventual-consistency or missing index).
+	debugIDs := []string{"anz6w0uDOjDlSorQLA6S", "756btZKk76bzLQfNp7XM"}
+	for _, id := range debugIDs {
+		if loadedIDs[id] {
+			log.Printf("  DEBUG: doc %s WAS loaded by query (OK)", id)
+			continue
+		}
+		// Try direct doc fetch
+		snap, err := col.Doc(id).Get(ctx)
+		if err != nil {
+			log.Printf("  DEBUG: doc %s not found via Doc().Get(): %v", id, err)
+			continue
+		}
+		if !snap.Exists() {
+			log.Printf("  DEBUG: doc %s exists=false", id)
+			continue
+		}
+		var f models.HorizonFragment
+		if err := snap.DataTo(&f); err != nil {
+			log.Printf("  DEBUG: doc %s failed to parse: %v", id, err)
+			continue
+		}
+		if f.ID == "" {
+			f.ID = snap.Ref.ID
+		}
+		// Check why it was missed
+		matchesTenant := strings.TrimSpace(f.TenantID) == tenantID
+		matchesType := typeFilter == "" || string(f.Type) == typeFilter
+		log.Printf("  DEBUG: doc %s exists but MISSED by query: tenantId=%q (match=%v) type=%q (match=%v)",
+			id, f.TenantID, matchesTenant, f.Type, matchesType)
+		// If it matches filters, add it (workaround for eventual consistency)
+		if matchesTenant && matchesType {
+			fragments = append(fragments, &f)
+			log.Printf("  DEBUG: added %s via direct fetch (workaround)", id)
 		}
 	}
 
@@ -1083,20 +1333,83 @@ func splitPathTokens(s string) []string {
 	})
 }
 
-// normalizeOrgCanonicalPathForDedup normalizes /org/{slug} by treating '_' and '-' as equivalent.
+// normalizeOrgCanonicalPathForDedup normalizes org canonical paths by treating '_' and '-' as equivalent.
 // This is used only for grouping candidates; canonical selection is still score-based.
 func normalizeOrgCanonicalPathForDedup(canonicalPath string) string {
 	cp := strings.TrimSpace(canonicalPath)
 	if !strings.HasPrefix(cp, "/org/") {
 		return ""
 	}
-	slug := strings.TrimSpace(strings.TrimPrefix(cp, "/org/"))
-	if slug == "" {
-		return ""
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	// Legacy: /org/{slug} → treat as /org/na/{slug} for conservative grouping.
+	if len(parts) == 2 && parts[0] == "org" {
+		slug := strings.ToLower(strings.TrimSpace(parts[1]))
+		if slug == "" {
+			return ""
+		}
+		slug = strings.ReplaceAll(slug, "_", "-")
+		return "/org/na/" + slug
 	}
-	slug = strings.ToLower(slug)
-	slug = strings.ReplaceAll(slug, "_", "-")
-	return "/org/" + slug
+	// Canonical: /org/{iso2}/{slug}
+	if len(parts) >= 3 && parts[0] == "org" {
+		iso2 := extractOrgOrGovISO2ForDedupKey(cp)
+		if iso2 == "" {
+			iso2 = "na"
+		}
+		slug := strings.ToLower(strings.TrimSpace(parts[2]))
+		if slug == "" {
+			return ""
+		}
+		slug = strings.ReplaceAll(slug, "_", "-")
+		return "/org/" + iso2 + "/" + slug
+	}
+	return ""
+}
+
+// isGovCanonicalPath returns true if path is in /gov/* namespace.
+func isGovCanonicalPath(path string) bool {
+	p := strings.TrimSpace(path)
+	return strings.HasPrefix(p, "/gov/")
+}
+
+// extractOrgOrGovISO2ForDedupKey extracts ISO2 from:
+// - /org/{iso2}/{slug}
+// - /gov/{iso2}/{slug}
+// - legacy /org/{slug} (returns "na")
+//
+// Returns "na" when unknown/invalid.
+func extractOrgOrGovISO2ForDedupKey(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return "na"
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) < 2 {
+		return "na"
+	}
+	ns := parts[0]
+	switch ns {
+	case "org", "gov":
+		// Legacy: /org/{slug}
+		if ns == "org" && len(parts) == 2 {
+			return "na"
+		}
+		if len(parts) >= 3 {
+			return normalizeISO2ForDedupKey(parts[1])
+		}
+	}
+	return "na"
+}
+
+func normalizeISO2ForDedupKey(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" || s == "na" {
+		return "na"
+	}
+	if len(s) == 2 && s >= "aa" && s <= "zz" {
+		return s
+	}
+	return "na"
 }
 
 // isLowSignalOrgStubForDedup identifies low-quality ORG fragments that commonly appear as duplicates
@@ -1845,7 +2158,7 @@ func getEnvDefault(key, defaultValue string) string {
 // normalizeLegalName removes common suffixes like JSC, LLC, Inc, etc.
 func normalizeLegalName(name string) string {
 	name = strings.TrimSpace(strings.ToLower(name))
-	
+
 	// Common suffixes to remove
 	suffixes := []string{
 		" jsc", " llc", " inc", " inc.", " ltd", " ltd.", " limited",
@@ -1855,21 +2168,113 @@ func normalizeLegalName(name string) string {
 		" pty", " pty.", " pty ltd", " pte", " pte.", " pte ltd",
 		" holding", " holdings", " group", " international",
 	}
-	
+
 	for _, suffix := range suffixes {
 		if strings.HasSuffix(name, suffix) {
 			name = strings.TrimSuffix(name, suffix)
 		}
 	}
-	
+
 	// Remove punctuation and extra spaces
 	name = strings.ReplaceAll(name, ",", "")
 	name = strings.ReplaceAll(name, ".", "")
 	name = strings.ReplaceAll(name, "'", "")
 	name = strings.ReplaceAll(name, "-", " ")
 	name = strings.Join(strings.Fields(name), " ")
-	
+
 	return strings.TrimSpace(name)
+}
+
+// =============================================================================
+// FACILITY normalized-name helpers (conservative)
+// =============================================================================
+
+// extractFacilityOrgFromPath parses canonical facility paths like:
+//
+//	/fac/{orgSlug}/{facilitySlug}
+//
+// and returns {orgSlug}. Returns "" if the path isn't in expected format.
+func extractFacilityOrgFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/fac/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "fac" {
+		return ""
+	}
+	org := strings.ToLower(strings.TrimSpace(parts[1]))
+	if org == "" || org == "na" {
+		return ""
+	}
+	return org
+}
+
+// extractFacilityNameFromPath returns the last slug segment from /fac/{org}/{slug}.
+func extractFacilityNameFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/fac/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "fac" {
+		return ""
+	}
+	slug := strings.ToLower(strings.TrimSpace(parts[len(parts)-1]))
+	if slug == "" || slug == "fac" || slug == "na" {
+		return ""
+	}
+	return slug
+}
+
+// normalizeFacilityAliasKey normalizes facility names for dedupe matching:
+// - lowercases
+// - strips punctuation to spaces (keeps letters/digits)
+// - removes stopwords (e.g., "by") to bridge small formatting differences
+// - collapses whitespace
+//
+// IMPORTANT: Keep conservative to avoid false positives.
+func normalizeFacilityAliasKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+
+	// Convert to "letters/digits/spaces only"
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		default:
+			b.WriteRune(' ')
+		}
+	}
+
+	toks := strings.Fields(b.String())
+	if len(toks) == 0 {
+		return ""
+	}
+
+	stop := map[string]struct{}{
+		"by": {}, "the": {}, "of": {}, "and": {}, "at": {},
+		// Generic lodging noise words (kept minimal; can be extended carefully)
+		"hotel": {}, "hotels": {}, "resort": {}, "inn": {}, "suites": {}, "suite": {},
+	}
+	out := make([]string, 0, len(toks))
+	for _, t := range toks {
+		if _, ok := stop[t]; ok {
+			continue
+		}
+		out = append(out, t)
+	}
+
+	// Safety: require a minimally descriptive key.
+	if len(out) < 3 {
+		return ""
+	}
+	return strings.Join(out, " ")
 }
 
 // extractCityFromPath extracts the city name from a canonical path
@@ -1923,9 +2328,10 @@ func extractCityFromPath(path string) string {
 
 // extractProductNameFromPath extracts product name from canonical path.
 // Examples:
-//   /product/lithium → "lithium"
-//   /product/raw/mineral/extraction/lithium → "lithium"
-//   /product/electronics/semiconductor/gpu → "gpu"
+//
+//	/product/lithium → "lithium"
+//	/product/raw/mineral/extraction/lithium → "lithium"
+//	/product/electronics/semiconductor/gpu → "gpu"
 func extractProductNameFromPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" || !strings.HasPrefix(path, "/product/") {
@@ -1975,8 +2381,9 @@ func extractCanonicalProductSlugForDedup(path string) string {
 // - collapses whitespace
 //
 // Example:
-//   "F-16 Fighting Falcon" -> "f 16 fighting falcon"
-//   "M1 Abrams" -> "m1 abrams"
+//
+//	"F-16 Fighting Falcon" -> "f 16 fighting falcon"
+//	"M1 Abrams" -> "m1 abrams"
 func normalizeProductAliasKey(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "" {
@@ -2063,6 +2470,80 @@ func isSpecificProductAliasKey(aliasKey string) bool {
 	return true
 }
 
+// normalizePhoneticKey normalizes Arabic/transliterated names for phonetic matching.
+// Handles common transliteration variations:
+//   - ou/oo/u → o (Tahnoun/Tahnoon/Tahnun → tahno...)
+//   - ee/i/y → i (Mohammed/Muhammad → mohamid)
+//   - kh → h (Khalid → halid)
+//   - doubled consonants → single (Mohammed → mohamed)
+//   - removes non-letter characters
+//
+// Example:
+//
+//	"Tahnoon bin Zayed Al Nahyan" → "tahon bin zaid al nahian"
+//	"Tahnoun bin Zayed Al Nahyan" → "tahon bin zaid al nahian"
+func normalizePhoneticKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+
+	// Step 1: Replace common transliteration variations
+	replacements := []struct{ from, to string }{
+		{"oo", "o"},
+		{"ou", "o"},
+		{"ee", "i"},
+		{"kh", "h"},
+		{"ph", "f"},
+		{"qu", "k"},
+	}
+	for _, r := range replacements {
+		name = strings.ReplaceAll(name, r.from, r.to)
+	}
+
+	// Step 2: Remove non-letters, keep spaces
+	var b strings.Builder
+	b.Grow(len(name))
+	var prevChar rune = ' '
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' {
+			// Remove doubled consonants (except vowels)
+			vowels := "aeiou"
+			if r == prevChar && !strings.ContainsRune(vowels, r) {
+				continue
+			}
+			b.WriteRune(r)
+			prevChar = r
+		} else if r == ' ' && prevChar != ' ' {
+			b.WriteRune(r)
+			prevChar = ' '
+		}
+	}
+
+	result := strings.TrimSpace(b.String())
+
+	// Safety: require at least 3 tokens to avoid overly generic matches
+	if len(strings.Fields(result)) < 3 {
+		return ""
+	}
+
+	return result
+}
+
+// extractPersonNameFromPath extracts the person name from a canonical path.
+// Example: /person/tahnoon-bin-zayed-al-nahyan → "tahnoon-bin-zayed-al-nahyan"
+func extractPersonNameFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/person/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
 // fixEdgeDirections reverses edges that point in the wrong direction
 // Uses pagination (100 edges per page) and pre-built fragment type cache for efficiency
 func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, fragmentTypes map[string]models.FragmentType, tenantID string) (int, error) {
@@ -2109,7 +2590,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 
 			// Canonical representation: SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary).
 			if edge.Type == models.DependencyTypeSubsidiaryOf {
-				oldSource := edge.SourceFragmentID // subsidiary
+				oldSource := edge.SourceFragmentID            // subsidiary
 				edge.SourceFragmentID = edge.TargetFragmentID // parent
 				edge.TargetFragmentID = oldSource
 				edge.Type = models.DependencyTypeOwns
@@ -2155,4 +2636,3 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 	log.Printf("  Completed: checked %d edges total", totalChecked)
 	return fixed, nil
 }
-

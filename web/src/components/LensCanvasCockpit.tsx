@@ -782,6 +782,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       error: null,
     });
   }, []);
+  // Ref for stable callback in useMemo (avoids re-computing baseVisibleEdges on callback identity change)
+  const openEdgeExplainPopoverRef = React.useRef(openEdgeExplainPopover);
+  openEdgeExplainPopoverRef.current = openEdgeExplainPopover;
 
   React.useEffect(() => {
     if (!edgeExplainPopover?.open) return;
@@ -893,7 +896,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'USES',
       'CONSUMES',
     ];
-    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES'];
+    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY'];
     const MARKET = [
       'COMPETES_WITH',
       'CONFLICTS_WITH',
@@ -901,6 +904,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'PARTNERS_WITH',
       'COOPERATES_WITH',
       'RELATED_TO',
+      'RELATIVE_OF',
       'SIMILAR_TO',
       'LINKED_TO',
     ];
@@ -1295,6 +1299,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setHoveredEdgeId(null);
   }, [perfMode]);
 
+  // Set CSS perf-mode attribute for disabling transitions (better paint performance on large graphs)
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.documentElement.dataset.hznPerfMode = perfMode ? 'true' : 'false';
+    return () => {
+      document.documentElement.dataset.hznPerfMode = 'false';
+    };
+  }, [perfMode]);
+
   // Add-node: focus input when opened
   React.useEffect(() => {
     if (!addNodeOpen) return;
@@ -1411,8 +1424,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     [lensId],
   );
 
-  // Keep nodes in sync with current lens scope (pinned state + callback).
-  React.useEffect(() => {
+  // Sync nodes with current lens scope (pinned state + callback).
+  // Extracted into a stable callback so it can be called after initial load.
+  const syncPinnedStateRef = React.useRef<() => void>(() => {});
+  syncPinnedStateRef.current = React.useCallback(() => {
     if (!lensId) return;
     const pinned = new Set(lensScopePaths.map((p) => String(p || '').trim()).filter(Boolean));
     setNodes((prev) => {
@@ -1429,7 +1444,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
       return changed ? (next as any) : prev;
     });
-  }, [lensId, lensScopePaths, nodes.length, setNodes, toggleScopePin]);
+  }, [lensId, lensScopePaths, setNodes, toggleScopePin]);
+
+  // React to scope changes (pin/unpin from elsewhere)
+  React.useEffect(() => {
+    syncPinnedStateRef.current();
+    // Also re-run when nodes are loaded/added/removed so newly created nodes receive onTogglePin.
+    // This is intentionally limited to nodes.length (not full nodes array) to avoid re-running on style-only updates.
+  }, [lensId, lensScopePaths, toggleScopePin, nodes.length]);
 
   // Lens scope preview: resolve canonical paths to (name/type) best-effort
   React.useEffect(() => {
@@ -1824,8 +1846,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (wantsAll) return [] as string[];
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
       const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES'];
-      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES'];
-      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'SIMILAR_TO', 'LINKED_TO'];
+      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY'];
+      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
       const out = new Set<string>();
       if (draft.scopes.ownership) for (const t of OWNERSHIP) out.add(t);
@@ -1841,7 +1863,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const CONTROL_INV = new Set(['SUBSIDIARY_OF']);
     const SUPPLY_FWD = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
     const SUPPLY_INV = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
-    const PEER = new Set(['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'SIMILAR_TO', 'LINKED_TO']);
+    const PEER = new Set(['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO']);
     const CONTEXTISH = new Set(['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES']);
     const INFLUENCEISH = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS']);
 
@@ -2573,6 +2595,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'PARTNERS_WITH',
       'COOPERATES_WITH',
       'RELATED_TO',
+      'RELATIVE_OF',
       'SIMILAR_TO',
       'LINKED_TO',
     ]);
@@ -3309,10 +3332,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         setNodes(loadedNodes);
         setEdges(loadedEdges);
         
-        // Fit view after initial load
+        // Pin state + callbacks are injected by the dedicated effect (triggered by nodes.length changes).
+        
+        // Fit view after initial load (and trigger auto-arrange for Levels mode)
         setTimeout(() => {
           if (reactFlowInstanceRef.current && loadedNodes.length > 0) {
             reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 300 });
+          }
+          // Trigger auto-arrange for Levels mode (moved from useEffect to avoid nodes.length dependency)
+          if (layoutMode === 'levels' && !autoArrangeOnceRef.current && loadedNodes.length > 0) {
+            const hasFragments = loadedNodes.some((n) => !((n.data as any)?.isGroup));
+            if (hasFragments) {
+              autoArrangeOnceRef.current = true;
+              invokeArrange();
+            }
           }
         }, 100);
       } catch (err: any) {
@@ -3322,20 +3355,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
 
     loadLensItems();
-  }, [lensId, setNodes, setEdges, dbg]);
-
-  // Default Hierarchical UX: once nodes are loaded, automatically apply the layout contract.
-  React.useEffect(() => {
-    if (layoutMode !== 'levels') return;
-    if (arranging) return;
-    if (autoArrangeOnceRef.current) return;
-    if (!nodes || nodes.length === 0) return;
-    // Only trigger when we have at least one fragment node (not just UI containers).
-    const hasFragments = nodes.some((n) => !((n.data as any)?.isGroup));
-    if (!hasFragments) return;
-    autoArrangeOnceRef.current = true;
-    invokeArrange();
-  }, [layoutMode, nodes.length, arranging, invokeArrange]);
+  }, [lensId, setNodes, setEdges, dbg, layoutMode, invokeArrange]);
 
   // Преобразование LensItems в ReactFlow ноды и рёбра
   const convertLensItemsToGraph = useCallback((items: LensItem[] | null | undefined) => {
@@ -4480,11 +4500,26 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             return;
           }
 
+          // === LEVELS CONTROL > DEPENDENCY OVERRIDE ===
+          // If a node has both a control/management signal and a dependency signal to the expanded node,
+          // the control signal must dominate. Otherwise the node can be misclassified (e.g., not bucketed into Stakeholders).
+          const LEVELS_CONTROL_TYPES = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'SUBSIDIARY_OF']);
+          const LEVELS_DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+          const existingIsControl = layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(existingUpper);
+          const newIsControl = layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(newUpper);
+          const existingIsDep = layoutMode === 'levels' && LEVELS_DEP_TYPES.has(existingUpper);
+          const newIsDep = layoutMode === 'levels' && LEVELS_DEP_TYPES.has(newUpper);
+          if (existingIsControl && newIsDep) return;
+          if (newIsControl && existingIsDep) {
+            fragmentEdgeType.set(neighborId, edgeType);
+            fragmentDirection.set(neighborId, effectiveDirection);
+            return;
+          }
+
           // === LEVELS CONTROL OVERRIDE ===
           // If there is a control/ownership edge from the expanded node to the neighbor (OUTGOING),
           // it must dominate over influence edges. Otherwise a node can be incorrectly promoted to the right backbone
           // due to an incoming INFLUENCES edge, and "miss" the left group.
-          const LEVELS_CONTROL_TYPES = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'SUBSIDIARY_OF']);
           const LEVELS_INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
           const existingIsControlOut =
             layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(existingUpper) && existingDir === 'outgoing';
@@ -4659,6 +4694,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         'PARTNERS_WITH', 
         'COOPERATES_WITH',
         'RELATED_TO',
+        'RELATIVE_OF',
         'SIMILAR_TO',
         'LINKED_TO',
       ]);
@@ -5467,39 +5503,46 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (!hovered) return null;
     const isControlLike = hoverHighlightMode === 'control' || hoverHighlightMode === 'expansion';
 
-    const hoveredNode = nodes.find((n) => String(n.id || '').trim() === hovered);
-    if (!hoveredNode) return null;
-    if ((hoveredNode.data as any)?.isGroup) return null;
-
-    // Visible nodes (exclude hidden) + group lookup
+    // Single-pass node iteration: collect visible nodes, groups, positions, and types
+    // (Optimization: previously this was 2-3 separate iterations over nodes)
     const visibleNodeIds = new Set<string>();
     const groupIds = new Set<string>();
     const xById = new Map<string, number>();
-    for (const n of nodes) {
+    const typeById = new Map<string, string>();
+    let hoveredNode: typeof nodes[0] | undefined;
+    
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i]!;
       const id = String(n.id || '').trim();
       if (!id) continue;
+      
+      // Check if this is the hovered node
+      if (id === hovered) {
+        hoveredNode = n;
+      }
+      
       if ((n as any).hidden) continue;
+      
+      const isGroup = Boolean((n.data as any)?.isGroup);
       visibleNodeIds.add(id);
-      if ((n.data as any)?.isGroup) groupIds.add(id);
-      // For Levels Two-Pane we can use x-position as a reliable hierarchy hint:
-      // "more ultimate" nodes are placed to the RIGHT.
-      if (!(n.data as any)?.isGroup) {
+      
+      if (isGroup) {
+        groupIds.add(id);
+      } else {
+        // For Levels Two-Pane we can use x-position as a reliable hierarchy hint
         const x = typeof (n as any)?.position?.x === 'number' ? (n as any).position.x : undefined;
         if (typeof x === 'number' && Number.isFinite(x)) xById.set(id, x);
+        // Node types (for control semantics)
+        const t = String((n.data as any)?.type || '').toUpperCase().trim();
+        if (t) typeById.set(id, t);
       }
     }
+    
+    // Early exit if hovered node not found or is a group
+    if (!hoveredNode) return null;
+    if ((hoveredNode.data as any)?.isGroup) return null;
     if (!visibleNodeIds.has(hovered)) return null;
 
-    // Node types (for control semantics, especially PERSON heuristics)
-    const typeById = new Map<string, string>();
-    for (const n of nodes) {
-      const id = String(n.id || '').trim();
-      if (!id) continue;
-      if ((n as any).hidden) continue;
-      if ((n.data as any)?.isGroup) continue;
-      const t = String((n.data as any)?.type || '').toUpperCase().trim();
-      if (t) typeById.set(id, t);
-    }
     const isPerson = (id: string) => (typeById.get(id) || '') === 'PERSON';
 
     const normalizeType = (t: string) => String(t || '').toUpperCase().trim();
@@ -5943,8 +5986,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     });
   }, [edges, hiddenNodeIds, nodes]);
 
-  // Hub nodes: inDegree >= 5 and/or outDegree >= 5 (visible graph only, ignore group containers).
-  const hubNodeIds = React.useMemo(() => {
+  // Stable node structure info (only changes when nodes are added/removed/hidden, NOT on style changes).
+  // This prevents hubNodeIds from re-computing on every hover/style update.
+  const stableNodeStructure = React.useMemo(() => {
     const visibleFragIds = new Set<string>();
     const groupIds = new Set<string>();
     for (const n of nodes) {
@@ -5954,7 +5998,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if ((n.data as any)?.isGroup) groupIds.add(id);
       else visibleFragIds.add(id);
     }
+    // Create a stable key that only changes when structure changes
+    const key = `${visibleFragIds.size}:${groupIds.size}:${Array.from(visibleFragIds).sort().join(',')}`;
+    return { visibleFragIds, groupIds, key };
+  }, [nodes]);
 
+  // Hub nodes: inDegree >= 5 and/or outDegree >= 5 (visible graph only, ignore group containers).
+  // Now depends on stableNodeStructure.key instead of full nodes array.
+  const hubNodeIds = React.useMemo(() => {
+    const { visibleFragIds, groupIds } = stableNodeStructure;
+    
     const inDeg = new Map<string, number>();
     const outDeg = new Map<string, number>();
     const inc = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) || 0) + 1);
@@ -5976,13 +6029,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (i >= 5 || o >= 5) out.add(id);
     }
     return out;
-  }, [nodes, visibleEdges]);
+  }, [stableNodeStructure, visibleEdges]);
 
   // Base edge presentation (labels hidden, dimmed) - computed only when the underlying edge set changes.
   // This avoids O(E) object cloning on every hover state update when nothing is hovered/selected.
+  // Note: use openEdgeExplainPopoverRef to avoid dependency on callback identity.
   const baseVisibleEdges = React.useMemo(() => {
     const DIM_OPACITY = 0.22;
     if (perfMode) return visibleEdges;
+    // Capture ref value once for this computation (stable across renders)
+    const onExplain = openEdgeExplainPopoverRef.current;
     return visibleEdges.map((e) => {
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
       const isArcTop = e.type === 'arcTop';
@@ -5990,12 +6046,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return {
         ...e,
         type: isArcTop ? 'hznArcTop' : 'hzn',
-        data: { ...d, onExplain: openEdgeExplainPopover, showLabel: false },
+        data: { ...d, onExplain, showLabel: false },
         label: undefined,
         style: { ...baseStyle, opacity: DIM_OPACITY },
       };
     });
-  }, [visibleEdges, perfMode, openEdgeExplainPopover]);
+  }, [visibleEdges, perfMode]);
 
   // Levels: derive aggKeys per node once per edge-set, so hover can suppress aggregated edges without an extra full scan.
   const levelsAggKeysByNodeId = React.useMemo(() => {
@@ -6089,6 +6145,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       };
     };
 
+    // Single-pass partition: split edges into [rest, raised] and concatenate.
+    // Avoids 2× filter() calls which iterate the array twice.
+    const orderByRaised = (edges: Edge[]): Edge[] => {
+      const rest: Edge[] = [];
+      const raised: Edge[] = [];
+      for (let i = 0; i < edges.length; i++) {
+        const e = edges[i]!;
+        if ((e as any)?.data?.raiseToFront) {
+          raised.push(e);
+        } else {
+          rest.push(e);
+        }
+      }
+      // Only create new array if there are raised edges
+      return raised.length > 0 ? [...rest, ...raised] : edges;
+    };
+
     // Persisted selection highlight (keeps an edge emphasized until the user clicks elsewhere).
     // Hover still works normally; we only skip this overlay in "edge hover" mode (hoveredEdgeId),
     // because that path intentionally fades everything except the hovered edge.
@@ -6110,9 +6183,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           true,
         );
       });
-      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
-      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return [...rest, ...raised];
+      return orderByRaised(out);
     };
 
     // Edge hover: show only this edge's label
@@ -6131,9 +6202,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
       // Keep hovered edge on top within edge layer.
-      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
-      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return [...rest, ...raised];
+      return orderByRaised(out);
     }
 
     // Group hover has priority over node hover
@@ -6201,9 +6270,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
-      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return applySelectedEdge([...rest, ...raised]);
+      return applySelectedEdge(orderByRaised(out));
     }
 
     // Hover highlight mode: highlight selected relation cluster and fade everything else.
@@ -6242,9 +6309,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
-      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return applySelectedEdge([...rest, ...raised]);
+      return applySelectedEdge(orderByRaised(out));
     }
 
     // Node hover: highlight incident edges and show their labels
@@ -6263,9 +6328,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
-      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return applySelectedEdge([...rest, ...raised]);
+      return applySelectedEdge(orderByRaised(out));
     }
 
     // Selected node (when not hovering): highlight incident edges, show labels
@@ -6284,9 +6347,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
       });
-      const raised = out.filter((e: any) => (e as any)?.data?.raiseToFront);
-      const rest = out.filter((e: any) => !(e as any)?.data?.raiseToFront);
-      return applySelectedEdge([...rest, ...raised]);
+      return applySelectedEdge(orderByRaised(out));
     }
 
     // Default: dim all edges, hide labels
@@ -6735,13 +6796,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const hovered = String(hoveredNodeId || '').trim();
     const hoverActive = !!hoverHighlight && !!hovered;
 
+    // Pre-compute query highlight styles (avoid creating objects in loop)
+    const queryOutline = theme === 'dark' ? '2px solid rgba(248,113,113,0.75)' : '2px solid rgba(220,38,38,0.60)';
+    const queryBoxShadow = theme === 'dark'
+      ? '0 0 0 4px rgba(248,113,113,0.18), 0 10px 26px rgba(0,0,0,0.35)'
+      : '0 0 0 4px rgba(220,38,38,0.14), 0 10px 26px rgba(0,0,0,0.18)';
+
     return nodes.map((n) => {
       const id = String(n.id || '').trim();
       const isGroup = Boolean((n.data as any)?.isGroup);
 
       const isOwnedNode = !!owned && id && owned.has(id);
       const isHovered = id === hovered;
-      const isQuery = !!qset && id && qset.has(id);
+      const isQuery = qActive && !!qset && id && qset.has(id);
 
       // Base hover highlight behavior (existing UX).
       let opacity = 1;
@@ -6755,20 +6822,57 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       // Graph-query highlight: make affected nodes pop and lightly de-emphasize others.
       // This is reversible (cleared on pane click / Esc / toggling chip).
-      const style: any = { ...(n as any).style, opacity };
-      if (qActive) {
-        if (isQuery && !isGroup) {
-          style.opacity = 1;
-          style.outline = theme === 'dark' ? '2px solid rgba(248,113,113,0.75)' : '2px solid rgba(220,38,38,0.60)';
+      // IMPORTANT: preserve behavior exactly, including clearing query-only styles when inactive.
+      const prevStyle: any = (n as any).style || {};
+      let style: any = prevStyle;
+      let styleChanged = false;
+
+      const wantQuery = Boolean(qActive && isQuery && !isGroup);
+      if (qActive && !wantQuery) {
+        // De-emphasize others (original logic: min(currentOpacity, 0.55), groups even more muted)
+        opacity = isGroup ? 0.12 : Math.min(opacity, 0.55);
+      }
+      if (wantQuery) {
+        opacity = 1;
+        zIndex = Math.max(zIndex, 40);
+      }
+
+      // Opacity: only materialize if it actually changes from current style value.
+      // Missing opacity is equivalent to 1 in CSS, so we don't need to force-set it for opacity=1.
+      if (typeof prevStyle.opacity === 'number') {
+        if (prevStyle.opacity !== opacity) {
+          style = { ...style, opacity };
+          styleChanged = true;
+        }
+      } else if (opacity !== 1) {
+        style = { ...style, opacity };
+        styleChanged = true;
+      }
+
+      // Query highlight style props: add/remove deterministically
+      if (wantQuery) {
+        const needOutline = prevStyle.outline !== queryOutline;
+        const needOffset = prevStyle.outlineOffset !== 2;
+        const needShadow = prevStyle.boxShadow !== queryBoxShadow;
+        if (needOutline || needOffset || needShadow) {
+          if (!styleChanged) {
+            style = { ...prevStyle };
+            styleChanged = true;
+          }
+          style.outline = queryOutline;
           style.outlineOffset = 2;
-          style.boxShadow =
-            theme === 'dark'
-              ? '0 0 0 4px rgba(248,113,113,0.18), 0 10px 26px rgba(0,0,0,0.35)'
-              : '0 0 0 4px rgba(220,38,38,0.14), 0 10px 26px rgba(0,0,0,0.18)';
-          zIndex = Math.max(zIndex, 40);
-        } else {
-          // Keep group containers very muted to avoid visual noise.
-          style.opacity = isGroup ? 0.12 : Math.min(style.opacity ?? 1, 0.55);
+          style.boxShadow = queryBoxShadow;
+        }
+      } else {
+        // If this node had query styles from a previous run, clear them.
+        if (prevStyle.outline || typeof prevStyle.outlineOffset !== 'undefined' || prevStyle.boxShadow) {
+          if (!styleChanged) {
+            style = { ...prevStyle };
+            styleChanged = true;
+          }
+          delete style.outline;
+          delete style.outlineOffset;
+          delete style.boxShadow;
         }
       }
 
@@ -6884,10 +6988,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         changed = true;
       }
 
-      if (changed) {
-        return { ...n, data: nextData, zIndex, style } as any;
+      // Only create new node object if something actually changed
+      const prevZIndex = (n as any).zIndex;
+      const zIndexChanged = prevZIndex !== zIndex;
+      
+      if (changed || styleChanged || zIndexChanged) {
+        return { ...n, data: changed ? nextData : d0, zIndex, style } as any;
       }
-      return { ...n, zIndex, style } as any;
+      // Return original node if nothing changed (preserves reference for React.memo)
+      return n;
     });
   }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace, openLocalFilters, toggleLocalFilter, levelsExpandEdgeTypes]);
 
@@ -7646,6 +7755,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const bgColor = theme === 'dark' ? 'var(--bg-primary)' : 'var(--bg-primary)';
   const bgPatternColor = theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)';
+
+  // Memoized styles for Controls and MiniMap (avoid recreating objects on every render during pan/zoom)
+  const controlsStyle = React.useMemo(() => ({
+    background: 'var(--bg-elevated)',
+    border: '1px solid var(--border-subtle)',
+    borderRadius: '8px',
+  }), []);
+
+  const miniMapStyle = React.useMemo(() => ({
+    background: 'var(--bg-elevated)',
+    border: '1px solid var(--border-subtle)',
+    borderRadius: '8px',
+  }), []);
+
+  // Memoized nodeColor callback for MiniMap (avoid recreating function on every render)
+  const miniMapNodeColor = React.useCallback((node: Node<HorizonNodeData>) => {
+    const data = node.data as HorizonNodeData;
+    return data.critical ? '#EF4444' : '#3B82F6';
+  }, []);
+
+  const miniMapMaskColor = theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)';
 
   // Handle node click
   const handleNodeClick = useCallback((event: React.MouseEvent, node: Node<HorizonNodeData>) => {
@@ -9623,26 +9753,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             elementsSelectable={true}
           >
           {showBackgroundGrid && <Background color={bgPatternColor} gap={16} />}
-          <Controls
-            style={{
-              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-              border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-              borderRadius: '8px',
-            }}
-          />
+          <Controls style={controlsStyle} />
           {showMiniMap && (
-          <MiniMap
-            style={{
-              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-              border: `1px solid ${theme === 'dark' ? 'var(--border-subtle)' : 'var(--border-subtle)'}`,
-              borderRadius: '8px',
-            }}
-            nodeColor={(node) => {
-              const data = node.data as HorizonNodeData;
-              return data.critical ? '#EF4444' : '#3B82F6';
-            }}
-            maskColor={theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)'}
-          />
+            <MiniMap
+              style={miniMapStyle}
+              nodeColor={miniMapNodeColor}
+              maskColor={miniMapMaskColor}
+            />
           )}
         </ReactFlow>
 

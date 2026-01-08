@@ -72,6 +72,10 @@ func main() {
 		string(horizonmodels.DependencyTypeFounded),
 		string(horizonmodels.DependencyTypeInvestsIn),
 		string(horizonmodels.DependencyTypePartnersWith),
+		// OSINT-lite / governance extensions
+		string(horizonmodels.DependencyTypeAuditedBy),
+		string(horizonmodels.DependencyTypeRelativeOf),
+		string(horizonmodels.DependencyTypeRelatedTo),
 	}
 
 	seen := map[string]struct{}{}

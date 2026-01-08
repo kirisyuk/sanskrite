@@ -133,6 +133,17 @@ TASK: Compare the extracted data with the source content and identify any confli
 	Missing Info logic:
 	- If important fields (like location, key metrics for the sector) are empty or unknown, add a specific question to 'missingInfo'.
 	- If the entity is an Organization or Facility, and NO supply chain relations (suppliers, customers, competitors) were found, you MUST add a question to find them. Example: "Who are the key suppliers for Tesla?" or "What are the major competitors of this entity?"
+	- If the entity is an Organization or Facility:
+	  - If no external auditor is present (AUDITED_BY), add a question:
+	    - "Who is the external auditor of <org> (as of YYYY)? Provide audit firm and source."
+	  - If marketSegments is empty, add a question:
+	    - "Which market segments does <org> operate in? Return canonical /segment/{domain}/{vertical}/{geo} (geo=ISO2 or global) with sources."
+	  - If orgSize is empty/unknown, add a question:
+	    - "What is the org size (orgSize=sme|le|enterprise|mega) for <org>? Use employees/revenue/assets with sources."
+	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
+	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2}/{slug}. If unknown, /gov/na/{slug}."
+	  - If canonicalPath is legacy (/org/{slug}) or uses /org/na/{slug}, add a question:
+	    - "What is the country of origin / primary jurisdiction for <org>? Prefer canonicalPath /org/{iso2}/{slug} (iso2=ISO3166-1 alpha2)."
 	- If "management" specialty is requested for an Organization/Facility, you MUST ensure leadership/board/founder coverage:
 	  - If there are no PERSON relations relevant to leadership (MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED), add specific questions like:
 	    - "Who is the CEO/CFO/COO/CTO/CIO/CMO/CHRO of <org>?" and "Who are the board members/chair of <org>?" and "Who founded <org>?"
@@ -156,6 +167,11 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - Ensure ownership/control relations are present (OWNS / SUBSIDIARY_OF / CONTROLS / INVESTS_IN).
 	  - If none are found for an ORGANIZATION, add questions like:
 	    - "Who owns <org> (shareholders/parent company/UBO)?" and "What subsidiaries does <org> own/control?"
+	- If the entity is a PERSON:
+	  - If no RELATIVE_OF relations are present, add a question:
+	    - "Who are the direct public relatives (spouse/children/parents/siblings) of <person>? Return RELATIVE_OF links with sources."
+	  - If no RELATED_TO relations are present, add a question:
+	    - "Who are the publicly known close associates of <person> (business partners/friends/classmates)? Return RELATED_TO links with evidence."
 	- If relations seem sparse or inconsistent with the entity's scale, flag it.
 
 	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, sourceContent, specBlock)

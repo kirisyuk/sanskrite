@@ -83,6 +83,22 @@ export function humanizeCanonicalPath(path?: string): string {
   if (!p) return '';
   const seg = p.split('/').filter(Boolean).pop() || '';
   const human = humanizeSlug(seg);
-  return human || seg;
+  const s = (human || seg).trim();
+  if (!s) return '';
+  // Best-effort Title Case when string looks slug-ish (no uppercase letters).
+  if (!/[A-Z]/.test(s)) {
+    return s
+      .split(/\s+/g)
+      .filter(Boolean)
+      .map((w) => {
+        // Keep words starting with non-letters as-is (e.g., "m1").
+        const first = w.charAt(0);
+        if (!first || first.toLowerCase() === first.toUpperCase()) return w;
+        return first.toUpperCase() + w.slice(1);
+      })
+      .join(' ')
+      .trim();
+  }
+  return s;
 }
 

@@ -686,6 +686,9 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       'COOPERATES_WITH',
       'CONFLICTS_WITH',
       'OPPOSES',
+      // OSINT-lite / governance extensions
+      'AUDITED_BY',
+      'RELATIVE_OF',
       'RELATED_TO',
       'SIMILAR_TO',
       'LINKED_TO',
@@ -720,6 +723,14 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     }
     if (t === 'REGULATES') {
       if (fromType !== 'ORGANIZATION') return { ok: false, message: 'REGULATES: From должен быть ORGANIZATION' };
+    }
+    if (t === 'AUDITED_BY') {
+      if (fromType !== 'ORGANIZATION' && fromType !== 'FACILITY') return { ok: false, message: 'AUDITED_BY: From должен быть ORGANIZATION или FACILITY' };
+      if (toType !== 'ORGANIZATION') return { ok: false, message: 'AUDITED_BY: To должен быть ORGANIZATION' };
+    }
+    if (t === 'RELATIVE_OF' || t === 'RELATED_TO') {
+      if (fromType !== 'PERSON') return { ok: false, message: `${t}: From должен быть PERSON` };
+      if (toType !== 'PERSON') return { ok: false, message: `${t}: To должен быть PERSON` };
     }
     return { ok: true };
   }, [hitlDelete, hitlType, hitlSwap, sourceFragment, targetFragment]);
@@ -2201,6 +2212,22 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             )}
               {fragment.canonicalPath && <KV k="Canonical path" v={<span style={mono}>{fragment.canonicalPath}</span>} copyText={fragment.canonicalPath} />}
               {fragment.type && <KV k="Fragment type" v={<span>{String(fragment.type)}</span>} />}
+              {fragment.orgSize && <KV k="Org size" v={<span style={mono}>{String(fragment.orgSize)}</span>} />}
+              {Array.isArray(fragment.marketSegments) && fragment.marketSegments.length > 0 && (
+                <KV
+                  k="Market segments"
+                  v={
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {fragment.marketSegments.map((p: any, idx: number) => (
+                        <span key={`${String(p)}-${idx}`} style={mono}>
+                          {String(p)}
+                        </span>
+                      ))}
+                    </div>
+                  }
+                  copyText={fragment.marketSegments.map((p: any) => String(p)).join('\n')}
+                />
+              )}
               {fragment.identifiers && Object.keys(fragment.identifiers).length > 0 && (
                 <div style={{ marginTop: 6 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>Identifiers</div>

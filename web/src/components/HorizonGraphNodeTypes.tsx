@@ -59,7 +59,7 @@ export interface HorizonNodeData {
   stackTitle?: string;
   /** Stack subtitle (context label): e.g. "Dubai Future Foundation" under "Control" */
   stackSubtitle?: string;
-  stackKind?: 'persons' | 'products' | 'control' | 'geolocation' | 'suppliers';
+  stackKind?: 'persons' | 'staff' | 'products' | 'control' | 'geolocation' | 'suppliers' | 'dependencies';
   /** Visual type override for the stack controller node (drives color/icon); e.g. PERSON/PRODUCT/ORGANIZATION/GEO_REGION */
   stackVisualType?: string;
   onToggleStack?: (stackKey: string, nextExpanded: boolean) => void;
@@ -118,6 +118,13 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     border: '#22C55E', borderDark: '#4ADE80',
     text: '#166534', textDark: '#BBF7D0',
     accent: '#22C55E', accentDark: '#4ADE80',
+  },
+  'DEPENDENCY': {
+    // Neutral grey (distinct from default, but still consistent with platform palette)
+    bg: '#F1F5F9', bgDark: '#0F172A',
+    border: '#94A3B8', borderDark: '#94A3B8',
+    text: '#334155', textDark: '#CBD5E1',
+    accent: '#94A3B8', accentDark: '#CBD5E1',
   },
   'FACILITY': {
     bg: '#FFEDD5', bgDark: '#7C2D12',
@@ -222,8 +229,15 @@ const getHorizonNodeVisualQuality = (): HorizonNodeVisualQuality => {
   return 'balanced';
 };
 
+// Track whether styles have been injected (avoids DOM thrashing on every node render)
+let _hzn2026StylesInjected = false;
+
 const ensureHorizonNode2026Styles = () => {
   if (typeof document === 'undefined') return;
+  // Skip if already injected (perf optimization - no DOM access needed)
+  if (_hzn2026StylesInjected) return;
+  _hzn2026StylesInjected = true;
+  
   // Default to balanced if unset
   if (!document.documentElement.dataset.hznNodeVisuals) {
     document.documentElement.dataset.hznNodeVisuals = 'balanced';
@@ -235,7 +249,7 @@ const ensureHorizonNode2026Styles = () => {
     style.id = id;
     document.head.appendChild(style);
   }
-  // Always refresh content so HMR / incremental builds don't leave stale CSS around.
+  // Inject styles once
   style.textContent = `
     @keyframes hzn-spin {
       from { transform: rotate(0deg); }
@@ -250,6 +264,31 @@ const ensureHorizonNode2026Styles = () => {
       border: 1px solid var(--hzn-border);
       box-shadow: var(--hzn-shadow);
       transition: box-shadow 140ms ease, border-color 140ms ease, opacity 140ms ease;
+      /* CSS containment for better performance.
+         IMPORTANT: do NOT use paint here — nodes intentionally render UI that can extend outside
+         the card bounds (stack previews, bottom controls). paint would clip them. */
+      contain: layout style;
+    }
+    /* Perf mode: disable all transitions and heavy effects for smoother pan/zoom on large graphs */
+    :root[data-hzn-perf-mode="true"] .hzn-node-2026 {
+      transition: none !important;
+      box-shadow: none !important;
+    }
+    :root[data-hzn-perf-mode="true"] .hzn-node-2026.is-selected {
+      /* Keep minimal selection indicator */
+      box-shadow: 0 0 0 2px var(--hzn-accent-ring) !important;
+    }
+    :root[data-hzn-perf-mode="true"] .hzn-node-2026 .hzn-handle,
+    :root[data-hzn-perf-mode="true"] .hzn-node-2026 .hzn-plus {
+      transition: none !important;
+      box-shadow: none !important;
+    }
+    :root[data-hzn-perf-mode="true"] .react-flow__edge path {
+      transition: none !important;
+    }
+    :root[data-hzn-perf-mode="true"] .hzn-node-2026::before {
+      /* Disable gradient overlay in perf mode */
+      display: none !important;
     }
     :root[data-hzn-node-visuals="minimal"] .hzn-node-2026 {
       box-shadow: none !important;
@@ -303,6 +342,11 @@ const ensureHorizonNode2026Styles = () => {
     }
   `;
 };
+
+// Initialize styles immediately on module load (avoids per-render checks)
+if (typeof document !== 'undefined') {
+  ensureHorizonNode2026Styles();
+}
 
 export const formatHorizonFragmentType = (type: string | undefined): string => {
   const t = String(type || '').trim();
@@ -411,6 +455,15 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
         </svg>
       );
     
+    case 'DEPENDENCY':
+      // Link / dependency icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1" />
+          <path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1" />
+        </svg>
+      );
+    
     case 'SERVICE':
       // Settings icon
       return (
@@ -495,7 +548,9 @@ export const getEdgeColor = (edgeType: string | undefined): string => {
   // Dependency — Gray
   if (['DEPENDS_ON', 'REQUIRES', 'USES', 'NEEDS'].includes(type)) return '#9CA3AF';
   // Location — Purple
-  if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'].includes(type)) return '#A855F7';
+  if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'AUDITED_BY'].includes(type)) return '#A855F7';
+  // Social graph (people-people) — Teal
+  if (['RELATED_TO', 'RELATIVE_OF'].includes(type)) return '#06B6D4';
   // Default — Slate
   return '#64748B';
 };
@@ -751,6 +806,14 @@ const EdgeTypeIcon = ({ edgeType, color }: { edgeType: string; color: string }) 
           <path d="M11 12h2" />
         </svg>
       );
+    case 'RELATIVE_OF':
+      return (
+        <svg {...common}>
+          <path d="M9 7a3 3 0 1 1 6 0" />
+          <path d="M7 21a5 5 0 0 1 10 0" />
+          <path d="M7.5 11.5c.8-1 2.2-1.8 4.5-1.8s3.7.8 4.5 1.8" />
+        </svg>
+      );
     case 'SIMILAR_TO':
       return (
         <svg {...common}>
@@ -858,7 +921,9 @@ const edgeCaptionShort = (raw: any): string => {
     SUPPORTS: 'Supports',
     SUPPLIES_TO: 'Supplies',
     PRODUCES: 'Produces',
+    AUDITED_BY: 'Audited',
     RELATED_TO: 'Related',
+    RELATIVE_OF: 'Relative',
     SIMILAR_TO: 'Similar',
     LINKED_TO: 'Linked',
     // Location / context
@@ -1454,7 +1519,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
 
 // Базовый узел для Horizon фрагмента
 const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected }) => {
-  ensureHorizonNode2026Styles();
+  // Note: ensureHorizonNode2026Styles() is called once on module load (not per render)
   const { theme } = React.useContext(ThemeContext);
   const colors = getNodeColors(data.type, theme);
   const [isHovering, setIsHovering] = React.useState(false);
@@ -1471,9 +1536,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // but the user should still be able to run scouting from it.
   const canScopeScout = Boolean((isExpanded || data.loadRelatedAttempted) && data.onScopeScout && !data.scopeScoutDone);
   const isSelected = Boolean(selected);
-  const canCollapse = Boolean(data.fragmentId && data.onCollapse && isExpanded && !data.isLoadingRelated);
-  const showExpand = Boolean(data.fragmentId && data.onLoadRelated && !isExpanded);
-  const canExpandClick = Boolean(showExpand && !isLoadingRelated);
+  // Node expand/collapse (load related fragments). NOTE: stacks should not show this control:
+  // the stack "N" pill controls stack expansion; node expansion is misleading on stack controllers.
+  const canCollapse0 = Boolean(data.fragmentId && data.onCollapse && isExpanded && !data.isLoadingRelated);
+  const showExpand0 = Boolean(data.fragmentId && data.onLoadRelated && !isExpanded);
   const isPinnedToScope = Boolean((data as any)?.pinnedToScope);
   const canTogglePin = Boolean((data as any)?.onTogglePin && data.canonicalPath);
   const stackKey = String((data as any)?.stackGroupKey || '').trim();
@@ -1486,6 +1552,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const controllerId = String((data as any)?.stackControllerId || '').trim();
   const isStackController = Boolean(canToggleStack && controllerId && controllerId === String(data.id || '').trim());
   const isCollapsedStackController = Boolean(isStackController && !stackExpanded && (stackCount || 0) > 1);
+  const canCollapse = canCollapse0 && !isStackController;
+  const showExpand = showExpand0 && !isStackController;
+  const canExpandClick = Boolean(showExpand && !isLoadingRelated);
   const stackPreviewOpen = Boolean((data as any)?.stackPreviewOpen);
   const stackPreviewItems = Array.isArray((data as any)?.stackPreviewItems) ? ((data as any)?.stackPreviewItems as any[]) : [];
   const stackPreviewMore = typeof (data as any)?.stackPreviewMore === 'number' ? (data as any).stackPreviewMore : 0;
@@ -1996,12 +2065,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                // Keep the badge away from the card's rounded border (stack controllers have stacked backplates).
+                marginTop: 2,
                 boxShadow: theme === 'dark'
                   ? `0 14px 30px rgba(0,0,0,0.22), inset 0 0 0 1px ${hexToRgba(accentColor, 0.18)}`
                   : `0 14px 30px rgba(0,0,0,0.10), inset 0 0 0 1px ${hexToRgba(accentColor, 0.12)}`,
               }}
             >
-              <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={22} />
+              <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, width: '100%' }}>
@@ -2040,17 +2111,6 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                   {stackSubtitle}
                 </div>
               )}
-              <div
-                style={{
-                  marginTop: 4,
-                  fontSize: 11,
-                  fontWeight: 800,
-                  color: theme === 'dark' ? 'rgba(255,255,255,0.80)' : 'rgba(15,23,42,0.76)',
-                  opacity: 0.9,
-                }}
-              >
-                STACK • {(stackCount || 0)}
-              </div>
             </div>
           </div>
 
@@ -2137,7 +2197,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
             }}
           >
-            <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
+            <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={14} />
           </div>
           
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -2360,7 +2420,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             cb?.(stackKey, !stackExpanded);
           }}
           aria-label={stackExpanded ? 'Collapse stack' : 'Expand stack'}
-          title={stackExpanded ? 'Collapse stacked nodes' : `Show ${Math.max(0, (stackCount || 0) - 1)} more`}
+          title={stackExpanded ? 'Collapse stacked nodes' : `Show ${(stackCount || 0)} items`}
           style={{
             position: 'absolute',
             left: '50%',
@@ -2390,7 +2450,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             <path d="M3 17l9 5 9-5" />
           </svg>
           <span>
-            {stackExpanded ? 'Collapse' : `+${Math.max(0, (stackCount || 0) - 1)}`}
+            {stackExpanded ? 'Collapse' : `${(stackCount || 0)}`}
           </span>
         </button>
       )}
@@ -2449,9 +2509,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                 minWidth: 220,
                 padding: 10,
                 borderRadius: 14,
-                border: '1px solid var(--border-subtle)',
-                background: theme === 'dark' ? 'rgba(17,24,39,0.92)' : 'rgba(255,255,255,0.96)',
-                boxShadow: theme === 'dark' ? '0 18px 60px rgba(0,0,0,0.55)' : '0 18px 60px rgba(0,0,0,0.18)',
+                // Match the "Actions" button (dark, inky surface) in dark theme.
+                border: theme === 'dark' ? '1px solid rgba(255,255,255,0.18)' : '1px solid var(--border-subtle)',
+                background: theme === 'dark' ? 'rgba(0,0,0,0.62)' : 'rgba(255,255,255,0.96)',
+                boxShadow: theme === 'dark' ? '0 18px 60px rgba(0,0,0,0.72)' : '0 18px 60px rgba(0,0,0,0.18)',
                 zIndex: 5,
               }}
             >
@@ -2466,9 +2527,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                     width: 28,
                     height: 28,
                     borderRadius: 10,
-                    border: '1px solid var(--border-subtle)',
-                    background: 'transparent',
-                    color: 'var(--text-secondary-strong)',
+                    border: theme === 'dark' ? '1px solid rgba(255,255,255,0.16)' : '1px solid var(--border-subtle)',
+                    background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'transparent',
+                    color: theme === 'dark' ? 'rgba(255,255,255,0.82)' : 'var(--text-secondary-strong)',
                     cursor: 'pointer',
                     display: 'inline-flex',
                     alignItems: 'center',

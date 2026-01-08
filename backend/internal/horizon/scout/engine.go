@@ -24,6 +24,16 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
+func isLegacyOrgPath(cp string) bool {
+	cp = strings.TrimSpace(cp)
+	if !strings.HasPrefix(cp, "/org/") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	// Legacy: /org/{slug} (2 segments total)
+	return len(parts) == 2 && parts[0] == "org" && strings.TrimSpace(parts[1]) != ""
+}
+
 func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 	ctx context.Context,
 	target *models.HorizonFragment,
@@ -292,6 +302,7 @@ type ScoutEngine struct {
 	factEmitter             *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
 	geoHierarchyBuilder     *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
 	orgDeduplicator         *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
+	personDeduplicator      *PersonDeduplicator               // Deduplicates persons by name/phonetic match
 	preCreateValidator      *PreCreateValidator               // Validates fragments before creation
 	orgHierarchyBuilder     *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
 	productDeduplicator     *ProductDeduplicator              // Deduplicates products by Wikidata/CAS/formula
@@ -448,7 +459,8 @@ func NewScoutEngine(
 	aiExecutor *ai.AITaskExecutor,
 ) *ScoutEngine {
 	geoBuilder := NewGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
-	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
+	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil)     // WikidataClient set via WithWikidataClient
+	personDedup := NewPersonDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
 	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
 	productDedup := NewProductDeduplicator(fragmentsRepo, nil)                    // WikidataClient set via WithWikidataClient
 	productHierarchy := NewProductHierarchyBuilder(fragmentsRepo, edgesRepo, nil) // WikidataClient set via WithWikidataClient
@@ -474,21 +486,27 @@ func NewScoutEngine(
 		budgetPolicy:            BudgetPolicyFromEnv(),
 		geoHierarchyBuilder:     geoBuilder,
 		orgDeduplicator:         orgDedup,
+		personDeduplicator:      personDedup,
 		orgHierarchyBuilder:     orgHierarchy,
 		productDeduplicator:     productDedup,
 		productHierarchyBuilder: productHierarchy,
 	}
-	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup)
+	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup).WithPersonDedup(personDedup)
 	return engine
 }
 
-// WithWikidataClient sets the Wikidata client for organization and product deduplication
+// WithWikidataClient sets the Wikidata client for organization, person, and product deduplication
 func (e *ScoutEngine) WithWikidataClient(client coreontology.WikidataClientInterface) *ScoutEngine {
 	e.wikidataClient = client
 	if e.orgDeduplicator != nil {
 		e.orgDeduplicator.wikidataClient = client
 	} else {
 		e.orgDeduplicator = NewOrgDeduplicator(e.fragmentsRepo, client)
+	}
+	if e.personDeduplicator != nil {
+		e.personDeduplicator.wikidataClient = client
+	} else {
+		e.personDeduplicator = NewPersonDeduplicator(e.fragmentsRepo, client)
 	}
 	if e.productDeduplicator != nil {
 		e.productDeduplicator.wikidataClient = client
@@ -1305,6 +1323,9 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			defaultType = models.FragmentTypeGeoRegion
 		case strings.HasPrefix(job.TargetCanonicalPath, "/event/"):
 			defaultType = models.FragmentTypeEvent
+		case strings.HasPrefix(job.TargetCanonicalPath, "/gov/"):
+			// Government bodies are modeled as ORGANIZATION fragments, but use /gov/{iso2}/{slug} paths to avoid collisions.
+			defaultType = models.FragmentTypeOrganization
 		case strings.HasPrefix(job.TargetCanonicalPath, "/org/"):
 			defaultType = models.FragmentTypeOrganization
 		case strings.HasPrefix(job.TargetCanonicalPath, "/person/"):
@@ -1349,6 +1370,35 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			MissingInfo: []string{
 				fmt.Sprintf("Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships.", job.TargetCanonicalPath),
 			},
+		}
+		// Always request ORG/FACILITY classifiers and governance facts when internal sources are empty.
+		// Critic is not run in this branch, so we seed missingInfo explicitly for grounded research.
+		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/org/") ||
+			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") ||
+			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/fac/") {
+			validationResult.MissingInfo = append(validationResult.MissingInfo,
+				fmt.Sprintf("Who is the external auditor of %s (as of the latest fiscal year)? Provide audit firm legal name and source. Output as relation AUDITED_BY.", job.TargetCanonicalPath),
+				fmt.Sprintf("Which market segments does %s operate in? Return canonical /segment/{domain}/{vertical}/{geo} (geo=ISO2 or global) with sources.", job.TargetCanonicalPath),
+				fmt.Sprintf("What is the org size for %s? Return orgSize as one of sme|le|enterprise|mega|na using employees/revenue/assets with sources.", job.TargetCanonicalPath),
+			)
+		}
+		// If a gov path uses /gov/na/... we MUST resolve jurisdiction to avoid cross-country collisions.
+		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/na/") {
+			validationResult.MissingInfo = append(validationResult.MissingInfo,
+				fmt.Sprintf("Which country/jurisdiction does %s belong to? Replace /gov/na/... with /gov/{iso2}/... based on evidence.", job.TargetCanonicalPath),
+			)
+		}
+		// If an org path is legacy (/org/{slug}) or uses /org/na/... we should try to resolve the country of origin.
+		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/org/na/") || isLegacyOrgPath(strings.TrimSpace(job.TargetCanonicalPath)) {
+			validationResult.MissingInfo = append(validationResult.MissingInfo,
+				fmt.Sprintf("What is the country of origin / primary jurisdiction for %s? Prefer /org/{iso2}/{slug} canonical path. If unknown, keep /org/na/...", job.TargetCanonicalPath),
+			)
+		}
+		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/person/") {
+			validationResult.MissingInfo = append(validationResult.MissingInfo,
+				fmt.Sprintf("Who are the direct public relatives (spouse/children/parents/siblings) of %s? Output RELATIVE_OF links with sources.", job.TargetCanonicalPath),
+				fmt.Sprintf("Who are the publicly known close associates of %s (business partners/friends/classmates)? Output RELATED_TO links with evidence and sources.", job.TargetCanonicalPath),
+			)
 		}
 		// Add specialty-specific research prompts when internal sources are empty (Critic is not run in this branch).
 		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement) {
@@ -1779,6 +1829,20 @@ SKIP_RESEARCH:
 		// Создаем новый фрагмент
 		extractedFragment.CanonicalPath = effectiveCanonicalPath
 		extractedFragment.TenantID = "global"
+		// Ensure we have a human-readable label even when upstream LLM produced slug-like lowercase or left labels empty.
+		// This only affects display fields and does not change canonicalPath/type.
+		if extractedFragment.Labels == nil {
+			extractedFragment.Labels = map[string]string{}
+		}
+		if strings.TrimSpace(extractedFragment.Labels["en"]) == "" {
+			seed := strings.TrimSpace(extractedFragment.Identifiers["legalName"])
+			if seed == "" {
+				seed = strings.TrimSpace(extractedFragment.Identifiers["shortName"])
+			}
+			extractedFragment.Labels["en"] = bestEffortDisplayLabel(seed, effectiveCanonicalPath)
+		} else {
+			extractedFragment.Labels["en"] = bestEffortDisplayLabel(extractedFragment.Labels["en"], effectiveCanonicalPath)
+		}
 		extractedFragment.Metadata.SourceFrameID = frameID
 		extractedFragment.Metadata.EpistemicStatus = models.EpistemicStatusVerified
 		if validationResult.Confidence < 0.7 {
@@ -1861,16 +1925,81 @@ SKIP_RESEARCH:
 
 		// Only create if we didn't find a duplicate
 		if !usedExistingDuplicate {
-			fragmentID, err = e.fragmentsRepo.Create(ctx, extractedFragment)
-			if err != nil {
-				return fmt.Errorf("failed to create fragment: %w", err)
+			// Race guard: another worker/job might have created this fragment after our first GetByCanonicalPath.
+			// Firestore doesn't enforce uniqueness on canonicalPath, so re-check right before Create.
+			if cp := strings.TrimSpace(extractedFragment.CanonicalPath); cp != "" {
+				if reread, rerr := e.fragmentsRepo.GetByCanonicalPath(ctx, cp); rerr == nil && reread != nil && strings.TrimSpace(reread.ID) != "" {
+					usedExistingDuplicate = true
+					existingFragment = reread
+					fragmentID = reread.ID
+
+					// Best-effort: apply the newly extracted state onto the existing fragment.
+					// This keeps the current scouting run effective even when creation raced.
+					existingFragment.State = extractedFragment.State
+					existingFragment.Metadata.LastUpdatedAt = time.Now()
+					existingFragment.Metadata.LastVerifiedAt = time.Now()
+					existingFragment.Metadata.SourceFrameID = frameID
+					existingFragment.Metadata.EpistemicStatus = extractedFragment.Metadata.EpistemicStatus
+					// Normalize display label again (safe; no canonical changes).
+					if existingFragment.Labels == nil {
+						existingFragment.Labels = map[string]string{}
+					}
+					if strings.TrimSpace(existingFragment.Labels["en"]) == "" {
+						seed := strings.TrimSpace(extractedFragment.Labels["en"])
+						if seed == "" {
+							seed = strings.TrimSpace(extractedFragment.Identifiers["legalName"])
+						}
+						if seed == "" {
+							seed = strings.TrimSpace(extractedFragment.Identifiers["shortName"])
+						}
+						existingFragment.Labels["en"] = bestEffortDisplayLabel(seed, cp)
+					} else {
+						existingFragment.Labels["en"] = bestEffortDisplayLabel(existingFragment.Labels["en"], cp)
+					}
+
+					// Conservative Wikidata enrichment (QID-known only) to keep names/industryPaths filled when possible.
+					if e.wikidataClient != nil {
+						_, _ = henrich.EnrichFragmentFromWikidataIfPresent(ctx, e.wikidataClient, existingFragment, henrich.ConservativeWikidataOptions{
+							Force:     false,
+							Overwrite: true,
+						})
+					}
+
+					if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
+						return fmt.Errorf("failed to update fragment after race-guard hit: %w", uerr)
+					}
+				}
 			}
-			extractedFragment.ID = fragmentID
-			existingFragment = extractedFragment
+			if usedExistingDuplicate {
+				// Skip Create path; we've adopted an existing fragment.
+			} else {
+				fragmentID, err = e.fragmentsRepo.Create(ctx, extractedFragment)
+				if err != nil {
+					return fmt.Errorf("failed to create fragment: %w", err)
+				}
+				extractedFragment.ID = fragmentID
+				existingFragment = extractedFragment
+			}
 		}
 	} else {
 		// Обновляем существующий фрагмент
 		existingFragment.State = extractedFragment.State
+		// Best-effort: normalize display label on update as well (helps fix older lowercase-only stubs over time).
+		if existingFragment.Labels == nil {
+			existingFragment.Labels = map[string]string{}
+		}
+		if strings.TrimSpace(existingFragment.Labels["en"]) == "" {
+			seed := strings.TrimSpace(extractedFragment.Labels["en"])
+			if seed == "" {
+				seed = strings.TrimSpace(extractedFragment.Identifiers["legalName"])
+			}
+			if seed == "" {
+				seed = strings.TrimSpace(extractedFragment.Identifiers["shortName"])
+			}
+			existingFragment.Labels["en"] = bestEffortDisplayLabel(seed, effectiveCanonicalPath)
+		} else {
+			existingFragment.Labels["en"] = bestEffortDisplayLabel(existingFragment.Labels["en"], effectiveCanonicalPath)
+		}
 		existingFragment.Metadata.LastUpdatedAt = time.Now()
 		existingFragment.Metadata.LastVerifiedAt = time.Now()
 		existingFragment.Metadata.SourceFrameID = frameID

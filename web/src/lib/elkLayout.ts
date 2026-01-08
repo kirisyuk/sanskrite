@@ -75,6 +75,8 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'CONTROLS': 1,
   'BOARD_MEMBER_OF': 1,
   'EXECUTIVE_OF': 1,
+  // Governance (strong, but not control)
+  'AUDITED_BY': 2,
 
   // 2) Products & dependency (inputs/outputs)
   'PRODUCES': 2,
@@ -91,6 +93,9 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'OPPOSES': 3,
   'PARTNERS_WITH': 3,
   'COOPERATES_WITH': 3,
+  // Person-person social graph (peers)
+  'RELATED_TO': 3,
+  'RELATIVE_OF': 3,
 
   // 4) Regulation / influence
   'REGULATES': 4,
@@ -360,6 +365,8 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
       return isOutgoing ? 'customers' : 'supply-chain';
     case 'SUBSIDIARY_OF':
       return isOutgoing ? 'supply-chain' : 'customers';  // inverse of OWNS
+    case 'AUDITED_BY':
+      return 'context'; // governance/compliance context
     
     // Production always downstream
     case 'PRODUCES':
@@ -372,6 +379,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'PARTNERS_WITH':
     case 'COOPERATES_WITH':
     case 'RELATED_TO':
+    case 'RELATIVE_OF':
     case 'SIMILAR_TO':
       return 'market';
     
@@ -421,6 +429,7 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'PARTNERS_WITH',
     'COOPERATES_WITH',
     'RELATED_TO',
+    'RELATIVE_OF',
     'SIMILAR_TO',
     'LINKED_TO',
   ]);
@@ -991,7 +1000,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'CONTROLS',
     'INVESTS_IN',
   ]);
-  const GOVERNANCE_CONTROL_TYPES = new Set(['BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
+  const GOVERNANCE_CONTROL_TYPES = new Set(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY']);
   const SUPPLY_CHAIN_TYPES = new Set(['PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO']);
   const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
   const hierarchyScore = (et: string): number => {
@@ -1027,6 +1036,8 @@ export async function layoutLevelsTwoPane<T = any>(
     'NEEDS',
     'USES',
     'CONSUMES',
+    // Governance/employment: PERSON -(EMPLOYED_BY)-> ORG means ORG is the "more ultimate" node (parent).
+    'EMPLOYED_BY',
     'LOCATED_IN',
     'OPERATES_IN',
     'BASED_IN',
@@ -1043,6 +1054,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'PARTNERS_WITH',
     'COOPERATES_WITH',
     'RELATED_TO',
+    'RELATIVE_OF',
     'SIMILAR_TO',
     'LINKED_TO',
   ]);
@@ -1050,7 +1062,7 @@ export async function layoutLevelsTwoPane<T = any>(
   // Example: A -(DEPENDS_ON)-> B means A is downstream of B.
   // If B is expanded/central, the edge is incoming to B, but A should stay in the LEFT group (downstream),
   // not be promoted into the right backbone.
-  const INCOMING_STAY_IN_GROUP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+  const INCOMING_STAY_IN_GROUP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'AUDITED_BY']);
 
   // Context / geography relations should stay in LEFT groups even when they are "incoming" to an expanded node.
   // Otherwise expanding a GEO node would promote many orgs/places into the right backbone and compete for space.
@@ -1123,6 +1135,7 @@ export async function layoutLevelsTwoPane<T = any>(
   // We must use real graph edges, not derived metadata like edgeTypeFromParent, because that metadata can be dominated
   // by a different relation for placement, while we still want to recognize supply/control semantics for stacks.
   const pairEdgeTypes = new Map<string, Set<string>>();
+  const directedEdgeTypes = new Map<string, Set<string>>(); // `${src}||${dst}` -> Set<edgeType>
   for (const e of (edges || []) as any[]) {
     const eid = String(e?.id || '').trim();
     const ed: any = e?.data || {};
@@ -1143,6 +1156,11 @@ export async function layoutLevelsTwoPane<T = any>(
     const set = pairEdgeTypes.get(k) || new Set<string>();
     set.add(String(et || '').trim());
     pairEdgeTypes.set(k, set);
+
+    const dk = `${s}||${t}`;
+    const dset = directedEdgeTypes.get(dk) || new Set<string>();
+    dset.add(String(et || '').trim());
+    directedEdgeTypes.set(dk, dset);
   }
 
   // Promote upstream neighbors into the right backbone (Upstream group disappears).
@@ -1394,6 +1412,10 @@ export async function layoutLevelsTwoPane<T = any>(
       SUBSIDIARY_OF: 'Subsidiary',
       BOARD_MEMBER_OF: 'Board',
       EXECUTIVE_OF: 'Executive',
+      // UX copy: for an auditor node, these are audited entities (clients), not "audited by".
+      AUDITED_BY: 'Audit clients',
+      RELATIVE_OF: 'Relative',
+      RELATED_TO: 'Related',
       SUPPLIES_TO: 'Supplies',
       PRODUCES: 'Produces',
       TRANSFORMS_INTO: 'Transforms',
@@ -1758,6 +1780,7 @@ export async function layoutLevelsTwoPane<T = any>(
   const CONTROL_EDGE_TYPES = new Set(['OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN']);
   const GEO_TYPES = new Set(['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY']);
   const SUPPLY_EDGE_TYPES = new Set(['SUPPLIES_TO', 'PRODUCES']);
+  const DEPENDENCY_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
   const stackKindOfRightNode = (id: string, relatedId?: string): { kind: string; title: string; visualType: string } | null => {
     const node = fragments.find((x) => x.id === id);
     const d: any = (node as any)?.data;
@@ -1771,8 +1794,36 @@ export async function layoutLevelsTwoPane<T = any>(
       return pairEdgeTypes.get(pairKey(a, b)) || null;
     })();
 
-    // Persons: always bucket by type (if >1)
-    if (tk === 'PERSON') return { kind: 'persons', title: 'People', visualType: 'PERSON' };
+    // Dependencies: prerequisites for the expanded node (outgoing DEPENDS_ON from expanded -> prerequisite).
+    // Rule: only bucket when the pair has ONLY dependency edge types (no other relations compete for placement).
+    if (relatedId && pairTypes && pairTypes.size > 0) {
+      const a = String(relatedId || '').trim(); // anchor (expanded)
+      const b = String(id || '').trim(); // candidate prerequisite
+      const pureDependencyPair = Array.from(pairTypes).every((x) => DEPENDENCY_EDGE_TYPES.has(normalizeEdgeType(x)));
+      if (pureDependencyPair) {
+        const dk = `${a}||${b}`;
+        const dset = directedEdgeTypes.get(dk) || null;
+        const hasOutgoingDependency = dset ? Array.from(dset).some((x) => DEPENDENCY_EDGE_TYPES.has(normalizeEdgeType(x))) : false;
+        if (hasOutgoingDependency) {
+          return { kind: 'dependencies', title: 'Dependencies', visualType: 'DEPENDENCY' };
+        }
+      }
+    }
+
+    // Persons:
+    // - If the person is connected via EMPLOYED_BY to the expanded org, bucket into a dedicated Staff stack.
+    // - Otherwise keep the generic People stack.
+    if (tk === 'PERSON') {
+      const rel = String(relatedId || '').trim();
+      const self = String(id || '').trim();
+      if (rel && self) {
+        const dk = `${self}||${rel}`; // person -> org (directed)
+        const dset = directedEdgeTypes.get(dk) || null;
+        const hasEmployedBy = dset ? Array.from(dset).some((x) => normalizeEdgeType(x) === 'EMPLOYED_BY') : false;
+        if (hasEmployedBy) return { kind: 'staff', title: 'Staff', visualType: 'PERSON' };
+      }
+      return { kind: 'persons', title: 'People', visualType: 'PERSON' };
+    }
     // Geolocation: geo-like nodes
     if (GEO_TYPES.has(tk) || tk.includes('GEO')) return { kind: 'geolocation', title: 'Locations', visualType: 'GEO_REGION' };
     // Products: only for "incoming products" (these are the products that end up on the right pane)

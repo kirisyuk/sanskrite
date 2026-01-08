@@ -81,6 +81,10 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"FOUNDED":          {},
 	"INVESTS_IN":       {},
 	"PARTNERS_WITH":    {},
+	// OSINT-lite / governance extensions
+	"AUDITED_BY":       {},
+	"RELATIVE_OF":      {},
+	"RELATED_TO":       {},
 }
 
 func isBuiltInAllowedRelationType(s string) bool {
@@ -199,6 +203,12 @@ func NormalizeRelationType(in string) string {
 	}
 	// Normalize legacy / common aliases.
 	switch s {
+	case "AUDITOR", "AUDITORS", "AUDITOR_OF", "AUDITED", "AUDIT_FIRM":
+		return "AUDITED_BY"
+	case "RELATIVE", "RELATIVES", "FAMILY_OF", "FAMILY_MEMBER_OF", "KIN_OF":
+		return "RELATIVE_OF"
+	case "RELATED", "ASSOCIATED_WITH", "ASSOCIATE_OF", "FRIEND_OF", "BUSINESS_PARTNER_OF", "CLASSMATE_OF", "ALUMNI_OF":
+		return "RELATED_TO"
 	case "SUBSIDIARY_OF", "OWNED_BY":
 		return "SUBSIDIARY_OF"
 	case "CONTROLLED_BY":

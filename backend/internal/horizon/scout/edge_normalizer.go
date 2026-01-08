@@ -24,6 +24,9 @@ import (
 var SymmetricEdgeTypes = map[models.DependencyType]bool{
 	models.DependencyTypeCompetesWith: true, // "A competes with B" = "B competes with A"
 	models.DependencyTypePartnersWith: true, // "A partners with B" = "B partners with A"
+	// Person-person social graph (directionless by nature).
+	models.DependencyTypeRelativeOf: true, // "A is relative of B" = "B is relative of A"
+	models.DependencyTypeRelatedTo:  true, // "A is related to B" = "B is related to A"
 }
 
 // NormalizeSymmetricEdge ensures consistent source/target ordering for symmetric edges.
@@ -248,6 +251,30 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
 		Description:      "Product transforms into downstream product",
+	},
+
+	// AUDITED_BY: organization/facility is audited by an audit firm (organization).
+	models.DependencyTypeAuditedBy: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Entity is audited by external audit firm",
+	},
+
+	// RELATIVE_OF: symmetric person-person relationship.
+	models.DependencyTypeRelativeOf: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypePerson},
+		Description:      "Person is relative of person (symmetric)",
+	},
+
+	// RELATED_TO: symmetric person-person relationship (public associates).
+	models.DependencyTypeRelatedTo: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypePerson},
+		Description:      "Person is related to person (symmetric)",
 	},
 }
 

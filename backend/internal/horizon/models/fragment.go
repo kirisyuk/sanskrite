@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // HorizonFragment представляет узел графа знаний (всегда глобальный)
 type HorizonFragment struct {
 	// BaseOntologyFields (общие с Entity)
-	ID          string            `json:"id" firestore:"id"`
+	ID string `json:"id" firestore:"id"`
 	// TenantID is usually "global" for world-graph fragments.
 	// Exception: SUPPLY_LINK fragments can be tenant-scoped or "global" (assumption layer).
 	TenantID    string            `json:"tenantId" firestore:"tenantId"`
@@ -31,6 +33,16 @@ type HorizonFragment struct {
 	// IndustryPaths are canonical, multi-valued industry classifications (Horizon-first taxonomy).
 	// Format: /industry/{sector}/{group}/{industry}/{subindustry}
 	IndustryPaths []string `json:"industryPaths,omitempty" firestore:"industryPaths,omitempty"`
+
+	// MarketSegments are canonical, multi-valued market segment paths for organizations/facilities.
+	// Canonical format: /segment/{domain}/{vertical}/{geo}
+	// - geo: ISO3166-1 alpha2 lowercase (2 chars) or "global"
+	// This is an ORG-level classification (not a separate fragment type in MVP).
+	MarketSegments []string `json:"marketSegments,omitempty" firestore:"marketSegments,omitempty"`
+
+	// OrgSize is a coarse organization size bucket (ORG-level property).
+	// Canonical values: "sme" | "le" | "enterprise" | "mega" | "na"
+	OrgSize string `json:"orgSize,omitempty" firestore:"orgSize,omitempty"`
 
 	// IndexPaths — денормализованные “координаты” фрагмента для детерминированного картографирования/фильтрации.
 	// Собирается из canonicalPath + (sectorPath/entityPath + ancestors) + location + tags + identifiers + (optional spheres).
@@ -63,9 +75,9 @@ type HorizonFragment struct {
 
 	// Supply Link specific fields (when Type == FragmentTypeSupplyLink)
 	// These fields are only used for SUPPLY_LINK fragments (tenant-specific)
-	SupplierRef         *string `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`         // /org/... or /fac/... (nil = natural resource)
-	CustomerRef         *string `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`         // /org/... or /fac/... (nil = end consumer)
-	ProductRef          *string `json:"productRef,omitempty" firestore:"productRef,omitempty"`            // /product/... (required for SUPPLY_LINK)
+	SupplierRef         *string `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`                 // /org/... or /fac/... (nil = natural resource)
+	CustomerRef         *string `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`                 // /org/... or /fac/... (nil = end consumer)
+	ProductRef          *string `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for SUPPLY_LINK)
 	SupplierFacilityRef *string `json:"supplierFacilityRef,omitempty" firestore:"supplierFacilityRef,omitempty"` // /fac/... (optional)
 	CustomerFacilityRef *string `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)
 }
@@ -89,7 +101,7 @@ func (f *HorizonFragment) Validate() error {
 	if f.Type == "" {
 		return fmt.Errorf("type is required")
 	}
-	
+
 	// SupplyLink fragments can be tenant-scoped OR global-scoped (assumption layer).
 	// All other fragments must be global.
 	if f.Type == FragmentTypeSupplyLink {
@@ -128,6 +140,15 @@ func (f *HorizonFragment) Validate() error {
 	// This enables reliable dedup/search (e.g., FindByIdentifier("wikidataId", "...")) even for legacy fragments
 	// that may have stored Wikidata only in kbRefs.
 	f.ensureWikidataMirroring()
+	// Best-effort: keep GeoNames linkage consistent across both KBRefs and Identifiers.
+	// GeoNames ExternalID is a numeric string (geonameId).
+	f.ensureGeoNamesMirroring()
+
+	// Best-effort: normalize org-level classifiers (safe, deterministic).
+	// These fields can be produced by Scout/Research and should be canonicalized before persistence.
+	f.MarketSegments = taxonomy.NormalizeSegmentPaths(f.MarketSegments)
+	f.OrgSize = taxonomy.NormalizeOrgSize(f.OrgSize)
+
 	// Best-effort: ensure indexPaths is always present for new/updated fragments.
 	// This keeps expand/graph filtering deterministic without requiring backfills.
 	f.IndexPaths = BuildIndexPaths(f, nil)
@@ -196,6 +217,75 @@ func (f *HorizonFragment) ensureWikidataMirroring() {
 	f.KBRefs = append(f.KBRefs, KBReference{
 		KB:         "Wikidata",
 		ExternalID: wid,
+		Confidence: 1.0,
+	})
+}
+
+// ensureGeoNamesMirroring best-effort keeps GeoNames external ID mirrored in both:
+// - KBRefs (KB="GeoNames", ExternalID="292968")
+// - Identifiers["geonamesId"] ("292968")
+//
+// This function is intentionally conservative:
+// - If a GeoNames KBRef exists, it is treated as the source of truth.
+// - If only identifiers contain a GeoNames ID, we add a KBRef.
+// - If both exist but differ, we overwrite Identifiers["geonamesId"] to match KBRefs.
+func (f *HorizonFragment) ensureGeoNamesMirroring() {
+	if f == nil {
+		return
+	}
+
+	// 1) Read from KBRefs first (source of truth if present).
+	kbID := ""
+	kbIdx := -1
+	for i, ref := range f.KBRefs {
+		if strings.EqualFold(strings.TrimSpace(ref.KB), "GeoNames") {
+			kbID = strings.TrimSpace(ref.ExternalID)
+			kbIdx = i
+			break
+		}
+	}
+
+	// 2) Read from Identifiers if present.
+	idID := ""
+	if f.Identifiers != nil {
+		if v := strings.TrimSpace(f.Identifiers["geonamesId"]); v != "" {
+			idID = v
+		} else if v := strings.TrimSpace(f.Identifiers["geonameId"]); v != "" {
+			// Legacy key support.
+			idID = v
+		} else if v := strings.TrimSpace(f.Identifiers["geonames"]); v != "" {
+			// Very legacy key support.
+			idID = v
+		}
+	}
+
+	// Choose authoritative ID.
+	gid := kbID
+	if gid == "" {
+		gid = idID
+	}
+	if gid == "" {
+		return
+	}
+
+	// Ensure identifiers map exists and contains geonamesId.
+	if f.Identifiers == nil {
+		f.Identifiers = make(map[string]string)
+	}
+	f.Identifiers["geonamesId"] = gid
+
+	// Ensure KBRefs contains GeoNames ref.
+	if kbIdx >= 0 {
+		// Normalize casing and ensure ExternalID is set (don't downgrade confidence).
+		f.KBRefs[kbIdx].KB = "GeoNames"
+		if strings.TrimSpace(f.KBRefs[kbIdx].ExternalID) == "" {
+			f.KBRefs[kbIdx].ExternalID = gid
+		}
+		return
+	}
+	f.KBRefs = append(f.KBRefs, KBReference{
+		KB:         "GeoNames",
+		ExternalID: gid,
 		Confidence: 1.0,
 	})
 }

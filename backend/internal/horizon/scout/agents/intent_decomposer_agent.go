@@ -233,7 +233,7 @@ Return ONLY JSON with this schema:
       "targetLegalName": "string",
       "targetShortName": "string",
       "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL",
-      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "COMPETES_WITH" | "INFLUENCES",
+      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES",
       "reason": "string",
       "confidence": 0.0,
       "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
@@ -246,7 +246,11 @@ RULES:
 - Prefer supply-chain/logistics structure when the intent suggests it (suppliers, battery materials/components, logistics providers, ports/regions, manufacturing facilities, key dependencies).
 - confidence MUST be <= 0.65 (hypothesis), use ~0.25..0.55 typically.
 - Use stable canonical paths:
-  - Organizations: /org/{slug}
+  - Organizations: /org/{iso2|na}/{slug}
+    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase). If unknown use "na".
+    - Legacy /org/{slug} may exist in the graph; prefer /org/{iso2}/{slug} for NEW entities to reduce collisions.
+  - Government bodies: /gov/{iso2|na}/{slug}
+    - Use for ministries, regulators, agencies, state bodies. If unknown, use /gov/na/{slug}.
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - Facilities: /fac/{orgSlug}/{slug} when possible (prefer nested over flat /fac/{slug})

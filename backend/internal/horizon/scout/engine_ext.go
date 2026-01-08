@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -43,6 +44,66 @@ func parseStateInt(v interface{}, def int) int {
 	default:
 		return def
 	}
+}
+
+func containsUpperLetter(s string) bool {
+	for _, r := range s {
+		if unicode.IsUpper(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// bestEffortTitleCase converts "riyadh" -> "Riyadh", "four points sheraton" -> "Four Points Sheraton".
+// It is intentionally conservative: it only title-cases when the string has no uppercase letters.
+func bestEffortTitleCase(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if containsUpperLetter(s) {
+		return s
+	}
+	// Humanize mild slug artifacts if present.
+	s = strings.ReplaceAll(s, "_", " ")
+	s = strings.ReplaceAll(s, "-", " ")
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return ""
+	}
+	for i, w := range words {
+		r := []rune(w)
+		if len(r) == 0 {
+			continue
+		}
+		r[0] = unicode.ToUpper(r[0])
+		words[i] = string(r)
+	}
+	return strings.Join(words, " ")
+}
+
+func lastCanonicalSegment(cp string) string {
+	cp = strings.TrimSpace(cp)
+	if cp == "" {
+		return ""
+	}
+	parts := strings.Split(cp, "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		seg := strings.TrimSpace(parts[i])
+		if seg != "" {
+			return seg
+		}
+	}
+	return ""
+}
+
+func bestEffortDisplayLabel(label string, canonicalPath string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = lastCanonicalSegment(canonicalPath)
+	}
+	return bestEffortTitleCase(label)
 }
 
 func parseStateString(v interface{}) string {
@@ -264,7 +325,13 @@ func (e *ScoutEngine) processRelationsInternal(
 
 		// General mode: exclude known noisy edge types
 		switch rt {
-		case string(models.DependencyTypeCompetesWith), string(models.DependencyTypeInfluences):
+		case string(models.DependencyTypeCompetesWith),
+			string(models.DependencyTypeInfluences),
+			// OSINT-lite / social edges can explode recursion breadth; keep nodes/edges but don't auto-expand.
+			string(models.DependencyTypeRelatedTo),
+			string(models.DependencyTypeRelativeOf),
+			// Auditors are a governance fact; not useful to recursively expand by default.
+			string(models.DependencyTypeAuditedBy):
 			return false
 		default:
 			return true
@@ -320,13 +387,14 @@ func (e *ScoutEngine) processRelationsInternal(
 			if rel.TargetLegalName != "" {
 				legalName = rel.TargetLegalName
 			}
+			labelEN := bestEffortDisplayLabel(legalName, targetPath)
 			newFragment := &models.HorizonFragment{
 				TenantID:      "global",
 				CanonicalPath: targetPath,
 				Type:          ft,
 				Status:        "active",
 				State:         make(map[string]models.MetricValue),
-				Labels:        map[string]string{"en": legalName},
+				Labels:        map[string]string{"en": labelEN},
 				Identifiers: map[string]string{
 					"legalName": legalName,
 				},
@@ -370,6 +438,15 @@ func (e *ScoutEngine) processRelationsInternal(
 						targetID = targetFragment.ID
 						usedExistingDuplicate = true
 					}
+				}
+			}
+
+			if !usedExistingDuplicate {
+				// Race guard: another worker/job might have created the fragment after our first GetByCanonicalPath.
+				if reread, rerr := e.fragmentsRepo.GetByCanonicalPath(ctx, targetPath); rerr == nil && reread != nil && strings.TrimSpace(reread.ID) != "" {
+					targetID = reread.ID
+					targetFragment = reread
+					usedExistingDuplicate = true
 				}
 			}
 

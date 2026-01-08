@@ -29,6 +29,7 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 	location := []string{}
 	spheres := []string{}
 	industry := []string{}
+	segments := []string{}
 	sector := []string{}
 	entity := []string{}
 	identifiers := []string{}
@@ -53,6 +54,15 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 			continue
 		}
 		industry = append(industry, withAncestors(ip, 6)...)
+	}
+
+	// Market segments (canonical) → /segment/... (+ ancestors)
+	for _, sp := range f.MarketSegments {
+		sp = strings.TrimSpace(sp)
+		if !strings.HasPrefix(sp, "/segment/") {
+			continue
+		}
+		segments = append(segments, withAncestors(sp, 4)...)
 	}
 
 	// Entity path (guide taxonomy) → index prefix /entity/...
@@ -83,6 +93,11 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 		identifiers = append(identifiers, "/id/"+key+"/"+val)
 	}
 
+	// Org size (coarse bucket) → /orgsize/{value}
+	if s := slugToken(strings.TrimSpace(f.OrgSize)); s != "" {
+		other = append(other, "/orgsize/"+s)
+	}
+
 	// Extras: if it's a sphere canonical path, treat as sphere coordinate; else keep as "other".
 	for _, p := range extra {
 		p = strings.TrimSpace(p)
@@ -108,7 +123,7 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 		}
 	}
 
-	return NormalizeIndexPaths(MaxIndexPaths, canonical, location, spheres, industry, sector, entity, identifiers, tags, other)
+	return NormalizeIndexPaths(MaxIndexPaths, canonical, location, spheres, industry, segments, sector, entity, identifiers, tags, other)
 }
 
 // NormalizeIndexPaths deduplicates, normalizes, and caps index paths deterministically.

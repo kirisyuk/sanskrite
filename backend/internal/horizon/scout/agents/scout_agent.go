@@ -221,6 +221,8 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 			scoutResult.Fragment.Type = models.FragmentTypePerson
 		case strings.Contains(targetCanonicalPath, "/org/"):
 			scoutResult.Fragment.Type = models.FragmentTypeOrganization
+		case strings.Contains(targetCanonicalPath, "/gov/"):
+			scoutResult.Fragment.Type = models.FragmentTypeOrganization
 		case strings.Contains(targetCanonicalPath, "/product/"):
 			scoutResult.Fragment.Type = models.FragmentTypeProduct
 		case strings.Contains(targetCanonicalPath, "/program/"):
@@ -299,7 +301,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "- Each node needs: canonicalPath, name, type (ORGANIZATION/FACILITY/PRODUCT), and optional role.\n"
 			specBlock += "- Roles: supplier, processor, manufacturer, assembler, distributor, customer, or describe the function.\n"
 			specBlock += "- Multiple chains are expected — different product lines, different suppliers, branching paths.\n"
-			specBlock += "- Canonical paths: /org/{slug} for organizations, /fac/{org}/{slug} for facilities, /product/{category}/{type}/{stage}/{slug} for products.\n"
+			specBlock += "- Canonical paths: /org/{iso2|na}/{slug} for organizations, /fac/{org}/{slug} for facilities, /product/{category}/{type}/{stage}/{slug} for products.\n"
 			specBlock += "- IMPORTANT: Also output individual 'relations' for non-chain relationships (location, ownership, etc.).\n\n"
 		}
 		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {
@@ -337,6 +339,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - sectorPath: Must match the provided sector path
    - legalName: The legal/official name of the entity, INCLUDING the form of ownership when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC, etc.)
    - shortName: The base name WITHOUT the form of ownership (used for canonicalPath slugging)
+   - marketSegments: Array of canonical segment paths where this organization/facility operates (see /segment/... rules below)
+   - orgSize: Organization size bucket: "sme" | "le" | "enterprise" | "mega" | "na"
    - state: Map of metrics (operational_health, capacity_utilization, etc.) with MetricValue objects
    - description: Brief description of the entity
    - homeLocation: Location object with ISO standards if available
@@ -371,9 +375,12 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
    - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
    - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
+   - AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
    - COMPETES_WITH: competitor relationship (direction is not important, but still output as source->target).
    - INFLUENCES: source influences target.
    - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
+   - RELATIVE_OF: person-person symmetric relationship (public relatives). Use ONLY when both are PERSON.
+   - RELATED_TO: person-person symmetric relationship (publicly known associates: friends/partners/classmates). Use ONLY when both are PERSON.
    
    EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
    - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
@@ -386,6 +393,9 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
    - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
    - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
+   - AUDITED_BY: source MUST be ORGANIZATION or FACILITY, target MUST be ORGANIZATION
+   - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
+   - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
    - LOCATED_IN: target MUST be GEO_REGION
    - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
    - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
@@ -396,7 +406,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - targetLegalName: Same as targetName (explicit field)
    - targetShortName: Base name without ownership suffix (e.g., "Tesla")
    - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL"
-   - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, COMPETES_WITH, INFLUENCES
+   - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES
    - reason: Brief evidence/reason for this relation
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.
@@ -422,7 +432,18 @@ TASK: Extract all relevant information about this entity and return it as a JSON
 CANONICAL PATH RULES:
 - NEVER use "/discovered/*" (this is not allowed).
 - Prefer existing stable namespaces:
-  - Organizations: /org/{lowercase-slug}
+  - Organizations: /org/{iso2|na}/{slug}
+    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase). If unknown use "na".
+    - slug: lowercase slug derived from shortName (without ownership suffix).
+    - Legacy /org/{slug} may exist in the graph; prefer /org/{iso2}/{slug} for NEW entities to reduce collisions.
+  - Government bodies: /gov/{iso2|na}/{slug}
+    - Use for ministries, regulators, agencies, state bodies. This prevents collisions like "Ministry of Defence" across countries.
+    - If jurisdiction is unknown, use /gov/na/{slug} and add a missingInfo question (or leave confidence low).
+  - Market segments (ORG-level classification): /segment/{domain}/{vertical}/{geo}
+    - domain: broad sector domain slug (e.g., finance, technology, industrial, consumer, healthcare, energy)
+    - vertical: specific vertical slug (e.g., retail-banking, semiconductors, ev-batteries)
+    - geo: ISO3166-1 alpha2 lowercase (2 letters) OR "global"
+    - IMPORTANT: fixed number of segments after /segment: exactly 3 parts (domain/vertical/geo)
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - People: /person/{lowercase-slug}

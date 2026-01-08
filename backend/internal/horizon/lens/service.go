@@ -435,6 +435,8 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 						ft = models.FragmentTypeMediaChannel
 					case strings.HasPrefix(p, "/org/"):
 						ft = models.FragmentTypeOrganization
+					case strings.HasPrefix(p, "/gov/"):
+						ft = models.FragmentTypeOrganization
 					}
 					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						p = resolved.CanonicalPath
@@ -484,6 +486,8 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			case strings.HasPrefix(inputPath, "/event/"):
 				fragmentType = models.FragmentTypeEvent
 			case strings.HasPrefix(inputPath, "/org/"):
+				fragmentType = models.FragmentTypeOrganization
+			case strings.HasPrefix(inputPath, "/gov/"):
 				fragmentType = models.FragmentTypeOrganization
 			case strings.HasPrefix(inputPath, "/person/"):
 				fragmentType = models.FragmentTypePerson
@@ -1067,6 +1071,8 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 						ft = models.FragmentTypeMediaChannel
 					case strings.HasPrefix(p, "/org/"):
 						ft = models.FragmentTypeOrganization
+					case strings.HasPrefix(p, "/gov/"):
+						ft = models.FragmentTypeOrganization
 					}
 					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						p = resolved.CanonicalPath
@@ -1105,6 +1111,8 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				case strings.HasPrefix(inputPath, "/event/"):
 					fragmentType = models.FragmentTypeEvent
 				case strings.HasPrefix(inputPath, "/org/"):
+					fragmentType = models.FragmentTypeOrganization
+				case strings.HasPrefix(inputPath, "/gov/"):
 					fragmentType = models.FragmentTypeOrganization
 				case strings.HasPrefix(inputPath, "/person/"):
 					fragmentType = models.FragmentTypePerson

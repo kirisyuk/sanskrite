@@ -62,6 +62,14 @@ const (
 	DependencyTypeInvestsIn DependencyType = "INVESTS_IN"
 	// PARTNERS_WITH: symmetric partnership relationship (peer collaboration).
 	DependencyTypePartnersWith DependencyType = "PARTNERS_WITH"
+
+	// --- OSINT-lite / governance extensions ---
+	// AUDITED_BY: external auditor relationship (company -> audit firm).
+	DependencyTypeAuditedBy DependencyType = "AUDITED_BY"
+	// RELATIVE_OF: symmetric person-person relationship (public relatives).
+	DependencyTypeRelativeOf DependencyType = "RELATIVE_OF"
+	// RELATED_TO: symmetric person-person relationship (publicly known associates: friends/partners/classmates).
+	DependencyTypeRelatedTo DependencyType = "RELATED_TO"
 )
 
 // EdgeProperties свойства ребра зависимости

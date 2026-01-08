@@ -60,7 +60,10 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 
 	switch t {
 	case models.FragmentTypeOrganization:
-		return []string{"/org/" + slug}
+		// Prefer jurisdiction-scoped org path to reduce cross-country name collisions.
+		// Without jurisdiction in the relation payload, we default to "na".
+		// Also keep legacy /org/{slug} as a secondary candidate for backward compatibility.
+		return []string{"/org/na/" + slug, "/org/" + slug}
 	case models.FragmentTypeFacility:
 		out := make([]string, 0, 2)
 		// Candidate nested: take first word as org token, remainder as facility label.
@@ -105,7 +108,7 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 	case models.FragmentTypePerson:
 		return []string{"/person/" + slug}
 	default:
-		return []string{"/org/" + slug}
+		return []string{"/org/na/" + slug, "/org/" + slug}
 	}
 }
 
@@ -420,6 +423,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		expectedPrefix := ""
 		switch relType {
 		case models.FragmentTypeOrganization:
+			// Organizations can be either:
+			// - /org/{iso2|na}/{slug} (companies, NGOs, etc.)
+			// - /gov/{iso2|na}/{slug} (government bodies: ministries, regulators, agencies)
 			expectedPrefix = "/org/"
 		case models.FragmentTypeFacility:
 			expectedPrefix = "/fac/"
@@ -436,9 +442,17 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		case models.FragmentTypePerson:
 			expectedPrefix = "/person/"
 		}
-		if expectedPrefix != "" && !strings.HasPrefix(out.CanonicalPath, expectedPrefix) {
-			return "", fmt.Errorf("canonicalization returned canonicalPath %q that does not match targetType %q (expected prefix %q)",
-				out.CanonicalPath, string(relType), expectedPrefix)
+		if expectedPrefix != "" {
+			if relType == models.FragmentTypeOrganization {
+				// Special-case: government bodies are modeled as ORGANIZATION, but use /gov/... namespace.
+				if !strings.HasPrefix(out.CanonicalPath, "/org/") && !strings.HasPrefix(out.CanonicalPath, "/gov/") {
+					return "", fmt.Errorf("canonicalization returned canonicalPath %q that does not match targetType %q (expected /org/ or /gov/)",
+						out.CanonicalPath, string(relType))
+				}
+			} else if !strings.HasPrefix(out.CanonicalPath, expectedPrefix) {
+				return "", fmt.Errorf("canonicalization returned canonicalPath %q that does not match targetType %q (expected prefix %q)",
+					out.CanonicalPath, string(relType), expectedPrefix)
+			}
 		}
 	}
 
@@ -547,9 +561,13 @@ RULES:
 - shortName MUST be the base name without ownership suffix.
 - canonicalPath slug MUST be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
 - ONLY include ownership suffix in canonicalPath if (and only if) it is REQUIRED to disambiguate entities with same shortName.
-- Intangible-but-real actors (alliances, coalitions, unions, regulators, ministries, associations) are ORGANIZATION and MUST use /org/{slug}.
+- Intangible-but-real actors (alliances, coalitions, unions, regulators, ministries, agencies, associations) are ORGANIZATION.
+- Government bodies MUST use /gov/{iso2|na}/{slug} (iso2 = jurisdiction). Other orgs use /org/{iso2|na}/{slug}.
 - Use these namespaces:
-  - ORGANIZATION: /org/{lowercase-slug}
+  - ORGANIZATION:
+    - /org/{iso2|na}/{lowercase-slug} (companies, NGOs, etc.)
+    - /gov/{iso2|na}/{lowercase-slug} (ministries, regulators, agencies, state bodies)
+    - Legacy /org/{lowercase-slug} may exist; prefer /org/{iso2}/{slug} for NEW entities.
   - PERSON: /person/{lowercase-slug}
   - PRODUCT: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
     - category: "raw" | "component" | "finished" | "service"
@@ -588,7 +606,7 @@ RULES:
 - VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType:
-    - ORGANIZATION -> /org/
+    - ORGANIZATION -> /org/ OR /gov/
     - FACILITY -> /fac/ (prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug})
     - GEO_REGION -> /loc/ (strictly enforced)
     - PRODUCT -> /product/

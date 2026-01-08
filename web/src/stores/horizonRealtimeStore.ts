@@ -165,13 +165,154 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
           description: progress ? `Progress: ${progress}` : undefined,
         };
       } else if (type === 'horizon.scout.job.log') {
-        icon = 'scout';
-        const line = short(data?.line);
-        text = line || 'Scout activity';
-        humanReadable = {
-          title: 'Scout Activity',
-          description: line,
+        const rawLine = typeof data?.line === 'string' ? data.line : '';
+        const level = typeof data?.level === 'string' ? data.level.toLowerCase() : '';
+        icon = level === 'warn' || level === 'error' ? 'error' : 'scout';
+
+        const edgeVerb = (et: string): string => {
+          const u = (et || '').toUpperCase().trim();
+          switch (u) {
+            case 'SUPPLIES_TO':
+              return 'supplies to';
+            case 'PRODUCES':
+              return 'produces';
+            case 'TRANSFORMS_INTO':
+              return 'transforms into';
+            case 'DEPENDS_ON':
+              return 'depends on';
+            case 'REQUIRES':
+              return 'requires';
+            case 'USES':
+              return 'uses';
+            case 'NEEDS':
+              return 'needs';
+            case 'OWNS':
+              return 'owns';
+            case 'MANAGES':
+              return 'manages';
+            case 'CONTROLS':
+              return 'controls';
+            case 'INVESTS_IN':
+              return 'invests in';
+            default:
+              return u ? u.toLowerCase().replace(/_/g, ' ') : 'linked to';
+          }
         };
+
+        const typeName = (t: string): string => {
+          const u = (t || '').toUpperCase().trim();
+          if (!u) return 'Entity';
+          return u.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+        };
+
+        const prettyCP = (cp: string): string => {
+          const c = String(cp || '').trim();
+          if (!c) return '';
+          const name = getEntityName(c);
+          return name ? name : c;
+        };
+
+        const fmt = (() => {
+          const l = String(rawLine || '').trim();
+          if (!l) return null as null | { title: string; description?: string; text: string };
+
+          // Supply chain parse summary
+          {
+            const m = l.match(/^\[SupplyChainParse\]\s+chains=(\d+)\s+nodes=(\d+)\s+edges=(\d+)\s+fragments=(\d+)/i);
+            if (m) {
+              const chains = parseInt(m[1] || '0', 10) || 0;
+              const nodesN = parseInt(m[2] || '0', 10) || 0;
+              const edgesN = parseInt(m[3] || '0', 10) || 0;
+              const fragsN = parseInt(m[4] || '0', 10) || 0;
+              const title = 'Supply chain extracted';
+              const description = `${chains} chain${chains === 1 ? '' : 's'} • ${nodesN} node${nodesN === 1 ? '' : 's'} • ${edgesN} link${edgesN === 1 ? '' : 's'} • ${fragsN} entity${fragsN === 1 ? '' : 'ies'}`;
+              return { title, description: short(description), text: title };
+            }
+          }
+
+          // Supply chain parse error
+          {
+            const m = l.match(/^\[SupplyChainParse\]\s+failed.*?:\s*(.+)$/i);
+            if (m) {
+              const title = 'Supply chain parsing failed';
+              return { title, description: short(m[1] || ''), text: title };
+            }
+          }
+
+          // Fragment create/update
+          {
+            const m = l.match(/^\[SupplyChainFragmentCreate\]\s+(OK|FAILED)\s+canonicalPath=([^\s]+)(?:\s+id=([^\s]+))?(?:\s+type=([A-Z_]+))?/i);
+            if (m) {
+              const ok = String(m[1] || '').toUpperCase() === 'OK';
+              const cp = String(m[2] || '').trim();
+              const t = String(m[4] || '').trim();
+              const title = ok ? 'Entity added' : 'Entity creation failed';
+              const description = ok
+                ? `${typeName(t)} • ${prettyCP(cp)}`
+                : `${prettyCP(cp)} • ${short(l)}`;
+              return { title, description: short(description), text: title };
+            }
+          }
+          {
+            const m = l.match(/^\[SupplyChainFragmentUpdate\]\s+(OK|FAILED)\s+canonicalPath=([^\s]+)(?:\s+id=([^\s]+))?/i);
+            if (m) {
+              const ok = String(m[1] || '').toUpperCase() === 'OK';
+              const cp = String(m[2] || '').trim();
+              const title = ok ? 'Entity updated' : 'Entity update failed';
+              const description = ok ? prettyCP(cp) : `${prettyCP(cp)} • ${short(l)}`;
+              return { title, description: short(description), text: title };
+            }
+          }
+
+          // Edge create
+          {
+            const m = l.match(/^\[SupplyChainEdgeCreate\]\s+(OK|FAILED)\s+([^\s]+)\s+-\[(\w+)\]->\s+([^\s]+)/i);
+            if (m) {
+              const ok = String(m[1] || '').toUpperCase() === 'OK';
+              const src = String(m[2] || '').trim();
+              const et = String(m[3] || '').trim();
+              const dst = String(m[4] || '').trim();
+              const title = ok ? 'Relationship added' : 'Relationship creation failed';
+              const description = `${prettyCP(src)} ${edgeVerb(et)} ${prettyCP(dst)}`;
+              return { title, description: short(description), text: title };
+            }
+          }
+
+          // Summary
+          {
+            const m = l.match(/^\[SupplyChainSummary\]\s+fragments\(created=(\d+)\s+updated=(\d+)\s+err=(\d+)\)\s+edges\(created=(\d+)\s+dupes=(\d+)\s+err=(\d+)\s+reversed=(\d+)\s+penalized=(\d+)\)\s+gaps=(\d+)/i);
+            if (m) {
+              const createdFrags = parseInt(m[1] || '0', 10) || 0;
+              const updatedFrags = parseInt(m[2] || '0', 10) || 0;
+              const createdEdges = parseInt(m[4] || '0', 10) || 0;
+              const gaps = parseInt(m[9] || '0', 10) || 0;
+              const title = 'Supply chain saved';
+              const parts = [
+                createdFrags ? `+${createdFrags} new` : null,
+                updatedFrags ? `${updatedFrags} updated` : null,
+                createdEdges ? `+${createdEdges} links` : null,
+                gaps ? `${gaps} gap${gaps === 1 ? '' : 's'} identified` : null,
+              ].filter(Boolean);
+              const description = parts.length > 0 ? parts.join(' • ') : 'No changes';
+              return { title, description: short(description), text: title };
+            }
+          }
+
+          // Default fallback: strip technical prefix if present
+          const cleaned = l.replace(/^\[[^\]]+\]\s*/, '');
+          const title = 'Scout Activity';
+          const description = short(cleaned || l);
+          return { title, description, text: description };
+        })();
+
+        if (fmt) {
+          text = fmt.text;
+          humanReadable = { title: fmt.title, description: fmt.description };
+        } else {
+          const line = short(rawLine);
+          text = line || 'Scout activity';
+          humanReadable = { title: 'Scout Activity', description: line };
+        }
       } else if (type === 'horizon.scout.job.created') {
         icon = 'scout';
         const target = typeof data?.targetCanonicalPath === 'string' ? data.targetCanonicalPath : '';

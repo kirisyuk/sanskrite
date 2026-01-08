@@ -70,6 +70,9 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
 		return fragment, nil
 	}
+	// Government bodies (/gov/{iso2|na}/{slug}) are modeled as ORGANIZATION, but MUST NOT be deduplicated by name-only
+	// across jurisdictions (e.g., "Ministry of Defence"). For /gov we only allow Tier-1 Wikidata dedup.
+	isGov := strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/")
 
 	// =========================================================================
 	// Tier 0: Canonical-path alias resolution (prevents creating obvious alias duplicates)
@@ -138,10 +141,15 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		}
 	}
 
+	// For government bodies, stop here to avoid false merges across countries based on names.
+	if isGov {
+		return fragment, nil
+	}
+
 	// Strategy 2: Exact legalName match (case-insensitive)
 	legalName := strings.TrimSpace(fragment.Identifiers["legalName"])
 	if legalName != "" {
-		existing, err := d.findByLegalName(ctx, legalName)
+		existing, err := d.findByLegalName(ctx, fragment, legalName)
 		if err == nil && existing != nil && existing.ID != fragment.ID {
 			return existing, nil
 		}
@@ -154,7 +162,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	// Strategy 3: Exact label[en] match
 	labelEN := strings.TrimSpace(fragment.Labels["en"])
 	if labelEN != "" {
-		existing, err := d.findByLabelEN(ctx, labelEN)
+		existing, err := d.findByLabelEN(ctx, fragment, labelEN)
 		if err == nil && existing != nil && existing.ID != fragment.ID {
 			return existing, nil
 		}
@@ -167,7 +175,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		if isLowSignalOrgStub(fragment) {
 			normalizedLabel := NormalizeLegalName(labelEN)
 			if normalizedLabel != "" {
-				existing, err := d.findByNormalizedLegalName(ctx, normalizedLabel)
+				existing, err := d.findByNormalizedLegalName(ctx, fragment, normalizedLabel)
 				if err == nil && existing != nil && existing.ID != fragment.ID {
 					return existing, nil
 				}
@@ -178,7 +186,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	// Strategy 4: Match by shortName
 	shortName := strings.TrimSpace(fragment.Identifiers["shortName"])
 	if shortName != "" {
-		existing, err := d.findByShortName(ctx, shortName)
+		existing, err := d.findByShortName(ctx, fragment, shortName)
 		if err == nil && existing != nil && existing.ID != fragment.ID {
 			return existing, nil
 		}
@@ -188,7 +196,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	if legalName != "" {
 		normalizedLegal := NormalizeLegalName(legalName)
 		if normalizedLegal != "" {
-			existing, err := d.findByNormalizedLegalName(ctx, normalizedLegal)
+			existing, err := d.findByNormalizedLegalName(ctx, fragment, normalizedLegal)
 			if err == nil && existing != nil && existing.ID != fragment.ID {
 				return existing, nil
 			}
@@ -230,13 +238,14 @@ func (d *OrgDeduplicator) findByWikidataID(ctx context.Context, wikidataID strin
 }
 
 // findByShortName searches for an existing organization with the same shortName.
-func (d *OrgDeduplicator) findByShortName(ctx context.Context, shortName string) (*models.HorizonFragment, error) {
+func (d *OrgDeduplicator) findByShortName(ctx context.Context, fragment *models.HorizonFragment, shortName string) (*models.HorizonFragment, error) {
 	if shortName == "" {
 		return nil, nil
 	}
 
 	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, models.FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
+		existing = filterOrgDedupCandidates(fragment, existing, "short")
 		return chooseBestOrgCandidate(existing), nil
 	}
 
@@ -244,13 +253,14 @@ func (d *OrgDeduplicator) findByShortName(ctx context.Context, shortName string)
 }
 
 // findByLegalName searches for an existing organization with the exact legalName (case-insensitive).
-func (d *OrgDeduplicator) findByLegalName(ctx context.Context, legalName string) (*models.HorizonFragment, error) {
+func (d *OrgDeduplicator) findByLegalName(ctx context.Context, fragment *models.HorizonFragment, legalName string) (*models.HorizonFragment, error) {
 	if legalName == "" {
 		return nil, nil
 	}
 
 	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, models.FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
+		existing = filterOrgDedupCandidates(fragment, existing, "legal")
 		return chooseBestOrgCandidate(existing), nil
 	}
 
@@ -258,14 +268,15 @@ func (d *OrgDeduplicator) findByLegalName(ctx context.Context, legalName string)
 }
 
 // findByLabelEN searches for an existing organization with the exact label[en].
-func (d *OrgDeduplicator) findByLabelEN(ctx context.Context, labelEN string) (*models.HorizonFragment, error) {
+func (d *OrgDeduplicator) findByLabelEN(ctx context.Context, fragment *models.HorizonFragment, labelEN string) (*models.HorizonFragment, error) {
 	if labelEN == "" {
 		return nil, nil
 	}
 
 	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, models.FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
-		return existing[0], nil
+		existing = filterOrgDedupCandidates(fragment, existing, "label")
+		return chooseBestOrgCandidate(existing), nil
 	}
 
 	return nil, nil
@@ -273,7 +284,7 @@ func (d *OrgDeduplicator) findByLabelEN(ctx context.Context, labelEN string) (*m
 
 // findByNormalizedLegalName searches for organizations where normalized legalName matches.
 // This catches cases like "Wingtech Technology Co., Ltd." vs "Wingtech Technology Ltd".
-func (d *OrgDeduplicator) findByNormalizedLegalName(ctx context.Context, normalizedName string) (*models.HorizonFragment, error) {
+func (d *OrgDeduplicator) findByNormalizedLegalName(ctx context.Context, fragment *models.HorizonFragment, normalizedName string) (*models.HorizonFragment, error) {
 	if normalizedName == "" {
 		return nil, nil
 	}
@@ -283,10 +294,90 @@ func (d *OrgDeduplicator) findByNormalizedLegalName(ctx context.Context, normali
 	existing, err := d.fragmentsRepo.FindByNormalizedLegalName(ctx, normalizedName)
 	if err == nil && len(existing) > 0 {
 		// FindByNormalizedLegalName is already org-scoped, but we still select best in case of multiple.
+		existing = filterOrgDedupCandidates(fragment, existing, "normalized")
 		return chooseBestOrgCandidate(existing), nil
 	}
 
 	return nil, nil
+}
+
+type orgPathScope struct {
+	ns    string // "org" | "gov" | ""
+	cc    string // iso2|na|"" ("" for legacy /org/{slug})
+	slug  string
+	hasCC bool
+}
+
+func parseOrgPathScope(cp string) orgPathScope {
+	p := strings.TrimSpace(cp)
+	if p == "" || !strings.HasPrefix(p, "/") {
+		return orgPathScope{}
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) < 2 {
+		return orgPathScope{}
+	}
+	switch parts[0] {
+	case "org":
+		// /org/{slug} (legacy) OR /org/{iso2|na}/{slug}
+		if len(parts) == 2 {
+			return orgPathScope{ns: "org", slug: parts[1], hasCC: false}
+		}
+		if len(parts) >= 3 {
+			return orgPathScope{ns: "org", cc: strings.ToLower(strings.TrimSpace(parts[1])), slug: parts[2], hasCC: true}
+		}
+	case "gov":
+		// /gov/{iso2|na}/{slug}
+		if len(parts) >= 3 {
+			return orgPathScope{ns: "gov", cc: strings.ToLower(strings.TrimSpace(parts[1])), slug: parts[2], hasCC: true}
+		}
+	}
+	return orgPathScope{}
+}
+
+func isExplicitCountryCode(cc string) bool {
+	cc = strings.ToLower(strings.TrimSpace(cc))
+	return cc != "" && cc != "na"
+}
+
+// filterOrgDedupCandidates applies jurisdiction-aware filtering to prevent false cross-country merges.
+// This is intentionally conservative: it may reduce merging, but it preserves correctness.
+func filterOrgDedupCandidates(fragment *models.HorizonFragment, cands []*models.HorizonFragment, strength string) []*models.HorizonFragment {
+	if fragment == nil || len(cands) == 0 {
+		return cands
+	}
+	fs := parseOrgPathScope(fragment.CanonicalPath)
+	if fs.ns == "gov" {
+		// Government bodies: only allow Wikidata-based merges (handled separately).
+		return nil
+	}
+	out := make([]*models.HorizonFragment, 0, len(cands))
+	for _, c := range cands {
+		if c == nil || c.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		cs := parseOrgPathScope(c.CanonicalPath)
+		// Never merge /org/... with /gov/... by name-only.
+		if fs.ns != "" && cs.ns != "" && fs.ns != cs.ns {
+			continue
+		}
+		// If both sides have explicit (non-na) country codes and they differ, reject.
+		if isExplicitCountryCode(fs.cc) && isExplicitCountryCode(cs.cc) && fs.cc != cs.cc {
+			continue
+		}
+		// For weaker signals, avoid merging unknown-jurisdiction orgs (/org/na/...) into country-scoped ones.
+		switch strength {
+		case "short", "label", "normalized":
+			if strings.ToLower(strings.TrimSpace(fs.cc)) == "na" && isExplicitCountryCode(cs.cc) {
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // orgCanonicalVariants returns alternative canonical path variants for org slugs

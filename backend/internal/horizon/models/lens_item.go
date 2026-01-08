@@ -144,6 +144,10 @@ func (li *LensItem) Validate() error {
 			string(DependencyTypeFounded):       true,
 			string(DependencyTypeInvestsIn):     true,
 			string(DependencyTypePartnersWith):  true,
+			// OSINT-lite / governance extensions
+			string(DependencyTypeAuditedBy):  true,
+			string(DependencyTypeRelativeOf): true,
+			string(DependencyTypeRelatedTo):  true,
 		}
 		if !validEdgeTypes[*li.Subkind] {
 			return fmt.Errorf("invalid subkind for edge: %s", *li.Subkind)

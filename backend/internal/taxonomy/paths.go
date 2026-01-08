@@ -46,10 +46,14 @@ func transliterateCyrillicToLatin(s string) string {
 // ValidCanonicalPathNamespace defines allowed namespace prefixes for canonical paths
 var ValidCanonicalPathNamespace = map[string]bool{
 	"org":     true,
+	// Government / state bodies (jurisdiction-scoped; prevents cross-country name collisions).
+	"gov":     true,
 	"person":  true,
 	"product": true,
 	"program": true,
 	"market":  true,
+	// Market segments (ORG-level classification; may be materialized later).
+	"segment": true,
 	"fac":     true,
 	"loc":     true,
 	"sphere":  true,
@@ -98,6 +102,47 @@ func ValidateCanonicalPath(path string) error {
 		// Check that segment matches slug format (lowercase alphanumeric and hyphens)
 		if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(part) {
 			return fmt.Errorf("canonical path segment %d contains invalid characters: %s", i, path)
+		}
+	}
+
+	// Namespace-specific shape constraints (keep deterministic and conservative).
+	//
+	// IMPORTANT:
+	// - We keep backward compatibility for legacy /org/{slug} paths.
+	// - We enforce stricter shapes for /gov and /segment to avoid ambiguous merges.
+	switch namespace {
+	case "gov":
+		// /gov/{iso2|na}/{slug}
+		if len(parts) != 3 {
+			return fmt.Errorf("gov canonical path must have exactly 3 segments: /gov/{iso2}/{slug}: %s", path)
+		}
+		cc := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !reCountryAlpha2.MatchString(cc) {
+			return fmt.Errorf("gov canonical path has invalid country code %q (expected ISO3166-1 alpha2 or 'na'): %s", parts[1], path)
+		}
+	case "org":
+		// Allowed:
+		// - legacy: /org/{slug}
+		// - preferred: /org/{iso2|na}/{slug}
+		if len(parts) == 2 {
+			return nil
+		}
+		if len(parts) != 3 {
+			return fmt.Errorf("org canonical path must be /org/{slug} (legacy) or /org/{iso2}/{slug}: %s", path)
+		}
+		cc := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !reCountryAlpha2.MatchString(cc) {
+			return fmt.Errorf("org canonical path has invalid country code %q (expected ISO3166-1 alpha2 or 'na'): %s", parts[1], path)
+		}
+	case "segment":
+		// /segment/{domain}/{vertical}/{geo}
+		// geo: ISO2 or "global"
+		if len(parts) != 4 {
+			return fmt.Errorf("segment canonical path must have exactly 4 segments: /segment/{domain}/{vertical}/{geo}: %s", path)
+		}
+		geo := strings.ToLower(strings.TrimSpace(parts[3]))
+		if geo != "global" && !reCountryAlpha2.MatchString(geo) {
+			return fmt.Errorf("segment canonical path has invalid geo %q (expected ISO3166-1 alpha2 or 'global'): %s", parts[3], path)
 		}
 	}
 
@@ -178,6 +223,38 @@ func GeoCanonicalPath(countryAlpha2, admin1, city string) string {
 	return "/" + strings.Join([]string{"loc", c, a1, ct}, "/")
 }
 
+// OrgCanonicalPath returns a Horizon-canonical organization path:
+// /org/{iso2|na}/{slug}
+//
+// iso2 should be the country of origin / primary jurisdiction. If missing/invalid, "na" is used.
+func OrgCanonicalPath(countryAlpha2OrNA string, orgLabel string) string {
+	cc := strings.ToLower(strings.TrimSpace(countryAlpha2OrNA))
+	if !reCountryAlpha2.MatchString(cc) {
+		cc = "na"
+	}
+	slug := Slugify(orgLabel)
+	if slug == "" {
+		return ""
+	}
+	return JoinPath("org", cc, slug)
+}
+
+// GovCanonicalPath returns a Horizon-canonical government body path:
+// /gov/{iso2|na}/{slug}
+//
+// If country is missing/invalid, "na" is used.
+func GovCanonicalPath(countryAlpha2OrNA string, agencyLabel string) string {
+	cc := strings.ToLower(strings.TrimSpace(countryAlpha2OrNA))
+	if !reCountryAlpha2.MatchString(cc) {
+		cc = "na"
+	}
+	slug := Slugify(agencyLabel)
+	if slug == "" {
+		return ""
+	}
+	return JoinPath("gov", cc, slug)
+}
+
 // FacilityCanonicalPath returns a Horizon-canonical facility path.
 // Preferred format (when orgSlug is known and stable): /fac/{orgSlug}/{facilitySlug}
 // Fallback format: /fac/{facilitySlug}
@@ -243,7 +320,9 @@ func MarketCanonicalPath(domain string, marketLabel string) string {
 func EntityCanonicalPath(entityType string, canonicalName string) string {
 	switch strings.TrimSpace(entityType) {
 	case "Organization":
-		return JoinPath("org", canonicalName)
+		// Organization canonical paths are jurisdiction-scoped to reduce cross-country name collisions.
+		// If jurisdiction is unknown at this stage, use "na".
+		return OrgCanonicalPath("na", canonicalName)
 	case "Person":
 		return JoinPath("person", canonicalName)
 	case "Product":

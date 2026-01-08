@@ -145,6 +145,38 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 			main.State[k] = v
 		}
 	}
+	// Merge marketSegments (ORG-level multi-valued field): union + dedup, don't clobber.
+	if len(partial.MarketSegments) > 0 {
+		if main.MarketSegments == nil {
+			main.MarketSegments = make([]string, 0, len(partial.MarketSegments))
+		}
+		seen := map[string]struct{}{}
+		for _, s := range main.MarketSegments {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				seen[s] = struct{}{}
+			}
+		}
+		for _, s := range partial.MarketSegments {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			main.MarketSegments = append(main.MarketSegments, s)
+		}
+	}
+	// Merge orgSize: fill missing/unknown only.
+	if strings.TrimSpace(partial.OrgSize) != "" {
+		cur := strings.TrimSpace(strings.ToLower(main.OrgSize))
+		in := strings.TrimSpace(partial.OrgSize)
+		if cur == "" || cur == "na" {
+			main.OrgSize = in
+		}
+	}
 	// Merge identifiers conservatively (fill missing only)
 	if partial.Identifiers != nil {
 		for k, v := range partial.Identifiers {
@@ -308,6 +340,11 @@ Name Normalization Rules:
   - fragment.identifiers.shortName: base name without ownership suffix
 - For relations, ALWAYS provide targetLegalName and targetShortName in addition to targetName.
 
+Organization Classification (ORG/FACILITY):
+- If you can determine market positioning, output:
+  - fragment.marketSegments: array of canonical paths /segment/{domain}/{vertical}/{geo} (geo = ISO2 or global)
+  - fragment.orgSize: one of "sme" | "le" | "enterprise" | "mega" | "na"
+
 RELATION DIRECTION RULES (STRICT):
 Each relation object describes a directed edge FROM THIS FRAGMENT (source) TO targetCanonicalPath (target).
 Choose relationType to match this direction:
@@ -331,6 +368,7 @@ Choose relationType to match this direction:
 - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
+- AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
 - COMPETES_WITH / INFLUENCES: as labeled.
 
 EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
@@ -348,6 +386,9 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
 - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
 - DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
+- AUDITED_BY: source MUST be ORGANIZATION or FACILITY, target MUST be ORGANIZATION
+- RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
+- RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
 
 DiscoveredRelation Schema:
 {
@@ -355,7 +396,7 @@ DiscoveredRelation Schema:
   "targetLegalName": "string",
   "targetShortName": "string",
   "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "COMPETES_WITH" | "INFLUENCES",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED"
@@ -364,7 +405,14 @@ DiscoveredRelation Schema:
 CANONICAL PATH RULES:
 - NEVER use "/discovered/*" (not allowed).
 - Prefer stable namespaces:
-  - Organizations: /org/{lowercase-slug}
+  - Organizations: /org/{iso2|na}/{slug}
+    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase). If unknown use "na".
+    - Legacy /org/{slug} may exist; prefer /org/{iso2}/{slug} for NEW entities to reduce collisions.
+  - Government bodies: /gov/{iso2|na}/{slug}
+    - Use for ministries, regulators, agencies, state bodies.
+    - If jurisdiction is unknown, use /gov/na/{slug} and explicitly ask to resolve country via missingInfo.
+  - Market segments (ORG-level classification): /segment/{domain}/{vertical}/{geo}
+    - geo: ISO3166-1 alpha2 lowercase (2 letters) OR "global"
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - People: /person/{lowercase-slug}

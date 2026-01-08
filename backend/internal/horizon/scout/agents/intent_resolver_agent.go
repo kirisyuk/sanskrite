@@ -292,7 +292,7 @@ RULES:
 - keywords SHOULD be in English when possible (translate), but can include raw tokens like handles.
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
-  /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
+  /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
 - If the query refers to a media brand/channel (e.g. a Telegram channel), do NOT collapse it to a GEO_REGION just because it contains a city name.
   - Example: Telegram channel "В казани поймут" should be anchored as a MEDIA_CHANNEL: /media/telegram/{channel-slug}, not as /loc/... for Kazan.
   - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.
@@ -302,7 +302,7 @@ RULES:
   - WRONG: /loc/UAE, /org/Tesla Inc, /product/Lithium Carbonate
 
 - The anchor type MUST match the canonicalPath namespace:
-  - ORGANIZATION -> /org/...
+  - ORGANIZATION -> /org/... OR /gov/... (for government bodies)
   - FACILITY     -> /fac/...
   - GEO_REGION   -> /loc/...
   - PERSON       -> /person/...
@@ -331,7 +331,13 @@ RULES:
   - otherwise use /fac/{facilitySlug}
 
 - ORGANIZATION canonicalPath:
-  - /org/{slug} (do not include legal suffixes like Inc/LLC in the path if possible)
+  - Organizations: /org/{iso2|na}/{slug}
+    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase, 2 letters). If unknown, use "na".
+    - slug: lowercase slug derived from the base name (avoid legal suffixes like Inc/LLC in the path if possible)
+    - Legacy /org/{slug} may exist in the graph; prefer /org/{iso2}/{slug} for NEW anchors to reduce collisions.
+  - Government bodies: /gov/{iso2|na}/{slug}
+    - Use for ministries, regulators, agencies, state bodies (prevents collisions like "Ministry of Defence" across countries).
+    - If jurisdiction is unknown, use /gov/na/{slug}.
 
 - PROGRAM/MARKET/EVENT/PERSON canonicalPath:
   - /program/{slug}, /market/{slug}, /event/{slug}, /person/{slug}
@@ -471,7 +477,8 @@ func normalizeCanonicalPathForTools(raw string) string {
 	if s == "" {
 		return s
 	}
-	candidates := []string{"/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/", "/media/"}
+	// IMPORTANT: keep this list in sync with allowed canonical namespaces (including /gov).
+	candidates := []string{"/gov/", "/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/", "/segment/", "/media/"}
 	for _, c := range candidates {
 		if idx := strings.Index(s, c); idx > 0 {
 			s = s[idx:]

@@ -16,6 +16,41 @@ func TestValidateCanonicalPath(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid org path with country",
+			path:    "/org/us/tesla",
+			wantErr: false,
+		},
+		{
+			name:    "valid org path with unknown country",
+			path:    "/org/na/tesla",
+			wantErr: false,
+		},
+		{
+			name:    "invalid org path with non-iso2 country",
+			path:    "/org/usa/tesla",
+			wantErr: true,
+		},
+		{
+			name:    "valid gov path",
+			path:    "/gov/ae/ministry-of-defence",
+			wantErr: false,
+		},
+		{
+			name:    "valid gov path unknown country",
+			path:    "/gov/na/ministry-of-defence",
+			wantErr: false,
+		},
+		{
+			name:    "invalid gov path missing country segment",
+			path:    "/gov/ministry-of-defence",
+			wantErr: true,
+		},
+		{
+			name:    "invalid gov path bad country segment",
+			path:    "/gov/uae/ministry-of-defence",
+			wantErr: true,
+		},
+		{
 			name:    "valid person path",
 			path:    "/person/john-doe",
 			wantErr: false,
@@ -34,6 +69,26 @@ func TestValidateCanonicalPath(t *testing.T) {
 			name:    "valid sphere path",
 			path:    "/sphere/ai/models",
 			wantErr: false,
+		},
+		{
+			name:    "valid segment path",
+			path:    "/segment/finance/retail-banking/kz",
+			wantErr: false,
+		},
+		{
+			name:    "valid segment path global",
+			path:    "/segment/technology/semiconductors/global",
+			wantErr: false,
+		},
+		{
+			name:    "invalid segment path missing geo",
+			path:    "/segment/technology/semiconductors",
+			wantErr: true,
+		},
+		{
+			name:    "invalid segment path bad geo",
+			path:    "/segment/technology/semiconductors/uae",
+			wantErr: true,
 		},
 		{
 			name:    "empty path",

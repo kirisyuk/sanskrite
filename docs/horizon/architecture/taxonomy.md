@@ -33,7 +33,7 @@ Runtime taxonomy в коде представлена моделью `HorizonTax
 
 ### canonicalPrefixes (default v1)
 
-`/org/`, `/fac/`, `/loc/`, `/person/`, `/product/`, `/program/`, `/market/`, `/event/`, `/sphere/`
+`/gov/`, `/org/`, `/fac/`, `/loc/`, `/person/`, `/product/`, `/program/`, `/market/`, `/segment/`, `/event/`, `/sphere/`, `/industry/`, `/media/`
 
 ### eventType vocabulary (default v1)
 
@@ -43,7 +43,7 @@ Runtime taxonomy в коде представлена моделью `HorizonTax
 
 ### relationType vocabulary (default v1)
 
-`SUPPLIES_TO`, `LOCATED_IN`, `OWNS`, `PRODUCES`, `OPERATES_IN`, `REGULATES`, `COMPETES_WITH`, `INFLUENCES`, `DEPENDS_ON`, `SUBSIDIARY_OF`
+`SUPPLIES_TO`, `LOCATED_IN`, `OWNS`, `PRODUCES`, `CONSUMES`, `OPERATES_IN`, `REGULATES`, `COMPETES_WITH`, `INFLUENCES`, `DEPENDS_ON`, `SUBSIDIARY_OF`, `TRANSFORMS_INTO`, `MANAGES`, `CONTROLS`, `EMPLOYED_BY`, `BOARD_MEMBER_OF`, `FOUNDED`, `INVESTS_IN`, `PARTNERS_WITH`, `AUDITED_BY`, `RELATIVE_OF`, `RELATED_TO`
 
 **Нормализация**: unknown → `INFLUENCES` (safe default), `DEPENDS` → `DEPENDS_ON`, `OWNED_BY` → `SUBSIDIARY_OF`.
 
@@ -58,6 +58,17 @@ CanonicalPath — это **Horizon-first** идентификатор фрагм
 - **формат**: `/{namespace}/{slug}/{slug}/...`
 - **slug**: нижний регистр, `[a-z0-9-]`
 - **namespace (enforced)**: `org`, `person`, `product`, `program`, `market`, `fac`, `loc`, `sphere`, `event`
+- **namespace (enforced)**: `gov`, `org`, `person`, `product`, `program`, `market`, `segment`, `fac`, `loc`, `sphere`, `event`, `industry`, `media`
+
+### Organization & Government canonicalPath (важно для дедупа и коллизий)
+
+- **Organizations (jurisdiction-scoped, preferred)**:
+  - `/org/{iso2|na}/{slug}`
+  - `iso2`: страна происхождения / основной юрисдикции (ISO3166-1 alpha2 lowercase). Если неизвестно — `na`.
+  - Legacy формат `/org/{slug}` может существовать в графе (backward compatibility), но для новых сущностей предпочтителен scoped формат.
+- **Government bodies (jurisdiction-scoped, required)**:
+  - `/gov/{iso2|na}/{slug}`
+  - Используется для министерств/ведомств/регуляторов, чтобы избежать ложных совпадений между странами (например, “Ministry of Defence”).
 
 ### Location canonicalPath (важное отличие от entityPath)
 

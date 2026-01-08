@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
@@ -26,6 +27,7 @@ type PreCreateValidator struct {
 	geoBuilder       *GeoHierarchyBuilder
 	orgDedup         *OrgDeduplicator
 	productDedup     *ProductDeduplicator
+	personDedup      *PersonDeduplicator
 	validationPolicy *policy.PolicyExecutor // Optional: unified validation policy
 	wikidataClient   coreontology.WikidataClientInterface
 	geonamesClient   coreontology.GeoNamesClientInterface
@@ -38,6 +40,12 @@ func NewPreCreateValidator(geoBuilder *GeoHierarchyBuilder, orgDedup *OrgDedupli
 		orgDedup:     orgDedup,
 		productDedup: productDedup,
 	}
+}
+
+// WithPersonDedup sets the person deduplicator for phonetic matching.
+func (v *PreCreateValidator) WithPersonDedup(dedup *PersonDeduplicator) *PreCreateValidator {
+	v.personDedup = dedup
+	return v
 }
 
 // WithValidationPolicy sets the validation policy executor.
@@ -143,9 +151,35 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Each fragment type should use its designated path prefix.
 	prefix := v.expectedPathPrefix(fragment.Type)
 	if prefix != "" && !strings.HasPrefix(fragment.CanonicalPath, prefix) {
+		// Special-case: government bodies are modeled as ORGANIZATION fragments but use /gov/... namespace.
+		if fragment.Type == models.FragmentTypeOrganization && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") {
+			// ok
+		} else {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
 				fragment.CanonicalPath, prefix, fragment.Type))
+		}
+	}
+
+	// Organization canonical paths: prefer /org/{iso2|na}/{slug}. Keep legacy /org/{slug} but warn.
+	if fragment.Type == models.FragmentTypeOrganization {
+		cp := strings.TrimSpace(fragment.CanonicalPath)
+		if strings.HasPrefix(cp, "/org/") {
+			parts := strings.Split(strings.Trim(cp, "/"), "/")
+			// legacy: ["org", "{slug}"]
+			if len(parts) == 2 {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("legacy org path %q: prefer /org/{iso2|na}/{slug} to avoid cross-country collisions", cp))
+			}
+		}
+		// gov paths: enforce /gov/{iso2|na}/{slug} shape best-effort (warnings only; hard errors are handled by ValidateCanonicalPath elsewhere).
+		if strings.HasPrefix(cp, "/gov/") {
+			parts := strings.Split(strings.Trim(cp, "/"), "/")
+			if len(parts) != 3 {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("gov path %q should be /gov/{iso2|na}/{slug}", cp))
+			}
+		}
 	}
 
 	// ==========================================================================
@@ -236,6 +270,46 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 				log.Printf("%s GEO_REGION validation passed: %s", logPrefix, fragment.CanonicalPath)
 			}
 		}
+
+		// Best-effort: attach GeoNames ID to GEO_REGION fragments (fragment-only; no Entity writes).
+		// This makes geo fragments linkable externally (like Wikidata), while taxonomy still drives hierarchy.
+		if v.geonamesClient != nil && strings.HasPrefix(fragment.CanonicalPath, "/loc/") {
+			parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
+			// Only attach for strict /loc/{cc}/{adm1}/{city} when city is present.
+			if len(parts) == 4 && parts[0] == "loc" && reCountryAlpha2.MatchString(parts[1]) && strings.TrimSpace(parts[3]) != "" && strings.ToLower(strings.TrimSpace(parts[3])) != "na" {
+				cc := strings.ToLower(strings.TrimSpace(parts[1]))
+				adm := strings.ToLower(strings.TrimSpace(parts[2]))
+				citySlug := strings.ToLower(strings.TrimSpace(parts[3]))
+				cityName := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(citySlug))
+				if cityName != "" {
+					if best, ok := pickUnambiguousCityCandidate(ctx, v.geonamesClient, cityName, cc, adm); ok && best != nil && best.GeoNameID > 0 {
+						if fragment.Identifiers == nil {
+							fragment.Identifiers = map[string]string{}
+						}
+						fragment.Identifiers["geonamesId"] = strconv.Itoa(best.GeoNameID)
+						// Also keep KBRefs mirrored (Validate() will ensure consistency).
+						has := false
+						for i := range fragment.KBRefs {
+							if strings.EqualFold(strings.TrimSpace(fragment.KBRefs[i].KB), "GeoNames") {
+								has = true
+								fragment.KBRefs[i].KB = "GeoNames"
+								if strings.TrimSpace(fragment.KBRefs[i].ExternalID) == "" {
+									fragment.KBRefs[i].ExternalID = strconv.Itoa(best.GeoNameID)
+								}
+								break
+							}
+						}
+						if !has {
+							fragment.KBRefs = append(fragment.KBRefs, models.KBReference{
+								KB:         "GeoNames",
+								ExternalID: strconv.Itoa(best.GeoNameID),
+								Confidence: 1.0,
+							})
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// ==========================================================================
@@ -296,7 +370,22 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	}
 
 	// ==========================================================================
-	// Policy 7: Required fields validation
+	// Policy 7: Person deduplication (includes phonetic matching)
+	// ==========================================================================
+	// Check if this person already exists (by Wikidata ID, name, or phonetic match).
+	// Phonetic matching catches Arabic transliteration variations: Tahnoon/Tahnoun, Khalid/Halid, etc.
+	if fragment.Type == models.FragmentTypePerson && v.personDedup != nil {
+		existing, err := v.personDedup.DeduplicatePerson(ctx, fragment)
+		if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
+			result.ReplacementFrag = existing
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("found existing person %q (%s) - using instead of creating new (phonetic/exact match)",
+					existing.CanonicalPath, existing.ID))
+		}
+	}
+
+	// ==========================================================================
+	// Policy 8: Required fields validation
 	// ==========================================================================
 	if strings.TrimSpace(fragment.CanonicalPath) == "" {
 		result.BlockReason = "canonical path is required"
@@ -349,8 +438,8 @@ type CanonicalPathPolicy struct {
 var CanonicalPathPolicies = map[models.FragmentType]CanonicalPathPolicy{
 	models.FragmentTypeOrganization: {
 		Prefix:      "/org/",
-		Example:     "/org/tesla",
-		Description: "Organization paths use lowercase hyphenated short names",
+		Example:     "/org/us/tesla",
+		Description: "Organization paths are jurisdiction-scoped: /org/{iso2|na}/{slug}. Government bodies use /gov/{iso2|na}/{slug}",
 	},
 	models.FragmentTypeFacility: {
 		Prefix:      "/fac/",
@@ -383,5 +472,5 @@ func (v *PreCreateValidator) String() string {
 	if v == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("PreCreateValidator(geo=%v, orgDedup=%v)", v.geoBuilder != nil, v.orgDedup != nil)
+	return fmt.Sprintf("PreCreateValidator(geo=%v, orgDedup=%v, personDedup=%v)", v.geoBuilder != nil, v.orgDedup != nil, v.personDedup != nil)
 }
