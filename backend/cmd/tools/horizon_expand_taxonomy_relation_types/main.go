@@ -72,6 +72,8 @@ func main() {
 		string(horizonmodels.DependencyTypeFounded),
 		string(horizonmodels.DependencyTypeInvestsIn),
 		string(horizonmodels.DependencyTypePartnersWith),
+		// People/org meta-relations
+		string(horizonmodels.DependencyTypeKeyPerson),
 		// OSINT-lite / governance extensions
 		string(horizonmodels.DependencyTypeAuditedBy),
 		string(horizonmodels.DependencyTypeRelativeOf),
@@ -182,7 +184,3 @@ func equalStringSlices(a, b []string) bool {
 	}
 	return true
 }
-
-
-
-

@@ -2640,12 +2640,19 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 
 			// Canonical representation: HAS_KEY_PERSON is normalized into KEY_PERSON (person -> org).
 			if edge.Type == models.DependencyTypeHasKeyPerson {
-				oldSource := edge.SourceFragmentID            // org
-				edge.SourceFragmentID = edge.TargetFragmentID // person
-				edge.TargetFragmentID = oldSource
+				// Historical variants:
+				// - ORG -> PERSON (inverse)
+				// - PERSON -> ORG (already correct but legacy type)
+				//
+				// Canonical: KEY_PERSON with PERSON -> ORG.
+				if sourceType == models.FragmentTypeOrganization && targetType == models.FragmentTypePerson {
+					oldSource := edge.SourceFragmentID            // org
+					edge.SourceFragmentID = edge.TargetFragmentID // person
+					edge.TargetFragmentID = oldSource
+					// Swap cached endpoint types as well
+					sourceType, targetType = targetType, sourceType
+				}
 				edge.Type = models.DependencyTypeKeyPerson
-				// Swap cached endpoint types as well
-				sourceType, targetType = targetType, sourceType
 				if err := edgesRepo.Update(ctx, &edge); err != nil {
 					log.Printf("  ERROR: failed to normalize HAS_KEY_PERSON edge %s: %v", edge.ID, err)
 					continue
