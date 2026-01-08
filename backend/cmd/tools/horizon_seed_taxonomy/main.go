@@ -333,6 +333,7 @@ func main() {
 			"FOUNDED",
 			"INVESTS_IN",
 			"PARTNERS_WITH",
+			"KEY_PERSON",
 			// OSINT-lite / governance extensions
 			"AUDITED_BY",
 			"RELATIVE_OF",

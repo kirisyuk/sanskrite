@@ -128,6 +128,28 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		Description:      "Person is board member of organization",
 	},
 
+	// WORKS_FOR: Legacy employment relationship (prefer EMPLOYED_BY).
+	models.DependencyTypeWorksFor: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Person works for organization (legacy, prefer EMPLOYED_BY)",
+	},
+
+	// KEY_PERSON: Person is a key person of organization.
+	models.DependencyTypeKeyPerson: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Person is key person of organization",
+	},
+
+	// HAS_KEY_PERSON: Inverse of KEY_PERSON (for normalization).
+	// NOTE: this is legacy. Canonical representation is KEY_PERSON (PERSON → ORG).
+	models.DependencyTypeHasKeyPerson: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Legacy alias; normalize to KEY_PERSON (person -> org)",
+	},
+
 	// FOUNDED: Founder relationship.
 	models.DependencyTypeFounded: {
 		ValidSourceTypes: []models.FragmentType{

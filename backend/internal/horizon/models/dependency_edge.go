@@ -24,9 +24,9 @@ type DependencyEdge struct {
 type DependencyType string
 
 const (
-	DependencyTypeSuppliesTo   DependencyType = "SUPPLIES_TO"
-	DependencyTypeLocatedIn    DependencyType = "LOCATED_IN"
-	DependencyTypeOwns         DependencyType = "OWNS"
+	DependencyTypeSuppliesTo DependencyType = "SUPPLIES_TO"
+	DependencyTypeLocatedIn  DependencyType = "LOCATED_IN"
+	DependencyTypeOwns       DependencyType = "OWNS"
 	// DependencyTypeSubsidiaryOf captures "X is owned/controlled by Y" (inverse of OWNS).
 	// NOTE: In scouting pipeline, SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary),
 	// but we keep this type for taxonomy/prompt compatibility.
@@ -62,6 +62,14 @@ const (
 	DependencyTypeInvestsIn DependencyType = "INVESTS_IN"
 	// PARTNERS_WITH: symmetric partnership relationship (peer collaboration).
 	DependencyTypePartnersWith DependencyType = "PARTNERS_WITH"
+
+	// --- Legacy types for migration ---
+	// WORKS_FOR: legacy employment (prefer EMPLOYED_BY). Person works for org.
+	DependencyTypeWorksFor DependencyType = "WORKS_FOR"
+	// KEY_PERSON: legacy key person relationship. Should be PERSON → ORG.
+	DependencyTypeKeyPerson DependencyType = "KEY_PERSON"
+	// HAS_KEY_PERSON: legacy inverse (ORG has key person). Should be normalized to KEY_PERSON (PERSON → ORG).
+	DependencyTypeHasKeyPerson DependencyType = "HAS_KEY_PERSON"
 
 	// --- OSINT-lite / governance extensions ---
 	// AUDITED_BY: external auditor relationship (company -> audit firm).

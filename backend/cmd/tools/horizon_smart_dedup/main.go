@@ -43,6 +43,7 @@ var (
 	enableProductAlias = flag.Bool("enable-product-alias", false, "Enable PRODUCT alias clustering (model/SKU heuristic). Default OFF: better duplicates than false-positive merges.")
 	enableOrgNameOnly  = flag.Bool("enable-org-name-only", false, "Enable ORGANIZATION name-only clustering (shortName/label[en]). Default OFF (too many false merges).")
 	enableOrgFuzzyName = flag.Bool("enable-org-fuzzy-name", false, "Enable ORGANIZATION fuzzy-ish name clustering (normalized legalName + stub-rescue normalized label/legal). Default OFF.")
+	fixEdgesOnly       = flag.Bool("fix-edges-only", false, "Only fix/normalize edges (direction + symmetric normalization + dedup). Skips fragment dedup/merge even if duplicates are found.")
 )
 
 // DuplicateCluster represents a group of fragments that are duplicates of each other
@@ -1028,11 +1029,17 @@ func main() {
 
 	if len(clusters) == 0 {
 		log.Printf("\nNo duplicates found!")
-		return
+		if !*fixEdgesOnly {
+			return
+		}
 	}
 
 	// Step 4: Process each cluster
 	log.Printf("\n=== Step 4: Processing clusters ===")
+	if *fixEdgesOnly {
+		log.Printf("SKIP: fragment merge step disabled (--fix-edges-only)")
+		goto FIX_EDGES
+	}
 	for i, cluster := range clusters {
 		if i%100 == 0 {
 			log.Printf("  Progress: %d/%d clusters processed...", i, len(clusters))
@@ -1133,6 +1140,7 @@ func main() {
 		}
 	}
 
+FIX_EDGES:
 	// Step 5: Fix edge directions (reverse edges that point in wrong direction)
 	// IMPORTANT: This can create duplicates; we run symmetric normalization + dedup afterwards.
 	log.Printf("\n=== Step 5: Fixing edge directions ===")
@@ -2555,6 +2563,34 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 	totalChecked := 0
 	var lastDoc *firestore.DocumentSnapshot
 
+	// Best-effort type resolver: when horizon_smart_dedup is run with --type filter,
+	// fragmentTypes cache can be incomplete, but edge direction fixing must remain global.
+	typeCache := fragmentTypes
+	if typeCache == nil {
+		typeCache = make(map[string]models.FragmentType)
+	}
+	resolveType := func(id string) models.FragmentType {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return ""
+		}
+		if t, ok := typeCache[id]; ok && t != "" {
+			return t
+		}
+		snap, err := db.Collection("horizon_fragments").Doc(id).Get(ctx)
+		if err != nil || snap == nil || !snap.Exists() {
+			return ""
+		}
+		if v, ok := snap.Data()["type"].(string); ok {
+			t := models.FragmentType(strings.TrimSpace(v))
+			if t != "" {
+				typeCache[id] = t
+				return t
+			}
+		}
+		return ""
+	}
+
 	for {
 		// Build paginated query
 		q := db.Collection("horizon_dependency_edges").Where("tenantId", "==", tenantID).Limit(pageSize)
@@ -2581,8 +2617,8 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 				edge.ID = doc.Ref.ID
 			}
 
-			sourceType := fragmentTypes[edge.SourceFragmentID]
-			targetType := fragmentTypes[edge.TargetFragmentID]
+			sourceType := resolveType(edge.SourceFragmentID)
+			targetType := resolveType(edge.TargetFragmentID)
 
 			if sourceType == "" || targetType == "" {
 				continue // Skip if we can't determine types (orphaned edge or deleted fragment)
@@ -2602,11 +2638,38 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 				continue
 			}
 
+			// Canonical representation: HAS_KEY_PERSON is normalized into KEY_PERSON (person -> org).
+			if edge.Type == models.DependencyTypeHasKeyPerson {
+				oldSource := edge.SourceFragmentID            // org
+				edge.SourceFragmentID = edge.TargetFragmentID // person
+				edge.TargetFragmentID = oldSource
+				edge.Type = models.DependencyTypeKeyPerson
+				// Swap cached endpoint types as well
+				sourceType, targetType = targetType, sourceType
+				if err := edgesRepo.Update(ctx, &edge); err != nil {
+					log.Printf("  ERROR: failed to normalize HAS_KEY_PERSON edge %s: %v", edge.ID, err)
+					continue
+				}
+				if *verbose {
+					log.Printf("  ✓ Normalized HAS_KEY_PERSON → KEY_PERSON: %s → %s", edge.SourceFragmentID, edge.TargetFragmentID)
+				}
+				fixed++
+				continue
+			}
+
+			// Canonical representation: WORKS_FOR is legacy; normalize to EMPLOYED_BY.
+			if edge.Type == models.DependencyTypeWorksFor {
+				edge.Type = models.DependencyTypeEmployedBy
+				// Keep processing below: direction might still need to be reversed.
+			}
+
 			if scout.ShouldReverseEdge(edge.Type, sourceType, targetType) {
 				// Reverse the edge
 				oldSource := edge.SourceFragmentID
 				edge.SourceFragmentID = edge.TargetFragmentID
 				edge.TargetFragmentID = oldSource
+				// Swap cached types
+				sourceType, targetType = targetType, sourceType
 
 				if err := edgesRepo.Update(ctx, &edge); err != nil {
 					log.Printf("  ERROR: failed to reverse edge %s: %v", edge.ID, err)

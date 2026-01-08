@@ -3,6 +3,7 @@ package horizon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -12,8 +13,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func getLensIDFromRequest(r *http.Request) string {
@@ -107,6 +110,71 @@ func indexPathsIntersectFilter(indexPaths []string, filterPaths []string) bool {
 		}
 	}
 	return false
+}
+
+func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *models.DependencyEdge) error {
+	if h == nil || h.service == nil {
+		return fmt.Errorf("service not initialized")
+	}
+	if edge == nil {
+		return fmt.Errorf("edge is nil")
+	}
+	if strings.TrimSpace(edge.SourceFragmentID) == "" || strings.TrimSpace(edge.TargetFragmentID) == "" {
+		return fmt.Errorf("sourceFragmentId and targetFragmentId are required")
+	}
+	if strings.TrimSpace(edge.SourceFragmentID) == strings.TrimSpace(edge.TargetFragmentID) {
+		return fmt.Errorf("sourceFragmentId and targetFragmentId must be different")
+	}
+
+	// Normalize relation type via runtime taxonomy (single source of truth).
+	rawType := strings.TrimSpace(string(edge.Type))
+	normType := strings.TrimSpace(taxonomy.NormalizeRelationType(rawType))
+	edge.Type = models.DependencyType(normType)
+
+	if edge.Qualifiers == nil {
+		edge.Qualifiers = map[string]interface{}{}
+	}
+	if rawType != "" && normType != "" && rawType != normType {
+		edge.Qualifiers["rawRelationType"] = rawType
+		edge.Qualifiers["normalizedRelationType"] = normType
+	}
+
+	// Canonical representation: SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary).
+	if edge.Type == models.DependencyTypeSubsidiaryOf {
+		edge.Type = models.DependencyTypeOwns
+		edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
+		edge.Qualifiers["normalizedDirection"] = true
+		edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+	}
+
+	// Symmetric edge normalization (avoid A->B and B->A duplicates).
+	edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+
+	// Resolve endpoint types for direction validation.
+	frRepo := h.service.Fragments()
+	if frRepo == nil {
+		// Best-effort: if we can't validate types, still allow creation (legacy behavior).
+		return nil
+	}
+	srcFrag, srcErr := frRepo.Get(ctx, edge.SourceFragmentID)
+	dstFrag, dstErr := frRepo.Get(ctx, edge.TargetFragmentID)
+	if srcErr != nil || dstErr != nil || srcFrag == nil || dstFrag == nil {
+		return fmt.Errorf("failed to resolve edge endpoints: srcErr=%v dstErr=%v", srcErr, dstErr)
+	}
+
+	// Enforce direction policies (FOUNDED, EMPLOYED_BY, MANAGES, KEY_PERSON, etc.).
+	if valid, shouldReverse, rule := scout.ValidateEdgeDirection(edge.Type, srcFrag.Type, dstFrag.Type); !valid {
+		if shouldReverse {
+			edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
+			edge.Qualifiers["normalizedDirection"] = true
+			// Re-apply symmetric normalization after swap (noop for non-symmetric).
+			edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+		} else if rule != nil {
+			return fmt.Errorf("invalid edge direction for %s: %s", edge.Type, rule.Description)
+		}
+	}
+
+	return nil
 }
 
 func (h *HorizonHandlers) publishEdgeUpserted(ctx context.Context, authTenant string, projectID string, lensID string, correlationID string, sessionID string, edge *models.DependencyEdge) {
@@ -225,6 +293,12 @@ func (h *HorizonHandlers) CreateEdge(w http.ResponseWriter, r *http.Request) {
 		CorrelationID: correlationID,
 		SessionID:     sessionID,
 	})
+
+	// Normalize edge type + direction at creation time (prevents inverted FOUNDED/EMPLOYED_BY/etc).
+	if err := h.normalizeEdgeForCreate(ctx, &edge); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	edgeID, err := h.service.Edges().Create(ctx, &edge)
 	if err != nil {
@@ -558,29 +632,29 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 		// - "A depends on B" (A->B) => B is upstream relative to A
 		// - "A operates in B" (A->B) => B is upstream context relative to A
 		reverse := map[string]struct{}{
-			"DEPENDS_ON":      {},
-			"REQUIRES":        {},
-			"NEEDS":           {},
-			"USES":            {},
-			"CONSUMES":        {},
-			"LOCATED_IN":      {},
-			"OPERATES_IN":     {},
-			"BASED_IN":        {},
+			"DEPENDS_ON":       {},
+			"REQUIRES":         {},
+			"NEEDS":            {},
+			"USES":             {},
+			"CONSUMES":         {},
+			"LOCATED_IN":       {},
+			"OPERATES_IN":      {},
+			"BASED_IN":         {},
 			"HEADQUARTERED_IN": {},
 			// Governance/context edges: org/fac -> auditor is upstream context relative to the org.
 			"AUDITED_BY": {},
 		}
 		// Symmetric relations: always treated as upstream environment by default.
 		symmetric := map[string]struct{}{
-			"COMPETES_WITH":  {},
-			"CONFLICTS_WITH": {},
-			"OPPOSES":        {},
-			"PARTNERS_WITH":  {},
+			"COMPETES_WITH":   {},
+			"CONFLICTS_WITH":  {},
+			"OPPOSES":         {},
+			"PARTNERS_WITH":   {},
 			"COOPERATES_WITH": {},
-			"RELATIVE_OF":    {},
-			"RELATED_TO":     {},
-			"SIMILAR_TO":     {},
-			"LINKED_TO":      {},
+			"RELATIVE_OF":     {},
+			"RELATED_TO":      {},
+			"SIMILAR_TO":      {},
+			"LINKED_TO":       {},
 		}
 
 		filtered := make([]*models.DependencyEdge, 0, len(edges))
@@ -926,16 +1000,16 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			b := beforeByType[t]
 			a := afterByType[t]
 			byType[t] = map[string]interface{}{
-				"before":  b,
+				"before":   b,
 				"returned": a,
-				"hasMore": b > a,
+				"hasMore":  b > a,
 			}
 		}
 		counts = map[string]interface{}{
 			"total": map[string]interface{}{
-				"before":  beforeTotal,
+				"before":   beforeTotal,
 				"returned": afterTotal,
-				"hasMore": beforeTotal > afterTotal,
+				"hasMore":  beforeTotal > afterTotal,
 			},
 			"byType": byType,
 		}

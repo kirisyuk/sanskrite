@@ -4585,6 +4585,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       }
 
+      // Levels: keep expansions strict to backend edgeTypes, BUT allow an important exception:
+      // If an expanded node already has a PRODUCES edge on canvas to a neighbor, it must dominate placement
+      // over DEPENDS-like edges (otherwise products can be misplaced).
+      if (isLevelsLayout) {
+        for (const e of currentEdges) {
+          const s = norm(e.source);
+          const t = norm(e.target);
+          const edgeType0 = (e as any)?.data?.edgeType || (e as any)?.type || '';
+          const u = String(edgeType0 || '').toUpperCase().trim();
+          if (u !== 'PRODUCES') continue;
+
+          // Normalize node ids -> fragment ids (ReactFlow ids can be lensItemId in some flows)
+          const sNode = nodeById.get(s) || nodeByFragmentId.get(s);
+          const tNode = nodeById.get(t) || nodeByFragmentId.get(t);
+          const sFrag = norm((sNode?.data as any)?.fragmentId || s);
+          const tFrag = norm((tNode?.data as any)?.fragmentId || t);
+
+          // Only OUTGOING from expanded -> neighbor matters for the strong override.
+          if (sFrag === fragmentId && tFrag) {
+            updateEdgeInfo(tFrag, 'PRODUCES', 'outgoing');
+          }
+        }
+      }
+
       // Also populate edge info from current canvas edges if missing from API deps.
       // In Levels mode, keep behavior strict to the backend response.
       if (!isLevelsLayout) for (const e of currentEdges) {
@@ -5932,6 +5956,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Map nodeId + fragmentId -> visual type (stack controllers can override type via stackVisualType).
     const typeByKey = new Map<string, string>();
+    const paneByKey = new Map<string, string>(); // Levels: right/left/dock (used to scope some edge filtering)
     for (const n of nodes) {
       const d: any = (n as any)?.data;
       if (d?.isGroup) continue;
@@ -5940,6 +5965,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const vt = String(d?.stackVisualType || d?.type || '').toUpperCase().trim().replace(/\s+/g, '_');
       if (id) typeByKey.set(id, vt);
       if (fid) typeByKey.set(fid, vt);
+      const pane = String(d?.levelsPane || '').trim();
+      if (id && pane) paneByKey.set(id, pane);
+      if (fid && pane) paneByKey.set(fid, pane);
     }
 
     // Suppress Influence-ish edges between:
@@ -5966,25 +5994,90 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       else pairHasNonInfluence.add(k);
     }
 
-    const base = hiddenNodeIds.size === 0 ? edges : edges.filter((e) => !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target));
-    if (pairHasNonInfluence.size === 0 || pairHasAnyInfluence.size === 0) return base;
-    return base.filter((e) => {
-      const s = String((e as any)?.source || '').trim();
-      const t = String((e as any)?.target || '').trim();
-      if (!s || !t || s === t) return true;
-      const st = typeByKey.get(s) || '';
-      const tt = typeByKey.get(t) || '';
-      if (!st || !tt) return true;
-      const isOrgGeo = (st === 'ORGANIZATION' && isGeoType(tt)) || (tt === 'ORGANIZATION' && isGeoType(st));
-      const isOrgPerson = (st === 'ORGANIZATION' && isPersonType(tt)) || (tt === 'ORGANIZATION' && isPersonType(st));
-      if (!isOrgGeo && !isOrgPerson) return true;
-      const k = pairKey(s, t);
-      if (!pairHasNonInfluence.has(k)) return true;
-      const et = edgeTypeOf(e);
-      if (INFLUENCEISH.has(et)) return false;
-      return true;
-    });
-  }, [edges, hiddenNodeIds, nodes]);
+    let base = hiddenNodeIds.size === 0 ? edges : edges.filter((e) => !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target));
+
+    // Apply influence suppression (ORG↔GEO / ORG↔PERSON) when a stronger non-influence relation exists.
+    if (pairHasNonInfluence.size > 0 && pairHasAnyInfluence.size > 0) {
+      base = base.filter((e) => {
+        const s = String((e as any)?.source || '').trim();
+        const t = String((e as any)?.target || '').trim();
+        if (!s || !t || s === t) return true;
+        const st = typeByKey.get(s) || '';
+        const tt = typeByKey.get(t) || '';
+        if (!st || !tt) return true;
+        const isOrgGeo = (st === 'ORGANIZATION' && isGeoType(tt)) || (tt === 'ORGANIZATION' && isGeoType(st));
+        const isOrgPerson = (st === 'ORGANIZATION' && isPersonType(tt)) || (tt === 'ORGANIZATION' && isPersonType(st));
+        if (!isOrgGeo && !isOrgPerson) return true;
+        const k = pairKey(s, t);
+        if (!pairHasNonInfluence.has(k)) return true;
+        const et = edgeTypeOf(e);
+        if (INFLUENCEISH.has(et)) return false;
+        return true;
+      });
+    }
+
+    // Levels (right graph): if multiple control/governance edges exist between the same pair,
+    // keep only the strongest one (avoid drawing multiple parallel control edges).
+    if (isLevelsLayout) {
+      const CONTROLISH = new Set([
+        'OWNS',
+        'PARENT_OF',
+        'SUBSIDIARY_OF',
+        'INVESTS_IN',
+        'CONTROLS',
+        'MANAGES',
+        'BOARD_MEMBER_OF',
+        'EXECUTIVE_OF',
+        'EMPLOYED_BY',
+        'FOUNDED',
+      ]);
+      const strength = (t: string): number => {
+        const u = String(t || '').toUpperCase().trim();
+        // Lower is stronger
+        if (u === 'OWNS' || u === 'PARENT_OF') return 10;
+        if (u === 'SUBSIDIARY_OF') return 12;
+        if (u === 'INVESTS_IN') return 20;
+        if (u === 'CONTROLS' || u === 'MANAGES') return 30;
+        if (u === 'BOARD_MEMBER_OF' || u === 'EXECUTIVE_OF') return 40;
+        if (u === 'EMPLOYED_BY') return 50;
+        if (u === 'FOUNDED') return 60;
+        return 100;
+      };
+      const isRight = (id: string) => (paneByKey.get(id) || '') === 'right';
+
+      const bestByPair = new Map<string, { id: string; rank: number }>();
+      for (const e of base) {
+        const s = String((e as any)?.source || '').trim();
+        const t = String((e as any)?.target || '').trim();
+        if (!s || !t || s === t) continue;
+        if (!isRight(s) || !isRight(t)) continue;
+        const et = edgeTypeOf(e);
+        if (!CONTROLISH.has(et)) continue;
+        const k = pairKey(s, t);
+        const r = strength(et);
+        const prev = bestByPair.get(k);
+        if (!prev || r < prev.rank || (r === prev.rank && String(e.id || '').localeCompare(prev.id) < 0)) {
+          bestByPair.set(k, { id: String(e.id || ''), rank: r });
+        }
+      }
+      if (bestByPair.size > 0) {
+        base = base.filter((e) => {
+          const s = String((e as any)?.source || '').trim();
+          const t = String((e as any)?.target || '').trim();
+          if (!s || !t || s === t) return true;
+          if (!isRight(s) || !isRight(t)) return true;
+          const et = edgeTypeOf(e);
+          if (!CONTROLISH.has(et)) return true;
+          const k = pairKey(s, t);
+          const best = bestByPair.get(k);
+          if (!best) return true;
+          return String(e.id || '') === best.id;
+        });
+      }
+    }
+
+    return base;
+  }, [edges, hiddenNodeIds, nodes, isLevelsLayout]);
 
   // Stable node structure info (only changes when nodes are added/removed/hidden, NOT on style changes).
   // This prevents hubNodeIds from re-computing on every hover/style update.
@@ -7822,25 +7915,44 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const cid = String(controllerId || '').trim();
       if (!key || !cid) return;
 
-      // Collect hidden members for this stack.
-      const members = (nodesStateRef.current || nodes)
+      // Collect members for this stack.
+      // Historically we excluded the controller because its label was shown on the node itself.
+      // Now we show it in the preview as the first chip (so the list is complete).
+      const allMembers = (nodesStateRef.current || nodes)
         .filter((n) => !(n as any)?.data?.isGroup)
-        .filter((n) => String(((n as any)?.data as any)?.stackGroupKey || '').trim() === key)
-        .filter((n) => String((n as any)?.id || '').trim() !== cid)
-        .filter((n) => Boolean(((n as any)?.data as any)?.hiddenByStack) || Boolean((n as any)?.hidden));
+        .filter((n) => String(((n as any)?.data as any)?.stackGroupKey || '').trim() === key);
 
-      members.sort((a: any, b: any) => {
+      const controllerNode = allMembers.find((n: any) => String(n?.id || '').trim() === cid) as any;
+      const controllerItem = controllerNode
+        ? {
+            nodeId: cid,
+            label:
+              String(controllerNode?.data?.label || '').trim() ||
+              humanizeCanonicalPath(String(controllerNode?.data?.canonicalPath || '').trim()) ||
+              'Fragment',
+            type: String(controllerNode?.data?.type || '').trim() || 'UNKNOWN',
+          }
+        : null;
+
+      const hiddenMembers = allMembers
+        .filter((n: any) => String(n?.id || '').trim() !== cid)
+        .filter((n: any) => Boolean(((n as any)?.data as any)?.hiddenByStack) || Boolean((n as any)?.hidden));
+
+      hiddenMembers.sort((a: any, b: any) => {
         const al = String(a?.data?.label || a?.data?.canonicalPath || a?.id || '');
         const bl = String(b?.data?.label || b?.data?.canonicalPath || b?.id || '');
         return al.localeCompare(bl);
       });
 
-      const items = members.slice(0, 5).map((n: any) => ({
+      // Keep the old cap for hidden members, but add the controller as the first chip.
+      const HIDDEN_PREVIEW_LIMIT = 5;
+      const hiddenItems = hiddenMembers.slice(0, HIDDEN_PREVIEW_LIMIT).map((n: any) => ({
         nodeId: String(n.id || '').trim(),
         label: String(n.data?.label || '').trim() || humanizeCanonicalPath(String(n.data?.canonicalPath || '').trim()) || 'Fragment',
         type: String(n.data?.type || '').trim() || 'UNKNOWN',
       }));
-      const more = Math.max(0, members.length - items.length);
+      const items = (controllerItem ? [controllerItem, ...hiddenItems] : hiddenItems);
+      const more = Math.max(0, allMembers.length - items.length);
 
       stackPreviewControllerIdRef.current = cid;
       setNodes((prev) =>
@@ -7856,6 +7968,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             onStackPreviewSelect: (targetNodeId: string) => {
               const tid = String(targetNodeId || '').trim();
               if (!tid) return;
+              if (tid === cid) {
+                // Clicking the controller chip is a no-op: just close the preview.
+                clearStackPreview();
+                return;
+              }
               clearStackPreview();
               pendingFocusNodeIdRef.current = tid;
               if (typeof (d0 as any)?.onToggleStack === 'function') {

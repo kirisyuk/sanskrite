@@ -30,17 +30,17 @@ type RuntimeTaxonomy struct {
 	AllowedRelationTypes map[string]struct{}
 
 	// Signal types for OntologyFact(kind=signal)
-	AllowedSignalKinds map[string]struct{}        // "risk", "opportunity", "trend", "direction"
-	SignalTypes        map[string]SignalTypeSpec  // "risk:supply_disruption" -> spec
+	AllowedSignalKinds map[string]struct{}       // "risk", "opportunity", "trend", "direction"
+	SignalTypes        map[string]SignalTypeSpec // "risk:supply_disruption" -> spec
 	SignalTypeSynonyms map[string]string         // alias -> canonical type
 
 	// Product taxonomy for canonicalization
-	AllowedProductCategories map[string]struct{}     // "raw", "component", "finished", "service"
-	AllowedProductTypes      map[string]struct{}     // "mineral", "agricultural", "chemical", "electronic", etc.
-	AllowedProductStages     map[string]struct{}     // "extraction", "refining", "processing", "manufacturing", "assembly"
-	ProductStageOrder        []string                // Ordered list for algorithmic upstream/downstream propagation
+	AllowedProductCategories map[string]struct{}    // "raw", "component", "finished", "service"
+	AllowedProductTypes      map[string]struct{}    // "mineral", "agricultural", "chemical", "electronic", etc.
+	AllowedProductStages     map[string]struct{}    // "extraction", "refining", "processing", "manufacturing", "assembly"
+	ProductStageOrder        []string               // Ordered list for algorithmic upstream/downstream propagation
 	KnownProducts            map[string]ProductSpec // "lithium-carbonate" -> spec
-	ProductSynonyms          map[string]string       // "Li2CO3" -> "lithium-carbonate", "battery grade lithium" -> "lithium-carbonate"
+	ProductSynonyms          map[string]string      // "Li2CO3" -> "lithium-carbonate", "battery grade lithium" -> "lithium-carbonate"
 }
 
 // SignalTypeSpec defines a signal type specification.
@@ -61,30 +61,32 @@ var rt *RuntimeTaxonomy
 // - We still want to materialize edges using types that the codebase understands, otherwise everything collapses to INFLUENCES.
 // - Runtime taxonomy can still tighten unknown values (anything not in this set remains restricted by AllowedRelationTypes when present).
 var builtInAllowedRelationTypes = map[string]struct{}{
-	"SUPPLIES_TO":      {},
-	"LOCATED_IN":       {},
-	"OWNS":             {},
-	"SUBSIDIARY_OF":    {},
-	"PRODUCES":         {},
-	"CONSUMES":         {},
-	"OPERATES_IN":      {},
-	"REGULATES":        {},
-	"COMPETES_WITH":    {},
-	"INFLUENCES":       {},
-	"DEPENDS_ON":       {},
-	"TRANSFORMS_INTO":  {},
+	"SUPPLIES_TO":     {},
+	"LOCATED_IN":      {},
+	"OWNS":            {},
+	"SUBSIDIARY_OF":   {},
+	"PRODUCES":        {},
+	"CONSUMES":        {},
+	"OPERATES_IN":     {},
+	"REGULATES":       {},
+	"COMPETES_WITH":   {},
+	"INFLUENCES":      {},
+	"DEPENDS_ON":      {},
+	"TRANSFORMS_INTO": {},
 	// Governance / org-person
-	"MANAGES":          {},
-	"CONTROLS":         {},
-	"EMPLOYED_BY":      {},
-	"BOARD_MEMBER_OF":  {},
-	"FOUNDED":          {},
-	"INVESTS_IN":       {},
-	"PARTNERS_WITH":    {},
+	"MANAGES":         {},
+	"CONTROLS":        {},
+	"EMPLOYED_BY":     {},
+	"BOARD_MEMBER_OF": {},
+	"FOUNDED":         {},
+	"INVESTS_IN":      {},
+	"PARTNERS_WITH":   {},
+	// People/org meta-relations
+	"KEY_PERSON": {},
 	// OSINT-lite / governance extensions
-	"AUDITED_BY":       {},
-	"RELATIVE_OF":      {},
-	"RELATED_TO":       {},
+	"AUDITED_BY":  {},
+	"RELATIVE_OF": {},
+	"RELATED_TO":  {},
 }
 
 func isBuiltInAllowedRelationType(s string) bool {
@@ -217,6 +219,9 @@ func NormalizeRelationType(in string) string {
 		return "MANAGES"
 	case "EMPLOYS", "WORKS_FOR":
 		return "EMPLOYED_BY"
+	case "KEYPERSON", "KEY_PERSON_OF", "HAS_KEY_PERSON":
+		// Canonical: KEY_PERSON (direction is enforced elsewhere).
+		return "KEY_PERSON"
 	case "FOUNDER_OF":
 		return "FOUNDED"
 	case "BOARD_MEMBER", "BOARD_MEMBER_AT":
@@ -387,4 +392,3 @@ func normalizeProductSlug(s string) string {
 	s = strings.Trim(s, "-")
 	return s
 }
-
