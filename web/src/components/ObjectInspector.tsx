@@ -2212,11 +2212,15 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             )}
               {fragment.canonicalPath && <KV k="Canonical path" v={<span style={mono}>{fragment.canonicalPath}</span>} copyText={fragment.canonicalPath} />}
               {fragment.type && <KV k="Fragment type" v={<span>{String(fragment.type)}</span>} />}
-              {fragment.orgSize && <KV k="Org size" v={<span style={mono}>{String(fragment.orgSize)}</span>} />}
-              {Array.isArray(fragment.marketSegments) && fragment.marketSegments.length > 0 && (
-                <KV
-                  k="Market segments"
-                  v={
+              <KV
+                k="Org size"
+                v={<span style={mono}>{fragment.orgSize ? String(fragment.orgSize) : '-'}</span>}
+                copyText={fragment.orgSize ? String(fragment.orgSize) : undefined}
+              />
+              <KV
+                k="Market segments"
+                v={
+                  Array.isArray(fragment.marketSegments) && fragment.marketSegments.length > 0 ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {fragment.marketSegments.map((p: any, idx: number) => (
                         <span key={`${String(p)}-${idx}`} style={mono}>
@@ -2224,10 +2228,16 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                         </span>
                       ))}
                     </div>
-                  }
-                  copyText={fragment.marketSegments.map((p: any) => String(p)).join('\n')}
-                />
-              )}
+                  ) : (
+                    <span style={mono}>-</span>
+                  )
+                }
+                copyText={
+                  Array.isArray(fragment.marketSegments) && fragment.marketSegments.length > 0
+                    ? fragment.marketSegments.map((p: any) => String(p)).join('\n')
+                    : undefined
+                }
+              />
               {fragment.identifiers && Object.keys(fragment.identifiers).length > 0 && (
                 <div style={{ marginTop: 6 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>Identifiers</div>

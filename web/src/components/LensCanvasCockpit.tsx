@@ -514,6 +514,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
+  // Levels Two-Pane: click on a left group ("aggregated node") should reveal real parent<->child edges.
+  const [selectedLevelsAggGroupId, setSelectedLevelsAggGroupId] = React.useState<string | null>(null);
+  // When set, we only reveal edges of this type within the selected group (clicked agg edge).
+  const [selectedLevelsAggEdgeType, setSelectedLevelsAggEdgeType] = React.useState<string | null>(null);
+  // When set (e.g. group↔group proxy edges), we reveal original edges that belong to this aggregation key.
+  const [selectedLevelsAggKey, setSelectedLevelsAggKey] = React.useState<string | null>(null);
   const edgeExplainSessionCacheRef = React.useRef<Map<string, { markdown: string; cachedAt: string }>>(new Map());
   const [edgeExplainPopover, setEdgeExplainPopover] = React.useState<{
     open: boolean;
@@ -530,10 +536,42 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const edgeExplainPopoverRef = React.useRef<HTMLDivElement | null>(null);
   const [gridState, setGridState] = React.useState<GridState>(createEmptyGrid());
 
+  // Collapsed subcategories state (Levels layout: left-pane groups can collapse relation-type subsections).
+  // Key format: `${groupId}:${edgeType}` for toggled state. Defaults are handled in layout logic.
+  const [collapsedSubcategories, setCollapsedSubcategories] = React.useState<Set<string>>(new Set());
+  // Track whether collapsed subcategories changed (to trigger relayout).
+  const collapsedSubcategoriesChangedRef = React.useRef(false);
+
+  // Callback to toggle subcategory collapse state (passed to layout and group nodes).
+  // Uses an `:expanded` marker to override default-collapsed edge types.
+  const toggleSubcategoryCollapse = React.useCallback((groupId: string, edgeType: string, nextCollapsed: boolean, focusNodeId?: string) => {
+    const key = `${groupId}:${edgeType}`;
+    const expandedKey = `${key}:expanded`;
+    const fid = String(focusNodeId || '').trim();
+    if (fid) pendingFocusNodeIdRef.current = fid;
+    setCollapsedSubcategories((prev) => {
+      const next = new Set(prev);
+      if (nextCollapsed) {
+        // Collapsing: add explicit collapse marker, remove expand marker
+        next.add(key);
+        next.delete(expandedKey);
+      } else {
+        // Expanding: remove collapse marker, add explicit expand marker (overrides defaults)
+        next.delete(key);
+        next.delete(edgeType);
+        next.add(expandedKey);
+      }
+      return next;
+    });
+    collapsedSubcategoriesChangedRef.current = true;
+  }, []);
+
   // Avoid unbounded growth across long sessions / lens switches.
+  // Also reset collapsed subcategories to defaults when lens changes.
   React.useEffect(() => {
     edgeExplainSessionCacheRef.current.clear();
     setEdgeExplainPopover(null);
+    setCollapsedSubcategories(new Set());
   }, [lensId]);
 
   // Hover updates can fire very frequently; coalesce to 1 update per frame to avoid re-render storms.
@@ -1608,6 +1646,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     });
   }, []);
+
+  // Trigger relayout when collapsed subcategories change (in Levels mode).
+  React.useEffect(() => {
+    if (!collapsedSubcategoriesChangedRef.current) return;
+    collapsedSubcategoriesChangedRef.current = false;
+    if (layoutMode === 'levels') {
+      // Use ref directly (bypassing debounce) to ensure latest closure is called immediately.
+      // onArrangeRef is updated each render to point to current handleArrange.
+      const fn = onArrangeRef.current;
+      if (typeof fn === 'function') fn();
+    }
+  }, [collapsedSubcategories, layoutMode]);
 
   const stopTrace = React.useCallback(() => {
     traceAbortRef.current?.abort();
@@ -2836,9 +2886,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     // === Levels group-proxy edges ===
-    // If a grouped child has edges to nodes OUTSIDE its group, those edges should terminate on the GROUP handlers,
-    // not on the child nodes. We generate aggregated proxy edges (one per group/outside/edgeType),
-    // and keep originals hidden (no hover reveal) to avoid clutter inside groups.
+    // Default UX: If a grouped child has edges to nodes OUTSIDE its group, those edges terminate on the GROUP handlers
+    // (aggregated on the right edge of the group), not on the child nodes.
+    //
+    // Hover UX: On hover over a specific child (including collapsed subcategory controllers),
+    // we reveal the original edge(s) incident to that child and temporarily suppress the corresponding aggregated edge.
+    // This keeps the default view clean, but allows precise inspection on demand.
     const groupProxyBuckets = new Map<
       string,
       | { kind: 'node'; groupId: string; outsideId: string; edgeType: string; groupAsSource: number; outsideAsSource: number }
@@ -2883,7 +2936,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         if (eidRaw) {
           perChildEdgeIdsToAggKey.set(eidRaw, k);
-          noHoverRevealEdgeIds.add(eidRaw);
+          // NOTE: do NOT mark as no-hover-reveal; we want to reveal on hover and suppress the aggregated edge.
         }
         continue;
       }
@@ -2893,9 +2946,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (!groupId) continue;
       const outsideId = sgIsLeftGroup ? t : s;
 
-      // Do not proxy edges between group child and its own group parent (handled by levels:agg edges).
+      // Edges between group child and its own group parent are handled by levels:agg edges.
+      // But for STACK PROXY edges, we still need to register them in perChildEdgeIdsToAggKey so they are hidden/revealed.
       const parentId = groupParentByGroupId.get(groupId);
-      if (parentId && outsideId === parentId) continue;
+      const isStackProxyEdge = Boolean(ed.levelsStackProxy);
+      if (parentId && outsideId === parentId) {
+        if (isStackProxyEdge && eidRaw) {
+          // Stack proxy edge to parent: add to perChildEdgeIdsToAggKey so it gets hidden with the appropriate aggKey.
+          const edgeTypeForAgg = edgeType;
+          const aggKeyForParent = `${groupId}::edge:${edgeTypeForAgg}`;
+          perChildEdgeIdsToAggKey.set(eidRaw, aggKeyForParent);
+        }
+        continue;
+      }
 
       const k = `${groupId}::node:${outsideId}::edge:${edgeType}`;
       const bucket = groupProxyBuckets.get(k);
@@ -2917,7 +2980,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
       if (eidRaw) {
         perChildEdgeIdsToAggKey.set(eidRaw, k);
-        noHoverRevealEdgeIds.add(eidRaw);
+        // NOTE: do NOT mark as no-hover-reveal; we want to reveal on hover and suppress the aggregated edge.
       }
     }
 
@@ -3017,25 +3080,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isPeerEdge = PEER_EDGE_TYPES.has(normalizedEdgeTypeOf(e));
 
       if (sGrouped && tGrouped) {
+        // IMPORTANT: even inside a group, do not show direct edges by default.
+        // We reveal them only on hover over the specific node (Levels UX).
+        const sId = String((e as any)?.source || '').trim();
+        const tId = String((e as any)?.target || '').trim();
+        const sg = sId ? groupIdByChildId.get(sId) : undefined;
+        const tg = tId ? groupIdByChildId.get(tId) : undefined;
+        const sameLeftGroup = Boolean(sg && tg && sg === tg && sg.startsWith('levels:left:'));
+
         const eid = String((e as any)?.id || '').trim();
         const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
         const d0: any = (e as any)?.data || {};
         const noHover = eid && noHoverRevealEdgeIds.has(eid);
+
+        // If this is an intra-group edge (same group), hide by aggregation even if there's no aggKey.
+        // (No agg edge exists; we just keep the canvas clean and reveal only on hover.)
+        if (sameLeftGroup && !aggKey) {
+          const d = { ...d0, levelsHiddenByAggregation: true, ...(noHover ? { levelsNoHoverReveal: true } : {}) };
+          return { ...e, data: d };
+        }
+
         const d = aggKey
           ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
           : stripAggFlags(d0);
-        return { ...e, data: d };
-      }
-
-      // If BOTH endpoints are group children (and this edge is proxied), keep it hidden always.
-      if (sGrouped && tGrouped) {
-        const eid = String((e as any)?.id || '').trim();
-        const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
-        const d0: any = (e as any)?.data || {};
-        const noHover = eid && noHoverRevealEdgeIds.has(eid);
-        const d = aggKey
-          ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
-          : d0;
         return { ...e, data: d };
       }
 
@@ -3113,6 +3180,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const tGrouped = isInGroup(targetNode);
       const isStackProxy = Boolean(((e as any)?.data as any)?.levelsStackProxy);
       const isPeerEdge = PEER_EDGE_TYPES.has(normalizedEdgeTypeOf(e));
+
+      // Hide intra-left-group edges by default (including stackproxy edges).
+      // They will be revealed only when the specific node is hovered (see displayEdges).
+      if (sGrouped && tGrouped) {
+        const sId = String((e as any)?.source || '').trim();
+        const tId = String((e as any)?.target || '').trim();
+        const sg = sId ? groupIdByChildId.get(sId) : undefined;
+        const tg = tId ? groupIdByChildId.get(tId) : undefined;
+        const sameLeftGroup = Boolean(sg && tg && sg === tg && sg.startsWith('levels:left:'));
+        if (sameLeftGroup) {
+          const eid = String((e as any)?.id || '').trim();
+          const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
+          const d0: any = (e as any)?.data || {};
+          const noHover = eid && noHoverRevealEdgeIds.has(eid);
+          const d = aggKey
+            ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
+            : { ...stripAggFlags(d0), levelsHiddenByAggregation: true, ...(noHover ? { levelsNoHoverReveal: true } : {}) };
+          // Handles can remain as computed defaults; only visibility is affected.
+          return { ...e, data: d };
+        }
+      }
 
       // Defaults
       let sourceHandle = e.sourceHandle || 'source-right';
@@ -4155,6 +4243,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           nodeSpacing: ELK_NODE_SPACING,
           layerSpacing: ELK_LAYER_SPACING,
           maxChildRows: ELK_MAX_CHILD_ROWS,
+          collapsedSubcategories,
+          onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
         });
         const withCallbacks = arranged.map((node) => {
           if ((node.data as any)?.isGroup) {
@@ -5238,6 +5328,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           nodeSpacing: ELK_NODE_SPACING,
           layerSpacing: ELK_LAYER_SPACING,
           maxChildRows: ELK_MAX_CHILD_ROWS,
+          collapsedSubcategories,
+          onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
         });
         linearEdgesAfterLayout = recalculateLevelsTwoPaneHandles(mergedEdges, layoutedNodes as any);
       } else {
@@ -6192,17 +6284,139 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (isLevelsLayout) {
       const hovered = String(hoveredNodeId || '').trim();
       const aggKeysToSuppress = hovered ? (levelsAggKeysByNodeId.get(hovered) || null) : null;
+
+      const selectedGroupId = String(selectedLevelsAggGroupId || '').trim();
+      const selectedEdgeType = normalizeEdgeType(selectedLevelsAggEdgeType);
+      const selectedAggKey = String(selectedLevelsAggKey || '').trim();
+      const selectedAggKeyIsGpair = !!selectedAggKey && selectedAggKey.startsWith('gpair:');
+      const selectedGroupNode = selectedGroupId ? nodes.find((n) => String(n.id || '').trim() === selectedGroupId) : undefined;
+      const selectedGroupData: any = selectedGroupNode?.data;
+      const selectedGroupParentId = String(selectedGroupData?.groupParentId || '').trim();
+      const selectedGroupIsLevelsLeft =
+        !!selectedGroupId &&
+        !!selectedGroupData?.isGroup &&
+        selectedGroupId.startsWith('levels:left:') &&
+        !!selectedGroupParentId;
+      const selectedGroupChildIds = selectedGroupIsLevelsLeft
+        ? new Set(
+            nodes
+              .filter(
+                (n) =>
+                  (((n as any).parentId === selectedGroupId || (n as any).parentNode === selectedGroupId) &&
+                    !(n as any).hidden &&
+                    !((n as any)?.data as any)?.isGroup),
+              )
+              .map((n) => String(n.id || '').trim())
+              .filter(Boolean),
+          )
+        : null;
+      const isSelectedGroupParentChildEdge = (e: any) => {
+        if (!selectedGroupIsLevelsLeft || !selectedGroupChildIds || selectedGroupChildIds.size === 0) return false;
+        const s = String(e?.source || '').trim();
+        const t = String(e?.target || '').trim();
+        if (!s || !t) return false;
+        if (selectedEdgeType) {
+          const et = normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
+          if (et !== selectedEdgeType) return false;
+        }
+        return (
+          (s === selectedGroupParentId && selectedGroupChildIds.has(t)) ||
+          (t === selectedGroupParentId && selectedGroupChildIds.has(s))
+        );
+      };
+      // Suppress only the aggregated edges corresponding to the selected group's parent<->child buckets.
+      // (Do NOT suppress group-proxy agg edges like `${groupId}::node:...`.)
+      const selectedAggKeysToSuppress =
+        selectedGroupIsLevelsLeft && selectedGroupChildIds && selectedGroupChildIds.size > 0
+          ? (() => {
+              const set = new Set<string>();
+              if (selectedEdgeType) {
+                set.add(`${selectedGroupId}::edge:${selectedEdgeType}`);
+                return set;
+              }
+              // Group node click (no explicit edgeType): suppress all parent<->child agg edges for this group.
+              for (const e of baseVisibleEdges) {
+                const d: any = (e as any)?.data || {};
+                if (!d.levelsAgg) continue;
+                const k = String(d.levelsAggKey || '').trim();
+                if (!k) continue;
+                if (k.startsWith(`${selectedGroupId}::edge:`)) set.add(k);
+              }
+              return set.size > 0 ? set : null;
+            })()
+          : null;
+      const combinedAggKeysToSuppress =
+        aggKeysToSuppress && selectedAggKeysToSuppress
+          ? (() => {
+              const next = new Set<string>(aggKeysToSuppress);
+              for (const k of selectedAggKeysToSuppress) next.add(k);
+              return next;
+            })()
+          : (aggKeysToSuppress || selectedAggKeysToSuppress);
+
+      // If preview is keyed off an explicit aggKey (e.g. group↔group proxy), suppress that agg edge too.
+      const combinedAggKeysToSuppress2 =
+        selectedAggKey
+          ? (() => {
+              const next = new Set<string>(combinedAggKeysToSuppress || []);
+              next.add(selectedAggKey);
+              return next;
+            })()
+          : combinedAggKeysToSuppress;
+
+      // For group↔group previews, pick a single strongest underlying edge to avoid spaghetti.
+      // We define "strength" as max(criticality, amplification) with deterministic tie-break.
+      const strongestEdgeIdForSelectedAggKey =
+        selectedAggKeyIsGpair && selectedEdgeType
+          ? (() => {
+              let bestId: string | null = null;
+              let bestScore = -Infinity;
+              for (const e of baseVisibleEdges as any[]) {
+                const d: any = e?.data || {};
+                if (!d.levelsHiddenByAggregation) continue;
+                if (d.levelsNoHoverReveal) continue;
+                const k = String(d.levelsAggKey || '').trim();
+                if (k !== selectedAggKey) continue;
+                const et = normalizeEdgeType(d.edgeType || d.subkind || e?.label || e?.type);
+                if (et !== selectedEdgeType) continue;
+                const cid = String(e?.id || '').trim();
+                if (!cid) continue;
+                const crit = Number.parseFloat(String(d.criticality ?? '0'));
+                const amp = Number.parseFloat(String(d.amplification ?? '0'));
+                const critScore = Number.isFinite(crit) ? crit : 0;
+                const ampScore = Number.isFinite(amp) ? amp : 0;
+                // Prefer criticality, then amplification, then stable id tie-break.
+                const score = critScore * 1000 + ampScore * 10;
+                if (score > bestScore) {
+                  bestScore = score;
+                  bestId = cid;
+                } else if (score === bestScore && bestId && cid < bestId) {
+                  bestId = cid;
+                }
+              }
+              return bestId;
+            })()
+          : null;
       edgesForDisplay = baseVisibleEdges.map((e) => {
         const d: any = (e as any)?.data || {};
         if (d.levelsHiddenByAggregation) {
           if (d.levelsNoHoverReveal) return { ...(e as any), hidden: true } as any;
           const isIncident = hovered && (e.source === hovered || e.target === hovered);
-          if (!isIncident) return { ...(e as any), hidden: true } as any;
+          const isSelectedGroupPC = selectedGroupIsLevelsLeft && isSelectedGroupParentChildEdge(e);
+          const edgeAggKey = String(d.levelsAggKey || '').trim();
+          const isSelectedAggKeyMatch =
+            selectedAggKey && edgeAggKey === selectedAggKey &&
+            (!selectedEdgeType || normalizeEdgeType(d.edgeType || d.subkind || (e as any)?.label || (e as any)?.type) === selectedEdgeType);
+          if (selectedAggKeyIsGpair && isSelectedAggKeyMatch && strongestEdgeIdForSelectedAggKey) {
+            const eid = String((e as any)?.id || '').trim();
+            if (eid !== strongestEdgeIdForSelectedAggKey) return { ...(e as any), hidden: true } as any;
+          }
+          if (!isIncident && !isSelectedGroupPC && !isSelectedAggKeyMatch) return { ...(e as any), hidden: true } as any;
           return { ...(e as any), hidden: false } as any;
         }
-        if (aggKeysToSuppress && d.levelsAgg) {
+        if (combinedAggKeysToSuppress2 && d.levelsAgg) {
           const k = String(d.levelsAggKey || '').trim();
-          if (k && aggKeysToSuppress.has(k)) return { ...(e as any), hidden: true } as any;
+          if (k && combinedAggKeysToSuppress2.has(k)) return { ...(e as any), hidden: true } as any;
         }
         return e;
       });
@@ -6278,6 +6492,117 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
       return orderByRaised(out);
     };
+
+    // Levels Two-Pane: persisted "real edges preview" from clicking an aggregated edge / group.
+    // This should take precedence over hover modes (edge hover, node hover, group hover) so it doesn't look "in the background".
+    if (isLevelsLayout) {
+      const selectedGroupId = String(selectedLevelsAggGroupId || '').trim();
+      const selectedEdgeType = normalizeEdgeType(selectedLevelsAggEdgeType);
+      const selectedAggKey = String(selectedLevelsAggKey || '').trim();
+      if (selectedGroupId) {
+        const groupNode = nodes.find((n) => String(n.id || '').trim() === selectedGroupId);
+        const gd: any = groupNode?.data;
+        const parentId = String(gd?.groupParentId || '').trim();
+        const isLevelsLeftGroup = !!gd?.isGroup && selectedGroupId.startsWith('levels:left:') && !!parentId;
+        if (isLevelsLeftGroup) {
+          const childIds = new Set(
+            nodes
+              .filter(
+                (n) =>
+                  (((n as any).parentId === selectedGroupId || (n as any).parentNode === selectedGroupId) &&
+                    !(n as any).hidden &&
+                    !((n as any)?.data as any)?.isGroup),
+              )
+              .map((n) => String(n.id || '').trim())
+              .filter(Boolean),
+          );
+          if (childIds.size > 0) {
+            const isPC = (e: any) => {
+              const s = String(e?.source || '').trim();
+              const t = String(e?.target || '').trim();
+              if (!s || !t) return false;
+              const okPair =
+                (s === parentId && childIds.has(t)) ||
+                (t === parentId && childIds.has(s));
+              if (!okPair) return false;
+              if (selectedEdgeType) {
+                const et = normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
+                if (et !== selectedEdgeType) return false;
+              }
+              return true;
+            };
+            const out = edgesForDisplay.map((e) => {
+              const { baseStyle } = baseStyled(e);
+              if (isPC(e)) {
+                const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+                return withLabel(
+                  e,
+                  true,
+                  {
+                    ...baseStyle,
+                    opacity: 1,
+                    strokeWidth: strokeWidth + 1.9,
+                  },
+                  true,
+                );
+              }
+              return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
+            });
+            return applySelectedEdge(orderByRaised(out));
+          }
+        }
+      }
+
+      // Group↔Group preview: reveal only one strongest underlying edge for this aggKey (avoid clutter).
+      if (!selectedGroupId && selectedAggKey && selectedAggKey.startsWith('gpair:') && selectedEdgeType) {
+        // Find the strongest visible hidden-by-aggregation edge for this aggKey/type.
+        let bestId: string | null = null;
+        let bestScore = -Infinity;
+        const scoreOf = (e: any): number => {
+          const d: any = e?.data || {};
+          const crit = Number.parseFloat(String(d.criticality ?? '0'));
+          const amp = Number.parseFloat(String(d.amplification ?? '0'));
+          const critScore = Number.isFinite(crit) ? crit : 0;
+          const ampScore = Number.isFinite(amp) ? amp : 0;
+          return critScore * 1000 + ampScore * 10;
+        };
+        for (const e of edgesForDisplay as any[]) {
+          const d: any = e?.data || {};
+          if (!d.levelsHiddenByAggregation) continue;
+          if (d.levelsNoHoverReveal) continue;
+          const k = String(d.levelsAggKey || '').trim();
+          if (k !== selectedAggKey) continue;
+          const et = normalizeEdgeType(d.edgeType || d.subkind || e?.label || e?.type);
+          if (et !== selectedEdgeType) continue;
+          const id = String(e?.id || '').trim();
+          if (!id) continue;
+          const s = scoreOf(e);
+          if (s > bestScore) {
+            bestScore = s;
+            bestId = id;
+          } else if (s === bestScore && bestId && id < bestId) {
+            bestId = id;
+          }
+        }
+        if (bestId) {
+          const out = edgesForDisplay.map((e) => {
+            const { baseStyle } = baseStyled(e);
+            const isBest = String((e as any)?.id || '').trim() === bestId;
+            if (isBest) {
+              const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+              return withLabel(
+                e,
+                true,
+                { ...baseStyle, opacity: 1, strokeWidth: strokeWidth + 2.0 },
+                true,
+              );
+            }
+            return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
+          });
+          return applySelectedEdge(orderByRaised(out));
+        }
+      }
+    }
 
     // Edge hover: show only this edge's label
     if (hoveredEdgeId) {
@@ -6445,7 +6770,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Default: dim all edges, hide labels
     return applySelectedEdge(edgesForDisplay);
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -6985,7 +7310,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Only clone data when needed (perf).
       let nextData: any = d0;
       let changed = false;
-      if (hasStack) {
+      // For regular (right-pane) stacks, set onToggleStack to toggleStackGroup.
+      // BUT: subcategory stacks (left-pane, collapsed by default) already have their own
+      // onToggleStack set by elkLayout that calls onToggleSubcategoryCollapse. Don't overwrite it!
+      const isSubcategoryStack = Boolean(d0?.subcategoryStack);
+      if (hasStack && !isSubcategoryStack) {
         if (nextData === d0) {
           nextData = { ...d0 };
           changed = true;
@@ -6994,7 +7323,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           nextData.onToggleStack = toggleStackGroup;
           changed = true;
         }
-      } else if (typeof nextData?.onToggleStack === 'function') {
+      } else if (!isSubcategoryStack && typeof nextData?.onToggleStack === 'function') {
         nextData = { ...d0 };
         delete nextData.onToggleStack;
         changed = true;
@@ -7187,6 +7516,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           nodeSpacing: ELK_NODE_SPACING,
           layerSpacing: ELK_LAYER_SPACING,
           maxChildRows: ELK_MAX_CHILD_ROWS,
+          collapsedSubcategories,
+          onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
         });
 
         const finalFragments = arrangedFragments.map((node) => {
@@ -7274,7 +7605,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } finally {
       setArranging(false);
     }
-  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout]);
+  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, collapsedSubcategories, toggleSubcategoryCollapse]);
 
   // Keep ref updated for stack toggle re-layout (avoid TDZ / circular deps).
   onArrangeRef.current = () => { void handleArrange(); };
@@ -7320,6 +7651,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             nodeSpacing: ELK_NODE_SPACING,
             layerSpacing: ELK_LAYER_SPACING,
             maxChildRows: ELK_MAX_CHILD_ROWS,
+            collapsedSubcategories,
+            onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
           });
           nextNodes = laidOut as any;
 
@@ -7775,6 +8108,36 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (!node) return;
       if (((node as any)?.data as any)?.isGroup) return;
 
+      // If the node is currently hidden under a collapsed subcategory stack, auto-expand that subcategory,
+      // then focus the found node after relayout (search UX).
+      const nd: any = (node as any)?.data || {};
+      const isHiddenByStack = Boolean(nd?.hiddenByStack) || Boolean((node as any)?.hidden);
+      const parentGroupId = String((node as any)?.parentId || (node as any)?.parentNode || '').trim();
+      const stackGroupKey = String(nd?.stackGroupKey || '').trim();
+      const inferredEdgeType = (() => {
+        const direct = String(nd?.subcategoryEdgeType || '').trim();
+        if (direct) return direct;
+        if (!stackGroupKey) return '';
+        const parts = stackGroupKey.split(':');
+        return String(parts[parts.length - 1] || '').trim();
+      })();
+      if (isHiddenByStack && parentGroupId && inferredEdgeType) {
+        // Set selection now (consistent), but focus will happen after arrange.
+        ignorePaneClicksUntilRef.current = Date.now() + 250;
+        setNodes((prev) =>
+          (prev || []).map((n: any) => {
+            if ((n?.data as any)?.isGroup) return { ...n, selected: false };
+            return { ...n, selected: String(n?.id || '').trim() === id };
+          }),
+        );
+        setEdges((prev) => (prev || []).map((e: any) => ({ ...e, selected: false })));
+
+        // Expand the subcategory and focus the actual node.
+        toggleSubcategoryCollapse(parentGroupId, inferredEdgeType, false, id);
+        closeAddNode();
+        return;
+      }
+
       // Keep selection consistent with click behavior (one selected node, no selected edges).
       ignorePaneClicksUntilRef.current = Date.now() + 250;
       setNodes((prev) =>
@@ -7843,7 +8206,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       closeAddNode();
     },
-    [nodes, edges, setNodes, setEdges, onNodeSelect, closeAddNode],
+    [nodes, edges, setNodes, setEdges, onNodeSelect, closeAddNode, toggleSubcategoryCollapse],
   );
 
   const bgColor = theme === 'dark' ? 'var(--bg-primary)' : 'var(--bg-primary)';
@@ -7887,6 +8250,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Selecting a node should clear any selected edge highlight.
     setSelectedEdgeId(null);
     onEdgeSelect?.(null, null);
+
+    // Levels Two-Pane: clicking an aggregated left group toggles "real edges" preview.
+    // Clicking any other node clears the preview (returns to default aggregated view).
+    if (layoutMode === 'levels' && Boolean((node.data as any)?.isGroup) && String(node.id || '').trim().startsWith('levels:left:')) {
+      const gid = String(node.id || '').trim();
+      setSelectedLevelsAggGroupId((prev) => (String(prev || '').trim() === gid ? null : gid));
+      // Group node click doesn't imply a specific edge type; show all types for that group.
+      setSelectedLevelsAggEdgeType(null);
+      setSelectedLevelsAggKey(null);
+    } else {
+      setSelectedLevelsAggGroupId(null);
+      setSelectedLevelsAggEdgeType(null);
+      setSelectedLevelsAggKey(null);
+    }
 
     // Levels stack preview: clicking a collapsed stack controller shows chip overlays.
     // Clicking elsewhere (another node) closes the preview.
@@ -8069,7 +8446,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       onNodeSelect(selectedId, nodeDataWithContext);
     }
-  }, [onNodeSelect, onEdgeSelect, edges, nodes]);
+  }, [onNodeSelect, onEdgeSelect, edges, nodes, layoutMode]);
 
   // Handle edge click
   const handleEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
@@ -8078,8 +8455,49 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     event.stopPropagation();
     event.preventDefault();
 
+    // Levels Two-Pane: clicking an aggregated edge should toggle the same "real edges" preview
+    // as clicking the left group node.
+    const ed: any = (edge as any)?.data || {};
+    const isLevelsAgg = Boolean(ed?.levelsAgg);
+    const aggGroupId = String(ed?.levelsAggGroupId || '').trim();
+    const aggKey = String(ed?.levelsAggKey || '').trim();
+    const aggEdgeType = normalizeEdgeType(ed?.levelsAggEdgeType || ed?.edgeType || edge?.label);
+    const isParentChildAggEdge =
+      String((edge as any)?.id || '').trim().startsWith('levels:agg:') ||
+      (aggGroupId && aggKey && aggKey.startsWith(`${aggGroupId}::edge:`));
+    const isGroupPairAggEdge = aggKey.startsWith('gpair:');
+    const isLevelsLeftGroup = aggGroupId && aggGroupId.startsWith('levels:left:');
+    if (layoutMode === 'levels' && isLevelsAgg && (isParentChildAggEdge || isGroupPairAggEdge) && isLevelsLeftGroup) {
+      // Toggle preview for this exact group+type.
+      const curGroup = String(selectedLevelsAggGroupId || '').trim();
+      const curType = normalizeEdgeType(selectedLevelsAggEdgeType);
+      const curKey = String(selectedLevelsAggKey || '').trim();
+      const nextKey = isGroupPairAggEdge ? aggKey : `${aggGroupId}::edge:${aggEdgeType}`;
+      const same = curType === aggEdgeType && curKey === nextKey && (!isGroupPairAggEdge ? (curGroup === aggGroupId) : true);
+      if (same) {
+        setSelectedLevelsAggGroupId(null);
+        setSelectedLevelsAggEdgeType(null);
+        setSelectedLevelsAggKey(null);
+      } else {
+        // For group-pair previews, we key purely off aggKey and don't need a single group id.
+        setSelectedLevelsAggGroupId(isGroupPairAggEdge ? null : aggGroupId);
+        setSelectedLevelsAggEdgeType(aggEdgeType || null);
+        setSelectedLevelsAggKey(nextKey || null);
+      }
+      // The agg edge itself will be suppressed; don't keep it as selected edge highlight.
+      setSelectedEdgeId(null);
+    } else {
+      // Any other edge click closes the group real-edges preview.
+      setSelectedLevelsAggGroupId(null);
+      setSelectedLevelsAggEdgeType(null);
+      setSelectedLevelsAggKey(null);
+    }
+
     // Persist edge highlight until user explicitly clicks elsewhere / another object.
-    setSelectedEdgeId(String(edge.id || '').trim() || null);
+    // (Skip for levels agg edges, since we hide that edge while previewing real edges.)
+    if (!(layoutMode === 'levels' && isLevelsAgg && (isParentChildAggEdge || isGroupPairAggEdge) && isLevelsLeftGroup)) {
+      setSelectedEdgeId(String(edge.id || '').trim() || null);
+    }
 
     // Click elsewhere should close stack preview and local filters too.
     if (stackPreviewControllerIdRef.current) {
@@ -8126,7 +8544,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       
       onEdgeSelect(edge.id, edgeDataWithFragments);
     }
-  }, [onEdgeSelect, nodes]);
+  }, [onEdgeSelect, nodes, layoutMode, normalizeEdgeType, selectedLevelsAggGroupId, selectedLevelsAggEdgeType]);
 
   // Handle pane click (click on empty space) - clear selection
   const handlePaneClick = useCallback(() => {
@@ -8141,6 +8559,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       onEdgeSelect(null, null);
     }
     setSelectedEdgeId(null);
+    setSelectedLevelsAggGroupId(null);
+    setSelectedLevelsAggEdgeType(null);
+    setSelectedLevelsAggKey(null);
     // Also clear graph-query highlight (UX: click elsewhere returns to normal view)
     // Clear stack preview overlay (Levels).
     if (stackPreviewControllerIdRef.current) {

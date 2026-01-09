@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
-	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -169,21 +168,11 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 			},
 			CurrentState: models.ScoutingJobStatePending,
 		}
+		// NOTE: Do NOT emit horizon.scout.job.created here — the WithOnCreate hook
+		// in main.go already publishes that event when Create() succeeds.
+		// Emitting here would cause duplicate "Scout Job Created" messages in the UI.
 		if id, cerr := h.service.ScoutingJobs().Create(ctx, scoutingJob); cerr == nil && strings.TrimSpace(id) != "" {
 			jobID = strings.TrimSpace(id)
-			// Emit creation event immediately for UI responsiveness
-			if pub := h.service.RealtimePublisher(); pub != nil {
-				_ = pub.PublishJSON(ctx, realtime.EventType("horizon.scout.job.created"), lens.TenantID, map[string]interface{}{
-					"tenantId":            lens.TenantID,
-					"projectId":           lens.ProjectID,
-					"lensId":              lens.ID,
-					"jobId":               jobID,
-					"targetCanonicalPath": targetCanonicalPath,
-					"correlationId":       correlationID,
-					"sessionId":           sessionID,
-					"ts":                  time.Now().UTC().Format(time.RFC3339Nano),
-				})
-			}
 		}
 	}
 

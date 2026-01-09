@@ -136,10 +136,10 @@ TASK: Compare the extracted data with the source content and identify any confli
 	- If the entity is an Organization or Facility:
 	  - If no external auditor is present (AUDITED_BY), add a question:
 	    - "Who is the external auditor of <org> (as of YYYY)? Provide audit firm and source."
-	  - If marketSegments is empty, add a question:
-	    - "Which market segments does <org> operate in? Return canonical /segment/{domain}/{vertical}/{geo} (geo=ISO2 or global) with sources."
-	  - If orgSize is empty/unknown, add a question:
-	    - "What is the org size (orgSize=sme|le|enterprise|mega) for <org>? Use employees/revenue/assets with sources."
+	  - MANDATORY: If marketSegments is empty or missing, you MUST add this question:
+	    - "Which market segments does <org> operate in? Return canonical paths /segment/{domain}/{vertical}/{geo} where domain=finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate, vertical=specific industry, geo=ISO2 or 'global'. Example: /segment/technology/semiconductors/us"
+	  - MANDATORY: If orgSize is empty, missing, or "na", you MUST add this question:
+	    - "What is the organization size for <org>? Determine orgSize based on: employees (<500=sme, 500-5000=le, 5000-50000=enterprise, >50000=mega) OR revenue (<$100M=sme, $100M-$1B=le, $1B-$10B=enterprise, >$10B=mega). Provide sources."
 	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
 	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2}/{slug}. If unknown, /gov/na/{slug}."
 	  - If canonicalPath is legacy (/org/{slug}) or uses /org/na/{slug}, add a question:

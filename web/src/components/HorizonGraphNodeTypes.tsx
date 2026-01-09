@@ -49,6 +49,11 @@ export interface HorizonNodeData {
   groupPageSize?: number;     // Items per page (default 12)
   groupAllChildIds?: string[]; // All child IDs for edge filtering
   onGroupPageChange?: (groupId: string, page: number) => void; // Callback for page change
+  // Collapsible subcategories (Left pane: subcategories by relation type)
+  // Each subcategory (relBlock) can be collapsed into a compact stack representation.
+  // Key format: `${groupId}:${edgeType}` or just edgeType within the group.
+  groupCollapsedSubcategories?: Set<string> | string[];  // Edge types that are collapsed in this group
+  onToggleSubcategoryCollapse?: (groupId: string, edgeType: string, nextCollapsed: boolean) => void;
   // Right-side temporary stacking (Levels/Hierarchical UX)
   // When many leaf right-nodes form a tall vertical column, we can collapse them into a single "stack"
   // and expand on demand. These fields are view-only (not persisted).
@@ -230,13 +235,10 @@ const getHorizonNodeVisualQuality = (): HorizonNodeVisualQuality => {
 };
 
 // Track whether styles have been injected (avoids DOM thrashing on every node render)
-let _hzn2026StylesInjected = false;
+const HZN_NODE_2026_CSS_VERSION = '2026-10';
 
 const ensureHorizonNode2026Styles = () => {
   if (typeof document === 'undefined') return;
-  // Skip if already injected (perf optimization - no DOM access needed)
-  if (_hzn2026StylesInjected) return;
-  _hzn2026StylesInjected = true;
   
   // Default to balanced if unset
   if (!document.documentElement.dataset.hznNodeVisuals) {
@@ -249,6 +251,9 @@ const ensureHorizonNode2026Styles = () => {
     style.id = id;
     document.head.appendChild(style);
   }
+  // Skip if already up-to-date (allows hot-reload updates without per-render thrash)
+  if ((style as any).dataset?.hznNode2026V === HZN_NODE_2026_CSS_VERSION) return;
+  (style as any).dataset.hznNode2026V = HZN_NODE_2026_CSS_VERSION;
   // Inject styles once
   style.textContent = `
     @keyframes hzn-spin {
@@ -269,6 +274,20 @@ const ensureHorizonNode2026Styles = () => {
          the card bounds (stack previews, bottom controls). paint would clip them. */
       contain: layout style;
     }
+
+    /* Stack controllers (containers): visually distinct from entity nodes.
+       Goal: fast role recognition without adding noisy chrome. */
+    .hzn-node-2026.is-stack {
+      /* Stack controllers (group-like nodes): calm, single-surface card.
+         No backplates, no inner chrome. Border width matches selected edge weight. */
+      border-radius: 14px;
+      border: 2px solid var(--hzn-stack-border, rgba(148,163,184,0.26));
+    }
+    .hzn-node-2026.is-stack::after { display: none; }
+    [data-theme="light"] .hzn-node-2026.is-stack {
+      border-color: rgba(100,116,139,0.26);
+    }
+    [data-theme="light"] .hzn-node-2026.is-stack::after { display: none; }
     /* Perf mode: disable all transitions and heavy effects for smoother pan/zoom on large graphs */
     :root[data-hzn-perf-mode="true"] .hzn-node-2026 {
       transition: none !important;
@@ -313,6 +332,10 @@ const ensureHorizonNode2026Styles = () => {
         radial-gradient(140px 80px at 18% 6%, var(--hzn-accent-soft) 0%, rgba(0,0,0,0) 70%),
         linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.00) 50%);
       opacity: 0.9;
+    }
+    /* Stack/group nodes must stay calm: solid fill, no top overlay gradients. */
+    :root[data-hzn-node-visuals="max"] .hzn-node-2026.is-stack::before {
+      display: none !important;
     }
     .hzn-node-2026.is-selected {
       box-shadow: 0 0 0 2px var(--hzn-accent-ring), 0 10px 28px rgba(0,0,0,0.18);
@@ -555,11 +578,11 @@ export const getEdgeColor = (edgeType: string | undefined): string => {
   return '#64748B';
 };
 
-const EdgeTypeIcon = ({ edgeType, color }: { edgeType: string; color: string }) => {
+const EdgeTypeIcon = ({ edgeType, color, size = 16 }: { edgeType: string; color: string; size?: number }) => {
   const et = (edgeType || '').toUpperCase().trim();
   const common = {
-    width: 16,
-    height: 16,
+    width: size,
+    height: size,
     viewBox: '0 0 24 24',
     fill: 'none',
     stroke: color,
@@ -801,17 +824,19 @@ const EdgeTypeIcon = ({ edgeType, color }: { edgeType: string; color: string }) 
     case 'RELATED_TO':
       return (
         <svg {...common}>
-          <circle cx="8" cy="12" r="3" />
-          <circle cx="16" cy="12" r="3" />
-          <path d="M11 12h2" />
+          <path d="M10 10a2.5 2.5 0 1 1-5 0a2.5 2.5 0 0 1 5 0z" />
+          <path d="M19 10a2.5 2.5 0 1 1-5 0a2.5 2.5 0 0 1 5 0z" />
+          <path d="M2.8 21a5.8 5.8 0 0 1 10.4 0" />
+          <path d="M10.8 21a5.8 5.8 0 0 1 10.4 0" />
         </svg>
       );
     case 'RELATIVE_OF':
       return (
         <svg {...common}>
-          <path d="M9 7a3 3 0 1 1 6 0" />
-          <path d="M7 21a5 5 0 0 1 10 0" />
-          <path d="M7.5 11.5c.8-1 2.2-1.8 4.5-1.8s3.7.8 4.5 1.8" />
+          <path d="M10 10a2.5 2.5 0 1 1-5 0a2.5 2.5 0 0 1 5 0z" />
+          <path d="M19 10a2.5 2.5 0 1 1-5 0a2.5 2.5 0 0 1 5 0z" />
+          <path d="M2.8 21a5.8 5.8 0 0 1 10.4 0" />
+          <path d="M10.8 21a5.8 5.8 0 0 1 10.4 0" />
         </svg>
       );
     case 'SIMILAR_TO':
@@ -923,7 +948,7 @@ const edgeCaptionShort = (raw: any): string => {
     PRODUCES: 'Produces',
     AUDITED_BY: 'Audited',
     RELATED_TO: 'Related',
-    RELATIVE_OF: 'Relative',
+    RELATIVE_OF: 'Relatives',
     SIMILAR_TO: 'Similar',
     LINKED_TO: 'Linked',
     // Location / context
@@ -1146,7 +1171,16 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         startX: number;
         dividerX?: number;
         blockW?: number;
-        relationBlocks?: Array<{ label: string; startX: number; blockW: number }>;
+        relationBlocks?: Array<{
+          label: string;
+          startX: number;
+          blockW: number;
+          dividerX?: number;
+          edgeTypeKey?: string;
+          nodeCount?: number;
+          collapsed?: boolean;
+          firstNodeId?: string;
+        }>;
         relationLabelY?: number;
       }>
     | undefined;
@@ -1307,6 +1341,30 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
           IMPORTANT: render even when there is only ONE type block (typeBlocks.length === 1). */}
       {showRelationBlocks && Array.isArray(typeBlocks) && (
         <>
+          {/* Subcategory dividers (between relation blocks): subtle, like type dividers but quieter (2025 UX). */}
+          {typeBlocks.flatMap((b, bIdx) => {
+            const rels = Array.isArray(b?.relationBlocks) ? (b.relationBlocks as any[]) : [];
+            if (!rels || rels.length <= 1) return [];
+            return rels
+              .map((rb: any, rIdx: number) => ({ rb, rIdx }))
+              .filter(({ rb }) => typeof rb?.dividerX === 'number')
+              .map(({ rb, rIdx }) => (
+                <div
+                  key={`rel-divider-${bIdx}-${rIdx}`}
+                  style={{
+                    position: 'absolute',
+                    left: rb.dividerX,
+                    top: 6,
+                    bottom: 6,
+                    width: 1,
+                    borderLeft: `1px dashed ${border}`,
+                    opacity: theme === 'dark' ? 0.18 : 0.14,
+                    pointerEvents: 'none',
+                  }}
+                />
+              ));
+          })}
+
           {typeBlocks.flatMap((b, bIdx) => {
             const rels = Array.isArray(b?.relationBlocks) ? b.relationBlocks : [];
             const y = typeof b?.relationLabelY === 'number' ? b.relationLabelY : undefined;
@@ -1315,6 +1373,13 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
               const left = typeof rb?.startX === 'number' ? rb.startX : (typeof b?.startX === 'number' ? b.startX : 12);
               const w = typeof rb?.blockW === 'number' ? rb.blockW : 80;
               const label = String(rb?.label || '').trim();
+              const edgeTypeKey = String((rb as any)?.edgeTypeKey || '').trim();
+              const firstNodeId = String((rb as any)?.firstNodeId || '').trim();
+              const groupIdForToggle = String((data as any)?.groupId || id).trim();
+              const canToggle = Boolean(edgeTypeKey && (data as any)?.onToggleSubcategoryCollapse);
+              const isCollapsed = Boolean((rb as any)?.collapsed);
+              const nodeCount = typeof (rb as any)?.nodeCount === 'number' ? (rb as any).nodeCount : undefined;
+              const showCollapsePill = Boolean(canToggle && !isCollapsed && typeof nodeCount === 'number' && nodeCount > 1);
               return (
                 <div
                   key={`rel-label-${bIdx}-${rIdx}`}
@@ -1323,21 +1388,71 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                     left,
                     top: y,
                     width: w,
+                    height: 16,
                     fontSize: 10,
                     fontWeight: 700,
                     color: subtitleColor,
                     textTransform: 'uppercase',
                     letterSpacing: '0.25px',
-                    textAlign: 'center',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
                     opacity: theme === 'dark' ? 0.55 : 0.60,
                     pointerEvents: 'none',
+                    lineHeight: '16px',
                   }}
                   title={label}
                 >
-                  {label}
+                  <span
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textAlign: 'center',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      paddingRight: showCollapsePill ? 34 : 0,
+                    }}
+                  >
+                    {label}
+                  </span>
+
+                  {/* Collapse control (only when expanded). Expand stays on the stack-controller node. */}
+                  {showCollapsePill && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        (data as any)?.onToggleSubcategoryCollapse?.(groupIdForToggle, edgeTypeKey, true, firstNodeId || undefined);
+                      }}
+                      aria-label={`Collapse ${label} (${nodeCount})`}
+                      title={`Collapse ${label} (${nodeCount})`}
+                      style={{
+                        pointerEvents: 'auto',
+                        position: 'absolute',
+                        right: 0,
+                        top: 0,
+                        height: 16,
+                        padding: '0 6px',
+                        borderRadius: 999,
+                        border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
+                        background: theme === 'dark' ? 'rgba(0,0,0,0.26)' : 'rgba(255,255,255,0.78)',
+                        color: subtitleColor,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        fontSize: 10,
+                        fontWeight: 850,
+                        lineHeight: 1,
+                      }}
+                    >
+                      <span>{nodeCount}</span>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 15l-6-6-6 6" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               );
             });
@@ -1534,7 +1649,6 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isUltimateBeneficiary = Boolean((data as any)?.ultimateBeneficiaryHighlight);
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
-  const canScopeScout = Boolean((isExpanded || data.loadRelatedAttempted) && data.onScopeScout && !data.scopeScoutDone);
   const isSelected = Boolean(selected);
   // Node expand/collapse (load related fragments). NOTE: stacks should not show this control:
   // the stack "N" pill controls stack expansion; node expansion is misleading on stack controllers.
@@ -1551,7 +1665,26 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const stackVisualType = String((data as any)?.stackVisualType || '').trim();
   const controllerId = String((data as any)?.stackControllerId || '').trim();
   const isStackController = Boolean(canToggleStack && controllerId && controllerId === String(data.id || '').trim());
+  // Scout CTA: normally shown only when the node is expanded (or user already attempted loading related).
+  // Exception: for RIGHT-PANE stacks, when the stack is expanded the controller node should still allow Scout,
+  // even if the node itself isn't expanded yet (otherwise the first visible item in an expanded stack feels "broken").
+  const allowScoutViaExpandedStack = Boolean(isStackController && stackExpanded && String((data as any)?.levelsPane || '') === 'right');
+  const canScopeScout = Boolean((isExpanded || data.loadRelatedAttempted || allowScoutViaExpandedStack) && data.onScopeScout && !data.scopeScoutDone);
   const isCollapsedStackController = Boolean(isStackController && !stackExpanded && (stackCount || 0) > 1);
+  const isSubcategoryStackController = Boolean(isCollapsedStackController && (data as any)?.subcategoryStack);
+  const subcategoryEdgeType =
+    isSubcategoryStackController
+      ? (
+          String((data as any)?.subcategoryEdgeType || '').trim() ||
+          // Fallback: parse from stackGroupKey like `levels:leftsubcat:${groupId}:${typeKey}:${relKey}`
+          (() => {
+            const raw = String((data as any)?.stackGroupKey || '').trim();
+            const parts = raw ? raw.split(':') : [];
+            const last = parts.length > 0 ? parts[parts.length - 1] : '';
+            return String(last || '').trim();
+          })()
+        )
+      : '';
   const canCollapse = canCollapse0 && !isStackController;
   const showExpand = showExpand0 && !isStackController;
   const canExpandClick = Boolean(showExpand && !isLoadingRelated);
@@ -1613,13 +1746,19 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const accentColor = isCritical ? '#EF4444' : (colorsForVisual?.accent || colors.accent);
   const textColor = theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.88)';
   const mutedTextColor = theme === 'dark' ? 'rgba(255,255,255,0.62)' : 'rgba(15,23,42,0.56)';
-  // Premium stack controllers: slightly richer surface, consistent with palette.
+  // Stack controllers: calm single-surface fill (no gradients).
   const surfaceBg = isCollapsedStackController
     ? (theme === 'dark' ? 'rgba(17,24,39,0.94)' : 'rgba(255,255,255,0.98)')
     : (theme === 'dark' ? 'rgba(17,24,39,0.90)' : 'rgba(255,255,255,0.96)');
   const surfaceBorder = isCollapsedStackController
-    ? (theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)')
+    ? (theme === 'dark' ? 'rgba(148,163,184,0.28)' : 'rgba(100,116,139,0.24)') // light graphite
     : (theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)');
+  const stackBorderColor =
+    isCollapsedStackController
+      ? (isSubcategoryStackController
+          ? getEdgeColor(subcategoryEdgeType || 'RELATED_TO')
+          : accentColor)
+      : surfaceBorder;
   const accentSoft = hexToRgba(accentColor, theme === 'dark' ? 0.22 : 0.16);
   const accentRing = hexToRgba(accentColor, theme === 'dark' ? 0.55 : 0.34);
   const shadowBase = theme === 'dark' ? '0 8px 22px rgba(0,0,0,0.30)' : '0 8px 22px rgba(0,0,0,0.10)';
@@ -1863,13 +2002,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       )}
 
       <div
-        className={`hzn-node-2026 ${isSelected ? 'is-selected' : ''}`}
+        className={`hzn-node-2026 ${isSelected ? 'is-selected' : ''} ${isCollapsedStackController ? 'is-stack' : ''}`}
         onMouseEnter={() => setIsHovering(true)}
         onMouseLeave={() => setIsHovering(false)}
         style={{
           // CSS variables for 2026 styles
           ['--hzn-surface' as any]: surfaceBg,
           ['--hzn-border' as any]: surfaceBorder,
+          ['--hzn-stack-border' as any]: stackBorderColor,
           ['--hzn-accent' as any]: accentColor,
           ['--hzn-accent-soft' as any]: accentSoft,
           ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,
@@ -1889,34 +2029,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           overflow: 'visible',
         }}
       >
-      {/* Stacked-node visual (collapsed): show 2-3 "cards" peeking from underneath */}
-      {stackLayers > 0 && (
-        <>
-          {Array.from({ length: stackLayers }).map((_, idx) => {
-            const layer = stackLayers - idx; // farthest first
-            const dy = layer * 8;
-            const dx = layer * 2;
-            return (
-              <div
-                key={`hzn-stack-layer-${layer}`}
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  transform: `translate(${dx}px, ${dy}px)`,
-                  borderRadius: 16,
-                  background: theme === 'dark' ? 'rgba(17,24,39,0.62)' : 'rgba(255,255,255,0.78)',
-                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.10)'}`,
-                  boxShadow: theme === 'dark'
-                    ? '0 10px 22px rgba(0,0,0,0.16)'
-                    : '0 10px 22px rgba(0,0,0,0.06)',
-                  pointerEvents: 'none',
-                  zIndex: -(idx + 1),
-                }}
-              />
-            );
-          })}
-        </>
-      )}
+      {/* Stack controllers are now rendered as a single calm surface (no backplates). */}
 
       {/* Top handles: 2 handles для верхней группы (supply-chain) */}
       <Handle
@@ -2045,11 +2158,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           <div
             style={{
               position: 'absolute',
-              inset: '12px 14px 20px 14px',
+              // Align the main icon top with the stack badge top-right.
+              inset: '10px 16px 30px 16px',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center',
+              justifyContent: 'flex-start',
               textAlign: 'center',
               gap: 8,
               pointerEvents: 'none',
@@ -2066,13 +2180,23 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                 alignItems: 'center',
                 justifyContent: 'center',
                 // Keep the badge away from the card's rounded border (stack controllers have stacked backplates).
-                marginTop: 2,
+                marginTop: 0,
                 boxShadow: theme === 'dark'
                   ? `0 14px 30px rgba(0,0,0,0.22), inset 0 0 0 1px ${hexToRgba(accentColor, 0.18)}`
                   : `0 14px 30px rgba(0,0,0,0.10), inset 0 0 0 1px ${hexToRgba(accentColor, 0.12)}`,
               }}
             >
-              <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
+              {isSubcategoryStackController ? (
+                <div style={{ transform: 'translateY(-1px)' }}>
+                  <EdgeTypeIcon
+                    edgeType={subcategoryEdgeType || 'RELATED_TO'}
+                    color={getEdgeColor(subcategoryEdgeType || 'RELATED_TO')}
+                    size={16}
+                  />
+                </div>
+              ) : (
+                <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
+              )}
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, width: '100%' }}>
@@ -2126,7 +2250,44 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               zIndex: 3,
             }}
           >
-            {canTogglePin && (
+            {/* Stack indicator: strict top-right position (same slot as Pin on regular nodes). */}
+            {isCollapsedStackController && (
+              <div
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 8,
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                  background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                  color: theme === 'dark' ? 'rgba(255,255,255,0.75)' : 'rgba(15,23,42,0.70)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                  pointerEvents: 'none',
+                }}
+                title="Stack"
+                aria-hidden="true"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M12 2 2 7l10 5 10-5-10-5z" />
+                  <path d="M2 17l10 5 10-5" />
+                  <path d="M2 12l10 5 10-5" />
+                </svg>
+              </div>
+            )}
+
+            {/* Pin is not shown for subcategory stacks */}
+            {canTogglePin && !isCollapsedStackController && !isSubcategoryStackController && (
               <button
                 type="button"
                 onClick={(e) => {
@@ -2236,7 +2397,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           
           {/* Right-side actions / indicators */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            {canTogglePin && (
+            {/* Pin is not shown for subcategory stacks */}
+            {canTogglePin && !isSubcategoryStackController && (
               <button
                 type="button"
                 onClick={(e) => {
@@ -2299,7 +2461,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       )}
 
       {/* Expand / collapse moved to bottom-right (less intrusive; more discoverable near content). */}
-      {(showExpand || canCollapse) && (
+      {(showExpand || canCollapse || (isSubcategoryStackController && canToggleStack)) && (
         <div
           style={{
             position: 'absolute',
@@ -2311,6 +2473,40 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             zIndex: 2,
           }}
         >
+          {isSubcategoryStackController && canToggleStack && typeof stackCount === 'number' && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const cb = (data as any)?.onToggleStack as ((k: string, next: boolean) => void) | undefined;
+                cb?.(stackKey, true);
+              }}
+              aria-label={`Expand ${stackTitle || displayLabel} (${stackCount})`}
+              title={`Expand ${stackTitle || displayLabel} (${stackCount})`}
+              style={{
+                minWidth: 28,
+                height: 22,
+                padding: '0 8px',
+                borderRadius: 11,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.22)' : 'rgba(15,23,42,0.16)'}`,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.82)',
+                color: theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.82)',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 850,
+                lineHeight: 1,
+                boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.25)' : '0 8px 18px rgba(0,0,0,0.12)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+              <span>{stackCount}</span>
+            </button>
+          )}
           {showExpand && (
             <button
               type="button"
@@ -2411,7 +2607,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       )}
 
       {/* Stack toggle: sits just below the node, pairs with the stacked-card visual cue */}
-      {canToggleStack && (
+      {canToggleStack && !isSubcategoryStackController && (
         <button
           type="button"
           onClick={(e) => {

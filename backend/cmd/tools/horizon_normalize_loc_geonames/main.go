@@ -759,6 +759,42 @@ func mergeFragmentData(target, source *hmodels.HorizonFragment) bool {
 		changed = true
 	}
 
+	// Merge OrgSize: fill if target is empty/unknown ("na")
+	if strings.TrimSpace(source.OrgSize) != "" {
+		cur := strings.TrimSpace(strings.ToLower(target.OrgSize))
+		in := strings.TrimSpace(source.OrgSize)
+		if cur == "" || cur == "na" {
+			target.OrgSize = in
+			changed = true
+		}
+	}
+
+	// Merge MarketSegments: union + dedup
+	if len(source.MarketSegments) > 0 {
+		if target.MarketSegments == nil {
+			target.MarketSegments = make([]string, 0, len(source.MarketSegments))
+		}
+		seen := make(map[string]bool)
+		for _, s := range target.MarketSegments {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				seen[s] = true
+			}
+		}
+		for _, s := range source.MarketSegments {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if seen[s] {
+				continue
+			}
+			seen[s] = true
+			target.MarketSegments = append(target.MarketSegments, s)
+			changed = true
+		}
+	}
+
 	// Audit trail
 	if strings.TrimSpace(source.CanonicalPath) != "" {
 		if target.Identifiers["merged_paths"] == "" {

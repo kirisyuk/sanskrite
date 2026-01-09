@@ -339,8 +339,17 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - sectorPath: Must match the provided sector path
    - legalName: The legal/official name of the entity, INCLUDING the form of ownership when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC, etc.)
    - shortName: The base name WITHOUT the form of ownership (used for canonicalPath slugging)
-   - marketSegments: Array of canonical segment paths where this organization/facility operates (see /segment/... rules below)
-   - orgSize: Organization size bucket: "sme" | "le" | "enterprise" | "mega" | "na"
+   - marketSegments: IMPORTANT for ORG/FACILITY. Array of canonical segment paths /segment/{domain}/{vertical}/{geo}.
+     Examples: /segment/finance/retail-banking/global, /segment/technology/semiconductors/us, /segment/industrial/ev-batteries/cn
+     Domains: finance, technology, industrial, consumer, healthcare, energy, materials, telecom, real-estate, etc.
+     geo: ISO2 lowercase (us, cn, de, jp) or "global"
+   - orgSize: IMPORTANT for ORG. Organization size bucket based on employees/revenue/assets:
+     - "sme": Small/Medium Enterprise (<500 employees or <$100M revenue)
+     - "le": Large Enterprise (500-5000 employees or $100M-$1B revenue)
+     - "enterprise": Major Enterprise (5000-50000 employees or $1B-$10B revenue)
+     - "mega": Mega Corporation (>50000 employees or >$10B revenue)
+     - "na": Cannot determine from available information
+     ALWAYS attempt to classify; use "na" only if truly unknown.
    - state: Map of metrics (operational_health, capacity_utilization, etc.) with MetricValue objects
    - description: Brief description of the entity
    - homeLocation: Location object with ISO standards if available

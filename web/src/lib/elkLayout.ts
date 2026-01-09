@@ -958,11 +958,32 @@ export async function layoutLevelsTwoPane<T = any>(
     nodeHeight = DEFAULT_NODE_HEIGHT,
     nodeSpacing = 60,
     layerSpacing = 150,
+    collapsedSubcategories = new Set<string>(),
+    onToggleSubcategoryCollapse,
   } = options;
 
   if (!nodes || nodes.length === 0) return nodes;
 
   const isGroup = (n: Node<T>) => Boolean((n.data as any)?.isGroup);
+
+  // Helper to check if a subcategory (edge type) is collapsed for a given group.
+  // Supports both per-group state (`groupId:edgeType`) and global defaults (`edgeType`).
+  // Also supports explicit expand markers (`groupId:edgeType:expanded`) to override defaults.
+  const isSubcategoryCollapsed = (groupId: string, edgeType: string): boolean => {
+    const perGroupKey = `${groupId}:${edgeType}`;
+    const expandedKey = `${perGroupKey}:expanded`;
+    // Explicit expand marker overrides everything (including defaults).
+    if (collapsedSubcategories.has(expandedKey)) return false;
+    // Explicit collapse marker
+    if (collapsedSubcategories.has(perGroupKey)) return true;
+    // Check global default (edge type alone)
+    if (collapsedSubcategories.has(edgeType)) return true;
+    // Check default-collapsed edge types (e.g., RELATIVE_OF)
+    if (DEFAULT_COLLAPSED_EDGE_TYPES.has(normalizeEdgeType(edgeType))) {
+        return true;
+    }
+    return false;
+  };
 
   // Strip any prior grouping from fragment nodes (ReactFlow parent linkage must be rebuilt deterministically).
   const fragments: Node<T>[] = nodes
@@ -973,6 +994,11 @@ export async function layoutLevelsTwoPane<T = any>(
       delete out.parentNode;
       delete out.extent;
       delete out.expandParent;
+      // Derived hiding (hiddenByStack) must NOT be treated as manual hidden across relayouts.
+      // Clear stale `hidden` so the current collapse state can decide visibility deterministically.
+      if (Boolean(out.hidden) && Boolean((out?.data as any)?.hiddenByStack)) {
+        delete out.hidden;
+      }
       return out as Node<T>;
     });
 
@@ -1382,10 +1408,26 @@ export async function layoutLevelsTwoPane<T = any>(
   type RelBlock<TNode = any> = {
     edgeTypeKey: string;
     label: string;
+    /**
+     * Nodes that are actually laid out in the grid for this subcategory.
+     * If collapsed: contains ONLY the chosen controller node.
+     */
     nodes: Node<TNode>[];
     cols: number;
     startX: number;
     blockW: number;
+    /** Total node count (even when collapsed, we need to show "N items"). */
+    nodeCount: number;
+    /** Whether this subcategory is collapsed (renders as a stack-controller node). */
+    collapsed: boolean;
+    /** First node id in this subcategory (stable ordering, used for focus rules). */
+    firstNodeId?: string;
+    /** If collapsed, all other member node IDs that are hidden under the controller. */
+    hiddenMemberIds?: string[];
+    /** If collapsed, the chosen controller node id. */
+    controllerId?: string;
+    /** If collapsed, stable key used for stack-proxy edge generation. */
+    stackKey?: string;
   };
   type TypeBlock<TNode = any> = {
     typeKey: string;
@@ -1395,6 +1437,10 @@ export async function layoutLevelsTwoPane<T = any>(
     blockW: number;
     relBlocks: RelBlock<TNode>[];
   };
+
+  // Default-collapsed edge types (subcategories that start collapsed by default).
+  // "Relatives" + "Related" are often secondary info and can be very noisy in the left pane.
+  const DEFAULT_COLLAPSED_EDGE_TYPES = new Set(['RELATIVE_OF', 'RELATED_TO']);
 
   const edgeTypeCaptionShortLocal = (raw: any): string => {
     const t = normalizeEdgeType(String(raw || '').trim());
@@ -1414,7 +1460,7 @@ export async function layoutLevelsTwoPane<T = any>(
       EXECUTIVE_OF: 'Executive',
       // UX copy: for an auditor node, these are audited entities (clients), not "audited by".
       AUDITED_BY: 'Audit clients',
-      RELATIVE_OF: 'Relative',
+      RELATIVE_OF: 'Relatives',
       RELATED_TO: 'Related',
       SUPPLIES_TO: 'Supplies',
       PRODUCES: 'Produces',
@@ -1442,7 +1488,7 @@ export async function layoutLevelsTwoPane<T = any>(
     return human.length > 18 ? `${human.slice(0, 18)}…` : human;
   };
 
-  const groupDimsWrap = (children: Node<T>[], parentId: string) => {
+  const groupDimsWrap = (children: Node<T>[], parentId: string, groupId?: string) => {
     // IMPORTANT: group grid must be computed from VISIBLE children only.
     // If we include `hidden` nodes (e.g. local relation filters), we can end up reserving empty rows/slots.
     const safeChildren = Array.isArray(children)
@@ -1464,14 +1510,18 @@ export async function layoutLevelsTwoPane<T = any>(
       };
     }
 
+    // Use provided groupId or construct a default one for collapse state lookup.
+    const effectiveGroupId = groupId || `levels:left:${parentId}:down`;
+
     // Row policy is applied PER TYPE BLOCK (otherwise splitting into types can create "empty rows").
+    // 2026 UX: cap at 2 rows max — 3 rows make groups too tall on laptops.
     const rowsForCount = (cnt: number): number => {
       const c = Math.max(0, Math.floor(cnt || 0));
       // UX: for small groups (<5 items) always keep a single row to avoid wasting vertical space.
       if (c <= 0) return 1;
       if (c <= 4) return 1;
-      if (c <= 12) return 2;
-      return 3;
+      // Cap at 2 rows for better UX on smaller screens
+      return 2;
     };
     const useRelGrouping = safeCount > 4;
 
@@ -1560,14 +1610,18 @@ export async function layoutLevelsTwoPane<T = any>(
           byRel.set(rel, arr);
         }
         // Auto-shrink rows if the "last row" would be entirely empty in this type block.
-        // Example: ORG block has many nodes overall (so rowsForCount => 2),
-        // but split by relation into many 1-node sub-blocks => second row is unused.
+        // IMPORTANT: compute this from VISIBLE sizes:
+        // - if a relation subcategory is collapsed, it occupies 1 slot (controller) even if it has many members.
         const baseRowsForType = rowsForCount(list.length);
-        let maxRelSize = 1;
-        for (const v of byRel.values()) {
-          maxRelSize = Math.max(maxRelSize, (v || []).length);
+        let maxRelSizeVisible = 1;
+        for (const [rk, v] of byRel.entries()) {
+          const relKey = String(rk || '').trim();
+          const nodesRel = (v || []);
+          const collapsed = isSubcategoryCollapsed(effectiveGroupId, relKey) && nodesRel.length > 1;
+          const visibleSize = collapsed ? 1 : nodesRel.length;
+          maxRelSizeVisible = Math.max(maxRelSizeVisible, Math.max(1, visibleSize));
         }
-        const rowsForType = Math.max(1, Math.min(baseRowsForType, maxRelSize));
+        const rowsForType = Math.max(1, Math.min(baseRowsForType, maxRelSizeVisible));
         const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
         maxInnerH = Math.max(maxInnerH, innerHForType);
         maxRows = Math.max(maxRows, rowsForType);
@@ -1587,15 +1641,37 @@ export async function layoutLevelsTwoPane<T = any>(
             const bl = String((b.data as any)?.label || b.id);
             return al.localeCompare(bl);
           });
-          const cols = Math.ceil(nodesRel.length / Math.max(1, rowsForType));
+
+          // Subcategory collapse is STRUCTURAL:
+          // - If collapsed: only ONE controller node participates in the grid.
+          // - Other members are hiddenByStack and their edges will be proxied via stackproxy edges.
+          const collapsed = isSubcategoryCollapsed(effectiveGroupId, relKey) && nodesRel.length > 1;
+          const controller = nodesRel[0];
+          const hiddenMemberIds = collapsed
+            ? nodesRel.slice(1).map((n) => String(n.id || '').trim()).filter(Boolean)
+            : [];
+          const nodesForLayout = collapsed ? (controller ? [controller] : []) : nodesRel;
+
+          const cols = collapsed ? 1 : Math.ceil(nodesForLayout.length / Math.max(1, rowsForType));
           const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+
+          const controllerId = collapsed ? String(controller?.id || '').trim() : undefined;
+          const firstNodeId = String(nodesRel[0]?.id || '').trim() || controllerId;
+          const stackKey = collapsed ? `levels:leftsubcat:${effectiveGroupId}:${typeKey}:${relKey}` : undefined;
+
           relBlocks.push({
             edgeTypeKey: relKey,
             label: edgeTypeCaptionShortLocal(relKey),
-            nodes: nodesRel,
+            nodes: nodesForLayout,
             cols,
             startX: relCursor,
             blockW,
+            nodeCount: nodesRel.length,
+            collapsed,
+            firstNodeId,
+            hiddenMemberIds: collapsed ? hiddenMemberIds : undefined,
+            controllerId,
+            stackKey,
           });
           relColsTotal += cols;
           relCursor += blockW;
@@ -1625,6 +1701,8 @@ export async function layoutLevelsTwoPane<T = any>(
           cols,
           startX: 0,
           blockW,
+          nodeCount: nodesFlat.length,
+          collapsed: false, // Non-grouped blocks are never collapsed
         });
         totalCols += cols;
         blocks.push({ typeKey, rows: rowsForType, cols, startX: cursorX, blockW, relBlocks });
@@ -2074,12 +2152,22 @@ export async function layoutLevelsTwoPane<T = any>(
   // === 6) Build group containers (Downstream only) + attach children ===
   const groupNodes: Node<T>[] = [];
   const childNodes: Node<T>[] = [];
+  const nodeById = new Map<string, Node<T>>();
+  for (const n of fragments) nodeById.set(String(n.id || '').trim(), n);
 
   const attachChildrenWrap = (
     blocks: TypeBlock<T>[],
     groupId: string,
     rows: number,
+    groupParentId: string,
   ) => {
+    const pNode = nodeById.get(String(groupParentId || '').trim());
+    const pData: any = (pNode as any)?.data || {};
+    const parentLabel =
+      String(pData?.label || '').trim() ||
+      String(pData?.canonicalPath || '').trim() ||
+      String(groupParentId || '').trim();
+
     for (const b of blocks) {
       const safeRows = Math.max(1, Math.floor((b as any)?.rows || rows || 1));
       for (const rb of (b.relBlocks || [])) {
@@ -2090,16 +2178,84 @@ export async function layoutLevelsTwoPane<T = any>(
       const colIdx = Math.floor(idx / safeRows);
           const cx = PAD_X + b.startX + rb.startX + colIdx * (nodeWidth + groupChildGapX);
       const cy = PAD_TOP + rowIdx * (nodeHeight + groupChildGapY);
-      childNodes.push({
-        ...(child as any),
-        parentId: groupId,
-        extent: 'parent' as any,
-        zIndex: 1,
-            // Preserve manual/UX-driven hidden state across relayouts (e.g., local relation filters).
-            // NOTE: we explicitly do NOT treat hiddenByStack as manual (handled separately).
+          const isCollapsed = Boolean((rb as any)?.collapsed);
+          const controllerId = String((rb as any)?.controllerId || '').trim();
+          const stackKey = String((rb as any)?.stackKey || '').trim();
+          const edgeTypeKey = String((rb as any)?.edgeTypeKey || '').trim();
+          const nodeCount = typeof (rb as any)?.nodeCount === 'number' ? (rb as any).nodeCount : (rb.nodes?.length || 0);
+          const isController = Boolean(isCollapsed && controllerId && String(child.id || '').trim() === controllerId);
+
+          const d0: any = (child as any)?.data || {};
+          const d: any = { ...d0 };
+          // Clear stale stack fields; collapse state will be re-applied deterministically.
+          delete d.hiddenByStack;
+          delete d.stackGroupKey;
+          delete d.stackCount;
+          delete d.stackExpanded;
+          delete (d as any).stackControllerId;
+          delete (d as any).subcategoryStack;
+          delete d.onToggleStack;
+          delete d.stackTitle;
+          delete d.stackSubtitle;
+
+          if (isController && isCollapsed && stackKey && edgeTypeKey && nodeCount > 1) {
+            d.stackGroupKey = stackKey;
+            d.stackCount = nodeCount;
+            d.stackExpanded = false;
+            (d as any).stackControllerId = controllerId;
+            (d as any).subcategoryEdgeType = edgeTypeKey;
+            // UX copy (category-first): title = relation label, subtitle = parent object.
+            // Keep it scannable and consistent with other stacks.
+            d.stackTitle = String((rb as any)?.label || edgeTypeKey || 'Related').trim();
+            d.stackSubtitle = parentLabel;
+            (d as any).subcategoryStack = true;
+            if (typeof onToggleSubcategoryCollapse === 'function') {
+              d.onToggleStack = (_k: string, nextExpanded: boolean) => {
+                // Focus rule:
+                // - Expanding: focus the first node of the subcategory (this controller id).
+                // - Collapsing: focus the stack controller node (same id after relayout).
+                onToggleSubcategoryCollapse(groupId, edgeTypeKey, !nextExpanded, controllerId);
+              };
+            }
+          }
+
+          childNodes.push({
+            ...(child as any),
+            parentId: groupId,
+            extent: 'parent' as any,
+            zIndex: 1,
+            // Preserve manual hidden state; derived stack hiding is applied below.
             hidden: preHiddenIds.has(child.id) || Boolean((child as any).hidden),
-        position: { x: cx, y: cy },
-      } as any);
+            data: d,
+            position: { x: cx, y: cy },
+          } as any);
+
+          // If collapsed: add hidden stack members so LensCanvasCockpit can generate stackproxy edges.
+          if (isController && isCollapsed && Array.isArray((rb as any)?.hiddenMemberIds) && (rb as any)?.hiddenMemberIds?.length) {
+            const hiddenIds = ((rb as any).hiddenMemberIds as any[])
+              .map((x) => String(x || '').trim())
+              .filter(Boolean);
+            for (const hid of hiddenIds) {
+              const member = nodeById.get(hid);
+              if (!member) continue;
+              const md0: any = (member as any)?.data || {};
+              const md: any = { ...md0 };
+              md.stackGroupKey = stackKey;
+              md.stackCount = nodeCount;
+              md.stackExpanded = false;
+              md.hiddenByStack = true;
+              (md as any).stackControllerId = controllerId;
+              childNodes.push({
+                ...(member as any),
+                parentId: groupId,
+                extent: 'parent' as any,
+                zIndex: 0,
+                hidden: true,
+                data: md,
+                position: { x: cx, y: cy },
+              } as any);
+            }
+          }
         }
       }
     }
@@ -2128,12 +2284,20 @@ export async function layoutLevelsTwoPane<T = any>(
 
   for (const rn of rightSorted) {
     const allChildren = downstreamByRight.get(rn.id) || [];
-    // Build groups only from visible children; hidden ones shouldn't reserve layout space.
-    const children = allChildren.filter((c) => !preHiddenIds.has(c.id) && !Boolean((c as any).hidden));
+    // Build groups from children excluding MANUAL hidden.
+    // Derived hiddenByStack should still participate (ports/edgeTypes), but must not reserve layout space
+    // (handled by groupDimsWrap + attachChildrenWrap which lay out only the controller when collapsed).
+    const children = allChildren.filter((c) => {
+      if (preHiddenIds.has(c.id)) return false;
+      const d: any = (c as any)?.data || {};
+      const isDerivedStackHidden = Boolean(d.hiddenByStack);
+      if (Boolean((c as any).hidden) && !isDerivedStackHidden) return false;
+      return true;
+    });
     if (children.length === 0) continue;
     const rp = rightPos.get(rn.id)!;
-    const dim = groupDimsWrap(children, rn.id);
     const groupId = `levels:left:${rn.id}:down`;
+    const dim = groupDimsWrap(children, rn.id, groupId);
     const gx = leftBandRightX - dim.w;
 
     const nodeCenterY = rp.y + nodeHeight / 2;
@@ -2440,17 +2604,39 @@ export async function layoutLevelsTwoPane<T = any>(
             const dividerX = hasNext ? (endX + gapX) : undefined;
             const relBlocks = Array.isArray((b as any)?.relBlocks) ? ((b as any).relBlocks as any[]) : [];
             const relationBlocks =
-              relBlocks.length > 1
-                ? relBlocks.map((rb: any) => {
+              relBlocks.length > 0
+                ? relBlocks.map((rb: any, rIdx: number) => {
                     const rbStart = Math.max(0, Math.floor(rb?.startX || 0));
                     const rbW = Math.max(1, Math.floor(rb?.blockW || 0));
                     const edgeTypeKey = String(rb?.edgeTypeKey || '').trim();
                     const relLabel = String(rb?.label || edgeTypeKey || '').trim();
-                    return { label: relLabel, startX: startX + rbStart, blockW: rbW };
+                    const nodeCount = typeof rb?.nodeCount === 'number' ? rb.nodeCount : (rb?.nodes?.length || 0);
+                    const collapsed = Boolean(rb?.collapsed);
+                    const firstNodeId = String((rb as any)?.firstNodeId || '').trim();
+                    const next = relBlocks[rIdx + 1];
+                    const nextStart = next ? Math.max(0, Math.floor(next?.startX || 0)) : undefined;
+                    // Divider between subcategories (center of the gap).
+                    const dividerX =
+                      typeof nextStart === 'number'
+                        ? (startX + Math.floor(((rbStart + rbW) + nextStart) / 2))
+                        : undefined;
+                    return {
+                      label: relLabel,
+                      startX: startX + rbStart,
+                      blockW: rbW,
+                      edgeTypeKey,
+                      nodeCount,
+                      collapsed,
+                      firstNodeId,
+                      dividerX,
+                    };
                   })
                 : undefined;
             return { typeKey, label, blockW, startX, dividerX, relationBlocks, relationLabelY: g.relLabelY };
           }),
+        // Callback to toggle subcategory collapse state.
+        onToggleSubcategoryCollapse,
+        groupId: g.groupId,
         // Ports for aggregated edges (one per edge type).
         groupEdgePorts,
         groupParentId: g.parentId,
@@ -2467,7 +2653,7 @@ export async function layoutLevelsTwoPane<T = any>(
       } as any,
     } as any);
 
-    attachChildrenWrap(g.blocks, g.groupId, g.rows);
+    attachChildrenWrap(g.blocks, g.groupId, g.rows, g.parentId);
   }
 
   // Lens focus objects: far-right group for pinned, disconnected nodes (degree=0).
@@ -3305,6 +3491,17 @@ export interface LayoutOptions_Custom {
   maxNodesPerRow?: number;
   /** Maximum number of rows for children (default 3) */
   maxChildRows?: number;
+  /**
+   * Collapsed subcategories in left-pane groups (Levels layout).
+   * Key format: `${groupId}:${edgeType}` for per-group state, or just `edgeType` for global default.
+   * When an edge type is in this set, its nodes in the group are rendered as a compact stack.
+   */
+  collapsedSubcategories?: Set<string>;
+  /**
+   * Callback to toggle subcategory collapse state (Levels layout).
+   * Called from group UI when user clicks the collapse/expand button.
+   */
+  onToggleSubcategoryCollapse?: (groupId: string, edgeType: string, nextCollapsed: boolean, focusNodeId?: string) => void;
 }
 
 /**

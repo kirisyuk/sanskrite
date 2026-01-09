@@ -36,6 +36,14 @@ class ApiClient {
         return response;
       },
       (error) => {
+        // Ignore user-initiated cancellations (typeahead AbortController, route changes, etc.)
+        // Otherwise we incorrectly flip the global "server unavailable" banner during normal UX.
+        if (axios.isCancel(error) || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || error?.name === 'AbortError') {
+          return Promise.reject(error);
+        }
+
+        const url = String(error?.config?.url || '');
+
         // Check if it's a network error (CORS, server down, etc.)
         if (!error.response) {
           // Network error - no response from server
@@ -43,6 +51,10 @@ class ApiClient {
             useServerStatusStore.getState().setServerUnavailable('Server is temporarily unavailable. Please try again later.');
           }).catch(() => {});
         } else if (error.response.status >= 500) {
+          // Best-effort endpoints (autocomplete/prefetch) shouldn't mark the whole server as unavailable.
+          if (url.includes('/api/horizon/entities/search')) {
+            return Promise.reject(error);
+          }
           // Server error (5xx)
           import('../stores/serverStatusStore').then(({ useServerStatusStore }) => {
             useServerStatusStore.getState().setServerUnavailable('Server error. Please try again later.');

@@ -692,6 +692,42 @@ func mergeOrg(dst *horizonmodels.HorizonFragment, src *horizonmodels.HorizonFrag
 		}
 	}
 
+	// Merge OrgSize: fill if target is empty/unknown ("na")
+	if strings.TrimSpace(src.OrgSize) != "" {
+		cur := strings.TrimSpace(strings.ToLower(dst.OrgSize))
+		in := strings.TrimSpace(src.OrgSize)
+		if cur == "" || cur == "na" {
+			dst.OrgSize = in
+			changed = true
+		}
+	}
+
+	// Merge MarketSegments: union + dedup
+	if len(src.MarketSegments) > 0 {
+		if dst.MarketSegments == nil {
+			dst.MarketSegments = make([]string, 0, len(src.MarketSegments))
+		}
+		seen := make(map[string]bool)
+		for _, s := range dst.MarketSegments {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				seen[s] = true
+			}
+		}
+		for _, s := range src.MarketSegments {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if seen[s] {
+				continue
+			}
+			seen[s] = true
+			dst.MarketSegments = append(dst.MarketSegments, s)
+			changed = true
+		}
+	}
+
 	return changed
 }
 

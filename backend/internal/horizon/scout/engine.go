@@ -459,7 +459,7 @@ func NewScoutEngine(
 	aiExecutor *ai.AITaskExecutor,
 ) *ScoutEngine {
 	geoBuilder := NewGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
-	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil)     // WikidataClient set via WithWikidataClient
+	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil)       // WikidataClient set via WithWikidataClient
 	personDedup := NewPersonDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
 	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
 	productDedup := NewProductDeduplicator(fragmentsRepo, nil)                    // WikidataClient set via WithWikidataClient
@@ -1984,6 +1984,41 @@ SKIP_RESEARCH:
 	} else {
 		// Обновляем существующий фрагмент
 		existingFragment.State = extractedFragment.State
+
+		// Merge OrgSize: fill if existing is empty/unknown ("na")
+		if strings.TrimSpace(extractedFragment.OrgSize) != "" {
+			cur := strings.TrimSpace(strings.ToLower(existingFragment.OrgSize))
+			in := strings.TrimSpace(extractedFragment.OrgSize)
+			if cur == "" || cur == "na" {
+				existingFragment.OrgSize = in
+			}
+		}
+
+		// Merge MarketSegments: union + dedup
+		if len(extractedFragment.MarketSegments) > 0 {
+			if existingFragment.MarketSegments == nil {
+				existingFragment.MarketSegments = make([]string, 0, len(extractedFragment.MarketSegments))
+			}
+			seen := make(map[string]bool)
+			for _, s := range existingFragment.MarketSegments {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					seen[s] = true
+				}
+			}
+			for _, s := range extractedFragment.MarketSegments {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					continue
+				}
+				if seen[s] {
+					continue
+				}
+				seen[s] = true
+				existingFragment.MarketSegments = append(existingFragment.MarketSegments, s)
+			}
+		}
+
 		// Best-effort: normalize display label on update as well (helps fix older lowercase-only stubs over time).
 		if existingFragment.Labels == nil {
 			existingFragment.Labels = map[string]string{}

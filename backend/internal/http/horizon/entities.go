@@ -44,11 +44,20 @@ func (h *HorizonHandlers) SearchEntities(w http.ResponseWriter, r *http.Request)
 		req.Limit = 50
 	}
 
-	// Выполняем семантический поиск через Vertex AI Search
+	// Выполняем семантический поиск через Vertex AI Search.
+	// Best-effort: on failures (Vertex down, Firestore missing index, etc.) return empty list
+	// instead of 500 to avoid flipping "server unavailable" banners in the UI during typeahead.
 	fragments, err := h.service.SearchFragments(r.Context(), req.Query, req.Limit)
 	if err != nil {
-		log.Printf("[SearchEntities] Search failed: %v", err)
-		http.Error(w, "Search failed: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[SearchEntities] Search failed (returning empty): %v", err)
+		// Return empty result set instead of 500 for graceful degradation.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"entities": []map[string]interface{}{},
+			"total":    0,
+			"query":    req.Query,
+			"error":    "search temporarily unavailable",
+		})
 		return
 	}
 
