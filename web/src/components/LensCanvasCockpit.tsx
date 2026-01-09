@@ -514,6 +514,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
+  // Risk Shield (8-segment overlay around a node) — single active node at a time.
+  const [riskShieldActiveNodeId, setRiskShieldActiveNodeId] = React.useState<string | null>(null);
+  const toggleRiskShield = React.useCallback((fragmentId: string) => {
+    const id = String(fragmentId || '').trim();
+    if (!id) return;
+    setRiskShieldActiveNodeId((prev) => (String(prev || '').trim() === id ? null : id));
+  }, []);
   // Levels Two-Pane: click on a left group ("aggregated node") should reveal real parent<->child edges.
   const [selectedLevelsAggGroupId, setSelectedLevelsAggGroupId] = React.useState<string | null>(null);
   // When set, we only reveal edges of this type within the selected group (clicked agg edge).
@@ -6271,10 +6278,32 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const displayEdges = React.useMemo(() => {
     const DIM_OPACITY = 0.22;
     const FADE_OPACITY = 0.12;
+    const riskId = String(riskShieldActiveNodeId || '').trim();
+    const riskActive = !!riskId;
+
+    const applyRiskShieldDimming = (arr: Edge[]) => {
+      if (!riskActive) return arr;
+      return (arr || []).map((e: any) => {
+        const s = String(e?.source || '').trim();
+        const t = String(e?.target || '').trim();
+        const incident = (!!s && s === riskId) || (!!t && t === riskId);
+        const baseStyle: any = (e as any)?.style || {};
+        const curOpacity = typeof baseStyle.opacity === 'number' ? baseStyle.opacity : DIM_OPACITY;
+        const nextOpacity = incident ? Math.max(curOpacity, 0.46) : Math.min(curOpacity, 0.08);
+        const d0: any = (e as any)?.data || {};
+        return {
+          ...(e as any),
+          // Keep labels suppressed; shield mode is meant to be quiet.
+          label: undefined,
+          data: { ...d0, showLabel: false },
+          style: { ...baseStyle, opacity: nextOpacity },
+        } as any;
+      });
+    };
 
     // Perf mode: do not derive per-edge styles/labels (avoids O(E) object cloning on hover),
     // just return filtered edges.
-    if (perfMode) return baseVisibleEdges;
+    if (perfMode && !riskActive) return baseVisibleEdges;
 
     // Levels Two-Pane aggregation:
     // - hide per-child edges by default (they exist for hover reveal)
@@ -6548,7 +6577,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               }
               return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
             });
-            return applySelectedEdge(orderByRaised(out));
+            return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
           }
         }
       }
@@ -6599,7 +6628,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             }
             return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
           });
-          return applySelectedEdge(orderByRaised(out));
+          return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
         }
       }
     }
@@ -6628,10 +6657,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const groupNode = nodes.find((n) => n.id === hoveredGroupId);
       const gd: any = groupNode?.data;
       if (!groupNode || !gd?.isGroup) {
-        return applySelectedEdge(edgesForDisplay.map((e) => {
+        return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
-        }));
+        })));
       }
 
       const groupEdgeType = normalizeEdgeType(gd.groupEdgeType);
@@ -6650,10 +6679,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           .map((n) => n.id),
       );
       if (!groupParentId || childIds.size === 0) {
-        return applySelectedEdge(edgesForDisplay.map((e) => {
+        return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
-        }));
+        })));
       }
 
       const isGroupEdge = (e: any) => {
@@ -6688,7 +6717,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      return applySelectedEdge(orderByRaised(out));
+      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     // Hover highlight mode: highlight selected relation cluster and fade everything else.
@@ -6727,7 +6756,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      return applySelectedEdge(orderByRaised(out));
+      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     // Node hover: highlight incident edges and show their labels
@@ -6746,7 +6775,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      return applySelectedEdge(orderByRaised(out));
+      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     // Selected node (when not hovering): highlight incident edges, show labels
@@ -6765,12 +6794,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
       });
-      return applySelectedEdge(orderByRaised(out));
+      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     // Default: dim all edges, hide labels
-    return applySelectedEdge(edgesForDisplay);
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType]);
+    return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay));
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -7207,12 +7236,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Perf mode: keep visuals light, but still allow graph-query highlight (low-cost style).
     const qset = graphQueryHighlightIds;
     const qActive = !!qset && qset.size > 0;
-    if (perfMode && !qActive) return nodes;
+    if (perfMode && !qActive && !String(riskShieldActiveNodeId || '').trim()) return nodes;
 
     const owned = hoverHighlight?.nodeIds;
     const ultimatePersons: Set<string> | undefined = (hoverHighlight as any)?.ultimatePersonIds;
     const hovered = String(hoveredNodeId || '').trim();
     const hoverActive = !!hoverHighlight && !!hovered;
+    const riskId = String(riskShieldActiveNodeId || '').trim();
+    const riskActive = !!riskId;
 
     // Pre-compute query highlight styles (avoid creating objects in loop)
     const queryOutline = theme === 'dark' ? '2px solid rgba(248,113,113,0.75)' : '2px solid rgba(220,38,38,0.60)';
@@ -7227,6 +7258,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isOwnedNode = !!owned && id && owned.has(id);
       const isHovered = id === hovered;
       const isQuery = qActive && !!qset && id && qset.has(id);
+      const isRiskNode = riskActive && !isGroup && id && id === riskId;
 
       // Base hover highlight behavior (existing UX).
       let opacity = 1;
@@ -7253,6 +7285,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (wantQuery) {
         opacity = 1;
         zIndex = Math.max(zIndex, 40);
+      }
+
+      // Risk Shield mode: dim everything except the active node.
+      if (riskActive) {
+        if (isRiskNode) {
+          opacity = 1;
+          zIndex = Math.max(zIndex, 70);
+        } else {
+          opacity = isGroup ? Math.min(opacity, 0.08) : Math.min(opacity, 0.16);
+          zIndex = isGroup ? 1 : Math.min(zIndex, 10);
+        }
       }
 
       // Opacity: only materialize if it actually changes from current style value.
@@ -7326,6 +7369,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       } else if (!isSubcategoryStack && typeof nextData?.onToggleStack === 'function') {
         nextData = { ...d0 };
         delete nextData.onToggleStack;
+        changed = true;
+      }
+
+      // Risk Shield: attach toggle callback + open flag only for real fragment nodes (not groups, not stacks).
+      const canRisk = !isGroup && !stackKey;
+      const wantRiskOpen = Boolean(canRisk && isRiskNode);
+      if (canRisk) {
+        if (nextData === d0) {
+          nextData = { ...d0 };
+          changed = true;
+        }
+        if (nextData.onToggleRiskShield !== toggleRiskShield) {
+          nextData.onToggleRiskShield = toggleRiskShield;
+          changed = true;
+        }
+        if (Boolean(nextData.riskShieldOpen) !== wantRiskOpen) {
+          nextData.riskShieldOpen = wantRiskOpen;
+          changed = true;
+        }
+      } else if (typeof nextData?.onToggleRiskShield === 'function' || typeof nextData?.riskShieldOpen !== 'undefined') {
+        nextData = { ...d0 };
+        delete nextData.onToggleRiskShield;
+        delete nextData.riskShieldOpen;
         changed = true;
       }
 
@@ -7420,7 +7486,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Return original node if nothing changed (preserves reference for React.memo)
       return n;
     });
-  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace, openLocalFilters, toggleLocalFilter, levelsExpandEdgeTypes]);
+  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace, openLocalFilters, toggleLocalFilter, levelsExpandEdgeTypes, riskShieldActiveNodeId, toggleRiskShield]);
 
   // Lightweight info for perf mode (no re-styling of edges)
   const perfHoveredEdgeInfo = React.useMemo(() => {
@@ -8247,6 +8313,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     event.stopPropagation();
     event.preventDefault();
 
+    // Risk Shield: clicking any other node counts as "outside" and closes it.
+    const rid = String(riskShieldActiveNodeId || '').trim();
+    const nid = String(node?.id || '').trim();
+    if (rid && nid && rid !== nid) {
+      setRiskShieldActiveNodeId(null);
+    }
+
     // Selecting a node should clear any selected edge highlight.
     setSelectedEdgeId(null);
     onEdgeSelect?.(null, null);
@@ -8446,7 +8519,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       onNodeSelect(selectedId, nodeDataWithContext);
     }
-  }, [onNodeSelect, onEdgeSelect, edges, nodes, layoutMode]);
+  }, [onNodeSelect, onEdgeSelect, edges, nodes, layoutMode, riskShieldActiveNodeId]);
 
   // Handle edge click
   const handleEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
@@ -8454,6 +8527,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     ignorePaneClicksUntilRef.current = Date.now() + 250;
     event.stopPropagation();
     event.preventDefault();
+
+    // Risk Shield: edge click is "outside" => close.
+    if (riskShieldActiveNodeId) setRiskShieldActiveNodeId(null);
 
     // Levels Two-Pane: clicking an aggregated edge should toggle the same "real edges" preview
     // as clicking the left group node.
@@ -8544,7 +8620,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       
       onEdgeSelect(edge.id, edgeDataWithFragments);
     }
-  }, [onEdgeSelect, nodes, layoutMode, normalizeEdgeType, selectedLevelsAggGroupId, selectedLevelsAggEdgeType]);
+  }, [onEdgeSelect, nodes, layoutMode, normalizeEdgeType, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId]);
 
   // Handle pane click (click on empty space) - clear selection
   const handlePaneClick = useCallback(() => {
@@ -8552,6 +8628,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return;
     }
     if (import.meta.env.DEV) console.log('[Cockpit] Pane clicked - clearing selection');
+    // Risk Shield: pane click closes it.
+    if (riskShieldActiveNodeId) setRiskShieldActiveNodeId(null);
     if (onNodeSelect) {
       onNodeSelect(null, null);
     }
@@ -8598,7 +8676,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return { ...(n as any), data: nd } as any;
       }),
     );
-  }, [onNodeSelect, onEdgeSelect, graphQueryHighlightIds]);
+  }, [onNodeSelect, onEdgeSelect, graphQueryHighlightIds, riskShieldActiveNodeId]);
 
   const handleNodeDragStop = useCallback(async (_event: React.MouseEvent, node: Node<HorizonNodeData>) => {
     const d: any = node?.data;

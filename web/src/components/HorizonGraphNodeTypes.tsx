@@ -26,6 +26,10 @@ export interface HorizonNodeData {
   expanded?: boolean;
   collapsed?: boolean;
   critical?: boolean;
+  /** UI: risk shield mode for this node (computed in LensCanvasCockpit displayNodes). */
+  riskShieldOpen?: boolean;
+  /** UI: toggle risk shield for a fragment (wired by LensCanvasCockpit). */
+  onToggleRiskShield?: (fragmentId: string) => void;
   onLoadRelated?: (fragmentId: string) => void; // Функция для загрузки связанных элементов
   onCollapse?: (fragmentId: string) => void; // Функция для сворачивания (undo expand)
   isLoadingRelated?: boolean; // Флаг загрузки связанных элементов
@@ -1693,6 +1697,163 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const stackPreviewMore = typeof (data as any)?.stackPreviewMore === 'number' ? (data as any).stackPreviewMore : 0;
   const onStackPreviewSelect = (data as any)?.onStackPreviewSelect as ((nodeId: string) => void) | undefined;
   const onStackPreviewMore = (data as any)?.onStackPreviewMore as (() => void) | undefined;
+  // Risk Shield button: only on "real" fragment nodes (not group nodes, not stack controllers, not stack members).
+  // For now it's a pure UI affordance; wiring happens later.
+  const showRiskShieldButton = Boolean(data.fragmentId && !String((data as any)?.stackGroupKey || '').trim());
+
+  // Risk Shield computation (Horizon-native):
+  // - Prefer standardized segment rollup metrics: /metric/risk/risk_segment_<segmentId>
+  // - Fallback to currently propagated base metrics in fragment.state
+  const RISK_SEGMENTS = [
+    { id: 'geopolitical', color: '#F59E0B' },
+    { id: 'supply', color: '#14B8A6' },
+    { id: 'financial', color: '#10B981' },
+    { id: 'cyber', color: '#3B82F6' },
+    { id: 'esg', color: '#84CC16' },
+    { id: 'operational', color: '#64748B' },
+    { id: 'keyperson', color: '#8B5CF6' },
+    { id: 'regulatory', color: '#F43F5E' },
+  ] as const;
+
+  type RiskSegmentId = typeof RISK_SEGMENTS[number]['id'];
+  type RiskLevel = 'none' | 'low' | 'medium' | 'high' | 'critical';
+
+  const clamp01 = (x: number) => {
+    if (!Number.isFinite(x)) return 0;
+    if (x < 0) return 0;
+    if (x > 1) return 1;
+    return x;
+  };
+
+  const directionalToRisk01 = (x: number) => {
+    // Directional metrics are typically [-1..1]. Negative means "bad" (riskier).
+    // Map: -1 -> 1 (max risk), +1 -> 0 (min risk).
+    if (!Number.isFinite(x)) return 0;
+    if (x < -1) x = -1;
+    if (x > 1) x = 1;
+    return clamp01((-x + 1) / 2);
+  };
+
+  const metricValue = (baseOrKey: string): number | undefined => {
+    const s = (data as any)?.state as Record<string, number> | undefined;
+    if (!s) return undefined;
+    const k = String(baseOrKey || '').trim();
+    if (!k) return undefined;
+    // Exact key
+    if (typeof s[k] === 'number') return s[k];
+    // Canonical risk metric path
+    const riskPath = k.startsWith('/') ? k : `/metric/risk/${k}`;
+    if (typeof s[riskPath] === 'number') return s[riskPath];
+    // Bare last segment lookup (support legacy keys stored without /metric/risk/)
+    const base = k.split('/').filter(Boolean).slice(-1)[0] || k;
+    if (typeof s[base] === 'number') return s[base];
+    // Also try riskPath base
+    const base2 = riskPath.split('/').filter(Boolean).slice(-1)[0];
+    if (base2 && typeof s[base2] === 'number') return s[base2];
+    return undefined;
+  };
+
+  const maxDefined = (...vals: Array<number | undefined>) => {
+    let m: number | undefined = undefined;
+    for (const v of vals) {
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+      m = typeof m === 'number' ? Math.max(m, v) : v;
+    }
+    return m;
+  };
+
+  const computeSegmentScore01 = (seg: RiskSegmentId): number => {
+    // 1) Prefer segment rollup metric from doc (server-side rollup or future derived metrics).
+    const segKey = `/metric/risk/risk_segment_${seg}`;
+    const segKeyAlt = `risk_segment_${seg}`;
+    const fromSeg = metricValue(segKey);
+    const fromSegAlt = metricValue(segKeyAlt);
+    if (typeof fromSeg === 'number') return clamp01(fromSeg);
+    if (typeof fromSegAlt === 'number') return clamp01(fromSegAlt);
+
+    // 2) Fallback to existing propagated base metrics in fragment.state.
+    const sanction = metricValue('sanction_exposure');
+    const stability = metricValue('stability_index');
+    const corruption = metricValue('corruption_vulnerability');
+    const geoAlign = metricValue('geopolitical_alignment');
+    const supplyCrit = metricValue('supply_chain_criticality');
+    const opHealth = metricValue('operational_health');
+    const capUtil = metricValue('capacity_utilization');
+    const marketSent = metricValue('market_sentiment');
+    const publicPerc = metricValue('public_perception');
+    const water = metricValue('water_intensity');
+    const energy = metricValue('energy_intensity');
+    const labor = metricValue('labor_intensity');
+
+    switch (seg) {
+      case 'geopolitical': {
+        const geo = maxDefined(
+          sanction,
+          stability,
+          corruption,
+          typeof geoAlign === 'number' ? directionalToRisk01(geoAlign) : undefined,
+        );
+        return clamp01(typeof geo === 'number' ? geo : 0);
+      }
+      case 'supply': {
+        return clamp01(typeof supplyCrit === 'number' ? supplyCrit : 0);
+      }
+      case 'financial': {
+        return clamp01(typeof marketSent === 'number' ? directionalToRisk01(marketSent) : 0);
+      }
+      case 'cyber': {
+        // No stable base metric in v1 fallback set yet (often derived from signals /sphere/cyber/*).
+        return 0;
+      }
+      case 'esg': {
+        const v = maxDefined(water, energy, labor);
+        return clamp01(typeof v === 'number' ? v : 0);
+      }
+      case 'operational': {
+        // operational_health is a "health" metric; risk is inverse.
+        const invHealth = typeof opHealth === 'number' ? clamp01(1 - opHealth) : undefined;
+        const v = maxDefined(invHealth, capUtil);
+        return clamp01(typeof v === 'number' ? v : 0);
+      }
+      case 'keyperson': {
+        return clamp01(typeof publicPerc === 'number' ? directionalToRisk01(publicPerc) : 0);
+      }
+      case 'regulatory': {
+        // Conservative proxy until dedicated regulatory metrics appear:
+        // sanctions exposure + corruption vulnerability correlate with regulatory friction.
+        const v = maxDefined(sanction, corruption);
+        return clamp01(typeof v === 'number' ? v : 0);
+      }
+      default:
+        return 0;
+    }
+  };
+
+  const scoreToLevel = (v01: number): RiskLevel => {
+    const v = clamp01(v01);
+    if (v <= 0.001) return 'none';
+    if (v < 0.25) return 'low';
+    if (v < 0.5) return 'medium';
+    if (v < 0.75) return 'high';
+    return 'critical';
+  };
+
+  const levelToAlpha = (lvl: RiskLevel): number => {
+    switch (lvl) {
+      case 'none':
+        return 0.12;
+      case 'low':
+        return 0.32;
+      case 'medium':
+        return 0.58;
+      case 'high':
+        return 0.82;
+      case 'critical':
+        return 1.0;
+      default:
+        return 0.32;
+    }
+  };
   // Collapsed stacked view: show 2–3 subtle "cards" peeking from underneath.
   const stackLayers = canToggleStack && !stackExpanded
     ? Math.min(3, Math.max(2, Math.ceil((stackCount || 0) / 8)))
@@ -2029,6 +2190,96 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           overflow: 'visible',
         }}
       >
+      {/* Risk Shield overlay (8-segment octagon ring) */}
+      {Boolean(data.riskShieldOpen) && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            pointerEvents: 'none',
+            zIndex: 3,
+          }}
+        >
+          {(() => {
+            // Place the ring OUTSIDE the node card:
+            // - inner radius must exceed the node half-diagonal + a small gap
+            // - outer radius adds ring thickness
+            const halfW = NODE_WIDTH_PX / 2;
+            const halfH = NODE_CARD_HEIGHT_PX / 2;
+            const halfDiag = Math.sqrt(halfW * halfW + halfH * halfH);
+            const gap = 10; // space between node card and ring inner edge
+            const thickness = 6;
+            const rInner = halfDiag + gap;
+            const rOuter = rInner + thickness;
+            const pad = 4; // SVG padding for glow
+            const size = Math.ceil((rOuter + pad) * 2);
+            const cx = size / 2;
+            const cy = size / 2;
+
+            const ptsOuter: Array<{ x: number; y: number }> = [];
+            const ptsInner: Array<{ x: number; y: number }> = [];
+            for (let i = 0; i < 8; i++) {
+              const a = ((22.5 + i * 45) * Math.PI) / 180;
+              ptsOuter.push({ x: cx + rOuter * Math.cos(a), y: cy + rOuter * Math.sin(a) });
+              ptsInner.push({ x: cx + rInner * Math.cos(a), y: cy + rInner * Math.sin(a) });
+            }
+            const segments = RISK_SEGMENTS.map((seg) => {
+              const score = computeSegmentScore01(seg.id);
+              const lvl = scoreToLevel(score);
+              const alpha = levelToAlpha(lvl);
+              return { ...seg, score, lvl, alpha };
+            });
+
+            const glowNeeded = segments.some((s) => s.lvl === 'high' || s.lvl === 'critical');
+
+            return (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: size,
+                  height: size,
+                  pointerEvents: 'none',
+                }}
+              >
+                <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                  {glowNeeded && (
+                    <defs>
+                      <filter id="hznRiskGlow" x="-50%" y="-50%" width="200%" height="200%">
+                        <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="rgba(59,130,246,0.35)" />
+                      </filter>
+                    </defs>
+                  )}
+                  <g filter={glowNeeded ? 'url(#hznRiskGlow)' : undefined}>
+                    {segments.map((seg, i) => {
+                      const j = (i + 1) % 8;
+                      const p0 = ptsOuter[i];
+                      const p1 = ptsOuter[j];
+                      const q1 = ptsInner[j];
+                      const q0 = ptsInner[i];
+                      const d = `M ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} L ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} L ${q1.x.toFixed(2)} ${q1.y.toFixed(2)} L ${q0.x.toFixed(2)} ${q0.y.toFixed(2)} Z`;
+                      return (
+                        <path
+                          key={`riskseg-${seg.id}`}
+                          d={d}
+                          fill={seg.color}
+                          fillOpacity={seg.alpha}
+                          stroke={seg.color}
+                          strokeOpacity={Math.min(1, seg.alpha + 0.12)}
+                          strokeWidth={1.2}
+                        />
+                      );
+                    })}
+                  </g>
+                </svg>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       {/* Stack controllers are now rendered as a single calm surface (no backplates). */}
 
       {/* Top handles: 2 handles для верхней группы (supply-chain) */}
@@ -2603,6 +2854,58 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               </svg>
             </button>
           )}
+        </div>
+      )}
+
+      {/* Risk Shield affordance (bottom-left, symmetric to expand button). */}
+      {showRiskShieldButton && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 12,
+            bottom: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            zIndex: 2,
+          }}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (data.fragmentId) data.onToggleRiskShield?.(data.fragmentId);
+            }}
+            aria-label="Risk shield"
+            title="Risk shield"
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 9,
+              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+              background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)',
+              color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+            }}
+          >
+            {/* Octagon (polygon) icon */}
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2z" />
+            </svg>
+          </button>
         </div>
       )}
 
